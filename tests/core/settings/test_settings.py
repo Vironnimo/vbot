@@ -39,10 +39,13 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
                 "subagent_timeout_minutes": 90,
             },
             "compaction": {
-                "auto": False,
-                "threshold": 1,
-                "tail_tokens": 12_000,
-                "summary_model": "openai/gpt-5.2",
+                "enabled": False,
+                "trigger": {"type": "context_ratio", "threshold": 1},
+                "strategy": {
+                    "type": "summary_tail",
+                    "tail_tokens": 12_000,
+                    "summary_model": "openai/gpt-5.2",
+                },
             },
             "defaults": {
                 "agent": {
@@ -76,10 +79,13 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
             "subagent_timeout_minutes": 90,
         },
         "compaction": {
-            "auto": False,
-            "threshold": 1.0,
-            "tail_tokens": 12_000,
-            "summary_model": "openai/gpt-5.2",
+            "enabled": False,
+            "trigger": {"type": "context_ratio", "threshold": 1.0},
+            "strategy": {
+                "type": "summary_tail",
+                "tail_tokens": 12_000,
+                "summary_model": "openai/gpt-5.2",
+            },
         },
         "defaults": {
             "agent": {
@@ -144,13 +150,16 @@ def test_parse_settings_update_omits_absent_chat_width() -> None:
         (
             {
                 "compaction": {
-                    "auto": True,
-                    "threshold": 1.5,
-                    "tail_tokens": 15_000,
-                    "summary_model": None,
+                    "enabled": True,
+                    "trigger": {"type": "context_ratio", "threshold": 1.5},
+                    "strategy": {
+                        "type": "summary_tail",
+                        "tail_tokens": 15_000,
+                        "summary_model": None,
+                    },
                 }
             },
-            "params.compaction.threshold must be in",
+            "params.compaction.trigger.threshold must be in",
         ),
         (
             {"defaults": {"agent": {"unknown_field": True}}},
@@ -278,10 +287,13 @@ def test_validate_settings_file_accepts_known_settings(tmp_path: Path) -> None:
                 "max_subagents_per_turn": 8,
                 "subagent_timeout_minutes": 60,
                 "compaction": {
-                    "auto": True,
-                    "threshold": 0.8,
-                    "tail_tokens": 15_000,
-                    "summary_model": None,
+                    "enabled": True,
+                    "trigger": {"type": "context_ratio", "threshold": 0.8},
+                    "strategy": {
+                        "type": "summary_tail",
+                        "tail_tokens": 15_000,
+                        "summary_model": None,
+                    },
                 },
                 "recall": {"backend": "sqlite_fts"},
                 "extensions": {
@@ -354,7 +366,11 @@ def test_validate_settings_file_reports_invalid_fields(tmp_path: Path) -> None:
                 "skill_directories": ["relative/path"],
                 "attachment_max_size_bytes": 0,
                 "speech_upload_max_size_bytes": 0,
-                "compaction": {"threshold": 2, "tail_tokens": False},
+                "compaction": {
+                    "enabled": True,
+                    "trigger": {"type": "context_ratio", "threshold": 2},
+                    "strategy": {"type": "summary_tail", "tail_tokens": False},
+                },
                 "defaults": {"agent": {"temperature": "warm", "unknown": True}},
                 "web_search": {
                     "provider": "unknown",
@@ -377,8 +393,8 @@ def test_validate_settings_file_reports_invalid_fields(tmp_path: Path) -> None:
         ("error", "$.skill_directories[0]", "must be an absolute or home-relative path"),
         ("error", "$.attachment_max_size_bytes", "must be a positive integer"),
         ("error", "$.speech_upload_max_size_bytes", "must be a positive integer"),
-        ("error", "$.compaction.threshold", "must be in (0, 1]"),
-        ("error", "$.compaction.tail_tokens", "must be a positive integer"),
+        ("error", "$.compaction.trigger.threshold", "must be in (0, 1]"),
+        ("error", "$.compaction.strategy.tail_tokens", "must be a positive integer"),
         (
             "error",
             "$.defaults.agent.unknown",

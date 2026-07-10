@@ -294,7 +294,7 @@ class TestUpdateSettingsSectionsWithDebug:
             storage.update_settings_sections(
                 {
                     "debug": {"enabled": True},
-                    "compaction": {"threshold": 2},
+                    "compaction": {"trigger": {"type": "context_ratio", "threshold": 2}},
                 }
             )
 

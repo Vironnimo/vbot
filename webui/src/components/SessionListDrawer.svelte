@@ -3,7 +3,16 @@
   import Button from './ui/Button.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import EmptyState from './ui/EmptyState.svelte';
-  import { deleteSession, listSessions, renameSession } from '$lib/api.js';
+  import Modal from './ui/Modal.svelte';
+  import Toggle from './ui/Toggle.svelte';
+  import CompactionPolicyEditor from './compaction/CompactionPolicyEditor.svelte';
+  import {
+    deleteSession,
+    listSessions,
+    renameSession,
+    setSessionCompactionPolicy,
+  } from '$lib/api.js';
+  import { normalizeCompactionPolicy } from '$lib/compactionPolicy.js';
   import { activeLocaleTag, t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
   import {
@@ -49,6 +58,11 @@
   // The session awaiting delete confirmation (null = dialog closed). The delete
   // only runs once the confirm dialog resolves.
   let deleteConfirmSession = $state(null);
+  let policySession = $state(null);
+  let policyUsesOverride = $state(false);
+  let policyDraft = $state(null);
+  let policySaving = $state(false);
+  let policyError = $state(null);
 
   const SESSION_TITLE_MAX_LENGTH = 200;
 
@@ -211,6 +225,49 @@
       return;
     }
     deleteConfirmSession = session;
+  };
+
+  const startPolicyEdit = (session) => {
+    closeMenu();
+    policySession = session;
+    policyUsesOverride = Boolean(session.compaction_policy_override);
+    policyDraft = normalizeCompactionPolicy(
+      session.compaction_policy_override ?? session.compaction_policy_effective,
+    );
+    policyError = null;
+  };
+
+  const closePolicyEdit = () => {
+    if (policySaving) return;
+    policySession = null;
+    policyDraft = null;
+    policyError = null;
+  };
+
+  const savePolicy = async () => {
+    const targetAgentId = asText(agentId);
+    if (!targetAgentId || !policySession || policySaving) return;
+    policySaving = true;
+    policyError = null;
+    try {
+      await setSessionCompactionPolicy(
+        targetAgentId,
+        policySession.id,
+        policyUsesOverride ? normalizeCompactionPolicy(policyDraft) : null,
+      );
+      policySession = null;
+      policyDraft = null;
+      await loadSessions(targetAgentId);
+    } catch (error) {
+      policyError =
+        error.message ||
+        t(
+          'sessions.compactionSaveError',
+          'The Compaction Policy could not be saved.',
+        );
+    } finally {
+      policySaving = false;
+    }
   };
 
   // The confirm body reflects whether the pending session is channel-bound.
@@ -512,6 +569,14 @@
                   </button>
                   <button
                     type="button"
+                    class="session-row__menu-item"
+                    role="menuitem"
+                    onclick={() => startPolicyEdit(session)}
+                  >
+                    {t('sessions.compactionPolicy', 'Compaction Policy')}
+                  </button>
+                  <button
+                    type="button"
                     class="session-row__menu-item session-row__menu-item--danger"
                     role="menuitem"
                     onclick={() => requestDelete(session)}
@@ -538,6 +603,62 @@
   />
 {/if}
 
+{#if policySession}
+  <Modal
+    title={t('sessions.compactionPolicy', 'Compaction Policy')}
+    labelledById="session-compaction-policy-title"
+    closeDisabled={policySaving}
+    onClose={closePolicyEdit}
+  >
+    {#snippet body()}
+      <div class="modal-body session-policy-modal__body">
+        <div class="session-policy-modal__inheritance">
+          <div>
+            <div class="session-policy-modal__label">
+              {t('sessions.compactionOverride', 'Session override')}
+            </div>
+            <p>
+              {t(
+                'sessions.compactionOverrideDescription',
+                'When disabled, this Session follows later Agent or global Policy changes.',
+              )}
+            </p>
+          </div>
+          <Toggle
+            checked={policyUsesOverride}
+            disabled={policySaving}
+            ariaLabel={t('sessions.compactionOverride', 'Session override')}
+            onChange={(enabled) => (policyUsesOverride = enabled)}
+          />
+        </div>
+        <CompactionPolicyEditor
+          value={policyDraft}
+          disabled={!policyUsesOverride || policySaving}
+          idPrefix="session-compaction-policy"
+          onChange={(next) => (policyDraft = next)}
+        />
+        {#if policyError}
+          <p class="session-policy-modal__error" role="alert">{policyError}</p>
+        {/if}
+      </div>
+    {/snippet}
+    {#snippet footer()}
+      <Button
+        variant="secondary"
+        disabled={policySaving}
+        onClick={closePolicyEdit}
+      >
+        {t('common.cancel', 'Cancel')}
+      </Button>
+      <Button disabled={policySaving} onClick={savePolicy}>
+        {policySaving
+          ? t('common.saving', 'Saving…')
+          : t('common.save', 'Save')}
+      </Button>
+    {/snippet}
+  </Modal>
+{/if}
+
 <style>
   .session-drawer {
     display: flex;
@@ -547,6 +668,35 @@
     border-right: 1px solid var(--border);
     background: var(--surface);
     overflow: hidden;
+  }
+
+  :global(.session-policy-modal__body) {
+    display: grid;
+    gap: 18px;
+    min-width: min(620px, 78vw);
+  }
+
+  .session-policy-modal__inheritance {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+  }
+
+  .session-policy-modal__label {
+    color: var(--text-hi);
+    font: 500 13px var(--font-ui);
+  }
+
+  .session-policy-modal__inheritance p,
+  .session-policy-modal__error {
+    margin: 3px 0 0;
+    color: var(--text-med);
+    font: 12px/1.45 var(--font-ui);
+  }
+
+  .session-policy-modal__error {
+    color: var(--danger);
   }
 
   .session-drawer__header {

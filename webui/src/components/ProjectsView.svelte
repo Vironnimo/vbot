@@ -3,6 +3,7 @@
 
   import Dropdown from './Dropdown.svelte';
   import SearchableDropdown from './SearchableDropdown.svelte';
+  import CompactionPolicyEditor from './compaction/CompactionPolicyEditor.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
@@ -140,6 +141,7 @@
   // when the view loads so the project-default inherit options can name the
   // global default. Empty object on failure → the absent-case labels render.
   let globalAgentDefaults = $state({});
+  let globalCompactionPolicy = $state(null);
 
   // Add modal state — the popup needs only the repo path plus an optional
   // display name (blank → backend derives the name from the folder).
@@ -482,8 +484,10 @@
       const defaults = result?.defaults?.agent;
       globalAgentDefaults =
         defaults && typeof defaults === 'object' ? defaults : {};
+      globalCompactionPolicy = result?.compaction ?? null;
     } catch {
       globalAgentDefaults = {};
+      globalCompactionPolicy = null;
     }
   }
 
@@ -963,6 +967,7 @@
         model: '',
         temperature: '',
         thinking_effort: '',
+        compaction_policy: null,
       }
     );
   }
@@ -1096,6 +1101,9 @@
     if (field === 'temperature') {
       return normalizeOverrideTemperature(draft.temperature) !== null;
     }
+    if (field === 'compaction_policy') {
+      return draft.compaction_policy !== null;
+    }
     // thinking_effort: a level or '' (provider default) is a valid override value.
     return typeof draft.thinking_effort === 'string';
   }
@@ -1108,6 +1116,9 @@
     }
     if (field === 'temperature') {
       return normalizeOverrideTemperature(draft.temperature);
+    }
+    if (field === 'compaction_policy') {
+      return draft.compaction_policy;
     }
     return draft.thinking_effort;
   }
@@ -2204,6 +2215,93 @@
                                     </Button>
                                   {/if}
                                 </div>
+                              </div>
+
+                              <div
+                                class="projects-override-row projects-override-row--policy"
+                              >
+                                <span class="projects-label">
+                                  {t(
+                                    'projects.team.compactionPolicy',
+                                    'Compaction Policy',
+                                  )}
+                                </span>
+                                {#if overrideDraft(member.agent_id).compaction_policy}
+                                  <CompactionPolicyEditor
+                                    value={overrideDraft(member.agent_id)
+                                      .compaction_policy}
+                                    onChange={(value) =>
+                                      updateOverrideDraft(
+                                        member.agent_id,
+                                        'compaction_policy',
+                                        value,
+                                      )}
+                                    idPrefix={`project-compaction-${member.agent_id}`}
+                                  />
+                                  <div class="projects-override-controls">
+                                    <Button
+                                      variant="secondary"
+                                      disabled={!canSetOverride(
+                                        member.agent_id,
+                                        'compaction_policy',
+                                      )}
+                                      onClick={() =>
+                                        applySetOverride(
+                                          member.agent_id,
+                                          'compaction_policy',
+                                        )}
+                                    >
+                                      {t(
+                                        'projects.team.setOverride',
+                                        'Set override',
+                                      )}
+                                    </Button>
+                                    <Button
+                                      variant="tertiary"
+                                      onClick={() =>
+                                        memberFieldIsOverridden(
+                                          member,
+                                          'compaction_policy',
+                                        )
+                                          ? applyClearOverride(
+                                              member.agent_id,
+                                              'compaction_policy',
+                                            )
+                                          : updateOverrideDraft(
+                                              member.agent_id,
+                                              'compaction_policy',
+                                              null,
+                                            )}
+                                    >
+                                      {memberFieldIsOverridden(
+                                        member,
+                                        'compaction_policy',
+                                      )
+                                        ? t(
+                                            'projects.team.clearOverride',
+                                            'Clear override',
+                                          )
+                                        : t('common.cancel', 'Cancel')}
+                                    </Button>
+                                  </div>
+                                {:else}
+                                  <Button
+                                    variant="secondary"
+                                    onClick={() =>
+                                      updateOverrideDraft(
+                                        member.agent_id,
+                                        'compaction_policy',
+                                        structuredClone(
+                                          globalCompactionPolicy ?? {},
+                                        ),
+                                      )}
+                                  >
+                                    {t(
+                                      'projects.team.customizeCompaction',
+                                      'Customize for this agent',
+                                    )}
+                                  </Button>
+                                {/if}
                               </div>
 
                               <p class="projects-override-help">

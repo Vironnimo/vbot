@@ -399,10 +399,13 @@ describe('SettingsView', () => {
 
     expect(getSettingsUpdateCalls()[0][1]).toEqual({
       compaction: {
-        auto: true,
-        threshold: 0.8,
-        tail_tokens: 15000,
-        summary_model: 'openai/gpt-5.2-mini::api-key',
+        enabled: true,
+        trigger: { type: 'context_ratio', threshold: 0.8 },
+        strategy: {
+          type: 'summary_tail',
+          tail_tokens: 15000,
+          summary_model: 'openai/gpt-5.2-mini::api-key',
+        },
       },
     });
 
@@ -417,10 +420,13 @@ describe('SettingsView', () => {
 
     expect(getSettingsUpdateCalls()[1][1]).toEqual({
       compaction: {
-        auto: true,
-        threshold: 0.8,
-        tail_tokens: 15000,
-        summary_model: null,
+        enabled: true,
+        trigger: { type: 'context_ratio', threshold: 0.8 },
+        strategy: {
+          type: 'summary_tail',
+          tail_tokens: 15000,
+          summary_model: null,
+        },
       },
     });
   });
@@ -2007,10 +2013,13 @@ function settingsPayload(options = {}) {
       subagent_timeout_minutes: 60,
     },
     compaction: {
-      auto: true,
-      threshold: 0.8,
-      tail_tokens: 15000,
-      summary_model: null,
+      enabled: true,
+      trigger: { type: 'context_ratio', threshold: 0.8 },
+      strategy: {
+        type: 'summary_tail',
+        tail_tokens: 15000,
+        summary_model: null,
+      },
     },
     recall: {
       backend: 'jsonl_scan',

@@ -204,6 +204,11 @@ export const englishCatalog = Object.freeze({
   'sessions.rename_label': 'Rename session',
   'sessions.rename_placeholder': 'Session name',
   'sessions.rename_error': 'The session could not be renamed.',
+  'sessions.compactionPolicy': 'Compaction Policy',
+  'sessions.compactionOverride': 'Session override',
+  'sessions.compactionOverrideDescription':
+    'When disabled, this Session follows later Agent or global Policy changes.',
+  'sessions.compactionSaveError': 'The Compaction Policy could not be saved.',
 
   'skillAutocomplete.label': 'Skill suggestions',
   'skillAutocomplete.eyebrow.commandsAndSkills': 'commands & skills',
@@ -765,7 +770,23 @@ export const englishCatalog = Object.freeze({
   'settings.reflection.saveSuccess': 'Reflection settings updated.',
   'settings.compaction.title': 'Compaction',
   'settings.compaction.subtitle':
-    'Automatic summarizing when a conversation nears the model context limit.',
+    'Choose when Context is compacted and how the next checkpoint is assembled.',
+  'compaction.enabled': 'Automatic compaction',
+  'compaction.enabledDescription':
+    'Evaluate this Policy after safe, completed Model steps.',
+  'compaction.trigger.label': 'Trigger',
+  'compaction.trigger.contextRatio': 'Context window ratio',
+  'compaction.trigger.inputTokens': 'Absolute input tokens',
+  'compaction.trigger.threshold': 'Context ratio',
+  'compaction.trigger.tokens': 'Input tokens',
+  'compaction.strategy.label': 'Strategy',
+  'compaction.strategy.summaryTail': 'Summary + verbatim tail',
+  'compaction.strategy.continuation': 'Cache-preserving continuation',
+  'compaction.strategy.tailTokens': 'Verbatim tail tokens',
+  'compaction.strategy.summaryModel': 'Summary model',
+  'compaction.strategy.activeModel': 'Active Model',
+  'compaction.strategy.continuationDescription':
+    'Reuses the active Model request prefix and turns one text response directly into the next checkpoint.',
   'settings.compaction.auto': 'Auto-compact',
   'settings.compaction.autoDescription':
     'When the conversation reaches the threshold, older messages are automatically summarized; the summary plus the most recent messages stay in context.',
@@ -776,6 +797,7 @@ export const englishCatalog = Object.freeze({
   'settings.compaction.tailTokensDescription':
     'Amount of recent conversation that is always kept word-for-word instead of summarized, measured in tokens.',
   'settings.compaction.summaryModel': 'Summary model',
+  'settings.compaction.summaryModelPlaceholder': 'Active agent model',
   'settings.compaction.summaryModelDescription':
     'Model used for summarization. Leave blank to use the active agent model. This binding is independent of agent and project defaults.',
   'settings.compaction.saved': 'Compaction settings saved.',

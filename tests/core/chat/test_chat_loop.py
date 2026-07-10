@@ -635,7 +635,21 @@ class StubModels:
 
 class StubStorage:
     def __init__(self, compaction_settings: JsonObject, *, data_dir: Path | None = None) -> None:
-        self._compaction_settings = dict(compaction_settings)
+        if "trigger" not in compaction_settings:
+            self._compaction_settings = {
+                "enabled": compaction_settings.get("auto", True),
+                "trigger": {
+                    "type": "context_ratio",
+                    "threshold": compaction_settings.get("threshold", 0.8),
+                },
+                "strategy": {
+                    "type": "summary_tail",
+                    "tail_tokens": compaction_settings.get("tail_tokens", 15_000),
+                    "summary_model": compaction_settings.get("summary_model"),
+                },
+            }
+        else:
+            self._compaction_settings = dict(compaction_settings)
         self.data_dir = data_dir or Path("data")
 
     def load_compaction_settings(self) -> JsonObject:
@@ -667,6 +681,7 @@ class StubCompactionService:
         input_tokens: int,
         context_window: int,
         threshold: float,
+        **kwargs: Any,
     ) -> bool:
         self.should_auto_calls.append((input_tokens, context_window, threshold))
         return self._should_auto
@@ -685,6 +700,7 @@ class StubCompactionService:
         storage: Any,
         settings: Any,
         instruction: str | None = None,
+        **kwargs: Any,
     ) -> ChatMessage:
         self.compact_calls.append(
             {
@@ -1111,12 +1127,12 @@ def test_compaction_latest_checkpoint_helper_returns_last_checkpoint() -> None:
     second_user = ChatMessage.user("second")
     first_checkpoint = ChatMessage.compaction_checkpoint(
         summary="checkpoint one",
-        tail_boundary_id=first_user.id,
+        projection=[first_user],
         compacted_token_count=10,
     )
     second_checkpoint = ChatMessage.compaction_checkpoint(
         summary="checkpoint two",
-        tail_boundary_id=second_user.id,
+        projection=[second_user],
         compacted_token_count=20,
     )
 
@@ -1133,35 +1149,35 @@ def test_compaction_latest_checkpoint_helper_returns_none_when_absent() -> None:
     assert _latest_compaction_checkpoint([ChatMessage.user("only")]) is None
 
 
-def test_resolve_preserved_tail_slices_from_boundary() -> None:
-    from core.chat.chat import _resolve_preserved_tail
+def test_effective_compaction_messages_use_checkpoint_projection() -> None:
+    from core.chat.messages import _effective_compaction_messages
 
     first = ChatMessage.user("first")
     second = ChatMessage.assistant(model="openai/gpt-5.2", content="second")
     third = ChatMessage.user("third")
     checkpoint = ChatMessage.compaction_checkpoint(
-        summary="s", tail_boundary_id=second.id, compacted_token_count=1
+        summary="s", projection=[second, third], compacted_token_count=1
     )
 
-    tail, recovered = _resolve_preserved_tail([first, second, third, checkpoint], checkpoint)
+    effective = _effective_compaction_messages([first, second, third, checkpoint])
 
-    assert tail == [second, third]
-    assert recovered is False
+    assert [message.role for message in effective] == ["note", "assistant", "user"]
+    assert effective[1:] == [second, third]
 
 
-def test_resolve_preserved_tail_recovers_when_boundary_missing() -> None:
-    from core.chat.chat import _resolve_preserved_tail
+def test_effective_compaction_messages_append_newer_messages() -> None:
+    from core.chat.messages import _effective_compaction_messages
 
     older = ChatMessage.user("older")
     checkpoint = ChatMessage.compaction_checkpoint(
-        summary="s", tail_boundary_id="missing-id", compacted_token_count=1
+        summary="s", projection=[older], compacted_token_count=1
     )
     newer = ChatMessage.user("newer")
 
-    tail, recovered = _resolve_preserved_tail([older, checkpoint, newer], checkpoint)
+    effective = _effective_compaction_messages([older, checkpoint, newer])
 
-    assert tail == [newer]
-    assert recovered is True
+    assert [message.role for message in effective] == ["note", "user", "user"]
+    assert effective[1:] == [older, newer]
 
 
 def test_compaction_build_request_messages_without_checkpoint_keeps_existing_path(
@@ -1196,7 +1212,7 @@ def test_compaction_build_request_messages_with_checkpoint_uses_summary_and_tail
     session.append(
         ChatMessage.compaction_checkpoint(
             summary="Compacted historical context.",
-            tail_boundary_id=tail_user.id,
+            projection=[tail_user, tail_assistant],
             compacted_token_count=123,
         )
     )
@@ -1225,7 +1241,7 @@ async def test_compaction_maybe_auto_compact_skips_when_auto_disabled(tmp_path: 
     adapter = StubAdapter([])
     checkpoint = ChatMessage.compaction_checkpoint(
         summary="unused",
-        tail_boundary_id="unused",
+        projection=[ChatMessage.user("unused")],
         compacted_token_count=1,
     )
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
@@ -1274,7 +1290,7 @@ async def test_compaction_maybe_auto_compact_skips_when_threshold_not_reached(
     adapter = StubAdapter([])
     checkpoint = ChatMessage.compaction_checkpoint(
         summary="unused",
-        tail_boundary_id="unused",
+        projection=[ChatMessage.user("unused")],
         compacted_token_count=1,
     )
     compaction_service = StubCompactionService(should_auto=False, checkpoint=checkpoint)
@@ -1382,7 +1398,7 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
     session.append(ChatMessage.assistant(model=agent.model, content="Tail assistant"))
     checkpoint = ChatMessage.compaction_checkpoint(
         summary="Compacted tail context.",
-        tail_boundary_id=tail_user.id,
+        projection=session.load()[-2:],
         compacted_token_count=42,
     )
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
@@ -1450,7 +1466,7 @@ async def test_compaction_reuses_pinned_skill_catalog(tmp_path: Path) -> None:
     session.append(ChatMessage.assistant(model=agent.model, content="Tail assistant"))
     checkpoint = ChatMessage.compaction_checkpoint(
         summary="Compacted tail context.",
-        tail_boundary_id=tail_user.id,
+        projection=session.load()[-2:],
         compacted_token_count=42,
     )
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
@@ -1499,7 +1515,7 @@ async def test_compaction_maybe_auto_compact_falls_back_when_summary_model_malfo
     session.append(ChatMessage.assistant(model=agent.model, content="Tail assistant"))
     checkpoint = ChatMessage.compaction_checkpoint(
         summary="Compacted tail context.",
-        tail_boundary_id=tail_user.id,
+        projection=session.load()[-2:],
         compacted_token_count=42,
     )
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
@@ -1549,7 +1565,7 @@ async def test_compaction_maybe_auto_compact_falls_back_when_summary_adapter_loo
     session.append(ChatMessage.assistant(model=agent.model, content="Tail assistant"))
     checkpoint = ChatMessage.compaction_checkpoint(
         summary="Compacted tail context.",
-        tail_boundary_id=tail_user.id,
+        projection=session.load()[-2:],
         compacted_token_count=42,
     )
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
@@ -1643,7 +1659,7 @@ async def test_compact_session_refuses_while_run_is_active(tmp_path: Path) -> No
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     checkpoint = ChatMessage.compaction_checkpoint(
         summary="unused",
-        tail_boundary_id="unused",
+        projection=[ChatMessage.user("unused")],
         compacted_token_count=1,
     )
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
@@ -1704,7 +1720,7 @@ async def test_compact_session_appends_checkpoint_and_closes_adapter(tmp_path: P
     session.append(ChatMessage.assistant(model=agent.model, content="Tail assistant"))
     checkpoint = ChatMessage.compaction_checkpoint(
         summary="Compacted context.",
-        tail_boundary_id=tail_user.id,
+        projection=session.load()[-2:],
         compacted_token_count=42,
     )
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
@@ -1734,6 +1750,7 @@ async def test_compact_session_scopes_to_project_session_and_agent(tmp_path: Pat
         agent=identity_agent,
         adapter=adapter,
         project_agents={("proj", "coder"): project_agent},
+        projects=StubProjects({"proj": StubProject("proj", str(tmp_path), [])}),
         storage=StubStorage(
             {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
         ),
@@ -1750,7 +1767,7 @@ async def test_compact_session_scopes_to_project_session_and_agent(tmp_path: Pat
     project_session.append(ChatMessage.assistant(model=project_agent.model, content="project a"))
     checkpoint = ChatMessage.compaction_checkpoint(
         summary="Compacted context.",
-        tail_boundary_id=project_tail.id,
+        projection=project_session.load()[-2:],
         compacted_token_count=42,
     )
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
@@ -1794,7 +1811,7 @@ async def test_compact_session_forwards_instruction_to_service(tmp_path: Path) -
     session.append(ChatMessage.assistant(model=agent.model, content="Tail assistant"))
     checkpoint = ChatMessage.compaction_checkpoint(
         summary="Compacted context.",
-        tail_boundary_id=tail_user.id,
+        projection=session.load()[-2:],
         compacted_token_count=42,
     )
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
@@ -1951,7 +1968,7 @@ def test_activated_skill_reinjected_ahead_of_compaction_summary(tmp_path: Path) 
     session.append(
         ChatMessage.compaction_checkpoint(
             summary="Compacted historical context.",
-            tail_boundary_id=tail_user.id,
+            projection=session.load()[-2:],
             compacted_token_count=123,
         )
     )
@@ -1983,7 +2000,7 @@ def test_skill_carried_in_tail_not_duplicated_after_compaction(tmp_path: Path) -
     session.append(
         ChatMessage.compaction_checkpoint(
             summary="Compacted historical context.",
-            tail_boundary_id=tail_user.id,
+            projection=session.load()[-3:],
             compacted_token_count=123,
         )
     )
@@ -2555,6 +2572,7 @@ async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
             summary_model_id: str,
             storage: Any,
             settings: Any,
+            **kwargs: Any,
         ) -> ChatMessage:
             del agent, summary_adapter, summary_model_id, storage, settings
 
@@ -2567,7 +2585,7 @@ async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
             )
             return ChatMessage.compaction_checkpoint(
                 summary="Compacted prior context.",
-                tail_boundary_id=tail_user.id,
+                projection=messages[messages.index(tail_user) :],
                 compacted_token_count=42,
             )
 
@@ -3720,6 +3738,7 @@ async def test_auto_compaction_preserves_reasoning_for_all_current_run_turns(
             summary_model_id: str,
             storage: Any,
             settings: Any,
+            **kwargs: Any,
         ) -> ChatMessage:
             del agent, summary_adapter, summary_model_id, storage, settings
 
@@ -3731,7 +3750,7 @@ async def test_auto_compaction_preserves_reasoning_for_all_current_run_turns(
             )
             return ChatMessage.compaction_checkpoint(
                 summary="Compacted prior context.",
-                tail_boundary_id=tail_user.id,
+                projection=messages[messages.index(tail_user) :],
                 compacted_token_count=42,
             )
 

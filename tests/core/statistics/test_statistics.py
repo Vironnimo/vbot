@@ -509,7 +509,7 @@ def test_cache_break_heuristic_skips_legitimate_prefix_changes(tmp_path: Path) -
             cached_turn(BASE),
             ChatMessage.compaction_checkpoint(
                 summary="compacted",
-                tail_boundary_id="tail",
+                projection=[ChatMessage.user("tail")],
                 compacted_token_count=100,
                 timestamp=BASE + timedelta(seconds=5),
             ),

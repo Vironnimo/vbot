@@ -146,6 +146,8 @@ class RuntimeAgent(Protocol):
     def created_at(self) -> str: ...
     @property
     def updated_at(self) -> str: ...
+    @property
+    def compaction_policy(self) -> dict[str, Any] | None: ...
 
 
 @dataclass(frozen=True)
@@ -181,6 +183,7 @@ class ConfigAgent:
     current_session_id: str = ""
     created_at: str = _CONFIG_AGENT_TIMESTAMP
     updated_at: str = _CONFIG_AGENT_TIMESTAMP
+    compaction_policy: dict[str, Any] | None = None
 
 
 class AgentResolutionError(ValueError):
@@ -476,6 +479,7 @@ class AgentResolver:
             resolved_thinking_effort,
             allowed_tools,
             allowed_skills,
+            project.overrides.get(agent_id, {}).get("compaction_policy"),
         )
 
     def effective_config(self, project_id: str | None, agent_id: str) -> dict[str, dict[str, Any]]:
@@ -853,6 +857,7 @@ def _build_config_agent(
     resolved_thinking_effort: str | None,
     allowed_tools: list[str],
     allowed_skills: list[str],
+    compaction_policy: Any,
 ) -> ConfigAgent:
     return ConfigAgent(
         id=scanned.agent_id,
@@ -865,6 +870,9 @@ def _build_config_agent(
         source_format=scanned.source_format,
         allowed_tools=allowed_tools,
         allowed_skills=allowed_skills,
+        compaction_policy=(
+            dict(compaction_policy) if isinstance(compaction_policy, dict) else None
+        ),
     )
 
 

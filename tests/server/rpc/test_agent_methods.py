@@ -33,6 +33,7 @@ from server.rpc.agent_methods import (
     _get_agent,
     _list_sessions,
     _rename_session,
+    _set_session_compaction_policy,
 )
 from server.rpc.errors import RpcError
 
@@ -64,6 +65,7 @@ class _FakeSessions:
         self.missing: set[str] = set()
         # Fork metadata keyed by (agent_id, session_id, project_id) for get_metadata.
         self._fork_metadata: dict[tuple[str, str, str | None], dict[str, Any]] = {}
+        self.saved_metadata: dict[tuple[str, str, str | None], dict[str, Any]] = {}
 
     def create(self, agent_id: str, *, session_id: Any = None, project_id: Any = None) -> Any:
         self.created.append(
@@ -124,7 +126,17 @@ class _FakeSessions:
     def get_metadata(
         self, agent_id: str, session_id: str, project_id: str | None = None
     ) -> dict[str, Any]:
-        return self._fork_metadata.get((agent_id, session_id, project_id), {})
+        key = (agent_id, session_id, project_id)
+        return self.saved_metadata.get(key, self._fork_metadata.get(key, {}))
+
+    def set_metadata(
+        self,
+        agent_id: str,
+        session_id: str,
+        metadata: dict[str, Any],
+        project_id: str | None = None,
+    ) -> None:
+        self.saved_metadata[(agent_id, session_id, project_id)] = dict(metadata)
 
     def set_title(
         self, agent_id: str, session_id: str, title: str, project_id: str | None = None
@@ -164,6 +176,17 @@ def _make_state() -> tuple[SimpleNamespace, _FakeResolver, _FakeSessions]:
             lambda agent_id, session_id, project_id=None: recall_removals.append(
                 (agent_id, session_id, project_id)
             )
+        ),
+        storage=SimpleNamespace(
+            load_compaction_settings=lambda: {
+                "enabled": True,
+                "trigger": {"type": "context_ratio", "threshold": 0.8},
+                "strategy": {
+                    "type": "summary_tail",
+                    "tail_tokens": 15_000,
+                    "summary_model": None,
+                },
+            }
         ),
     )
     state = SimpleNamespace(
@@ -226,7 +249,9 @@ def test_list_qualified_agent_scopes_to_project() -> None:
 
     result = _list_sessions(state, {"agent_id": "builder@vbot"})
 
-    assert result == {"sessions": [{"id": "s1"}]}
+    assert result["sessions"][0]["id"] == "s1"
+    assert result["sessions"][0]["compaction_policy_override"] is None
+    assert result["sessions"][0]["compaction_policy_effective"]["enabled"] is True
     assert sessions.listed == [("builder", "vbot")]
 
 
@@ -236,6 +261,47 @@ def test_list_bare_agent_is_identity() -> None:
     _list_sessions(state, {"agent_id": "builder"})
 
     assert sessions.listed == [("builder", None)]
+
+
+def test_session_compaction_policy_override_and_clear() -> None:
+    state, _resolver, sessions = _make_state()
+    policy = {
+        "enabled": True,
+        "trigger": {"type": "input_tokens", "tokens": 100_000},
+        "strategy": {"type": "continuation"},
+    }
+
+    set_result = _set_session_compaction_policy(
+        state,
+        {"agent_id": "builder", "session_id": "s1", "policy": policy},
+    )
+    clear_result = _set_session_compaction_policy(
+        state,
+        {"agent_id": "builder", "session_id": "s1", "policy": None},
+    )
+
+    assert set_result["override"] == policy
+    assert set_result["source"] == "session"
+    assert clear_result["override"] is None
+    assert clear_result["source"] == "agent_or_global"
+    assert sessions.saved_metadata[("builder", "s1", None)] == {}
+
+
+def test_session_compaction_policy_rejects_invalid_shape() -> None:
+    state, _resolver, sessions = _make_state()
+
+    with pytest.raises(RpcError) as exc_info:
+        _set_session_compaction_policy(
+            state,
+            {
+                "agent_id": "builder",
+                "session_id": "s1",
+                "policy": {"enabled": True, "trigger": {"type": "unknown"}},
+            },
+        )
+
+    assert exc_info.value.code == "invalid_request"
+    assert sessions.saved_metadata == {}
 
 
 def test_create_session_publishes_sessions_resource_changed() -> None:
@@ -601,7 +667,13 @@ def test_agent_get_reports_config_and_effective_for_own_value(tmp_path: Path) ->
     result = _get_agent(state, {"id": "orchestrator"})
 
     # config = raw own values (pre-default-bake); shape check.
-    assert set(result["config"]) == {"model", "fallback_model", "temperature", "thinking_effort"}
+    assert set(result["config"]) == {
+        "model",
+        "fallback_model",
+        "temperature",
+        "thinking_effort",
+        "compaction_policy",
+    }
     assert result["config"]["model"] == "openai/gpt-5.2"
     assert result["config"]["fallback_model"] == ""
     assert result["config"]["temperature"] is None

@@ -1,11 +1,13 @@
 <script>
   import { onDestroy, onMount, untrack } from 'svelte';
 
-  import SearchableDropdown from '../SearchableDropdown.svelte';
+  import CompactionPolicyEditor from '../compaction/CompactionPolicyEditor.svelte';
   import Button from '../ui/Button.svelte';
-  import TextField from '../ui/TextField.svelte';
-  import Toggle from '../ui/Toggle.svelte';
   import { rpc } from '$lib/api.js';
+  import {
+    compactionPoliciesEqual,
+    normalizeCompactionPolicy,
+  } from '$lib/compactionPolicy.js';
   import { t } from '$lib/i18n.js';
   import { runSettingsSave } from '$lib/settingsSave.js';
   import {
@@ -14,15 +16,6 @@
     parseModelSelectionValue,
     selectModelValue,
   } from '$lib/modelSelection.js';
-  import {
-    buildCompactionSettingsPayload,
-    getCompactionSettings,
-    normalizeCompactionSettings,
-  } from '$lib/settingsView.js';
-  import {
-    SURFACE_FORM,
-    shouldApplyReloadNow,
-  } from '$lib/resourceInvalidation.js';
 
   const AUTO_SAVE_DEBOUNCE_MS = 800;
   const noop = () => {};
@@ -35,67 +28,36 @@
     modelsRefreshToken = 0,
   } = $props();
 
-  // Form is seeded once from the settings prop at mount (untrack avoids a
-  // reactive dependency); later commits flow back through saveDisabled.
-  let compactionSettings = $state(
-    untrack(() => getCompactionSettings(settings)),
+  let policy = $state(
+    untrack(() => normalizeCompactionPolicy(settings?.compaction)),
   );
   let saving = $state(false);
+  let timer = null;
   let availableModels = $state([]);
   let availableConnections = $state([]);
-  let autoSaveTimer = null;
-  // A live model reload fetches in the background but holds the visible option
-  // swap while the picker is open, so an open selection is never disturbed; the
-  // chosen value lives in `compactionSettings`, separate from these options.
-  let modelDropdownOpenCount = $state(0);
-  let pendingModelCatalogs = null;
   let lastModelsRefreshToken = null;
-
-  let compactionSummaryModelOptions = $derived(
-    selectModelOptions(
-      compactionSettings.summary_model ?? '',
-      t('settings.compaction.summaryModelPlaceholder', 'Active agent model'),
-    ),
+  let summaryModelOptions = $derived(
+    buildModelSelectOptions({
+      models: availableModels,
+      connections: availableConnections,
+      selectedModelValue: policy.strategy.summary_model ?? '',
+      emptyLabel: t(
+        'settings.compaction.summaryModelPlaceholder',
+        'Active agent model',
+      ),
+      translate: t,
+    }),
   );
-  let compactionSummaryModelSelectValue = $derived(
-    selectModelValue(
-      compactionSettings.summary_model ?? '',
-      compactionSummaryModelOptions,
-    ),
+  let summaryModelSelectValue = $derived(
+    selectModelValue(policy.strategy.summary_model ?? '', summaryModelOptions),
   );
   let saveDisabled = $derived(
-    saving ||
-      compactionSettingsMatch(
-        compactionSettings,
-        getCompactionSettings(settings),
-      ),
+    saving || compactionPoliciesEqual(policy, settings?.compaction),
   );
 
-  onMount(() => {
-    void loadModelCatalogs();
-  });
+  onDestroy(() => clearTimer());
+  onMount(() => void loadModelCatalogs());
 
-  onDestroy(() => {
-    clearAutoSaveTimer();
-  });
-
-  $effect(() => {
-    if (saveDisabled) {
-      return;
-    }
-
-    autoSaveTimer = setTimeout(() => {
-      autoSaveTimer = null;
-      void saveCompactionSettings();
-    }, AUTO_SAVE_DEBOUNCE_MS);
-
-    return () => {
-      clearAutoSaveTimer();
-    };
-  });
-
-  // Reload the model catalog when the generic invalidation channel signals a
-  // model/provider change (first run is a no-op: mount already loaded).
   $effect(() => {
     if (lastModelsRefreshToken === null) {
       lastModelsRefreshToken = modelsRefreshToken;
@@ -103,120 +65,78 @@
     }
     if (modelsRefreshToken !== lastModelsRefreshToken) {
       lastModelsRefreshToken = modelsRefreshToken;
-      void reloadModelCatalogs();
+      void loadModelCatalogs();
     }
   });
 
-  async function fetchModelCatalogs() {
+  $effect(() => {
+    if (saveDisabled) return;
+    timer = setTimeout(() => {
+      timer = null;
+      void save();
+    }, AUTO_SAVE_DEBOUNCE_MS);
+    return clearTimer;
+  });
+
+  function clearTimer() {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  }
+
+  function update(next) {
+    policy = next;
+    onError('');
+  }
+
+  async function loadModelCatalogs() {
     try {
       const [modelsResult, connectionsResult] = await Promise.all([
         rpc('model.list'),
         rpc('connection.list'),
       ]);
-
-      return {
-        models: Array.isArray(modelsResult?.models) ? modelsResult.models : [],
-        connections: Array.isArray(connectionsResult?.connections)
-          ? connectionsResult.connections
-          : [],
-      };
+      availableModels = Array.isArray(modelsResult?.models)
+        ? modelsResult.models
+        : [];
+      availableConnections = Array.isArray(connectionsResult?.connections)
+        ? connectionsResult.connections
+        : [];
     } catch (error) {
       onError(
         `${t('settings.models.loadError', 'Model catalog could not be loaded.')} ${error.message}`,
       );
-      return null;
     }
   }
 
-  function applyModelCatalogs(catalogs) {
-    availableModels = catalogs.models;
-    availableConnections = catalogs.connections;
-    pendingModelCatalogs = null;
-  }
-
-  async function loadModelCatalogs() {
-    const catalogs = await fetchModelCatalogs();
-    if (catalogs) {
-      applyModelCatalogs(catalogs);
-    }
-  }
-
-  async function reloadModelCatalogs() {
-    const catalogs = await fetchModelCatalogs();
-    if (!catalogs) {
-      return;
-    }
-    if (
-      shouldApplyReloadNow(SURFACE_FORM, {
-        dropdownOpen: modelDropdownOpenCount > 0,
-      })
-    ) {
-      applyModelCatalogs(catalogs);
-    } else {
-      pendingModelCatalogs = catalogs;
-    }
-  }
-
-  function trackModelDropdownOpen(open) {
-    modelDropdownOpenCount = Math.max(
-      0,
-      modelDropdownOpenCount + (open ? 1 : -1),
-    );
-    if (modelDropdownOpenCount === 0 && pendingModelCatalogs) {
-      applyModelCatalogs(pendingModelCatalogs);
-    }
-  }
-
-  function selectModelOptions(selectedModelValue, emptyLabel) {
-    return buildModelSelectOptions({
-      models: availableModels,
-      connections: availableConnections,
-      selectedModelValue,
-      emptyLabel,
-      translate: t,
+  function selectSummaryModel(selectedValue) {
+    const selection = parseModelSelectionValue(selectedValue);
+    update({
+      ...policy,
+      strategy: {
+        ...policy.strategy,
+        summary_model: modelSelectionValue(
+          selection.model,
+          selection.connectionLocalId,
+        ),
+      },
     });
   }
 
-  function clearAutoSaveTimer() {
-    if (autoSaveTimer !== null) {
-      clearTimeout(autoSaveTimer);
-      autoSaveTimer = null;
-    }
+  async function save() {
+    if (saveDisabled) return;
+    await runSettingsSave({
+      onCommit,
+      onToast,
+      onError,
+      setSaving: (value) => (saving = value),
+      buildPayload: () => ({ compaction: normalizeCompactionPolicy(policy) }),
+      successKey: 'settings.compaction.saved',
+      successFallback: 'Compaction Policy saved.',
+    });
   }
 
-  function compactionSettingsMatch(left, right) {
-    const normalizedLeft = normalizeCompactionSettings({ compaction: left });
-    const normalizedRight = normalizeCompactionSettings({ compaction: right });
-
-    return (
-      normalizedLeft.auto === normalizedRight.auto &&
-      normalizedLeft.threshold === normalizedRight.threshold &&
-      normalizedLeft.tail_tokens === normalizedRight.tail_tokens &&
-      normalizedLeft.summary_model === normalizedRight.summary_model
-    );
-  }
-
-  function handleCompactionSettingChange(key, value) {
-    compactionSettings = {
-      ...compactionSettings,
-      [key]: value,
-    };
-    onError('');
-  }
-
-  function updateCompactionSummaryModelSelection(selectedValue) {
-    const selection = parseModelSelectionValue(selectedValue);
-    handleCompactionSettingChange(
-      'summary_model',
-      modelSelectionValue(selection.model, selection.connectionLocalId),
-    );
-  }
-
-  function handleManualCompactionSettingsSave() {
-    if (saving) {
-      return;
-    }
-
+  function saveNow() {
     if (saveDisabled) {
       onToast({
         title: t('common.alreadySaved', 'Already saved'),
@@ -224,135 +144,25 @@
       });
       return;
     }
-
-    clearAutoSaveTimer();
-    void saveCompactionSettings();
-  }
-
-  async function saveCompactionSettings() {
-    if (saveDisabled) {
-      return;
-    }
-
-    await runSettingsSave({
-      onCommit,
-      onToast,
-      onError,
-      setSaving: (value) => (saving = value),
-      buildPayload: () => buildCompactionSettingsPayload(compactionSettings),
-      successKey: 'settings.compaction.saved',
-      successFallback: 'Compaction settings saved.',
-    });
+    clearTimer();
+    void save();
   }
 </script>
 
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.compaction.auto', 'Auto-compact')}
-    </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.compaction.autoDescription',
-        'When the conversation reaches the threshold, older messages are automatically summarized; the summary plus the most recent messages stay in context.',
-      )}
-    </div>
-  </div>
-  <div class="s-row-control">
-    <Toggle
-      checked={compactionSettings.auto === true}
-      ariaLabel={t('settings.compaction.auto', 'Auto-compact')}
-      onChange={(next) => handleCompactionSettingChange('auto', next)}
-    />
-  </div>
-</div>
-
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.compaction.threshold', 'Threshold')}
-    </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.compaction.thresholdDescription',
-        'Fraction of the context window that triggers compaction, between 0 and 1 — e.g. 0.8 compacts when the context is 80% full.',
-      )}
-    </div>
-  </div>
-  <div class="s-row-control s-row-control--number">
-    <TextField
-      inputmode="decimal"
-      value={compactionSettings.threshold}
-      ariaLabel={t('settings.compaction.threshold', 'Threshold')}
-      onInput={(next) => handleCompactionSettingChange('threshold', next)}
-    />
-  </div>
-</div>
-
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.compaction.tailTokens', 'Tail tokens')}
-    </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.compaction.tailTokensDescription',
-        'Amount of recent conversation that is always kept word-for-word instead of summarized, measured in tokens.',
-      )}
-    </div>
-  </div>
-  <div class="s-row-control s-row-control--number">
-    <TextField
-      type="number"
-      min="1"
-      step="1000"
-      value={compactionSettings.tail_tokens}
-      ariaLabel={t('settings.compaction.tailTokens', 'Tail tokens')}
-      onInput={(next) => handleCompactionSettingChange('tail_tokens', next)}
-    />
-  </div>
-</div>
-
-<div class="s-row">
-  <div class="s-row-info">
-    <div class="s-row-label">
-      {t('settings.compaction.summaryModel', 'Summary model')}
-    </div>
-    <div class="s-row-desc">
-      {t(
-        'settings.compaction.summaryModelDescription',
-        'Model used for summarization. Leave blank to use the active agent model. This binding is independent of agent and project defaults.',
-      )}
-    </div>
-  </div>
-  <div class="s-row-control s-row-control--model">
-    <SearchableDropdown
-      id="settings-compaction-summary-model"
-      value={compactionSummaryModelSelectValue}
-      options={compactionSummaryModelOptions}
-      placeholder={t(
-        'settings.compaction.summaryModelPlaceholder',
-        'Active agent model',
-      )}
-      searchPlaceholder={t(
-        'agents.form.modelSearchPlaceholder',
-        'Filter models…',
-      )}
-      emptyLabel={t('agents.form.modelSearchEmpty', 'No models match')}
-      ariaLabel={t('settings.compaction.summaryModel', 'Summary model')}
-      triggerClass="settings-view__dropdown"
-      panelClass="settings-view__model-panel"
-      onOpenChange={trackModelDropdownOpen}
-      onValueChange={updateCompactionSummaryModelSelection}
-    />
-  </div>
-</div>
+<CompactionPolicyEditor
+  value={policy}
+  onChange={update}
+  idPrefix="settings-compaction"
+  {summaryModelOptions}
+  {summaryModelSelectValue}
+  onSummaryModelSelect={selectSummaryModel}
+/>
 
 <div class="s-footer">
   <Button
     variant="primary"
     class="s-save-button s-save-button--inline"
-    onClick={handleManualCompactionSettingsSave}
+    onClick={saveNow}
   >
     {saving ? t('common.saving', 'Saving…') : t('common.save', 'Save')}
   </Button>

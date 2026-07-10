@@ -1228,8 +1228,11 @@ describe('comma decimal separators', () => {
 
   it('parses a comma threshold in compaction settings', () => {
     expect(
-      normalizeCompactionSettings({ compaction: { threshold: '0,35' } })
-        .threshold,
+      normalizeCompactionSettings({
+        compaction: {
+          trigger: { type: 'context_ratio', threshold: '0,35' },
+        },
+      }).trigger.threshold,
     ).toBe(0.35);
   });
 });

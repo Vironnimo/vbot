@@ -46,7 +46,7 @@ Each domain has a **domain map** in `.vorch/domain-maps/`, named after its modul
 | `.vorch/domain-maps/model_tasks/embeddings.md` | embedding execution | Text-embedding execution, provider wire, vector output for recall |
 | `.vorch/domain-maps/chat.md` | `core/chat/` | Canonical ChatMessage format, chat-loop constraints, Run execution |
 | `.vorch/domain-maps/runs.md` | `core/runs/` | Run lifecycle, cancellation, timeline events, in-memory queues |
-| `.vorch/domain-maps/compaction.md` | `core/compaction/` | Context-window compaction, checkpoints, summary strategy |
+| `.vorch/domain-maps/compaction.md` | `core/compaction/` | Policy-driven Triggers, Strategies, Plans, and self-contained checkpoints |
 | `.vorch/domain-maps/sessions.md` | `core/sessions/` | Session persistence, metadata, current JSONL storage contract |
 | `.vorch/domain-maps/recall.md` | `core/recall/` | Session recall backend interface, JSONL scan backend, SQLite FTS derived index, vector chunked semantic index |
 | `.vorch/domain-maps/statistics.md` | `core/statistics/` | Read-only on-demand aggregation over Sessions, run-summary segmentation, real-vs-estimated tokens, `statistics.report` RPC, Statistics tab |

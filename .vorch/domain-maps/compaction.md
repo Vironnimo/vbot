@@ -1,57 +1,47 @@
 # Compaction
 
-Context-window management and compaction checkpoint creation for chat Sessions.
+Policy-driven Context transformation and checkpoint creation for chat Sessions.
 
 ## Overview
 
-`core/compaction/` (`compaction.py`) owns the provider-agnostic compaction algorithm, settings type, and strategy/service interface. Compaction is a logical Session operation: it summarizes older closed history into a `compaction_checkpoint` message while preserving a verbatim recent tail. It never rewrites or deletes existing Session JSONL history.
+`core/compaction/` owns the provider-neutral Engine that evaluates Triggers, asks one Strategy for a Plan, performs zero or one Model call, validates the resulting Projection, and returns one self-contained `compaction_checkpoint`. It never rewrites or deletes prior Session JSONL records. The chat loop owns safe execution points and runtime resolution; settings, Agent, Project, and Session layers own persisted Policy configuration.
 
-The chat loop decides when compaction is safe to run. The compaction domain decides how to choose the preserved tail boundary, render pre-tail history for summarization, call the supplied summary adapter, and validate the resulting checkpoint.
+Core cross-cutting terms (Session, Agent, Model, Tool) live in `.vorch/GLOSSARY.md`.
 
 ## Data Model
 
-- `CompactionSettings` — runtime settings `{ auto, threshold, tail_tokens, summary_model }`.
-- `CompactionStrategy` — protocol for implementations that produce a `ChatMessage` checkpoint.
-- `CompactionService` — wrapper that runs a strategy, validates the checkpoint role, and exposes threshold/token helpers.
-- `SummarizationStrategy` — current strategy that summarizes pre-tail history through a caller-provided provider adapter.
-- `CompactionError` — expected domain error for invalid history, invalid strategy output, or invalid summary responses.
-- `TOOL_RESULT_CONTENT_PLACEHOLDER` — placeholder used when rendering tool messages into the summary prompt; raw tool result content is omitted from compaction prompts.
+- A resolved Compaction Policy is `{enabled, trigger, strategy}`. Built-in Triggers are `{type: "context_ratio", threshold}` and `{type: "input_tokens", tokens}`. Built-in Strategies are `{type: "summary_tail", tail_tokens, summary_model}` and `{type: "continuation"}`.
+- `CompactionSettings` is the typed runtime view of one resolved Policy. It is not the persisted schema and must not become a second settings source.
+- `CompactionPlan` is the Strategy/Engine boundary: optional Model messages and target (`active` or `summary`), ordered messages before/after the returned text, optional zero-call text, and cumulative compacted-token count. A Plan permits zero or one Model call; the Engine never loops or performs follow-up calls.
+- A new `compaction_checkpoint` stores its plain summary in `content`, a canonical message `projection`, cumulative `usage.compacted_token_count`, and Policy/Strategy provenance. The constructor guarantees the Projection starts with the matching `[compaction-summary]` note. The latest checkpoint's Projection plus messages appended after that checkpoint is the effective Context; hidden pre-checkpoint JSONL history is never re-read into later compaction. Existing boundary-based checkpoints remain valid read-only input: their stored summary plus the surviving slice from `tail_boundary_id` is materialized in memory as the effective Projection, then any later compaction writes only the new format.
 
 ## Interfaces
 
-- `find_tail_boundary(messages, tail_tokens) -> str` returns the user-message id where the verbatim preserved tail starts.
-- `CompactionService.compact(messages, agent, summary_adapter, summary_model_id, storage, settings, instruction=None) -> ChatMessage` delegates to the strategy and requires a `role: "compaction_checkpoint"` result. `instruction` is the optional manual `/compact` free-text argument forwarded to the strategy.
-- `CompactionService.should_auto_compact(input_tokens, context_window, threshold) -> bool` evaluates configured threshold ratio. The chat loop resolves `context_window` through the shared read-side default chain (`resolve_context_window`, see `providers.md`) before calling, so a model whose catalog window is `None` still auto-compacts against a usable window (provider-config default or the global floor) instead of silently disabling. The `<= 0` guard stays as defensive belt-and-suspenders.
-- `CompactionService.estimate_messages_tokens(messages) -> int` estimates prompt size when provider usage is unavailable. The estimate counts provider-relevant structured message fields such as content blocks, tool calls, tool result metadata, and reasoning fields; storage-only fields such as ids, timestamps, usage, and timing are ignored.
-- `SummarizationStrategy.compact(...)` reads `compaction.md` through the provided storage object, sends one user prompt to the summary adapter with `temperature=0.0` and provider-default thinking effort, and returns `ChatMessage.compaction_checkpoint(...)`.
-- **Incremental compaction:** When the supplied history already contains a `compaction_checkpoint`, `compact` summarizes only the messages from that checkpoint's `tail_boundary_id` onward (its previously preserved tail), not the whole session. The previous summary is seeded into the prompt inside `<previous_summary>...</previous_summary>` so the model carries its facts forward, and the new checkpoint's `usage.compacted_token_count` accumulates the prior count plus the newly folded delta. Without a prior checkpoint, the full history is the candidate region.
+- `CompactionService.should_auto_compact(...)` selects the configured Trigger from the registry and evaluates it against current input tokens and the resolved Context window.
+- `CompactionStrategy.plan(context, settings) -> CompactionPlan` is the extension seam for programmed Strategies. A Strategy receives the current effective canonical messages, an optional exact provider-request snapshot, previous cumulative count, manual instruction, and prompt-fragment storage; it performs no Model I/O itself.
+- `CompactionService.compact(...) -> ChatMessage` selects the Strategy, executes at most one planned Model request, assembles the Projection, validates complete Tool cycles, and returns the checkpoint.
+- `SummarizationStrategy` chooses a complete user-turn tail, renders older effective Context into the `compaction.md` instruction with raw Tool results and Skill bodies replaced by placeholders, calls the configured Summary Model once, and projects the response followed by the verbatim tail.
+- `ContinuationStrategy` requires the exact active provider request, appends one internal `<system-reminder>` asking for checkpoint Context, calls the active Model once with the same Tool definitions, and uses the one text response directly as the Projection. This append-only request shape is the cache-preserving strategy; any provider cache hit still depends on the provider's exact-prefix rules.
+- `find_tail_boundary(messages, tail_tokens)` returns the user-message id at which a Summary+Tail Strategy's verbatim tail begins.
+
+## Policy Resolution
+
+The chat loop resolves a Policy at every compaction decision, in this order: Session metadata override → Agent effective Policy (including a Project member override) → global settings. Absence means inheritance, so later global or Agent changes affect existing Sessions immediately without rewriting metadata. A Policy change never triggers compaction by itself and never reprocesses hidden history; the next normal or manual compaction consumes the existing checkpoint Projection under the newly resolved Policy.
 
 ## Cross-Domain Contracts
 
-- `core/runtime/` wires compaction: `Runtime.start()` constructs both canonical ChatLoops with one shared `CompactionService(SummarizationStrategy())` via constructor injection. No other layer creates or injects the service.
-- `core/chat/` owns the **auto-compaction** entry point. The chat loop (`_maybe_auto_compact` in `core/chat/chat.py`) runs it only after a final assistant response with no pending tool calls or after a complete tool-result cycle, and resolves its own summary adapter/model.
-- `core/automation/` owns the **manual `/compact`** entry point as a thin bridge. The pure-text command is recognized by `core/chat/commands.py`; accessors dispatch it (server RPC `_handle_compact_command`, the Telegram channel) to `TriggerService.compact_session`, which delegates to `ChatLoop.compact_session(...)`. Manual and auto compaction share the chat loop's single summary-adapter resolution (`ChatLoop._resolve_summary_adapter`). `server/` is RPC dispatch only — no compaction logic lives there.
-- **`/compact <instruction>` argument:** the optional free-text argument is threaded `CommandAction(name="compact", argument=...)` → `compact_session(..., instruction)` → `ChatLoop.compact_session(..., instruction)` → `CompactionService.compact(..., instruction)` → `SummarizationStrategy.compact(..., instruction)`. When present, `_build_compaction_prompt` adds it as a `<user_instruction>...</user_instruction>` section (between the prompt fragment and the optional `<previous_summary>`/`<history>` sections). `instruction` defaults to `None` everywhere, so the auto-compaction path is unaffected.
-- `core/sessions/` owns persistence. Compaction appends checkpoint messages to the Session; it never mutates existing records.
-- `core/storage/` owns persisted settings and prompt-fragment access. `compaction.md` is in `storage.PROMPT_FRAGMENT_NAMES` (backend load/write allowed) but is deliberately excluded from `storage.AGENT_PROMPT_FRAGMENT_NAMES` (never Agent-scoped) and is never a prompt block — the System Prompt block facade does not expose it for editing.
-- WebUI renders `compaction_completed` Run events and persisted `compaction_checkpoint` history as timeline separators, not normal chat bubbles.
+- `core/runtime/` constructs one registry-backed `CompactionService` shared by the canonical ChatLoops.
+- `core/chat/` evaluates auto-compaction only at safe completed Model boundaries, resolves effective Policy and adapters, supplies the exact active request snapshot for Continuation, appends the checkpoint, and rebuilds provider Context from its Projection.
+- `core/sessions/` persists checkpoints and the optional Session Policy override under metadata key `compaction_policy`.
+- `core/settings/`, `core/agents/`, and `core/projects/` validate the same complete Policy shape. Agent and Project-member values are nullable inheritance overrides.
+- `server/` exposes Session override mutation and returns both `compaction_policy_override` and `compaction_policy_effective` in Session listings. The WebUI edits the same Policy shape globally and at Agent, Project-member, and Session scopes.
 
-## Conventions
+## Invariants & Gotchas
 
-- Tail boundaries must start on user messages so preserved history resumes at a complete user turn.
-- Compaction must not split unresolved assistant tool-call cycles.
-- Tool messages are represented in compaction prompts with `TOOL_RESULT_CONTENT_PLACEHOLDER`; raw tool result content can be large or sensitive and is not copied into the summary prompt.
-- Skill activations are excluded from the summary prompt the same way: a `[skill-context] ` trigger note renders as `SKILL_ACTIVATION_CONTENT_PLACEHOLDER` (keeping the activation fact + skill name visible, never the body), and a `skill` tool result is already covered by the generic tool placeholder. Skill instructions are standing context, not conversation to summarize — the chat loop re-injects activated skills into the rebuilt request after a checkpoint (see `chat.md`), so nothing is lost by omitting them here.
-- Tail-boundary token estimates must include structured tool-call arguments and content-block payloads rather than only `message.content`, so tool-heavy turns are not undercounted.
-- Summary adapter responses may be raw provider dicts or adapter-normalized dicts. If an adapter exposes `normalize_response()`, the strategy uses it before extracting summary text.
-- `summary_model` fallback behavior is owned by callers because they know the active runtime/provider context. Invalid or unavailable summary models should fall back to the active run model rather than failing the user turn.
-
-## Constraints & Gotchas
-
-- `CompactionService` intentionally accepts adapters, storage, settings, and agent objects from callers instead of reaching into runtime globals.
-- The domain imports canonical `ChatMessage`/`ContentBlock` types from `core.chat` at module load; `core/chat/chat.py` imports `CompactionService` only under `TYPE_CHECKING` plus a lazy local import, and the service is injected. Keep it that way — a module-level `core.chat` ↔ `core.compaction` import in both directions would create a runtime cycle.
-- Manual `/compact` (`compact_session`) refuses while a Run is active for the session (returns "Cannot compact while a run is active for this session"); auto-compaction only runs at the chat loop's safe points. Neither path compacts mid-turn.
-- Existing completed-turn provider reasoning metadata must not be blindly carried into summaries or later provider requests.
-- Failed automatic compaction should not fail the active Run; the chat loop logs a warning and continues without compaction.
-- A checkpoint's `tail_boundary_id` can become a dangling reference if the anchored message is lost (corrupted/partial write). Neither path hard-fails on this: `_split_at_previous_checkpoint` falls back to the region right after the checkpoint as the re-summarizable region (prior summary still seeded), so the next compaction emits a fresh checkpoint with a valid boundary. The chat loop's request build recovers symmetrically (see `chat.md`). The trade-off in both is that the unanchored preserved-tail slice between the lost boundary and the checkpoint is dropped — its integrity is already suspect in the corruption case.
-- Compaction assumes a context window of **at least ~32k tokens** with the default settings (`threshold=0.8`, `tail_tokens=15_000`). On much smaller windows the preserved tail alone can exceed the trigger threshold so compaction never reduces below it. `tail_tokens` is a floor, not a cap, and is not clamped against the context window — see `.vorch/FLAGGED.md` for the residual edge cases that were intentionally deferred under the 32k assumption.
+- Automatic compaction is enabled/disabled by Policy. Manual `/compact` still executes the selected Strategy but refuses while a Run is active.
+- A Strategy cannot split or orphan an assistant Tool-call cycle in its retained Projection. Summary+Tail boundaries begin on user messages.
+- Continuation runs only when the chat loop can provide a completed active request snapshot. At a mid-tool safe point it waits until the final assistant boundary rather than synthesizing a different prefix.
+- Raw Tool result bodies and Skill instruction bodies are not copied into the Summary+Tail prompt. Their structural facts remain visible through placeholders; surviving canonical tail messages remain verbatim.
+- Failed automatic compaction logs and leaves the active Run untouched. Manual failures become the existing user-facing `Compaction failed: ...` reply.
+- Summary Model resolution and fallback remain chat-loop responsibilities because only that layer knows the active provider/connection. Continuation always targets the active Model/connection.
+- Do not write new `tail_boundary_id` checkpoints or rewrite old ones. The old checkpoint reader exists solely to preserve already persisted Session history under the explicit cumulative-compaction contract. The removed flat `{auto, threshold, tail_tokens, summary_model}` Policy has no compatibility parser.

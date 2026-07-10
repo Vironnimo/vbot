@@ -110,8 +110,11 @@ def test_build_project_rejects_unknown_source_format(tmp_path: Path) -> None:
         build_project("vbot", "vBot", tmp_path, source_format="cursor")
 
 
-def test_override_fields_constant_is_the_three_overridable_fields() -> None:
-    assert frozenset({"model", "temperature", "thinking_effort"}) == OVERRIDE_FIELDS
+def test_override_fields_constant_contains_all_overridable_fields() -> None:
+    assert (
+        frozenset({"model", "temperature", "thinking_effort", "compaction_policy"})
+        == OVERRIDE_FIELDS
+    )
 
 
 def test_build_project_accepts_overrides(tmp_path: Path) -> None:

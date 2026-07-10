@@ -69,7 +69,7 @@ SUBAGENT_SETTING_FIELDS = (
     "subagent_timeout_minutes",
 )
 APPEARANCE_FIELDS = frozenset({"language", "chat_width"})
-COMPACTION_FIELDS = frozenset({"auto", "threshold", "tail_tokens", "summary_model"})
+COMPACTION_FIELDS = frozenset({"enabled", "trigger", "strategy"})
 DEFAULTS_SECTIONS = frozenset({"agent"})
 RECALL_FIELDS = frozenset({"backend"})
 EXTENSIONS_FIELDS = frozenset({"disabled", "config"})
@@ -89,6 +89,7 @@ AGENT_FIELDS = frozenset(
         "allowed_tools",
         "created_at",
         "custom_system_prompt_enabled",
+        "compaction_policy",
         "current_session_id",
         "fallback_model",
         "id",
@@ -179,7 +180,7 @@ PROJECT_FIELDS = frozenset(
 ALLOWED_PROJECT_SOURCE_FORMATS = frozenset(PROJECT_SOURCE_FORMATS)
 # The optional fields a per-agent override object may carry. Kept in sync with
 # ``core.projects.projects.OVERRIDE_FIELDS`` (which owns the runtime shape).
-OVERRIDE_FIELDS = frozenset({"model", "temperature", "thinking_effort"})
+OVERRIDE_FIELDS = frozenset({"model", "temperature", "thinking_effort", "compaction_policy"})
 REQUIRED_PROJECT_FIELDS = frozenset(
     {"created_at", "cwd", "display_name", "project_id", "updated_at"}
 )
@@ -422,6 +423,9 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
         data["custom_system_prompt_enabled"], bool
     ):
         _error(diagnostics, "$.custom_system_prompt_enabled", "must be a boolean")
+    _validate_optional_compaction_policy(
+        diagnostics, data.get("compaction_policy"), "$.compaction_policy"
+    )
     _validate_string(diagnostics, "$.created_at", data.get("created_at"), required=True)
     _validate_string(diagnostics, "$.updated_at", data.get("updated_at"), required=True)
     if "current_session_id" in data:
@@ -763,25 +767,85 @@ def _validate_compaction(diagnostics: list[JsonDiagnostic], value: Any) -> None:
         return
 
     _warn_unknown_keys(diagnostics, "$.compaction", value, COMPACTION_FIELDS, "compaction field")
-    if "auto" in value and not isinstance(value["auto"], bool):
-        _error(diagnostics, "$.compaction.auto", "must be a boolean")
-    if "threshold" in value:
-        threshold = value["threshold"]
-        if isinstance(threshold, bool) or not isinstance(threshold, int | float):
-            _error(diagnostics, "$.compaction.threshold", "must be a number")
-        else:
-            normalized_threshold = float(threshold)
-            if normalized_threshold <= 0 or normalized_threshold > 1:
-                _error(diagnostics, "$.compaction.threshold", "must be in (0, 1]")
-    _validate_positive_integer(
-        diagnostics, "$.compaction.tail_tokens", value.get("tail_tokens"), required=False
+    if "enabled" in value and not isinstance(value["enabled"], bool):
+        _error(diagnostics, "$.compaction.enabled", "must be a boolean")
+    _validate_compaction_trigger(diagnostics, value.get("trigger"), "$.compaction.trigger")
+    _validate_compaction_strategy(diagnostics, value.get("strategy"), "$.compaction.strategy")
+
+
+def _validate_optional_compaction_policy(
+    diagnostics: list[JsonDiagnostic], value: Any, path: str
+) -> None:
+    if value is None:
+        return
+    if not isinstance(value, Mapping):
+        _error(diagnostics, path, "must be an object or null")
+        return
+    _warn_unknown_keys(
+        diagnostics,
+        path,
+        value,
+        frozenset({"enabled", "trigger", "strategy"}),
+        "compaction Policy field",
     )
-    if (
-        "summary_model" in value
-        and value["summary_model"] is not None
-        and not isinstance(value["summary_model"], str)
-    ):
-        _error(diagnostics, "$.compaction.summary_model", "must be a string or null")
+    if "enabled" in value and not isinstance(value["enabled"], bool):
+        _error(diagnostics, f"{path}.enabled", "must be a boolean")
+    _validate_compaction_trigger(diagnostics, value.get("trigger"), f"{path}.trigger")
+    _validate_compaction_strategy(diagnostics, value.get("strategy"), f"{path}.strategy")
+
+
+def _validate_compaction_trigger(diagnostics: list[JsonDiagnostic], value: Any, path: str) -> None:
+    if value is None:
+        return
+    if not isinstance(value, Mapping):
+        _error(diagnostics, path, "must be an object")
+        return
+    trigger_type = value.get("type")
+    if trigger_type == "context_ratio":
+        _warn_unknown_keys(
+            diagnostics, path, value, frozenset({"type", "threshold"}), "trigger field"
+        )
+        threshold = value.get("threshold")
+        if isinstance(threshold, bool) or not isinstance(threshold, int | float):
+            _error(diagnostics, f"{path}.threshold", "must be a number")
+        elif not 0 < float(threshold) <= 1:
+            _error(diagnostics, f"{path}.threshold", "must be in (0, 1]")
+        return
+    if trigger_type == "input_tokens":
+        _warn_unknown_keys(diagnostics, path, value, frozenset({"type", "tokens"}), "trigger field")
+        _validate_positive_integer(
+            diagnostics, f"{path}.tokens", value.get("tokens"), required=False
+        )
+        return
+    _error(diagnostics, f"{path}.type", "must be context_ratio or input_tokens")
+
+
+def _validate_compaction_strategy(diagnostics: list[JsonDiagnostic], value: Any, path: str) -> None:
+    if value is None:
+        return
+    if not isinstance(value, Mapping):
+        _error(diagnostics, path, "must be an object")
+        return
+    strategy_type = value.get("type")
+    if strategy_type == "summary_tail":
+        _warn_unknown_keys(
+            diagnostics,
+            path,
+            value,
+            frozenset({"type", "tail_tokens", "summary_model"}),
+            "strategy field",
+        )
+        _validate_positive_integer(
+            diagnostics, f"{path}.tail_tokens", value.get("tail_tokens"), required=False
+        )
+        summary_model = value.get("summary_model")
+        if summary_model is not None and not isinstance(summary_model, str):
+            _error(diagnostics, f"{path}.summary_model", "must be a string or null")
+        return
+    if strategy_type == "continuation":
+        _warn_unknown_keys(diagnostics, path, value, frozenset({"type"}), "strategy field")
+        return
+    _error(diagnostics, f"{path}.type", "must be summary_tail or continuation")
 
 
 def _validate_defaults(diagnostics: list[JsonDiagnostic], value: Any) -> None:
@@ -1259,6 +1323,12 @@ def _validate_one_override(diagnostics: list[JsonDiagnostic], path: str, overrid
             _child_path(path, "thinking_effort"),
             override["thinking_effort"],
             allow_none=False,
+        )
+    if "compaction_policy" in override:
+        _validate_optional_compaction_policy(
+            diagnostics,
+            override["compaction_policy"],
+            _child_path(path, "compaction_policy"),
         )
 
 

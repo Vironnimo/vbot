@@ -23,7 +23,7 @@ from core.automation import CronService, ReflectionService, TriggerService
 from core.channels import ChannelService
 from core.chat import ChatLoop, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
-from core.compaction import CompactionService, SummarizationStrategy
+from core.compaction import CompactionService
 from core.debug import DebugTraceStore, ProviderDebugRecorder
 from core.extensions import (
     ExtensionRegistry,
@@ -591,7 +591,7 @@ class Runtime:
         if self._attachment_store is None:
             raise RuntimeError("Attachment store not available")
         resolver = ContentBlockResolver(self._attachment_store, transcriber=self._speech)
-        compaction_service = CompactionService(SummarizationStrategy())
+        compaction_service = CompactionService()
         # The reflection service starts review runs through the runtime's
         # streaming loop lazily at review time, so constructing it before the
         # loops is safe — the loops only need its notify hook.

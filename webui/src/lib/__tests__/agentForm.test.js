@@ -23,6 +23,7 @@ describe('agent form helpers', () => {
       memory_prompt_mode: 'agent_user',
       allowed_tools: ['*'],
       allowed_skills: ['*'],
+      compaction_policy: null,
       custom_system_prompt_enabled: false,
     });
   });
@@ -107,6 +108,7 @@ describe('agent form helpers', () => {
       memory_prompt_mode: 'agent',
       allowed_tools: ['read', 'write'],
       allowed_skills: ['debugging'],
+      compaction_policy: null,
       custom_system_prompt_enabled: true,
     });
 
@@ -151,6 +153,7 @@ describe('agent form helpers', () => {
       memory_prompt_mode: 'off',
       allowed_tools: ['read', 'write'],
       allowed_skills: ['debugging'],
+      compaction_policy: null,
       custom_system_prompt_enabled: true,
     });
     expect(result.payload).not.toHaveProperty('workspace');

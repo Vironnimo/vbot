@@ -638,32 +638,18 @@ class StubStorage:
 
     def load_compaction_settings(self) -> JsonObject:
         defaults: JsonObject = {
-            "auto": True,
-            "threshold": 0.8,
-            "tail_tokens": 15_000,
-            "summary_model": None,
+            "enabled": True,
+            "trigger": {"type": "context_ratio", "threshold": 0.8},
+            "strategy": {
+                "type": "summary_tail",
+                "tail_tokens": 15_000,
+                "summary_model": None,
+            },
         }
         stored = self._settings.get("compaction")
         if not isinstance(stored, dict):
-            return dict(defaults)
-
-        normalized = dict(defaults)
-        if isinstance(stored.get("auto"), bool):
-            normalized["auto"] = stored["auto"]
-
-        threshold = stored.get("threshold")
-        if isinstance(threshold, int | float) and not isinstance(threshold, bool):
-            normalized["threshold"] = float(threshold)
-
-        tail_tokens = stored.get("tail_tokens")
-        if isinstance(tail_tokens, int) and not isinstance(tail_tokens, bool):
-            normalized["tail_tokens"] = tail_tokens
-
-        summary_model = stored.get("summary_model")
-        if isinstance(summary_model, str) or summary_model is None:
-            normalized["summary_model"] = summary_model
-
-        return normalized
+            return defaults
+        return dict(stored)
 
     def load_recall_settings(self) -> JsonObject:
         stored = self._settings.get("recall")
@@ -1210,7 +1196,7 @@ class RecordingCompactionService:
         self.calls += 1
         return ChatMessage.compaction_checkpoint(
             summary="Compacted context",
-            tail_boundary_id="tail-boundary",
+            projection=[ChatMessage.user("tail")],
             compacted_token_count=1,
         )
 
@@ -1565,10 +1551,13 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
             "subagent_timeout_minutes": 60,
         },
         "compaction": {
-            "auto": True,
-            "threshold": 0.8,
-            "tail_tokens": 15000,
-            "summary_model": None,
+            "enabled": True,
+            "trigger": {"type": "context_ratio", "threshold": 0.8},
+            "strategy": {
+                "type": "summary_tail",
+                "tail_tokens": 15000,
+                "summary_model": None,
+            },
         },
         "recall": {
             "backend": "jsonl_scan",
@@ -3768,10 +3757,13 @@ async def test_settings_update_persists_compaction_settings_and_returns_full_pay
             "method": "settings.update",
             "params": {
                 "compaction": {
-                    "auto": False,
-                    "threshold": 0.9,
-                    "tail_tokens": 12000,
-                    "summary_model": "openai/gpt-5.2",
+                    "enabled": False,
+                    "trigger": {"type": "context_ratio", "threshold": 0.9},
+                    "strategy": {
+                        "type": "summary_tail",
+                        "tail_tokens": 12000,
+                        "summary_model": "openai/gpt-5.2",
+                    },
                 }
             },
         },
@@ -3779,16 +3771,22 @@ async def test_settings_update_persists_compaction_settings_and_returns_full_pay
 
     assert response["ok"] is True, response
     assert state.runtime.storage.load_compaction_settings() == {
-        "auto": False,
-        "threshold": 0.9,
-        "tail_tokens": 12000,
-        "summary_model": "openai/gpt-5.2",
+        "enabled": False,
+        "trigger": {"type": "context_ratio", "threshold": 0.9},
+        "strategy": {
+            "type": "summary_tail",
+            "tail_tokens": 12000,
+            "summary_model": "openai/gpt-5.2",
+        },
     }
     assert response["result"]["compaction"] == {
-        "auto": False,
-        "threshold": 0.9,
-        "tail_tokens": 12000,
-        "summary_model": "openai/gpt-5.2",
+        "enabled": False,
+        "trigger": {"type": "context_ratio", "threshold": 0.9},
+        "strategy": {
+            "type": "summary_tail",
+            "tail_tokens": 12000,
+            "summary_model": "openai/gpt-5.2",
+        },
     }
 
 
@@ -4114,10 +4112,13 @@ async def test_settings_update_rejects_compaction_threshold_out_of_range(tmp_pat
             "method": "settings.update",
             "params": {
                 "compaction": {
-                    "auto": True,
-                    "threshold": 1.5,
-                    "tail_tokens": 15000,
-                    "summary_model": None,
+                    "enabled": True,
+                    "trigger": {"type": "context_ratio", "threshold": 1.5},
+                    "strategy": {
+                        "type": "summary_tail",
+                        "tail_tokens": 15000,
+                        "summary_model": None,
+                    },
                 }
             },
         },
@@ -4125,7 +4126,7 @@ async def test_settings_update_rejects_compaction_threshold_out_of_range(tmp_pat
 
     assert response["ok"] is False
     assert response["error"]["code"] == "invalid_request"
-    assert "params.compaction.threshold" in response["error"]["message"]
+    assert "params.compaction.trigger.threshold" in response["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -4156,10 +4157,13 @@ async def test_settings_update_maps_storage_section_error_without_partial_write(
             "params": {
                 "appearance": {"language": "en"},
                 "compaction": {
-                    "auto": False,
-                    "threshold": 0.9,
-                    "tail_tokens": 12000,
-                    "summary_model": None,
+                    "enabled": False,
+                    "trigger": {"type": "context_ratio", "threshold": 0.9},
+                    "strategy": {
+                        "type": "summary_tail",
+                        "tail_tokens": 12000,
+                        "summary_model": None,
+                    },
                 },
             },
         },
@@ -4476,10 +4480,13 @@ async def test_settings_update_rejects_summary_model_on_forbidden_connection(
             "method": "settings.update",
             "params": {
                 "compaction": {
-                    "auto": True,
-                    "threshold": 0.8,
-                    "tail_tokens": 15000,
-                    "summary_model": "openai/gpt-5.4::api-key",
+                    "enabled": True,
+                    "trigger": {"type": "context_ratio", "threshold": 0.8},
+                    "strategy": {
+                        "type": "summary_tail",
+                        "tail_tokens": 15000,
+                        "summary_model": "openai/gpt-5.4::api-key",
+                    },
                 }
             },
         },
@@ -5079,7 +5086,7 @@ async def test_chat_history_includes_compaction_checkpoints(tmp_path: Path) -> N
     session.append(
         ChatMessage.compaction_checkpoint(
             summary="Compacted context summary",
-            tail_boundary_id=user_message.id,
+            projection=[user_message],
             compacted_token_count=321,
         )
     )
@@ -5104,7 +5111,7 @@ async def test_chat_history_includes_compaction_checkpoints(tmp_path: Path) -> N
     ]
     checkpoint = messages[1]
     assert checkpoint["content"] == "Compacted context summary"
-    assert checkpoint["tail_boundary_id"] == user_message.id
+    assert checkpoint["projection"][1]["id"] == user_message.id
     assert checkpoint["usage"] == {"compacted_token_count": 321}
 
 

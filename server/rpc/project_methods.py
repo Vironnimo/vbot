@@ -337,6 +337,13 @@ def _validate_override_value(state: Any, field: str, value: Any) -> Any:
             return validate_temperature(value, label="params.value", allow_none=False)
         except SettingsValidationError as exc:
             raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    if field == "compaction_policy":
+        try:
+            from core.settings.normalizers import normalize_compaction_policy
+
+            return normalize_compaction_policy(value)
+        except Exception as exc:
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     try:
         return validate_thinking_effort(value, label="params.value", allow_none=False)
     except SettingsValidationError as exc:

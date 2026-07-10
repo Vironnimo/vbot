@@ -1,3 +1,5 @@
+import { normalizeCompactionPolicy } from './compactionPolicy.js';
+
 // Pure view helpers for the Projects tab. Business and normalization logic
 // lives here so the Svelte component stays a thin display/input/orchestration
 // layer (see webui.md → Conventions). Every export is unit-tested in
@@ -527,6 +529,11 @@ function normalizeOverrides(overrides) {
       normalized[field] = overrides[field];
     }
   }
+  if (isPlainObject(overrides.compaction_policy)) {
+    normalized.compaction_policy = normalizeCompactionPolicy(
+      overrides.compaction_policy,
+    );
+  }
   return Object.keys(normalized).length > 0 ? normalized : null;
 }
 
@@ -551,6 +558,9 @@ function normalizeEffective(effective) {
 // `effective[field].source === 'override'`, the single truth for "overridden" that
 // also drives the Clear-override control's visibility.
 export function memberFieldIsOverridden(member, field) {
+  if (field === 'compaction_policy') {
+    return isPlainObject(member?.overrides?.compaction_policy);
+  }
   return member?.effective?.[field]?.source === EFFECTIVE_SOURCE_OVERRIDE;
 }
 
@@ -578,6 +588,9 @@ export function seedTeamOverrideDraft(member) {
     model: modelSeed,
     temperature: temperatureSeed,
     thinking_effort: thinkingSeed,
+    compaction_policy: isPlainObject(overrides.compaction_policy)
+      ? normalizeCompactionPolicy(overrides.compaction_policy)
+      : null,
   };
 }
 
