@@ -342,6 +342,8 @@ Primary save buttons inside long editor panels stay enabled even when the form i
 
 ### Inputs
 
+**Every ordinary labeled control is wrapped by the shared `FormField` component (`webui/src/components/ui/FormField.svelte`).** The caller keeps the value and validation state; `FormField` owns the visible Mono-caps label, optional required marker, help text, error text, spacing, and the generated ids that connect help/error copy to the control through its snippet contract. Optional `actions` render after feedback, and `full` spans a two-column form grid. Agents, Projects, provider connection, Channels, Extensions, and Specialized Models use this shell around `TextField`, `TextArea`, `Dropdown`, `SearchableDropdown`, and `Toggle`; toolbar filters, Chat Composer, and other specialized controls remain outside it. The guard rejects raw canonical classes and the retired modal/settings/agent field-shell classes.
+
 **Every single-line text field is the shared `TextField` component (`webui/src/components/ui/TextField.svelte`).** It uses the callback-prop pattern (`value` in, `onInput(next, event)` out — never `bind:`) and takes `type`, `variant`, `readonly`, `invalid`, `disabled`, `inputmode`, `placeholder`, `ariaLabel`. The guard scan fails the build if a raw `<input class="s-input">`/`modal-input` or a raw `s-value-box` appears outside the component.
 
 **Default input (`variant="default"` → `s-input`)** — Mono font at 12.5px, `surface-2` background, `border-2` border, 6px radius. Focus: accent border + glow ring. `invalid` adds a red border (`s-input--invalid`) that wins over the focus glow.

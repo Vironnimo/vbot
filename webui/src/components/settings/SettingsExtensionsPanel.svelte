@@ -6,6 +6,7 @@
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
+  import FormField from '../ui/FormField.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextArea from '../ui/TextArea.svelte';
   import TextField from '../ui/TextField.svelte';
@@ -472,7 +473,7 @@
         {t('settings.extensions.reload', 'Reload extensions')}
       </Button>
     </div>
-    <dl class="s-field-help s-ext-actions-help">
+    <dl class="s-ext-actions-help">
       <div class="s-ext-actions-help-item">
         <dt>{t('common.refresh', 'Refresh')}</dt>
         <dd>
@@ -616,98 +617,109 @@
               {#each extension.settingsSchema as field (field.key)}
                 {@const secretSaving =
                   savingSecret === `${extension.name}:${field.key}`}
-                <div class="s-field s-field--full s-ext-schema-field">
-                  <span class="s-field-label">{field.label}</span>
-                  {#if field.description}
-                    <span class="s-field-hint">{field.description}</span>
-                  {/if}
-                  {#if field.type === 'toggle'}
-                    <Toggle
-                      checked={formStates[extension.name]?.[field.key] === true}
-                      disabled={rowBusy}
-                      ariaLabel={field.label}
-                      onChange={(next) =>
-                        setFormValue(extension.name, field.key, next)}
-                    />
-                  {:else if field.type === 'secret'}
-                    <div class="s-ext-secret">
-                      <StatusChip variant={field.set ? 'success' : 'warn'}>
-                        {field.set
-                          ? t('settings.extensions.secretSet', 'Set')
-                          : t('settings.extensions.secretUnset', 'Not set')}
-                      </StatusChip>
-                      <TextField
-                        type="password"
-                        autocomplete="off"
-                        value={secretDrafts[extension.name]?.[field.key] ?? ''}
+                {@const fieldControlId = `extension-${extension.name}-${field.key}`}
+                <FormField
+                  controlId={fieldControlId}
+                  full
+                  class="s-ext-schema-field"
+                  label={field.label}
+                  help={field.description ?? ''}
+                  error={formFieldErrors[extension.name]?.[field.key]
+                    ? t(
+                        'settings.extensions.numberInvalid',
+                        'Enter a valid number.',
+                      )
+                    : ''}
+                >
+                  {#snippet children(formField)}
+                    {#if field.type === 'toggle'}
+                      <Toggle
+                        id={formField.controlId}
+                        checked={formStates[extension.name]?.[field.key] ===
+                          true}
                         disabled={rowBusy}
-                        placeholder={t(
-                          'settings.extensions.secretPlaceholder',
-                          'Enter a new value',
-                        )}
+                        ariaLabel={field.label}
+                        aria-describedby={formField.describedBy}
+                        onChange={(next) =>
+                          setFormValue(extension.name, field.key, next)}
+                      />
+                    {:else if field.type === 'secret'}
+                      <div class="s-ext-secret">
+                        <StatusChip variant={field.set ? 'success' : 'warn'}>
+                          {field.set
+                            ? t('settings.extensions.secretSet', 'Set')
+                            : t('settings.extensions.secretUnset', 'Not set')}
+                        </StatusChip>
+                        <TextField
+                          id={formField.controlId}
+                          type="password"
+                          autocomplete="off"
+                          value={secretDrafts[extension.name]?.[field.key] ??
+                            ''}
+                          disabled={rowBusy}
+                          aria-describedby={formField.describedBy}
+                          placeholder={t(
+                            'settings.extensions.secretPlaceholder',
+                            'Enter a new value',
+                          )}
+                          ariaLabel={t(
+                            'settings.extensions.secretAria',
+                            'Secret {label} for extension {name}',
+                            { label: field.label, name: extension.name },
+                          )}
+                          onInput={(next) =>
+                            setSecretDraft(extension.name, field.key, next)}
+                        />
+                        <div class="s-ext-secret-actions">
+                          <Button
+                            variant="primary"
+                            disabled={rowBusy ||
+                              !(
+                                secretDrafts[extension.name]?.[field.key] ?? ''
+                              )}
+                            onClick={() =>
+                              saveSecret(
+                                extension,
+                                field,
+                                secretDrafts[extension.name]?.[field.key] ?? '',
+                              )}
+                          >
+                            {secretSaving
+                              ? t('common.saving', 'Saving…')
+                              : t('settings.extensions.secretSave', 'Save')}
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            disabled={rowBusy || !field.set}
+                            onClick={() => saveSecret(extension, field, '')}
+                          >
+                            {t('settings.extensions.secretClear', 'Clear')}
+                          </Button>
+                        </div>
+                      </div>
+                    {:else}
+                      <TextField
+                        id={formField.controlId}
+                        type={field.type === 'number' ? 'number' : 'text'}
+                        value={formStates[extension.name]?.[field.key] ?? ''}
+                        disabled={rowBusy}
+                        invalid={formField.invalid}
+                        aria-describedby={formField.describedBy}
+                        placeholder={field.default === null ||
+                        field.default === undefined
+                          ? ''
+                          : String(field.default)}
                         ariaLabel={t(
-                          'settings.extensions.secretAria',
-                          'Secret {label} for extension {name}',
+                          'settings.extensions.fieldAria',
+                          '{label} for extension {name}',
                           { label: field.label, name: extension.name },
                         )}
                         onInput={(next) =>
-                          setSecretDraft(extension.name, field.key, next)}
+                          setFormValue(extension.name, field.key, next)}
                       />
-                      <div class="s-ext-secret-actions">
-                        <Button
-                          variant="primary"
-                          disabled={rowBusy ||
-                            !(secretDrafts[extension.name]?.[field.key] ?? '')}
-                          onClick={() =>
-                            saveSecret(
-                              extension,
-                              field,
-                              secretDrafts[extension.name]?.[field.key] ?? '',
-                            )}
-                        >
-                          {secretSaving
-                            ? t('common.saving', 'Saving…')
-                            : t('settings.extensions.secretSave', 'Save')}
-                        </Button>
-                        <Button
-                          variant="secondary"
-                          disabled={rowBusy || !field.set}
-                          onClick={() => saveSecret(extension, field, '')}
-                        >
-                          {t('settings.extensions.secretClear', 'Clear')}
-                        </Button>
-                      </div>
-                    </div>
-                  {:else}
-                    <TextField
-                      type={field.type === 'number' ? 'number' : 'text'}
-                      value={formStates[extension.name]?.[field.key] ?? ''}
-                      disabled={rowBusy}
-                      invalid={Boolean(
-                        formFieldErrors[extension.name]?.[field.key],
-                      )}
-                      placeholder={field.default === null ||
-                      field.default === undefined
-                        ? ''
-                        : String(field.default)}
-                      ariaLabel={t(
-                        'settings.extensions.fieldAria',
-                        '{label} for extension {name}',
-                        { label: field.label, name: extension.name },
-                      )}
-                      onInput={(next) =>
-                        setFormValue(extension.name, field.key, next)}
-                    />
-                    {#if formFieldErrors[extension.name]?.[field.key]}
-                      <span class="s-field-error">
-                        {t(
-                          'settings.extensions.numberInvalid',
-                          'Enter a valid number.',
-                        )}
-                      </span>
                     {/if}
-                  {/if}
-                </div>
+                  {/snippet}
+                </FormField>
               {/each}
               <div class="s-ext-config-actions">
                 <Button
@@ -727,39 +739,44 @@
             class="s-disclosure-sub"
             hidden={!expandedConfigNames.has(extension.name)}
           >
-            <div class="s-field s-field--full s-ext-config">
-              <span class="s-field-label">
-                {t('settings.extensions.config', 'Config (JSON)')}
-              </span>
-              <TextArea
-                code
-                invalid={Boolean(configErrors[extension.name])}
-                spellcheck="false"
-                value={configDrafts[extension.name] ?? ''}
-                disabled={rowBusy}
-                ariaLabel={t(
-                  'settings.extensions.configAria',
-                  'Config for extension {name}',
-                  { name: extension.name },
-                )}
-                onInput={(value) => setConfigDraft(extension.name, value)}
-              />
-              {#if configErrors[extension.name]}
-                <span class="s-field-error">{configErrors[extension.name]}</span
-                >
-              {/if}
-              <div class="s-ext-config-actions">
-                <Button
-                  variant="primary"
+            <FormField
+              controlId={`extension-${extension.name}-config`}
+              full
+              class="s-ext-config"
+              label={t('settings.extensions.config', 'Config (JSON)')}
+              error={configErrors[extension.name] ?? ''}
+            >
+              {#snippet children(formField)}
+                <TextArea
+                  id={formField.controlId}
+                  code
+                  invalid={formField.invalid}
+                  aria-describedby={formField.describedBy}
+                  spellcheck="false"
+                  value={configDrafts[extension.name] ?? ''}
                   disabled={rowBusy}
-                  onClick={() => handleManualExtensionConfigSave(extension)}
-                >
-                  {savingConfigName === extension.name
-                    ? t('common.saving', 'Saving…')
-                    : t('settings.extensions.saveConfig', 'Save config')}
-                </Button>
-              </div>
-            </div>
+                  ariaLabel={t(
+                    'settings.extensions.configAria',
+                    'Config for extension {name}',
+                    { name: extension.name },
+                  )}
+                  onInput={(value) => setConfigDraft(extension.name, value)}
+                />
+              {/snippet}
+              {#snippet actions()}
+                <div class="s-ext-config-actions">
+                  <Button
+                    variant="primary"
+                    disabled={rowBusy}
+                    onClick={() => handleManualExtensionConfigSave(extension)}
+                  >
+                    {savingConfigName === extension.name
+                      ? t('common.saving', 'Saving…')
+                      : t('settings.extensions.saveConfig', 'Save config')}
+                  </Button>
+                </div>
+              {/snippet}
+            </FormField>
           </div>
         {/if}
       </div>

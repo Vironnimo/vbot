@@ -14,6 +14,7 @@
     placeholder = t('dropdown.placeholder', 'Select an option'),
     disabled = false,
     ariaLabel = '',
+    ariaDescribedby = undefined,
     triggerClass = '',
     listClass = '',
     onValueChange = noop,
@@ -195,6 +196,7 @@
     type="button"
     {disabled}
     aria-label={ariaLabel || placeholder}
+    aria-describedby={ariaDescribedby}
     aria-haspopup="listbox"
     aria-expanded={isOpen}
     onclick={toggleOpen}

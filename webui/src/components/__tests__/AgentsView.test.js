@@ -214,7 +214,7 @@ describe('AgentsView', () => {
     expect(trigger.disabled).toBe(true);
     expect(
       document.body.querySelector(
-        '[data-testid="thinking-effort-disabled-hint"]',
+        '.agents-view__thinking-field .form-field__help',
       ),
     ).toBeTruthy();
   });
@@ -437,7 +437,7 @@ describe('AgentsView', () => {
     );
 
     const workspaceLabels = Array.from(
-      document.body.querySelectorAll('.agent-detail-pane .f-label'),
+      document.body.querySelectorAll('.agent-detail-pane .form-field__label'),
     ).filter((label) => label.textContent.trim() === 'Workspace');
     expect(workspaceLabels).toHaveLength(1);
 
@@ -575,7 +575,9 @@ describe('AgentsView', () => {
 
     // Label text without the InfoHint "?" dot that may sit inside the label.
     const modelLabels = Array.from(
-      document.body.querySelectorAll('.agents-view__model-fields .f-label'),
+      document.body.querySelectorAll(
+        '.agents-view__model-fields .form-field__label',
+      ),
     ).map((label) => {
       const clone = label.cloneNode(true);
       clone.querySelectorAll('.info-hint').forEach((dot) => dot.remove());

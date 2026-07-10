@@ -3,6 +3,7 @@
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
+  import FormField from '../ui/FormField.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
   import Modal from '../ui/Modal.svelte';
   import TextField from '../ui/TextField.svelte';
@@ -199,49 +200,56 @@
   {#snippet body()}
     <form onsubmit={submit}>
       <div class="modal-body agents-view__create-modal-body">
-        <label class="modal-field">
-          <span class="modal-label">{t('agents.form.id', 'Agent ID')}</span>
-          <TextField
-            invalid={Boolean(formErrors.id)}
-            value={formValues.id}
-            disabled={isSaving}
-            onInput={(next) => {
-              formValues.id = next;
-              formErrors.id = '';
-              errorMessage = '';
-            }}
-          />
-          <small class="agents-view__field-help">
-            {t('agents.form.idHelp', 'Agent IDs are immutable after creation.')}
-          </small>
-          {#if formErrors.id}
-            <small class="agents-view__field-error">
-              {fieldError('id')}
-            </small>
-          {/if}
-        </label>
+        <FormField
+          controlId="agent-create-id"
+          label={t('agents.form.id', 'Agent ID')}
+          help={t(
+            'agents.form.idHelp',
+            'Agent IDs are immutable after creation.',
+          )}
+          error={formErrors.id ? fieldError('id') : ''}
+        >
+          {#snippet children(field)}
+            <TextField
+              id={field.controlId}
+              invalid={field.invalid}
+              aria-describedby={field.describedBy}
+              value={formValues.id}
+              disabled={isSaving}
+              onInput={(next) => {
+                formValues.id = next;
+                formErrors.id = '';
+                errorMessage = '';
+              }}
+            />
+          {/snippet}
+        </FormField>
 
-        <label class="modal-field">
-          <span class="modal-label">{t('agents.form.name', 'Name')}</span>
-          <TextField
-            invalid={Boolean(formErrors.name)}
-            value={formValues.name}
-            disabled={isSaving}
-            onInput={(next) => {
-              formValues.name = next;
-              formErrors.name = '';
-              errorMessage = '';
-            }}
-          />
-          {#if formErrors.name}
-            <small class="agents-view__field-error">
-              {fieldError('name')}
-            </small>
-          {/if}
-        </label>
+        <FormField
+          controlId="agent-create-name"
+          label={t('agents.form.name', 'Name')}
+          error={formErrors.name ? fieldError('name') : ''}
+        >
+          {#snippet children(field)}
+            <TextField
+              id={field.controlId}
+              invalid={field.invalid}
+              aria-describedby={field.describedBy}
+              value={formValues.name}
+              disabled={isSaving}
+              onInput={(next) => {
+                formValues.name = next;
+                formErrors.name = '';
+                errorMessage = '';
+              }}
+            />
+          {/snippet}
+        </FormField>
 
-        <label class="modal-field">
-          <span class="modal-label">{t('agents.form.model', 'Model')}</span>
+        <FormField
+          controlId="agent-create-model"
+          label={t('agents.form.model', 'Model')}
+        >
           <SearchableDropdown
             id="agent-create-model"
             value={modelSelectValue}
@@ -260,10 +268,18 @@
             onFooterAction={() => (showAllModels = !showAllModels)}
             onValueChange={updateModelSelection}
           />
-        </label>
+        </FormField>
 
-        <label class="modal-field">
-          <span class="modal-label">
+        <FormField
+          controlId="agent-create-thinking-effort"
+          help={effortDropdownDisabled
+            ? t(
+                'agents.form.thinkingEffortUnsupported',
+                'This model does not support reasoning.',
+              )
+            : ''}
+        >
+          {#snippet labelContent()}
             {t('agents.form.thinkingEffort', 'Thinking effort')}
             <InfoHint
               text={t(
@@ -271,7 +287,7 @@
                 'How much internal reasoning the model may spend before answering. Leave at — for the default.',
               )}
             />
-          </span>
+          {/snippet}
           <Dropdown
             id="agent-create-thinking-effort"
             value={formValues.thinking_effort}
@@ -284,21 +300,13 @@
               formValues.thinking_effort = selectedValue;
             }}
           />
-          {#if effortDropdownDisabled}
-            <small
-              class="agents-view__field-help"
-              data-testid="create-thinking-effort-disabled-hint"
-            >
-              {t(
-                'agents.form.thinkingEffortUnsupported',
-                'This model does not support reasoning.',
-              )}
-            </small>
-          {/if}
-        </label>
+        </FormField>
 
-        <label class="modal-field">
-          <span class="modal-label">
+        <FormField
+          controlId="agent-create-temperature"
+          error={formErrors.temperature ? fieldError('temperature') : ''}
+        >
+          {#snippet labelContent()}
             {t('agents.form.temperature', 'Temperature')}
             <InfoHint
               text={t(
@@ -306,24 +314,23 @@
                 'Sampling randomness, typically 0–2. Leave empty to use the default.',
               )}
             />
-          </span>
-          <TextField
-            inputmode="decimal"
-            invalid={Boolean(formErrors.temperature)}
-            value={formValues.temperature}
-            disabled={isSaving}
-            onInput={(next) => {
-              formValues.temperature = next;
-              formErrors.temperature = '';
-              errorMessage = '';
-            }}
-          />
-          {#if formErrors.temperature}
-            <small class="agents-view__field-error">
-              {fieldError('temperature')}
-            </small>
-          {/if}
-        </label>
+          {/snippet}
+          {#snippet children(field)}
+            <TextField
+              id={field.controlId}
+              inputmode="decimal"
+              invalid={field.invalid}
+              aria-describedby={field.describedBy}
+              value={formValues.temperature}
+              disabled={isSaving}
+              onInput={(next) => {
+                formValues.temperature = next;
+                formErrors.temperature = '';
+                errorMessage = '';
+              }}
+            />
+          {/snippet}
+        </FormField>
 
         {#if errorMessage}
           <Banner variant="error" role="alert">
