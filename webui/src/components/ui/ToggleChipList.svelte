@@ -216,8 +216,8 @@
   }
 
   .access-chips__search:focus-within {
-    border-color: rgba(232, 135, 10, 0.4);
-    box-shadow: 0 0 0 3px rgba(232, 135, 10, 0.06);
+    border-color: var(--accent-40);
+    box-shadow: var(--focus-ring);
   }
 
   .access-chips__search-input {
@@ -300,12 +300,12 @@
 
   .access-chip.is-on {
     color: var(--accent);
-    background: rgba(232, 135, 10, 0.1);
-    border-color: rgba(232, 135, 10, 0.3);
+    background: var(--accent-10);
+    border-color: var(--accent-30);
   }
 
   button.access-chip.is-on:hover:not(:disabled) {
-    background: rgba(232, 135, 10, 0.16);
+    background: var(--accent-16);
     border-color: rgba(232, 135, 10, 0.42);
     color: var(--accent);
   }

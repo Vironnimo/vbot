@@ -1525,7 +1525,7 @@
     outline: none;
     color: var(--accent);
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(232, 135, 10, 0.06);
+    box-shadow: var(--focus-ring);
   }
 
   .sp-drag-handle:active {
@@ -1635,7 +1635,7 @@
 
   .sp-textarea:focus {
     outline: none;
-    box-shadow: inset 0 0 0 1px rgba(232, 135, 10, 0.3);
+    box-shadow: inset 0 0 0 1px var(--accent-30);
   }
 
   .sp-data-block {

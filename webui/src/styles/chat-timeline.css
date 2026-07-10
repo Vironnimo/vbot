@@ -327,7 +327,7 @@
 }
 
 .interrupted-notice {
-  border-left: 2px solid rgba(232, 135, 10, 0.4);
+  border-left: 2px solid var(--accent-40);
   margin: 4px 0 2px;
   padding: 4px 0 4px 12px;
   color: var(--text-med);
@@ -371,7 +371,7 @@
 
 .subagent-link:focus-visible {
   border-radius: 3px;
-  outline: 1px solid rgba(232, 135, 10, 0.4);
+  outline: 1px solid var(--accent-40);
   outline-offset: 3px;
 }
 
@@ -387,7 +387,7 @@
 .row-cancel {
   margin-left: auto;
   border: 0;
-  border-bottom: 1px solid rgba(232, 135, 10, 0.22);
+  border-bottom: 1px solid var(--accent-22);
   padding: 0 0 1px;
   background: transparent;
   color: var(--text-med);
@@ -409,7 +409,7 @@
 
 .row-cancel:focus-visible {
   border-radius: 3px;
-  outline: 1px solid rgba(232, 135, 10, 0.4);
+  outline: 1px solid var(--accent-40);
   outline-offset: 3px;
 }
 
@@ -505,7 +505,7 @@ a.inline-attachment {
 }
 
 a.inline-attachment:focus-visible {
-  outline: 1px solid rgba(232, 135, 10, 0.4);
+  outline: 1px solid var(--accent-40);
   outline-offset: 2px;
 }
 
@@ -640,7 +640,7 @@ a.inline-attachment:focus-visible {
 }
 
 .inline-file-link {
-  border-bottom: 1px solid rgba(232, 135, 10, 0.3);
+  border-bottom: 1px solid var(--accent-30);
   color: var(--accent);
   text-decoration: none;
 }
@@ -652,7 +652,7 @@ a.inline-attachment:focus-visible {
 
 .inline-file-link:focus-visible {
   border-radius: 3px;
-  outline: 1px solid rgba(232, 135, 10, 0.4);
+  outline: 1px solid var(--accent-40);
   outline-offset: 2px;
 }
 

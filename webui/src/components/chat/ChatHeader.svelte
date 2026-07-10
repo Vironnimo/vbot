@@ -392,7 +392,7 @@
   :global(.chat-sessions-toggle--active) {
     border-color: var(--accent);
     color: var(--accent);
-    background: rgba(232, 135, 10, 0.08);
+    background: var(--accent-08);
   }
 
   /* Compact project picker in the header: shares the shared Dropdown chrome

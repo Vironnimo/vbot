@@ -212,9 +212,9 @@
   }
 
   .queued-messages__editor:focus {
-    border-color: rgba(232, 135, 10, 0.4);
+    border-color: var(--accent-40);
     outline: none;
-    box-shadow: 0 0 0 3px rgba(232, 135, 10, 0.06);
+    box-shadow: var(--focus-ring);
   }
 
   .queued-messages__error {
