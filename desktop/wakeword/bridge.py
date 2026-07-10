@@ -15,6 +15,7 @@ methods). The connection methods delegate to the injected
 from __future__ import annotations
 
 import threading
+from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -50,21 +51,31 @@ class ConnectionDelegate(Protocol):
 
 
 _WAKEWORD_STATE_OFF = "off"
+_WAKEWORD_STATE_STARTING = "starting"
 _WAKEWORD_STATE_LISTENING = "listening"
 _WAKEWORD_STATE_DETECTED = "wakeword_detected"
 _WAKEWORD_STATE_RECORDING = "recording"
 _WAKEWORD_STATE_TRANSCRIBING = "transcribing"
 _WAKEWORD_STATE_SENDING = "sending"
+_WAKEWORD_STATE_SENT = "sent"
+_WAKEWORD_STATE_CANCELLED = "cancelled"
+_WAKEWORD_STATE_NO_SPEECH = "no_speech"
+_WAKEWORD_STATE_TRANSCRIPTION_FAILED = "transcription_failed"
 _WAKEWORD_STATE_ERROR = "error"
 
 _VALID_STATES = frozenset(
     [
         _WAKEWORD_STATE_OFF,
+        _WAKEWORD_STATE_STARTING,
         _WAKEWORD_STATE_LISTENING,
         _WAKEWORD_STATE_DETECTED,
         _WAKEWORD_STATE_RECORDING,
         _WAKEWORD_STATE_TRANSCRIBING,
         _WAKEWORD_STATE_SENDING,
+        _WAKEWORD_STATE_SENT,
+        _WAKEWORD_STATE_CANCELLED,
+        _WAKEWORD_STATE_NO_SPEECH,
+        _WAKEWORD_STATE_TRANSCRIPTION_FAILED,
         _WAKEWORD_STATE_ERROR,
     ]
 )
@@ -75,11 +86,12 @@ _KNOWN_WAKEWORD_KEYS = frozenset(
         "engine",
         "microphone",
         "sensitivity",
-        "target_agent_id",
-        "session_behavior",
         "wake_phrase",
     ]
 )
+
+_SERVER_PROFILE_KEYS = frozenset(["target_agent_id", "session_behavior"])
+_WAKEWORD_EVENT_HISTORY_LIMIT = 24
 
 
 class DesktopBridge:
@@ -98,6 +110,7 @@ class DesktopBridge:
         connection: ConnectionDelegate | None = None,
         server_url: str = "",
         mock: bool = False,
+        mode: str = "real",
     ) -> None:
         self._settings_path = settings_path
         self._worker = worker
@@ -107,11 +120,15 @@ class DesktopBridge:
         # once in the worker factory) so a runtime server switch — first-run
         # connect, saved-server pick, or the "Server" menu — retargets voice too.
         self._server_url = server_url.rstrip("/")
-        # True when the running worker is the no-microphone mock (either the
-        # --mock-wakeword flag or the on-device stack failing to import), so the
-        # WebUI can warn that nothing is actually being heard.
+        # Mock is explicit developer/demo mode; missing local dependencies use
+        # the separate unavailable mode and never simulate Voice activity.
         self._mock = bool(mock)
+        self._mode = "mock" if self._mock and mode == "real" else mode
         self._state = _WAKEWORD_STATE_OFF
+        self._error_code: str | None = None
+        self._active_microphone: dict[str, Any] | None = None
+        self._event_sequence = 0
+        self._events: deque[dict[str, Any]] = deque(maxlen=_WAKEWORD_EVENT_HISTORY_LIMIT)
         self._lock = threading.Lock()
         # Server-selection calls mutate shared on-disk state and navigate the
         # single window; a dedicated lock serializes them across pywebview
@@ -131,8 +148,11 @@ class DesktopBridge:
     def getWakewordStatus(self) -> dict[str, Any]:  # noqa: N802
         """Return current wakeword configuration and live worker state."""
         with self._lock:
-            config = read_wakeword_settings(self._settings_path)
+            config = self._worker_config_locked()
             state = self._state
+            error_code = self._error_code
+            active_microphone = dict(self._active_microphone) if self._active_microphone else None
+            events = [dict(event) for event in self._events]
         return {
             "enabled": config.get("enabled", False),
             "state": state,
@@ -142,10 +162,20 @@ class DesktopBridge:
             "target_agent_id": config.get("target_agent_id"),
             "session_behavior": config.get("session_behavior", "active"),
             "wake_phrase": config.get("wake_phrase", "hey_jarvis"),
+            "error_code": error_code,
+            "active_microphone": active_microphone,
+            "events": events,
             # Runtime-only fields (not editable config): the mock flag lets the
             # WebUI warn when detection is not really running.
             "mock": self._mock,
+            "mode": self._mode,
         }
+
+    def listMicrophones(self) -> list[dict[str, Any]]:  # noqa: N802
+        """Return available input devices and whether Voice can use them."""
+        from desktop.wakeword.worker import list_microphones
+
+        return list_microphones()
 
     # -- Actions from WebUI --------------------------------------------------
 
@@ -171,8 +201,26 @@ class DesktopBridge:
             changed = False
             for key in _KNOWN_WAKEWORD_KEYS:
                 if key in config:
-                    current[key] = config[key]
+                    current[key] = _validated_config_value(key, config[key])
                     changed = True
+            profile_changes = {
+                key: _validated_config_value(key, config[key])
+                for key in _SERVER_PROFILE_KEYS
+                if key in config
+            }
+            if profile_changes:
+                if not self._server_url:
+                    raise ValueError("Voice target settings require an active server")
+                profiles = current.get("server_profiles")
+                if not isinstance(profiles, dict):
+                    profiles = {}
+                profile = profiles.get(self._server_url)
+                if not isinstance(profile, dict):
+                    profile = {}
+                profile.update(profile_changes)
+                profiles[self._server_url] = profile
+                current["server_profiles"] = profiles
+                changed = True
             if not changed:
                 return
             write_wakeword_settings(current, self._settings_path)
@@ -185,6 +233,16 @@ class DesktopBridge:
         elif enabled:
             self._worker = None
             self._start_worker()
+
+    def retryWakeword(self) -> None:  # noqa: N802
+        """Rebuild and restart the worker after a visible recoverable error."""
+        with self._lock:
+            enabled = bool(read_wakeword_settings(self._settings_path).get("enabled", False))
+        if not enabled:
+            return
+        self._stop_worker()
+        self._worker = None
+        self._start_worker()
 
     # -- Connection (server selection) ---------------------------------------
 
@@ -235,13 +293,29 @@ class DesktopBridge:
 
     # -- Worker state callbacks ----------------------------------------------
 
-    def publish_state(self, state: str) -> None:
+    def publish_state(self, state: str, error_code: str | None = None) -> None:
         """Update the live worker state for WebUI status polling."""
         if state not in _VALID_STATES:
             raise ValueError(f"Invalid wakeword state: {state}")
         with self._lock:
             self._state = state
+            self._error_code = error_code if state == _WAKEWORD_STATE_ERROR else None
+            self._event_sequence += 1
+            self._events.append(
+                {
+                    "sequence": self._event_sequence,
+                    "state": state,
+                    "error_code": self._error_code,
+                }
+            )
         self._status_event.set()
+
+    def publish_runtime_details(self, *, active_microphone: dict[str, Any] | None) -> None:
+        """Publish the concrete input device selected by automatic routing."""
+        with self._lock:
+            self._active_microphone = (
+                dict(active_microphone) if active_microphone is not None else None
+            )
 
     # -- Active server (voice target follows the window) ---------------------
 
@@ -267,8 +341,8 @@ class DesktopBridge:
             if normalized == self._server_url:
                 return
             self._server_url = normalized
-            restart = self._worker is not None and self._worker.is_running()
-        if restart:
+            enabled = bool(read_wakeword_settings(self._settings_path).get("enabled", False))
+        if enabled:
             self._stop_worker()
             self._worker = None
             self._start_worker()
@@ -286,6 +360,21 @@ class DesktopBridge:
     def _stop_worker(self) -> None:
         if self._worker:
             self._worker.stop()
+
+    def worker_config(self) -> dict[str, Any]:
+        """Return the global Voice config plus this server's safe routing profile."""
+        with self._lock:
+            return self._worker_config_locked()
+
+    def _worker_config_locked(self) -> dict[str, Any]:
+        config = read_wakeword_settings(self._settings_path)
+        profiles = config.get("server_profiles")
+        profile = profiles.get(self._server_url, {}) if isinstance(profiles, dict) else {}
+        if not isinstance(profile, dict):
+            profile = {}
+        config["target_agent_id"] = profile.get("target_agent_id")
+        config["session_behavior"] = profile.get("session_behavior", "active")
+        return config
 
     def _require_connection(self) -> ConnectionDelegate:
         if self._connection is None:
@@ -319,3 +408,33 @@ def _coerce_port(value: Any) -> int | str:
 def _server_to_payload(entry: ServerEntry) -> dict[str, Any]:
     """Render a remembered-server entry as a JSON-serializable bridge payload."""
     return entry.to_storage()
+
+
+def _validated_config_value(key: str, value: Any) -> Any:
+    """Validate the small Desktop-local Voice config surface at the bridge."""
+    if key == "sensitivity":
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("Voice sensitivity must be a number between 0 and 1")
+        numeric = float(value)
+        if not 0.0 <= numeric <= 1.0:
+            raise ValueError("Voice sensitivity must be between 0 and 1")
+        return numeric
+    if key == "microphone":
+        if value is None or (isinstance(value, int) and not isinstance(value, bool) and value >= 0):
+            return value
+        raise ValueError("Voice microphone must be a non-negative device index or null")
+    if key == "target_agent_id":
+        if value is None:
+            return None
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        raise ValueError("Voice target agent must be a non-empty id or null")
+    if key == "session_behavior":
+        if value in {"active", "new"}:
+            return value
+        raise ValueError("Voice session behavior must be 'active' or 'new'")
+    if key == "enabled":
+        return bool(value)
+    if key in {"engine", "wake_phrase"} and isinstance(value, str) and value.strip():
+        return value.strip()
+    raise ValueError(f"Invalid Voice setting: {key}")

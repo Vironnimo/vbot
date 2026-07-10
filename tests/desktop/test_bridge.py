@@ -208,7 +208,10 @@ def test_set_wakeword_enabled_toggles_and_persists(tmp_path: Path) -> None:
     settings_file = tmp_path / "settings.json"
     _write_settings(settings_file)
 
-    bridge = DesktopBridge(settings_path=settings_file)
+    bridge = DesktopBridge(
+        settings_path=settings_file,
+        server_url="http://127.0.0.1:8420",
+    )
 
     bridge.setWakewordEnabled(True)
     status = bridge.getWakewordStatus()
@@ -263,12 +266,56 @@ def test_set_wakeword_config_partial_update(tmp_path: Path) -> None:
     settings_file = tmp_path / "settings.json"
     _write_settings(settings_file)
 
-    bridge = DesktopBridge(settings_path=settings_file)
+    bridge = DesktopBridge(
+        settings_path=settings_file,
+        server_url="http://127.0.0.1:8420",
+    )
     bridge.setWakewordConfig({"sensitivity": 0.9, "target_agent_id": "agent-1"})
 
     status = bridge.getWakewordStatus()
     assert status["sensitivity"] == 0.9
     assert status["target_agent_id"] == "agent-1"
+
+
+def test_voice_target_profile_is_isolated_per_server(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file)
+    bridge = DesktopBridge(
+        settings_path=settings_file,
+        server_url="http://a.lan:8420",
+    )
+
+    bridge.setWakewordConfig({"target_agent_id": "home", "session_behavior": "active"})
+    bridge.set_server_url("http://b.lan:8420")
+    assert bridge.getWakewordStatus()["target_agent_id"] is None
+
+    bridge.setWakewordConfig({"target_agent_id": "office", "session_behavior": "new"})
+    bridge.set_server_url("http://a.lan:8420")
+    status = bridge.getWakewordStatus()
+
+    assert status["target_agent_id"] == "home"
+    assert status["session_behavior"] == "active"
+
+
+def test_status_exposes_actionable_error_and_event_history(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file)
+    bridge = DesktopBridge(settings_path=settings_file)
+
+    bridge.publish_state("starting")
+    bridge.publish_state("error", "microphone_unavailable")
+
+    status = bridge.getWakewordStatus()
+    assert status["state"] == "error"
+    assert status["error_code"] == "microphone_unavailable"
+    assert status["events"][-2:] == [
+        {"sequence": 1, "state": "starting", "error_code": None},
+        {
+            "sequence": 2,
+            "state": "error",
+            "error_code": "microphone_unavailable",
+        },
+    ]
 
 
 def test_set_wakeword_config_rejects_non_dict(tmp_path: Path) -> None:

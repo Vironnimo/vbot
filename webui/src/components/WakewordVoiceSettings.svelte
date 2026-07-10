@@ -9,7 +9,9 @@
     getWakewordStatus,
     setWakewordEnabled,
     setWakewordConfig,
+    listMicrophones,
     onWakewordStatusChange,
+    retryWakeword,
     isDesktop,
   } from '$lib/desktopBridge.js';
   import {
@@ -21,7 +23,6 @@
     snapshotVoiceSettings,
   } from '$lib/wakewordSettings.js';
 
-  const AUTO_SAVE_DEBOUNCE_MS = 800;
   const SESSION_BEHAVIOR_OPTIONS = Object.freeze([
     {
       value: 'active',
@@ -38,8 +39,10 @@
   let voiceState = $state(createVoiceSettingsState());
   let lastSaved = $state(null);
   let loaded = $state(false);
-  let autoSaveTimer = null;
   let cleanupStatusPoll = null;
+  let microphones = $state([]);
+  let saveState = $state('idle');
+  let saveChain = Promise.resolve();
 
   let agentOptions = $derived(
     agents.map((agent) => ({
@@ -48,12 +51,37 @@
     })),
   );
   let selectedAgentValue = $derived(voiceState.target_agent_id || '');
+  let microphoneOptions = $derived([
+    {
+      value: '',
+      label: t('settings.voice.systemAutomaticMic', 'Automatic selection'),
+      secondaryLabel: voiceState.activeMicrophone?.name || '',
+    },
+    ...microphones.map((device) => ({
+      value: String(device.index),
+      label: device.name,
+      secondaryLabel: device.supported
+        ? t('settings.voice.compatibleMic', 'Compatible')
+        : t('settings.voice.incompatibleMic', 'Unsupported format'),
+      disabled: !device.supported,
+    })),
+  ]);
+  let selectedMicrophoneValue = $derived(
+    Number.isInteger(voiceState.microphone)
+      ? String(voiceState.microphone)
+      : '',
+  );
 
   let liveStateLabel = $derived(liveStateText(voiceState.liveState));
   let liveStateDotClass = $derived(liveStateDotColor(voiceState.liveState));
 
   let dirty = $derived(voiceSettingsDirty(voiceState, lastSaved));
   let sensitivityPercent = $derived(Math.round(voiceState.sensitivity * 100));
+  let enableToggleDisabled = $derived(
+    !loaded ||
+      (!voiceState.enabled &&
+        (!voiceState.target_agent_id || voiceState.mode === 'unavailable')),
+  );
 
   function liveStateText(state) {
     if (state === 'wakeword_detected') {
@@ -63,10 +91,63 @@
     return t(key, state);
   }
 
+  function errorMessage(code) {
+    const messages = {
+      no_server: t(
+        'settings.voice.error.noServer',
+        'Voice has no active server. Connect the Desktop app to a server and try again.',
+      ),
+      missing_target_agent: t(
+        'settings.voice.error.missingTarget',
+        'Choose a Personal Agent for this server before enabling wakeword listening.',
+      ),
+      target_agent_unavailable: t(
+        'settings.voice.error.targetUnavailable',
+        'The selected Personal Agent no longer exists on this server. Choose another Agent.',
+      ),
+      engine_start_failed: t(
+        'settings.voice.error.engine',
+        'The on-device wakeword model could not start. Restart the Desktop app and try again.',
+      ),
+      microphone_unavailable: t(
+        'settings.voice.error.microphone',
+        'The selected microphone cannot provide compatible audio. Choose another input device or check microphone permissions.',
+      ),
+      microphone_read_failed: t(
+        'settings.voice.error.microphoneRead',
+        'The microphone stopped responding. Check the device connection and retry.',
+      ),
+      detection_failed: t(
+        'settings.voice.error.detection',
+        'Wakeword detection stopped unexpectedly. Retry listening.',
+      ),
+      session_resolution_failed: t(
+        'settings.voice.error.session',
+        'vBot could not open the target Agent session. Check the server connection and retry.',
+      ),
+      send_failed: t(
+        'settings.voice.error.send',
+        'The spoken command could not be sent. Check the server connection and retry.',
+      ),
+      voice_stack_unavailable: t(
+        'settings.voice.error.stackUnavailable',
+        'The Desktop Voice components are unavailable. Install the desktop Voice dependencies and restart vBot.',
+      ),
+    };
+    return (
+      messages[code] ||
+      t(
+        'settings.voice.error.unknown',
+        'Voice stopped unexpectedly. Retry listening or restart the Desktop app.',
+      )
+    );
+  }
+
   function liveStateDotColor(state) {
     switch (state) {
       case 'listening':
         return 'voice-dot--listening';
+      case 'starting':
       case 'wakeword_detected':
         return 'voice-dot--detected';
       case 'recording':
@@ -74,6 +155,12 @@
       case 'transcribing':
       case 'sending':
         return 'voice-dot--processing';
+      case 'sent':
+        return 'voice-dot--listening';
+      case 'cancelled':
+      case 'no_speech':
+      case 'transcription_failed':
+        return 'voice-dot--warning';
       case 'error':
         return 'voice-dot--error';
       default:
@@ -82,10 +169,6 @@
   }
 
   onDestroy(() => {
-    if (autoSaveTimer) {
-      clearTimeout(autoSaveTimer);
-      autoSaveTimer = null;
-    }
     if (cleanupStatusPoll) {
       cleanupStatusPoll();
       cleanupStatusPoll = null;
@@ -94,8 +177,12 @@
 
   async function loadStatus() {
     try {
-      const status = await getWakewordStatus();
+      const [status, availableMicrophones] = await Promise.all([
+        getWakewordStatus(),
+        listMicrophones(),
+      ]);
       voiceState = applyWakewordStatus(voiceState, status);
+      microphones = availableMicrophones;
       lastSaved = snapshotVoiceSettings(voiceState);
     } catch {
       // Bridge not available; keep defaults
@@ -116,43 +203,38 @@
       await setWakewordEnabled(enabled);
       voiceState = applyWakewordStatus(voiceState, {
         enabled,
-        state: enabled ? 'listening' : 'off',
+        state: enabled ? 'starting' : 'off',
       });
       lastSaved = snapshotVoiceSettings(voiceState);
-    } catch {
+    } catch (error) {
       voiceState = { ...voiceState, enabled: !enabled };
-    }
-  }
-
-  function handleConfigChange() {
-    if (autoSaveTimer) {
-      clearTimeout(autoSaveTimer);
-    }
-    autoSaveTimer = setTimeout(() => {
-      autoSaveTimer = null;
-      void saveConfig();
-    }, AUTO_SAVE_DEBOUNCE_MS);
-  }
-
-  async function saveConfig() {
-    if (!dirty) {
-      onToast({
-        title: t('common.alreadySaved', 'Already saved'),
-        variant: 'info',
-      });
-      return;
-    }
-    const payload = buildVoiceSettingsPayload(voiceState, lastSaved);
-    try {
-      await setWakewordConfig(payload);
-      lastSaved = snapshotVoiceSettings(voiceState);
-      onToast({
-        title: t('settings.voice.saveSuccess', 'Voice settings updated.'),
-        variant: 'success',
-      });
-    } catch {
       onToast({
         title: t('errors.generic', 'Something went wrong. Try again.'),
+        message: error?.message || '',
+        variant: 'error',
+      });
+    }
+  }
+
+  function saveConfig() {
+    saveChain = saveChain.then(persistCurrentConfig);
+    return saveChain;
+  }
+
+  async function persistCurrentConfig() {
+    const payload = buildVoiceSettingsPayload(voiceState, lastSaved);
+    if (Object.keys(payload).length === 0) return;
+    const savedSnapshot = snapshotVoiceSettings(voiceState);
+    saveState = 'saving';
+    try {
+      await setWakewordConfig(payload);
+      lastSaved = savedSnapshot;
+      saveState = 'saved';
+    } catch (error) {
+      saveState = 'error';
+      onToast({
+        title: t('errors.generic', 'Something went wrong. Try again.'),
+        message: error?.message || '',
         variant: 'error',
       });
     }
@@ -160,27 +242,41 @@
 
   function handleAgentChange(value) {
     voiceState = { ...voiceState, target_agent_id: value || null };
-    handleConfigChange();
+    void saveConfig();
   }
 
   function handleSessionBehaviorChange(value) {
     voiceState = { ...voiceState, session_behavior: value };
-    handleConfigChange();
+    void saveConfig();
+  }
+
+  function handleMicrophoneChange(value) {
+    const parsed = Number.parseInt(value, 10);
+    voiceState = {
+      ...voiceState,
+      microphone: Number.isInteger(parsed) ? parsed : null,
+    };
+    void saveConfig();
   }
 
   function handleSensitivityInput(event) {
     const value = parseFloat(event.target.value);
     if (Number.isFinite(value)) {
       voiceState = { ...voiceState, sensitivity: value };
-      handleConfigChange();
     }
   }
 
-  function microphoneLabel() {
-    if (!voiceState.microphone) {
-      return t('settings.voice.systemDefaultMic', 'System default');
+  async function handleRetry() {
+    try {
+      voiceState = { ...voiceState, liveState: 'starting', errorCode: null };
+      await retryWakeword();
+    } catch (error) {
+      onToast({
+        title: t('settings.voice.retryFailed', 'Voice could not restart.'),
+        message: error?.message || '',
+        variant: 'error',
+      });
     }
-    return String(voiceState.microphone);
   }
 
   // Load status on component init
@@ -222,8 +318,11 @@
         <Toggle
           checked={voiceState.enabled}
           onChange={handleEnabledChange}
-          disabled={!loaded}
-          ariaLabel={t('settings.voice.enabled', 'Wakeword listening')}
+          disabled={enableToggleDisabled}
+          ariaLabel={t(
+            'settings.voice.enabledAria',
+            'Enable wakeword listening',
+          )}
         />
       </div>
     </div>
@@ -232,7 +331,7 @@
       <div class="voice-mock-warning" role="alert">
         {t(
           'settings.voice.mockWarning',
-          'Wakeword detection is running in mock mode — the on-device speech engine could not be loaded, so nothing is actually being heard. Install the desktop voice dependencies and restart to enable real detection.',
+          'Voice is running in demo mode. State changes are simulated; no microphone is heard and no command is sent. Restart Desktop without --mock-wakeword for real detection.',
         )}
       </div>
     {/if}
@@ -245,13 +344,35 @@
         </div>
       </div>
       <div class="s-row-control">
-        <span class="voice-state">
+        <span class="voice-state" aria-live="polite">
           <span class="voice-state-dot {liveStateDotClass}" aria-hidden="true"
           ></span>
           <span class="voice-state-label">{liveStateLabel}</span>
         </span>
       </div>
     </div>
+
+    {#if voiceState.liveState === 'error' || voiceState.mode === 'unavailable'}
+      <div class="voice-error" role="alert">
+        <div>
+          <strong
+            >{t('settings.voice.errorTitle', 'Voice needs attention')}</strong
+          >
+          <p>
+            {errorMessage(
+              voiceState.mode === 'unavailable'
+                ? 'voice_stack_unavailable'
+                : voiceState.errorCode,
+            )}
+          </p>
+        </div>
+        {#if voiceState.errorCode !== 'missing_target_agent' && voiceState.errorCode !== 'target_agent_unavailable' && voiceState.mode !== 'unavailable'}
+          <Button variant="secondary" class="voice-retry" onClick={handleRetry}>
+            {t('settings.voice.retry', 'Retry listening')}
+          </Button>
+        {/if}
+      </div>
+    {/if}
 
     <!-- Sensitivity slider -->
     <div class="s-row">
@@ -265,16 +386,18 @@
       </div>
       <div class="s-row-control">
         <div class="voice-slider">
-          <span class="voice-slider-label">
+          <label class="voice-slider-label" for="voice-sensitivity">
             {t('settings.voice.sensitivity', 'Sensitivity')}
-          </span>
+          </label>
           <input
+            id="voice-sensitivity"
             type="range"
             min="0"
             max="1"
             step="0.05"
             value={voiceState.sensitivity}
             oninput={handleSensitivityInput}
+            onchange={() => void saveConfig()}
             disabled={!loaded}
           />
           <div class="voice-slider-labels">
@@ -289,12 +412,12 @@
     <div class="s-row">
       <div class="s-row-info">
         <div class="s-row-label">
-          {t('settings.voice.targetAgent', 'Target Agent')}
+          {t('settings.voice.targetAgent', 'Personal Agent')}
         </div>
         <div class="s-row-desc">
           {t(
             'settings.voice.targetAgentDescription',
-            'The agent that receives your spoken command after the wake phrase. Voice commands go nowhere until a target agent is selected.',
+            'The Personal Agent that receives spoken commands on this server. Project Agents and other servers use separate routing.',
           )}
         </div>
       </div>
@@ -341,15 +464,22 @@
       </div>
     </div>
 
-    <!-- Microphone (read-only) -->
+    <!-- Microphone picker -->
     <div class="s-row">
       <div class="s-row-info">
         <div class="s-row-label">
           {t('settings.voice.microphone', 'Microphone')}
         </div>
       </div>
-      <div class="s-row-control s-row-control--input">
-        <TextField readonly value={microphoneLabel()} />
+      <div class="s-row-control voice-microphone-control">
+        <Dropdown
+          value={selectedMicrophoneValue}
+          options={microphoneOptions}
+          ariaLabel={t('settings.voice.microphone', 'Microphone')}
+          triggerClass="voice-microphone-dropdown"
+          onValueChange={handleMicrophoneChange}
+          disabled={!loaded || microphones.length === 0}
+        />
       </div>
     </div>
 
@@ -369,20 +499,24 @@
     <div class="voice-privacy-note">
       {t(
         'settings.voice.privacyNote',
-        'Wakeword detection runs locally on your device. Audio is only recorded after the wake phrase is detected. Transcription uses your configured vBot speech backend.',
+        'While listening is enabled, microphone audio is analyzed continuously on this device. Nothing is saved or sent before the wake phrase matches; the following command recording is sent to your configured vBot speech backend for transcription.',
       )}
+      <p>
+        {t(
+          'settings.voice.cancelPhrases',
+          'Say “abbrechen” or “vergiss es” at the end of the same recording to discard the entire command before it starts a Run.',
+        )}
+      </p>
     </div>
 
-    <!-- Save button -->
-    <div class="s-footer">
-      <Button
-        variant="primary"
-        class="s-save-button s-save-button--inline"
-        disabled={!loaded}
-        onClick={() => saveConfig()}
-      >
-        {t('common.save', 'Save')}
-      </Button>
+    <div class="voice-save-state" aria-live="polite">
+      {#if saveState === 'saving'}
+        {t('common.saving', 'Saving…')}
+      {:else if saveState === 'saved' && !dirty}
+        {t('common.saved', 'Saved')}
+      {:else if saveState === 'error'}
+        {t('common.saveFailed', 'Not saved')}
+      {/if}
     </div>
   {/if}
 </div>
@@ -424,6 +558,9 @@
   .voice-dot--processing {
     background: var(--accent);
     animation: voice-spin 1s linear infinite;
+  }
+  .voice-dot--warning {
+    background: var(--amber);
   }
   .voice-dot--error {
     background: var(--red);
@@ -482,6 +619,11 @@
     color: var(--text-lo);
   }
 
+  .voice-microphone-control,
+  .voice-settings :global(.voice-microphone-dropdown.dropdown) {
+    min-width: 300px;
+  }
+
   /* Privacy note */
   .voice-privacy-note {
     margin-top: 16px;
@@ -492,6 +634,39 @@
     font-size: var(--fs-body-sm);
     color: var(--text-med);
     line-height: 1.5;
+  }
+  .voice-privacy-note p {
+    margin: 8px 0 0;
+  }
+
+  .voice-error {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin: 8px 0 12px;
+    padding: 12px 16px;
+    border: 1px solid color-mix(in srgb, var(--red) 35%, var(--border));
+    border-radius: var(--r-md);
+    background: color-mix(in srgb, var(--red) 9%, var(--surface-2));
+    color: var(--text-hi);
+  }
+  .voice-error p {
+    margin: 4px 0 0;
+    color: var(--text-med);
+    font-size: var(--fs-body-sm);
+    line-height: 1.45;
+  }
+  :global(.voice-retry) {
+    white-space: nowrap;
+  }
+
+  .voice-save-state {
+    min-height: 20px;
+    padding: 10px 0 0;
+    color: var(--text-lo);
+    font-size: var(--fs-body-sm);
+    text-align: right;
   }
 
   /* Mock-mode warning */
@@ -504,5 +679,13 @@
     font-size: var(--fs-body-sm);
     color: var(--text-hi);
     line-height: 1.5;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .voice-dot--listening,
+    .voice-dot--detected,
+    .voice-dot--processing {
+      animation: none;
+    }
   }
 </style>

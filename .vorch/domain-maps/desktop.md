@@ -27,8 +27,8 @@ Domain-specific vocabulary for the Desktop accessor.
 - `python desktop/main.py [--host] [--port] [--mock-wakeword]` (the same entrypoint `vbot desktop` invokes; see `cli.md`)
   - **Launch target.** An explicit `--host`/`--port` is a *deliberate* override and connects straight to that target (a missing half fills from `127.0.0.1`/`8420`). With **neither** flag given, the controller auto-connects to the last-used remembered server, or shows the connection screen on first run. The old silent `127.0.0.1:8420` auto-default is gone — `127.0.0.1:8420` survives only as a prefill *suggestion* in the connect form, never as an auto-connect target.
   - **Probe contract (`probe_target`).** Probes `GET /health` first and treats HTTP 200 with body exactly `{"status":"ok"}` as the vBot identity contract; then probes `/` and accepts a 2xx/3xx WebUI root. The four probe outcomes (`server_unreachable`, `not_vbot_server`, `webui_unavailable`, `invalid_target`) all render inline in the connection screen — there is no separate static fallback page anymore.
-  - **Voice follows the window's active server.** At launch the effective target (override else last-used) seeds the voice worker's `server_url`; thereafter every successful in-window connect (first-run connect, saved-server pick, or the "Server" menu switch) retargets the worker through the connection controller's active-server listener, so window and voice never diverge. A running worker is rebuilt against the new server; an unchanged target is a no-op (so the launch auto-connect to the already-open server never restarts the worker). An empty target (first run, nothing remembered) makes the worker skip sending until the first connect supplies one.
-  - `--mock-wakeword` forces a no-microphone `MockWakewordWorker`; when omitted, the real worker is used if `openwakeword` **and** `sounddevice` can be imported, otherwise Desktop falls back to the mock worker instead of opening an audio device. The mock worker drives the *same* `listening → wakeword_detected → recording → transcribing → sending → listening` state cycle as the real worker (from a `MockWakewordEngine` score script — no audio device, no network), so the WebUI status indicator can be validated. Whether the running worker is the mock is surfaced in `getWakewordStatus().mock`, and the WebUI shows a warning banner when it is — the mock fallback is never silent.
+  - **Voice follows the window's active server.** At launch the effective target (override else last-used) seeds the voice worker's `server_url`; thereafter every successful in-window connect retargets and, when enabled, rebuilds the worker. An unchanged target is a no-op. An empty target produces the actionable `no_server` error without loading the engine or opening a microphone.
+  - `--mock-wakeword` explicitly selects the no-microphone `MockWakewordWorker` for UI validation; it is the only path that simulates the state cycle. Without the flag, missing `openwakeword` or `sounddevice` selects `UnavailableWakewordWorker`, which exposes `voice_stack_unavailable` and never simulates listening or sending. `getWakewordStatus().mode` distinguishes `real` / `mock` / `unavailable` and the WebUI explains the selected mode.
   - pywebview ordering constraint: the window is created **before** the GUI loop with the connection screen as neutral initial content; `Window.load_url` / `load_html` may only run *after* `webview.start`, so the controller's connect/auto-connect is the post-loop entry callable passed to `start`.
 - **Connection controller (`desktop/connection.py`).** `ConnectionController` holds the live pywebview `Window` (handed over after creation via `attach_window`, since the window does not exist when the menu/bridge are wired) and funnels every action through `connect(host, port)`: a successful probe remembers the target, marks it last-used, navigates the window to `…/?accessor=desktop` via `Window.load_url`, and notifies its active-server listener with the plain base URL; any failure re-renders the connection screen via `Window.load_html`. `switch_to` / `reconnect` / `auto_connect` / `show_connection_screen` are thin wrappers. It reuses `probe_target` / `validate_host` / `validate_port` from `desktop/main.py` rather than re-deriving them. The active-server listener is set via `set_active_server_listener` (the launcher wires it to `bridge.set_server_url`, keeping the controller decoupled from the voice stack); a listener that raises is logged and swallowed so a worker-rebuild failure never breaks a navigation that already succeeded.
 - **Remembered-servers operations** (`list_servers` / `add_server` / `remove_server` / `select_server` / `resolve_last_used`) wrap the settings store. `add_server` is keyed by `(host, port)` (a re-add refreshes the label in place, never duplicates); removing the last-used target also clears the last-used reference; `resolve_last_used` returns last-used → first remembered → `None` (first run).
@@ -51,20 +51,23 @@ Nested under the `wakeword` key in the Desktop settings file:
     "engine": "openwakeword",
     "microphone": null,
     "sensitivity": 0.5,
-    "target_agent_id": null,
-    "session_behavior": "active",
-    "wake_phrase": "hey_jarvis"
+    "wake_phrase": "hey_jarvis",
+    "server_profiles": {
+      "http://pi.lan:8420": {
+        "target_agent_id": "main",
+        "session_behavior": "active"
+      }
+    }
   }
 }
 ```
 
 - `enabled` — whether the wakeword pipeline starts on Desktop launch
 - `engine` — display name of the detection engine (MVP: "openwakeword")
-- `microphone` — sounddevice device index or `null` for system default
+- `microphone` — sounddevice device index or `null` for automatic selection; the worker tries the host defaults then compatible input devices, captures in a supported native format, and normalizes to 16 kHz mono PCM internally
 - `sensitivity` — float 0–1, mapped to score threshold `1.0 - sensitivity`
-- `target_agent_id` — agent ID to send transcripts to, or `null` for none
-- `session_behavior` — `"active"` uses the latest session; `"new"` creates one
 - `wake_phrase` — the wakeword phrase ("hey_jarvis")
+- `server_profiles` — map keyed by normalized active server base URL; each profile stores that server's Personal Agent `target_agent_id` and `session_behavior`, preventing a server switch from silently reusing another server's bare Agent id
 
 ### Python↔JS bridge
 
@@ -78,17 +81,19 @@ Bridge methods:
 |---|---|---|
 | `getDesktopCapabilities()` | `{ wakeword: true }` | Feature flags for WebUI gating |
 | `getWakewordStatus()` | status dict | Current config + live worker state |
+| `listMicrophones()` | device list | Input devices with compatibility and capture-rate metadata |
 | `setWakewordEnabled(enabled)` | — | Enable/disable the worker |
 | `setWakewordConfig(config)` | — | Partial config update, persists, recreates/restarts worker when enabled |
+| `retryWakeword()` | — | Rebuild/restart an enabled worker after an actionable error |
 | `connect(host, port)` | `{ status }` | Probe + navigate via the controller (used by the connection screen) |
 | `listServers()` | `[{host, port, label?}]` | Remembered servers |
 | `addServer(host, port, label?)` | stored entry | Remember a server without connecting |
 | `removeServer(host, port)` | `{ removed }` | Forget a remembered server |
 | `selectServer(host, port)` | `{ status }` | Select and connect to a remembered server |
 
-The WebUI polls `getWakewordStatus()` every 500ms while Desktop is detected; the poll carries only the observed runtime fields (live `state`, the `mock` boolean) into WebUI state, never the editable config, so a poll firing during the ~800ms autosave debounce cannot revert an unsaved edit. The status payload includes a runtime-only `mock` boolean (true when the running worker is the no-microphone mock). Worker state transitions are published through the bridge's `publish_state()` method, and config changes are reflected in the next full status payload.
+The WebUI polls `getWakewordStatus()` every 500ms while Desktop is detected; settings UI polling carries only runtime fields into editable state. Status includes the current `state`, stable `error_code`, concrete `active_microphone`, `mode`, and a bounded sequence-numbered event history so short transitions such as detection are not lost between polls. App-level event consumption plays non-verbal Web Audio cues for detection, success, cancellation, no-speech/transcription failure, and fatal error; visual state remains authoritative if the host cannot play audio.
 
-Worker states (exposed in `getWakewordStatus().state`): `off` → `listening` → `wakeword_detected` → `recording` → `transcribing` → `sending` → `listening` (or → `error` at any point). The real worker closes the microphone stream while transcribing and sending, then reopens it before returning to `listening`; this avoids treating expected input buffer overflows after network waits as fatal loop errors. After any wakeword activation, detection is disarmed until the score falls below the configured threshold again. The worker also holds the visible `listening` state briefly before reopening the microphone stream, so one spoken wake phrase cannot immediately retrigger a second recording cycle.
+Worker states (exposed in `getWakewordStatus().state`): `off` → `starting` → `listening` → `wakeword_detected` → `recording` → `transcribing` → `sending` → `sent` → `listening`; recoverable utterance outcomes are `cancelled`, `no_speech`, and `transcription_failed`, while fatal startup/device/routing/send failures enter `error` with a machine-readable reason. The real worker closes the microphone while transcribing/sending, shows the outcome briefly, then reopens it. Detection re-arms only after the score falls below threshold. openWakeWord's bundled VAD gates detection; post-detection WebRTC VAD waits up to four seconds for speech, retains 300 ms of pre-speech padding, ends after 1.5 seconds of trailing silence, and caps the command at 15 seconds.
 
 ## Conventions
 
@@ -104,12 +109,13 @@ Worker states (exposed in `getWakewordStatus().state`): `off` → `listening` �
 - The Python↔JS bridge is a pywebview `js_api` object. Bridge methods execute in separate threads — implementations must be thread-safe.
 - If the server is unreachable, is not a vBot server, or has no WebUI, Desktop stays open and shows the interactive connection screen (with the failed host/port prefilled and an inline error) instead of crashing or dead-ending.
 - Hosts are plain host names or IP addresses only; schemes, paths, whitespace, and URL punctuation are rejected; a rejected host renders as the `invalid_target` connection-screen error.
-- Wakeword detection runs locally. Audio is only recorded after the wake phrase is detected. No audio leaves the device before a wakeword match.
-- If `target_agent_id` is not configured, the worker **fails fast at start**: it enters `error` immediately (no engine load, no microphone opened) rather than sitting in `listening` and dying on the first wake word. A configured agent that is cleared mid-run recreates the worker (config change), which re-checks the same gate; the post-detection guard in `_handle_detection` remains as defense-in-depth.
+- While listening is enabled, microphone audio is analyzed continuously on-device. Nothing is persisted or sent before a wakeword match; only the following command recording is uploaded for transcription.
+- Startup validates the active server and that server's configured Personal Agent before loading the engine/opening the microphone. Missing server/target, a stale Agent id, model startup, device incompatibility, repeated reads, detection, session resolution, and send failures have distinct `error_code` values; stopped in-flight validation never continues into engine/microphone startup.
+- A normalized transcript ending in the reserved German phrase `abbrechen` or `vergiss es` returns the recoverable `cancelled` outcome and is discarded before session resolution or `chat.stream`, so it cannot start a Run. The phrases are recognized only inside the same captured utterance; they do not cancel a Run that already started.
 - `"active"` session behavior resolves the Agent's persisted `current_session_id` via `agent.get`; if unavailable, it falls back to the most recently active session from `session.list`, then creates a session.
 - Transcripts are submitted with `chat.stream` and `input_origin: "speech_transcription"` so the Desktop worker returns to listening after the server accepts the Run instead of blocking until the Run completes, while the model still receives hidden context that the visible user text came from speech-to-text.
 - Isolated microphone read errors during detection are recovered by reopening the stream; three consecutive failures transition to `error`.
-- An empty transcript or a failed transcription request is logged, sends no chat message, and returns the worker to `listening`; one bad utterance must not stop future wakeword detection.
+- An empty/no-speech recording or failed transcription sends no chat message, exposes `no_speech` / `transcription_failed` long enough for visible and audible feedback, then returns to `listening`; one bad utterance must not stop future wakeword detection.
 - A stop (disable / reconfigure / server switch) between capture and send discards the utterance: `_handle_detection` re-checks `_running` after recording and after transcription and bails without sending a now-stale command, and the retry loops honor `_running` (interruptible backoff, no retry after stop). A stop-induced empty resolve/send result does not publish `error` (the bridge publishes `off`). The in-flight HTTP request itself is best-effort — a single attempt may finish and its result is discarded.
 
 ## External Dependencies
@@ -117,8 +123,8 @@ Worker states (exposed in `getWakewordStatus().state`): `off` → `listening` �
 All four ship in the `[desktop]` optional-dependency group (`pyproject.toml`). They are still imported lazily/optionally in code so the backend test gate never requires the GUI/audio stack.
 
 - **pywebview** — native window wrapper used to host the existing WebUI and the connection screen; `webview.menu` provides the native Server menu.
-- **openwakeword** — ONNX-based wakeword detection. Falls back to the mock engine when the import fails.
-- **sounddevice** — cross-platform microphone access via PortAudio. The real worker is selected only when both `openwakeword` and `sounddevice` import; otherwise the mock worker runs.
+- **openwakeword** — ONNX-based wakeword detection with its bundled VAD enabled to reduce non-speech activations. An import failure selects the non-simulating unavailable worker unless `--mock-wakeword` was explicitly requested.
+- **sounddevice** — cross-platform PortAudio access. The worker probes device/rate/dtype support, prefers native 16 kHz when available, otherwise captures at a supported rate of at least 16 kHz and resamples to the engine's 16 kHz signed-PCM contract.
 - **webrtcvad** — Google WebRTC VAD for silence detection during post-wakeword recording. Falls back to fixed-duration capture when not installed.
 
 ## Constraints & Gotchas
@@ -126,7 +132,7 @@ All four ship in the `[desktop]` optional-dependency group (`pyproject.toml`). T
 - A healthy vBot server may exist without `webui/dist`; in that case the probe returns `webui_unavailable` and Desktop shows the connection screen with a "WebUI unavailable" inline error (not a dead-end page).
 - Desktop-local preferences must not be written into the shared server `data_dir`, because that directory belongs to the selected vBot instance. They live in the OS per-user config dir (`%APPDATA%\vbot` / XDG), which survives a package/venv reinstall — a real install puts the program inside a venv that is not user-writable.
 - pywebview and `webview.menu` are imported lazily so backend tests and non-desktop development workflows do not require the optional GUI package. Behavior of runtime `Window.load_url` and the native `webview.menu` API varies by backend/version; the connection screen also auto-appears on any unreachable target, so server switching never depends solely on the menu.
-- openWakeWord and sounddevice are optional imports — the Desktop launches with the mock worker when either is missing. webrtcvad is optional only for post-wake silence detection; when it is missing, the worker uses fixed-duration recording after the wakeword.
-- `microphone` accepts a sounddevice device index, but device enumeration is not wired into the UI: `list_microphones()` exists in `desktop/wakeword/worker.py` (exported from `desktop.wakeword`) yet no bridge method exposes it and the WebUI never calls it. Building an in-app mic picker means adding a bridge method first.
-- The real wakeword worker runs in a daemon thread. If startup, repeated microphone failures, missing target Agent, session resolution, or send fails, the bridge state transitions to `error` and remains there until the user changes config or toggles the worker.
+- openWakeWord and sounddevice are optional imports — normal Desktop mode reports Voice unavailable when either is missing; only the explicit mock flag simulates activity. webrtcvad remains optional for post-wake silence detection; without it, the worker uses fixed-duration recording.
+- Automatic microphone selection may choose a host-API default/fallback whose index differs from the persisted `microphone: null`; `active_microphone` is the authoritative runtime device shown beside the automatic option. Explicit unsupported devices stay visible but disabled in the picker.
+- The real wakeword worker runs in a daemon thread. Fatal failures leave a stable reason until config change, Retry, disable, or server switch rebuilds it; recoverable utterance failures return to listening automatically.
 - Bridge methods must return quickly and not block — they hold a threading.Lock for config access only during reads/writes to the local settings file.

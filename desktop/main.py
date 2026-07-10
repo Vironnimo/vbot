@@ -330,25 +330,37 @@ def _create_wakeword_bridge(
     shell connection screen's ``connect`` call routes through it). ``server_url``
     is the *effective launch target* the caller resolved once (CLI override else
     last-used), so the local voice pipeline sends transcripts to the same server
-    the window opens. An empty ``server_url`` (first run, nothing to target)
-    makes the worker skip sending — the no-target behavior the worker guards.
+    the window opens. An empty ``server_url`` is reported as an actionable Voice
+    startup error before the engine or microphone opens.
 
-    Uses MockWakewordWorker when --mock-wakeword is set or when the on-device
-    wakeword stack cannot be imported; the mock decision is made once up front so
-    the bridge can surface it to the WebUI. Returns the bridge instance (never
-    None — the bridge always exists so the WebUI can query capabilities).
+    Mock mode is explicit through ``--mock-wakeword``. A missing on-device stack
+    selects the non-simulating unavailable worker instead, so production never
+    shows fake listening/sending activity. Returns the bridge instance in every
+    mode so the WebUI can query capabilities and the concrete reason.
     """
 
     from desktop.wakeword.bridge import DesktopBridge
     from desktop.wakeword.engine import OpenWakeWordEngine
-    from desktop.wakeword.worker import MockWakewordWorker, WakewordWorker
+    from desktop.wakeword.worker import (
+        MockWakewordWorker,
+        UnavailableWakewordWorker,
+        WakewordWorker,
+    )
 
-    is_mock = bool(args.mock_wakeword) or not _real_wakeword_available()
+    voice_mode = (
+        "mock"
+        if bool(args.mock_wakeword)
+        else "real"
+        if _real_wakeword_available()
+        else "unavailable"
+    )
 
     def worker_factory(bridge: DesktopBridge) -> Any:
-        if is_mock:
+        if voice_mode == "mock":
             return MockWakewordWorker(bridge=bridge)
-        wakeword_config = read_wakeword_settings(settings_file)
+        if voice_mode == "unavailable":
+            return UnavailableWakewordWorker(bridge=bridge)
+        wakeword_config = bridge.worker_config()
         engine = OpenWakeWordEngine(
             wake_phrase=wakeword_config.get("wake_phrase", "hey_jarvis"),
             sensitivity=wakeword_config.get("sensitivity", 0.5),
@@ -360,6 +372,7 @@ def _create_wakeword_bridge(
             bridge=bridge,
             settings_path=settings_file,
             server_url=bridge.server_url,
+            config_reader=bridge.worker_config,
         )
 
     bridge = DesktopBridge(
@@ -367,7 +380,8 @@ def _create_wakeword_bridge(
         worker_factory=worker_factory,
         connection=controller,
         server_url=server_url,
-        mock=is_mock,
+        mock=voice_mode == "mock",
+        mode=voice_mode,
     )
 
     wakeword_config = read_wakeword_settings(settings_file)
@@ -381,9 +395,8 @@ def _real_wakeword_available() -> bool:
     """Whether the on-device wakeword stack can be imported.
 
     Both openWakeWord and sounddevice must import for the real worker; a missing
-    either one means Desktop runs the no-microphone mock worker. Probed once up
-    front so the decision can be surfaced to the WebUI (a silent mock left the
-    user staring at a fake "listening" that never hears anything).
+    dependency selects unavailable mode. Probed once up front so the WebUI can
+    explain the dependency failure without simulating microphone activity.
     """
 
     try:

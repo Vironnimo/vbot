@@ -91,6 +91,9 @@ describe('applyRuntimeStatus', () => {
     const status = {
       state: 'recording',
       mock: true,
+      mode: 'unavailable',
+      error_code: 'microphone_unavailable',
+      active_microphone: { index: 4, name: 'Desk mic', sample_rate: 48000 },
       // Config fields in the poll payload must be ignored so an in-progress
       // edit is never reverted.
       sensitivity: 0.5,
@@ -101,6 +104,9 @@ describe('applyRuntimeStatus', () => {
 
     expect(next.liveState).toBe('recording');
     expect(next.mock).toBe(true);
+    expect(next.mode).toBe('unavailable');
+    expect(next.errorCode).toBe('microphone_unavailable');
+    expect(next.activeMicrophone.name).toBe('Desk mic');
     expect(next.sensitivity).toBe(0.9);
     expect(next.target_agent_id).toBe('agent-1');
   });

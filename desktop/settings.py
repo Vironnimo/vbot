@@ -22,6 +22,7 @@ preserve unrelated top-level keys so one concern never clobbers another.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import tempfile
@@ -46,9 +47,12 @@ DEFAULT_WAKEWORD_SETTINGS: dict[str, Any] = {
     "engine": "openwakeword",
     "microphone": None,
     "sensitivity": 0.5,
-    "target_agent_id": None,
-    "session_behavior": "active",
     "wake_phrase": "hey_jarvis",
+    # Agent/session routing is server-specific. A Desktop can switch between
+    # unrelated vBot servers, where the same bare agent id may name a different
+    # identity. Keeping the target beside the server URL prevents commands from
+    # silently crossing that boundary after a switch.
+    "server_profiles": {},
 }
 
 
@@ -221,7 +225,7 @@ def read_wakeword_settings(path: Path | None = None) -> dict[str, Any]:
     wakeword_data = full.get(WAKEWORD_KEY)
     if not isinstance(wakeword_data, dict):
         wakeword_data = {}
-    merged = dict(DEFAULT_WAKEWORD_SETTINGS)
+    merged = copy.deepcopy(DEFAULT_WAKEWORD_SETTINGS)
     merged.update(wakeword_data)
     return merged
 

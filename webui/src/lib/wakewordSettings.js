@@ -10,13 +10,27 @@ const VOICE_SETTINGS_DEFAULTS = Object.freeze({
   wake_phrase: 'hey_jarvis',
   liveState: 'off',
   mock: false,
+  mode: 'real',
+  errorCode: null,
+  activeMicrophone: null,
 });
 
 // Fields observed from the worker, not edited by the user: never part of a save
 // payload or the dirty check, and safe for a status poll to overwrite mid-edit.
-const RUNTIME_KEYS = new Set(['liveState', 'mock']);
+const RUNTIME_KEYS = new Set([
+  'liveState',
+  'mock',
+  'mode',
+  'errorCode',
+  'activeMicrophone',
+]);
 
 const hasKey = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+const sameMicrophone = (left, right) =>
+  left === right ||
+  (left?.index === right?.index &&
+    left?.name === right?.name &&
+    left?.sample_rate === right?.sample_rate);
 
 /** Create the initial voice settings state with defaults. */
 export function createVoiceSettingsState() {
@@ -50,6 +64,13 @@ export function applyWakewordStatus(state, status) {
       : state.wake_phrase,
     liveState: hasKey(status, 'state') ? status.state : state.liveState,
     mock: hasKey(status, 'mock') ? status.mock : state.mock,
+    mode: hasKey(status, 'mode') ? status.mode : state.mode,
+    errorCode: hasKey(status, 'error_code')
+      ? status.error_code
+      : state.errorCode,
+    activeMicrophone: hasKey(status, 'active_microphone')
+      ? status.active_microphone
+      : state.activeMicrophone,
   };
 }
 
@@ -67,6 +88,18 @@ export function applyRuntimeStatus(state, status) {
   }
   if (hasKey(status, 'mock') && status.mock !== next.mock) {
     next = { ...next, mock: status.mock };
+  }
+  if (hasKey(status, 'mode') && status.mode !== next.mode) {
+    next = { ...next, mode: status.mode };
+  }
+  if (hasKey(status, 'error_code') && status.error_code !== next.errorCode) {
+    next = { ...next, errorCode: status.error_code };
+  }
+  if (
+    hasKey(status, 'active_microphone') &&
+    !sameMicrophone(status.active_microphone, next.activeMicrophone)
+  ) {
+    next = { ...next, activeMicrophone: status.active_microphone };
   }
   return next;
 }

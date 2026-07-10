@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Protocol
 
+_WAKEWORD_VAD_THRESHOLD = 0.3
+
 
 class WakewordEngine(Protocol):
     """Abstract interface for wakeword detection engines."""
@@ -81,6 +83,10 @@ class OpenWakeWordEngine:
         self._model = Model(
             wakeword_models=[self._wake_phrase],
             inference_framework="onnx",
+            # Gate wakeword scores with openWakeWord's bundled speech detector.
+            # This reduces activations from non-speech household noise before
+            # the post-detection recorder is ever allowed to open a command.
+            vad_threshold=_WAKEWORD_VAD_THRESHOLD,
         )
 
     def stop(self) -> None:
@@ -93,7 +99,7 @@ class OpenWakeWordEngine:
             return 0.0
         import numpy as np
 
-        audio_array = np.frombuffer(audio_chunk, dtype=np.int16).astype(np.float32)
+        audio_array = np.frombuffer(audio_chunk, dtype=np.int16)
         prediction = self._model.predict(audio_array)
         score = float(prediction.get(self._wake_phrase, 0.0))
         return max(0.0, min(1.0, score))

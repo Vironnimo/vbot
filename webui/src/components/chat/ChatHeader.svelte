@@ -39,6 +39,7 @@
   let micDotClass = $derived(computeMicDotClass(wakewordStatus));
   let micTooltip = $derived(computeMicTooltip(wakewordStatus));
   let micVisible = $derived(Boolean(desktopCapabilities?.wakeword));
+  let micStatusText = $derived(compactMicStatus(wakewordStatus));
   // The identity bar carries a "Personal" label only while a project is
   // selected, so it visually pairs with the project-name label on the second
   // (team) bar below. With no project there is just one bar and no label needed.
@@ -102,6 +103,8 @@
       return 'mic-dot--off';
     }
     switch (status.state) {
+      case 'starting':
+        return 'mic-dot--processing';
       case 'listening':
       case 'wakeword_detected':
         return 'mic-dot--listening';
@@ -110,6 +113,12 @@
       case 'transcribing':
       case 'sending':
         return 'mic-dot--processing';
+      case 'sent':
+        return 'mic-dot--listening';
+      case 'cancelled':
+      case 'no_speech':
+      case 'transcription_failed':
+        return 'mic-dot--warning';
       case 'error':
         return 'mic-dot--error';
       default:
@@ -122,6 +131,8 @@
       return t('voice.mic.tooltip.off', 'Wakeword disabled');
     }
     switch (status.state) {
+      case 'starting':
+        return t('voice.mic.tooltip.starting', 'Starting wakeword listening');
       case 'listening':
         return t('voice.mic.tooltip.listening', 'Listening for wakeword');
       case 'wakeword_detected':
@@ -131,10 +142,40 @@
       case 'transcribing':
       case 'sending':
         return t('voice.mic.tooltip.processing', 'Processing voice command');
+      case 'sent':
+        return t('voice.mic.tooltip.sent', 'Voice command sent');
+      case 'cancelled':
+        return t('voice.mic.tooltip.cancelled', 'Voice command cancelled');
+      case 'no_speech':
+        return t('voice.mic.tooltip.noSpeech', 'No speech heard');
+      case 'transcription_failed':
+        return t(
+          'voice.mic.tooltip.transcriptionFailed',
+          'Voice command was not understood',
+        );
       case 'error':
         return t('voice.mic.tooltip.error', 'Voice error');
       default:
         return t('voice.mic.tooltip.off', 'Wakeword disabled');
+    }
+  }
+
+  function compactMicStatus(status) {
+    if (!status?.enabled) return '';
+    switch (status.state) {
+      case 'wakeword_detected':
+        return t('voice.state.wakewordDetected', 'Wakeword detected');
+      case 'recording':
+        return t('voice.state.recording', 'Recording');
+      case 'transcribing':
+      case 'sending':
+        return t('voice.state.processing', 'Processing');
+      case 'cancelled':
+        return t('voice.state.cancelled', 'Cancelled');
+      case 'error':
+        return t('voice.state.error', 'Voice error');
+      default:
+        return '';
     }
   }
 </script>
@@ -183,6 +224,10 @@
         onclick={onNavigateToVoiceSettings}
       >
         <span class="mic-dot {micDotClass}" aria-hidden="true"></span>
+        {#if micStatusText}
+          <span class="mic-status-text" aria-live="polite">{micStatusText}</span
+          >
+        {/if}
       </button>
     {/if}
     {#if tokenBadgeText}
@@ -342,12 +387,13 @@
 
   .mic-indicator {
     display: inline-flex;
-    width: 28px;
+    min-width: 28px;
     height: 28px;
     flex-shrink: 0;
     align-items: center;
     justify-content: center;
-    padding: 0;
+    gap: 6px;
+    padding: 0 8px;
     border: none;
     border-radius: 50%;
     background: transparent;
@@ -385,8 +431,19 @@
     background: var(--accent);
   }
 
+  .mic-dot--warning {
+    background: var(--amber);
+  }
+
   .mic-dot--error {
     background: var(--red);
+  }
+
+  .mic-status-text {
+    color: var(--text-med);
+    font-family: var(--font-ui);
+    font-size: var(--fs-label-sm);
+    white-space: nowrap;
   }
 
   :global(.chat-sessions-toggle--active) {
@@ -428,6 +485,13 @@
     }
     100% {
       opacity: 1;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mic-dot--listening,
+    .mic-dot--processing {
+      animation: none;
     }
   }
 

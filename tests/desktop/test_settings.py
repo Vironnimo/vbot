@@ -255,6 +255,15 @@ def test_read_wakeword_settings_returns_defaults_when_file_missing(tmp_path: Pat
     assert config == desktop_settings.DEFAULT_WAKEWORD_SETTINGS
 
 
+def test_wakeword_defaults_return_independent_server_profile_maps(tmp_path: Path) -> None:
+    first = desktop_settings.read_wakeword_settings(tmp_path / "missing.json")
+    second = desktop_settings.read_wakeword_settings(tmp_path / "missing.json")
+
+    first["server_profiles"]["http://a.lan:8420"] = {"target_agent_id": "main"}
+
+    assert second["server_profiles"] == {}
+
+
 def test_read_wakeword_settings_merges_with_defaults(tmp_path: Path) -> None:
     settings_file = tmp_path / "settings.json"
     settings_file.write_text(
