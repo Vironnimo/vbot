@@ -251,7 +251,9 @@ The app shell is a fixed sidebar (210px) plus a fluid main content area. The sid
 
 Sidebar navigation is grouped by usage cadence into Work / Configure / Insights, each group introduced by a mono-xs uppercase section label (`--text-lo`, no divider lines); on mobile (≤640px) the groups collapse to a single scrolling top-bar row and the labels hide.
 
-Within views, two-pane splits (Agents: 240px list + fluid detail; Settings: 168px nav + fluid panel) use a thin `border` divider with no gap. Padding inside panels is 20–32px depending on context.
+Within views, two-pane splits (Agents: 240px list + fluid detail; Settings: 208px index + fluid document) use a thin `border` divider with no gap. Padding inside panels is 20–32px depending on context.
+
+Settings is the one-document pattern: the left column is a search input plus a grouped table of contents (mono-caps group labels, scrollspy highlight in the accent nav-item style, non-matching entries dim to 35% during a search), and the right side is a single scrolling column of section cards (`--content-max-narrow` measure, `lg` radius, `border` outline, faint white fill) each headed by a 15px/600 title and a `text-med` subtitle above a divider.
 
 In scrollable edit surfaces, the primary save action belongs at the bottom of the scroll region in a sticky footer, not in the panel header. This keeps the action visually near the edited fields and available after long scrolls.
 
