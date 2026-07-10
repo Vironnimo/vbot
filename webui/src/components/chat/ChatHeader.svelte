@@ -1,6 +1,7 @@
 <script>
   import { activeLocaleTag, t } from '$lib/i18n.js';
   import { formatTokenUsageTooltip } from '$lib/tokenUsageTooltip.js';
+  import { tooltip } from '$lib/tooltip.js';
   import Button from '../ui/Button.svelte';
   import Dropdown from '../Dropdown.svelte';
 
@@ -144,7 +145,7 @@
     {#if showPersonalLabel}
       <span
         class="agent-tabs__personal-label"
-        title={t(
+        use:tooltip={t(
           'chat.personalBarHint',
           'Your personal agents — available with or without a project.',
         )}
@@ -177,7 +178,7 @@
       <button
         type="button"
         class="mic-indicator"
-        title={micTooltip}
+        use:tooltip={micTooltip}
         aria-label={micTooltip}
         onclick={onNavigateToVoiceSettings}
       >
@@ -185,7 +186,8 @@
       </button>
     {/if}
     {#if tokenBadgeText}
-      <span class="token-badge" title={tokenBadgeTooltip}>{tokenBadgeText}</span
+      <span class="token-badge" use:tooltip={tokenBadgeTooltip}
+        >{tokenBadgeText}</span
       >
     {/if}
     <Dropdown
@@ -207,24 +209,30 @@
         ? t('sessions.hide', 'Hide sessions')
         : t('sessions.title', 'Sessions')}
     </Button>
-    <Button
-      variant="primary"
-      disabled={!activeAgent || newSessionBlocked || creatingSession}
-      title={newSessionBlocked
+    <!-- The blocked hint must show on the *disabled* button, which receives no
+         pointer events — so the tooltip listens on this wrapper span. -->
+    <span
+      class="tooltip-anchor"
+      use:tooltip={newSessionBlocked
         ? t(
             'chat.newSessionBlocked',
             'A new session can be started after the current run finishes.',
           )
-        : undefined}
-      onClick={onNewSession}
+        : ''}
     >
-      <svg viewBox="0 0 14 14" width="12" height="12" aria-hidden="true">
-        <path d="M7 1v12M1 7h12" />
-      </svg>
-      {creatingSession
-        ? t('common.loading', 'Loading…')
-        : t('chat.newSession', 'New session')}
-    </Button>
+      <Button
+        variant="primary"
+        disabled={!activeAgent || newSessionBlocked || creatingSession}
+        onClick={onNewSession}
+      >
+        <svg viewBox="0 0 14 14" width="12" height="12" aria-hidden="true">
+          <path d="M7 1v12M1 7h12" />
+        </svg>
+        {creatingSession
+          ? t('common.loading', 'Loading…')
+          : t('chat.newSession', 'New session')}
+      </Button>
+    </span>
   </div>
 </header>
 

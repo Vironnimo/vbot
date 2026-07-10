@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
+import { TOOLTIP_SHOW_DELAY_MS } from '../../lib/tooltip.js';
 
 const debugStatusMock = vi.fn();
 const debugTraceListMock = vi.fn();
@@ -85,7 +86,7 @@ describe('DebugView', () => {
     expect(text).not.toContain('(none)');
   });
 
-  it('exposes full provider and model values via the title attribute on trace rows', async () => {
+  it('exposes full provider and model values via the quick tooltip on trace rows', async () => {
     debugTraceListMock.mockResolvedValue({
       traces: [
         traceListEntry({
@@ -104,10 +105,10 @@ describe('DebugView', () => {
     const providerCell = document.querySelector('.debug-trace__provider');
     const modelCell = document.querySelector('.debug-trace__model');
 
-    expect(providerCell?.getAttribute('title')).toBe(
+    expect(await hoveredTooltipText(providerCell)).toBe(
       'openai-subscription-with-a-very-long-name',
     );
-    expect(modelCell?.getAttribute('title')).toBe(
+    expect(await hoveredTooltipText(modelCell)).toBe(
       'gpt-5.2-with-extra-context-and-suffix',
     );
   });
@@ -662,4 +663,15 @@ async function waitForCondition(check, attempts = 60) {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   throw new Error('Timed out waiting for condition');
+}
+
+// Hovers `element` and returns the shared quick tooltip's text once it shows.
+async function hoveredTooltipText(element) {
+  element.dispatchEvent(new Event('pointerenter'));
+  await new Promise((resolve) =>
+    setTimeout(resolve, TOOLTIP_SHOW_DELAY_MS + 50),
+  );
+  const text = document.getElementById('app-tooltip')?.textContent ?? null;
+  element.dispatchEvent(new Event('pointerleave'));
+  return text;
 }

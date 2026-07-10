@@ -29,6 +29,8 @@
     parseModelSelectionValue,
     selectModelValue,
   } from '$lib/modelSelection.js';
+  import { tooltip } from '$lib/tooltip.js';
+  import InfoHint from '../ui/InfoHint.svelte';
 
   const EMPTY_VALUE = '—';
   const AUTO_SAVE_DEBOUNCE_MS = 800;
@@ -788,21 +790,28 @@
 
       <div class="detail-btns">
         {#if formMode === AGENT_FORM_MODE_EDIT}
-          <Button
-            variant="danger"
-            disabled={isDeleting || !canDeleteSelectedAgent}
-            title={!canDeleteSelectedAgent
+          <!-- The disabled reason must show on the *disabled* button, which
+               receives no pointer events — so the tooltip listens on this
+               wrapper span. -->
+          <span
+            class="tooltip-anchor"
+            use:tooltip={!canDeleteSelectedAgent
               ? t(
                   'agents.deleteDisabledMinimum',
                   'The last remaining agent cannot be deleted.',
                 )
-              : t('agents.delete', 'Delete agent')}
-            onClick={deleteSelectedAgent}
+              : ''}
           >
-            {isDeleting
-              ? t('common.loading', 'Loading…')
-              : t('agents.delete', 'Delete agent')}
-          </Button>
+            <Button
+              variant="danger"
+              disabled={isDeleting || !canDeleteSelectedAgent}
+              onClick={deleteSelectedAgent}
+            >
+              {isDeleting
+                ? t('common.loading', 'Loading…')
+                : t('agents.delete', 'Delete agent')}
+            </Button>
+          </span>
         {/if}
       </div>
     </div>
@@ -926,6 +935,12 @@
         <label class="f">
           <span class="f-label">
             {t('agents.form.fallbackModel', 'Fallback model')}
+            <InfoHint
+              text={t(
+                'agents.form.fallbackModelHelp',
+                'Used automatically when the primary model fails or is unavailable.',
+              )}
+            />
           </span>
           <SearchableDropdown
             id="agent-fallback-model"
@@ -947,18 +962,18 @@
             onValueChange={(selectedValue) =>
               updateModelSelection('fallback_model', selectedValue)}
           />
-          <small class="agents-view__field-help">
-            {t(
-              'agents.form.fallbackModelHelp',
-              'Used automatically when the primary model fails or is unavailable.',
-            )}
-          </small>
           {@render globalDefaultsLink()}
         </label>
 
         <label class="f agents-view__thinking-field">
           <span class="f-label">
             {t('agents.form.thinkingEffort', 'Thinking effort')}
+            <InfoHint
+              text={t(
+                'agents.form.thinkingEffortHelp',
+                'How much internal reasoning the model may spend before answering. Leave at — for the default.',
+              )}
+            />
           </span>
           <Dropdown
             id="agent-thinking-effort"
@@ -982,13 +997,6 @@
                 'This model does not support reasoning.',
               )}
             </small>
-          {:else}
-            <small class="agents-view__field-help">
-              {t(
-                'agents.form.thinkingEffortHelp',
-                'How much internal reasoning the model may spend before answering. Leave at — for the default.',
-              )}
-            </small>
           {/if}
           {#if formValues.thinking_effort === ''}
             {@render globalDefaultsLink()}
@@ -998,6 +1006,12 @@
         <label class="f">
           <span class="f-label">
             {t('agents.form.temperature', 'Temperature')}
+            <InfoHint
+              text={t(
+                'agents.form.temperatureHelp',
+                'Sampling randomness, typically 0–2. Leave empty to use the default.',
+              )}
+            />
           </span>
           <div class="agents-view__temperature-input">
             <TextField
@@ -1010,7 +1024,10 @@
               <Button
                 variant="tertiary"
                 class="agents-view__reset-inherit"
-                title={t('inherit.resetToInherit', 'Reset to inherited value')}
+                tooltip={t(
+                  'inherit.resetToInherit',
+                  'Reset to inherited value',
+                )}
                 ariaLabel={t(
                   'inherit.resetToInherit',
                   'Reset to inherited value',
@@ -1021,12 +1038,6 @@
               </Button>
             {/if}
           </div>
-          <small class="agents-view__field-help">
-            {t(
-              'agents.form.temperatureHelp',
-              'Sampling randomness, typically 0–2. Leave empty to use the default.',
-            )}
-          </small>
           {#if temperatureIsInherit}
             {#if inheritSource('temperature') === 'global_default'}
               <small class="agents-view__field-help agents-view__inherit-hint">
@@ -1060,6 +1071,12 @@
       <div class="agents-view__prompt-toggle-row">
         <span class="agents-view__prompt-toggle-label">
           {t('agents.form.customSystemPrompt', 'Custom system prompt')}
+          <InfoHint
+            text={t(
+              'agents.form.customPromptHelp',
+              'Gives this agent its own editable copy of the system prompt. Edit it in the System Prompt tab by selecting this agent as the scope. Turning this off keeps the customized blocks but stops using them.',
+            )}
+          />
         </span>
         <div class="agents-view__prompt-toggle-controls">
           {#if formMode === AGENT_FORM_MODE_EDIT && formValues.custom_system_prompt_enabled}
@@ -1086,12 +1103,6 @@
           />
         </div>
       </div>
-      <small class="agents-view__field-help">
-        {t(
-          'agents.form.customPromptHelp',
-          'Gives this agent its own editable copy of the system prompt. Edit it in the System Prompt tab by selecting this agent as the scope. Turning this off keeps the customized blocks but stops using them.',
-        )}
-      </small>
     </div>
 
     <div class="detail-group agents-view__memory-group">
@@ -1101,6 +1112,12 @@
       <div class="agents-view__prompt-memory-row">
         <span class="agents-view__prompt-toggle-label">
           {t('agents.form.memoryPromptMode', 'Memory')}
+          <InfoHint
+            text={t(
+              'agents.form.memoryModeHelp',
+              'Which memory files are pinned into the System Prompt. The memory tool follows this setting — it is available to the agent unless this is off.',
+            )}
+          />
         </span>
         <Dropdown
           id="agent-memory-prompt-mode"
@@ -1114,12 +1131,6 @@
           }}
         />
       </div>
-      <small class="agents-view__field-help">
-        {t(
-          'agents.form.memoryModeHelp',
-          'Which memory files are pinned into the System Prompt. The memory tool follows this setting — it is available to the agent unless this is off.',
-        )}
-      </small>
     </div>
 
     <div class="detail-group">

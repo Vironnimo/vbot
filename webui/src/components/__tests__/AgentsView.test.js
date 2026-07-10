@@ -573,9 +573,14 @@ describe('AgentsView', () => {
 
     await waitForCondition(() => modelTriggerLabel() === 'openai/gpt-5.2', 100);
 
+    // Label text without the InfoHint "?" dot that may sit inside the label.
     const modelLabels = Array.from(
       document.body.querySelectorAll('.agents-view__model-fields .f-label'),
-    ).map((label) => label.textContent.trim());
+    ).map((label) => {
+      const clone = label.cloneNode(true);
+      clone.querySelectorAll('.info-hint').forEach((dot) => dot.remove());
+      return clone.textContent.trim();
+    });
 
     expect(modelLabels).toEqual([
       'Model',

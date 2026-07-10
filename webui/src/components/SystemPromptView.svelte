@@ -12,6 +12,7 @@
   } from '$lib/agentTargetOptions.js';
   import { listProjects, rpc, showProject } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
 
   const AUTO_SAVE_DEBOUNCE_MS = 800;
   // The custom-block slug rule mirrors the backend agent-id rule (validated again
@@ -1023,7 +1024,7 @@
                     {#if block.kind === 'data'}
                       <span
                         class="sp-badge sp-badge--data"
-                        title={t(
+                        use:tooltip={t(
                           'systemPrompt.blockList.dataHint',
                           'Generated content — rebuilt automatically, not editable.',
                         )}
@@ -1034,7 +1035,7 @@
                     {#if isAgentScope && isInherited(block)}
                       <span
                         class="sp-badge sp-badge--inherited"
-                        title={t(
+                        use:tooltip={t(
                           'systemPrompt.blockList.inheritedHint',
                           'Inherited from the Default scope — editing creates an override.',
                         )}
@@ -1047,7 +1048,7 @@
                     {:else if block.editable && block.isModified}
                       <span
                         class="sp-badge sp-badge--modified"
-                        title={t(
+                        use:tooltip={t(
                           'systemPrompt.fragmentEditor.modifiedHint',
                           'Edited — differs from the built-in default.',
                         )}
@@ -1061,7 +1062,7 @@
                     {#if block.editable && block.isDirty}
                       <span
                         class="sp-badge sp-badge--dirty"
-                        title={t(
+                        use:tooltip={t(
                           'systemPrompt.fragmentEditor.dirtyIndicator',
                           'Unsaved changes',
                         )}
@@ -1194,7 +1195,7 @@
                 {#if previewToolTokens}
                   <span
                     class="sp-token-count"
-                    title={t(
+                    use:tooltip={t(
                       'systemPrompt.preview.tokenBreakdownHint',
                       'Estimated. Tools = the {count} tool definitions sent to the provider with every request alongside the system prompt.',
                       { count: previewToolCount ?? 0 },

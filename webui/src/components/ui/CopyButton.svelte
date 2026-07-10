@@ -66,7 +66,7 @@
   icon
   class={`copy-button ${className}`.trim()}
   ariaLabel={currentLabel}
-  title={currentLabel}
+  tooltip={currentLabel}
   disabled={disabled || !copyText}
   onClick={handleCopy}
 >

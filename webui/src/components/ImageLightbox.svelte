@@ -1,6 +1,7 @@
 <script>
   import { portal } from '$lib/dropdownPanel.js';
   import { t } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
 
   let { src = '', alt = '', onClose = () => {} } = $props();
 
@@ -75,7 +76,7 @@
     class:zoomed
     {src}
     alt={alt || t('chat.image.alt', 'Image')}
-    title={zoomed
+    use:tooltip={zoomed
       ? t('chat.image.zoomOut', 'Click to fit')
       : canZoom
         ? t('chat.image.zoomIn', 'Click to view full size')

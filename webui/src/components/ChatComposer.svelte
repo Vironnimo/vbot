@@ -18,6 +18,7 @@
     matchMentionCandidates,
   } from '$lib/fileMentions.js';
   import { t } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
   import FileAutocomplete from './FileAutocomplete.svelte';
   import SkillAutocomplete from './SkillAutocomplete.svelte';
   import Button from './ui/Button.svelte';
@@ -1119,7 +1120,7 @@
         ariaLabel={isRecording
           ? t('chat.voice.stopRecording', 'Stop recording')
           : t('chat.voice.startRecording', 'Start voice input')}
-        title={isRecording
+        tooltip={isRecording
           ? t('chat.voice.stopRecording', 'Stop recording')
           : t('chat.voice.startRecording', 'Start voice input')}
         onClick={handleMicrophoneClick}
@@ -1134,7 +1135,7 @@
         icon
         {disabled}
         ariaLabel={t('chat.attachment.addFile', 'Add file')}
-        title={t('chat.attachment.addFile', 'Add file')}
+        tooltip={t('chat.attachment.addFile', 'Add file')}
         onClick={handleFilePickerClick}
       >
         <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
@@ -1156,7 +1157,7 @@
           ariaLabel={cancelling
             ? t('cancel.cancelling', 'Cancelling run…')
             : t('chat.cancelRun', 'Cancel run')}
-          title={cancelling
+          tooltip={cancelling
             ? t('cancel.cancelling', 'Cancelling run…')
             : t('chat.cancelRun', 'Cancel run')}
           onClick={onCancelRun}
@@ -1185,7 +1186,7 @@
         ariaLabel={isRunning
           ? t('chat.queueMessage', 'Queue message')
           : t('chat.sendMessage', 'Send message')}
-        title={isRunning
+        tooltip={isRunning
           ? t('chat.queueMessage', 'Queue message')
           : t('chat.sendMessage', 'Send message')}
       >
@@ -1210,7 +1211,7 @@
               type="button"
               class="attachment-thumb-trigger"
               aria-label={t('chat.attachment.preview', 'Preview attachment')}
-              title={t('chat.attachment.preview', 'Preview attachment')}
+              use:tooltip={t('chat.attachment.preview', 'Preview attachment')}
             >
               <img
                 src={attachment.preview_url}
@@ -1235,7 +1236,7 @@
             </span>
           {/if}
           <div class="attachment-meta">
-            <span class="attachment-name" title={attachment.filename}
+            <span class="attachment-name" use:tooltip={attachment.filename}
               >{attachment.filename}</span
             >
             {#if attachment.uploading}
@@ -1252,7 +1253,7 @@
             type="button"
             class="attachment-remove"
             aria-label={t('chat.attachment.remove', 'Remove attachment')}
-            title={t('chat.attachment.remove', 'Remove attachment')}
+            use:tooltip={t('chat.attachment.remove', 'Remove attachment')}
             onclick={() => _removeAttachment(index)}
           >
             <svg viewBox="0 0 16 16" aria-hidden="true">

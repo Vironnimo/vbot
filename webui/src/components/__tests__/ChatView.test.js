@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
+import { TOOLTIP_SHOW_DELAY_MS } from '../../lib/tooltip.js';
 
 const rpcMock = vi.fn();
 const subscribeRunEventsMock = vi.fn(() => ({ close: vi.fn(), source: null }));
@@ -305,16 +306,9 @@ describe('ChatView', () => {
       'Avg cache read per turn: 2,667 tok',
     ].join('\n');
 
-    await waitForCondition(
-      () =>
-        document.body.querySelector('.token-badge')?.getAttribute('title') ===
-        expectedTooltip,
-      100,
+    expect(await hoveredTokenBadgeTooltip(expectedTooltip)).toBe(
+      expectedTooltip,
     );
-
-    expect(
-      document.body.querySelector('.token-badge')?.getAttribute('title'),
-    ).toBe(expectedTooltip);
   });
 
   it('omits cache lines from the token badge tooltip without cache usage', async () => {
@@ -333,16 +327,9 @@ describe('ChatView', () => {
       'Output: 92 tok',
     ].join('\n');
 
-    await waitForCondition(
-      () =>
-        document.body.querySelector('.token-badge')?.getAttribute('title') ===
-        expectedTooltip,
-      100,
+    expect(await hoveredTokenBadgeTooltip(expectedTooltip)).toBe(
+      expectedTooltip,
     );
-
-    expect(
-      document.body.querySelector('.token-badge')?.getAttribute('title'),
-    ).toBe(expectedTooltip);
   });
 
   it('does not render a refresh button in the chat header', async () => {
@@ -5125,4 +5112,25 @@ async function waitForCondition(check, attempts = 20) {
   }
 
   throw new Error('Timed out waiting for condition.');
+}
+
+// Hovers the token badge and polls the shared quick tooltip (#app-tooltip)
+// until it shows `expectedText` — usage data may still be streaming in when
+// the badge first renders, and the tooltip updates in place.
+async function hoveredTokenBadgeTooltip(expectedText) {
+  await waitForCondition(
+    () => document.body.querySelector('.token-badge') !== null,
+    100,
+  );
+  document.body
+    .querySelector('.token-badge')
+    .dispatchEvent(new Event('pointerenter'));
+  await new Promise((resolve) =>
+    setTimeout(resolve, TOOLTIP_SHOW_DELAY_MS + 50),
+  );
+  await waitForCondition(
+    () => document.getElementById('app-tooltip')?.textContent === expectedText,
+    100,
+  );
+  return document.getElementById('app-tooltip')?.textContent ?? null;
 }

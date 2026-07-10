@@ -2,8 +2,10 @@
   import { onMount } from 'svelte';
 
   import Button from './ui/Button.svelte';
+  import InfoHint from './ui/InfoHint.svelte';
   import { rpc } from '$lib/api.js';
   import { t, activeLocaleTag } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
   import {
     STATISTICS_SUB_VIEWS,
     DAILY_GRANULARITIES,
@@ -311,8 +313,13 @@
 </section>
 
 {#snippet statCard(label, value, hint)}
-  <div class="stats-card" title={hint}>
-    <span class="stats-card__label">{label}</span>
+  <div class="stats-card">
+    <span class="stats-card__label">
+      {label}
+      {#if hint}
+        <InfoHint text={hint} />
+      {/if}
+    </span>
     <span class="stats-card__value">{value}</span>
   </div>
 {/snippet}
@@ -320,7 +327,7 @@
 {#snippet estimatedBadge()}
   <span
     class="stats-badge"
-    title={t(
+    use:tooltip={t(
       'statistics.estimatedHint',
       'Estimated tokens are approximated, not provider-reported.',
     )}
@@ -336,9 +343,13 @@
     {#if display.projectId}
       <span
         class="stats-agent__project"
-        title={t('statistics.agent.projectBadgeTitle', 'Project: {project}', {
-          project: display.projectId,
-        })}
+        use:tooltip={t(
+          'statistics.agent.projectBadgeTitle',
+          'Project: {project}',
+          {
+            project: display.projectId,
+          },
+        )}
       >
         {display.projectId}
       </span>
@@ -400,7 +411,7 @@
       {#each points as point, index (point.date)}
         <div
           class="stats-trend__col"
-          title={`${point.date} · ${formatInteger(point.runs, locale)} / ${formatInteger(point.errors, locale)}`}
+          use:tooltip={`${point.date} · ${formatInteger(point.runs, locale)} / ${formatInteger(point.errors, locale)}`}
         >
           <span
             class="stats-trend__bar stats-trend__bar--runs"
@@ -1039,7 +1050,7 @@
         {#each errors.by_hour as entry, index (entry.hour)}
           <div
             class="stats-hours__col"
-            title={`${formatHourLabel(entry.hour)} · ${formatInteger(entry.count, locale)}`}
+            use:tooltip={`${formatHourLabel(entry.hour)} · ${formatInteger(entry.count, locale)}`}
           >
             <span
               class="stats-hours__bar"
@@ -1198,12 +1209,12 @@
               {@const neverActivated = skill.activated_sessions === 0}
               <tr
                 class:stats-skill-row--never={neverActivated}
-                title={neverActivated
+                use:tooltip={neverActivated
                   ? t(
                       'statistics.skills.neverUsedRowTitle',
                       'Offered but never activated — a candidate to delete or improve.',
                     )
-                  : null}
+                  : ''}
               >
                 <td class="stats-mono">
                   <span class="stats-skill-name">
@@ -1260,7 +1271,7 @@
       ></span>
     </span>
     {#if reset}
-      <span class="stats-limit-window__reset" title={reset.absolute}>
+      <span class="stats-limit-window__reset" use:tooltip={reset.absolute}>
         {reset.relative
           ? t('statistics.limits.resetsIn', 'Resets in {duration}', {
               duration: reset.relative,

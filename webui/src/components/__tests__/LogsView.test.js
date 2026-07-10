@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
+import { TOOLTIP_SHOW_DELAY_MS } from '../../lib/tooltip.js';
 
 const listLogsMock = vi.fn();
 const readLogFileMock = vi.fn();
@@ -313,7 +314,14 @@ describe('LogsView', () => {
     expect(rows[0].querySelectorAll('span')).toHaveLength(4);
     expect(errorRow).toBeTruthy();
     expect(errorRow?.textContent).toContain('Failed Traceback line');
-    expect(errorRow?.getAttribute('title')).toBe('Failed\nTraceback line');
+    errorRow.dispatchEvent(new Event('pointerenter'));
+    await new Promise((resolve) =>
+      setTimeout(resolve, TOOLTIP_SHOW_DELAY_MS + 50),
+    );
+    expect(document.getElementById('app-tooltip')?.textContent).toBe(
+      'Failed\nTraceback line',
+    );
+    errorRow.dispatchEvent(new Event('pointerleave'));
     expect(document.body.querySelector('select')).toBeNull();
     expect(document.body.textContent).toContain('Live');
     expect(readLogFileMock.mock.calls.length).toBe(initialReadCalls);
@@ -398,7 +406,7 @@ describe('LogsView', () => {
 
     const copyButton = document.querySelector('.logs-entry .logs-entry__copy');
     expect(copyButton).toBeTruthy();
-    expect(copyButton.getAttribute('title')).toBe('Copy log line');
+    expect(copyButton.getAttribute('aria-label')).toBe('Copy log line');
 
     copyButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await waitForCondition(() => writeText.mock.calls.length === 1);
@@ -406,7 +414,9 @@ describe('LogsView', () => {
     // The full source line is copied verbatim, not the reconstructed/truncated
     // preview shown in the row.
     expect(writeText).toHaveBeenCalledWith(rawLine);
-    await waitForCondition(() => copyButton.getAttribute('title') === 'Copied');
+    await waitForCondition(
+      () => copyButton.getAttribute('aria-label') === 'Copied',
+    );
   });
 
   it('reconnects after the live stream closes unexpectedly', async () => {

@@ -1,5 +1,6 @@
 <script>
   import { t } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
   import { renderMarkdown, renderReasoningMarkdown } from '$lib/markdown.js';
   import {
     attachmentFilename,
@@ -114,7 +115,7 @@
           href={mediaUrl}
           target="_blank"
           rel="noopener noreferrer"
-          title={attachmentFilename(block)}
+          use:tooltip={attachmentFilename(block)}
           aria-label={attachmentPreviewLabel(block)}
         >
           <img
@@ -128,7 +129,7 @@
           <img class="attachment-hover-image" src={mediaUrl} alt="" />
         </div>
         <div class="attachment-meta">
-          <span class="attachment-name" title={attachmentFilename(block)}
+          <span class="attachment-name" use:tooltip={attachmentFilename(block)}
             >{attachmentFilename(block)}</span
           >
         </div>
@@ -162,7 +163,7 @@
           class="inline-file-link"
           href={fileUrl}
           download={attachmentFilename(block)}
-          title={attachmentFilename(block)}
+          use:tooltip={attachmentFilename(block)}
         >
           {attachmentFilename(block)}
         </a>
@@ -174,7 +175,7 @@
     {@const statusLabel = fileMentionStatusLabel(block)}
     <div
       class="inline-file"
-      title={t('chat.fileMention.label', 'Mentioned file')}
+      use:tooltip={t('chat.fileMention.label', 'Mentioned file')}
     >
       <svg
         class="inline-file-icon"
@@ -196,7 +197,9 @@
           stroke-width="1.2"
         />
       </svg>
-      <span class="inline-file-name" title={block.path}>@{block.path}</span>
+      <span class="inline-file-name" use:tooltip={block.path}
+        >@{block.path}</span
+      >
       {#if statusLabel}
         <span class="inline-file-status">({statusLabel})</span>
       {/if}

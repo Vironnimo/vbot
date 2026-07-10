@@ -45,13 +45,13 @@ describe('CopyButton', () => {
 
     const button = render({ text: 'a verbatim - line' });
     expect(button.classList.contains('copy-button')).toBe(true);
-    expect(button.getAttribute('title')).toBe('Copy');
+    expect(button.getAttribute('aria-label')).toBe('Copy');
 
     button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await flushAsync();
 
     expect(writeText).toHaveBeenCalledWith('a verbatim - line');
-    expect(button.getAttribute('title')).toBe('Copied');
+    expect(button.getAttribute('aria-label')).toBe('Copied');
   });
 
   it('honors caller-supplied labels and passthrough class', () => {
@@ -62,7 +62,6 @@ describe('CopyButton', () => {
       class: 'logs-entry__copy',
     });
 
-    expect(button.getAttribute('title')).toBe('Copy log line');
     expect(button.getAttribute('aria-label')).toBe('Copy log line');
     expect(button.classList.contains('logs-entry__copy')).toBe(true);
   });
@@ -84,7 +83,7 @@ describe('CopyButton', () => {
     await flushAsync();
 
     expect(writeText).toHaveBeenCalled();
-    expect(button.getAttribute('title')).toBe('Copy');
+    expect(button.getAttribute('aria-label')).toBe('Copy');
   });
 });
 
