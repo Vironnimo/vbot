@@ -209,6 +209,35 @@ async def test_cancel_marks_run_cancelled_and_suppresses_late_output() -> None:
     assert_timing_payload(run.events[-1].payload)
 
 
+async def test_immediate_cancel_reaches_terminal_and_releases_session() -> None:
+    manager = ChatRunManager()
+    executor_started = False
+
+    async def execute(_run: Run) -> str:
+        nonlocal executor_started
+        executor_started = True
+        return "must not run"
+
+    run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+    )
+    run.request_cancel()
+
+    with pytest.raises(RunCancelledError):
+        await asyncio.wait_for(run.wait(), timeout=1)
+    await asyncio.sleep(0)
+
+    assert executor_started is False
+    assert run.status == RunStatus.CANCELLED
+    assert run.events[-1].type == "run_cancelled"
+    assert manager.active_run(agent_id="coder", session_id="session-one", project_id=None) is None
+
+    replacement = await manager.start(
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+    )
+    assert await replacement.wait() == "must not run"
+
+
 async def test_delta_events_use_normal_sequences_and_replay_filtering() -> None:
     run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
 
