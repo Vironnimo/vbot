@@ -3,6 +3,7 @@
   import { SvelteSet } from 'svelte/reactivity';
 
   import Dropdown from '../Dropdown.svelte';
+  import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
@@ -402,12 +403,12 @@
 </script>
 
 {#if taskModelLoading}
-  <div class="s-feedback s-feedback--neutral">
+  <Banner variant="neutral">
     {t(
       'settings.specializedModels.loading',
       'Loading specialized model targets…',
     )}
-  </div>
+  </Banner>
 {/if}
 
 <div class="s-task-model-list">

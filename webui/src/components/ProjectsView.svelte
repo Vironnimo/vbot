@@ -3,6 +3,7 @@
 
   import Dropdown from './Dropdown.svelte';
   import SearchableDropdown from './SearchableDropdown.svelte';
+  import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import Modal from './ui/Modal.svelte';
@@ -1394,12 +1395,9 @@
 
       <div class="project-list-scroll">
         {#if listError}
-          <p
-            class="projects-notice projects-notice--error project-list-state"
-            role="alert"
-          >
+          <Banner variant="error" role="alert">
             {listError}
-          </p>
+          </Banner>
         {/if}
         {#if statusMessage}
           <p class="project-list-state" role="status">{statusMessage}</p>
@@ -1503,9 +1501,9 @@
             </div>
 
             {#if editError}
-              <p class="projects-notice projects-notice--error" role="alert">
+              <Banner variant="error" role="alert">
                 {editError}
-              </p>
+              </Banner>
             {/if}
 
             <!-- Section 1: Project settings -->
@@ -1822,10 +1820,7 @@
               <div class="detail-section-body">
                 {#if activeReport && !scanLoading && !activeReport.clean}
                   <div class="projects-field">
-                    <p
-                      class="projects-notice projects-notice--warn"
-                      role="status"
-                    >
+                    <Banner variant="warn" role="status">
                       {t(
                         'projects.report.findingCount',
                         '{count} issues found',
@@ -1833,7 +1828,7 @@
                           count: activeReport.findingCount,
                         },
                       )}
-                    </p>
+                    </Banner>
                     {#each activeReport.groups as group (group.type)}
                       <div class="projects-finding-group">
                         <h4 class="projects-finding-title">
@@ -2528,9 +2523,9 @@
             {/if}
 
             {#if addError}
-              <p class="projects-notice projects-notice--error" role="alert">
+              <Banner variant="error" role="alert">
                 {addError}
-              </p>
+              </Banner>
             {/if}
           </div>
 
@@ -2590,9 +2585,9 @@
             </label>
 
             {#if rePointError}
-              <p class="projects-notice projects-notice--error" role="alert">
+              <Banner variant="error" role="alert">
                 {rePointError}
-              </p>
+              </Banner>
             {/if}
           </div>
 

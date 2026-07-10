@@ -8,6 +8,8 @@
   // It renders nothing when the report is clean or absent; the parent decides
   // when to mount it, but the component is defensively self-guarding too.
 
+  import Banner from '../ui/Banner.svelte';
+  import Button from '../ui/Button.svelte';
   import { t } from '$lib/i18n.js';
 
   let { report = null, onNavigateToProjects = () => {} } = $props();
@@ -31,36 +33,30 @@
 </script>
 
 {#if visible}
-  <div class="project-scan-banner" role="status" aria-live="polite">
+  <Banner
+    variant="warn"
+    class="project-scan-banner"
+    role="status"
+    aria-live="polite"
+  >
     <span class="project-scan-banner__message">{message}</span>
-    <button
-      type="button"
+    <Button
+      variant="tertiary"
       class="project-scan-banner__link"
-      onclick={() => onNavigateToProjects()}
+      onClick={() => onNavigateToProjects()}
     >
       {t('chat.project.scanBannerLink', 'Review in Projects')}
-    </button>
-  </div>
+    </Button>
+  </Banner>
 {/if}
 
 <style>
-  .project-scan-banner {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
+  :global(.project-scan-banner) {
     flex-shrink: 0;
     width: 100%;
     max-width: var(--chat-measure);
     margin-inline: auto;
     padding: 7px 14px;
-    border-left: 2px solid var(--amber);
-    border-bottom: 1px solid var(--border);
-    background: linear-gradient(
-      90deg,
-      rgba(245, 158, 11, 0.08),
-      transparent 72%
-    );
   }
 
   .project-scan-banner__message {
@@ -70,28 +66,20 @@
     line-height: 1.4;
   }
 
-  .project-scan-banner__link {
+  :global(.project-scan-banner__link) {
     flex-shrink: 0;
-    padding: 0;
-    border: 0;
     color: var(--accent);
-    background: transparent;
-    font-family: var(--font-ui);
-    font-size: 12px;
-    font-weight: 500;
     text-decoration: underline;
-    cursor: pointer;
   }
 
-  .project-scan-banner__link:hover,
-  .project-scan-banner__link:focus-visible {
+  :global(.project-scan-banner__link:hover),
+  :global(.project-scan-banner__link:focus-visible) {
     color: var(--accent);
-    outline: none;
     text-decoration: none;
   }
 
   @media (max-width: 640px) {
-    .project-scan-banner {
+    :global(.project-scan-banner) {
       align-items: flex-start;
       flex-direction: column;
       gap: 6px;

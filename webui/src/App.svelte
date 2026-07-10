@@ -72,6 +72,7 @@
   import SystemPromptView from './components/SystemPromptView.svelte';
   import OnboardingView from './components/OnboardingView.svelte';
   import ToastStack from './components/ToastStack.svelte';
+  import Banner from './components/ui/Banner.svelte';
   import Button from './components/ui/Button.svelte';
   import {
     createConnectionState,
@@ -909,7 +910,7 @@
   connectionStatus={connectionState.status}
 >
   {#if showFinishSetup}
-    <div class="app-finish-setup">
+    <Banner variant="info" class="app-finish-setup">
       <span class="app-finish-setup__text">
         {t(
           'onboarding.finishSetupHint',
@@ -919,7 +920,7 @@
       <Button variant="secondary" onClick={reopenOnboarding}>
         {t('onboarding.finishSetup', 'Finish setup')}
       </Button>
-    </div>
+    </Banner>
   {/if}
   {#if onboardingActive}
     <OnboardingView
@@ -1007,26 +1008,24 @@
   /* Slim re-entry banner for a dismissed-but-incomplete first-run setup. Sits
      above the active view inside the content column and disappears the instant
      a provider is connected. */
-  .app-finish-setup {
-    display: flex;
+  :global(.app-finish-setup) {
     flex-shrink: 0;
-    align-items: center;
-    justify-content: space-between;
     gap: 14px;
     padding: 8px 20px;
-    border-bottom: 1px solid var(--border);
-    border-left: 3px solid var(--accent);
+    border-width: 0 0 1px 3px;
+    border-color: var(--border) var(--border) var(--border) var(--accent);
+    border-radius: 0;
     background: var(--surface);
   }
 
   .app-finish-setup__text {
     color: var(--text-med);
     font-family: var(--font-ui);
-    font-size: 12.5px;
+    font-size: var(--fs-body-sm);
   }
 
   @media (max-width: 640px) {
-    .app-finish-setup {
+    :global(.app-finish-setup) {
       padding: 8px 14px;
     }
   }

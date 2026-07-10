@@ -1885,7 +1885,7 @@ describe('ChatView', () => {
     expect(document.body.textContent).toContain('Return to current session');
     expect(
       document.querySelector(
-        '.chat-view__footer-stack .chat-view__subagent-session-notice',
+        '.chat-view__footer-stack .chat-view__footer-banner',
       ),
     ).toBeTruthy();
     expect(document.querySelector('textarea')?.disabled).toBe(false);
@@ -4890,7 +4890,10 @@ describe('ChatView', () => {
     flushSync();
 
     await waitForCondition(
-      () => document.querySelector('.chat-view__no-model-notice') !== null,
+      () =>
+        Array.from(document.querySelectorAll('.chat-view__footer-banner')).some(
+          (element) => element.textContent.includes('Pick a model'),
+        ),
       100,
     );
     expect(document.body.textContent).toContain('Pick a model to start');
@@ -4912,7 +4915,11 @@ describe('ChatView', () => {
     });
     flushSync();
 
-    expect(document.querySelector('.chat-view__no-model-notice')).toBeNull();
+    expect(
+      Array.from(document.querySelectorAll('.chat-view__footer-banner')).some(
+        (element) => element.textContent.includes('Pick a model'),
+      ),
+    ).toBe(false);
   });
 });
 function createChatRpcMock({

@@ -67,6 +67,7 @@
   import SessionListDrawer from './SessionListDrawer.svelte';
   import ChatTimeline from './ChatTimeline.svelte';
   import QueuedMessages from './QueuedMessages.svelte';
+  import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
 
   let {
@@ -2299,27 +2300,27 @@
           <div class="chat-view__notice-stack" aria-live="polite">
             <div class="chat-view__measure chat-view__notice-inner">
               {#if loadingHistory}
-                <p class="chat-view__notice">
+                <Banner variant="neutral">
                   {t('loading.history', 'Loading chat history…')}
-                </p>
+                </Banner>
               {/if}
               {#if historyError}
-                <p class="chat-view__error">
+                <Banner variant="error">
                   {t(
                     'chat.historyLoadError',
                     'Chat history could not be loaded.',
                   )}
                   {historyError}
-                </p>
+                </Banner>
               {/if}
               {#if actionError}
-                <p class="chat-view__error">{actionError}</p>
+                <Banner variant="error">{actionError}</Banner>
               {/if}
               {#if activeSessionState?.error}
-                <p class="chat-view__error">
+                <Banner variant="error">
                   {t('chat.runError', 'Run failed.')}
                   {activeSessionState.error}
-                </p>
+                </Banner>
               {/if}
             </div>
           </div>
@@ -2348,9 +2349,13 @@
         </div>
         <div class="chat-view__footer-stack">
           {#if sessionOverrideActive}
-            <div class="chat-view__subagent-session-notice" aria-live="polite">
-              <div class="chat-view__subagent-session-copy">
-                <p class="chat-view__subagent-session-title">
+            <Banner
+              variant="info"
+              class="chat-view__footer-banner"
+              aria-live="polite"
+            >
+              <div class="chat-view__footer-banner-copy">
+                <p class="chat-view__footer-banner-title">
                   {subAgentSessionActive
                     ? t(
                         'chat.subagentSessionNotice',
@@ -2358,7 +2363,7 @@
                       )
                     : t('chat.pastSessionNotice', 'Viewing a past session')}
                 </p>
-                <p class="chat-view__subagent-session-hint">
+                <p class="chat-view__footer-banner-hint">
                   {subAgentSessionActive
                     ? subAgentParentTarget
                       ? t(
@@ -2388,15 +2393,19 @@
                       'Return to current session',
                     )}
               </Button>
-            </div>
+            </Banner>
           {/if}
           {#if agentModelMissing}
-            <div class="chat-view__no-model-notice" aria-live="polite">
-              <div class="chat-view__no-model-copy">
-                <p class="chat-view__no-model-title">
+            <Banner
+              variant="info"
+              class="chat-view__footer-banner"
+              aria-live="polite"
+            >
+              <div class="chat-view__footer-banner-copy">
+                <p class="chat-view__footer-banner-title">
                   {t('chat.noModel.title', 'Pick a model to start')}
                 </p>
-                <p class="chat-view__no-model-hint">
+                <p class="chat-view__footer-banner-hint">
                   {t(
                     'chat.noModel.hint',
                     'This agent has no model yet. Choose one to send messages.',
@@ -2410,7 +2419,7 @@
               >
                 {t('chat.noModel.action', 'Choose a model')}
               </Button>
-            </div>
+            </Banner>
           {/if}
           <div class="chat-view__measure">
             <QueuedMessages
@@ -2605,17 +2614,6 @@
     gap: 6px;
   }
 
-  .chat-view__notice,
-  .chat-view__error {
-    margin: 0;
-    color: var(--text-med);
-    font-size: 12.5px;
-  }
-
-  .chat-view__error {
-    color: var(--red);
-  }
-
   /* Chat-local bottom toast: floats just above the composer (same anchoring as
      the composer's own attachment-error toast), centered on the chat measure. */
   .chat-view__composer-shell {
@@ -2648,86 +2646,40 @@
     white-space: pre-wrap;
   }
 
-  .chat-view__subagent-session-notice {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 14px;
+  :global(.chat-view__footer-banner) {
     flex-shrink: 0;
     width: 100%;
     max-width: var(--chat-measure);
     margin-inline: auto;
-    border-left: 3px solid var(--accent);
     padding: 9px 20px 9px 12px;
-    border-top: 1px solid var(--border);
-    background: linear-gradient(90deg, var(--accent-08), transparent 72%);
   }
 
-  .chat-view__subagent-session-copy {
+  .chat-view__footer-banner-copy {
     min-width: 0;
   }
 
-  .chat-view__subagent-session-title,
-  .chat-view__subagent-session-hint {
+  .chat-view__footer-banner-title,
+  .chat-view__footer-banner-hint {
     margin: 0;
   }
 
-  .chat-view__subagent-session-title {
+  .chat-view__footer-banner-title {
     color: var(--accent);
     font-family: var(--font-mono);
-    font-size: 10.5px;
+    font-size: var(--fs-mono-xs);
     font-weight: 500;
     letter-spacing: 0.07em;
     text-transform: uppercase;
   }
 
-  .chat-view__subagent-session-hint {
+  .chat-view__footer-banner-hint {
     margin-top: 4px;
     color: var(--text-med);
-    font-size: 12.5px;
+    font-size: var(--fs-body-sm);
   }
 
   :global(.chat-view__subagent-session-return) {
     flex-shrink: 0;
-  }
-
-  .chat-view__no-model-notice {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 14px;
-    flex-shrink: 0;
-    width: 100%;
-    max-width: var(--chat-measure);
-    margin-inline: auto;
-    border-left: 3px solid var(--accent);
-    padding: 9px 20px 9px 12px;
-    border-top: 1px solid var(--border);
-    background: linear-gradient(90deg, var(--accent-08), transparent 72%);
-  }
-
-  .chat-view__no-model-copy {
-    min-width: 0;
-  }
-
-  .chat-view__no-model-title,
-  .chat-view__no-model-hint {
-    margin: 0;
-  }
-
-  .chat-view__no-model-title {
-    color: var(--accent);
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    font-weight: 500;
-    letter-spacing: 0.07em;
-    text-transform: uppercase;
-  }
-
-  .chat-view__no-model-hint {
-    margin-top: 4px;
-    color: var(--text-med);
-    font-size: 12.5px;
   }
 
   :global(.chat-view__no-model-action) {
@@ -2743,8 +2695,7 @@
       flex-direction: column;
     }
 
-    .chat-view__subagent-session-notice,
-    .chat-view__no-model-notice {
+    :global(.chat-view__footer-banner) {
       align-items: flex-start;
       flex-direction: column;
     }

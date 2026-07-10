@@ -372,23 +372,6 @@
   overflow-y: auto;
 }
 
-.cron-view .cron-notice {
-  margin: 0;
-  padding: 11px 14px;
-  border: 1px solid var(--border-2);
-  border-left: 2px solid var(--green);
-  border-radius: var(--r-md);
-  color: var(--text-med);
-  font-size: 12.5px;
-  line-height: 1.4;
-  background: var(--surface);
-}
-
-.cron-view .cron-notice--error {
-  border-left-color: var(--red);
-  color: var(--red);
-}
-
 .cron-view .cron-detail-footer {
   display: flex;
   flex-shrink: 0;

@@ -186,6 +186,60 @@ describe('UI primitive guard', () => {
     expect(violations).toEqual([]);
   });
 
+  it('routes every inline banner through components/ui/Banner.svelte', () => {
+    const forbidden = new Set([
+      'banner',
+      'banner--neutral',
+      'banner--info',
+      'banner--success',
+      'banner--warn',
+      'banner--error',
+    ]);
+
+    const violations = findRawClassViolations(
+      ANY_ELEMENT,
+      forbidden,
+      'components/ui/Banner.svelte',
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it('keeps the retired bespoke banner classes from returning', () => {
+    const retired = new Set([
+      's-feedback',
+      's-feedback--neutral',
+      's-feedback--error',
+      's-feedback--compact',
+      'agents-view__notice',
+      'agents-view__notice--error',
+      'projects-notice',
+      'projects-notice--error',
+      'projects-notice--warn',
+      'cron-notice',
+      'cron-notice--error',
+      'logs-view__feedback',
+      'logs-view__feedback--error',
+      'logs-view__feedback--warn',
+      'debug-view__feedback',
+      'debug-view__feedback--error',
+      'stats-view__feedback',
+      'stats-view__feedback--error',
+      'sp-feedback',
+      'sp-feedback--neutral',
+      'onboarding-notice',
+      'onboarding-error',
+      'model-fallback-notice',
+      'interrupted-notice',
+      'chat-view__subagent-session-notice',
+      'chat-view__no-model-notice',
+    ]);
+
+    const violations = findRawClassViolations(ANY_ELEMENT, retired, '');
+
+    expect(violations).toEqual([]);
+  });
+
   it('keeps the retired bespoke pill classes from returning', () => {
     // Every hand-built metadata pill was folded into the Badge primitive. These
     // base tokens must never reappear on an element — reintroducing one is a

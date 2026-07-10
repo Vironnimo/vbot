@@ -1,4 +1,5 @@
 <script>
+  import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import { t } from '$lib/i18n.js';
   import {
@@ -92,15 +93,12 @@
       </p>
     </div>
   {:else if error}
-    <div
-      class="debug-view__feedback debug-view__feedback--error"
-      aria-live="polite"
-    >
+    <Banner variant="error" aria-live="polite">
       <span>{error}</span>
       <Button variant="secondary" onClick={retry}>
         {t('common.retry', 'Retry')}
       </Button>
-    </div>
+    </Banner>
   {:else if trace}
     <div class="debug-view__detail-tabs" role="tablist">
       {#each DETAIL_TABS as tab (tab.id)}
@@ -278,24 +276,6 @@
     color: var(--text-hi);
     font-size: 15px;
     font-weight: 600;
-  }
-
-  .debug-view__feedback {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 12px 14px;
-    border: 1px solid var(--border-2);
-    border-radius: var(--r-md);
-    font-size: 12.5px;
-    line-height: 1.5;
-  }
-
-  .debug-view__feedback--error {
-    border-color: rgba(252, 129, 129, 0.2);
-    color: var(--red);
-    background: rgba(252, 129, 129, 0.08);
   }
 
   .debug-view__detail-tabs {

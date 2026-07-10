@@ -3,6 +3,7 @@
   import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
   import Badge from '../ui/Badge.svelte';
+  import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
@@ -493,15 +494,15 @@
 </div>
 
 {#if loading}
-  <div class="s-feedback s-feedback--neutral">
+  <Banner variant="neutral">
     {t('common.loading', 'Loading…')}
-  </div>
+  </Banner>
 {:else if loadError}
-  <div class="s-feedback s-feedback--error">{loadError}</div>
+  <Banner variant="error">{loadError}</Banner>
 {:else if extensions.length === 0}
-  <div class="s-feedback s-feedback--neutral">
+  <Banner variant="neutral">
     {t('settings.extensions.empty', 'No extensions discovered.')}
-  </div>
+  </Banner>
 {:else}
   <div class="s-ext-list">
     {#each extensions as extension (extension.name)}

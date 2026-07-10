@@ -22,6 +22,7 @@
   import DebugTraceDetail from './debug/DebugTraceDetail.svelte';
   import DebugTraceList from './debug/DebugTraceList.svelte';
   import Badge from './ui/Badge.svelte';
+  import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
 
   const TRACE_LIMIT_MAX = 500;
@@ -328,15 +329,12 @@
   </div>
 
   {#if viewState.error}
-    <div
-      class="debug-view__feedback debug-view__feedback--error"
-      aria-live="polite"
-    >
+    <Banner variant="error" aria-live="polite">
       <span>{viewState.error}</span>
       <Button variant="secondary" onClick={loadAll}>
         {t('common.retry', 'Retry')}
       </Button>
-    </div>
+    </Banner>
   {/if}
 
   {#if viewState.loading}
@@ -521,24 +519,6 @@
     color: var(--amber);
     font-size: 12px;
     line-height: 1.5;
-  }
-
-  .debug-view__feedback {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 12px 14px;
-    border: 1px solid var(--border-2);
-    border-radius: var(--r-md);
-    font-size: 12.5px;
-    line-height: 1.5;
-  }
-
-  .debug-view__feedback--error {
-    border-color: rgba(252, 129, 129, 0.2);
-    color: var(--red);
-    background: rgba(252, 129, 129, 0.08);
   }
 
   .debug-view__state {

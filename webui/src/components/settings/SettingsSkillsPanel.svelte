@@ -1,6 +1,7 @@
 <script>
   import { onDestroy, untrack } from 'svelte';
 
+  import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import TextField from '../ui/TextField.svelte';
   import SettingsSkillManagerPanel from './SettingsSkillManagerPanel.svelte';
@@ -175,12 +176,12 @@
 
   <div class="s-skill-directory-list">
     {#if skillDirectories.length === 0}
-      <div class="s-feedback s-feedback--neutral s-feedback--compact">
+      <Banner variant="neutral">
         {t(
           'settings.skills.emptyDirectories',
           'No additional skill directories configured.',
         )}
-      </div>
+      </Banner>
     {:else}
       {#each skillDirectories as directory (directory)}
         <div class="s-skill-directory-item">
