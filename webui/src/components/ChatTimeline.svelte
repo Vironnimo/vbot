@@ -17,6 +17,8 @@
   import ChatAssistantRun from './chat/ChatAssistantRun.svelte';
   import ChatTimelineEntry from './chat/ChatTimelineEntry.svelte';
   import ImageLightbox from './ImageLightbox.svelte';
+  import Banner from './ui/Banner.svelte';
+  import EmptyState from './ui/EmptyState.svelte';
 
   let {
     sessionState,
@@ -469,26 +471,25 @@
         <!-- While history is loading, a quiet placeholder — flashing the
              "No messages yet" empty state would be a lie for a session whose
              messages just have not arrived yet. -->
-        <div class="empty-state chat-empty-state">
-          <p class="empty-state-sub">
-            {t('loading.history', 'Loading chat history…')}
-          </p>
-        </div>
+        <Banner variant="neutral" class="chat-timeline-loading">
+          {t('loading.history', 'Loading chat history…')}
+        </Banner>
       {:else}
-        <div class="empty-state chat-empty-state">
-          <svg class="empty-state-icon" viewBox="0 0 32 32" aria-hidden="true">
-            <path d="M5 7h22v14H16l-6 5v-5H5z" />
-          </svg>
-          <p class="empty-state-title">
-            {t('chat.historyEmptyTitle', 'No messages yet')}
-          </p>
-          <p class="empty-state-sub">
-            {t(
-              'chat.historyEmpty',
-              'No messages yet. Send the first message to this agent.',
-            )}
-          </p>
-        </div>
+        <EmptyState
+          fill
+          class="chat-timeline-empty"
+          title={t('chat.historyEmptyTitle', 'No messages yet')}
+          description={t(
+            'chat.historyEmpty',
+            'No messages yet. Send the first message to this agent.',
+          )}
+        >
+          {#snippet icon()}
+            <svg viewBox="0 0 32 32" width="38" height="38">
+              <path d="M5 7h22v14H16l-6 5v-5H5z" />
+            </svg>
+          {/snippet}
+        </EmptyState>
       {/if}
     {:else}
       {#each transientCardGroups.leading as card (card.id)}

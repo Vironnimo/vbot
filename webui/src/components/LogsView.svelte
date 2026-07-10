@@ -5,6 +5,7 @@
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import CopyButton from './ui/CopyButton.svelte';
+  import EmptyState from './ui/EmptyState.svelte';
   import StatusChip from './ui/StatusChip.svelte';
   import { listLogs, readLogFile, subscribeLogEvents } from '$lib/api.js';
   import { reconnectBackoffDelay } from '$lib/backoff.js';
@@ -505,44 +506,36 @@
   </div>
 
   {#if viewState.loadingCatalog || viewState.loadingEntries}
-    <div class="logs-view__state">
-      <p class="logs-view__state-title">
-        {viewState.loadingCatalog
-          ? t('logs.loadingCatalog', 'Loading log files…')
-          : t('logs.loadingFile', 'Loading log file…')}
-      </p>
-    </div>
+    <Banner variant="neutral">
+      {viewState.loadingCatalog
+        ? t('logs.loadingCatalog', 'Loading log files…')
+        : t('logs.loadingFile', 'Loading log file…')}
+    </Banner>
   {:else if !hasFiles}
-    <div class="logs-view__state">
-      <p class="logs-view__state-title">
-        {t('logs.emptyTitle', 'No log files yet')}
-      </p>
-      <p class="logs-view__state-subtitle">
-        {t(
-          'logs.emptySubtitle',
-          'Application logs will appear here after the server writes daily files.',
-        )}
-      </p>
-    </div>
+    <EmptyState
+      fill
+      title={t('logs.emptyTitle', 'No log files yet')}
+      description={t(
+        'logs.emptySubtitle',
+        'Application logs will appear here after the server writes daily files.',
+      )}
+    />
   {:else if filteredEntries.length === 0}
-    <div class="logs-view__state">
-      <p class="logs-view__state-title">
-        {hasActiveFilters
-          ? t('logs.noMatchesTitle', 'No entries match the current filters')
-          : t('logs.fileEmptyTitle', 'This log file is empty')}
-      </p>
-      <p class="logs-view__state-subtitle">
-        {hasActiveFilters
-          ? t(
-              'logs.noMatchesSubtitle',
-              'Try another level or broaden the search text.',
-            )
-          : t(
-              'logs.fileEmptySubtitle',
-              'Live updates will appear here when the file grows.',
-            )}
-      </p>
-    </div>
+    <EmptyState
+      fill
+      title={hasActiveFilters
+        ? t('logs.noMatchesTitle', 'No entries match the current filters')
+        : t('logs.fileEmptyTitle', 'This log file is empty')}
+      description={hasActiveFilters
+        ? t(
+            'logs.noMatchesSubtitle',
+            'Try another level or broaden the search text.',
+          )
+        : t(
+            'logs.fileEmptySubtitle',
+            'Live updates will appear here when the file grows.',
+          )}
+    />
   {:else}
     <div
       class="logs-view__list"
@@ -713,36 +706,6 @@
 
   .logs-view__summary-file {
     color: var(--text-med);
-  }
-
-  .logs-view__state {
-    display: flex;
-    min-height: 0;
-    flex: 1;
-    align-items: center;
-    justify-content: center;
-    flex-direction: column;
-    gap: 8px;
-    padding: 28px;
-    border: 1px dashed var(--border);
-    border-radius: var(--r-lg);
-    background: rgba(255, 255, 255, 0.02);
-    text-align: center;
-  }
-
-  .logs-view__state-title {
-    margin: 0;
-    color: var(--text-hi);
-    font-size: 15px;
-    font-weight: 600;
-  }
-
-  .logs-view__state-subtitle {
-    max-width: 560px;
-    margin: 0;
-    color: var(--text-med);
-    font-size: 12.5px;
-    line-height: 1.5;
   }
 
   .logs-view__list {

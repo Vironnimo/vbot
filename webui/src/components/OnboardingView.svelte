@@ -29,6 +29,7 @@
   import SearchableDropdown from './SearchableDropdown.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
+  import EmptyState from './ui/EmptyState.svelte';
   import '../styles/onboarding.css';
 
   const noop = () => {};
@@ -409,17 +410,19 @@
               </Button>
             </div>
           {:else if !hasModels}
-            <Banner variant="neutral">
-              {t(
+            <EmptyState
+              density="compact"
+              description={t(
                 'onboarding.model.empty',
                 'No models are available yet. Retry once the model list finishes updating.',
               )}
-            </Banner>
-            <div class="onboarding-footer">
-              <Button variant="secondary" onClick={retryModels}>
-                {t('onboarding.model.retry', 'Retry')}
-              </Button>
-            </div>
+            >
+              {#snippet actions()}
+                <Button variant="secondary" onClick={retryModels}>
+                  {t('onboarding.model.retry', 'Retry')}
+                </Button>
+              {/snippet}
+            </EmptyState>
           {:else}
             {#if tipText}
               <p class="onboarding-tip">{tipText}</p>

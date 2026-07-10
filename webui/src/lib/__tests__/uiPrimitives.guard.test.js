@@ -240,6 +240,60 @@ describe('UI primitive guard', () => {
     expect(violations).toEqual([]);
   });
 
+  it('routes every empty-content surface through components/ui/EmptyState.svelte', () => {
+    const forbidden = new Set([
+      'empty-state',
+      'empty-state--default',
+      'empty-state--compact',
+      'empty-state--fill',
+      'empty-state__icon',
+      'empty-state__title',
+      'empty-state__description',
+      'empty-state__actions',
+    ]);
+
+    const violations = findRawClassViolations(
+      ANY_ELEMENT,
+      forbidden,
+      'components/ui/EmptyState.svelte',
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it('keeps the retired bespoke empty-state classes from returning', () => {
+    const retired = new Set([
+      'empty-state-icon',
+      'empty-state-title',
+      'empty-state-sub',
+      'agents-view__empty-list',
+      'project-empty-list',
+      'project-empty-title',
+      'project-empty-sub',
+      'project-detail-empty',
+      'projects-file-empty',
+      'projects-team-empty',
+      'cron-empty-list',
+      'cron-empty-title',
+      'cron-empty-sub',
+      'cron-detail-empty',
+      'session-drawer__empty',
+      'session-drawer__empty-title',
+      'session-drawer__empty-subtitle',
+      'logs-view__state',
+      'logs-view__state-title',
+      'logs-view__state-subtitle',
+      'debug-view__state',
+      'debug-view__state-title',
+      'debug-view__state-subtitle',
+      'stats-empty',
+    ]);
+
+    const violations = findRawClassViolations(ANY_ELEMENT, retired, '');
+
+    expect(violations).toEqual([]);
+  });
+
   it('keeps the retired bespoke pill classes from returning', () => {
     // Every hand-built metadata pill was folded into the Badge primitive. These
     // base tokens must never reappear on an element — reintroducing one is a

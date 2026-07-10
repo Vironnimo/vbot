@@ -5,6 +5,7 @@
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
+  import EmptyState from './ui/EmptyState.svelte';
   import StatusChip from './ui/StatusChip.svelte';
   import TextField from './ui/TextField.svelte';
   import Toggle from './ui/Toggle.svelte';
@@ -550,17 +551,13 @@
             {t('cron.loading', 'Loading cron jobs…')}
           </p>
         {:else if jobs.length === 0}
-          <div class="cron-empty-list">
-            <p class="cron-empty-title">
-              {t('cron.emptyTitle', 'No scheduled jobs')}
-            </p>
-            <p class="cron-empty-sub">
-              {t(
-                'cron.emptySubtitle',
-                'Create a job to run an agent prompt on a schedule.',
-              )}
-            </p>
-          </div>
+          <EmptyState
+            title={t('cron.emptyTitle', 'No scheduled jobs')}
+            description={t(
+              'cron.emptySubtitle',
+              'Create a job to run an agent prompt on a schedule.',
+            )}
+          />
         {:else}
           <ul
             class="cron-list"
@@ -602,16 +599,16 @@
 
     {#if !showDetailForm}
       <div class="cron-detail-pane">
-        <p class="cron-detail-empty">
-          {#if !hasAgents}
-            {t('cron.noAgents', 'Create an agent before adding cron jobs.')}
-          {:else}
-            {t(
-              'cron.emptySubtitle',
-              'Create a job to run an agent prompt on a schedule.',
-            )}
-          {/if}
-        </p>
+        <EmptyState
+          fill
+          class="master-detail-empty"
+          title={!hasAgents
+            ? t('cron.noAgents', 'Create an agent before adding cron jobs.')
+            : t(
+                'cron.emptySubtitle',
+                'Create a job to run an agent prompt on a schedule.',
+              )}
+        />
       </div>
     {:else}
       {#key isCreating ? 'cron-create' : selectedJobId}

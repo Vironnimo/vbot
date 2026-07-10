@@ -19,6 +19,7 @@
   import SettingsWebSearchPanel from './settings/SettingsWebSearchPanel.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
+  import EmptyState from './ui/EmptyState.svelte';
   import { rpc } from '$lib/api.js';
   import { init, t } from '$lib/i18n.js';
   import { SETTINGS_LAYOUT_CLASS } from '$lib/settingsView.js';
@@ -632,9 +633,13 @@
         </Banner>
       {:else}
         {#if searchActive && matchCount === 0}
-          <Banner variant="neutral">
-            {t('settings.search.noMatches', 'No settings match your search.')}
-          </Banner>
+          <EmptyState
+            density="compact"
+            description={t(
+              'settings.search.noMatches',
+              'No settings match your search.',
+            )}
+          />
         {/if}
 
         <div class="s-doc-group" data-settings-group="connect">

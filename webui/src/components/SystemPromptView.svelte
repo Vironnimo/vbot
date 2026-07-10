@@ -6,6 +6,7 @@
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
+  import EmptyState from './ui/EmptyState.svelte';
   import Toggle from './ui/Toggle.svelte';
   import {
     buildAgentTargetDropdownOptions,
@@ -1169,12 +1170,13 @@
         </ul>
 
         {#if blocks.length === 0}
-          <Banner variant="neutral">
-            {t(
+          <EmptyState
+            density="compact"
+            description={t(
               'systemPrompt.blockList.empty',
               'No prompt blocks for this scope.',
             )}
-          </Banner>
+          />
         {/if}
 
         <div class="sp-preview-section">

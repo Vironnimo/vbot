@@ -1,8 +1,8 @@
 <script>
   import { onDestroy, untrack } from 'svelte';
 
-  import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
+  import EmptyState from '../ui/EmptyState.svelte';
   import TextField from '../ui/TextField.svelte';
   import SettingsSkillManagerPanel from './SettingsSkillManagerPanel.svelte';
   import { rpc } from '$lib/api.js';
@@ -176,12 +176,13 @@
 
   <div class="s-skill-directory-list">
     {#if skillDirectories.length === 0}
-      <Banner variant="neutral">
-        {t(
+      <EmptyState
+        density="compact"
+        description={t(
           'settings.skills.emptyDirectories',
           'No additional skill directories configured.',
         )}
-      </Banner>
+      />
     {:else}
       {#each skillDirectories as directory (directory)}
         <div class="s-skill-directory-item">

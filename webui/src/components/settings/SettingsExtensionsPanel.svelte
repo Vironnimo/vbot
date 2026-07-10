@@ -5,6 +5,7 @@
   import Badge from '../ui/Badge.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
+  import EmptyState from '../ui/EmptyState.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
@@ -500,9 +501,10 @@
 {:else if loadError}
   <Banner variant="error">{loadError}</Banner>
 {:else if extensions.length === 0}
-  <Banner variant="neutral">
-    {t('settings.extensions.empty', 'No extensions discovered.')}
-  </Banner>
+  <EmptyState
+    density="compact"
+    description={t('settings.extensions.empty', 'No extensions discovered.')}
+  />
 {:else}
   <div class="s-ext-list">
     {#each extensions as extension (extension.name)}

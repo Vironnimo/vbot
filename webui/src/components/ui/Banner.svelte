@@ -1,8 +1,9 @@
 <script>
   // Shared inline banner: a padded message box carrying a 2px colored left
   // stripe — the canonical home for every in-flow feedback / notice box across
-  // the WebUI (loading / error / empty states, form errors, non-blocking
-  // notices). It is the in-flow counterpart to the app-wide ToastStack
+  // the WebUI (loading, form/RPC errors, warnings, non-blocking notices). A
+  // known absence of content belongs to EmptyState instead. Banner is the
+  // in-flow counterpart to the app-wide ToastStack
   // (transient, bottom-right) and the chat command-output surfaces; reach for
   // Banner when the message lives inside a view's own layout. Callers pass a
   // `variant` and already-translated `children` — plain text, or text plus a

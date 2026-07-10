@@ -4,6 +4,7 @@
   import Badge from './ui/Badge.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
+  import EmptyState from './ui/EmptyState.svelte';
   import InfoHint from './ui/InfoHint.svelte';
   import { rpc } from '$lib/api.js';
   import { t, activeLocaleTag } from '$lib/i18n.js';
@@ -404,9 +405,10 @@
 
 {#snippet trendBars(points, runFractions, errorFractions)}
   {#if points.length === 0}
-    <p class="stats-empty">
-      {t('statistics.empty', 'No activity recorded yet.')}
-    </p>
+    <EmptyState
+      density="compact"
+      description={t('statistics.empty', 'No activity recorded yet.')}
+    />
   {:else}
     <div class="stats-trend">
       {#each points as point, index (point.date)}
@@ -642,9 +644,10 @@
         {t('statistics.usage.providers', 'Providers')}
       </h3>
       {#if usage.providers.length === 0}
-        <p class="stats-empty">
-          {t('statistics.empty', 'No activity recorded yet.')}
-        </p>
+        <EmptyState
+          density="compact"
+          description={t('statistics.empty', 'No activity recorded yet.')}
+        />
       {:else}
         <table class="stats-table">
           <thead>
@@ -714,9 +717,10 @@
         {@render granularityToggle()}
       </div>
       {#if usageDaily.length === 0}
-        <p class="stats-empty">
-          {t('statistics.empty', 'No activity recorded yet.')}
-        </p>
+        <EmptyState
+          density="compact"
+          description={t('statistics.empty', 'No activity recorded yet.')}
+        />
       {:else}
         <svg
           class="stats-spark"
@@ -779,9 +783,13 @@
         )}
       </h3>
       {#if cacheSessions.length === 0}
-        <p class="stats-empty">
-          {t('statistics.usage.cacheEmpty', 'No cache-reporting activity yet.')}
-        </p>
+        <EmptyState
+          density="compact"
+          description={t(
+            'statistics.usage.cacheEmpty',
+            'No cache-reporting activity yet.',
+          )}
+        />
       {:else}
         <table class="stats-table">
           <thead>
@@ -874,7 +882,10 @@
   <div class="stats-block stats-block--narrow">
     <h3 class="stats-block__title">{title}</h3>
     {#if entries.length === 0}
-      <p class="stats-empty">{t('statistics.none', 'None')}</p>
+      <EmptyState
+        density="compact"
+        description={t('statistics.none', 'None')}
+      />
     {:else}
       {@render barRows(
         topN(entries, 8).map((entry) => ({
@@ -892,7 +903,10 @@
   <div class="stats-block stats-block--narrow">
     <h3 class="stats-block__title">{title}</h3>
     {#if entries.length === 0}
-      <p class="stats-empty">{t('statistics.none', 'None')}</p>
+      <EmptyState
+        density="compact"
+        description={t('statistics.none', 'None')}
+      />
     {:else}
       <ul class="stats-bars">
         {#each topN(entries, 8) as entry (entry.key)}
@@ -992,9 +1006,10 @@
         {t('statistics.runs.longest', 'Longest runs')}
       </h3>
       {#if runs.longest_runs.length === 0}
-        <p class="stats-empty">
-          {t('statistics.empty', 'No activity recorded yet.')}
-        </p>
+        <EmptyState
+          density="compact"
+          description={t('statistics.empty', 'No activity recorded yet.')}
+        />
       {:else}
         <table class="stats-table">
           <thead>
@@ -1081,9 +1096,10 @@
         {t('statistics.tools.perTool', 'Per tool')}
       </h3>
       {#if tools.tools.length === 0}
-        <p class="stats-empty">
-          {t('statistics.empty', 'No activity recorded yet.')}
-        </p>
+        <EmptyState
+          density="compact"
+          description={t('statistics.empty', 'No activity recorded yet.')}
+        />
       {:else}
         <table class="stats-table">
           <thead>
@@ -1124,7 +1140,10 @@
           {t('statistics.tools.topSessions', 'Busiest sessions')}
         </h3>
         {#if tools.top_sessions.length === 0}
-          <p class="stats-empty">{t('statistics.none', 'None')}</p>
+          <EmptyState
+            density="compact"
+            description={t('statistics.none', 'None')}
+          />
         {:else}
           <table class="stats-table">
             <thead>
@@ -1189,9 +1208,13 @@
         {t('statistics.skills.perSkill', 'Per skill')}
       </h3>
       {#if skills.skills.length === 0}
-        <p class="stats-empty">
-          {t('statistics.skills.empty', 'No skills in the current inventory.')}
-        </p>
+        <EmptyState
+          density="compact"
+          description={t(
+            'statistics.skills.empty',
+            'No skills in the current inventory.',
+          )}
+        />
       {:else}
         <table class="stats-table">
           <thead>
@@ -1333,9 +1356,13 @@
           </Button>
         </Banner>
       {:else if usageProviders.length === 0}
-        <p class="stats-empty">
-          {t('statistics.limits.empty', 'No subscription providers connected.')}
-        </p>
+        <EmptyState
+          density="compact"
+          description={t(
+            'statistics.limits.empty',
+            'No subscription providers connected.',
+          )}
+        />
       {:else}
         <div class="stats-limits">
           {#each usageProviders as snapshot (snapshot.connection)}
@@ -1403,7 +1430,6 @@
     color: var(--text-lo);
   }
   .stats-view__placeholder,
-  .stats-empty,
   .stats-note {
     color: var(--text-med);
     font-size: 12.5px;
