@@ -475,41 +475,82 @@ def _parse_compaction_update(compaction: Any) -> JsonObject:
     if not isinstance(compaction, dict):
         raise SettingsValidationError("params.compaction must be an object")
 
-    supported_fields = {"auto", "threshold", "tail_tokens", "summary_model"}
+    supported_fields = {"enabled", "trigger", "strategy"}
     unsupported_fields = sorted(set(compaction) - supported_fields)
     if unsupported_fields:
         raise SettingsValidationError(
             f"unsupported compaction settings: {', '.join(unsupported_fields)}"
         )
 
-    required_fields = ("auto", "threshold", "tail_tokens", "summary_model")
+    required_fields = ("enabled", "trigger", "strategy")
     missing_fields = [field for field in required_fields if field not in compaction]
     if missing_fields:
         raise SettingsValidationError(f"missing compaction settings: {', '.join(missing_fields)}")
 
-    auto = compaction["auto"]
-    if not isinstance(auto, bool):
-        raise SettingsValidationError("params.compaction.auto must be a boolean")
+    enabled = compaction["enabled"]
+    if not isinstance(enabled, bool):
+        raise SettingsValidationError("params.compaction.enabled must be a boolean")
+    trigger = _parse_compaction_trigger(compaction["trigger"])
+    strategy = _parse_compaction_strategy(compaction["strategy"])
+    return {"enabled": enabled, "trigger": trigger, "strategy": strategy}
 
-    threshold_value = compaction["threshold"]
-    if isinstance(threshold_value, bool) or not isinstance(threshold_value, int | float):
-        raise SettingsValidationError("params.compaction.threshold must be a number")
-    threshold = float(threshold_value)
-    if threshold <= 0 or threshold > 1:
-        raise SettingsValidationError("params.compaction.threshold must be in (0, 1]")
 
-    tail_tokens = _positive_integer(compaction["tail_tokens"], "params.compaction.tail_tokens")
+def _parse_compaction_trigger(value: Any) -> JsonObject:
+    if not isinstance(value, dict):
+        raise SettingsValidationError("params.compaction.trigger must be an object")
+    trigger_type = value.get("type")
+    if trigger_type == "context_ratio":
+        if set(value) != {"type", "threshold"}:
+            raise SettingsValidationError(
+                "context_ratio trigger requires exactly type and threshold"
+            )
+        threshold_value = value["threshold"]
+        if isinstance(threshold_value, bool) or not isinstance(threshold_value, int | float):
+            raise SettingsValidationError("params.compaction.trigger.threshold must be a number")
+        threshold = float(threshold_value)
+        if threshold <= 0 or threshold > 1:
+            raise SettingsValidationError("params.compaction.trigger.threshold must be in (0, 1]")
+        return {"type": trigger_type, "threshold": threshold}
+    if trigger_type == "input_tokens":
+        if set(value) != {"type", "tokens"}:
+            raise SettingsValidationError("input_tokens trigger requires exactly type and tokens")
+        return {
+            "type": trigger_type,
+            "tokens": _positive_integer(value["tokens"], "params.compaction.trigger.tokens"),
+        }
+    raise SettingsValidationError(
+        "params.compaction.trigger.type must be context_ratio or input_tokens"
+    )
 
-    summary_model = compaction["summary_model"]
-    if summary_model is not None and not isinstance(summary_model, str):
-        raise SettingsValidationError("params.compaction.summary_model must be a string or null")
 
-    return {
-        "auto": auto,
-        "threshold": threshold,
-        "tail_tokens": tail_tokens,
-        "summary_model": summary_model,
-    }
+def _parse_compaction_strategy(value: Any) -> JsonObject:
+    if not isinstance(value, dict):
+        raise SettingsValidationError("params.compaction.strategy must be an object")
+    strategy_type = value.get("type")
+    if strategy_type == "summary_tail":
+        if set(value) != {"type", "tail_tokens", "summary_model"}:
+            raise SettingsValidationError(
+                "summary_tail strategy requires exactly type, tail_tokens, and summary_model"
+            )
+        summary_model = value["summary_model"]
+        if summary_model is not None and not isinstance(summary_model, str):
+            raise SettingsValidationError(
+                "params.compaction.strategy.summary_model must be a string or null"
+            )
+        return {
+            "type": strategy_type,
+            "tail_tokens": _positive_integer(
+                value["tail_tokens"], "params.compaction.strategy.tail_tokens"
+            ),
+            "summary_model": summary_model,
+        }
+    if strategy_type == "continuation":
+        if set(value) != {"type"}:
+            raise SettingsValidationError("continuation strategy accepts only type")
+        return {"type": strategy_type}
+    raise SettingsValidationError(
+        "params.compaction.strategy.type must be summary_tail or continuation"
+    )
 
 
 def _parse_debug_update(debug: Any) -> JsonObject:

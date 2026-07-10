@@ -581,6 +581,29 @@ export function renameSession(agentId, sessionId, title, options = {}) {
   );
 }
 
+export function setSessionCompactionPolicy(
+  agentId,
+  sessionId,
+  policy,
+  options = {},
+) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'session.set_compaction_policy',
+  );
+  requireNonEmptyString(
+    sessionId,
+    'Session id must be a non-empty string',
+    'session.set_compaction_policy',
+  );
+  return rpc(
+    'session.set_compaction_policy',
+    { agent_id: agentId, session_id: sessionId, policy: policy ?? null },
+    options,
+  );
+}
+
 export function deleteSession(agentId, sessionId, options = {}) {
   requireNonEmptyString(
     agentId,

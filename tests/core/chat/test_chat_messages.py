@@ -793,7 +793,12 @@ class TestChatMessageParsing:
             ("error", {"content": "Provider failed.", "error_kind": "provider_error"}),
             (
                 "compaction_checkpoint",
-                {"content": "Summary.", "tail_boundary_id": "msg_tail"},
+                {
+                    "content": "Summary.",
+                    "projection": [],
+                    "compaction_policy": "custom",
+                    "compaction_strategy": "custom",
+                },
             ),
             (
                 "run_summary",
@@ -1056,17 +1061,16 @@ class TestRepairDanglingToolCalls:
         session.append(ChatMessage.user("Old question", timestamp=FIXED_TIMESTAMP))
         session.append(ChatMessage.assistant(model=agent.model, content="Old answer"))
         session.append(tail_user)
-        session.append(
-            ChatMessage.assistant(
-                model=agent.model,
-                content=None,
-                tool_calls=[ToolCall(id="dangling", name="read", arguments={})],
-            )
+        tail_assistant = ChatMessage.assistant(
+            model=agent.model,
+            content=None,
+            tool_calls=[ToolCall(id="dangling", name="read", arguments={})],
         )
+        session.append(tail_assistant)
         session.append(
             ChatMessage.compaction_checkpoint(
                 summary="Compacted earlier turns.",
-                tail_boundary_id=tail_user.id,
+                projection=[tail_user, tail_assistant],
                 compacted_token_count=10,
             )
         )
@@ -1083,27 +1087,23 @@ class TestRepairDanglingToolCalls:
         envelope = json.loads(tool_entries[0]["content"])
         assert envelope == _synthesized_failure_envelope()
 
-    def test_compaction_build_recovers_from_missing_tail_boundary(self, tmp_path) -> None:
-        # A checkpoint points at a tail boundary that no longer exists in
-        # history (e.g. a corrupted/partial write). The build path must recover
-        # instead of failing every request: keep the summary, replay
-        # post-checkpoint history, and flag the loss in the summary block.
+    def test_compaction_build_uses_self_contained_projection(self, tmp_path) -> None:
         from core.chat.chat import ChatLoop
-        from core.chat.messages import COMPACTION_TAIL_RECOVERED_HINT
+        from core.chat.messages import COMPACTION_SUMMARY_NOTE_PREFIX
         from tests.core.chat.test_chat_loop import StubAdapter, StubAgent, StubRuntime
 
         agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
         runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
         session = runtime.chat_sessions.create("coder", session_id="session-one")
 
-        # Pre-checkpoint slice whose anchor is lost, the checkpoint, then a
-        # genuinely new turn appended after the checkpoint.
         session.append(ChatMessage.user("Lost tail question", timestamp=FIXED_TIMESTAMP))
         session.append(ChatMessage.assistant(model=agent.model, content="Lost tail answer"))
         session.append(
             ChatMessage.compaction_checkpoint(
                 summary="Compacted earlier turns.",
-                tail_boundary_id="boundary-that-no-longer-exists",
+                projection=[
+                    ChatMessage.note(f"{COMPACTION_SUMMARY_NOTE_PREFIX}Compacted earlier turns.")
+                ],
                 compacted_token_count=10,
             )
         )
@@ -1111,7 +1111,6 @@ class TestRepairDanglingToolCalls:
 
         request_messages = asyncio.run(ChatLoop(runtime)._build_request_messages(agent, session))
 
-        # The summary survives and carries the recovery hint.
         summary_entries = [
             entry
             for entry in request_messages
@@ -1119,10 +1118,6 @@ class TestRepairDanglingToolCalls:
             and "Compacted earlier turns." in entry.get("content", "")
         ]
         assert len(summary_entries) == 1
-        assert COMPACTION_TAIL_RECOVERED_HINT in summary_entries[0]["content"]
-
-        # Post-checkpoint history is replayed; the unanchored pre-checkpoint
-        # slice is not.
         user_contents = [
             entry.get("content") for entry in request_messages if entry.get("role") == "user"
         ]
@@ -1547,7 +1542,7 @@ class TestAgentTakeoverMessage:
             ("tool_call_id", "call_abc"),
             ("name", "get_weather"),
             ("error_kind", "provider_error"),
-            ("tail_boundary_id", "msg-1"),
+            ("projection", []),
             ("run_id", "run-1"),
             ("status", "completed"),
         ],

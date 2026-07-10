@@ -24,28 +24,6 @@ from core.chat.events import (
     _exception_to_error_kind as _exception_to_error_kind,
 )
 from core.chat.messages import (
-    COMPACTION_TAIL_RECOVERED_HINT,
-    SYSTEM_REMINDER_CLOSE_TAG,
-    SYSTEM_REMINDER_OPEN_TAG,
-    ChatMessage,
-    JsonObject,
-    _append_input_origin_note,
-    _apply_usage_estimation,
-    _assistant_continuation_dict,
-    _assistant_message_from_response,
-    _display_content_preview,
-    _embed_notes_into_request,
-    _last_user_message,
-    _last_user_message_with_content_blocks,
-    _latest_compaction_checkpoint,
-    _message_to_request_dict,
-    _notes_to_request_messages,
-    _resolve_preserved_tail,
-    _restore_in_run_assistant_reasoning,
-    _session_has_any_content_blocks,
-    _strip_assistant_reasoning_fields,
-)
-from core.chat.messages import (
     ERROR_KIND_AUTH as ERROR_KIND_AUTH,
 )
 from core.chat.messages import (
@@ -74,6 +52,25 @@ from core.chat.messages import (
 )
 from core.chat.messages import (
     INPUT_ORIGIN_SPEECH_TRANSCRIPTION as INPUT_ORIGIN_SPEECH_TRANSCRIPTION,
+)
+from core.chat.messages import (
+    ChatMessage,
+    JsonObject,
+    _append_input_origin_note,
+    _apply_usage_estimation,
+    _assistant_continuation_dict,
+    _assistant_message_from_response,
+    _display_content_preview,
+    _effective_compaction_messages,
+    _embed_notes_into_request,
+    _last_user_message,
+    _last_user_message_with_content_blocks,
+    _latest_compaction_checkpoint,
+    _message_to_request_dict,
+    _notes_to_request_messages,
+    _restore_in_run_assistant_reasoning,
+    _session_has_any_content_blocks,
+    _strip_assistant_reasoning_fields,
 )
 from core.chat.messages import (
     InputOrigin as InputOrigin,
@@ -518,7 +515,9 @@ class ChatLoop:
             agent_id, session_id, create_missing=False, project_id=project_id
         )
         messages = session.load()
-        settings = self._load_compaction_settings()
+        settings = self._load_compaction_settings(
+            agent, agent_id=agent_id, session_id=session_id, project_id=project_id
+        )
 
         adapter: Any | None = None
         summary_adapter: Any | None = None
@@ -532,6 +531,28 @@ class ChatLoop:
                 model_id,
                 settings,
             )
+            prompt_project = resolve_prompt_project(self._runtime.projects, project_id, agent)
+            prompt_context = (
+                ProjectPromptContext.from_project(prompt_project.cwd, prompt_project.auto_load)
+                if prompt_project is not None
+                else None
+            )
+            skill_project_id, identity_agent_id = resolve_skill_scope(
+                project_id, prompt_project, agent_id
+            )
+            skill_registry = self._runtime.skills_for(skill_project_id, identity_agent_id)
+            request_messages = await self._build_request_messages(
+                agent,
+                session,
+                replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
+                wire_media_types=_resolve_wire_media_support(adapter, model_id),
+                agent_body=runtime_agent_body(agent),
+                project_context=prompt_context,
+                skill_registry=skill_registry,
+                skill_catalog=self._pinned_skill_catalog(
+                    agent_id, session_id, agent, skill_registry, project_id
+                ),
+            )
             checkpoint = await self._compaction_service.compact(
                 messages,
                 agent=agent,
@@ -540,6 +561,10 @@ class ChatLoop:
                 storage=self._runtime.storage,
                 settings=settings,
                 instruction=instruction,
+                request_messages=request_messages,
+                active_adapter=adapter,
+                active_model_id=model_id,
+                active_tools=self._runtime.system_prompts.provider_tool_definitions(agent),
             )
             session.append(checkpoint)
         except Exception as exc:
@@ -1161,72 +1186,34 @@ class ChatLoop:
         )
         session_messages = session.load()
         checkpoint = _latest_compaction_checkpoint(session_messages)
-
-        if checkpoint is None:
-            history = _embed_notes_into_request(
-                session_messages,
-                replay_policy=replay_policy,
-                agent_model=agent.model,
-            )
-            request_messages = [*system_messages, *history]
-        else:
-            tail_messages, tail_recovered = _resolve_preserved_tail(session_messages, checkpoint)
-            if tail_recovered:
-                _LOGGER.warning(
-                    "Compaction tail boundary %r not found for session %s; "
-                    "recovering from post-checkpoint history",
-                    checkpoint.tail_boundary_id,
-                    session.id,
-                )
-            summary_text = checkpoint.content if isinstance(checkpoint.content, str) else ""
-            if tail_recovered:
-                summary_text = (
-                    f"{summary_text}\n\n{COMPACTION_TAIL_RECOVERED_HINT}"
-                    if summary_text
-                    else COMPACTION_TAIL_RECOVERED_HINT
-                )
-            summary_synthetic_message: JsonObject = {
-                "role": "user",
-                "content": (
-                    f"{SYSTEM_REMINDER_OPEN_TAG}\n{summary_text}\n{SYSTEM_REMINDER_CLOSE_TAG}"
-                ),
-            }
-            history = _embed_notes_into_request(
-                tail_messages,
-                replay_policy=replay_policy,
-                agent_model=agent.model,
-            )
-            # Activated skills stay loaded across compaction: their carriers live
-            # in normal history, so any activation whose carrier was folded into
-            # the summary region is re-injected here, ahead of the summary. Free
-            # cache-wise — the checkpoint rebuild breaks the prefix anyway, and
-            # the injected block is deterministic (activation order) afterwards.
-            # A carrier that survives in the preserved tail is not duplicated.
-            tail_carried_skills = skill_activation_names(tail_messages)
+        effective_messages = _effective_compaction_messages(session_messages)
+        history = _embed_notes_into_request(
+            effective_messages,
+            replay_policy=replay_policy,
+            agent_model=agent.model,
+        )
+        skill_context_messages: list[JsonObject] = []
+        if checkpoint is not None:
+            projected_skills = skill_activation_names(effective_messages)
             skill_context_messages = [
                 {"role": "user", "content": content}
                 for name, content in session.activated_skill_contents(session_messages).items()
-                if name not in tail_carried_skills
+                if name not in projected_skills
             ]
-            request_messages = [
-                *system_messages,
-                *skill_context_messages,
-                summary_synthetic_message,
-                *history,
-            ]
+        request_messages = [*system_messages, *skill_context_messages, *history]
 
         session.drain_pending_notes()
 
         if self._attachment_resolver is None:
             return request_messages
-        if not _session_has_any_content_blocks(session_messages):
+        if not _session_has_any_content_blocks(effective_messages):
             return request_messages
 
         # Use the most recently appended user turn as the current-turn marker.
         # If that turn is plain text, all content blocks resolve as historical.
         current_user_message = _last_user_message_with_content_blocks(
-            session_messages
-        ) or _last_user_message(session_messages)
+            effective_messages
+        ) or _last_user_message(effective_messages)
         if current_user_message is None:
             return request_messages
 
@@ -1379,6 +1366,13 @@ class ChatLoop:
                             run=run,
                             project_id=project_id,
                             skill_project_id=skill_project_id,
+                            tools=tools,
+                            continuation_request_messages=[
+                                *messages_for_request,
+                                _assistant_continuation_dict(
+                                    assistant_message, replay_policy=replay_policy
+                                ),
+                            ],
                         )
                     return assistant_message
 
@@ -1454,6 +1448,7 @@ class ChatLoop:
                     run=run,
                     project_id=project_id,
                     skill_project_id=skill_project_id,
+                    tools=tools,
                 )
 
         raise ToolIterationLimitError("maximum tool iterations exceeded")
@@ -1513,13 +1508,22 @@ class ChatLoop:
         run: Run,
         project_id: str | None = None,
         skill_project_id: str | None = None,
+        tools: list[JsonObject] | None = None,
+        continuation_request_messages: list[JsonObject] | None = None,
     ) -> list[JsonObject]:
         """Auto-compact when configured token thresholds are exceeded."""
         if self._compaction_service is None:
             return messages
 
-        settings = self._load_compaction_settings()
+        settings = self._load_compaction_settings(
+            agent,
+            agent_id=run.agent_id,
+            session_id=run.session_id,
+            project_id=run.project_id,
+        )
         if not settings.auto:
+            return messages
+        if settings.strategy == "continuation" and continuation_request_messages is None:
             return messages
 
         context_window = self._resolve_context_window(agent)
@@ -1536,11 +1540,20 @@ class ChatLoop:
         else:
             input_tokens = self._compaction_service.estimate_messages_tokens(messages)
 
-        if not self._compaction_service.should_auto_compact(
-            input_tokens,
-            context_window,
-            settings.threshold,
-        ):
+        if settings.trigger == "context_ratio":
+            should_compact = self._compaction_service.should_auto_compact(
+                input_tokens,
+                context_window,
+                settings.threshold,
+            )
+        else:
+            should_compact = self._compaction_service.should_auto_compact(
+                input_tokens,
+                context_window,
+                settings.threshold,
+                settings=settings,
+            )
+        if not should_compact:
             return messages
 
         _LOGGER.info(
@@ -1568,6 +1581,10 @@ class ChatLoop:
                 summary_model_id=summary_model_id,
                 storage=self._runtime.storage,
                 settings=settings,
+                request_messages=continuation_request_messages or messages,
+                active_adapter=adapter,
+                active_model_id=model_id,
+                active_tools=tools,
             )
         except Exception:
             _LOGGER.warning("Compaction failed; continuing without compaction", exc_info=True)
@@ -1605,18 +1622,41 @@ class ChatLoop:
         )
         return _restore_in_run_assistant_reasoning(rebuilt_messages, messages)
 
-    def _load_compaction_settings(self) -> CompactionSettings:
-        """Build typed compaction settings from the persisted normalized section."""
+    def _load_compaction_settings(
+        self,
+        agent: Any,
+        *,
+        agent_id: str,
+        session_id: str,
+        project_id: str | None,
+    ) -> CompactionSettings:
+        """Resolve Session override → Agent default → global Compaction Policy."""
         # Local import: core.compaction imports core.chat at module load, so
         # chat must not import it back at module level (runtime cycle).
-        from core.compaction import CompactionSettings
+        from core.compaction import COMPACTION_POLICY_META_KEY, CompactionSettings
+        from core.settings.normalizers import normalize_compaction_policy
 
-        raw_settings = self._runtime.storage.load_compaction_settings()
+        metadata = self._runtime.chat_sessions.get_metadata(agent_id, session_id, project_id)
+        session_policy = metadata.get(COMPACTION_POLICY_META_KEY)
+        agent_policy = getattr(agent, "compaction_policy", None)
+        raw_settings = normalize_compaction_policy(
+            session_policy
+            if isinstance(session_policy, dict)
+            else agent_policy
+            if isinstance(agent_policy, dict)
+            else self._runtime.storage.load_compaction_settings(),
+            use_defaults=True,
+        )
+        trigger = raw_settings["trigger"]
+        strategy = raw_settings["strategy"]
         return CompactionSettings(
-            auto=bool(raw_settings["auto"]),
-            threshold=float(raw_settings["threshold"]),
-            tail_tokens=int(raw_settings["tail_tokens"]),
-            summary_model=raw_settings["summary_model"],
+            auto=bool(raw_settings["enabled"]),
+            trigger=str(trigger["type"]),
+            threshold=float(trigger.get("threshold", 0.8)),
+            trigger_tokens=int(trigger.get("tokens", 100_000)),
+            strategy=str(strategy["type"]),
+            tail_tokens=int(strategy.get("tail_tokens", 15_000)),
+            summary_model=strategy.get("summary_model"),
         )
 
     def _resolve_context_window(self, agent: Any) -> int | None:

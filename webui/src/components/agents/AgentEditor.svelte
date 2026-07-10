@@ -3,6 +3,7 @@
 
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
+  import CompactionPolicyEditor from '../compaction/CompactionPolicyEditor.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
@@ -658,6 +659,12 @@
     formValues.temperature = '';
   }
 
+  function setOwnCompactionPolicy(enabled) {
+    formValues.compaction_policy = enabled
+      ? structuredClone(agent?.effective_compaction_policy ?? {})
+      : null;
+  }
+
   function memoryToolRowText() {
     return formValues.memory_prompt_mode === 'off'
       ? t(
@@ -1070,6 +1077,42 @@
           {/snippet}
         </FormField>
       </div>
+    </div>
+
+    <div class="detail-group agents-view__compaction-group">
+      <div class="detail-group-title">
+        {t('agents.detail.compaction', 'Compaction Policy')}
+      </div>
+      <div class="agents-view__prompt-toggle-row">
+        <div>
+          <div class="agents-view__prompt-toggle-label">
+            {formValues.compaction_policy
+              ? t('compaction.scope.agentOwn', 'Use an Agent Policy')
+              : t(
+                  'compaction.scope.inheritGlobal',
+                  'Inherit the global Policy live',
+                )}
+          </div>
+          <div class="agents-view__prompt-toggle-desc">
+            {t(
+              'compaction.scope.agentDescription',
+              'Inherited changes apply to this Agent’s existing Sessions unless a Session has its own override.',
+            )}
+          </div>
+        </div>
+        <Toggle
+          checked={formValues.compaction_policy !== null}
+          ariaLabel={t('compaction.scope.agentOwn', 'Use an Agent Policy')}
+          onChange={setOwnCompactionPolicy}
+        />
+      </div>
+      {#if formValues.compaction_policy}
+        <CompactionPolicyEditor
+          value={formValues.compaction_policy}
+          onChange={(next) => (formValues.compaction_policy = next)}
+          idPrefix="agent-compaction"
+        />
+      {/if}
     </div>
 
     <div class="detail-group agents-view__prompt-group">

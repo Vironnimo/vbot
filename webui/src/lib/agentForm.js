@@ -1,4 +1,5 @@
 import { parseModelSelectionValue } from './modelSelection.js';
+import { normalizeCompactionPolicy } from './compactionPolicy.js';
 
 export const AGENT_FORM_MODE_CREATE = 'create';
 export const AGENT_FORM_MODE_EDIT = 'edit';
@@ -42,6 +43,7 @@ const EDITABLE_AGENT_FIELDS = Object.freeze([
   'allowed_tools',
   'allowed_skills',
   'custom_system_prompt_enabled',
+  'compaction_policy',
 ]);
 
 const AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -74,6 +76,9 @@ export function createAgentFormValues(agent = {}) {
       DEFAULT_AGENT_ALLOWED_SKILLS,
     ),
     custom_system_prompt_enabled: Boolean(agent.custom_system_prompt_enabled),
+    compaction_policy: isPlainObject(raw.compaction_policy)
+      ? normalizeCompactionPolicy(raw.compaction_policy)
+      : null,
   };
 }
 
@@ -184,6 +189,9 @@ function normalizeValues(values = {}) {
     allowed_tools: normalizeList(values.allowed_tools),
     allowed_skills: normalizeArrayList(values.allowed_skills),
     custom_system_prompt_enabled: Boolean(values.custom_system_prompt_enabled),
+    compaction_policy: isPlainObject(values.compaction_policy)
+      ? normalizeCompactionPolicy(values.compaction_policy)
+      : null,
   };
 }
 
@@ -239,6 +247,7 @@ function buildAgentPayload(normalized, temperature, options = {}) {
     allowed_tools: normalized.allowed_tools,
     allowed_skills: normalized.allowed_skills,
     custom_system_prompt_enabled: normalized.custom_system_prompt_enabled,
+    compaction_policy: normalized.compaction_policy,
   };
 
   if (options.includeWorkspace) {
@@ -265,6 +274,10 @@ function filterChangedFields(payload, baselinePayload) {
 function valuesEqual(left, right) {
   if (Array.isArray(left) || Array.isArray(right)) {
     return arrayValuesEqual(left, right);
+  }
+
+  if (isPlainObject(left) || isPlainObject(right)) {
+    return JSON.stringify(left) === JSON.stringify(right);
   }
 
   return left === right;

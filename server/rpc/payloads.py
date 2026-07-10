@@ -10,6 +10,7 @@ from core.providers.providers import (
     resolve_effective_context_window,
 )
 from core.runs import QueuedRunItem, Run
+from core.settings.normalizers import normalize_compaction_settings
 from core.tools import tool_is_ready
 
 JsonObject = dict[str, Any]
@@ -97,6 +98,9 @@ def _provider_config(state: Any, provider_id: str) -> Any:
 
 
 def _agent_response(state: Any, agent: Any) -> JsonObject:
+    agent_policy = getattr(agent, "compaction_policy", None)
+    if not isinstance(agent_policy, dict):
+        agent_policy = None
     return {
         "id": agent.id,
         "name": agent.name,
@@ -114,6 +118,16 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
         "allowed_tools": list(agent.allowed_tools),
         "allowed_skills": list(agent.allowed_skills),
         "custom_system_prompt_enabled": bool(agent.custom_system_prompt_enabled),
+        "compaction_policy": dict(agent_policy) if agent_policy is not None else None,
+        "effective_compaction_policy": (
+            dict(agent_policy)
+            if agent_policy is not None
+            else (
+                state.runtime.storage.load_compaction_settings()
+                if getattr(state.runtime, "storage", None) is not None
+                else normalize_compaction_settings(None)
+            )
+        ),
         "current_session_id": agent.current_session_id,
         "context_window": _resolve_context_window(state, agent.model),
         # Raw own values (pre-default-bake), so the editor can distinguish an
@@ -131,11 +145,15 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
 def _agent_raw_config(state: Any, agent_id: str) -> JsonObject:
     """Return an identity agent's raw own values (``""``/``None`` preserved)."""
     raw = state.runtime.agents.get_raw(agent_id)
+    raw_policy = getattr(raw, "compaction_policy", None)
+    if not isinstance(raw_policy, dict):
+        raw_policy = None
     return {
         "model": raw.model,
         "fallback_model": raw.fallback_model,
         "temperature": raw.temperature,
         "thinking_effort": raw.thinking_effort,
+        "compaction_policy": dict(raw_policy) if raw_policy is not None else None,
     }
 
 

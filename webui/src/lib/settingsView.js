@@ -8,6 +8,7 @@ import {
   buildUpdatePayload,
   createChannelSettingsState,
 } from './channelSettings.js';
+import { normalizeCompactionPolicy } from './compactionPolicy.js';
 
 export const SETTINGS_LAYOUT_CLASS = 'settings-layout view active';
 
@@ -82,13 +83,6 @@ const AGENT_DEFAULT_THINKING_EFFORT_OPTIONS = Object.freeze([
   'xhigh',
   'max',
 ]);
-
-const COMPACTION_SETTING_DEFAULTS = Object.freeze({
-  auto: true,
-  threshold: 0.8,
-  tail_tokens: 15000,
-  summary_model: null,
-});
 
 function positiveIntegerOrDefault(value, fallback) {
   const numberValue = Number(value);
@@ -688,32 +682,7 @@ export function normalizeSubAgentSettings(rawSettings) {
 }
 
 export function normalizeCompactionSettings(rawSettings) {
-  const compaction = rawSettings?.compaction ?? {};
-  const threshold = Number(
-    String(compaction.threshold).trim().replace(',', '.'),
-  );
-  const summaryModel =
-    typeof compaction.summary_model === 'string'
-      ? compaction.summary_model.trim()
-      : '';
-
-  return {
-    auto:
-      typeof compaction.auto === 'boolean'
-        ? compaction.auto
-        : COMPACTION_SETTING_DEFAULTS.auto,
-    threshold: Number.isFinite(threshold)
-      ? threshold
-      : COMPACTION_SETTING_DEFAULTS.threshold,
-    tail_tokens: positiveIntegerOrDefault(
-      compaction.tail_tokens,
-      COMPACTION_SETTING_DEFAULTS.tail_tokens,
-    ),
-    summary_model:
-      summaryModel.length > 0
-        ? summaryModel
-        : COMPACTION_SETTING_DEFAULTS.summary_model,
-  };
+  return normalizeCompactionPolicy(rawSettings?.compaction);
 }
 
 export function buildCompactionSettingsPayload(formValues) {

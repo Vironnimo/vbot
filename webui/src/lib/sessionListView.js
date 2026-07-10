@@ -101,6 +101,16 @@ function normalizeSession(session) {
     subagent_parent: subagentParent,
     fork_source: forkSource,
     is_fork: forkSource !== null,
+    compaction_policy_override: isPlainObject(
+      session?.compaction_policy_override,
+    )
+      ? session.compaction_policy_override
+      : null,
+    compaction_policy_effective: isPlainObject(
+      session?.compaction_policy_effective,
+    )
+      ? session.compaction_policy_effective
+      : null,
   };
 
   normalizedSession.display_name = sessionDisplayName(normalizedSession);

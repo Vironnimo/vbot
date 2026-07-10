@@ -503,22 +503,21 @@ async def test_full_history_adapter_replays_reasoning_for_compaction_tail_turns(
         )
         tail_user = ChatMessage.user("Tail question")
         session.append(tail_user)
-        session.append(
-            ChatMessage.assistant(
-                model="fake-provider/fake-model-v1",
-                content="Tail answer",
-                reasoning="Tail thinking",
-                reasoning_meta={
-                    "content_blocks": [
-                        {"type": "thinking", "thinking": "Tail thinking", "signature": "sig-tail"}
-                    ]
-                },
-            )
+        tail_assistant = ChatMessage.assistant(
+            model="fake-provider/fake-model-v1",
+            content="Tail answer",
+            reasoning="Tail thinking",
+            reasoning_meta={
+                "content_blocks": [
+                    {"type": "thinking", "thinking": "Tail thinking", "signature": "sig-tail"}
+                ]
+            },
         )
+        session.append(tail_assistant)
         session.append(
             ChatMessage.compaction_checkpoint(
                 summary="Compacted summary",
-                tail_boundary_id=tail_user.id,
+                projection=[tail_user, tail_assistant],
                 compacted_token_count=123,
             )
         )
@@ -534,9 +533,9 @@ async def test_full_history_adapter_replays_reasoning_for_compaction_tail_turns(
             "user",
         ]
         assert "Compacted summary" in request[1]["content"]
-        tail_assistant = request[3]
-        assert tail_assistant["reasoning"] == "Tail thinking"
-        assert tail_assistant["reasoning_meta"] == {
+        request_tail_assistant = request[3]
+        assert request_tail_assistant["reasoning"] == "Tail thinking"
+        assert request_tail_assistant["reasoning_meta"] == {
             "content_blocks": [
                 {"type": "thinking", "thinking": "Tail thinking", "signature": "sig-tail"}
             ]

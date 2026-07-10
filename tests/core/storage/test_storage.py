@@ -261,9 +261,9 @@ def test_load_settings_rejects_invalid_json(tmp_path: Path) -> None:
 def test_load_settings_rejects_invalid_schema_fields(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
     storage.ensure_directories()
-    storage.settings_path.write_text('{"compaction": {"auto": "yes"}}', encoding="utf-8")
+    storage.settings_path.write_text('{"compaction": {"enabled": "yes"}}', encoding="utf-8")
 
-    with pytest.raises(StorageError, match=r"\$\.compaction\.auto: must be a boolean"):
+    with pytest.raises(StorageError, match=r"\$\.compaction\.enabled: must be a boolean"):
         storage.load_settings()
 
 
@@ -625,10 +625,13 @@ def test_load_compaction_settings_returns_defaults_when_missing(tmp_path: Path) 
     settings = storage.load_compaction_settings()
 
     assert settings == {
-        "auto": True,
-        "threshold": 0.8,
-        "tail_tokens": 15_000,
-        "summary_model": None,
+        "enabled": True,
+        "trigger": {"type": "context_ratio", "threshold": 0.8},
+        "strategy": {
+            "type": "summary_tail",
+            "tail_tokens": 15_000,
+            "summary_model": None,
+        },
     }
 
 
@@ -637,10 +640,13 @@ def test_load_compaction_settings_reads_and_normalizes_values(tmp_path: Path) ->
     storage.save_settings(
         {
             "compaction": {
-                "auto": False,
-                "threshold": 1,
-                "tail_tokens": 7_500,
-                "summary_model": "openrouter/anthropic/claude-sonnet-4",
+                "enabled": False,
+                "trigger": {"type": "context_ratio", "threshold": 1},
+                "strategy": {
+                    "type": "summary_tail",
+                    "tail_tokens": 7_500,
+                    "summary_model": "openrouter/anthropic/claude-sonnet-4",
+                },
             }
         }
     )
@@ -648,10 +654,13 @@ def test_load_compaction_settings_reads_and_normalizes_values(tmp_path: Path) ->
     settings = storage.load_compaction_settings()
 
     assert settings == {
-        "auto": False,
-        "threshold": 1.0,
-        "tail_tokens": 7_500,
-        "summary_model": "openrouter/anthropic/claude-sonnet-4",
+        "enabled": False,
+        "trigger": {"type": "context_ratio", "threshold": 1.0},
+        "strategy": {
+            "type": "summary_tail",
+            "tail_tokens": 7_500,
+            "summary_model": "openrouter/anthropic/claude-sonnet-4",
+        },
     }
 
 
@@ -661,10 +670,13 @@ def test_update_compaction_settings_persists_under_compaction_key(tmp_path: Path
         {
             "server_port": 8500,
             "compaction": {
-                "auto": False,
-                "threshold": 0.9,
-                "tail_tokens": 12_000,
-                "summary_model": None,
+                "enabled": False,
+                "trigger": {"type": "context_ratio", "threshold": 0.9},
+                "strategy": {
+                    "type": "summary_tail",
+                    "tail_tokens": 12_000,
+                    "summary_model": None,
+                },
             },
         }
     )
@@ -672,17 +684,23 @@ def test_update_compaction_settings_persists_under_compaction_key(tmp_path: Path
     updated = storage.update_settings_sections(
         {
             "compaction": {
-                "tail_tokens": 8_000,
-                "summary_model": "openai/gpt-4.1-mini",
+                "strategy": {
+                    "type": "summary_tail",
+                    "tail_tokens": 8_000,
+                    "summary_model": "openai/gpt-4.1-mini",
+                },
             }
         }
     )
 
     assert updated["compaction"] == {
-        "auto": False,
-        "threshold": 0.9,
-        "tail_tokens": 8_000,
-        "summary_model": "openai/gpt-4.1-mini",
+        "enabled": False,
+        "trigger": {"type": "context_ratio", "threshold": 0.9},
+        "strategy": {
+            "type": "summary_tail",
+            "tail_tokens": 8_000,
+            "summary_model": "openai/gpt-4.1-mini",
+        },
     }
     assert storage.load_compaction_settings() == updated["compaction"]
     assert storage.load_settings() == {"compaction": updated["compaction"], "server_port": 8500}
@@ -713,10 +731,13 @@ def test_update_settings_sections_persists_multiple_sections_with_one_save(
                 "subagent_timeout_minutes": 90,
             },
             "compaction": {
-                "auto": False,
-                "threshold": 0.9,
-                "tail_tokens": 12_000,
-                "summary_model": None,
+                "enabled": False,
+                "trigger": {"type": "context_ratio", "threshold": 0.9},
+                "strategy": {
+                    "type": "summary_tail",
+                    "tail_tokens": 12_000,
+                    "summary_model": None,
+                },
             },
             "recall": {"backend": "sqlite_fts"},
         }
@@ -731,20 +752,26 @@ def test_update_settings_sections_persists_multiple_sections_with_one_save(
             "subagent_timeout_minutes": 90,
         },
         "compaction": {
-            "auto": False,
-            "threshold": 0.9,
-            "tail_tokens": 12_000,
-            "summary_model": None,
+            "enabled": False,
+            "trigger": {"type": "context_ratio", "threshold": 0.9},
+            "strategy": {
+                "type": "summary_tail",
+                "tail_tokens": 12_000,
+                "summary_model": None,
+            },
         },
         "recall": {"backend": "sqlite_fts"},
     }
     assert storage.load_settings() == {
         "appearance": {"language": "en", "chat_width": "comfortable"},
         "compaction": {
-            "auto": False,
-            "threshold": 0.9,
-            "tail_tokens": 12_000,
-            "summary_model": None,
+            "enabled": False,
+            "trigger": {"type": "context_ratio", "threshold": 0.9},
+            "strategy": {
+                "type": "summary_tail",
+                "tail_tokens": 12_000,
+                "summary_model": None,
+            },
         },
         "max_subagent_depth": 6,
         "max_subagents_per_turn": 12,
@@ -761,11 +788,11 @@ def test_update_settings_sections_leaves_file_unchanged_when_section_fails(
     original_settings = {"server_port": 8500}
     storage.save_settings(original_settings)
 
-    with pytest.raises(StorageError, match="Compaction setting threshold"):
+    with pytest.raises(StorageError, match="threshold"):
         storage.update_settings_sections(
             {
                 "appearance": {"language": "en"},
-                "compaction": {"threshold": 2},
+                "compaction": {"trigger": {"type": "context_ratio", "threshold": 2}},
             }
         )
 

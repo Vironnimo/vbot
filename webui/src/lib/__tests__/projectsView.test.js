@@ -591,6 +591,7 @@ describe('seedTeamOverrideDraft', () => {
       model: 'openai/gpt-mini',
       temperature: '0.3',
       thinking_effort: 'low',
+      compaction_policy: null,
     });
   });
 
@@ -607,6 +608,7 @@ describe('seedTeamOverrideDraft', () => {
       model: 'openai/gpt-5.2',
       temperature: '',
       thinking_effort: 'high',
+      compaction_policy: null,
     });
   });
 });

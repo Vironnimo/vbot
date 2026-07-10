@@ -25,6 +25,7 @@ from core.settings import (
     validate_temperature,
     validate_thinking_effort,
 )
+from core.settings.normalizers import normalize_compaction_policy
 from core.tools.availability import sanitize_configured_allowed_tools
 from core.utils.atomic import atomic_write_text
 
@@ -90,6 +91,7 @@ class Agent:
     current_session_id: str = ""
     custom_system_prompt_enabled: bool = DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED
     memory_prompt_mode: MemoryPromptMode = DEFAULT_MEMORY_PROMPT_MODE
+    compaction_policy: dict[str, Any] | None = None
 
 
 class AgentStore:
@@ -126,6 +128,7 @@ class AgentStore:
         allowed_tools: list[str] | None = None,
         allowed_skills: list[str] | None = None,
         custom_system_prompt_enabled: bool = DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
+        compaction_policy: dict[str, Any] | None = None,
     ) -> Agent:
         """Create and persist a new agent, sessions directory, and workspace."""
         self._validate_agent_id(agent_id)
@@ -145,6 +148,11 @@ class AgentStore:
         validated_allowed_skills = _validate_allowed_items("allowed_skills", allowed_skills)
         validated_custom_system_prompt_enabled = _validate_bool_field(
             "custom_system_prompt_enabled", custom_system_prompt_enabled
+        )
+        validated_compaction_policy = (
+            normalize_compaction_policy(compaction_policy)
+            if compaction_policy is not None
+            else None
         )
         now = _utc_now()
         workspace_path = (
@@ -167,6 +175,7 @@ class AgentStore:
             allowed_tools=validated_allowed_tools,
             allowed_skills=validated_allowed_skills,
             custom_system_prompt_enabled=validated_custom_system_prompt_enabled,
+            compaction_policy=validated_compaction_policy,
             current_session_id=session.id,
             created_at=now,
             updated_at=now,
@@ -286,6 +295,11 @@ class AgentStore:
         if "custom_system_prompt_enabled" in changes:
             changes["custom_system_prompt_enabled"] = _validate_bool_field(
                 "custom_system_prompt_enabled", changes["custom_system_prompt_enabled"]
+            )
+        if "compaction_policy" in changes:
+            policy = changes["compaction_policy"]
+            changes["compaction_policy"] = (
+                normalize_compaction_policy(policy) if policy is not None else None
             )
         if "current_session_id" in changes:
             self._validate_current_session(agent_id, changes["current_session_id"])
@@ -566,6 +580,11 @@ def _agent_from_dict(data: dict[str, Any], *, default_workspace: str | Path | No
         allowed_skills=list(data["allowed_skills"]),
         custom_system_prompt_enabled=data.get(
             "custom_system_prompt_enabled", DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED
+        ),
+        compaction_policy=(
+            dict(data["compaction_policy"])
+            if isinstance(data.get("compaction_policy"), dict)
+            else None
         ),
         current_session_id=data.get("current_session_id", ""),
         created_at=data["created_at"],

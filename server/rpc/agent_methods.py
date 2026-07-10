@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 from core.channels import ChannelConfigError, channel_system_reminder
+from core.compaction import COMPACTION_POLICY_META_KEY
 from core.memory import MEMORY_PROMPT_MODES
 from core.projects import (
     InvalidAgentAddressError,
@@ -25,6 +26,8 @@ from core.settings import (
     validate_temperature,
     validate_thinking_effort,
 )
+from core.settings.normalizers import normalize_compaction_settings
+from core.utils.errors import StorageError
 from server.events import RESOURCE_KIND_AGENTS, RESOURCE_KIND_SESSIONS
 from server.rpc.agent_refs import _agent_reference_ids, _agent_reference_lock
 from server.rpc.channel_methods import _channel_config_by_id
@@ -274,6 +277,33 @@ def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
     agent_id, project_id = _required_agent_address(params, "agent_id")
     try:
         sessions = state.runtime.chat_sessions.list_with_metadata(agent_id, project_id)
+        resolver = getattr(state.runtime, "agent_resolver", None)
+        agents = getattr(state.runtime, "agents", None)
+        if resolver is None and agents is None:
+            return {"sessions": sessions}
+        if resolver is not None:
+            agent = resolver.resolve_agent(project_id, agent_id)
+        else:
+            assert agents is not None
+            agent = agents.get(agent_id)
+        own_policy = getattr(agent, "compaction_policy", None)
+        inherited_policy = (
+            dict(own_policy)
+            if isinstance(own_policy, dict)
+            else (
+                state.runtime.storage.load_compaction_settings()
+                if getattr(state.runtime, "storage", None) is not None
+                else normalize_compaction_settings(None)
+            )
+        )
+        for session in sessions:
+            override = session.get(COMPACTION_POLICY_META_KEY)
+            session["compaction_policy_override"] = (
+                dict(override) if isinstance(override, dict) else None
+            )
+            session["compaction_policy_effective"] = (
+                dict(override) if isinstance(override, dict) else dict(inherited_policy)
+            )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"sessions": sessions}
@@ -423,6 +453,47 @@ def _rename_session(state: Any, params: JsonObject) -> JsonObject:
     return {"agent_id": agent_id, "session_id": session_id, "title": stored_title}
 
 
+def _set_session_compaction_policy(state: Any, params: JsonObject) -> JsonObject:
+    """Set a full Session Policy override, or clear it back to live inheritance."""
+    _reject_unsupported(
+        params, {"agent_id", "session_id", "policy"}, "session.set_compaction_policy"
+    )
+    agent_id, project_id = _required_agent_address(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    policy = params.get("policy")
+    try:
+        from core.settings.normalizers import normalize_compaction_policy
+
+        normalized = normalize_compaction_policy(policy) if policy is not None else None
+        state.runtime.chat_sessions.get(agent_id, session_id, project_id)
+        metadata = state.runtime.chat_sessions.get_metadata(agent_id, session_id, project_id)
+        if normalized is None:
+            metadata.pop(COMPACTION_POLICY_META_KEY, None)
+        else:
+            metadata[COMPACTION_POLICY_META_KEY] = normalized
+        state.runtime.chat_sessions.set_metadata(agent_id, session_id, metadata, project_id)
+        agent = state.runtime.agent_resolver.resolve_agent(project_id, agent_id)
+        own_policy = getattr(agent, "compaction_policy", None)
+        inherited = (
+            dict(own_policy)
+            if isinstance(own_policy, dict)
+            else state.runtime.storage.load_compaction_settings()
+        )
+        effective = normalized or inherited
+    except StorageError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    publish_resource_changed(state, RESOURCE_KIND_SESSIONS, scope={"agent_id": agent_id})
+    return {
+        "agent_id": format_agent_address(agent_id, project_id),
+        "session_id": session_id,
+        "override": normalized,
+        "effective": effective,
+        "source": "session" if normalized is not None else "agent_or_global",
+    }
+
+
 def _session_title_param(params: JsonObject) -> str:
     """Read the rename title: any string, empty allowed (an empty title clears).
 
@@ -447,6 +518,7 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
         "allowed_tools",
         "allowed_skills",
         "custom_system_prompt_enabled",
+        "compaction_policy",
     }
     if not for_create:
         public_fields.add("current_session_id")
@@ -499,6 +571,15 @@ def _validate_agent_field(key: str, value: Any) -> Any:
                 "params.custom_system_prompt_enabled must be a boolean",
             )
         return value
+    if key == "compaction_policy":
+        if value is None:
+            return None
+        try:
+            from core.settings.normalizers import normalize_compaction_policy
+
+            return normalize_compaction_policy(value)
+        except Exception as exc:
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     raise RpcError(RPC_ERROR_INVALID_REQUEST, f"unsupported agent field: {key}")
 
 
@@ -559,5 +640,6 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "session.fork": _fork_session,
         "session.delete": _delete_session,
         "session.rename": _rename_session,
+        "session.set_compaction_policy": _set_session_compaction_policy,
         "session.link_channel": _link_session_to_channel,
     }

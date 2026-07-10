@@ -210,7 +210,10 @@ def _validate_model_connections(models: Any, settings_update: JsonObject) -> Non
         if isinstance(value, str):
             _ensure_model_connection_supported(models, f"defaults.agent.{field}", value)
 
-    summary_model = settings_update.get("compaction", {}).get("summary_model")
+    compaction_strategy = settings_update.get("compaction", {}).get("strategy", {})
+    summary_model = (
+        compaction_strategy.get("summary_model") if isinstance(compaction_strategy, dict) else None
+    )
     if isinstance(summary_model, str):
         _ensure_model_connection_supported(models, "compaction.summary_model", summary_model)
 

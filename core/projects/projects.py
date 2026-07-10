@@ -66,7 +66,9 @@ PROJECT_DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
 
 # The optional fields a per-agent override may carry. Each maps to the top tier of
 # the matching config-agent resolver chain (model / temperature / thinking effort).
-OVERRIDE_FIELDS: frozenset[str] = frozenset({"model", "temperature", "thinking_effort"})
+OVERRIDE_FIELDS: frozenset[str] = frozenset(
+    {"model", "temperature", "thinking_effort", "compaction_policy"}
+)
 
 # The tool-neutral project-instruction convention (the agents.md standard). Seeded
 # as the first ``auto_load`` entry when a project is created
@@ -432,6 +434,15 @@ def _validate_override(agent_id: str, override: Any) -> dict[str, Any]:
         validated["thinking_effort"] = _validate_override_thinking_effort(
             agent_id, override["thinking_effort"]
         )
+    if "compaction_policy" in override:
+        from core.settings.normalizers import normalize_compaction_policy
+
+        try:
+            validated["compaction_policy"] = normalize_compaction_policy(
+                override["compaction_policy"]
+            )
+        except Exception as exc:
+            raise ProjectError(str(exc)) from exc
     return validated
 
 

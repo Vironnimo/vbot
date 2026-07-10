@@ -59,6 +59,7 @@ TIMESTAMP_SUFFIX = "+00:00"
 UTC_Z_SUFFIX = "Z"
 SYSTEM_REMINDER_OPEN_TAG = "<system-reminder>"
 SYSTEM_REMINDER_CLOSE_TAG = "</system-reminder>"
+COMPACTION_SUMMARY_NOTE_PREFIX = "[compaction-summary] "
 
 # Header for passively observed, unaddressed group messages. They are useful
 # conversational background, but originate with other group members and must never
@@ -69,12 +70,6 @@ UNTRUSTED_CHANNEL_MESSAGES_HEADER = (
     "Answer any separately addressed user message normally."
 )
 
-# Appended to a checkpoint summary when the preserved tail could not be anchored
-# on its recorded boundary and was recovered from post-checkpoint history.
-COMPACTION_TAIL_RECOVERED_HINT = (
-    "Some recent history couldn't be restored and is omitted below; continue from "
-    "the messages that follow."
-)
 INPUT_ORIGIN_SPEECH_TRANSCRIPTION: InputOrigin = "speech_transcription"
 SPEECH_TRANSCRIPTION_SYSTEM_REMINDER = (
     "The following user message was produced by speech-to-text transcription. "
@@ -175,6 +170,9 @@ class ChatMessage:
     name: str | None = None
     error_kind: str | None = None
     tail_boundary_id: str | None = None
+    projection: list[JsonObject] | None = None
+    compaction_policy: str | None = None
+    compaction_strategy: str | None = None
     run_id: str | None = None
     status: str | None = None
     sender: MessageSender | None = None
@@ -312,18 +310,26 @@ class ChatMessage:
         cls,
         *,
         summary: str,
-        tail_boundary_id: str,
+        projection: list[ChatMessage],
         compacted_token_count: int,
+        policy: str = "custom",
+        strategy: str = "custom",
         timestamp: datetime | None = None,
     ) -> ChatMessage:
-        """Create a compaction checkpoint message."""
+        """Create a self-contained compaction checkpoint projection."""
+        summary_note = f"{COMPACTION_SUMMARY_NOTE_PREFIX}{summary}"
+        projected = list(projection)
+        if not (projected and projected[0].role == "note" and projected[0].content == summary_note):
+            projected.insert(0, cls.note(summary_note, timestamp=timestamp))
         return cls(
             id=_new_message_id(),
             timestamp=_format_timestamp(timestamp),
             role="compaction_checkpoint",
             content=summary,
             usage={"compacted_token_count": compacted_token_count},
-            tail_boundary_id=tail_boundary_id,
+            projection=[message.to_dict() for message in projected],
+            compaction_policy=policy,
+            compaction_strategy=strategy,
         )
 
     @classmethod
@@ -377,6 +383,10 @@ class ChatMessage:
         _add_if_not_none(message, "name", self.name)
         _add_if_not_none(message, "error_kind", self.error_kind)
         _add_if_not_none(message, "tail_boundary_id", self.tail_boundary_id)
+        if self.projection is not None:
+            message["projection"] = [dict(entry) for entry in self.projection]
+        _add_if_not_none(message, "compaction_policy", self.compaction_policy)
+        _add_if_not_none(message, "compaction_strategy", self.compaction_strategy)
         _add_if_not_none(message, "run_id", self.run_id)
         _add_if_not_none(message, "status", self.status)
         if self.sender is not None:
@@ -406,6 +416,13 @@ class ChatMessage:
         if not isinstance(interrupted, bool):
             raise ChatMessageValidationError("interrupted must be a boolean")
 
+        projection_data = data.get("projection")
+        if projection_data is not None:
+            if not isinstance(projection_data, list):
+                raise ChatMessageValidationError("projection must be an array")
+            if not all(isinstance(entry, dict) for entry in projection_data):
+                raise ChatMessageValidationError("projection entries must be objects")
+
         message = cls(
             id=_require_string(data, "id"),
             timestamp=_require_string(data, "timestamp"),
@@ -421,6 +438,11 @@ class ChatMessage:
             name=_optional_string(data, "name"),
             error_kind=_optional_string(data, "error_kind"),
             tail_boundary_id=_optional_string(data, "tail_boundary_id"),
+            projection=(
+                [dict(entry) for entry in projection_data] if projection_data is not None else None
+            ),
+            compaction_policy=_optional_string(data, "compaction_policy"),
+            compaction_strategy=_optional_string(data, "compaction_strategy"),
             run_id=_optional_string(data, "run_id"),
             status=_optional_string(data, "status"),
             sender=MessageSender.from_dict(sender_data) if sender_data is not None else None,
@@ -652,42 +674,53 @@ def _latest_compaction_checkpoint(messages: list[ChatMessage]) -> ChatMessage | 
     return None
 
 
-def _resolve_preserved_tail(
-    messages: list[ChatMessage], checkpoint: ChatMessage
-) -> tuple[list[ChatMessage], bool]:
-    """Resolve the verbatim tail to replay after a compaction checkpoint.
-
-    The tail normally starts at the checkpoint's recorded ``tail_boundary_id``.
-    When that anchor message is no longer present in the loaded history (a
-    corrupted or partial write can truncate it, or the id may be absent), the
-    start falls back to the position right after the checkpoint itself, which is
-    always locatable. That keeps a compacted session usable instead of
-    permanently failing every request build on a dangling boundary reference.
-
-    Returns ``(tail_messages, recovered)`` where ``recovered`` signals that the
-    fallback anchor was used. Checkpoint markers are excluded from the tail.
-    """
-    start_index, recovered = _tail_start_index(messages, checkpoint)
-    tail_messages = [
-        message for message in messages[start_index:] if message.role != "compaction_checkpoint"
+def _effective_compaction_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
+    """Return the latest checkpoint projection plus messages appended after it."""
+    checkpoint = _latest_compaction_checkpoint(messages)
+    if checkpoint is None:
+        return list(messages)
+    checkpoint_index = next(
+        (index for index, message in enumerate(messages) if message.id == checkpoint.id),
+        len(messages),
+    )
+    if checkpoint.projection is not None:
+        projection = [ChatMessage.from_dict(entry) for entry in checkpoint.projection]
+    else:
+        projection = _legacy_checkpoint_projection(messages, checkpoint, checkpoint_index)
+    appended = [
+        message
+        for message in messages[checkpoint_index + 1 :]
+        if message.role != "compaction_checkpoint"
     ]
-    return tail_messages, recovered
+    return [*projection, *appended]
 
 
-def _tail_start_index(messages: list[ChatMessage], checkpoint: ChatMessage) -> tuple[int, bool]:
+def _legacy_checkpoint_projection(
+    messages: list[ChatMessage], checkpoint: ChatMessage, checkpoint_index: int
+) -> list[ChatMessage]:
+    """Materialize one old boundary-based checkpoint without rewriting it."""
+    summary = checkpoint.content if isinstance(checkpoint.content, str) else ""
+    projection = [
+        ChatMessage.note(
+            f"{COMPACTION_SUMMARY_NOTE_PREFIX}{summary}",
+            timestamp=datetime.fromisoformat(checkpoint.timestamp),
+        )
+    ]
     boundary_id = checkpoint.tail_boundary_id
-    if boundary_id is not None:
-        for index, message in enumerate(messages):
-            if message.id == boundary_id:
-                return index, False
-    return _index_after_checkpoint(messages, checkpoint), True
-
-
-def _index_after_checkpoint(messages: list[ChatMessage], checkpoint: ChatMessage) -> int:
-    for index, message in enumerate(messages):
-        if message.id == checkpoint.id:
-            return index + 1
-    return len(messages)
+    boundary_index = next(
+        (
+            index
+            for index, message in enumerate(messages[:checkpoint_index])
+            if message.id == boundary_id
+        ),
+        checkpoint_index,
+    )
+    projection.extend(
+        message
+        for message in messages[boundary_index:checkpoint_index]
+        if message.role != "compaction_checkpoint"
+    )
+    return projection
 
 
 def _embed_notes_into_request(
@@ -949,7 +982,11 @@ def _system_reminder_block(message: ChatMessage) -> str:
     message.validate()
     content = message.content
     if isinstance(content, str):
-        for prefix in (PARTIAL_THINKING_NOTE_PREFIX, SKILL_AVAILABLE_NOTE_PREFIX):
+        for prefix in (
+            PARTIAL_THINKING_NOTE_PREFIX,
+            SKILL_AVAILABLE_NOTE_PREFIX,
+            COMPACTION_SUMMARY_NOTE_PREFIX,
+        ):
             if content.startswith(prefix):
                 content = content.removeprefix(prefix)
                 break
@@ -1104,6 +1141,14 @@ def _validate_core_fields(message: ChatMessage) -> None:
         raise ChatMessageValidationError("timestamp must be a non-empty string")
     if not _has_explicit_utc_offset(message.timestamp):
         raise ChatMessageValidationError("timestamp must include explicit UTC offset")
+    if message.role != "compaction_checkpoint":
+        _reject_fields(
+            message,
+            "tail_boundary_id",
+            "projection",
+            "compaction_policy",
+            "compaction_strategy",
+        )
 
 
 def _has_explicit_utc_offset(timestamp: str) -> bool:
@@ -1159,7 +1204,6 @@ def _validate_system_message(message: ChatMessage) -> None:
         "tool_call_id",
         "name",
         "error_kind",
-        "tail_boundary_id",
         "run_id",
         "status",
         "sender",
@@ -1189,7 +1233,6 @@ def _validate_user_message(message: ChatMessage) -> None:
         "tool_call_id",
         "name",
         "error_kind",
-        "tail_boundary_id",
         "run_id",
         "status",
     )
@@ -1218,7 +1261,6 @@ def _validate_assistant_message(message: ChatMessage) -> None:
         "tool_call_id",
         "name",
         "error_kind",
-        "tail_boundary_id",
         "run_id",
         "status",
         "sender",
@@ -1246,7 +1288,6 @@ def _validate_tool_message(message: ChatMessage) -> None:
         "usage",
         "tool_calls",
         "error_kind",
-        "tail_boundary_id",
         "run_id",
         "status",
         "sender",
@@ -1270,7 +1311,6 @@ def _validate_note_message(message: ChatMessage) -> None:
         "tool_call_id",
         "name",
         "error_kind",
-        "tail_boundary_id",
         "run_id",
         "status",
         "sender",
@@ -1294,7 +1334,6 @@ def _validate_error_message(message: ChatMessage) -> None:
         "tool_calls",
         "tool_call_id",
         "name",
-        "tail_boundary_id",
         "run_id",
         "status",
         "sender",
@@ -1306,12 +1345,30 @@ def _validate_compaction_checkpoint_message(message: ChatMessage) -> None:
         raise ChatMessageValidationError("compaction checkpoints require content")
     if not isinstance(message.content, str):
         raise ChatMessageValidationError("compaction checkpoints content must be a string")
-    if message.tail_boundary_id is None:
-        raise ChatMessageValidationError("compaction checkpoints require tail_boundary_id")
-    if not message.tail_boundary_id:
-        raise ChatMessageValidationError(
-            "compaction checkpoints tail_boundary_id must be a non-empty string"
-        )
+    if message.projection is None:
+        if not message.tail_boundary_id:
+            raise ChatMessageValidationError(
+                "legacy compaction checkpoints require tail_boundary_id"
+            )
+        if message.compaction_policy or message.compaction_strategy:
+            raise ChatMessageValidationError(
+                "legacy compaction checkpoints cannot include Policy provenance"
+            )
+    else:
+        if message.tail_boundary_id is not None:
+            raise ChatMessageValidationError(
+                "projected compaction checkpoints cannot include tail_boundary_id"
+            )
+        if not message.compaction_policy:
+            raise ChatMessageValidationError("compaction checkpoints require compaction_policy")
+        if not message.compaction_strategy:
+            raise ChatMessageValidationError("compaction checkpoints require compaction_strategy")
+        for entry in message.projection:
+            projected = ChatMessage.from_dict(entry)
+            if projected.role == "compaction_checkpoint":
+                raise ChatMessageValidationError(
+                    "compaction checkpoint projections cannot contain checkpoints"
+                )
 
     if message.usage is not None:
         compacted_count = message.usage.get("compacted_token_count")
@@ -1361,7 +1418,6 @@ def _validate_run_summary_message(message: ChatMessage) -> None:
         "tool_call_id",
         "name",
         "error_kind",
-        "tail_boundary_id",
         "sender",
     )
 
@@ -1384,7 +1440,6 @@ def _validate_agent_takeover_message(message: ChatMessage) -> None:
         "tool_call_id",
         "name",
         "error_kind",
-        "tail_boundary_id",
         "run_id",
         "status",
         "sender",

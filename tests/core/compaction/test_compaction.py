@@ -1,493 +1,244 @@
-"""Tests for compaction primitives and strategy."""
+"""Tests for the policy-driven compaction engine."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
 from core.chat import ChatMessage
+from core.chat.messages import COMPACTION_SUMMARY_NOTE_PREFIX, _effective_compaction_messages
 from core.compaction import (
     TOOL_RESULT_CONTENT_PLACEHOLDER,
     CompactionError,
     CompactionService,
     CompactionSettings,
-    SummarizationStrategy,
     find_tail_boundary,
 )
-from core.utils.tokens import estimate_message_tokens, estimate_tokens
 
-JsonObject = dict[str, Any]
 TIMESTAMP = "2026-05-19T12:00:00+00:00"
-FIXED_TIMESTAMP = datetime(2026, 5, 19, 12, 0, tzinfo=UTC)
 
 
 class StubStorage:
-    def __init__(self, prompt: str) -> None:
-        self.prompt = prompt
-        self.requested_fragments: list[str] = []
-
     def read_prompt_fragment(self, name: str) -> str:
-        self.requested_fragments.append(name)
-        return self.prompt
+        assert name == "compaction.md"
+        return "Preserve decisions and unfinished work."
 
 
-class StubSummaryAdapter:
-    def __init__(self, response: JsonObject) -> None:
-        self.response = response
-        self.requests: list[JsonObject] = []
+class StubAdapter:
+    def __init__(self, text: str = "COMPACTED") -> None:
+        self.text = text
+        self.requests: list[dict[str, Any]] = []
 
-    async def send(self, messages: list[dict], *, model_id: str, **kwargs: Any) -> dict:
-        self.requests.append(
-            {
-                "messages": [dict(message) for message in messages],
-                "model_id": model_id,
-                "kwargs": dict(kwargs),
-            }
-        )
-        return dict(self.response)
+    async def send(self, messages: list[dict], **kwargs: Any) -> dict[str, Any]:
+        self.requests.append({"messages": messages, **kwargs})
+        return {"content": self.text}
 
-    def normalize_response(self, response: JsonObject) -> JsonObject:
+    def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
         return response
 
 
-class NoopStrategy:
-    async def compact(
-        self,
-        messages: list[ChatMessage],
-        *,
-        agent: Any,
-        summary_adapter: Any,
-        summary_model_id: str,
-        storage: Any,
-        settings: CompactionSettings,
-        instruction: str | None = None,
-    ) -> ChatMessage:
-        raise AssertionError("NoopStrategy.compact should not be called in this test")
-
-
-def _user(message_id: str, content: str) -> ChatMessage:
+def message(message_id: str, role: str, content: str, **extra: Any) -> ChatMessage:
     return ChatMessage.from_dict(
-        {
-            "id": message_id,
-            "timestamp": TIMESTAMP,
-            "role": "user",
-            "content": content,
-        }
+        {"id": message_id, "timestamp": TIMESTAMP, "role": role, "content": content, **extra}
     )
 
 
-def _assistant(
-    message_id: str,
-    content: str | None,
-    *,
-    tool_calls: list[JsonObject] | None = None,
-) -> ChatMessage:
-    payload: JsonObject = {
-        "id": message_id,
-        "timestamp": TIMESTAMP,
-        "role": "assistant",
-        "model": "openrouter/anthropic/claude-sonnet-4",
-        "content": content,
-    }
-    if tool_calls is not None:
-        payload["tool_calls"] = tool_calls
-    return ChatMessage.from_dict(payload)
+def user(message_id: str, content: str) -> ChatMessage:
+    return message(message_id, "user", content)
 
 
-def _tool(message_id: str, *, tool_call_id: str, name: str, content: str) -> ChatMessage:
-    return ChatMessage.from_dict(
-        {
-            "id": message_id,
-            "timestamp": TIMESTAMP,
-            "role": "tool",
-            "tool_call_id": tool_call_id,
-            "name": name,
-            "content": content,
-        }
+def assistant(message_id: str, content: str) -> ChatMessage:
+    return message(message_id, "assistant", content, model="openai/gpt-5")
+
+
+def checkpoint(projection: list[ChatMessage], count: int = 10) -> ChatMessage:
+    return ChatMessage.compaction_checkpoint(
+        summary="PRIOR",
+        projection=projection,
+        compacted_token_count=count,
+        policy="summary_tail",
+        strategy="summary_tail",
     )
 
 
-def _checkpoint(
-    message_id: str,
-    *,
-    boundary: str,
-    content: str,
-    compacted_tokens: int,
-) -> ChatMessage:
-    return ChatMessage.from_dict(
-        {
-            "id": message_id,
-            "timestamp": TIMESTAMP,
-            "role": "compaction_checkpoint",
-            "content": content,
-            "tail_boundary_id": boundary,
-            "usage": {"compacted_token_count": compacted_tokens},
-        }
-    )
-
-
-def _content_tokens(content: Any) -> int:
-    tokens, _ = estimate_tokens(str(content))
-    return tokens
-
-
-def test_find_tail_boundary_budget_reached_mid_history() -> None:
+def test_find_tail_boundary_keeps_complete_user_turns() -> None:
     messages = [
-        _user("u1", "aaaaaaaa"),
-        _assistant("a1", "bbbbbbbb"),
-        _user("u2", "cccccccc"),
-        _assistant("a2", "dddddddd"),
-        _user("u3", "eeeeeeee"),
-        _assistant("a3", "ffffffff"),
+        user("u1", "first " * 30),
+        assistant("a1", "answer " * 30),
+        user("u2", "second " * 30),
+        assistant("a2", "answer " * 30),
+        user("u3", "last"),
+        assistant("a3", "last answer"),
     ]
 
-    boundary = find_tail_boundary(messages, tail_tokens=10)
-
-    assert boundary == "u2"
+    assert find_tail_boundary(messages, tail_tokens=5) == "u3"
 
 
-def test_find_tail_boundary_exact_boundary_keeps_complete_tool_cycle() -> None:
-    messages = [
-        _user("u1", "turn one user"),
-        _assistant(
-            "a1",
-            None,
-            tool_calls=[{"id": "call_1", "name": "read_file", "arguments": {"path": "README.md"}}],
-        ),
-        _tool("t1", tool_call_id="call_1", name="read_file", content="tool result content"),
-        _assistant("a1f", "turn one assistant final"),
-        _user("u2", "tail user"),
-        _assistant("a2", "tail assistant"),
-    ]
-    tail_turn_tokens = _content_tokens("tail user") + _content_tokens("tail assistant")
+def test_context_ratio_and_absolute_token_triggers() -> None:
+    service = CompactionService()
 
-    boundary = find_tail_boundary(messages, tail_tokens=tail_turn_tokens)
-
-    assert boundary == "u2"
-
-
-def test_find_tail_boundary_counts_tool_calls_in_current_tail_turn() -> None:
-    messages = [
-        _user("u1", "previous small turn"),
-        _assistant("a1", "previous small answer"),
-        _user("u2", "current turn"),
-        _assistant(
-            "a2",
-            None,
-            tool_calls=[
-                {
-                    "id": "call_2",
-                    "name": "write_file",
-                    "arguments": {"payload": "x" * 20_000},
-                }
-            ],
-        ),
-        _tool("t2", tool_call_id="call_2", name="write_file", content="ok"),
-    ]
-
-    boundary = find_tail_boundary(messages, tail_tokens=1_000)
-
-    assert boundary == "u2"
-
-
-def test_find_tail_boundary_rejects_empty_messages() -> None:
-    with pytest.raises(CompactionError, match="empty message list"):
-        find_tail_boundary([], tail_tokens=100)
-
-
-def test_find_tail_boundary_with_large_budget_returns_first_turn() -> None:
-    messages = [
-        _user("u1", "turn one"),
-        _assistant("a1", "assistant one"),
-        _user("u2", "turn two"),
-        _assistant("a2", "assistant two"),
-    ]
-
-    boundary = find_tail_boundary(messages, tail_tokens=10_000)
-
-    assert boundary == "u1"
+    assert service.should_auto_compact(80, 100, 0.8)
+    assert not service.should_auto_compact(79, 100, 0.8)
+    settings = CompactionSettings(trigger="input_tokens", trigger_tokens=100_000)
+    assert service.should_auto_compact(100_000, 1_000_000, 0.8, settings=settings)
+    assert not service.should_auto_compact(99_999, 1_000_000, 0.8, settings=settings)
 
 
 @pytest.mark.asyncio
-async def test_summarization_strategy_compact_happy_path() -> None:
+async def test_summary_tail_executes_one_call_and_materializes_projection() -> None:
+    summary_adapter = StubAdapter("NEW SUMMARY")
+    active_adapter = StubAdapter("must not be used")
     messages = [
-        _user("u1", "Need to debug parser."),
-        _assistant(
-            "a1",
-            None,
-            tool_calls=[
-                {
-                    "id": "call_1",
-                    "name": "grep",
-                    "arguments": {"query": "parse"},
-                }
-            ],
-        ),
-        _tool(
-            "t1",
-            tool_call_id="call_1",
-            name="grep",
-            content="SECRET TOOL OUTPUT",
-        ),
-        _assistant("a1f", "Tool says parse_line is missing."),
-        _user("u2", "Continue with the fix."),
-        _assistant("a2", "I will continue."),
+        user("u1", "old request " * 100),
+        assistant("a1", "old response " * 100),
+        user("u2", "recent request"),
+        assistant("a2", "recent response"),
     ]
 
-    adapter = StubSummaryAdapter({"content": "Compacted context for continuation."})
-    storage = StubStorage("Create a continuation context.")
-    settings = CompactionSettings(tail_tokens=4)
-    strategy = SummarizationStrategy()
+    result = await CompactionService().compact(
+        messages,
+        agent=object(),
+        summary_adapter=summary_adapter,
+        summary_model_id="openai/summary",
+        storage=StubStorage(),
+        settings=CompactionSettings(tail_tokens=5),
+        active_adapter=active_adapter,
+        active_model_id="openai/active",
+    )
 
-    checkpoint = await strategy.compact(
+    assert len(summary_adapter.requests) == 1
+    assert active_adapter.requests == []
+    assert summary_adapter.requests[0]["model_id"] == "openai/summary"
+    assert "old request" in summary_adapter.requests[0]["messages"][0]["content"]
+    effective = _effective_compaction_messages([*messages, result])
+    assert effective[0].role == "note"
+    assert effective[0].content == f"{COMPACTION_SUMMARY_NOTE_PREFIX}NEW SUMMARY"
+    assert [item.id for item in effective[1:]] == ["u2", "a2"]
+
+
+@pytest.mark.asyncio
+async def test_next_compaction_consumes_previous_projection_not_hidden_history() -> None:
+    adapter = StubAdapter("NEXT")
+    prior = checkpoint(
+        [ChatMessage.note(f"{COMPACTION_SUMMARY_NOTE_PREFIX}PRIOR"), user("u2", "kept")]
+    )
+    hidden = user("u1", "hidden-secret-marker")
+
+    await CompactionService().compact(
+        [hidden, prior, assistant("a2", "new")],
+        agent=object(),
+        summary_adapter=adapter,
+        summary_model_id="openai/summary",
+        storage=StubStorage(),
+        settings=CompactionSettings(tail_tokens=1),
+    )
+
+    rendered = adapter.requests[0]["messages"][0]["content"]
+    assert "hidden-secret-marker" not in rendered
+    assert "PRIOR" in rendered
+
+
+@pytest.mark.asyncio
+async def test_summary_prompt_omits_raw_tool_result_content() -> None:
+    adapter = StubAdapter()
+    tool_call = {"id": "call-1", "name": "read", "arguments": {}}
+    messages = [
+        user("u1", "old"),
+        message("a1", "assistant", "", model="openai/gpt-5", tool_calls=[tool_call]),
+        message("t1", "tool", "sensitive-output", tool_call_id="call-1", name="read"),
+        user("u2", "tail"),
+    ]
+
+    await CompactionService().compact(
         messages,
         agent=object(),
         summary_adapter=adapter,
-        summary_model_id="anthropic/claude-sonnet-4",
-        storage=storage,
-        settings=settings,
+        summary_model_id="openai/summary",
+        storage=StubStorage(),
+        settings=CompactionSettings(tail_tokens=1),
     )
 
-    expected_compacted_tokens = sum(
-        estimate_message_tokens(message.to_dict())[0]
-        for message in messages
-        if message.id in {"u1", "a1", "t1", "a1f"}
-    )
-
-    assert checkpoint.role == "compaction_checkpoint"
-    assert checkpoint.tail_boundary_id == "u2"
-    assert checkpoint.content == "Compacted context for continuation."
-    assert checkpoint.usage == {"compacted_token_count": expected_compacted_tokens}
-
-    assert storage.requested_fragments == ["compaction.md"]
-    assert len(adapter.requests) == 1
-    request = adapter.requests[0]
-    assert request["model_id"] == "anthropic/claude-sonnet-4"
-    assert request["kwargs"]["temperature"] == 0.0
-    assert request["kwargs"]["thinking_effort"] == ""
-    assert request["messages"][0]["role"] == "user"
-
-    prompt = request["messages"][0]["content"]
-    assert "Need to debug parser." in prompt
-    assert "SECRET TOOL OUTPUT" not in prompt
+    prompt = adapter.requests[0]["messages"][0]["content"]
     assert TOOL_RESULT_CONTENT_PLACEHOLDER in prompt
+    assert "sensitive-output" not in prompt
 
 
 @pytest.mark.asyncio
-async def test_summarization_strategy_compact_is_incremental_after_checkpoint() -> None:
-    # A prior checkpoint already folded u1/a1 into "PRIOR SUMMARY"; its preserved
-    # tail started at u2. A second compaction must only summarize the messages
-    # added since that boundary (u2..a3), never re-summarize u1/a1.
-    messages = [
-        _user("u1", "ALREADY COMPACTED user turn one"),
-        _assistant("a1", "ALREADY COMPACTED assistant one"),
-        _user("u2", "summarized boundary turn"),
-        _assistant("a2", "boundary answer"),
-        _checkpoint("c1", boundary="u2", content="PRIOR SUMMARY", compacted_tokens=50),
-        _user("u3", "newer turn"),
-        _assistant("a3", "newer answer"),
-        _user("u4", "latest tail turn"),
-        _assistant("a4", "latest tail answer"),
+async def test_continuation_preserves_request_prefix_and_active_tools() -> None:
+    active = StubAdapter("ACTIVE SUMMARY")
+    summary = StubAdapter("must not be used")
+    request = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "answer"},
     ]
+    tools = [{"type": "function", "function": {"name": "read", "parameters": {}}}]
 
-    adapter = StubSummaryAdapter({"content": "Merged continuation context."})
-    storage = StubStorage("Create a continuation context.")
-    settings = CompactionSettings(tail_tokens=4)
-    strategy = SummarizationStrategy()
-
-    checkpoint = await strategy.compact(
-        messages,
+    result = await CompactionService().compact(
+        [user("u1", "hello"), assistant("a1", "answer")],
         agent=object(),
-        summary_adapter=adapter,
-        summary_model_id="anthropic/claude-sonnet-4",
-        storage=storage,
-        settings=settings,
+        summary_adapter=summary,
+        summary_model_id="openai/summary",
+        storage=StubStorage(),
+        settings=CompactionSettings(strategy="continuation"),
+        request_messages=request,
+        active_adapter=active,
+        active_model_id="openai/active",
+        active_tools=tools,
     )
 
-    assert checkpoint.tail_boundary_id == "u4"
-
-    # compacted_token_count accumulates: prior 50 + the newly folded delta.
-    delta_tokens = sum(
-        estimate_message_tokens(message.to_dict())[0]
-        for message in messages
-        if message.id in {"u2", "a2", "u3", "a3"}
-    )
-    assert checkpoint.usage == {"compacted_token_count": 50 + delta_tokens}
-
-    prompt = adapter.requests[0]["messages"][0]["content"]
-    # The previous summary is seeded so the model carries it forward.
-    assert "PRIOR SUMMARY" in prompt
-    # The newly added (uncompacted) delta is summarized.
-    assert "summarized boundary turn" in prompt
-    # The already-compacted region must not be re-sent for summarization.
-    assert "ALREADY COMPACTED user turn one" not in prompt
-    assert "ALREADY COMPACTED assistant one" not in prompt
+    assert summary.requests == []
+    assert len(active.requests) == 1
+    assert active.requests[0]["messages"][:-1] == request
+    assert "checkpoint" in active.requests[0]["messages"][-1]["content"]
+    assert active.requests[0]["tools"] == tools
+    assert result.projection is not None
+    assert len(result.projection) == 1
 
 
 @pytest.mark.asyncio
-async def test_summarization_strategy_self_heals_when_prior_boundary_missing() -> None:
-    # The prior checkpoint's tail boundary no longer exists in history (e.g. a
-    # corrupted/partial write). Compaction must still run: fall back to the
-    # post-checkpoint region, seed the prior summary, and emit a fresh
-    # checkpoint anchored on a boundary that actually exists.
-    messages = [
-        _user("u1", "ALREADY COMPACTED user turn one"),
-        _assistant("a1", "ALREADY COMPACTED assistant one"),
-        _user("u2", "preserved tail that lost its anchor"),
-        _assistant("a2", "preserved tail answer"),
-        _checkpoint(
-            "c1", boundary="anchor-that-vanished", content="PRIOR SUMMARY", compacted_tokens=50
-        ),
-        _user("u3", "newer turn"),
-        _assistant("a3", "newer answer"),
-        _user("u4", "latest tail turn"),
-        _assistant("a4", "latest tail answer"),
-    ]
-
-    adapter = StubSummaryAdapter({"content": "Merged continuation context."})
-    storage = StubStorage("Create a continuation context.")
-    settings = CompactionSettings(tail_tokens=4)
-    strategy = SummarizationStrategy()
-
-    checkpoint = await strategy.compact(
-        messages,
-        agent=object(),
-        summary_adapter=adapter,
-        summary_model_id="anthropic/claude-sonnet-4",
-        storage=storage,
-        settings=settings,
-    )
-
-    # The fresh boundary is a real id from the post-checkpoint region.
-    assert checkpoint.tail_boundary_id == "u4"
-
-    # Token count still accumulates onto the prior checkpoint's count.
-    delta_tokens = sum(
-        estimate_message_tokens(message.to_dict())[0]
-        for message in messages
-        if message.id in {"u3", "a3"}
-    )
-    assert checkpoint.usage == {"compacted_token_count": 50 + delta_tokens}
-
-    prompt = adapter.requests[0]["messages"][0]["content"]
-    # The prior summary is carried forward and the post-checkpoint delta summarized.
-    assert "PRIOR SUMMARY" in prompt
-    assert "newer turn" in prompt
-    # The unanchored pre-checkpoint slice and already-compacted region are dropped.
-    assert "preserved tail that lost its anchor" not in prompt
-    assert "ALREADY COMPACTED user turn one" not in prompt
+async def test_continuation_requires_active_request_and_target() -> None:
+    with pytest.raises(CompactionError, match="active request"):
+        await CompactionService().compact(
+            [user("u1", "hello")],
+            agent=object(),
+            summary_adapter=StubAdapter(),
+            summary_model_id="openai/summary",
+            storage=StubStorage(),
+            settings=CompactionSettings(strategy="continuation"),
+        )
 
 
-@pytest.mark.asyncio
-async def test_summarization_strategy_compact_includes_user_instruction() -> None:
-    messages = [
-        _user("u1", "first turn"),
-        _assistant("a1", "first answer"),
-        _user("u2", "tail turn"),
-        _assistant("a2", "tail answer"),
-    ]
-    adapter = StubSummaryAdapter({"content": "Compacted context."})
-    storage = StubStorage("Create a continuation context.")
-    settings = CompactionSettings(tail_tokens=4)
-    strategy = SummarizationStrategy()
+def test_checkpoint_round_trip_contains_projection_and_provenance() -> None:
+    original = checkpoint([user("u2", "tail")])
+    restored = ChatMessage.from_dict(original.to_dict())
 
-    await strategy.compact(
-        messages,
-        agent=object(),
-        summary_adapter=adapter,
-        summary_model_id="anthropic/claude-sonnet-4",
-        storage=storage,
-        settings=settings,
-        instruction="focus on the unresolved bug",
-    )
-
-    prompt = adapter.requests[0]["messages"][0]["content"]
-    assert "<user_instruction>" in prompt
-    assert "focus on the unresolved bug" in prompt
+    assert restored.role == "compaction_checkpoint"
+    assert restored.projection is not None
+    assert [entry["role"] for entry in restored.projection] == ["note", "user"]
+    assert restored.compaction_policy == "summary_tail"
+    assert restored.compaction_strategy == "summary_tail"
 
 
-def test_compaction_service_should_auto_compact_thresholds() -> None:
-    service = CompactionService(NoopStrategy())
-
-    assert service.should_auto_compact(80, 100, 0.8) is True
-    assert service.should_auto_compact(81, 100, 0.8) is True
-    assert service.should_auto_compact(79, 100, 0.8) is False
-
-
-def test_compaction_service_estimate_messages_tokens() -> None:
-    service = CompactionService(NoopStrategy())
-
-    plain_estimated = service.estimate_messages_tokens(
-        [
-            {"content": "abcd"},
-            {"content": "abcde"},
-        ]
-    )
-    structured_estimated = service.estimate_messages_tokens(
-        [
-            {
-                "role": "assistant",
-                "content": None,
-                "reasoning": "Need a large tool call.",
-                "tool_calls": [
-                    {
-                        "id": "call_large",
-                        "name": "write_file",
-                        "arguments": {"payload": "x" * 20_000},
-                    }
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "see attached"},
-                    {"type": "media", "base64": "y" * 1_000, "media_type": "image/png"},
-                ],
-            },
-        ]
-    )
-
-    assert plain_estimated == 3
-    assert structured_estimated > 5_000
-
-
-def test_chat_message_compaction_checkpoint_round_trip() -> None:
-    checkpoint = ChatMessage.compaction_checkpoint(
-        summary="Summary for continuation.",
-        tail_boundary_id="user_tail_1",
-        compacted_token_count=123,
-        timestamp=FIXED_TIMESTAMP,
-    )
-
-    payload = checkpoint.to_dict()
-    parsed = ChatMessage.from_dict(payload)
-    parsed.validate()
-
-    assert payload == {
-        "id": checkpoint.id,
-        "timestamp": "2026-05-19T12:00:00+00:00",
-        "role": "compaction_checkpoint",
-        "content": "Summary for continuation.",
-        "usage": {"compacted_token_count": 123},
-        "tail_boundary_id": "user_tail_1",
-    }
-    assert parsed.to_dict() == payload
-
-
-def test_chat_message_from_dict_parses_compaction_tail_boundary() -> None:
-    message = ChatMessage.from_dict(
+def test_legacy_checkpoint_is_read_only_input_to_the_new_projection_engine() -> None:
+    old = user("u1", "hidden")
+    tail = user("u2", "kept tail")
+    legacy = ChatMessage.from_dict(
         {
-            "id": "checkpoint_1",
+            "id": "c1",
             "timestamp": TIMESTAMP,
             "role": "compaction_checkpoint",
-            "content": "Summary content",
-            "tail_boundary_id": "user_boundary_2",
-            "usage": {"compacted_token_count": 77},
+            "content": "old checkpoint summary",
+            "tail_boundary_id": "u2",
+            "usage": {"compacted_token_count": 40},
         }
     )
+    newer = assistant("a2", "new response")
 
-    assert message.role == "compaction_checkpoint"
-    assert message.tail_boundary_id == "user_boundary_2"
-    assert message.usage == {"compacted_token_count": 77}
+    effective = _effective_compaction_messages([old, tail, legacy, newer])
+
+    assert [message.role for message in effective] == ["note", "user", "assistant"]
+    assert effective[0].content == (f"{COMPACTION_SUMMARY_NOTE_PREFIX}old checkpoint summary")
+    assert effective[1:] == [tail, newer]
+    assert legacy.to_dict()["tail_boundary_id"] == "u2"
