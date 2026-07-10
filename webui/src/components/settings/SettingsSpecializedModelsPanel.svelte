@@ -5,6 +5,7 @@
   import Dropdown from '../Dropdown.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
+  import TextArea from '../ui/TextArea.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import {
@@ -493,22 +494,21 @@
                       setTaskModelOption(row.taskType, field, value)}
                   />
                 {:else if field.type === 'textarea'}
-                  <textarea
-                    class="s-input s-textarea"
+                  <TextArea
                     rows="3"
                     value={taskModelOptionValue(row.taskType, field)}
                     disabled={taskModelSaving}
-                    oninput={(event) =>
+                    onInput={(_value, event) =>
                       handleTaskModelOptionChange(row.taskType, field, event)}
-                  ></textarea>
+                  />
                 {:else if field.type === JSON_OPTION_TYPE}
-                  <textarea
-                    class={`s-input s-textarea s-textarea--json${jsonError ? ' s-textarea--invalid' : ''}`}
+                  <TextArea
+                    code
+                    invalid={Boolean(jsonError)}
                     rows="8"
                     spellcheck="false"
                     autocapitalize="off"
                     autocorrect="off"
-                    aria-invalid={jsonError ? 'true' : 'false'}
                     aria-describedby={jsonError
                       ? `s-task-model-json-error-${row.taskType}-${field.name}`
                       : undefined}
@@ -518,9 +518,9 @@
                     )}
                     value={taskModelOptionValue(row.taskType, field)}
                     disabled={taskModelSaving}
-                    oninput={(event) =>
+                    onInput={(_value, event) =>
                       handleTaskModelOptionChange(row.taskType, field, event)}
-                  ></textarea>
+                  />
                   {#if jsonError}
                     <span
                       id={`s-task-model-json-error-${row.taskType}-${field.name}`}

@@ -981,10 +981,10 @@ describe('SettingsView', () => {
     selectSimpleOption('settings-specialized-image_generation', 'Recraft v3');
 
     await waitForCondition(
-      () => document.body.querySelector('.s-textarea--json') !== null,
+      () => document.body.querySelector('.text-area--code') !== null,
     );
 
-    const jsonTextarea = document.body.querySelector('.s-textarea--json');
+    const jsonTextarea = document.body.querySelector('.text-area--code');
     expect(jsonTextarea).toBeTruthy();
     // Default empty array serializes to "[]" — confirms the renderer
     // stringifies structured defaults rather than treating them as text.
@@ -1002,7 +1002,7 @@ describe('SettingsView', () => {
         ],
       },
     ]);
-    setTextareaValue('.s-textarea--json', validText);
+    setTextareaValue('.text-area--code', validText);
 
     await waitForCondition(
       () =>
@@ -1097,16 +1097,16 @@ describe('SettingsView', () => {
     selectSimpleOption('settings-specialized-image_generation', 'Recraft v3');
 
     await waitForCondition(
-      () => document.body.querySelector('.s-textarea--json') !== null,
+      () => document.body.querySelector('.text-area--code') !== null,
     );
 
-    setTextareaValue('.s-textarea--json', '[{"text": "hi"');
+    setTextareaValue('.text-area--code', '[{"text": "hi"');
 
     await waitForCondition(
       () => document.body.querySelector('.s-field-error') !== null,
     );
 
-    const jsonTextarea = document.body.querySelector('.s-textarea--json');
+    const jsonTextarea = document.body.querySelector('.text-area--code');
     expect(jsonTextarea.getAttribute('aria-invalid')).toBe('true');
     expect(document.body.querySelector('.s-field-error')).toBeTruthy();
     expect(document.body.textContent).toContain('Invalid JSON');
@@ -1139,7 +1139,7 @@ describe('SettingsView', () => {
 
     // Repairing the input clears the error and lets the binding update.
     setTextareaValue(
-      '.s-textarea--json',
+      '.text-area--code',
       JSON.stringify([
         {
           text: 'repaired',

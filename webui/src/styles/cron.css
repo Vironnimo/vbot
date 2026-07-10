@@ -288,11 +288,6 @@
   line-height: 1.4;
 }
 
-.cron-view .cron-textarea {
-  min-height: 92px;
-  resize: vertical;
-}
-
 .cron-view .cron-radio-fieldset {
   margin: 0;
   padding: 0;

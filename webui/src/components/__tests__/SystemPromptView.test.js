@@ -101,7 +101,9 @@ describe('SystemPromptView', () => {
     );
 
     // Three editable text blocks → three textareas; the data block has none.
-    const textareas = document.body.querySelectorAll('textarea.sp-textarea');
+    const textareas = document.body.querySelectorAll(
+      'textarea.text-area--inset',
+    );
     expect(textareas).toHaveLength(3);
     expect(textareas[0].value).toBe('# Intro');
 

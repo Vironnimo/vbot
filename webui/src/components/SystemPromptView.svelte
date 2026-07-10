@@ -7,6 +7,7 @@
   import Button from './ui/Button.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import EmptyState from './ui/EmptyState.svelte';
+  import TextArea from './ui/TextArea.svelte';
   import Toggle from './ui/Toggle.svelte';
   import {
     buildAgentTargetDropdownOptions,
@@ -475,12 +476,11 @@
     return blocks.findIndex((block) => block.id === blockId);
   }
 
-  function handleTextareaInput(blockId, event) {
+  function handleTextareaInput(blockId, nextContent) {
     const index = blockIndexById(blockId);
     if (index === -1) {
       return;
     }
-    const nextContent = event.currentTarget.value;
     blocks[index].editedContent = nextContent;
     blocks[index].isDirty = nextContent !== blocks[index].content;
 
@@ -1124,12 +1124,12 @@
               </div>
 
               {#if block.editable}
-                <textarea
-                  class="sp-textarea"
+                <TextArea
+                  variant="inset"
                   spellcheck="false"
                   value={block.editedContent}
-                  oninput={(event) => handleTextareaInput(block.id, event)}
-                ></textarea>
+                  onInput={(value) => handleTextareaInput(block.id, value)}
+                />
               {:else}
                 <div class="sp-data-block">
                   <div class="sp-data-block-head">
@@ -1483,7 +1483,7 @@
     color: var(--text-med);
   }
 
-  .sp-block--inherited .sp-textarea {
+  .sp-block--inherited :global(.text-area) {
     color: var(--text-med);
   }
 
@@ -1574,25 +1574,6 @@
   :global(.sp-btn-sm) {
     padding: 4px 10px;
     font-size: 12px;
-  }
-
-  .sp-textarea {
-    width: 100%;
-    min-height: 150px;
-    padding: 12px 14px;
-    border: 0;
-    color: var(--text-hi);
-    background: var(--bg);
-    font-family: var(--font-mono);
-    font-size: 12px;
-    line-height: 1.6;
-    resize: vertical;
-    box-sizing: border-box;
-  }
-
-  .sp-textarea:focus {
-    outline: none;
-    box-shadow: inset 0 0 0 1px var(--accent-30);
   }
 
   .sp-data-block {

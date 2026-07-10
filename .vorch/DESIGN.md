@@ -342,7 +342,7 @@ Primary save buttons inside long editor panels stay enabled even when the form i
 
 ### Inputs
 
-**Every text field is the shared `TextField` component (`webui/src/components/ui/TextField.svelte`).** It uses the callback-prop pattern (`value` in, `onInput(next, event)` out — never `bind:`) and takes `type`, `variant`, `readonly`, `invalid`, `disabled`, `inputmode`, `placeholder`, `ariaLabel`. The guard scan fails the build if a raw `<input class="s-input">`/`modal-input` or a raw `s-value-box` appears outside the component. (Multi-line textareas — the chat composer, cron prompt, JSON option editors — are a separate concern and keep their own `<textarea>` markup.)
+**Every single-line text field is the shared `TextField` component (`webui/src/components/ui/TextField.svelte`).** It uses the callback-prop pattern (`value` in, `onInput(next, event)` out — never `bind:`) and takes `type`, `variant`, `readonly`, `invalid`, `disabled`, `inputmode`, `placeholder`, `ariaLabel`. The guard scan fails the build if a raw `<input class="s-input">`/`modal-input` or a raw `s-value-box` appears outside the component.
 
 **Default input (`variant="default"` → `s-input`)** — Mono font at 12.5px, `surface-2` background, `border-2` border, 6px radius. Focus: accent border + glow ring. `invalid` adds a red border (`s-input--invalid`) that wins over the focus glow.
 
@@ -350,7 +350,9 @@ Primary save buttons inside long editor panels stay enabled even when the form i
 
 **Read-only value (`readonly` → `s-value-box`)** — Renders a non-interactive `<div>` with the same geometry and mono type as the default input but a structural `border` (not `border-2`), transparent background, and `text-med` color. Read-only facts (server host, data directory, default skill directory) must never wear the editable input chrome.
 
-**Chat composer** — A `bg`-filled rounded rectangle (10px radius) with `border-2` border. Contains an auto-resizing textarea (max 182px, hidden scrollbar) and action buttons flush to the bottom-right. Focus applies the accent border + glow.
+**Every ordinary multi-line form field is the shared `TextArea` component (`webui/src/components/ui/TextArea.svelte`).** It follows the same `value` / `onInput(next, event)` callback contract as `TextField` and owns the default, inset, code, invalid, disabled, and read-only states. `variant="default"` is the bordered `surface-2` field used by Cron and Settings; `variant="inset"` is the borderless `bg` editor integrated into a bounded System Prompt block. `code` preserves whitespace, enables horizontal overflow, and raises the minimum height for JSON editors; `invalid` keeps a red border/ring and sets `aria-invalid`. The guard allows raw textareas only in the specialized Chat Composer and queued-message editor and rejects every retired form-textarea class.
+
+**Chat composer** — A `bg`-filled rounded rectangle (10px radius) with `border-2` border. Its specialized auto-resizing textarea (max 182px, hidden scrollbar) and action buttons sit flush to the bottom-right; it is deliberately not `TextArea`. Focus applies the accent border + glow. The queued-message editor is the other deliberate raw-textarea exception because it owns inline queue-edit behavior.
 
 ### Toggles
 
