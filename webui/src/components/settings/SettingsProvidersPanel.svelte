@@ -4,6 +4,7 @@
   import StatusChip from '../ui/StatusChip.svelte';
   import { rpc } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
   import {
     accountDisplayName,
     connectionReachability,
@@ -669,7 +670,7 @@
                           {#if isProcessEnvAccount(account)}
                             <span
                               class="s-connection-account-locked"
-                              title={t(
+                              use:tooltip={t(
                                 'settings.providers.accounts.removeEnvHint',
                                 'This credential comes from the process environment and cannot be removed here.',
                               )}

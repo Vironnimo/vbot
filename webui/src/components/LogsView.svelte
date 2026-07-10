@@ -7,6 +7,7 @@
   import { listLogs, readLogFile, subscribeLogEvents } from '$lib/api.js';
   import { reconnectBackoffDelay } from '$lib/backoff.js';
   import { t } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
   import {
     LOGS_STREAM_STATUS_CONNECTED,
     LOGS_STREAM_STATUS_CONNECTING,
@@ -561,7 +562,7 @@
         <article
           class={`logs-entry ${levelTone(entry.level)}`}
           role="listitem"
-          title={entryBody(entry)}
+          use:tooltip={entryBody(entry)}
         >
           <span class="logs-entry__timestamp">{entry.timestamp || '—'}</span>
           <span class="logs-entry__level">{levelLabel(entry.level)}</span>

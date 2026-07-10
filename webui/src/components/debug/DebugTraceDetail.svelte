@@ -138,20 +138,15 @@
           <h4 class="debug-view__detail-heading">
             {t('debug.requestUrl', 'URL')}
           </h4>
-          <pre
-            class="debug-view__code-block"
-            title={trace.request?.url || ''}>{trace.request?.url || '—'}</pre>
+          <pre class="debug-view__code-block">{trace.request?.url || '—'}</pre>
         </div>
         <div class="debug-view__detail-section">
           <h4 class="debug-view__detail-heading">
             {t('debug.requestHeaders', 'Headers')}
           </h4>
-          <pre
-            class="debug-view__code-block"
-            title={formatHeadersForDisplay(
+          <pre class="debug-view__code-block">{formatHeadersForDisplay(
               trace.request?.headers ?? null,
-            )}>{formatHeadersForDisplay(trace.request?.headers ?? null) ||
-              '—'}</pre>
+            ) || '—'}</pre>
         </div>
         <div class="debug-view__detail-section">
           <div class="debug-view__detail-heading-row">
@@ -186,8 +181,7 @@
             {/if}
           </div>
           <pre
-            class={`debug-view__code-block ${isRequestBodyFormatted ? 'debug-view__code-block--formatted' : 'debug-view__code-block--raw'}`}
-            title={rawBodyText(trace.request?.body)}>{isRequestBodyFormatted
+            class={`debug-view__code-block ${isRequestBodyFormatted ? 'debug-view__code-block--formatted' : 'debug-view__code-block--raw'}`}>{isRequestBodyFormatted
               ? formattedBodyText(trace.request?.body) || '—'
               : rawBodyText(trace.request?.body) || '—'}</pre>
         </div>
@@ -203,12 +197,9 @@
           <h4 class="debug-view__detail-heading">
             {t('debug.responseHeaders', 'Headers')}
           </h4>
-          <pre
-            class="debug-view__code-block"
-            title={formatHeadersForDisplay(
+          <pre class="debug-view__code-block">{formatHeadersForDisplay(
               trace.response?.headers ?? null,
-            )}>{formatHeadersForDisplay(trace.response?.headers ?? null) ||
-              '—'}</pre>
+            ) || '—'}</pre>
         </div>
         <div class="debug-view__detail-section">
           <div class="debug-view__detail-heading-row">
@@ -243,8 +234,7 @@
             {/if}
           </div>
           <pre
-            class={`debug-view__code-block ${isResponseBodyFormatted ? 'debug-view__code-block--formatted' : 'debug-view__code-block--raw'}`}
-            title={rawBodyText(trace.response?.body)}>{isResponseBodyFormatted
+            class={`debug-view__code-block ${isResponseBodyFormatted ? 'debug-view__code-block--formatted' : 'debug-view__code-block--raw'}`}>{isResponseBodyFormatted
               ? formattedBodyText(trace.response?.body) || '—'
               : rawBodyText(trace.response?.body) || '—'}</pre>
         </div>

@@ -1,7 +1,8 @@
 // Composes the chat-header token badge hover text: a "Last turn" block that
 // splits the input into its cache shares, plus a whole-session block with the
-// session cache hit rate. Native `title` tooltips render plain text only, so
-// structure is expressed with line breaks and middot-indented sub-lines.
+// session cache hit rate. Rendered by the shared quick tooltip (lib/tooltip.js),
+// which keeps line breaks, so structure is expressed with line breaks and
+// middot-indented sub-lines.
 //
 // The cache lines matter for spotting prompt-cache breaks: canonical
 // `input_tokens` already contains the cached tokens, so the sub-lines are

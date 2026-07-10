@@ -63,6 +63,8 @@
     shouldApplyReloadNow,
   } from '$lib/resourceInvalidation.js';
   import { t } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
+  import InfoHint from './ui/InfoHint.svelte';
 
   const PROJECT_BUSY_CODE = 'project_busy';
   const PROJECT_IN_USE_CODE = 'project_in_use';
@@ -1440,7 +1442,7 @@
                     </StatusChip>
                   {/if}
                 </span>
-                <span class="project-item-cwd" title={project.cwd}>
+                <span class="project-item-cwd" use:tooltip={project.cwd}>
                   {project.cwd}
                 </span>
               </span>
@@ -1531,6 +1533,12 @@
                   <label class="projects-field">
                     <span class="projects-label">
                       {t('projects.manage.sourceFormat', 'Source format')}
+                      <InfoHint
+                        text={t(
+                          'projects.manage.sourceFormatHelp',
+                          'Where this project’s agents and skills come from. Switching re-derives the team and skills from the other ecosystem’s directories; sessions are kept.',
+                        )}
+                      />
                     </span>
                     <Dropdown
                       id="project-edit-source-format"
@@ -1545,12 +1553,6 @@
                       onValueChange={(value) =>
                         updateEditField('source_format', value)}
                     />
-                    <small class="projects-inherit-hint">
-                      {t(
-                        'projects.manage.sourceFormatHelp',
-                        'Where this project’s agents and skills come from. Switching re-derives the team and skills from the other ecosystem’s directories; sessions are kept.',
-                      )}
-                    </small>
                   </label>
 
                   <label class="projects-field">
@@ -1638,7 +1640,7 @@
                       {#if !temperatureIsInherit}
                         <Button
                           variant="tertiary"
-                          title={t(
+                          tooltip={t(
                             'inherit.resetToInherit',
                             'Reset to inherited value',
                           )}
@@ -1714,6 +1716,12 @@
             <div class="detail-section">
               <div class="detail-section-title">
                 {t('projects.detail.sectionAutoLoad', 'Auto-load files')}
+                <InfoHint
+                  text={t(
+                    'projects.detail.autoLoadInfo',
+                    'These files are embedded into the system prompt of every session in this project — the agent always sees their full content, with higher weight than normal chat history, and they are never dropped or summarized by context compaction.\n\nPaths are relative to the project folder (absolute paths also work), files load in list order, and missing files are skipped. When an outside agent visits the project, the same files arrive as a context note instead.',
+                  )}
+                />
               </div>
               <div class="detail-section-body">
                 <div class="projects-field">
@@ -1884,7 +1892,7 @@
                           </span>
                           <span
                             class="projects-team-summary"
-                            title={summary.value}
+                            use:tooltip={summary.value}
                           >
                             {summary.value}
                           </span>

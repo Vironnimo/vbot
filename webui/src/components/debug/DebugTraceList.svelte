@@ -1,5 +1,6 @@
 <script>
   import { activeLocaleTag, t } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
 
   let {
     traces = [],
@@ -110,10 +111,13 @@
           <span class="debug-trace__timestamp">
             {formatTimestamp(trace.timestamp)}
           </span>
-          <span class="debug-trace__provider" title={trace.provider_id ?? ''}>
+          <span
+            class="debug-trace__provider"
+            use:tooltip={trace.provider_id ?? ''}
+          >
             {traceProviderLabel(trace)}
           </span>
-          <span class="debug-trace__model" title={trace.model_id ?? ''}>
+          <span class="debug-trace__model" use:tooltip={trace.model_id ?? ''}>
             {traceModelLabel(trace)}
           </span>
           <span class="debug-trace__method">
@@ -135,7 +139,7 @@
           aria-label={isTraceExpanded(trace.trace_id)
             ? t('debug.collapseRow', 'Collapse row')
             : t('debug.expandRow', 'Expand row')}
-          title={isTraceExpanded(trace.trace_id)
+          use:tooltip={isTraceExpanded(trace.trace_id)
             ? t('debug.collapseRow', 'Collapse row')
             : t('debug.expandRow', 'Expand row')}
           onclick={(event) => {

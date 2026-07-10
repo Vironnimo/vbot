@@ -131,8 +131,7 @@
           {t('debug.modelProbe.rawResponse', 'Raw Response')}
         </h4>
         <pre
-          class="debug-view__code-block debug-view__code-block--raw"
-          title={viewState.modelProbeResult.raw || ''}>{viewState
+          class="debug-view__code-block debug-view__code-block--raw">{viewState
             .modelProbeResult.raw || '—'}</pre>
       </div>
 

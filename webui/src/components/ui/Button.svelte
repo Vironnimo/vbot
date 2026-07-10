@@ -4,6 +4,12 @@
   // hand-assembling the global `btn-*` classes. Callers pass already-translated
   // label/icon content as the default `children` snippet — the primitive never
   // calls `t(...)` itself.
+  //
+  // `tooltip` renders through the shared quick tooltip (lib/tooltip.js), not
+  // the native `title`. Browsers do not fire pointer events on a disabled
+  // button, so a tooltip that must show while disabled belongs on a wrapping
+  // <span class="tooltip-anchor" use:tooltip> at the call site.
+  import { tooltip as tooltipAction } from '../../lib/tooltip.js';
 
   const noop = () => {};
 
@@ -14,7 +20,7 @@
     disabled = false,
     loading = false,
     ariaLabel = '',
-    title = '',
+    tooltip = '',
     class: className = '',
     onClick = noop,
     children,
@@ -44,7 +50,7 @@
   disabled={isDisabled}
   aria-label={ariaLabel || undefined}
   aria-busy={loading || undefined}
-  title={title || undefined}
+  use:tooltipAction={tooltip}
   onclick={onClick}
 >
   {@render children?.()}

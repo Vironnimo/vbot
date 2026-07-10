@@ -412,6 +412,14 @@ Built-in slash command replies render at the **bottom** of the chat, not the top
 - **Bottom command toast** (`toast` channel, e.g. `/stop`, `/compact`): a chat-local confirmation floating just above the composer (`bottom: calc(100% + 10px)`, centered on `--chat-measure`). `surface` background, `border-2` border with a 2px accent left stripe, dark shadow, `font-ui` `text-med` body with `pre-wrap`. Auto-dismisses after 5s. This is the composer-local toast pattern — **not** the app-wide bottom-right `ToastStack`.
 - **Transient card** (`transient` channel, e.g. `/status`, `/help`): a non-persisted card in the chat stream. `surface-2` fill, `border-2` border with a 2px accent left stripe, 10px radius. A `mono-sm` uppercase label tag sits above a monospace (`font-mono`, 12px) `pre-wrap` body for the key/value lines, so it reads as a diagnostic snapshot distinct from real chat bubbles. Cards **stack** (no dedup, no dismiss) — successive snapshots sit underneath each other for visual comparison — and disappear on session switch or reload.
 
+### Tooltips & info hints
+
+Two tiers, one rule: the browser-native `title` tooltip is never used (unstyled, delayed, no touch support — a Vitest guard bans it).
+
+**Quick tooltip** (`use:tooltip` action from `lib/tooltip.js`, or the `tooltip` prop on `Button`/`CopyButton`) — the short hover label: what a button does, the untruncated value, a data point. One shared floating element per app, portaled to `<body>`: `surface-3` fill, `border-2` border, 3px radius, `text-hi` at 11.5px `font-ui`, 4px 9px padding. Appears after 150ms above the anchor (falls below near the top edge), keeps line breaks for structured hover text (token badge), and clips oversized content. Purely presentational — icon-only buttons still carry `aria-label`.
+
+**Info hint** (`ui/InfoHint.svelte`) — the "?" dot for explanations: a 15px circular `border-2` outline button with a mono "?" in `text-lo`, turning accent on hover/focus/open. Its popover is an elevated card (`surface-2`, `border-2`, 6px radius, dropdown shadow, `body-sm` in `text-med`, max-width 320px) that opens on hover, pins on click/tap for touch, and closes on Escape or outside click. Use it wherever an explanation would otherwise sit in the UI as permanent grey text; keep permanently visible inline hints only for must-see state (inherited values, "this model does not support reasoning") and warnings.
+
 ### Tool call events
 
 Inline dot-text lines within assistant messages. No box or card — just a colored `●` dot + monospace function name + args + timing on one line. Expandable body (indented, `border-2` left border) shows ARGS and RESULT in mono-xs labels + mono-body values. Three states: done (green dot), running (amber blinking dot), error (red dot, red timing text, red result text).

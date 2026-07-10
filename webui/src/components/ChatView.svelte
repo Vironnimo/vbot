@@ -30,6 +30,7 @@
 
   import { agentNeedsModel } from '$lib/onboarding.js';
   import { parseAgentAddress } from '$lib/agentAddress.js';
+  import { tooltip } from '$lib/tooltip.js';
   import { createChatRunStream } from '../lib/chatRunStream.js';
   import {
     addServerQueuedMessage,
@@ -2230,7 +2231,7 @@
       <div class="chat-view__project-team-inner">
         <span
           class="chat-view__project-team-name"
-          title={t(
+          use:tooltip={t(
             'chat.project.teamBarHint',
             'Agents discovered in this project’s repository.',
           )}>{selectedProjectName}</span

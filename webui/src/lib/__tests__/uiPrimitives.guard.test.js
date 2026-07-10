@@ -211,6 +211,29 @@ describe('UI primitive guard', () => {
     expect(violations).toEqual([]);
   });
 
+  it('bans native title tooltips — use the shared tooltip action or InfoHint', () => {
+    // The quick tooltip (`use:tooltip` from lib/tooltip.js, or the Button
+    // `tooltip` prop) replaced every native `title` attribute: styled,
+    // multi-line, immediate, and consistent. A raw `title=` on an HTML element
+    // would bring back the unstyled, delayed, touch-less browser tooltip.
+    // Capitalized Svelte components are unaffected — their `title` props are
+    // real headings (Modal, ConfirmDialog), not native tooltips.
+    const NATIVE_TITLE = /<[a-z][\w-]*\b[^>]*\stitle\s*=/g;
+    const violations = [];
+
+    for (const filePath of SVELTE_FILES) {
+      const source = readFileSync(filePath, 'utf8');
+      for (const match of source.matchAll(NATIVE_TITLE)) {
+        const relativePath = relative(SRC_DIR, filePath);
+        violations.push(
+          `${relativePath}: ${match[0].replaceAll('\n', ' ').slice(0, 80)}`,
+        );
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
   it('routes every text field through components/ui/TextField.svelte', () => {
     // Editable inputs: scoped to <input> so textareas (which legitimately reuse
     // s-input for styling) are unaffected. The read-only value-box may live on

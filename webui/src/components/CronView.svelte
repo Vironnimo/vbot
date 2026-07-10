@@ -40,6 +40,8 @@
     visibleCronJobs,
   } from '$lib/cronView.js';
   import { t } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
+  import InfoHint from './ui/InfoHint.svelte';
 
   const noop = () => {};
 
@@ -584,7 +586,7 @@
                     </span>
                     <span
                       class="cron-item-schedule"
-                      title={describeCronExpression(job.cron_expression)}
+                      use:tooltip={describeCronExpression(job.cron_expression)}
                     >
                       {displayValue(job.schedule_description)}
                     </span>
@@ -820,6 +822,12 @@
               <label class="cron-field">
                 <span class="cron-label">
                   {t('cron.form.sessionId', 'Session ID')}
+                  <InfoHint
+                    text={t(
+                      'cron.form.sessionIdHelp',
+                      'Optional: run inside one fixed existing session instead of a new one. Leave empty to let each run use its own.',
+                    )}
+                  />
                 </span>
                 <TextField
                   id="cron-job-session"
@@ -828,12 +836,6 @@
                   disabled={submittingForm}
                   onInput={(next) => updateFormField('session_id', next)}
                 />
-                <span class="cron-field-help">
-                  {t(
-                    'cron.form.sessionIdHelp',
-                    'Optional: run inside one fixed existing session instead of a new one. Leave empty to let each run use its own.',
-                  )}
-                </span>
               </label>
 
               {#if formErrorMessage}

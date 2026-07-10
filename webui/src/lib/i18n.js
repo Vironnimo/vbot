@@ -30,6 +30,7 @@ export const englishCatalog = Object.freeze({
   'common.delete': 'Delete',
   'common.edit': 'Edit',
   'common.loading': 'Loading…',
+  'common.moreInfo': 'More information',
   'common.new': 'New',
   'common.refresh': 'Refresh',
   'common.remove': 'Remove',
@@ -493,6 +494,8 @@ export const englishCatalog = Object.freeze({
     'A cron job points at one of this project’s agents, so it cannot be removed. Remove or retarget the cron job first.',
   'projects.detail.sectionSettings': 'Project settings',
   'projects.detail.sectionAutoLoad': 'Auto-load files',
+  'projects.detail.autoLoadInfo':
+    'These files are embedded into the system prompt of every session in this project — the agent always sees their full content, with higher weight than normal chat history, and they are never dropped or summarized by context compaction.\n\nPaths are relative to the project folder (absolute paths also work), files load in list order, and missing files are skipped. When an outside agent visits the project, the same files arrive as a context note instead.',
   'projects.detail.sectionTeam': 'Team',
   'projects.detail.sectionTools': 'Tools',
   'projects.detail.sectionSkills': 'Skills',
