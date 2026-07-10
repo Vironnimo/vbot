@@ -76,12 +76,12 @@ typography:
     lineHeight: 1.5
   mono-sm:
     fontFamily: IBM Plex Mono
-    fontSize: 11px
+    fontSize: 11.5px
     fontWeight: 500
     lineHeight: 1
   mono-xs:
     fontFamily: IBM Plex Mono
-    fontSize: 10px
+    fontSize: 10.5px
     fontWeight: 500
     lineHeight: 1
     letterSpacing: 0.07em
@@ -222,6 +222,8 @@ The palette is organized around four layers of warm dark surface and three seman
 - **Amber (#F59E0B):** In-progress / warning state (running tool call indicator, blinking dot animation).
 - **Red (#FC8181):** Error state (failed tool call, destructive button hover).
 
+Accent tints (fills, borders, hover states) come only from the tint ramp tokens `--accent-06 … --accent-40` in `webui/src/styles/app.css` — never hand-write `rgba(232, 135, 10, …)`. If a needed step is missing, extend the ramp there rather than inlining a literal. `--accent-dim` / `--accent-pale` are semantic aliases onto the ramp (08 / 12). The input focus glow is the single `--focus-ring` token.
+
 ## Typography
 
 Two typefaces carry the entire system. Never introduce a third.
@@ -242,8 +244,10 @@ Section headers in the Components tab and pane titles use Mono in all-caps with 
 - **label-md** — Nav items, agent names, tab labels. 13px / 500.
 - **label-sm** — Author names (YOU, ASSISTANT), button text. 12px / 600 / 0.02em.
 - **mono-body** — Tool call names, code content, settings inputs, dropdown values. 12px / 400 / 1.5lh.
-- **mono-sm** — Timestamps, chip text, toast labels, token badge. 11–11.5px / 500.
-- **mono-xs** — Section labels (TOOLS, SKILLS, ARGS, RESULT), pane titles. 10–10.5px / 500 / 0.07em uppercase.
+- **mono-sm** — Timestamps, chip text, toast labels, token badge. 11.5px / 500.
+- **mono-xs** — Section labels (TOOLS, SKILLS, ARGS, RESULT), pane titles. 10.5px / 500 / 0.07em uppercase.
+
+Every role's size is a CSS token (`--fs-<role>` in `webui/src/styles/app.css`, e.g. `--fs-body-sm`, `--fs-mono-xs`). New or touched styles use the token, never a px literal; legacy literals migrate opportunistically as their files are touched.
 
 ## Layout
 
@@ -281,13 +285,15 @@ On mobile (≤640px) the sidebar collapses to a top bar, two-pane splits stack, 
 
 Chat messages use 28px horizontal padding as the column gutter. User message bubbles are right-aligned at 75% max-width *of the capped reading measure*. Assistant prose flows free (no bounding box) but within the same centered, capped measure. The composer, notice stack, and session banner align to the same center axis as the messages.
 
-The spacing scale:
+The spacing scale — five named anchors plus documented intermediates for this dense, technical UI:
 
 - `xs` (4px) — tight gaps between related elements within a component
 - `sm` (8px) — gaps between inline components, icon-label pairs
 - `md` (14px) — intra-panel padding, row spacing
 - `lg` (20px) — panel edge padding
 - `xl` (28px) — section separation, message stream padding
+
+**6, 10, 12, and 16px are sanctioned intermediate steps** — component-internal paddings and gaps in a UI this dense legitimately need them (the button/input paddings under `components:` above use 6/7/9/11/13px deliberately). Values on neither list are off-scale; don't introduce new ones. Legacy off-scale values migrate opportunistically as their files are touched, not in bulk.
 
 ## Elevation & Depth
 

@@ -104,7 +104,7 @@
     flex-direction: column;
     max-height: min(320px, 45vh);
     overflow-y: auto;
-    border: 1px solid rgba(232, 135, 10, 0.3);
+    border: 1px solid var(--accent-30);
     border-radius: var(--r-md);
     background: var(--surface-2);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);

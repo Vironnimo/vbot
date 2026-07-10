@@ -260,11 +260,11 @@
   }
 
   .debug-trace--selected .debug-trace__row:hover {
-    background: rgba(232, 135, 10, 0.16);
+    background: var(--accent-16);
   }
 
   .debug-trace__row:focus-visible {
-    outline: 2px solid rgba(232, 135, 10, 0.4);
+    outline: 2px solid var(--accent-40);
     outline-offset: -2px;
   }
 
@@ -288,7 +288,7 @@
   .debug-trace__expand:hover,
   .debug-trace__expand:focus-visible {
     color: var(--accent);
-    background: rgba(232, 135, 10, 0.06);
+    background: var(--accent-06);
   }
 
   .debug-trace--selected .debug-trace__expand {

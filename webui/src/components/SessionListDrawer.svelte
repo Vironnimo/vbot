@@ -611,11 +611,11 @@
   .session-row__select:hover,
   .session-row__select:focus-visible {
     outline: none;
-    background: rgba(232, 135, 10, 0.08);
+    background: var(--accent-08);
   }
 
   .session-row__select--active {
-    background: rgba(232, 135, 10, 0.12);
+    background: var(--accent-12);
     box-shadow: inset 2px 0 0 var(--accent);
   }
 
@@ -698,7 +698,7 @@
   .session-row__menu-item:hover,
   .session-row__menu-item:focus-visible {
     outline: none;
-    background: rgba(232, 135, 10, 0.12);
+    background: var(--accent-12);
   }
 
   .session-row__menu-item--danger {
@@ -771,7 +771,7 @@
     border-radius: 999px;
     padding: 2px 7px;
     color: var(--accent);
-    background: rgba(232, 135, 10, 0.08);
+    background: var(--accent-08);
     font-family: var(--font-mono);
     font-size: 10.5px;
     line-height: 1;

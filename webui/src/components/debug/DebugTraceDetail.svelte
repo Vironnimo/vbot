@@ -399,7 +399,7 @@
   }
 
   .debug-view__body-tab:focus-visible {
-    outline: 2px solid rgba(232, 135, 10, 0.4);
+    outline: 2px solid var(--accent-40);
     outline-offset: 1px;
   }
 

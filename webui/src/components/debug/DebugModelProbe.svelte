@@ -220,8 +220,8 @@
   }
 
   .debug-view__probe-select:focus-visible {
-    border-color: rgba(232, 135, 10, 0.4);
-    box-shadow: 0 0 0 3px rgba(232, 135, 10, 0.06);
+    border-color: var(--accent-40);
+    box-shadow: var(--focus-ring);
     outline: none;
   }
 

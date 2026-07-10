@@ -2660,11 +2660,7 @@
     border-left: 3px solid var(--accent);
     padding: 9px 20px 9px 12px;
     border-top: 1px solid var(--border);
-    background: linear-gradient(
-      90deg,
-      rgba(232, 135, 10, 0.08),
-      transparent 72%
-    );
+    background: linear-gradient(90deg, var(--accent-08), transparent 72%);
   }
 
   .chat-view__subagent-session-copy {
@@ -2707,11 +2703,7 @@
     border-left: 3px solid var(--accent);
     padding: 9px 20px 9px 12px;
     border-top: 1px solid var(--border);
-    background: linear-gradient(
-      90deg,
-      rgba(232, 135, 10, 0.08),
-      transparent 72%
-    );
+    background: linear-gradient(90deg, var(--accent-08), transparent 72%);
   }
 
   .chat-view__no-model-copy {
