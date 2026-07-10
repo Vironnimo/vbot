@@ -250,8 +250,12 @@
   border-bottom: 0;
 }
 
-.s-row--provider {
-  border-bottom: 0;
+.s-provider-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 13px 0;
 }
 
 .s-row--stacked {
@@ -408,7 +412,6 @@
 .s-provider-connections {
   display: flex;
   flex-direction: column;
-  margin: -6px 0 10px;
 }
 
 .s-provider-connection-row {
@@ -482,7 +485,7 @@
   flex-direction: column;
   gap: 8px;
   margin: 0;
-  padding: 0;
+  padding: 0 0 10px;
   list-style: none;
 }
 
@@ -521,12 +524,15 @@
 .s-connection-add-account {
   display: flex;
   justify-content: flex-start;
+  padding-bottom: 10px;
 }
 
 .s-provider-local-context {
   display: flex;
   flex-direction: column;
   align-items: stretch;
+  gap: 8px;
+  padding-top: 10px;
   border-top: 1px solid var(--border);
 }
 

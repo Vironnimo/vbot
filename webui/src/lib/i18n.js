@@ -869,7 +869,7 @@ export const englishCatalog = Object.freeze({
   'settings.providers.enableAria': 'Enable connection {id}',
   'settings.providers.disable': 'Disable',
   'settings.providers.disableAria': 'Disable connection {id}',
-  'settings.providers.detailsAria': 'Account details for {id}',
+  'settings.providers.detailsAria': 'Details for {id}',
   'settings.providers.disabledDescription':
     'Disabled — not probed and offering no models until you enable it.',
   'settings.providers.enabledReachableToast':
@@ -893,8 +893,6 @@ export const englishCatalog = Object.freeze({
   'settings.providers.localContext.title': 'Local model context',
   'settings.providers.localContext.description':
     'The context window vBot budgets against and requests from the local server per call. Empty uses the default (32k, capped at the model max).',
-  'settings.providers.localContext.detailsAria':
-    'Context window settings for {id}',
   'settings.providers.localContext.inputLabel': 'Context window for {model}',
   'settings.providers.localContext.maxHint': 'model max {max}',
   'settings.providers.localContext.invalidValue':

@@ -1378,7 +1378,7 @@ function scopedQueryAll(selector) {
 }
 
 function providerRow(providerName) {
-  const rows = scopedQueryAll('.s-row');
+  const rows = scopedQueryAll('.s-provider-card');
   const row = rows.find((item) => item.textContent.includes(providerName));
   expect(row).toBeTruthy();
   return row;
