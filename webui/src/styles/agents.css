@@ -405,26 +405,12 @@
   overflow-y: auto;
 }
 
-.agents-view .agents-view__notice,
 .agents-view .agents-view__placeholder-row,
 .agents-view .agents-view__list-state {
   margin: 0;
   color: var(--text-med);
   font-size: 12.5px;
   line-height: 1.4;
-}
-
-.agents-view .agents-view__notice {
-  padding: 11px 14px;
-  border: 1px solid var(--border-2);
-  border-left: 2px solid var(--green);
-  border-radius: var(--r-md);
-  background: var(--surface);
-}
-
-.agents-view .agents-view__notice--error {
-  border-left-color: var(--red);
-  color: var(--red);
 }
 
 .agents-view .agents-view__placeholder-row,

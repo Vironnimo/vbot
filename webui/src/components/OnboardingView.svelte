@@ -27,6 +27,7 @@
 
   import ProviderConnectModal from './settings/ProviderConnectModal.svelte';
   import SearchableDropdown from './SearchableDropdown.svelte';
+  import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import '../styles/onboarding.css';
 
@@ -267,7 +268,7 @@
           </p>
 
           {#if settingsError}
-            <p class="onboarding-error" role="alert">{settingsError}</p>
+            <Banner variant="error" role="alert">{settingsError}</Banner>
           {/if}
 
           {#if heroScope}
@@ -397,23 +398,23 @@
           </p>
 
           {#if loadingModels && !hasModels}
-            <p class="onboarding-notice" aria-live="polite">
+            <Banner variant="neutral" aria-live="polite">
               {t('onboarding.model.loading', 'Loading models…')}
-            </p>
+            </Banner>
           {:else if modelsError}
-            <p class="onboarding-error" role="alert">{modelsError}</p>
+            <Banner variant="error" role="alert">{modelsError}</Banner>
             <div class="onboarding-footer">
               <Button variant="secondary" onClick={retryModels}>
                 {t('onboarding.model.retry', 'Retry')}
               </Button>
             </div>
           {:else if !hasModels}
-            <p class="onboarding-notice">
+            <Banner variant="neutral">
               {t(
                 'onboarding.model.empty',
                 'No models are available yet. Retry once the model list finishes updating.',
               )}
-            </p>
+            </Banner>
             <div class="onboarding-footer">
               <Button variant="secondary" onClick={retryModels}>
                 {t('onboarding.model.retry', 'Retry')}
@@ -454,7 +455,7 @@
             </label>
 
             {#if assignError}
-              <p class="onboarding-error" role="alert">{assignError}</p>
+              <Banner variant="error" role="alert">{assignError}</Banner>
             {/if}
 
             <div class="onboarding-footer">

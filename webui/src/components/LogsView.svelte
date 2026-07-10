@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
 
   import Dropdown from './Dropdown.svelte';
+  import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import CopyButton from './ui/CopyButton.svelte';
   import StatusChip from './ui/StatusChip.svelte';
@@ -397,10 +398,7 @@
   </header>
 
   {#if viewState.catalogError}
-    <div
-      class="logs-view__feedback logs-view__feedback--error"
-      aria-live="polite"
-    >
+    <Banner variant="error" aria-live="polite">
       <span>{viewState.catalogError}</span>
       <Button
         variant="secondary"
@@ -408,28 +406,22 @@
       >
         {t('common.retry', 'Retry')}
       </Button>
-    </div>
+    </Banner>
   {/if}
 
   {#if viewState.readError}
-    <div
-      class="logs-view__feedback logs-view__feedback--error"
-      aria-live="polite"
-    >
+    <Banner variant="error" aria-live="polite">
       <span>{viewState.readError}</span>
       <Button variant="secondary" onClick={retryCurrentFile}>
         {t('common.retry', 'Retry')}
       </Button>
-    </div>
+    </Banner>
   {/if}
 
   {#if viewState.streamError}
-    <div
-      class="logs-view__feedback logs-view__feedback--warn"
-      aria-live="polite"
-    >
+    <Banner variant="warn" aria-live="polite">
       <span>{viewState.streamError}</span>
-    </div>
+    </Banner>
   {/if}
 
   <div class="logs-view__toolbar">
@@ -639,30 +631,6 @@
     align-items: center;
     justify-content: flex-end;
     gap: 10px;
-  }
-
-  .logs-view__feedback {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 12px 14px;
-    border: 1px solid var(--border-2);
-    border-radius: var(--r-md);
-    font-size: 12.5px;
-    line-height: 1.5;
-  }
-
-  .logs-view__feedback--error {
-    color: var(--red);
-    border-color: rgba(252, 129, 129, 0.2);
-    background: rgba(252, 129, 129, 0.08);
-  }
-
-  .logs-view__feedback--warn {
-    color: var(--amber);
-    border-color: rgba(245, 158, 11, 0.2);
-    background: rgba(245, 158, 11, 0.08);
   }
 
   .logs-view__toolbar {
@@ -908,8 +876,7 @@
       padding: 20px;
     }
 
-    .logs-view__header,
-    .logs-view__feedback {
+    .logs-view__header {
       flex-direction: column;
       align-items: stretch;
     }

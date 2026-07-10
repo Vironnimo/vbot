@@ -3498,7 +3498,9 @@ describe('ChatTimeline', () => {
     });
     flushSync();
 
-    const fallbackNotice = document.querySelector('.model-fallback-notice');
+    const fallbackNotice = document.querySelector(
+      '.run-inline-banner.banner--info',
+    );
     expect(fallbackNotice).toBeTruthy();
     expect(fallbackNotice.textContent).toContain(
       'Switched to openrouter/anthropic/claude-sonnet-4',
@@ -3534,7 +3536,7 @@ describe('ChatTimeline', () => {
     });
     flushSync();
 
-    const notice = document.querySelector('.interrupted-notice');
+    const notice = document.querySelector('.run-inline-banner.banner--warn');
     expect(notice).toBeTruthy();
     expect(notice.textContent).toContain('interrupted');
     expect(document.body.textContent).toContain('The first half of the answer');
@@ -3568,7 +3570,9 @@ describe('ChatTimeline', () => {
     });
     flushSync();
 
-    expect(document.querySelector('.interrupted-notice')).toBeNull();
+    expect(
+      document.querySelector('.run-inline-banner.banner--warn'),
+    ).toBeNull();
   });
 
   it('renders streamed tool stdout and stderr inside assistant runs', () => {

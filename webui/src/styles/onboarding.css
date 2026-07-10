@@ -265,21 +265,6 @@
   text-transform: uppercase;
 }
 
-.onboarding-notice {
-  margin: 0;
-  color: var(--text-med);
-  font-family: var(--font-ui);
-  font-size: 13px;
-}
-
-.onboarding-error {
-  margin: 0;
-  color: var(--red);
-  font-family: var(--font-ui);
-  font-size: 12.5px;
-  line-height: 1.4;
-}
-
 .onboarding-footer {
   display: flex;
   flex-wrap: wrap;

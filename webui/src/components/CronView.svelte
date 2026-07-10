@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
 
   import Dropdown from './Dropdown.svelte';
+  import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import StatusChip from './ui/StatusChip.svelte';
@@ -851,9 +852,9 @@
               </label>
 
               {#if formErrorMessage}
-                <p class="cron-notice cron-notice--error" role="alert">
+                <Banner variant="error" role="alert">
                   {formErrorMessage}
-                </p>
+                </Banner>
               {/if}
             </div>
 

@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
 
   import Badge from './ui/Badge.svelte';
+  import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import InfoHint from './ui/InfoHint.svelte';
   import { rpc } from '$lib/api.js';
@@ -264,15 +265,12 @@
   </header>
 
   {#if errorMessage}
-    <div
-      class="stats-view__feedback stats-view__feedback--error"
-      aria-live="polite"
-    >
+    <Banner variant="error" aria-live="polite">
       <span>{errorMessage}</span>
       <Button variant="secondary" onClick={loadReport}>
         {t('common.retry', 'Retry')}
       </Button>
-    </div>
+    </Banner>
   {/if}
 
   {#if loading && !report}
@@ -1328,15 +1326,12 @@
       </div>
 
       {#if usageError}
-        <div
-          class="stats-view__feedback stats-view__feedback--error"
-          aria-live="polite"
-        >
+        <Banner variant="error" aria-live="polite">
           <span>{usageError}</span>
           <Button variant="secondary" onClick={loadUsage}>
             {t('common.retry', 'Retry')}
           </Button>
-        </div>
+        </Banner>
       {:else if usageProviders.length === 0}
         <p class="stats-empty">
           {t('statistics.limits.empty', 'No subscription providers connected.')}
@@ -1406,21 +1401,6 @@
     font-family: var(--font-mono);
     font-size: 11px;
     color: var(--text-lo);
-  }
-  .stats-view__feedback {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-    padding: 10px 14px;
-    border-radius: var(--r-md);
-    border: 1px solid var(--border-2);
-    font-size: 12.5px;
-  }
-  .stats-view__feedback--error {
-    border-color: var(--red);
-    color: var(--red);
-    background: rgba(252, 129, 129, 0.07);
   }
   .stats-view__placeholder,
   .stats-empty,

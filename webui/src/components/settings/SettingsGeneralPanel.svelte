@@ -1,4 +1,5 @@
 <script>
+  import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
@@ -176,15 +177,15 @@
 </div>
 
 {#if clientsError}
-  <div class="s-feedback s-feedback--error">{clientsError}</div>
+  <Banner variant="error">{clientsError}</Banner>
 {:else if !clientsLoaded}
-  <div class="s-feedback s-feedback--neutral">
+  <Banner variant="neutral">
     {t('settings.general.clients.loading', 'Loading connected clients…')}
-  </div>
+  </Banner>
 {:else if clientRows.length === 0}
-  <div class="s-feedback s-feedback--neutral">
+  <Banner variant="neutral">
     {t('settings.general.clients.empty', 'No app windows connected.')}
-  </div>
+  </Banner>
 {:else}
   <div class="s-clients-list">
     {#each clientRows as row (row.id)}

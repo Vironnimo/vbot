@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
 
   import Dropdown from '../Dropdown.svelte';
+  import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
@@ -210,19 +211,17 @@
   </div>
 
   {#if loadError}
-    <div class="s-feedback s-feedback--error s-feedback--compact">
-      {loadError}
-    </div>
+    <Banner variant="error">{loadError}</Banner>
   {:else if loading}
-    <div class="s-feedback s-feedback--neutral s-feedback--compact">
+    <Banner variant="neutral">
       {t('settings.loading', 'Loading…')}
-    </div>
+    </Banner>
   {:else}
     <div class="s-skill-manager-list">
       {#if skills.length === 0}
-        <div class="s-feedback s-feedback--neutral s-feedback--compact">
+        <Banner variant="neutral">
           {t('settings.skills.empty', 'No skills in this scope yet.')}
-        </div>
+        </Banner>
       {:else}
         {#each skills as skill (skill.name)}
           <div class="s-skill-manager-item">

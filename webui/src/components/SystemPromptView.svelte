@@ -3,6 +3,7 @@
 
   import Dropdown from './Dropdown.svelte';
   import Badge from './ui/Badge.svelte';
+  import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import Toggle from './ui/Toggle.svelte';
@@ -945,9 +946,9 @@
       </div>
 
       {#if isLoadingData}
-        <div class="sp-feedback sp-feedback--neutral">
+        <Banner variant="neutral">
           {t('common.loading', 'Loading…')}
-        </div>
+        </Banner>
       {:else}
         <div class="sp-blocklist-toolbar">
           <span class="sp-blocklist-hint">
@@ -1168,12 +1169,12 @@
         </ul>
 
         {#if blocks.length === 0}
-          <div class="sp-feedback sp-feedback--neutral">
+          <Banner variant="neutral">
             {t(
               'systemPrompt.blockList.empty',
               'No prompt blocks for this scope.',
             )}
-          </div>
+          </Banner>
         {/if}
 
         <div class="sp-preview-section">
@@ -1422,19 +1423,6 @@
   :global(.sp-agent-dropdown-list) {
     max-height: 260px;
     overflow-y: auto;
-  }
-
-  .sp-feedback {
-    padding: 12px 14px;
-    border: 1px solid var(--border-2);
-    border-radius: var(--r-md);
-    font-size: 12.5px;
-    line-height: 1.5;
-  }
-
-  .sp-feedback--neutral {
-    color: var(--text-med);
-    background: rgba(255, 255, 255, 0.02);
   }
 
   .sp-blocklist-toolbar {

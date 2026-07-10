@@ -3,6 +3,7 @@
 
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
+  import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
@@ -817,9 +818,9 @@
     </div>
 
     {#if errorMessage}
-      <p class="agents-view__notice agents-view__notice--error" role="alert">
+      <Banner variant="error" role="alert">
         {errorMessage}
-      </p>
+      </Banner>
     {/if}
 
     <div class="detail-group">

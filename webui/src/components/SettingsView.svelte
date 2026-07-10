@@ -17,6 +17,7 @@
   import SettingsSpecializedModelsPanel from './settings/SettingsSpecializedModelsPanel.svelte';
   import SettingsSubAgentsPanel from './settings/SettingsSubAgentsPanel.svelte';
   import SettingsWebSearchPanel from './settings/SettingsWebSearchPanel.svelte';
+  import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import { rpc } from '$lib/api.js';
   import { init, t } from '$lib/i18n.js';
@@ -619,21 +620,21 @@
   >
     <div class="s-doc" bind:this={documentRoot}>
       {#if loading}
-        <div class="s-feedback s-feedback--neutral">
+        <Banner variant="neutral">
           {t('settings.loading', 'Loading settings…')}
-        </div>
+        </Banner>
       {:else if loadError}
-        <div class="s-feedback s-feedback--error">
-          <p>{loadError}</p>
+        <Banner variant="error">
+          <span>{loadError}</span>
           <Button variant="secondary" onClick={loadSettings}>
             {t('common.retry', 'Retry')}
           </Button>
-        </div>
+        </Banner>
       {:else}
         {#if searchActive && matchCount === 0}
-          <div class="s-feedback s-feedback--neutral">
+          <Banner variant="neutral">
             {t('settings.search.noMatches', 'No settings match your search.')}
-          </div>
+          </Banner>
         {/if}
 
         <div class="s-doc-group" data-settings-group="connect">

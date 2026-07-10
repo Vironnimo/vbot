@@ -1,4 +1,5 @@
 <script>
+  import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import { debugModelProbe } from '$lib/api.js';
   import {
@@ -116,12 +117,9 @@
   </div>
 
   {#if viewState.modelProbeError}
-    <div
-      class="debug-view__feedback debug-view__feedback--error"
-      aria-live="polite"
-    >
+    <Banner variant="error" aria-live="polite">
       <span>{viewState.modelProbeError}</span>
-    </div>
+    </Banner>
   {/if}
 
   {#if viewState.modelProbeResult}
@@ -232,24 +230,6 @@
 
   :global(.debug-view__probe-btn) {
     align-self: flex-end;
-  }
-
-  .debug-view__feedback {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 12px 14px;
-    border: 1px solid var(--border-2);
-    border-radius: var(--r-md);
-    font-size: 12.5px;
-    line-height: 1.5;
-  }
-
-  .debug-view__feedback--error {
-    border-color: rgba(252, 129, 129, 0.2);
-    color: var(--red);
-    background: rgba(252, 129, 129, 0.08);
   }
 
   .debug-view__probe-results {

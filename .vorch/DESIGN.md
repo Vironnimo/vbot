@@ -407,6 +407,12 @@ If we use inline SVGs without explicit `width` and `height`, they can suddenly r
 
 **The rule: metadata tags (kind markers, origins, versions, scopes) use `Badge`; statuses use `StatusChip`.** A `use:tooltip` hint goes on a wrapping `<span class="tooltip-anchor" use:tooltip={…}>` at the call site, since Svelte actions cannot be applied to a component.
 
+### Inline banners
+
+**Every persistent in-flow feedback box is the shared `Banner` component (`webui/src/components/ui/Banner.svelte`).** Use it for loading and empty feedback, form or RPC errors, warnings, and non-blocking notices that belong inside a view; transient app-wide feedback still belongs in `ToastStack`. Callers pass `variant` (`neutral` / `info` / `success` / `warn` / `error`), already-translated `children`, and accessibility attributes such as `role="alert"` or `aria-live` when the state changes dynamically. The component owns the canonical `banner banner--<variant>` classes and the guard rejects both raw primitive classes and the retired view-specific feedback classes.
+
+The banner uses `surface-2`, a `border-2` outline, and a 2px semantic left stripe; semantic color stays in the stripe and low-opacity tint while the text remains `text-med`. Content is a space-between flex row so a trailing Retry or Review action sits at the right, then stacks on mobile. Feature surfaces may pass a layout class for placement or geometry (the full-width first-run strip, the capped Chat footer banner, compact assistant-run notices), but they do not recreate the semantic variants.
+
 ### Log viewer
 
 - The Logs tab uses the standard input/dropdown styling (`surface-2`, `border-2`, mono text) for file selection, level filtering, sort order, and search. Use the shared **simple** dropdown style for the file, level, and order controls.

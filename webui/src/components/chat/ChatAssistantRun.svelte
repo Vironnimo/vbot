@@ -1,4 +1,5 @@
 <script>
+  import Banner from '../ui/Banner.svelte';
   import { t } from '$lib/i18n.js';
   import {
     renderMarkdown,
@@ -459,19 +460,19 @@
         <!-- A cancelled run shows the "Cancelled" header label instead: the
              cut was the user's action, not an involuntary interruption. -->
         {#if child.interrupted && !child.streaming && item.status !== 'cancelled'}
-          <div class="interrupted-notice">
+          <Banner variant="warn" class="run-inline-banner">
             {t(
               'chat.interrupted',
               'Response interrupted — the next turn continues it.',
             )}
-          </div>
+          </Banner>
         {/if}
       {:else if child.type === 'model_fallback'}
-        <div class="model-fallback-notice">
+        <Banner variant="info" class="run-inline-banner">
           {t('chat.modelFallbackActivated', 'Switched to {model}', {
             model: child.to_model,
           })}
-        </div>
+        </Banner>
       {/if}
     {/each}
   </div>

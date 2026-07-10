@@ -744,6 +744,63 @@ textarea::placeholder {
   color: var(--red);
 }
 
+/* Canonical inline-banner variants. `Banner` (`components/ui/Banner.svelte`)
+   emits `banner banner--<variant>` for an in-flow message box — loading / error
+   / empty states, form errors, non-blocking notices. A 2px colored left stripe
+   carries the semantic weight (the app's toast / command-output stripe
+   language); the text stays `text-med` and the tint ramp matches Badge. It is
+   the in-flow counterpart to the bottom-right ToastStack. Content lays out with
+   space-between, so a trailing action (Retry, Review) floats to the right. */
+.banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-2);
+  border-left: 2px solid var(--border-2);
+  border-radius: var(--r-md);
+  color: var(--text-med);
+  font-family: var(--font-ui);
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
+}
+
+.banner > :where(p) {
+  margin: 0;
+}
+
+.banner--neutral {
+  background: var(--surface-2);
+}
+
+.banner--info {
+  border-left-color: var(--accent);
+  background: var(--accent-08);
+}
+
+.banner--success {
+  border-left-color: var(--green);
+  background: rgba(74, 222, 128, 0.1);
+}
+
+.banner--warn {
+  border-left-color: var(--amber);
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.banner--error {
+  border-left-color: var(--red);
+  background: rgba(252, 129, 129, 0.1);
+}
+
+@media (max-width: 640px) {
+  .banner {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
 .toggle,
 .tl-toggle {
   position: relative;

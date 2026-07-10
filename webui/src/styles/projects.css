@@ -342,28 +342,6 @@
   width: 100%;
 }
 
-.projects-view .projects-notice {
-  margin: 0;
-  padding: 11px 14px;
-  border: 1px solid var(--border-2);
-  border-left: 2px solid var(--green);
-  border-radius: var(--r-md);
-  color: var(--text-med);
-  font-size: 12.5px;
-  line-height: 1.4;
-  background: var(--surface);
-}
-
-.projects-view .projects-notice--error {
-  border-left-color: var(--red);
-  color: var(--red);
-}
-
-.projects-view .projects-notice--warn {
-  border-left-color: var(--amber);
-  color: var(--amber);
-}
-
 .projects-view .projects-view__eyebrow {
   margin: 0 0 6px;
   color: var(--text-lo);

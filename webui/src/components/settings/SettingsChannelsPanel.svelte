@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
 
   import Dropdown from '../Dropdown.svelte';
+  import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
@@ -376,7 +377,9 @@
 {#if channelFormVisible}
   <form class="s-channel-form" onsubmit={submitChannelForm}>
     {#if channelFormError}
-      <div class="s-feedback s-feedback--error">{channelFormError}</div>
+      <Banner variant="error" class="s-channel-form-error"
+        >{channelFormError}</Banner
+      >
     {/if}
 
     <div class="s-channel-form-header">
@@ -522,17 +525,17 @@
 {/if}
 
 {#if channelPanelState.loading}
-  <div class="s-feedback s-feedback--neutral">
+  <Banner variant="neutral">
     {t('common.loading', 'Loading…')}
-  </div>
+  </Banner>
 {:else if channelPanelState.error}
-  <div class="s-feedback s-feedback--error">
+  <Banner variant="error">
     {channelPanelState.error}
-  </div>
+  </Banner>
 {:else if channelPanelState.channels.length === 0}
-  <div class="s-feedback s-feedback--neutral">
+  <Banner variant="neutral">
     {t('settings.channels.empty', 'No channels configured.')}
-  </div>
+  </Banner>
 {:else}
   <div class="s-channel-list">
     {#each channelPanelState.channels as channel (channel.id)}
