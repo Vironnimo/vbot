@@ -14,6 +14,7 @@ Coverage (AAA):
 
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 from typing import Any, cast
@@ -801,15 +802,24 @@ class _QueueOnBusyLoop:
     id.
     """
 
-    def __init__(self, resolved_session_id: str = "s1") -> None:
+    def __init__(
+        self,
+        resolved_session_id: str = "s1",
+        *,
+        run_started_during_enqueue: _FakeRun | None = None,
+    ) -> None:
         self._resolved_session_id = resolved_session_id
+        self._run_started_during_enqueue = run_started_during_enqueue
         self.build_calls: list[dict[str, Any]] = []
 
     async def start_run(self, agent_id: str, content: Any, **kwargs: Any) -> Any:
         raise ActiveRunError("session already has an active run")
 
     async def queue_run(self, agent_id: str, content: Any, **kwargs: Any) -> Any:
-        return SimpleNamespace(to_dict=lambda: {"id": "q-1"})
+        future = asyncio.get_running_loop().create_future()
+        if self._run_started_during_enqueue is not None:
+            future.set_result(self._run_started_during_enqueue)
+        return SimpleNamespace(future=future, to_dict=lambda: {"id": "q-1"})
 
     def build_queue_update(
         self, agent_id: str, session_id: str, content: Any, **kwargs: Any
@@ -893,6 +903,48 @@ async def test_stream_enqueue_publishes_queue_resource_changed(
     assert _queue_resource_events(state) == [
         {"kind": "queue", "scope": {"agent_id": "builder", "session_id": "s1"}}
     ]
+
+
+@pytest.mark.asyncio
+async def test_send_busy_to_idle_race_returns_started_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started_run = _FakeRun("run-race")
+    state = _make_queue_state(_QueueOnBusyLoop(run_started_during_enqueue=started_run))
+    bridged_runs: list[Any] = []
+    monkeypatch.setattr(
+        "server.rpc.chat_methods._bridge_run_to_event_bus",
+        lambda _state, run: bridged_runs.append(run),
+    )
+
+    result = await _send_chat(state, {"agent_id": "builder", "session_id": "s1", "content": "hi"})
+
+    assert result["run_id"] == "run-race"
+    assert result["message"]["content"] == "handoff text"
+    assert "queued" not in result
+    assert bridged_runs == [started_run]
+    assert _queue_resource_events(state) == []
+
+
+@pytest.mark.asyncio
+async def test_stream_busy_to_idle_race_returns_started_run_with_sse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started_run = _FakeRun("run-race")
+    state = _make_queue_state(_QueueOnBusyLoop(run_started_during_enqueue=started_run))
+    bridged_runs: list[Any] = []
+    monkeypatch.setattr(
+        "server.rpc.chat_methods._bridge_run_to_event_bus",
+        lambda _state, run: bridged_runs.append(run),
+    )
+
+    result = await _stream_chat(state, {"agent_id": "builder", "session_id": "s1", "content": "hi"})
+
+    assert result["run_id"] == "run-race"
+    assert result["sse_url"] == "/api/runs/run-race/events"
+    assert "queued" not in result
+    assert bridged_runs == [started_run]
+    assert _queue_resource_events(state) == []
 
 
 def test_queue_remove_publishes_queue_resource_changed() -> None:
