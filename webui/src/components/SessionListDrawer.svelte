@@ -1,5 +1,6 @@
 <script>
   import Badge from './ui/Badge.svelte';
+  import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import EmptyState from './ui/EmptyState.svelte';
@@ -27,8 +28,7 @@
     currentSessionId = '',
     agentCurrentSessionId = '',
     // Bumped by ChatView on `resource_changed(kind:"sessions")` so a new or
-    // switched session created in another window appears here without the user
-    // pressing Refresh.
+    // switched session created in another window appears here automatically.
     reloadToken = 0,
     onSessionSelected = () => {},
     // Called after a successful delete with { deletedSessionId, nextSessionId }
@@ -399,14 +399,6 @@
 <aside class="session-drawer" aria-label={t('sessions.title', 'Sessions')}>
   <div class="session-drawer__header">
     <h3 class="session-drawer__title">{t('sessions.title', 'Sessions')}</h3>
-    <Button
-      variant="secondary"
-      class="session-drawer__refresh"
-      disabled={sessionState.loading || !agentId}
-      onClick={() => loadSessions()}
-    >
-      {t('common.refresh', 'Refresh')}
-    </Button>
   </div>
 
   {#if actionError}
@@ -416,9 +408,16 @@
   {/if}
 
   {#if sessionState.error}
-    <p class="session-drawer__state session-drawer__state--error">
-      {sessionState.error}
-    </p>
+    <Banner variant="error" class="session-drawer__load-error" role="alert">
+      <span>{sessionState.error}</span>
+      <Button
+        variant="secondary"
+        disabled={sessionState.loading || !agentId}
+        onClick={() => loadSessions()}
+      >
+        {t('common.retry', 'Retry')}
+      </Button>
+    </Banner>
   {:else if sessionState.loading && sessionState.sessions.length === 0}
     <p class="session-drawer__state">
       {t('sessions.loading', 'Loading sessions…')}
@@ -723,11 +722,6 @@
     text-transform: uppercase;
   }
 
-  :global(.session-drawer__refresh) {
-    padding: 4px 10px;
-    font-size: var(--fs-label-sm);
-  }
-
   .session-drawer__list {
     margin: 0;
     padding: 12px 10px 14px;
@@ -954,6 +948,10 @@
 
   .session-drawer__state--error {
     color: var(--red);
+  }
+
+  :global(.session-drawer__load-error) {
+    margin: 10px 12px;
   }
 
   :global(.session-drawer__empty-layout) {

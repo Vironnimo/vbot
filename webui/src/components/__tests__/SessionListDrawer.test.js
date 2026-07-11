@@ -115,6 +115,39 @@ describe('SessionListDrawer', () => {
     expect(listSessionsMock.mock.calls.length).toBe(1);
   });
 
+  it('hides the permanent refresh action and offers Retry only after a load failure', async () => {
+    listSessionsMock
+      .mockRejectedValueOnce(new Error('session list unavailable'))
+      .mockResolvedValueOnce({
+        sessions: [
+          { id: 'session-1', created_at: '2026-05-09T00:00:00+00:00' },
+        ],
+      });
+
+    mountedComponent = mount(SessionListDrawer, {
+      target: document.body,
+      props: {
+        agentId: 'alpha',
+        currentSessionId: 'session-1',
+        agentCurrentSessionId: 'session-1',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(() => buttonByText('Retry') !== null);
+    expect(buttonByText('Refresh')).toBeNull();
+
+    buttonByText('Retry').click();
+    flushSync();
+
+    await waitForCondition(
+      () => document.querySelector('.session-row') !== null,
+    );
+    expect(listSessionsMock).toHaveBeenCalledTimes(2);
+    expect(buttonByText('Retry')).toBeNull();
+    expect(buttonByText('Refresh')).toBeNull();
+  });
+
   it('renames a session through the row menu and reloads the list', async () => {
     mountedComponent = mount(SessionListDrawer, {
       target: document.body,
@@ -376,6 +409,14 @@ async function waitForCondition(check, attempts = 50) {
     flushSync();
   }
   throw new Error('Condition was not met in time');
+}
+
+function buttonByText(text) {
+  return (
+    [...document.body.querySelectorAll('button')].find(
+      (button) => button.textContent.trim() === text,
+    ) ?? null
+  );
 }
 
 // Clicks a button in the open ConfirmDialog by its label (Delete / Cancel).

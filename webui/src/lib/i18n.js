@@ -1069,8 +1069,6 @@ export const englishCatalog = Object.freeze({
   'settings.extensions.secretCleared': 'Secret cleared.',
   'settings.extensions.reload': 'Reload extensions',
   'settings.extensions.reloadSuccess': 'Extensions reloaded.',
-  'settings.extensions.refreshHelp':
-    'Re-reads the extension list and current status from the server.',
   'settings.extensions.reloadHelp':
     'Rebuilds all extensions from disk — picks up code edits, new and removed extensions.',
   'settings.appearance.title': 'Appearance',
