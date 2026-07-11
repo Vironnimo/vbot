@@ -44,7 +44,7 @@ Used when `connection_mode` is `None` or `chat_completions`. Delegates to `OpenA
 - The Codex backend requires an `instructions` field. The adapter uses assembled system instructions when present and falls back to `You are a helpful assistant.`.
 - The Codex backend requires `store: false`; omission is rejected like an enabled store request.
 - The Codex backend rejects output-token limit parameters. The adapter filters both `max_tokens` and `max_output_tokens` instead of forwarding provider defaults or caller kwargs.
-- The wire requires `stream: true`, including when a caller uses the adapter's logical `send()` interface. `stream()` yields normalized vBot deltas; `send()` consumes exactly one Responses SSE request internally through `response.completed` and returns that completed Responses object for the same shared output, usage, reasoning, and tool-call normalization used by Copilot Responses. Do not retry a rejected non-streaming request as a stream — that would create a second billable request.
+- The wire requires `stream: true`, including when a caller uses the adapter's logical `send()` interface. `stream()` yields normalized vBot deltas; `send()` consumes exactly one Responses SSE request internally through `response.completed` and accumulates text, reasoning, metadata, usage, and Tool Call fragments across the whole stream into one canonical response. The live wire may leave `response.completed.response.output` empty even after emitting text deltas, so the completed object alone is not an answer. Do not retry a rejected non-streaming request as a stream — that would create a second billable request.
 
 ## OAuth (subscription connection)
 

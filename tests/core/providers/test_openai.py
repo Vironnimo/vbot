@@ -233,6 +233,47 @@ async def test_codex_send_posts_responses_payload_with_account_and_beta_headers(
     }
 
 
+@respx.mock
+@pytest.mark.asyncio
+async def test_codex_send_collects_text_deltas_when_completed_output_is_empty() -> None:
+    """The live Codex wire may leave completed.output empty after streaming text."""
+
+    adapter = OpenAIAdapter(
+        _subscription_config(),
+        _jwt_with_account("acct_openai"),
+        connection_mode=CODEX_RESPONSES_MODE,
+    )
+    sse_body = (
+        "event: response.output_text.delta\n"
+        'data: {"type":"response.output_text.delta","delta":"Generated "}\n\n'
+        "event: response.output_text.delta\n"
+        'data: {"type":"response.output_text.delta","delta":"title"}\n\n'
+        "event: response.completed\n"
+        'data: {"type":"response.completed","response":{"id":"resp_1",'
+        '"status":"completed","output":[],"usage":{"input_tokens":2,'
+        '"output_tokens":2}}}\n\n'
+    )
+    route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
+        return_value=httpx.Response(
+            200,
+            text=sse_body,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    response = await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.5")
+
+    assert route.call_count == 1
+    assert adapter.normalize_response(response) == {
+        "role": "assistant",
+        "content": "Generated title",
+        "reasoning": None,
+        "reasoning_meta": {"response_id": "resp_1"},
+        "tool_calls": None,
+        "usage": {"input_tokens": 2, "output_tokens": 2},
+    }
+
+
 def test_request_context_kwargs_scopes_conversation() -> None:
     """The hook maps ``(agent_id, session_id)`` to a stable conversation id."""
 
