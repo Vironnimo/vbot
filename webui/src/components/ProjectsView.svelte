@@ -181,7 +181,7 @@
   let activeReport = $state(null);
   let activeScanSkills = $state({ project: [], bundled: [], global: [] });
   let scanLoading = $state(false);
-  let scanRefreshSection = $state('');
+  let scanRefreshRequested = $state(false);
   let removingProjectId = $state('');
   // The project awaiting remove confirmation (null = dialog closed).
   let removeConfirmProject = $state(null);
@@ -804,17 +804,16 @@
     }
   }
 
-  // Team and Skills are two views of the same live project scan. Keep the
-  // actions where users look for them, while preserving one authoritative
-  // refresh path for repository agents, project skills, and global skills.
-  async function refreshScan(section) {
+  // Team and Skills are two projections of one repository scan, so the Project
+  // header owns the single explicit rescan action for both.
+  async function refreshScan() {
     if (!selectedProjectId || scanLoading) {
       return;
     }
-    scanRefreshSection = section;
+    scanRefreshRequested = true;
     await loadScan(selectedProjectId);
     if (!destroyed) {
-      scanRefreshSection = '';
+      scanRefreshRequested = false;
     }
   }
 
@@ -1519,6 +1518,17 @@
                 <div class="detail-sub">{selectedProject.cwd}</div>
               </div>
               <div class="detail-btns">
+                <Button
+                  variant="secondary"
+                  data-testid="project-repository-rescan"
+                  loading={scanRefreshRequested}
+                  disabled={scanLoading}
+                  onClick={refreshScan}
+                >
+                  {scanRefreshRequested
+                    ? t('projects.repository.rescanning', 'Scanning…')
+                    : t('projects.repository.rescan', 'Rescan repository')}
+                </Button>
                 {#if needsRePoint(selectedProject)}
                   <Button
                     variant="secondary"
@@ -1863,30 +1873,9 @@
                     )}
                   />
                 </span>
-                <Button
-                  variant="tertiary"
-                  class="projects-section-refresh"
-                  data-testid="project-team-refresh"
-                  loading={scanLoading && scanRefreshSection === 'team'}
-                  disabled={scanLoading}
-                  onClick={() => refreshScan('team')}
-                >
-                  <svg
-                    viewBox="0 0 14 14"
-                    width="11"
-                    height="11"
-                    aria-hidden="true"
-                  >
-                    <path d="M11.5 4.5V1.5m0 0h-3" />
-                    <path d="M11 4A5 5 0 1 0 12 9" />
-                  </svg>
-                  {scanLoading && scanRefreshSection === 'team'
-                    ? t('projects.team.refreshing', 'Scanning…')
-                    : t('projects.team.refresh', 'Rescan team')}
-                </Button>
               </div>
               <div class="detail-section-body">
-                {#if activeReport && !(scanLoading && scanRefreshSection !== 'skills') && !activeReport.clean}
+                {#if activeReport && !activeReport.clean}
                   <div class="projects-field">
                     <Banner variant="warn" role="status">
                       {t(
@@ -1934,7 +1923,7 @@
                   </div>
                 {/if}
 
-                {#if scanLoading && scanRefreshSection !== 'skills'}
+                {#if scanLoading}
                   <p class="projects-scan-loading" role="status">
                     {t('projects.loading', 'Loading projects…')}
                   </p>
@@ -2461,27 +2450,6 @@
             <div class="detail-section">
               <div class="detail-section-title">
                 <span>{t('projects.detail.sectionSkills', 'Skills')}</span>
-                <Button
-                  variant="tertiary"
-                  class="projects-section-refresh"
-                  data-testid="project-skills-refresh"
-                  loading={scanLoading && scanRefreshSection === 'skills'}
-                  disabled={scanLoading}
-                  onClick={() => refreshScan('skills')}
-                >
-                  <svg
-                    viewBox="0 0 14 14"
-                    width="11"
-                    height="11"
-                    aria-hidden="true"
-                  >
-                    <path d="M11.5 4.5V1.5m0 0h-3" />
-                    <path d="M11 4A5 5 0 1 0 12 9" />
-                  </svg>
-                  {scanLoading && scanRefreshSection === 'skills'
-                    ? t('projects.skills.refreshing', 'Refreshing…')
-                    : t('projects.skills.refresh', 'Refresh skills')}
-                </Button>
               </div>
               <div class="detail-section-body">
                 <div class="projects-field">

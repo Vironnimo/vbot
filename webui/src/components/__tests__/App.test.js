@@ -971,6 +971,30 @@ describe('App', () => {
     expect(mountedComponent.getModelsRefreshToken()).toBe(0);
   });
 
+  it('routes channel and debug trace invalidations to their views', () => {
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    const [handlers] = subscribeServerEventsMock.mock.calls[0];
+    expect(mountedComponent.getChannelsRefreshToken()).toBe(0);
+    expect(mountedComponent.getDebugTracesRefreshToken()).toBe(0);
+
+    handlers.onEvent({
+      type: 'resource_changed',
+      sequence: 1,
+      payload: { kind: 'channels' },
+    });
+    handlers.onEvent({
+      type: 'resource_changed',
+      sequence: 2,
+      payload: { kind: 'debug_traces' },
+    });
+    flushSync();
+
+    expect(mountedComponent.getChannelsRefreshToken()).toBe(1);
+    expect(mountedComponent.getDebugTracesRefreshToken()).toBe(1);
+  });
+
   it('bumps the sessions refresh token on resource_changed(sessions)', () => {
     mountedComponent = mount(App, { target: document.body });
     flushSync();

@@ -99,7 +99,9 @@
   import { isOperational } from '$lib/onboarding.js';
   import {
     RESOURCE_TOKEN_AGENTS,
+    RESOURCE_TOKEN_CHANNELS,
     RESOURCE_TOKEN_CLIENTS,
+    RESOURCE_TOKEN_DEBUG_TRACES,
     RESOURCE_TOKEN_MODELS,
     RESOURCE_TOKEN_SESSIONS,
     tokenKeysForKind,
@@ -271,6 +273,8 @@
   // Bumped by `resource_changed(kind:"clients")` — a window connecting or
   // disconnecting. The General settings panel reloads its presence roster.
   let clientsRefreshToken = $state(0);
+  let channelsRefreshToken = $state(0);
+  let debugTracesRefreshToken = $state(0);
   let connectionState = $state(createConnectionState());
   let serverNoticeState = $state('');
   let serverRecoveryGeneration = $state(0);
@@ -870,6 +874,12 @@
       if (tokenKeys.includes(RESOURCE_TOKEN_CLIENTS)) {
         clientsRefreshToken += 1;
       }
+      if (tokenKeys.includes(RESOURCE_TOKEN_CHANNELS)) {
+        channelsRefreshToken += 1;
+      }
+      if (tokenKeys.includes(RESOURCE_TOKEN_DEBUG_TRACES)) {
+        debugTracesRefreshToken += 1;
+      }
       if (tokenKeys.includes(RESOURCE_TOKEN_AGENTS)) {
         await reloadAgentsFromServer();
       }
@@ -968,6 +978,14 @@
 
   export function getClientsRefreshToken() {
     return clientsRefreshToken;
+  }
+
+  export function getChannelsRefreshToken() {
+    return channelsRefreshToken;
+  }
+
+  export function getDebugTracesRefreshToken() {
+    return debugTracesRefreshToken;
   }
 
   onMount(() => {
@@ -1182,13 +1200,14 @@
         onOpenSetupGuide={reopenOnboarding}
         {modelsRefreshToken}
         {clientsRefreshToken}
+        {channelsRefreshToken}
       />
     {:else if activeViewId === 'logs'}
       <LogsView />
     {:else if activeViewId === 'statistics'}
       <StatisticsView />
     {:else if activeViewId === 'debug'}
-      <DebugView />
+      <DebugView {debugTracesRefreshToken} />
     {/if}
   {/key}
   <ToastStack toasts={toastState.toasts} onDismiss={dismissAppToast} />

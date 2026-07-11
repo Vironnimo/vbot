@@ -351,6 +351,7 @@ class TestDebugTraceClear:
         assert response["result"]["cleared"] is True
         remaining = DebugTraceStore(tmp_path, trace_limit=50).get_traces()
         assert remaining == []
+        assert state.event_bus.events[-1]["payload"] == {"kind": "debug_traces"}
 
     @pytest.mark.asyncio
     async def test_clears_traces_when_enabled(self, tmp_path: Path) -> None:
@@ -602,6 +603,7 @@ class TestDebugModelProbe:
         saved = store.get_trace(result["trace_id"])
         assert saved["type"] == "model_probe"
         assert saved["provider_id"] == "openrouter"
+        assert state.event_bus.events[-1]["payload"] == {"kind": "debug_traces"}
 
 
 # ---------------------------------------------------------------------------

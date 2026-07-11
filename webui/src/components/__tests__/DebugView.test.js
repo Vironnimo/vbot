@@ -5,6 +5,7 @@ import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
 import { TOOLTIP_SHOW_DELAY_MS } from '../../lib/tooltip.js';
+import { reactiveProps } from './_reactiveProps.svelte.js';
 
 const debugStatusMock = vi.fn();
 const debugTraceListMock = vi.fn();
@@ -390,6 +391,7 @@ describe('DebugView', () => {
   });
 
   it('keeps the selected list entry when refreshTraces returns a list still containing the id', async () => {
+    const props = reactiveProps({ debugTracesRefreshToken: 0 });
     const traceA = traceListEntry({
       trace_id: 'trace-keep',
       provider_id: 'openai',
@@ -402,7 +404,7 @@ describe('DebugView', () => {
     });
     debugTraceListMock.mockResolvedValueOnce({ traces: [traceA, traceB] });
 
-    mountedComponent = mount(DebugView, { target: document.body });
+    mountedComponent = mount(DebugView, { target: document.body, props });
     flushSync();
 
     await waitForText('claude-sonnet-4');
@@ -433,7 +435,7 @@ describe('DebugView', () => {
       ],
     });
 
-    clickRefresh();
+    props.debugTracesRefreshToken += 1;
     await waitForCondition(
       () =>
         document.querySelectorAll('.debug-trace[data-trace-id]').length === 3,
@@ -443,6 +445,7 @@ describe('DebugView', () => {
   });
 
   it('clears the selection when refreshTraces returns a list without the selected id', async () => {
+    const props = reactiveProps({ debugTracesRefreshToken: 0 });
     const traceA = traceListEntry({
       trace_id: 'trace-vanish',
       provider_id: 'openai',
@@ -450,7 +453,7 @@ describe('DebugView', () => {
     });
     debugTraceListMock.mockResolvedValueOnce({ traces: [traceA] });
 
-    mountedComponent = mount(DebugView, { target: document.body });
+    mountedComponent = mount(DebugView, { target: document.body, props });
     flushSync();
 
     await waitForText('gpt-5.2');
@@ -459,12 +462,13 @@ describe('DebugView', () => {
     flushSync();
 
     debugTraceListMock.mockResolvedValueOnce({ traces: [] });
-    clickRefresh();
+    props.debugTracesRefreshToken += 1;
     await waitForCondition(() =>
       (document.body.textContent ?? '').includes('No traces captured yet'),
     );
 
     expect(document.querySelector('.debug-view__detail-panel')).toBeNull();
+    expect(document.querySelector('.debug-view__refresh-btn')).toBeNull();
   });
 
   it('falls back to the placeholder when headers are missing and never shows (none)', async () => {
@@ -570,14 +574,6 @@ function clickTraceRow(traceId) {
     throw new Error(`Trace row not found for ${traceId}`);
   }
   row.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-}
-
-function clickRefresh() {
-  const button = document.querySelector('.debug-view__refresh-btn');
-  if (!button) {
-    throw new Error('Refresh button not found');
-  }
-  button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
 }
 
 async function switchToDetailTabWhenReady(label, attempts = 40) {

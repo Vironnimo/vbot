@@ -181,6 +181,9 @@ describe('SystemPromptView', () => {
     );
 
     vi.useFakeTimers();
+    const previewCallsBefore = rpcMock.mock.calls.filter(
+      (call) => call[0] === 'prompt.preview',
+    ).length;
 
     const textarea = blockElement('core:intro').querySelector('textarea');
     textarea.value = 'updated intro';
@@ -202,6 +205,13 @@ describe('SystemPromptView', () => {
       id: 'core:intro',
       content: 'updated intro',
     });
+
+    await vi.advanceTimersByTimeAsync(100);
+    await Promise.resolve();
+    flushSync();
+    expect(
+      rpcMock.mock.calls.filter((call) => call[0] === 'prompt.preview').length,
+    ).toBeGreaterThan(previewCallsBefore);
   });
 
   it('autosave keys by block id, not array index, after a reorder', async () => {
@@ -678,7 +688,7 @@ describe('SystemPromptView', () => {
     ).toBe(false);
   });
 
-  it('refresh calls prompt.preview and renders the token breakdown', async () => {
+  it('loads prompt.preview automatically and renders the token breakdown', async () => {
     rpcMock.mockImplementation(
       createRpcMock({
         promptPreview: {
@@ -699,12 +709,6 @@ describe('SystemPromptView', () => {
       100,
     );
 
-    const refreshButton = Array.from(
-      document.body.querySelectorAll('button'),
-    ).find((button) => button.textContent.trim() === 'Refresh');
-    refreshButton.click();
-    flushSync();
-
     await waitForCondition(
       () => rpcMock.mock.calls.some((call) => call[0] === 'prompt.preview'),
       100,
@@ -721,6 +725,7 @@ describe('SystemPromptView', () => {
       '~1234 prompt + ~456 tools = ~1690 tokens',
     );
     expect(document.body.textContent).toContain('You are an agent named Alpha');
+    expect(buttonByText('Refresh')).toBeNull();
   });
 
   it('falls back to the plain token count when the agent has no tools', async () => {
@@ -743,12 +748,6 @@ describe('SystemPromptView', () => {
       () => document.body.textContent.includes('Preview for'),
       100,
     );
-
-    const refreshButton = Array.from(
-      document.body.querySelectorAll('button'),
-    ).find((button) => button.textContent.trim() === 'Refresh');
-    refreshButton.click();
-    flushSync();
 
     await waitForCondition(
       () => document.body.textContent.includes('~200 tokens'),
@@ -782,12 +781,6 @@ describe('SystemPromptView', () => {
     );
 
     expect(document.body.querySelector('#sp-agent-select')).toBeNull();
-
-    const refreshButton = Array.from(
-      document.body.querySelectorAll('button'),
-    ).find((button) => button.textContent.trim() === 'Refresh');
-    refreshButton.click();
-    flushSync();
 
     await waitForCondition(
       () => rpcMock.mock.calls.some((call) => call[0] === 'prompt.preview'),
@@ -954,7 +947,6 @@ describe('SystemPromptView', () => {
       'systemPrompt.blockList.ownerHint.tool',
       'systemPrompt.blockList.ownerHint.extension',
       'systemPrompt.preview.heading',
-      'systemPrompt.preview.refresh',
       'systemPrompt.preview.copy',
       'systemPrompt.preview.tokenCount',
       'systemPrompt.preview.tokenBreakdown',
@@ -1146,6 +1138,14 @@ function clickToolbarButton(label) {
   ).find((item) => item.textContent.trim() === label);
   expect(button, `toolbar button not found: ${label}`).toBeTruthy();
   button.click();
+}
+
+function buttonByText(label) {
+  return (
+    Array.from(document.body.querySelectorAll('button')).find(
+      (button) => button.textContent.trim() === label,
+    ) ?? null
+  );
 }
 
 // Clicks the confirm button in the open ConfirmDialog, identified by its label.

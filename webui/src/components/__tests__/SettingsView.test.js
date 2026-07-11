@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
+import { reactiveProps } from './_reactiveProps.svelte.js';
 const rpcMock = vi.fn();
 
 vi.mock('svelte', async () => {
@@ -546,6 +547,42 @@ describe('SettingsView', () => {
         (call) => call[0] === 'channel.status' && call[1]?.id === 'tg-work',
       ),
     ).toBe(true);
+  });
+
+  it('reloads an external channel change after an open form closes', async () => {
+    const props = reactiveProps({ channelsRefreshToken: 0 });
+    rpcMock.mockImplementation(
+      createSettingsRpcMock({ channels: [channelConfig('tg-assistant')] }),
+    );
+
+    mountedComponent = mount(SettingsView, {
+      target: document.body,
+      props,
+    });
+    flushSync();
+    await openChannelsPanel();
+    const initialListCalls = rpcMock.mock.calls.filter(
+      (call) => call[0] === 'channel.list',
+    ).length;
+
+    buttonByText('Add channel').click();
+    flushSync();
+    props.channelsRefreshToken += 1;
+    flushSync();
+    await Promise.resolve();
+
+    expect(
+      rpcMock.mock.calls.filter((call) => call[0] === 'channel.list'),
+    ).toHaveLength(initialListCalls);
+
+    buttonByText('Cancel').click();
+    flushSync();
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.filter((call) => call[0] === 'channel.list')
+          .length ===
+        initialListCalls + 1,
+    );
   });
 
   it('lists denied chats and allows one from the channel card', async () => {

@@ -33,6 +33,7 @@ from server.events import (
     ALLOWED_RESOURCE_KINDS,
     PROVIDER_AUTH_COMPLETED_EVENT,
     RESOURCE_CHANGED_EVENT,
+    RESOURCE_KIND_DEBUG_TRACES,
     RUN_CANCELLED_SERVER_EVENT,
     RUN_COMPLETED_SERVER_EVENT,
     RUN_FAILED_SERVER_EVENT,
@@ -170,6 +171,11 @@ async def _publish_run_events(event_bus: Any, run: Run) -> None:
             continue
         summary = _server_event_from_run_event(event)
         event_bus.publish(summary["type"], summary["payload"])
+        if event.type in RUN_TERMINAL_EVENT_TYPES:
+            event_bus.publish(
+                RESOURCE_CHANGED_EVENT,
+                {"kind": RESOURCE_KIND_DEBUG_TRACES},
+            )
 
 
 def _server_event_from_run_event(event: RunEvent) -> JsonObject:

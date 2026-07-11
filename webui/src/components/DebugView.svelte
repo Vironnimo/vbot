@@ -29,6 +29,8 @@
   const TRACE_LIMIT_MAX = 500;
   const TRACE_LIMIT_MIN = 1;
 
+  let { debugTracesRefreshToken = 0 } = $props();
+
   let viewState = $state(createDebugViewState());
   let status = $state({ enabled: false, traceLimit: 50, traceCount: 0 });
   let showClearConfirm = $state(false);
@@ -37,12 +39,26 @@
   let loadingDetail = $state(false);
   let detailError = $state('');
   let detailRequestToken = $state(0);
+  let lastDebugTracesRefreshToken = $state(null);
 
   let hasTraces = $derived(viewState.traces.length > 0);
   let hasSelection = $derived(viewState.selectedTrace !== null);
 
   onMount(() => {
     loadAll();
+  });
+
+  $effect(() => {
+    const token = debugTracesRefreshToken;
+    if (lastDebugTracesRefreshToken === null) {
+      lastDebugTracesRefreshToken = token;
+      return;
+    }
+    if (token === lastDebugTracesRefreshToken) {
+      return;
+    }
+    lastDebugTracesRefreshToken = token;
+    void refreshTraces();
   });
 
   async function loadAll() {
@@ -355,7 +371,6 @@
         traces={viewState.traces}
         selectedTraceId={viewState.selectedTrace?.trace_id ?? ''}
         onSelect={handleTraceSelect}
-        onRefresh={refreshTraces}
       />
 
       {#if hasSelection}

@@ -16,6 +16,7 @@ from typing import Any, cast
 import pytest
 
 from core.runs import (
+    RUN_COMPLETED_EVENT,
     RUN_STARTED_EVENT,
     TOOL_CALL_STDERR_EVENT,
     TOOL_CALL_STDOUT_EVENT,
@@ -29,6 +30,7 @@ from server.rpc.event_bridge import (
     SERVER_EVENT_TYPES,
     QueuedRunItem,
     _bridge_queued_item_to_event_bus,
+    _publish_run_events,
     _server_event_from_run_event,
     publish_resource_changed,
 )
@@ -203,6 +205,19 @@ def test_publish_resource_changed_rejects_unknown_kind() -> None:
         publish_resource_changed(state, "bogus")
 
     assert state.event_bus.events == []
+
+
+@pytest.mark.asyncio
+async def test_terminal_run_event_invalidates_debug_traces() -> None:
+    event_bus = ServerEventBus()
+    run = Run(run_id="run-one", agent_id="agent-1", session_id="session-1")
+    run.emit(RUN_STARTED_EVENT, {"status": "running"})
+    run.emit(RUN_COMPLETED_EVENT, {"status": "completed"})
+
+    await _publish_run_events(event_bus, run)
+
+    assert event_bus.events[-1]["type"] == "resource_changed"
+    assert event_bus.events[-1]["payload"] == {"kind": "debug_traces"}
 
 
 def test_process_output_deltas_are_sse_only_not_websocket_events() -> None:

@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   RESOURCE_TOKEN_AGENTS,
+  RESOURCE_TOKEN_CHANNELS,
   RESOURCE_TOKEN_CLIENTS,
+  RESOURCE_TOKEN_DEBUG_TRACES,
   RESOURCE_TOKEN_MODELS,
   RESOURCE_TOKEN_SESSIONS,
   SURFACE_DISPLAY,
@@ -31,6 +33,13 @@ describe('tokenKeysForKind()', () => {
 
   it('routes a clients change to the clients token', () => {
     expect(tokenKeysForKind('clients')).toEqual([RESOURCE_TOKEN_CLIENTS]);
+  });
+
+  it('routes channels and debug traces to their own tokens', () => {
+    expect(tokenKeysForKind('channels')).toEqual([RESOURCE_TOKEN_CHANNELS]);
+    expect(tokenKeysForKind('debug_traces')).toEqual([
+      RESOURCE_TOKEN_DEBUG_TRACES,
+    ]);
   });
 
   it('returns no tokens for the queue kind (scope-routed, not token-routed)', () => {

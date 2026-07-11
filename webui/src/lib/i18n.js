@@ -505,8 +505,6 @@ export const englishCatalog = Object.freeze({
   'projects.manage.globalSkills': 'Global skills',
   'projects.manage.toggleSkill': 'Toggle skill {name}',
   'projects.manage.skillsEmpty': 'No skills available',
-  'projects.skills.refresh': 'Refresh skills',
-  'projects.skills.refreshing': 'Refreshing…',
   'projects.manage.save': 'Save changes',
   'projects.manage.saving': 'Saving…',
   'projects.manage.saveError': 'Project changes could not be saved.',
@@ -532,8 +530,8 @@ export const englishCatalog = Object.freeze({
   'projects.detail.sectionSkills': 'Skills',
   'projects.detail.empty': 'Select a project to view and edit it.',
   'projects.team.title': 'Team',
-  'projects.team.refresh': 'Rescan team',
-  'projects.team.refreshing': 'Scanning…',
+  'projects.repository.rescan': 'Rescan repository',
+  'projects.repository.rescanning': 'Scanning…',
   'projects.team.empty':
     'No agents discovered in this repository yet. An empty project is valid — add agent files to the repo to build a team.',
   'projects.team.noModel': 'No model',
@@ -599,7 +597,6 @@ export const englishCatalog = Object.freeze({
   'systemPrompt.fragmentEditor.resetAgentConfirm':
     'Reset this Agent block to the current Default content? This cannot be undone.',
   'systemPrompt.preview.heading': 'Preview for',
-  'systemPrompt.preview.refresh': 'Refresh',
   'systemPrompt.preview.copy': 'Copy',
   'systemPrompt.preview.tokenCount': '~{count} tokens',
   'systemPrompt.preview.tokenBreakdown':

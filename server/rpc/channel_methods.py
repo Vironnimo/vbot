@@ -10,10 +10,12 @@ from core.settings import (
     ALLOWED_CHANNEL_PLATFORMS,
     ALLOWED_CHANNEL_RESPONSE_MODES,
 )
+from server.events import RESOURCE_KIND_CHANNELS
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
+from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.validation import (
     _optional_bool,
     _optional_string_list,
@@ -74,6 +76,7 @@ async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
             state.runtime.reload_channel_tool()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
     return {"id": config.id}
 
 
@@ -124,6 +127,7 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
                 state.runtime.reload_channel_tool()
         except Exception as exc:
             raise _map_expected_error(exc) from exc
+        publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
         return {"ok": True}
 
     try:
@@ -131,6 +135,7 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
         state.runtime.reload_channel_tool()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
     return {"ok": True}
 
 
@@ -143,6 +148,7 @@ def _delete_channel(state: Any, params: JsonObject) -> JsonObject:
         state.runtime.reload_channel_tool()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
     return {"ok": True}
 
 
@@ -155,6 +161,7 @@ def _enable_channel(state: Any, params: JsonObject) -> JsonObject:
         state.runtime.reload_channel_tool()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
     return {"ok": True}
 
 
@@ -167,6 +174,7 @@ def _disable_channel(state: Any, params: JsonObject) -> JsonObject:
         state.runtime.reload_channel_tool()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
     return {"ok": True}
 
 
