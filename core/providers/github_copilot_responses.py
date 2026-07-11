@@ -57,6 +57,7 @@ class ResponsesStreamState:
     emitted_tool_names: set[str] = field(default_factory=set)
     emitted_tool_arguments: dict[str, str] = field(default_factory=dict)
     emitted_reasoning_text: str = ""
+    completed_response: dict[str, Any] | None = None
 
 
 def build_responses_payload(
@@ -651,6 +652,7 @@ def _completed_event_deltas(
     response = event_data.get("response")
     if not isinstance(response, Mapping):
         response = event_data
+    state.completed_response = dict(response)
     deltas: list[dict[str, Any]] = []
     output_items = _mapping_list(response.get("output"))
     reasoning = _joined_or_none(_extract_reasoning_parts(output_items))

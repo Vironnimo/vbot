@@ -130,6 +130,14 @@ def _jwt_with_account(account_id: str = "acct_vbot") -> str:
     return f"header.{encoded_payload}.signature"
 
 
+def _codex_sse_response(response: dict[str, object]) -> httpx.Response:
+    body = (
+        "event: response.completed\n"
+        f"data: {json.dumps({'type': 'response.completed', 'response': response})}\n\n"
+    )
+    return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+
+
 # ------------------------------------------------------------------
 # Codex Responses mode (subscription connection)
 # ------------------------------------------------------------------
@@ -161,10 +169,10 @@ async def test_codex_send_posts_responses_payload_with_account_and_beta_headers(
         connection_mode=CODEX_RESPONSES_MODE,
     )
     route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
-        return_value=httpx.Response(
-            200,
-            json={
+        return_value=_codex_sse_response(
+            {
                 "id": "resp_1",
+                "status": "completed",
                 "output": [
                     {
                         "type": "message",
@@ -172,7 +180,7 @@ async def test_codex_send_posts_responses_payload_with_account_and_beta_headers(
                     }
                 ],
                 "usage": {"input_tokens": 2, "output_tokens": 3},
-            },
+            }
         )
     )
 
@@ -213,6 +221,7 @@ async def test_codex_send_posts_responses_payload_with_account_and_beta_headers(
         "include": ["reasoning.encrypted_content"],
         "text": {"format": {"type": "json_object"}},
         "store": False,
+        "stream": True,
     }
     assert adapter.normalize_response(response) == {
         "role": "assistant",
@@ -245,9 +254,13 @@ async def test_codex_send_stamps_cache_scope_headers() -> None:
         connection_mode=CODEX_RESPONSES_MODE,
     )
     route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
-        return_value=httpx.Response(
-            200,
-            json={"id": "resp_1", "output": [], "usage": {"input_tokens": 1, "output_tokens": 1}},
+        return_value=_codex_sse_response(
+            {
+                "id": "resp_1",
+                "status": "completed",
+                "output": [],
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            }
         )
     )
 
@@ -275,9 +288,13 @@ async def test_codex_send_omits_cache_scope_headers_without_conversation() -> No
         connection_mode=CODEX_RESPONSES_MODE,
     )
     route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
-        return_value=httpx.Response(
-            200,
-            json={"id": "resp_1", "output": [], "usage": {"input_tokens": 1, "output_tokens": 1}},
+        return_value=_codex_sse_response(
+            {
+                "id": "resp_1",
+                "status": "completed",
+                "output": [],
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            }
         )
     )
 
@@ -323,7 +340,7 @@ async def test_codex_send_preserves_xhigh_reasoning_effort() -> None:
         connection_mode=CODEX_RESPONSES_MODE,
     )
     route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
-        return_value=httpx.Response(200, json={"id": "resp_1", "output": []})
+        return_value=_codex_sse_response({"id": "resp_1", "status": "completed", "output": []})
     )
 
     await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.5", thinking_effort="xhigh")
@@ -349,7 +366,7 @@ async def test_codex_send_snaps_against_effective_model_ladder() -> None:
         model_lookup=_subscription_model_lookup(("low", "medium")),
     )
     route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
-        return_value=httpx.Response(200, json={"id": "resp_1", "output": []})
+        return_value=_codex_sse_response({"id": "resp_1", "status": "completed", "output": []})
     )
 
     await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.5", thinking_effort="xhigh")
@@ -375,7 +392,7 @@ async def test_codex_send_falls_back_to_constant_without_feed_ladder() -> None:
         model_lookup=_subscription_model_lookup(()),
     )
     route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
-        return_value=httpx.Response(200, json={"id": "resp_1", "output": []})
+        return_value=_codex_sse_response({"id": "resp_1", "status": "completed", "output": []})
     )
 
     await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.5", thinking_effort="xhigh")
@@ -396,7 +413,7 @@ async def test_codex_send_adds_default_instructions_without_system_message() -> 
         connection_mode=CODEX_RESPONSES_MODE,
     )
     route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
-        return_value=httpx.Response(200, json={"id": "resp_1", "output": []})
+        return_value=_codex_sse_response({"id": "resp_1", "status": "completed", "output": []})
     )
 
     await adapter.send([{"role": "user", "content": "Hello"}], model_id="gpt-5.5")
@@ -419,7 +436,7 @@ async def test_codex_send_omits_unsupported_output_token_limits() -> None:
         connection_mode=CODEX_RESPONSES_MODE,
     )
     route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
-        return_value=httpx.Response(200, json={"id": "resp_1", "output": []})
+        return_value=_codex_sse_response({"id": "resp_1", "status": "completed", "output": []})
     )
 
     await adapter.send(
