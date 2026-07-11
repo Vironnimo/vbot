@@ -8,6 +8,7 @@ from unittest.mock import Mock
 import pytest
 
 from core.channels import ChannelConfig, ChannelConfigError, DeniedChatFacts
+from server.events import ServerEventBus
 from server.rpc.methods import dispatch_rpc
 
 
@@ -55,7 +56,7 @@ def _state(
         chat_sessions=chat_sessions if chat_sessions is not None else Mock(),
         agents=agent_store,
     )
-    return SimpleNamespace(runtime=runtime)
+    return SimpleNamespace(runtime=runtime, event_bus=ServerEventBus())
 
 
 @pytest.mark.asyncio
@@ -96,6 +97,7 @@ async def test_channel_create_happy_path_calls_service_and_reload() -> None:
     assert created_config.to_dict() == _channel_config(observe_unaddressed=True).to_dict()
     state.runtime.agents.get.assert_called_once_with("assistant")
     state.runtime.reload_channel_tool.assert_called_once_with()
+    assert state.event_bus.events[-1]["payload"] == {"kind": "channels"}
 
 
 @pytest.mark.asyncio
@@ -127,6 +129,7 @@ async def test_channel_update_happy_path_calls_service_and_reload() -> None:
     )
     state.runtime.agents.get.assert_not_called()
     state.runtime.reload_channel_tool.assert_called_once_with()
+    assert state.event_bus.events[-1]["payload"] == {"kind": "channels"}
 
 
 @pytest.mark.asyncio
@@ -182,6 +185,7 @@ async def test_channel_mutation_methods_call_service_and_reload(
     assert response == {"ok": True, "result": {"ok": True}}
     getattr(channel_service, service_method).assert_called_once_with("tg-assistant")
     state.runtime.reload_channel_tool.assert_called_once_with()
+    assert state.event_bus.events[-1]["payload"] == {"kind": "channels"}
 
 
 @pytest.mark.asyncio

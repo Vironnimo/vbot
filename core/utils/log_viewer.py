@@ -25,6 +25,7 @@ _LOGGER = get_logger("log_viewer")
 
 APPEND_EVENT = "append"
 RESET_EVENT = "reset"
+CATALOG_EVENT = "catalog"
 UNKNOWN_LEVEL = "unknown"
 UNKNOWN_LOGGER_NAME = ""
 UNKNOWN_TIMESTAMP = ""
@@ -49,6 +50,7 @@ class _LogSnapshot:
 class _WatcherState:
     file_name: str
     snapshot: _LogSnapshot
+    catalog: tuple[str, ...]
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
     subscribers: list[asyncio.Queue[JsonObject]] = field(default_factory=list)
     task: asyncio.Task[None] | None = None
@@ -249,6 +251,7 @@ class LogViewer:
             watcher = _WatcherState(
                 file_name=file_name,
                 snapshot=self._read_snapshot(file_path),
+                catalog=tuple(self.list_files()["files"]),
             )
             watcher.task = asyncio.create_task(self._watch_file(watcher))
 
@@ -303,23 +306,34 @@ class LogViewer:
                 if watcher.stop_event.is_set():
                     continue
 
-                if changes and not _includes_path(changes, watched_path_str):
-                    continue
-
                 async with self._watch_lock:
-                    next_snapshot = self._read_snapshot(watched_path)
-                    event = _build_snapshot_event(
-                        watcher.file_name,
-                        watcher.snapshot,
-                        next_snapshot,
-                    )
-                    watcher.snapshot = next_snapshot
+                    catalog = self.list_files()
+                    next_catalog = tuple(catalog["files"])
+                    catalog_event = None
+                    if next_catalog != watcher.catalog:
+                        watcher.catalog = next_catalog
+                        catalog_event = {
+                            "type": CATALOG_EVENT,
+                            "file": watcher.file_name,
+                            **catalog,
+                        }
+
+                    event = None
+                    if not changes or _includes_path(changes, watched_path_str):
+                        next_snapshot = self._read_snapshot(watched_path)
+                        event = _build_snapshot_event(
+                            watcher.file_name,
+                            watcher.snapshot,
+                            next_snapshot,
+                        )
+                        watcher.snapshot = next_snapshot
                     subscribers = list(watcher.subscribers)
-                if event is None:
-                    continue
 
                 for subscriber in subscribers:
-                    subscriber.put_nowait(event)
+                    if catalog_event is not None:
+                        subscriber.put_nowait(catalog_event)
+                    if event is not None:
+                        subscriber.put_nowait(event)
         except asyncio.CancelledError:
             return
         except UnboundLocalError:

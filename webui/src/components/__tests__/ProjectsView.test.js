@@ -541,7 +541,7 @@ describe('ProjectsView', () => {
     });
   });
 
-  it('re-scans the selected project from the Team section', async () => {
+  it('re-scans Team and Skills through the single repository action', async () => {
     listProjectsMock.mockResolvedValue({
       projects: [project({ project_id: 'demo', display_name: 'Demo' })],
     });
@@ -556,35 +556,18 @@ describe('ProjectsView', () => {
 
     await waitForCondition(() => showProjectMock.mock.calls.length === 1);
     await waitForCondition(
-      () => !buttonByTestId('project-team-refresh').disabled,
+      () => !buttonByTestId('project-repository-rescan').disabled,
     );
 
-    buttonByTestId('project-team-refresh').click();
+    buttonByTestId('project-repository-rescan').click();
 
     await waitForCondition(() => showProjectMock.mock.calls.length === 2);
-  });
-
-  it('reloads the shared project scan from the Skills section', async () => {
-    listProjectsMock.mockResolvedValue({
-      projects: [project({ project_id: 'demo', display_name: 'Demo' })],
-    });
-    showProjectMock.mockResolvedValue({
-      project: project({ project_id: 'demo' }),
-      scan: { team: [], report: { clean: true, findings: [] }, skills: {} },
-    });
-    mockToolCatalog([], []);
-
-    mountedComponent = mount(ProjectsView, { target: document.body });
-    flushSync();
-
-    await waitForCondition(() => showProjectMock.mock.calls.length === 1);
-    await waitForCondition(
-      () => !buttonByTestId('project-skills-refresh').disabled,
-    );
-
-    buttonByTestId('project-skills-refresh').click();
-
-    await waitForCondition(() => showProjectMock.mock.calls.length === 2);
+    expect(
+      document.querySelector('[data-testid="project-team-refresh"]'),
+    ).toBeNull();
+    expect(
+      document.querySelector('[data-testid="project-skills-refresh"]'),
+    ).toBeNull();
   });
 
   it('seeds the temperature field and thinking-effort dropdown from the project', async () => {

@@ -357,6 +357,37 @@ describe('LogsView', () => {
     expect(readLogFileMock.mock.calls.length).toBe(initialReadCalls);
   });
 
+  it('updates the file catalog live without changing a valid selection', async () => {
+    listLogsMock.mockResolvedValue({
+      files: ['2026-05-11', '2026-05-10'],
+      default_file: '2026-05-11',
+    });
+    readLogFileMock.mockResolvedValue({
+      file: '2026-05-11',
+      entries: [entry({ message: 'Ready' })],
+      cursor: 'cursor-catalog',
+    });
+
+    mountedComponent = mount(LogsView, { target: document.body });
+    flushSync();
+    await waitForCondition(() => streamConnections.length === 1);
+    const initialReadCalls = readLogFileMock.mock.calls.length;
+
+    streamConnections[0].emitEvent({
+      type: 'catalog',
+      file: '2026-05-11',
+      files: ['2026-05-12', '2026-05-11', '2026-05-10'],
+      default_file: '2026-05-12',
+    });
+    flushSync();
+
+    expect(simpleTriggerLabel('logs-file')).toContain('2026-05-11');
+    expect(readLogFileMock).toHaveBeenCalledTimes(initialReadCalls);
+
+    openSimpleDropdown('logs-file');
+    expect(simpleOptionLabels('logs-file')).toContain('2026-05-12');
+  });
+
   it('shows a fallback stream error message when the error event has no message', async () => {
     listLogsMock.mockResolvedValue({
       files: ['2026-05-11'],
@@ -485,6 +516,7 @@ describe('LogsView', () => {
     expect(
       readLogFileMock.mock.calls.filter((call) => call[0] === '2026-05-11'),
     ).toHaveLength(2);
+    expect(listLogsMock).toHaveBeenCalledTimes(2);
     expect(subscribeLogEventsMock).toHaveBeenLastCalledWith(
       '2026-05-11',
       expect.any(Object),

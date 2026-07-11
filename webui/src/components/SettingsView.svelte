@@ -40,6 +40,7 @@
     onOpenSetupGuide = noop,
     modelsRefreshToken = 0,
     clientsRefreshToken = 0,
+    channelsRefreshToken = 0,
   } = $props();
 
   export function handleProviderAuthCompleted(event) {
@@ -687,6 +688,7 @@
           {@render sectionHeader(panelById.get('channels'))}
           <SettingsChannelsPanel
             {onToast}
+            {channelsRefreshToken}
             onError={(message) => reportSettingsError(message)}
           />
         </section>

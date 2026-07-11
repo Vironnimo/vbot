@@ -183,7 +183,7 @@
             return;
           }
 
-          mergeLogStreamEvent(viewState, event);
+          handleLogStreamEvent(event);
         },
         onError: (error) => {
           if (currentStream !== stream) {
@@ -232,8 +232,30 @@
       if (destroyed || viewState.selectedFile !== file) {
         return;
       }
-      loadSelectedFile(file);
+      loadCatalogAndMaybeFile({ silent: true, forceReload: true });
     }, delay);
+  }
+
+  function handleLogStreamEvent(event) {
+    if (event?.type !== 'catalog') {
+      mergeLogStreamEvent(viewState, event);
+      return;
+    }
+
+    const previousSelection = viewState.selectedFile;
+    const selectedFile = applyLogCatalog(viewState, event);
+    if (selectedFile === previousSelection) {
+      return;
+    }
+
+    if (!selectedFile) {
+      viewState.entries = [];
+      viewState.streamStatus = LOGS_STREAM_STATUS_IDLE;
+      closeCurrentStream();
+      return;
+    }
+
+    void loadSelectedFile(selectedFile);
   }
 
   function clearReconnectTimer() {

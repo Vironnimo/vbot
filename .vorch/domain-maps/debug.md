@@ -104,6 +104,7 @@ See `.vorch/domain-maps/server.md` for the envelope. All gated on `debug.enabled
 - `debug.trace_get` `{ trace_id }` → `{ trace }` — full sanitized trace.
 - `debug.trace_clear` → `{ cleared: true }` — delete all. **Always allowed** (ungated, so users can clean up after disabling).
 - `debug.model_probe` `{ provider_id, connection_id }` → `{ trace_id, status_code, duration_ms, raw_response, model_preview }`. `model_preview` is `{ model_count, models: [{ id, name }] }` (first 10) on a 200 with parseable JSON, or `{ error, models: [] }` on a non-200 / non-JSON response. Resolves the connection credential (API key or OAuth), GETs the provider's `models_endpoint` over a **raw** `httpx.AsyncClient`, stores a `model_probe` trace, and does **not** write `resources/models/*.json` or reload the registry.
+- Trace-list freshness uses the shared server event bus without transporting trace data: every terminal Run bridge event, successful `debug.model_probe`, and `debug.trace_clear` publishes `resource_changed(kind: "debug_traces")`; DebugView re-fetches status/list on that signal and therefore has no manual Refresh action.
 
 ## Conventions
 

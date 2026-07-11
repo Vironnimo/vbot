@@ -2,12 +2,7 @@
   import { activeLocaleTag, t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
 
-  let {
-    traces = [],
-    selectedTraceId = '',
-    onSelect = () => {},
-    onRefresh = () => {},
-  } = $props();
+  let { traces = [], selectedTraceId = '', onSelect = () => {} } = $props();
 
   let expandedTraceIds = $state({});
 
@@ -80,14 +75,6 @@
     <span class="debug-view__section-label">
       {t('debug.traceList', 'Traces')}
     </span>
-    <button
-      type="button"
-      class="debug-view__refresh-btn"
-      onclick={onRefresh}
-      aria-label={t('common.refresh', 'Refresh')}
-    >
-      {t('common.refresh', 'Refresh')}
-    </button>
   </div>
 
   <div
@@ -178,23 +165,6 @@
     font-weight: 500;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-  }
-
-  .debug-view__refresh-btn {
-    padding: 3px 8px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-sm);
-    color: var(--text-lo);
-    background: transparent;
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    font-weight: 500;
-    cursor: pointer;
-  }
-
-  .debug-view__refresh-btn:hover {
-    border-color: var(--accent);
-    color: var(--accent);
   }
 
   .debug-view__trace-list {

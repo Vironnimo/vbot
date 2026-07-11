@@ -245,14 +245,6 @@
   gap: 6px;
 }
 
-.projects-view .projects-section-refresh {
-  flex-shrink: 0;
-  gap: 6px;
-  padding: 4px 8px;
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-sm);
-}
-
 .projects-view .detail-section-body {
   display: flex;
   flex-direction: column;

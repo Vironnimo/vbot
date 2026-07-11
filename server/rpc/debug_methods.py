@@ -23,9 +23,11 @@ import httpx
 
 from core.debug import DebugTraceStore
 from core.debug.redaction import redact_headers, redact_url
+from server.events import RESOURCE_KIND_DEBUG_TRACES
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
+from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.provider_access import _provider_connection
 from server.rpc.validation import _reject_unsupported, _required_string
 
@@ -249,6 +251,7 @@ def _debug_trace_clear(state: Any, params: JsonObject) -> JsonObject:
         runtime = state.runtime
         store = _make_debug_store(runtime)
         store.clear_all()
+        publish_resource_changed(state, RESOURCE_KIND_DEBUG_TRACES)
         return {"cleared": True}
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -325,6 +328,7 @@ async def _debug_model_probe(state: Any, params: JsonObject) -> JsonObject:
         provider_id,
         connection_id,
     )
+    publish_resource_changed(state, RESOURCE_KIND_DEBUG_TRACES)
 
     model_preview = _build_model_preview(raw_body, status_code)
 

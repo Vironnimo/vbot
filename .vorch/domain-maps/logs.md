@@ -17,22 +17,20 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
   - `message: string`
   - `continuation: string` — multiline tail such as stack traces
   - `raw: string` — the source line(s) verbatim (continuation rows joined with `\n`), so an accessor can copy an entry exactly as written to the file; `message`/`level` are derived/normalized, `raw` is not
-- Live stream event:
-  - `type: "append" | "reset"`
-  - `file: string`
-  - `entries: ParsedLogEntry[]`
+- Live stream entry event: `{ type: "append" | "reset", file: string, entries: ParsedLogEntry[] }`
+- Live stream catalog event: `{ type: "catalog", file: string, files: string[], default_file: string | null }`
 
 ## Interfaces
 
 - `core/utils/log_viewer.py`
   - `LogViewer.list_files()` → `{ files, default_file }`
   - `LogViewer.read_file(file_name)` → `{ file, entries, cursor }`
-  - `LogViewer.subscribe(file_name, cursor?)` → async generator of `{ type, file, entries }`
+  - `LogViewer.subscribe(file_name, cursor?)` → async generator of entry and catalog events
 - Server RPC
   - `log.list` — returns the daily log catalog sorted newest-first
   - `log.read { file }` — returns parsed entries plus a handoff cursor for one selected file
 - Server transport
-  - `GET /ws/logs?file=<name>&cursor=<cursor>` — streams append/reset events for one selected file only and can replay the read→socket handoff gap. Invalid file name or unknown/mismatched cursor → close code `1008`.
+  - `GET /ws/logs?file=<name>&cursor=<cursor>` — streams append/reset events for the selected file plus catalog events when the directory's daily file list changes, and can replay the read→socket handoff gap. Invalid file name or unknown/mismatched cursor → close code `1008`.
 - WebUI
   - `listLogs()` / `readLogFile()` / `subscribeLogEvents()` in `webui/src/lib/api.js`
   - `webui/src/lib/logsView.js` owns client-side selection/filter/search/sort helpers
@@ -46,13 +44,13 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
 - The level filter is based only on parsed `level`. Logger names are searchable through free-text search, not separate filter UI.
 - Entry ordering is accessor-local UI state. Switching between newest-first and oldest-first must not trigger another `log.read` call for the same file.
 - `cursor` is an internal handoff token, not user-visible UI state.
-- The selected file remains user-controlled. Refreshing the catalog may add newer files, but it must not auto-switch the active selection.
+- The selected file remains user-controlled. A live catalog event may add a newer file, but it must not auto-switch a still-valid active selection; if the selected file disappeared, the WebUI falls back to the catalog default and starts that file's read/stream flow.
 - The Logs toolbar uses the shared simple dropdown style for file, level, and order controls.
 - Routine `/ws` and `/ws/logs` lifecycle noise (connection open/closed, accept) is filtered on two layers: at write time by the logging pipeline (`is_logs_websocket_lifecycle_record`, so it never lands in daily files going forward) and again at read/stream time in `parse_log_entries` (`_should_include_entry`, so pre-existing matching rows don't surface in `log.read` results or `/ws/logs` events). Genuine websocket transport failures must still stay visible.
 
 ## External Dependencies
 
-- `watchfiles` — `awatch` watches the whole logs *directory* (`recursive=False`) in forced-polling mode (`force_polling=True`, `poll_delay_ms=50`, `debounce=100`), not the single selected file. Live append/reset events are derived from re-read file snapshots, not from raw watcher payloads — this polling setup is deliberate for reliable Windows behavior.
+- `watchfiles` — `awatch` watches the whole logs *directory* (`recursive=False`) in forced-polling mode (`force_polling=True`, `poll_delay_ms=50`, `debounce=100`), not the single selected file. Live append/reset events are derived from re-read file snapshots, while a changed sorted filename tuple emits a catalog event even when the selected file did not change — this polling setup is deliberate for reliable Windows behavior and naturally covers daily rollover.
 
 ## Constraints & Gotchas
 
@@ -62,4 +60,5 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
 - If a file is truncated, replaced, or otherwise diverges from the previous parsed prefix, emit a `reset` event so the UI replaces its entry list.
 - **Watcher lifecycle is per-file and ref-counted.** One watcher task per file, shared by all subscribers; it starts on the first subscriber and stops when the last one leaves. `aclose()` (called on server shutdown with a 1 s timeout) tears down every watcher. Snapshots are read and diffed under a single async lock.
 - **Cursor handoff is the no-gap guarantee.** `read_file` stores a one-shot handoff snapshot under a fresh UUID `cursor`, keyed per file (only the file's latest cursor is retained; total handoffs bounded to `MAX_READ_HANDOFFS = 32`, oldest pruned). `subscribe(cursor)` pops it and emits the missed append/reset diff *before* live events; `subscribe(cursor=None)` falls back to popping the file's latest stored cursor. A cursor is single-use; an unknown or file-mismatched cursor raises `ValueError`. This is what prevents losing lines appended between `log.read` and the socket connecting.
+- A WebUI log-stream reconnect reloads the catalog before re-reading and re-subscribing, preserving a still-valid selection and discovering files created while disconnected.
 - **One shared `LogViewer` instance.** It lives on `app.state.log_viewer` and is shared by `log.read` (RPC) and `/ws/logs`; the RPC helper lazily creates and caches it if missing. The cursor handoff only works because both paths hit the same instance — never instantiate a `LogViewer` per request or per connection.

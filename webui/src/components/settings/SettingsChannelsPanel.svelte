@@ -31,7 +31,7 @@
 
   const noop = () => {};
 
-  let { onToast = noop, onError = noop } = $props();
+  let { onToast = noop, onError = noop, channelsRefreshToken = 0 } = $props();
 
   let channelPanelState = $state(createChannelPanelState());
   let channelAgents = $state([]);
@@ -47,6 +47,8 @@
   // The channel awaiting delete confirmation (null = dialog closed). The delete
   // only runs once the confirm dialog resolves.
   let deleteConfirmChannel = $state(null);
+  let lastChannelsRefreshToken = $state(null);
+  let pendingExternalReload = $state(false);
 
   let channelPlatformOptions = $derived(
     CHANNEL_PLATFORMS.map((platformId) => ({
@@ -76,6 +78,27 @@
   );
 
   onMount(() => {
+    void loadChannelsPanel();
+  });
+
+  $effect(() => {
+    const token = channelsRefreshToken;
+    if (lastChannelsRefreshToken === null) {
+      lastChannelsRefreshToken = token;
+      return;
+    }
+    if (token === lastChannelsRefreshToken) {
+      return;
+    }
+    lastChannelsRefreshToken = token;
+    pendingExternalReload = true;
+  });
+
+  $effect(() => {
+    if (!pendingExternalReload || channelFormVisible || channelPanelBusy) {
+      return;
+    }
+    pendingExternalReload = false;
     void loadChannelsPanel();
   });
 

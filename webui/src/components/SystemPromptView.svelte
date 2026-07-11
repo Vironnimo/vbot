@@ -19,6 +19,7 @@
   import { tooltip } from '$lib/tooltip.js';
 
   const AUTO_SAVE_DEBOUNCE_MS = 800;
+  const PREVIEW_REFRESH_DEBOUNCE_MS = 100;
   // The custom-block slug rule mirrors the backend agent-id rule (validated again
   // at the RPC edge and the store): letters/digits plus `-`/`_`, alphanumeric
   // start, bounded length. This is a UX pre-check; the server stays authoritative.
@@ -54,6 +55,8 @@
   let previewToolCount = $state(null);
   let isLoadingData = $state(true);
   let isRefreshingPreview = $state(false);
+  let previewRequestId = 0;
+  let previewRefreshTimer = null;
   let reorderAnnouncement = $state('');
 
   // Autosave timers keyed by block id (a reorder must not reassign a timer to a
@@ -127,6 +130,7 @@
     loadProjectTeams();
     return () => {
       clearAutoSaveTimers();
+      clearPreviewRefreshTimer();
     };
   });
 
@@ -558,6 +562,7 @@
       if (showSuccessToast) {
         showToast(t('common.saved', 'Saved'), 'success');
       }
+      schedulePreviewRefresh();
       return true;
     } catch {
       showToast(t('systemPrompt.error.saveFailed', 'Failed to save'), 'error');
@@ -636,6 +641,7 @@
       if (typeof result.inheritance === 'string') {
         blocks[liveIndex].inheritance = result.inheritance;
       }
+      schedulePreviewRefresh();
     } catch {
       showToast(
         t('systemPrompt.error.resetFailed', 'Failed to reset'),
@@ -665,6 +671,7 @@
           })),
         }),
       );
+      schedulePreviewRefresh();
     } catch {
       showToast(
         t('systemPrompt.error.layoutFailed', 'Failed to save layout'),
@@ -821,6 +828,7 @@
     try {
       await rpc('prompt.create_block', scopedParams({ slug: trimmed }));
       await loadBlocksForScope(selectedScopeKey);
+      schedulePreviewRefresh();
     } catch {
       showToast(
         t(
@@ -851,6 +859,7 @@
     try {
       await rpc('prompt.remove_block', scopedParams({ id: blockId }));
       await loadBlocksForScope(selectedScopeKey);
+      schedulePreviewRefresh();
     } catch {
       showToast(
         t('systemPrompt.blockList.removeFailed', 'Failed to remove block'),
@@ -873,6 +882,7 @@
     try {
       await rpc('prompt.reset_layout', scopedParams());
       await loadBlocksForScope(selectedScopeKey);
+      schedulePreviewRefresh();
     } catch {
       showToast(
         t('systemPrompt.error.layoutFailed', 'Failed to save layout'),
@@ -881,7 +891,22 @@
     }
   }
 
-  // -- Preview (unchanged behavior) ----------------------------------------
+  // -- Preview --------------------------------------------------------------
+
+  function schedulePreviewRefresh() {
+    clearPreviewRefreshTimer();
+    previewRefreshTimer = setTimeout(() => {
+      previewRefreshTimer = null;
+      void refreshPreview();
+    }, PREVIEW_REFRESH_DEBOUNCE_MS);
+  }
+
+  function clearPreviewRefreshTimer() {
+    if (previewRefreshTimer !== null) {
+      clearTimeout(previewRefreshTimer);
+      previewRefreshTimer = null;
+    }
+  }
 
   async function refreshPreview() {
     const params = previewParams();
@@ -889,21 +914,31 @@
       return;
     }
 
+    const requestId = previewRequestId + 1;
+    previewRequestId = requestId;
     isRefreshingPreview = true;
 
     try {
       const result = await rpc('prompt.preview', params);
+      if (requestId !== previewRequestId) {
+        return;
+      }
       previewText = result.text ?? '';
       previewTokens = result.tokens ?? null;
       previewToolTokens = result.tool_tokens ?? null;
       previewToolCount = result.tool_count ?? null;
     } catch {
+      if (requestId !== previewRequestId) {
+        return;
+      }
       showToast(
         t('systemPrompt.error.previewFailed', 'Failed to load preview'),
         'error',
       );
     } finally {
-      isRefreshingPreview = false;
+      if (requestId === previewRequestId) {
+        isRefreshingPreview = false;
+      }
     }
   }
 
@@ -1240,16 +1275,6 @@
                 onClick={copyPreview}
               >
                 {t('systemPrompt.preview.copy', 'Copy')}
-              </Button>
-              <Button
-                variant="primary"
-                class="sp-btn-sm"
-                disabled={isRefreshingPreview || !canRefreshPreview()}
-                onClick={refreshPreview}
-              >
-                {isRefreshingPreview
-                  ? t('common.loading', 'Loading…')
-                  : t('systemPrompt.preview.refresh', 'Refresh')}
               </Button>
             </div>
           </div>

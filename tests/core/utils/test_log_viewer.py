@@ -361,6 +361,42 @@ async def test_subscribe_filters_routine_websocket_noise_from_handoff_append(
     }
 
 
+@pytest.mark.asyncio
+async def test_subscribe_pushes_catalog_changes_for_other_log_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    selected_file = logs_dir / "2026-05-11"
+    selected_file.write_text(
+        "2026-05-11 09:00:00 [INFO] vbot.core - Ready\n",
+        encoding="utf-8",
+    )
+    next_file = logs_dir / "2026-05-12"
+
+    async def fake_awatch(*_args: object, **_kwargs: object):
+        next_file.write_text(
+            "2026-05-12 00:00:00 [INFO] vbot.core - New day\n",
+            encoding="utf-8",
+        )
+        yield {(1, str(next_file))}
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(log_viewer_module, "awatch", fake_awatch)
+    viewer = LogViewer(tmp_path)
+
+    async with aclosing(viewer.subscribe(selected_file.name)) as stream:
+        event = await asyncio.wait_for(stream.__anext__(), timeout=1)
+
+    assert event == {
+        "type": "catalog",
+        "file": selected_file.name,
+        "files": [next_file.name, selected_file.name],
+        "default_file": next_file.name,
+    }
+
+
 def test_build_snapshot_event_resets_using_filtered_entries() -> None:
     previous = _LogSnapshot(
         exists=True,
