@@ -1392,7 +1392,7 @@ export const englishCatalog = Object.freeze({
   'statistics.skills.origin.project': 'project: {detail}',
   'statistics.subview.limits': 'Limits',
   'statistics.limits.note':
-    'Live subscription usage, fetched on demand — nothing is stored.',
+    'Live subscription usage, updated every 10 seconds while this tab is visible — nothing is stored.',
   'statistics.limits.loading': 'Loading usage limits…',
   'statistics.limits.loadError': 'Usage limits could not be loaded.',
   'statistics.limits.empty': 'No subscription providers connected.',

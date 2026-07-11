@@ -344,6 +344,7 @@ describe('StatisticsView', () => {
       await unmount(mountedComponent);
       mountedComponent = null;
     }
+    vi.useRealTimers();
     document.body.innerHTML = '';
   });
 
@@ -563,6 +564,146 @@ describe('StatisticsView', () => {
     // The error snapshot renders its message cleanly rather than crashing.
     expect(document.body.textContent).toContain('GitHub Copilot');
     expect(document.body.textContent).toContain('HTTP 401');
+    expect(
+      [...document.querySelectorAll('.stats-panel button')].some(
+        (button) => button.textContent.trim() === 'Refresh',
+      ),
+    ).toBe(false);
+    expect(document.body.textContent).toContain('updated every 10 seconds');
+  });
+
+  it('refreshes provider usage every ten seconds only while Limits is visible', async () => {
+    vi.useFakeTimers();
+    rpcMock.mockImplementation(routedRpc(makeUsageReport()));
+
+    mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForCondition(() =>
+      document.body.textContent.includes('Per agent'),
+    );
+
+    openLimitsTab();
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.filter(([method]) => method === 'provider.usage')
+          .length === 1,
+    );
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(
+      rpcMock.mock.calls.filter(([method]) => method === 'provider.usage'),
+    ).toHaveLength(2);
+
+    const overviewTab = [...document.querySelectorAll('.tab-list__tab')].find(
+      (button) => button.textContent.trim() === 'Overview',
+    );
+    overviewTab.click();
+    flushSync();
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(
+      rpcMock.mock.calls.filter(([method]) => method === 'provider.usage'),
+    ).toHaveLength(2);
+  });
+
+  it('does not overlap provider usage requests', async () => {
+    vi.useFakeTimers();
+    let resolveFirstUsage;
+    let usageCalls = 0;
+    rpcMock.mockImplementation((method) => {
+      if (method !== 'provider.usage') {
+        return Promise.resolve(makeReport());
+      }
+      usageCalls += 1;
+      if (usageCalls === 1) {
+        return new Promise((resolve) => {
+          resolveFirstUsage = resolve;
+        });
+      }
+      return Promise.resolve(makeUsageReport());
+    });
+
+    mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForCondition(() =>
+      document.body.textContent.includes('Per agent'),
+    );
+    openLimitsTab();
+    await waitForCondition(() => usageCalls === 1);
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(usageCalls).toBe(1);
+
+    resolveFirstUsage(makeUsageReport());
+    await waitForCondition(() => document.body.textContent.includes('OpenAI'));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(usageCalls).toBe(2);
+  });
+
+  it('pauses provider usage while the page is hidden and refreshes on return', async () => {
+    vi.useFakeTimers();
+    let visibility = 'visible';
+    const visibilitySpy = vi
+      .spyOn(document, 'visibilityState', 'get')
+      .mockImplementation(() => visibility);
+    rpcMock.mockImplementation(routedRpc(makeUsageReport()));
+
+    mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForCondition(() =>
+      document.body.textContent.includes('Per agent'),
+    );
+    openLimitsTab();
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.filter(([method]) => method === 'provider.usage')
+          .length === 1,
+    );
+
+    visibility = 'hidden';
+    document.dispatchEvent(new Event('visibilitychange'));
+    flushSync();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(
+      rpcMock.mock.calls.filter(([method]) => method === 'provider.usage'),
+    ).toHaveLength(1);
+
+    visibility = 'visible';
+    document.dispatchEvent(new Event('visibilitychange'));
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.filter(([method]) => method === 'provider.usage')
+          .length === 2,
+    );
+    visibilitySpy.mockRestore();
+  });
+
+  it('keeps a contextual Retry after a Limits RPC failure', async () => {
+    let usageCalls = 0;
+    rpcMock.mockImplementation((method) => {
+      if (method !== 'provider.usage') {
+        return Promise.resolve(makeReport());
+      }
+      usageCalls += 1;
+      return usageCalls === 1
+        ? Promise.reject(new Error('limits unavailable'))
+        : Promise.resolve(makeUsageReport());
+    });
+
+    mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForCondition(() =>
+      document.body.textContent.includes('Per agent'),
+    );
+    openLimitsTab();
+    await waitForCondition(() =>
+      document.body.textContent.includes('limits unavailable'),
+    );
+
+    const retryButton = [
+      ...document.querySelectorAll('.stats-panel button'),
+    ].find((button) => button.textContent.trim() === 'Retry');
+    retryButton.click();
+    await waitForCondition(() => document.body.textContent.includes('OpenAI'));
+
+    expect(usageCalls).toBe(2);
+    expect(document.body.textContent).not.toContain('limits unavailable');
   });
 
   it('shows the limits empty state when no providers are connected', async () => {

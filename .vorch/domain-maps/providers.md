@@ -71,39 +71,13 @@ Domain-specific vocabulary for providers and the wire. Core terms (Provider, Mod
 
 ## Provider Usage Probe
 
-`core/providers/usage.py` — `ProviderUsageService`, an on-demand probe of each
-logged-in connection's *own* subscription usage (rolling-window percent used,
-reset time, plan). This is **live provider state**, deliberately separate from
-`core/statistics/` (a read-only Session aggregation that never hits the network);
-the only coupling is the WebUI Limits subtab that surfaces it (see `statistics.md`,
-`webui.md`). Exposed via RPC `provider.usage` (`server.md`), never through chat.
+`core/providers/usage.py` — `ProviderUsageService`, an on-demand probe of each logged-in connection's *own* subscription usage (rolling-window percent used, reset time, plan). This is **live provider state**, deliberately separate from `core/statistics/` (a read-only Session aggregation that never hits the network); the only coupling is the WebUI Limits subtab that surfaces it (see `statistics.md`, `webui.md`). Exposed via RPC `provider.usage` (`server.md`), never through chat.
 
-- **Common shape** (`to_dict()`-able frozen dataclasses): `UsageWindow{label,
-  used_percent, reset_at}`, `ProviderUsageSnapshot{connection, display_name, plan,
-  windows, error}`, `UsageReport{generated_at, providers}`. `used_percent` is clamped
-  0–100; `reset_at` is ISO-8601 UTC or `null`.
-- **DI, no import cycle.** Constructed from a local `UsageProbeRuntime` protocol
-  (`providers`, `provider_credentials`, `get_connection_token_getter`,
-  `get_connection_token_extra`) — like `task_client.py` it must not import
-  `core.runtime`. The HTTP GET is an injectable `UsageTransport` (httpx by default) so
-  tests never hit the network. Not exported from `core.providers.__init__` (import
-  directly), mirroring `task_client.py`.
-- **Fan-out / fail-open.** `report(connections=None)` queries only connections with a
-  registered fetcher AND `is_usable` (enabled + credentialed — a disabled
-  connection is never probed); fetchers run concurrently with a
-  per-fetcher timeout; one failure (timeout → `Timeout`, HTTP error → `HTTP <code>`,
-  shape mismatch → `Unsupported response shape`, anything else → `Unavailable`) becomes
-  that snapshot's `error` and never breaks siblings; snapshots with neither a window nor
-  an error are dropped. A 60s in-memory TTL cache per connection avoids hammering on tab
-  toggles.
-- **Token safety.** Never caches raw OAuth tokens and logs no token data — it pulls a
-  fresh token per fetch via the runtime token getter (`get_connection_token_getter`),
-  and reads token-store `extra` via `get_connection_token_extra` (Copilot's
-  `github_oauth_token`, OpenAI's mirrored `chatgpt_account_id`).
-- **Supported connections.** `openai:subscription` (live-verified 2026-06-16),
-  `github-copilot:oauth` and `minimax:api-key` (blind from openclaw field names,
-  degrade to an `error` snapshot on shape mismatch). Per-endpoint facts live in
-  `providers/openai.md`, `providers/github-copilot.md`, `providers/minimax.md`.
+- **Common shape** (`to_dict()`-able frozen dataclasses): `UsageWindow{label, used_percent, reset_at}`, `ProviderUsageSnapshot{connection, display_name, plan, windows, error}`, `UsageReport{generated_at, providers}`. `used_percent` is clamped 0–100; `reset_at` is ISO-8601 UTC or `null`.
+- **DI, no import cycle.** Constructed from a local `UsageProbeRuntime` protocol (`providers`, `provider_credentials`, `get_connection_token_getter`, `get_connection_token_extra`) — like `task_client.py` it must not import `core.runtime`. The HTTP GET is an injectable `UsageTransport` (httpx by default) so tests never hit the network. Not exported from `core.providers.__init__` (import directly), mirroring `task_client.py`.
+- **Fan-out / fail-open.** `report(connections=None)` queries only connections with a registered fetcher AND `is_usable` (enabled + credentialed — a disabled connection is never probed); fetchers run concurrently with a per-fetcher timeout; one failure (timeout → `Timeout`, HTTP error → `HTTP <code>`, shape mismatch → `Unsupported response shape`, anything else → `Unavailable`) becomes that snapshot's `error` and never breaks siblings; snapshots with neither a window nor an error are dropped. The per-connection in-memory cache keeps successful snapshots for 10 seconds and error snapshots for 60 seconds; a per-connection async lock coalesces concurrent cache misses so multiple WebUI windows never multiply an outbound fetch.
+- **Token safety.** Never caches raw OAuth tokens and logs no token data — it pulls a fresh token per fetch via the runtime token getter (`get_connection_token_getter`), and reads token-store `extra` via `get_connection_token_extra` (Copilot's `github_oauth_token`, OpenAI's mirrored `chatgpt_account_id`).
+- **Supported connections.** `openai:subscription` (live-verified 2026-06-16), `github-copilot:oauth` and `minimax:api-key` (blind from openclaw field names, degrade to an `error` snapshot on shape mismatch). Per-endpoint facts live in `providers/openai.md`, `providers/github-copilot.md`, `providers/minimax.md`.
 
 ## Specific Specs
 
