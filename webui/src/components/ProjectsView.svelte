@@ -179,6 +179,7 @@
   let activeReport = $state(null);
   let activeScanSkills = $state({ project: [], bundled: [], global: [] });
   let scanLoading = $state(false);
+  let scanRefreshSection = $state('');
   let removingProjectId = $state('');
   // The project awaiting remove confirmation (null = dialog closed).
   let removeConfirmProject = $state(null);
@@ -596,17 +597,6 @@
     }
   }
 
-  // The Refresh button re-reads everything the tab shows from disk: the project
-  // list plus, when a project is selected, its scan — which on the backend reloads
-  // the global skill registry, so a skill hand-dropped into the global skills folder
-  // shows up in the opt-in pool instead of waiting for a restart.
-  async function refreshProjects() {
-    await loadProjects();
-    if (selectedProjectId) {
-      await loadScan(selectedProjectId);
-    }
-  }
-
   function openAdd() {
     addForm = createAddForm();
     addError = '';
@@ -784,6 +774,20 @@
       if (!destroyed && requestId === scanRequestId) {
         scanLoading = false;
       }
+    }
+  }
+
+  // Team and Skills are two views of the same live project scan. Keep the
+  // actions where users look for them, while preserving one authoritative
+  // refresh path for repository agents, project skills, and global skills.
+  async function refreshScan(section) {
+    if (!selectedProjectId || scanLoading) {
+      return;
+    }
+    scanRefreshSection = section;
+    await loadScan(selectedProjectId);
+    if (!destroyed) {
+      scanRefreshSection = '';
     }
   }
 
@@ -1390,13 +1394,6 @@
         </span>
         <div class="pane-header-actions">
           <Button
-            variant="secondary"
-            data-testid="projects-refresh"
-            onClick={() => refreshProjects()}
-          >
-            {t('projects.refresh', 'Refresh')}
-          </Button>
-          <Button
             variant="primary"
             data-testid="project-add-open"
             onClick={openAdd}
@@ -1827,16 +1824,39 @@
             <!-- Section 3: Team -->
             <div class="detail-section">
               <div class="detail-section-title">
-                {t('projects.detail.sectionTeam', 'Team')}
-                <InfoHint
-                  text={t(
-                    'projects.detail.teamInfo',
-                    'Agents discovered live in the project repository — where they are read from depends on the source format. The list is re-derived on open and re-scan; the repository is the source of truth, so vBot never copies or edits these agents.',
-                  )}
-                />
+                <span class="projects-section-title-copy">
+                  {t('projects.detail.sectionTeam', 'Team')}
+                  <InfoHint
+                    text={t(
+                      'projects.detail.teamInfo',
+                      'Agents discovered live in the project repository — where they are read from depends on the source format. The list is re-derived on open and re-scan; the repository is the source of truth, so vBot never copies or edits these agents.',
+                    )}
+                  />
+                </span>
+                <Button
+                  variant="tertiary"
+                  class="projects-section-refresh"
+                  data-testid="project-team-refresh"
+                  loading={scanLoading && scanRefreshSection === 'team'}
+                  disabled={scanLoading}
+                  onClick={() => refreshScan('team')}
+                >
+                  <svg
+                    viewBox="0 0 14 14"
+                    width="11"
+                    height="11"
+                    aria-hidden="true"
+                  >
+                    <path d="M11.5 4.5V1.5m0 0h-3" />
+                    <path d="M11 4A5 5 0 1 0 12 9" />
+                  </svg>
+                  {scanLoading && scanRefreshSection === 'team'
+                    ? t('projects.team.refreshing', 'Scanning…')
+                    : t('projects.team.refresh', 'Rescan team')}
+                </Button>
               </div>
               <div class="detail-section-body">
-                {#if activeReport && !scanLoading && !activeReport.clean}
+                {#if activeReport && !(scanLoading && scanRefreshSection !== 'skills') && !activeReport.clean}
                   <div class="projects-field">
                     <Banner variant="warn" role="status">
                       {t(
@@ -1884,7 +1904,7 @@
                   </div>
                 {/if}
 
-                {#if scanLoading}
+                {#if scanLoading && scanRefreshSection !== 'skills'}
                   <p class="projects-scan-loading" role="status">
                     {t('projects.loading', 'Loading projects…')}
                   </p>
@@ -2410,7 +2430,28 @@
             <!-- Section 5: Skills -->
             <div class="detail-section">
               <div class="detail-section-title">
-                {t('projects.detail.sectionSkills', 'Skills')}
+                <span>{t('projects.detail.sectionSkills', 'Skills')}</span>
+                <Button
+                  variant="tertiary"
+                  class="projects-section-refresh"
+                  data-testid="project-skills-refresh"
+                  loading={scanLoading && scanRefreshSection === 'skills'}
+                  disabled={scanLoading}
+                  onClick={() => refreshScan('skills')}
+                >
+                  <svg
+                    viewBox="0 0 14 14"
+                    width="11"
+                    height="11"
+                    aria-hidden="true"
+                  >
+                    <path d="M11.5 4.5V1.5m0 0h-3" />
+                    <path d="M11 4A5 5 0 1 0 12 9" />
+                  </svg>
+                  {scanLoading && scanRefreshSection === 'skills'
+                    ? t('projects.skills.refreshing', 'Refreshing…')
+                    : t('projects.skills.refresh', 'Refresh skills')}
+                </Button>
               </div>
               <div class="detail-section-body">
                 <div class="projects-field">

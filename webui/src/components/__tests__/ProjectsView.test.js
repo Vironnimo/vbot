@@ -512,7 +512,7 @@ describe('ProjectsView', () => {
     });
   });
 
-  it('re-scans the selected project on refresh to pick up disk changes', async () => {
+  it('re-scans the selected project from the Team section', async () => {
     listProjectsMock.mockResolvedValue({
       projects: [project({ project_id: 'demo', display_name: 'Demo' })],
     });
@@ -527,8 +527,35 @@ describe('ProjectsView', () => {
 
     await selectDemo();
     await waitForCondition(() => showProjectMock.mock.calls.length === 1);
+    await waitForCondition(
+      () => !buttonByTestId('project-team-refresh').disabled,
+    );
 
-    buttonByTestId('projects-refresh').click();
+    buttonByTestId('project-team-refresh').click();
+
+    await waitForCondition(() => showProjectMock.mock.calls.length === 2);
+  });
+
+  it('reloads the shared project scan from the Skills section', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [project({ project_id: 'demo', display_name: 'Demo' })],
+    });
+    showProjectMock.mockResolvedValue({
+      project: project({ project_id: 'demo' }),
+      scan: { team: [], report: { clean: true, findings: [] }, skills: {} },
+    });
+    mockToolCatalog([], []);
+
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await selectDemo();
+    await waitForCondition(() => showProjectMock.mock.calls.length === 1);
+    await waitForCondition(
+      () => !buttonByTestId('project-skills-refresh').disabled,
+    );
+
+    buttonByTestId('project-skills-refresh').click();
 
     await waitForCondition(() => showProjectMock.mock.calls.length === 2);
   });
@@ -1348,6 +1375,9 @@ function expectSectionOrder(titles) {
   ).map((node) => {
     const clone = node.cloneNode(true);
     clone.querySelectorAll('.info-hint').forEach((dot) => dot.remove());
+    clone
+      .querySelectorAll('.projects-section-refresh')
+      .forEach((button) => button.remove());
     return clone.textContent.trim();
   });
   expect(rendered).toEqual(titles);

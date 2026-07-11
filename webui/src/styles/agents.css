@@ -19,12 +19,12 @@
 .agents-view .agent-list-pane {
   display: flex;
   min-height: 0;
-  width: 240px;
-  min-width: 240px;
+  width: var(--secondary-sidebar-width);
+  min-width: var(--secondary-sidebar-width);
   flex-direction: column;
   overflow: hidden;
   border-right: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--secondary-surface);
 }
 
 .agents-view .pane-header {
