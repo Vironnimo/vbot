@@ -19,6 +19,7 @@ export const englishCatalog = Object.freeze({
   'nav.section.insights': 'Insights',
 
   'common.alreadySaved': 'Already saved',
+  'common.add': 'Add',
   'common.back': 'Back',
   'common.cancel': 'Cancel',
   'common.clear': 'Clear',
@@ -31,7 +32,6 @@ export const englishCatalog = Object.freeze({
   'common.edit': 'Edit',
   'common.loading': 'Loading…',
   'common.moreInfo': 'More information',
-  'common.new': 'New',
   'common.refresh': 'Refresh',
   'common.remove': 'Remove',
   'common.reset': 'Reset',
@@ -364,7 +364,6 @@ export const englishCatalog = Object.freeze({
   'cron.title': 'Cron',
   'cron.subtitle':
     'Manage scheduled agent runs. Completed jobs are hidden from this list.',
-  'cron.newJob': 'New job',
   'cron.noAgents': 'Create an agent before adding cron jobs.',
   'cron.loading': 'Loading cron jobs…',
   'cron.emptyTitle': 'No scheduled jobs',
@@ -448,7 +447,6 @@ export const englishCatalog = Object.freeze({
   'projects.add.displayName': 'Display name',
   'projects.add.displayNamePlaceholder':
     'Optional — defaults to the folder name',
-  'projects.add.open': 'Add project',
   'projects.add.submit': 'Add project',
   'projects.add.submitting': 'Adding project…',
   'projects.add.missingCwd': 'Enter a repository path to add a project.',

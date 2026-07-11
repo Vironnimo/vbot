@@ -197,11 +197,11 @@ describe('CronView', () => {
     mountView();
 
     await waitForCondition(() => {
-      const button = findButtonByText('New job');
+      const button = findButtonByText('Add');
       return Boolean(button && !button.disabled);
     });
 
-    buttonByText('New job').click();
+    buttonByText('Add').click();
     flushSync();
 
     await waitForCondition(() => document.getElementById('cron-job-prompt'));
@@ -234,10 +234,10 @@ describe('CronView', () => {
     mountView();
 
     await waitForCondition(() => {
-      const button = findButtonByText('New job');
+      const button = findButtonByText('Add');
       return Boolean(button && !button.disabled);
     });
-    buttonByText('New job').click();
+    buttonByText('Add').click();
     flushSync();
 
     await waitForCondition(() => document.getElementById('cron-job-preset'));
