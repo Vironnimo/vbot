@@ -231,11 +231,13 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Send a non-streaming request.
+        """Return one completed response without exposing stream deltas.
 
         Routes to the Codex Responses endpoint when ``connection_mode`` is
-        ``CODEX_RESPONSES_MODE``; otherwise delegates to the inherited
-        ``/chat/completions`` request.
+        ``CODEX_RESPONSES_MODE``. That wire requires ``stream: true``, so the
+        adapter consumes its single SSE request internally and returns the
+        completed Responses object. Other connections delegate to the inherited
+        non-streaming ``/chat/completions`` request.
         """
 
         conversation_id = kwargs.pop(CONVERSATION_ID_KWARG, None)
@@ -243,11 +245,19 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             payload = self._build_responses_payload(
                 messages,
                 model_id=model_id,
+                stream=True,
                 **self._request_kwargs_with_defaults(kwargs),
             )
-            return await self._post_json(
-                CODEX_RESPONSES_ENDPOINT, payload, cache_scope_id=conversation_id
-            )
+            state = ResponsesStreamState()
+            async for _delta in self._stream_responses(
+                payload,
+                cache_scope_id=conversation_id,
+                state=state,
+            ):
+                pass
+            if state.completed_response is None:
+                raise NetworkError("Stream ended without a completed Responses object")
+            return state.completed_response
         return await super().send(messages, model_id=model_id, **kwargs)
 
     async def stream(
@@ -429,11 +439,12 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         payload: dict[str, Any],
         *,
         cache_scope_id: str | None = None,
+        state: ResponsesStreamState | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         response = await self._connect_stream(
             CODEX_RESPONSES_ENDPOINT, payload, cache_scope_id=cache_scope_id
         )
-        state = ResponsesStreamState()
+        stream_state = state or ResponsesStreamState()
         event_lines: list[str] = []
         seen_finish_delta = False
         try:
@@ -441,13 +452,13 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 if line:
                     event_lines.append(line)
                     continue
-                for delta in iter_responses_sse_deltas_with_state(event_lines, state):
+                for delta in iter_responses_sse_deltas_with_state(event_lines, stream_state):
                     if delta.get("type") == "finish":
                         seen_finish_delta = True
                     yield delta
                 event_lines = []
             if event_lines:
-                for delta in iter_responses_sse_deltas_with_state(event_lines, state):
+                for delta in iter_responses_sse_deltas_with_state(event_lines, stream_state):
                     if delta.get("type") == "finish":
                         seen_finish_delta = True
                     yield delta
