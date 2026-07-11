@@ -75,6 +75,8 @@
   import Banner from './components/ui/Banner.svelte';
   import Button from './components/ui/Button.svelte';
   import {
+    CONNECTION_STATUS_CONNECTED,
+    CONNECTION_STATUS_DISCONNECTED,
     createConnectionState,
     connect,
     disconnect,
@@ -128,6 +130,10 @@
   const TOAST_AUTO_DISMISS_MS = 3200;
   const MAX_RUN_SERVER_EVENTS = 500;
   const CONNECTION_READY_EVENT_TYPE = 'connection_ready';
+  const SERVER_UNAVAILABLE_NOTICE_DELAY_MS = 1000;
+  const SERVER_RESTORED_NOTICE_DURATION_MS = 1400;
+  const SERVER_NOTICE_OFFLINE = 'offline';
+  const SERVER_NOTICE_RESTORED = 'restored';
   const RUN_SERVER_EVENT_TYPES = new Set([
     'run_started',
     'run_output',
@@ -266,6 +272,13 @@
   // disconnecting. The General settings panel reloads its presence roster.
   let clientsRefreshToken = $state(0);
   let connectionState = $state(createConnectionState());
+  let serverNoticeState = $state('');
+  let serverRecoveryGeneration = $state(0);
+  let serverUnavailableNoticeTimer = null;
+  let serverRestoredNoticeTimer = null;
+  let serverUnavailable = $derived(
+    connectionState.status === CONNECTION_STATUS_DISCONNECTED,
+  );
   let toastState = $state(createToastState());
   // Application settings, fetched on mount and re-fetched on a provider/model
   // change. Drives the first-run onboarding decision. Null until first loaded.
@@ -700,6 +713,16 @@
     variant = 'info',
     autoDismiss,
   }) => {
+    // A disconnected server is already represented by the global availability
+    // notice. Suppress dependent action/load errors so one transport failure
+    // cannot flood the active view with duplicate symptoms.
+    if (
+      variant === 'error' &&
+      connectionState.status === CONNECTION_STATUS_DISCONNECTED
+    ) {
+      return;
+    }
+
     const id = addToast(toastState, { title, message, variant });
     // Error toasts stay until the user dismisses them (a transport/server
     // failure the user must acknowledge); success/info/warn auto-dismiss. An
@@ -715,6 +738,78 @@
       toastDismissTimers.delete(id);
     }, TOAST_AUTO_DISMISS_MS);
     toastDismissTimers.set(id, timer);
+  };
+
+  const clearServerNoticeTimers = () => {
+    if (serverUnavailableNoticeTimer) {
+      clearTimeout(serverUnavailableNoticeTimer);
+      serverUnavailableNoticeTimer = null;
+    }
+    if (serverRestoredNoticeTimer) {
+      clearTimeout(serverRestoredNoticeTimer);
+      serverRestoredNoticeTimer = null;
+    }
+  };
+
+  const clearOutageErrorToasts = () => {
+    const errorToastIds = new Set(
+      toastState.toasts
+        .filter((toast) => toast.variant === 'error')
+        .map((toast) => toast.id),
+    );
+    for (const id of errorToastIds) {
+      clearToastDismissTimer(id);
+    }
+    toastState.toasts = toastState.toasts.filter(
+      (toast) => !errorToastIds.has(toast.id),
+    );
+  };
+
+  const handleConnectionStatusChange = () => {
+    const status = connectionState.status;
+
+    if (status === CONNECTION_STATUS_DISCONNECTED) {
+      if (serverRestoredNoticeTimer) {
+        clearTimeout(serverRestoredNoticeTimer);
+        serverRestoredNoticeTimer = null;
+      }
+      if (serverNoticeState === SERVER_NOTICE_RESTORED) {
+        serverNoticeState = '';
+      }
+      if (
+        serverNoticeState !== SERVER_NOTICE_OFFLINE &&
+        !serverUnavailableNoticeTimer
+      ) {
+        serverUnavailableNoticeTimer = setTimeout(() => {
+          serverUnavailableNoticeTimer = null;
+          if (connectionState.status !== CONNECTION_STATUS_DISCONNECTED) {
+            return;
+          }
+          clearOutageErrorToasts();
+          serverNoticeState = SERVER_NOTICE_OFFLINE;
+        }, SERVER_UNAVAILABLE_NOTICE_DELAY_MS);
+      }
+      return;
+    }
+
+    if (serverUnavailableNoticeTimer) {
+      clearTimeout(serverUnavailableNoticeTimer);
+      serverUnavailableNoticeTimer = null;
+    }
+
+    if (
+      status === CONNECTION_STATUS_CONNECTED &&
+      serverNoticeState === SERVER_NOTICE_OFFLINE
+    ) {
+      serverNoticeState = SERVER_NOTICE_RESTORED;
+      serverRecoveryGeneration += 1;
+      serverRestoredNoticeTimer = setTimeout(() => {
+        serverRestoredNoticeTimer = null;
+        if (connectionState.status === CONNECTION_STATUS_CONNECTED) {
+          serverNoticeState = '';
+        }
+      }, SERVER_RESTORED_NOTICE_DURATION_MS);
+    }
   };
 
   const handleServerEvent = async (event) => {
@@ -780,6 +875,13 @@
       }
       return;
     }
+  };
+
+  const connectServerEvents = () => {
+    connect(connectionState, {
+      onEvent: handleServerEvent,
+      onStatusChange: handleConnectionStatusChange,
+    });
   };
 
   // Deep-link to a specific Settings panel (Agent defaults, Extensions, Voice…).
@@ -909,7 +1011,7 @@
     }
     window.addEventListener('popstate', handlePopState);
 
-    connect(connectionState, { onEvent: handleServerEvent });
+    connectServerEvents();
 
     // Load the project list for the chat dropdown (best-effort; the chat works
     // identity-only when this fails).
@@ -974,6 +1076,7 @@
       cancelled = true;
       window.removeEventListener('popstate', handlePopState);
       disconnect(connectionState);
+      clearServerNoticeTimers();
       clearToastDismissTimers();
       if (cleanupWakewordPoll) {
         cleanupWakewordPoll();
@@ -988,6 +1091,9 @@
   {activeViewId}
   onSelectView={selectView}
   connectionStatus={connectionState.status}
+  {serverUnavailable}
+  {serverNoticeState}
+  onRetryConnection={connectServerEvents}
 >
   {#if showFinishSetup}
     <Banner variant="info" class="app-finish-setup">
@@ -1002,87 +1108,89 @@
       </Button>
     </Banner>
   {/if}
-  {#if onboardingActive}
-    <OnboardingView
-      {providerAuthEvent}
-      {modelsRefreshToken}
-      targetAgentId={selectedAgentId || 'main'}
-      onComplete={completeOnboarding}
-      onDismiss={dismissOnboarding}
-      onToast={showToast}
-    />
-  {:else if activeViewId === 'chat'}
-    <ChatView
-      sharedAgents={agents}
-      sharedSelectedAgentId={selectedAgentId}
-      chatWidth={appearancePrefs.chatWidth}
-      {projects}
-      {selectedProjectId}
-      onProjectSelected={selectProject}
-      sharedSelectedProjectAgentId={selectedProjectAgentId}
-      onProjectAgentSelected={selectProjectAgent}
-      onNavigateToProjects={navigateToProjects}
-      {agentsRefreshToken}
-      onAgentsChanged={syncAgents}
-      onAgentSelected={selectAgent}
-      {navigateToSubAgent}
-      {pendingSessionNavigation}
-      onSessionNavigation={handleChatSessionNavigation}
-      {runServerEvents}
-      {connectionSnapshot}
-      {sessionsRefreshToken}
-      {queueInvalidation}
-      {wakewordStatus}
-      {desktopCapabilities}
-      onNavigateToVoiceSettings={navigateToVoiceSettings}
-      onPickModel={navigateToAgentModel}
-    />
-  {:else if activeViewId === 'agents'}
-    <AgentsView
-      sharedSelectedAgentId={selectedAgentId}
-      onAgentsChanged={refreshAgents}
-      onAgentSelected={selectAgent}
-      onToast={showToast}
-      onNavigateToSettingsPanel={navigateToSettingsPanel}
-      onNavigateToAgentPrompt={navigateToAgentPromptScope}
-      {modelsRefreshToken}
-    />
-  {:else if activeViewId === 'projects'}
-    <ProjectsView
-      selectedProjectId={managedProjectId}
-      onProjectSelected={selectManagedProject}
-      onToast={showToast}
-      onNavigateToSettingsPanel={navigateToSettingsPanel}
-      {modelsRefreshToken}
-    />
-  {:else if activeViewId === 'cron'}
-    <CronView onToast={showToast} />
-  {:else if activeViewId === 'system-prompt'}
-    <SystemPromptView
-      onToast={showToast}
-      targetScopeAgentId={promptScopeTarget}
-      targetScopeRequestId={promptScopeTargetRequestId}
-    />
-  {:else if activeViewId === 'settings'}
-    <SettingsView
-      {providerAuthEvent}
-      onToast={showToast}
-      {agents}
-      {desktopCapabilities}
-      targetPanelId={settingsPanelTarget}
-      targetPanelRequestId={settingsPanelTargetRequestId}
-      onDebugEnabledChange={handleDebugEnabledChange}
-      onOpenSetupGuide={reopenOnboarding}
-      {modelsRefreshToken}
-      {clientsRefreshToken}
-    />
-  {:else if activeViewId === 'logs'}
-    <LogsView />
-  {:else if activeViewId === 'statistics'}
-    <StatisticsView />
-  {:else if activeViewId === 'debug'}
-    <DebugView />
-  {/if}
+  {#key serverRecoveryGeneration}
+    {#if onboardingActive}
+      <OnboardingView
+        {providerAuthEvent}
+        {modelsRefreshToken}
+        targetAgentId={selectedAgentId || 'main'}
+        onComplete={completeOnboarding}
+        onDismiss={dismissOnboarding}
+        onToast={showToast}
+      />
+    {:else if activeViewId === 'chat'}
+      <ChatView
+        sharedAgents={agents}
+        sharedSelectedAgentId={selectedAgentId}
+        chatWidth={appearancePrefs.chatWidth}
+        {projects}
+        {selectedProjectId}
+        onProjectSelected={selectProject}
+        sharedSelectedProjectAgentId={selectedProjectAgentId}
+        onProjectAgentSelected={selectProjectAgent}
+        onNavigateToProjects={navigateToProjects}
+        {agentsRefreshToken}
+        onAgentsChanged={syncAgents}
+        onAgentSelected={selectAgent}
+        {navigateToSubAgent}
+        {pendingSessionNavigation}
+        onSessionNavigation={handleChatSessionNavigation}
+        {runServerEvents}
+        {connectionSnapshot}
+        {sessionsRefreshToken}
+        {queueInvalidation}
+        {wakewordStatus}
+        {desktopCapabilities}
+        onNavigateToVoiceSettings={navigateToVoiceSettings}
+        onPickModel={navigateToAgentModel}
+      />
+    {:else if activeViewId === 'agents'}
+      <AgentsView
+        sharedSelectedAgentId={selectedAgentId}
+        onAgentsChanged={refreshAgents}
+        onAgentSelected={selectAgent}
+        onToast={showToast}
+        onNavigateToSettingsPanel={navigateToSettingsPanel}
+        onNavigateToAgentPrompt={navigateToAgentPromptScope}
+        {modelsRefreshToken}
+      />
+    {:else if activeViewId === 'projects'}
+      <ProjectsView
+        selectedProjectId={managedProjectId}
+        onProjectSelected={selectManagedProject}
+        onToast={showToast}
+        onNavigateToSettingsPanel={navigateToSettingsPanel}
+        {modelsRefreshToken}
+      />
+    {:else if activeViewId === 'cron'}
+      <CronView onToast={showToast} />
+    {:else if activeViewId === 'system-prompt'}
+      <SystemPromptView
+        onToast={showToast}
+        targetScopeAgentId={promptScopeTarget}
+        targetScopeRequestId={promptScopeTargetRequestId}
+      />
+    {:else if activeViewId === 'settings'}
+      <SettingsView
+        {providerAuthEvent}
+        onToast={showToast}
+        {agents}
+        {desktopCapabilities}
+        targetPanelId={settingsPanelTarget}
+        targetPanelRequestId={settingsPanelTargetRequestId}
+        onDebugEnabledChange={handleDebugEnabledChange}
+        onOpenSetupGuide={reopenOnboarding}
+        {modelsRefreshToken}
+        {clientsRefreshToken}
+      />
+    {:else if activeViewId === 'logs'}
+      <LogsView />
+    {:else if activeViewId === 'statistics'}
+      <StatisticsView />
+    {:else if activeViewId === 'debug'}
+      <DebugView />
+    {/if}
+  {/key}
   <ToastStack toasts={toastState.toasts} onDismiss={dismissAppToast} />
 </AppShell>
 

@@ -1,4 +1,5 @@
 <script>
+  import Button from './ui/Button.svelte';
   import { t } from '$lib/i18n.js';
   import {
     CONNECTION_STATUS_CONNECTED,
@@ -11,6 +12,9 @@
     activeViewId,
     onSelectView,
     connectionStatus = CONNECTION_STATUS_RECONNECTING,
+    serverUnavailable = false,
+    serverNoticeState = '',
+    onRetryConnection = () => {},
     children,
   } = $props();
 
@@ -67,9 +71,14 @@
         ? t('status.notReachable', 'Not reachable')
         : t('status.reconnecting', 'Reconnecting…'),
   );
+
+  const serverRestored = $derived(serverNoticeState === 'restored');
 </script>
 
-<div class="app-shell">
+<div
+  class="app-shell"
+  data-server-unavailable={serverUnavailable ? 'true' : undefined}
+>
   <aside
     class="app-shell__sidebar"
     aria-label={t('navigation.primary', 'Primary navigation')}
@@ -159,7 +168,64 @@
     </div>
   </aside>
 
-  <main class="app-shell__content">
+  <main class="app-shell__content" inert={serverUnavailable ? true : undefined}>
     {@render children?.()}
   </main>
+
+  {#if serverNoticeState}
+    <aside
+      class:server-availability-notice--restored={serverRestored}
+      class="server-availability-notice"
+      role={serverRestored ? 'status' : 'alert'}
+      aria-live={serverRestored ? 'polite' : 'assertive'}
+      aria-atomic="true"
+    >
+      <span class="server-availability-notice__signal" aria-hidden="true">
+        <span></span>
+      </span>
+      <div class="server-availability-notice__content">
+        <p class="server-availability-notice__eyebrow">
+          {serverRestored
+            ? t('status.connectionRestored', 'Connection restored')
+            : t('status.connectionInterrupted', 'Connection interrupted')}
+        </p>
+        <h2>
+          {serverRestored
+            ? t('status.serverRestoredTitle', 'Server is reachable again')
+            : t('status.serverUnavailableTitle', 'Server is not reachable')}
+        </h2>
+        <p class="server-availability-notice__message">
+          {serverRestored
+            ? t(
+                'status.serverRestoredMessage',
+                'The current view has been refreshed.',
+              )
+            : t(
+                'status.serverUnavailableMessage',
+                'vBot is trying to restore the connection automatically.',
+              )}
+        </p>
+        {#if !serverRestored}
+          <details class="server-availability-notice__details">
+            <summary>{t('common.details', 'Details')}</summary>
+            <p>
+              {t(
+                'status.serverUnavailableDetails',
+                'The browser connection to the vBot server was interrupted. Features that need the server are temporarily unavailable.',
+              )}
+            </p>
+          </details>
+        {/if}
+      </div>
+      {#if !serverRestored}
+        <Button
+          variant="secondary"
+          class="server-availability-notice__retry"
+          onClick={onRetryConnection}
+        >
+          {t('status.retryNow', 'Retry now')}
+        </Button>
+      {/if}
+    </aside>
+  {/if}
 </div>

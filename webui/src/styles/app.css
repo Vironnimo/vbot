@@ -101,6 +101,7 @@
   --z-sticky: 100;
   --z-overlay: 300;
   --z-modal: 500;
+  --z-notice: 700;
   --z-floating: 1000;
 
   /* Compatibility aliases for existing Svelte components during migration. */
@@ -390,6 +391,171 @@ svg {
   flex-direction: column;
   overflow: hidden;
   padding: 0;
+}
+
+/* A server outage is one application-level condition, not one error per
+   mounted surface. The global notice owns that condition; dependent inline
+   errors stay in state but are visually and semantically quiet until the
+   active view is remounted after reconnection. */
+.app-shell[data-server-unavailable='true']
+  .app-shell__content
+  :is(
+    [role='alert'],
+    .banner--error,
+    .chat-view__project-team-error,
+    .session-drawer__state--error
+  ),
+.app-shell[data-server-unavailable='true'] .toast.error {
+  display: none;
+}
+
+.server-availability-notice {
+  position: fixed;
+  top: 24vh;
+  left: 50%;
+  z-index: var(--z-notice);
+  display: grid;
+  width: min(520px, calc(100vw - 40px));
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-md);
+  padding: 18px 18px 17px;
+  border: 1px solid var(--red);
+  border-left-width: 4px;
+  border-radius: var(--r-lg);
+  background: var(--surface-3);
+  box-shadow: var(--dropdown-elevation-strong);
+  transform: translateX(-50%);
+  animation: server-notice-in 180ms ease-out;
+}
+
+.server-availability-notice--restored {
+  border-color: var(--green);
+}
+
+.server-availability-notice__signal {
+  position: relative;
+  display: flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+
+.server-availability-notice__signal::before,
+.server-availability-notice__signal span {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--red);
+  content: '';
+}
+
+.server-availability-notice__signal::before {
+  animation: server-notice-pulse 1.8s ease-out infinite;
+}
+
+.server-availability-notice--restored
+  .server-availability-notice__signal::before,
+.server-availability-notice--restored .server-availability-notice__signal span {
+  background: var(--green);
+}
+
+.server-availability-notice--restored
+  .server-availability-notice__signal::before {
+  animation: none;
+}
+
+.server-availability-notice__content {
+  min-width: 0;
+}
+
+.server-availability-notice__eyebrow {
+  margin: 0 0 var(--space-xs);
+  color: var(--red);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.server-availability-notice--restored .server-availability-notice__eyebrow {
+  color: var(--green);
+}
+
+.server-availability-notice h2 {
+  margin: 0;
+  color: var(--text-hi);
+  font-size: var(--fs-heading-sm);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+
+.server-availability-notice__message {
+  margin: 5px 0 0;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
+}
+
+.server-availability-notice__details {
+  margin-top: var(--space-sm);
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+}
+
+.server-availability-notice__details summary {
+  width: fit-content;
+  color: var(--text-med);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
+}
+
+.server-availability-notice__details p {
+  margin: var(--space-xs) 0 0;
+  line-height: 1.45;
+}
+
+.server-availability-notice__retry {
+  white-space: nowrap;
+}
+
+@keyframes server-notice-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -10px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(-50%);
+  }
+}
+
+@keyframes server-notice-pulse {
+  0% {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+
+  70%,
+  100% {
+    opacity: 0;
+    transform: scale(2.2);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .server-availability-notice,
+  .server-availability-notice__signal::before {
+    animation: none;
+  }
 }
 
 .view {
@@ -2381,6 +2547,18 @@ kbd {
    band and the navigation becomes a single compact horizontal scroll row so it
    doesn't eat vertical space. Touch targets grow to a ≥40px hit area. */
 @media (max-width: 640px) {
+  .server-availability-notice {
+    top: 18vh;
+    width: calc(100vw - 28px);
+    grid-template-columns: auto minmax(0, 1fr);
+    padding: 16px;
+  }
+
+  .server-availability-notice__retry {
+    grid-column: 2;
+    justify-self: start;
+  }
+
   .app-shell {
     flex-direction: column;
   }

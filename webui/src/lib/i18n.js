@@ -1183,6 +1183,16 @@ export const englishCatalog = Object.freeze({
   'status.connected': 'Connected',
   'status.notReachable': 'Not reachable',
   'status.reconnecting': 'Reconnecting…',
+  'status.connectionInterrupted': 'Connection interrupted',
+  'status.connectionRestored': 'Connection restored',
+  'status.serverUnavailableTitle': 'Server is not reachable',
+  'status.serverUnavailableMessage':
+    'vBot is trying to restore the connection automatically.',
+  'status.serverUnavailableDetails':
+    'The browser connection to the vBot server was interrupted. Features that need the server are temporarily unavailable.',
+  'status.serverRestoredTitle': 'Server is reachable again',
+  'status.serverRestoredMessage': 'The current view has been refreshed.',
+  'status.retryNow': 'Retry now',
 
   'settings.voice.title': 'Voice',
   'settings.voice.subtitle': 'Wakeword detection and voice command settings.',
