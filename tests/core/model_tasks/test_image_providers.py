@@ -21,7 +21,7 @@ from core.model_tasks.image_providers import (
     _build_openrouter_image_payload,
     _parse_openai_codex_image_response,
 )
-from core.model_tasks.image_types import ImageGenerationResult
+from core.model_tasks.image_types import ImageGenerationResult, ImageInput
 from core.providers.errors import ProviderAuthError, ProviderError
 from core.providers.openai import CODEX_EXTRA_HEADERS, CODEX_RESPONSES_MODE
 from core.providers.openai_subscription_auth import OPENAI_AUTH_CLAIM
@@ -227,6 +227,24 @@ def test_build_payload_merges_extra_options_last() -> None:
     assert "extra_options" not in payload
 
 
+def test_build_payload_encodes_source_images_as_input_references() -> None:
+    payload = _build_openrouter_image_payload(
+        "openai/gpt-image-1",
+        "make it rainy",
+        {},
+        input_images=(ImageInput(filename="photo.png", media_type="image/png", data=b"source"),),
+    )
+
+    assert payload["input_references"] == [
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": "data:image/png;base64," + base64.b64encode(b"source").decode("ascii")
+            },
+        }
+    ]
+
+
 def test_unified_image_keys_constant_matches_contract() -> None:
     """The unified key whitelist must match OpenRouter's documented image
     API parameters."""
@@ -305,6 +323,30 @@ async def test_openrouter_image_generate_sends_provider_options() -> None:
     payload = json.loads(route.calls[0].request.content)
     assert payload["provider"] == {"options": {"recraft": {"style": "any_style"}}}
     assert payload["n"] == 2
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openrouter_image_generate_sends_source_images() -> None:
+    route = respx.post(OPENROUTER_IMAGES_URL).mock(
+        return_value=httpx.Response(200, json=_unified_image_response(b"edited"))
+    )
+    client = _openrouter_image_client("openai/gpt-image-1")
+
+    result = await client.generate(
+        "make it rainy",
+        options={},
+        input_images=(
+            ImageInput(filename="photo.jpg", media_type="image/jpeg", data=b"jpeg-source"),
+        ),
+    )
+
+    payload = json.loads(route.calls[0].request.content)
+    reference_url = payload["input_references"][0]["image_url"]["url"]
+    assert reference_url == (
+        "data:image/jpeg;base64," + base64.b64encode(b"jpeg-source").decode("ascii")
+    )
+    assert result.images == (b"edited",)
 
 
 @pytest.mark.asyncio
@@ -794,6 +836,38 @@ async def test_openai_image_generate_records_output_format_in_media_type() -> No
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_openai_image_edit_posts_multipart_source_images() -> None:
+    b64_payload = base64.b64encode(b"edited-png").decode("ascii")
+    route = respx.post("https://api.openai.com/v1/images/edits").mock(
+        return_value=httpx.Response(
+            200,
+            json={"created": 1, "data": [{"b64_json": b64_payload}]},
+        )
+    )
+    client = _openai_image_client("gpt-image-1")
+
+    result = await client.generate(
+        "make it rainy",
+        options={"size": "1024x1024", "quality": "high"},
+        input_images=(
+            ImageInput(filename="first.png", media_type="image/png", data=b"first-source"),
+            ImageInput(filename="second.webp", media_type="image/webp", data=b"second-source"),
+        ),
+    )
+
+    request = route.calls[0].request
+    assert request.headers["content-type"].startswith("multipart/form-data; boundary=")
+    body = request.content
+    assert b'name="model"' in body and b"gpt-image-1" in body
+    assert b'name="prompt"' in body and b"make it rainy" in body
+    assert b'name="image[]"; filename="first.png"' in body
+    assert b'name="image[]"; filename="second.webp"' in body
+    assert b"first-source" in body and b"second-source" in body
+    assert result.images == (b"edited-png",)
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_openai_image_generate_rejects_empty_data_list() -> None:
     """A 200 with no ``data`` array is a malformed OpenAI image response and
     must surface as a ``ProviderError`` (retryable, since the same request
@@ -880,6 +954,20 @@ async def test_openai_subscription_image_generate_requires_account_header() -> N
 
     with pytest.raises(ProviderAuthError, match="reconnect"):
         await client.generate("a cat", options={})
+
+
+@pytest.mark.asyncio
+async def test_openai_subscription_image_edit_is_explicitly_unsupported() -> None:
+    client = _openai_subscription_image_client("gpt-image-2")
+
+    with pytest.raises(ProviderError, match="subscription connection"):
+        await client.generate(
+            "make it rainy",
+            options={},
+            input_images=(
+                ImageInput(filename="photo.png", media_type="image/png", data=b"source"),
+            ),
+        )
 
 
 @pytest.mark.asyncio

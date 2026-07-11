@@ -10,6 +10,15 @@ JsonObject = dict[str, Any]
 
 
 @dataclass(frozen=True)
+class ImageInput:
+    """One local image loaded for a provider image-to-image request."""
+
+    filename: str
+    media_type: str
+    data: bytes
+
+
+@dataclass(frozen=True)
 class ImageGenerationResult:
     """Normalized image generation result."""
 

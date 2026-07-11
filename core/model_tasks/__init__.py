@@ -22,6 +22,7 @@ from core.model_tasks.image import (
     ImageConfigurationError,
     ImageError,
     ImageExecutionError,
+    ImageInputError,
     ImageService,
     ImageUnsupportedTargetError,
 )
@@ -75,6 +76,7 @@ __all__ = [
     "ImageError",
     "ImageExecutionError",
     "ImageGenerationResult",
+    "ImageInputError",
     "ImageService",
     "ImageUnsupportedTargetError",
     "LocalSpeechError",
