@@ -1,0 +1,432 @@
+"""Tests for durable provider-neutral Run continuation."""
+
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from core.chat import ChatMessage, ToolCall
+from core.chat.continuation import (
+    CONTINUATION_RECORD_VERSION,
+    ContinuationTracker,
+    fold_continuation_records,
+    inject_continuation_reminder,
+    normalize_interruption_cause,
+    recover_continuation,
+    render_continuation_reminder,
+)
+from core.chat.streaming import StreamingChunkTimeoutError
+from core.providers.errors import NetworkError, ProviderTimeoutError
+from core.sessions import ChatSession
+from core.utils.errors import ProviderError
+
+
+def _record(record_type: str, run_id: str = "run-one", **fields: Any) -> dict[str, Any]:
+    return {
+        "version": CONTINUATION_RECORD_VERSION,
+        "type": record_type,
+        "run_id": run_id,
+        "timestamp": "2026-07-11T12:00:00+00:00",
+        **fields,
+    }
+
+
+class _ManualClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleepers: list[tuple[float, asyncio.Future[None]]] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    async def sleep(self, delay: float) -> None:
+        future = asyncio.get_running_loop().create_future()
+        self.sleepers.append((self.now + delay, future))
+        await future
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+        remaining: list[tuple[float, asyncio.Future[None]]] = []
+        for due, future in self.sleepers:
+            if future.done():
+                continue
+            if due <= self.now:
+                future.set_result(None)
+            else:
+                remaining.append((due, future))
+        self.sleepers = remaining
+
+
+@pytest.mark.asyncio
+async def test_ten_trackers_coalesce_many_deltas_to_one_periodic_flush_each(
+    tmp_path: Path,
+) -> None:
+    clock = _ManualClock()
+    batches: list[list[list[dict[str, Any]]]] = [[] for _ in range(10)]
+    trackers: list[ContinuationTracker] = []
+    for index in range(10):
+        session = ChatSession.create(tmp_path / str(index), session_id="session")
+
+        def sink(records: list[dict[str, Any]], *, index: int = index) -> None:
+            batches[index].append(records)
+
+        tracker = ContinuationTracker(
+            session,
+            run_id=f"run-{index}",
+            request="work",
+            record_sink=sink,
+            clock=clock,
+            sleep=clock.sleep,
+        )
+        trackers.append(tracker)
+        for _ in range(100):
+            tracker.record_stream_delta(reasoning="r", content="c")
+
+    await asyncio.sleep(0)
+    clock.advance(1.99)
+    await asyncio.sleep(0)
+    assert all(len(run_batches) == 1 for run_batches in batches)
+
+    clock.advance(0.01)
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert all(len(run_batches) == 2 for run_batches in batches)
+    assert all(run_batches[1][0]["type"] == "stream_delta" for run_batches in batches)
+
+    for tracker in trackers:
+        for _ in range(100):
+            tracker.record_stream_delta(content="more")
+        tracker.record_assistant_boundary(
+            message_id="assistant",
+            reasoning="r" * 100,
+            content="c" * 100,
+            interrupted=False,
+        )
+    assert all(len(run_batches) == 3 for run_batches in batches)
+    assert all(
+        [record["type"] for record in run_batches[2]] == ["stream_delta", "assistant_boundary"]
+        for run_batches in batches
+    )
+    await asyncio.gather(*(tracker.resolve() for tracker in trackers))
+
+
+@pytest.mark.asyncio
+async def test_boundary_timer_cancellation_cannot_lose_next_dirty_flush(tmp_path: Path) -> None:
+    clock = _ManualClock()
+    batches: list[list[dict[str, Any]]] = []
+    session = ChatSession.create(tmp_path, session_id="session")
+    tracker = ContinuationTracker(
+        session,
+        run_id="run-one",
+        request="work",
+        record_sink=batches.append,
+        clock=clock,
+        sleep=clock.sleep,
+    )
+    tracker.record_stream_delta(reasoning="before")
+    await asyncio.sleep(0)
+
+    tracker.record_assistant_boundary(
+        message_id="assistant-one",
+        reasoning="before",
+        content=None,
+        interrupted=False,
+    )
+    tracker.record_stream_delta(reasoning="after")
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    clock.advance(2.0)
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert batches[-1][0]["type"] == "stream_delta"
+    assert batches[-1][0]["reasoning_delta"] == "after"
+    await tracker.resolve()
+
+
+def test_fold_preserves_chain_across_repeated_interruptions() -> None:
+    records = [
+        _record(
+            "run_started",
+            checkpoint_id="checkpoint",
+            origin_run_id="run-one",
+            request="first request",
+        ),
+        _record("stream_delta", step=1, reasoning_delta="plan", content_delta="partial"),
+        _record("run_interrupted", cause="network", user_initiated=False),
+        _record(
+            "run_started",
+            run_id="run-two",
+            checkpoint_id="checkpoint",
+            origin_run_id="run-one",
+            request=None,
+        ),
+        _record(
+            "stream_delta",
+            run_id="run-two",
+            step=1,
+            reasoning_delta="continued plan",
+            content_delta="",
+        ),
+        _record(
+            "run_interrupted",
+            run_id="run-two",
+            cause="timeout",
+            user_initiated=False,
+        ),
+    ]
+
+    state = fold_continuation_records(records)
+
+    assert state is not None
+    assert state.origin_run_id == "run-one"
+    assert state.latest_run_id == "run-two"
+    assert state.cause == "timeout"
+    assert state.reasoning == "plan\n\ncontinued plan"
+    summary = state.public_summary()
+    assert summary is not None
+    assert summary["can_continue"] is True
+
+
+@pytest.mark.parametrize(
+    ("error", "cause"),
+    [
+        (NetworkError("offline"), "network"),
+        (ProviderTimeoutError("slow"), "timeout"),
+        (StreamingChunkTimeoutError("stalled"), "timeout"),
+        (ProviderError("rejected", retryable=False), "provider"),
+        (RuntimeError("bug"), "internal"),
+    ],
+)
+def test_normalizes_all_post_admission_interruption_causes(
+    error: BaseException,
+    cause: str,
+) -> None:
+    assert normalize_interruption_cause(error) == cause
+
+
+def test_prompt_warns_before_repeating_unknown_write_edit_or_bash() -> None:
+    records = [
+        _record(
+            "run_started",
+            checkpoint_id="checkpoint",
+            origin_run_id="run-one",
+            request="change the repository",
+        ),
+        _record("tool_started", tool_call_id="write-1", name="write"),
+        _record("tool_started", tool_call_id="read-1", name="read"),
+        _record("run_interrupted", cause="process_restart", user_initiated=False),
+    ]
+    state = fold_continuation_records(records)
+    assert state is not None
+
+    reminder = render_continuation_reminder(state, context_window=32_000)
+
+    assert "Inspect the actual filesystem/process state before repeating" in reminder
+    assert "write (write-1)" in reminder
+    assert "read (read-1): unknown" in reminder
+
+
+def test_fold_references_ten_completed_tools_and_keeps_one_dangling_unknown() -> None:
+    records = [
+        _record(
+            "run_started",
+            checkpoint_id="checkpoint",
+            origin_run_id="run-one",
+            request="work",
+        )
+    ]
+    for index in range(10):
+        records.extend(
+            [
+                _record(
+                    "tool_started",
+                    tool_call_id=f"read-{index}",
+                    name="read",
+                ),
+                _record(
+                    "tool_result",
+                    tool_call_id=f"read-{index}",
+                    name="read",
+                    ok=True,
+                ),
+            ]
+        )
+    records.extend(
+        [
+            _record("tool_started", tool_call_id="edit-dangling", name="edit"),
+            _record("run_interrupted", cause="process_restart", user_initiated=False),
+        ]
+    )
+
+    state = fold_continuation_records(records)
+
+    assert state is not None
+    assert len(state.operations) == 11
+    assert sum(operation["status"] == "completed" for operation in state.operations.values()) == 10
+    assert state.operations["edit-dangling"]["status"] == "unknown"
+    assert "Inspect the actual filesystem/process state" in render_continuation_reminder(
+        state,
+        context_window=32_000,
+    )
+
+
+def test_prompt_truncation_keeps_original_request_operations_warning_and_marker() -> None:
+    records = [
+        _record(
+            "run_started",
+            checkpoint_id="checkpoint",
+            origin_run_id="run-one",
+            request="ORIGINAL REQUEST",
+        ),
+        _record(
+            "stream_delta",
+            step=1,
+            reasoning_delta="old plan " * 2_000,
+            content_delta="partial",
+        ),
+        _record("tool_started", tool_call_id="bash-1", name="bash"),
+        _record("run_interrupted", cause="internal", user_initiated=False),
+    ]
+    state = fold_continuation_records(records)
+    assert state is not None
+
+    reminder = render_continuation_reminder(state, context_window=4_000)
+
+    assert len(reminder) <= 4_000
+    assert "ORIGINAL REQUEST" in reminder
+    assert "bash-1" in reminder
+    assert "SAFETY:" in reminder
+    assert "truncated to fit" in reminder
+
+
+def test_injection_places_reminder_immediately_before_new_turn_and_deduplicates() -> None:
+    messages = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "old"},
+        {"role": "assistant", "content": "answer"},
+        {"role": "user", "content": "correction"},
+    ]
+
+    injected = inject_continuation_reminder(
+        messages,
+        '<continuation-checkpoint id="one">state</continuation-checkpoint>',
+        explicit_continue=False,
+    )
+    reinjected = inject_continuation_reminder(
+        injected,
+        '<continuation-checkpoint id="one">state</continuation-checkpoint>',
+        explicit_continue=False,
+    )
+
+    assert reinjected[-1]["content"] == "correction"
+    assert "continuation-checkpoint" in reinjected[-2]["content"]
+    assert (
+        sum("continuation-checkpoint" in str(message.get("content")) for message in reinjected) == 1
+    )
+
+
+def test_recover_classifies_abandoned_journal_as_process_restart(tmp_path: Path) -> None:
+    session = ChatSession.create(tmp_path, session_id="session")
+    session.append_continuation_record(
+        _record(
+            "run_started",
+            checkpoint_id="checkpoint",
+            origin_run_id="run-one",
+            request="work",
+        )
+    )
+
+    state = recover_continuation(session)
+
+    assert state is not None
+    assert state.cause == "process_restart"
+    summary = state.public_summary()
+    assert summary is not None
+    assert summary["can_continue"] is True
+
+
+def test_restart_reconciliation_uses_only_current_transcript_tail(tmp_path: Path) -> None:
+    session = ChatSession.create(tmp_path, session_id="session")
+    session.append(ChatMessage.user("old work"))
+    session.append(
+        ChatMessage.assistant(
+            model="test/model",
+            content=None,
+            tool_calls=[ToolCall(id="old-edit", name="edit")],
+        )
+    )
+    session.append(
+        ChatMessage.run_summary(
+            run_id="old-run",
+            status="completed",
+            timing={
+                "started_at": "2026-07-11T11:00:00+00:00",
+                "completed_at": "2026-07-11T11:00:01+00:00",
+                "duration_ms": 1_000,
+            },
+        )
+    )
+    session.append(ChatMessage.user("new work"))
+    session.append(
+        ChatMessage.assistant(
+            model="test/model",
+            content=None,
+            tool_calls=[ToolCall(id="new-bash", name="bash")],
+        )
+    )
+    session.append(
+        ChatMessage.tool(
+            tool_call_id="new-bash",
+            name="bash",
+            content='{"ok":true}',
+        )
+    )
+    session.append_continuation_record(
+        _record(
+            "run_started",
+            checkpoint_id="checkpoint",
+            origin_run_id="new-run",
+            run_id="new-run",
+            request="new work",
+        )
+    )
+
+    state = recover_continuation(session)
+
+    assert state is not None
+    assert set(state.operations) == {"new-bash"}
+    assert state.operations["new-bash"]["status"] == "completed"
+
+
+def test_recover_clears_stale_journal_when_transcript_proves_normal_completion(
+    tmp_path: Path,
+) -> None:
+    session = ChatSession.create(tmp_path, session_id="session")
+    session.append(ChatMessage.user("work"))
+    session.append(ChatMessage.assistant(model="test/model", content="done"))
+    session.append(
+        ChatMessage.run_summary(
+            run_id="run-one",
+            status="completed",
+            timing={
+                "started_at": "2026-07-11T12:00:00+00:00",
+                "completed_at": "2026-07-11T12:00:01+00:00",
+                "duration_ms": 1_000,
+            },
+        )
+    )
+    session.append_continuation_record(
+        _record(
+            "run_started",
+            checkpoint_id="checkpoint",
+            origin_run_id="run-one",
+            request="work",
+        )
+    )
+
+    assert recover_continuation(session) is None
+    assert not session.continuation_path.exists()

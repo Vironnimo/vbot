@@ -902,7 +902,7 @@ class ChannelConversationEngine:
 
         if isinstance(dispatch_result, CommandAction):
             if defer_actions:
-                # Command actions can run long (compact = model call, retry = full Run
+                # Command actions can run long (compact = model call, continue = full Run
                 # relay). The adapter feeds updates sequentially, so they must not be
                 # awaited in the update handler; the per-conversation worker owns slow work.
                 if not self._enqueue_chat_work(
@@ -946,9 +946,9 @@ class ChannelConversationEngine:
                 await self._send_reply(reply_plan, reply)
             case "new_session":
                 await self._start_new_session(route, reply_plan, conversation_key)
-            case "retry_last_turn":
+            case "continue":
                 try:
-                    run = await self._trigger_service.retry_run(
+                    run = await self._trigger_service.continue_run(
                         route.agent_id,
                         route.session_id,
                     )

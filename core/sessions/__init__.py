@@ -3,8 +3,8 @@
 from core.chat.errors import ChatSessionError
 from core.sessions.sessions import (
     CHANNEL_MESSAGE_NOTE_PREFIX,
+    CONTINUATION_FILE_SUFFIX,
     FORK_SOURCE_META_KEY,
-    PARTIAL_THINKING_NOTE_PREFIX,
     SESSION_FILE_EXTENSION,
     SESSION_FORK_ALWAYS_STRIP_META_KEYS,
     SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS,
@@ -13,7 +13,6 @@ from core.sessions.sessions import (
     ChatSession,
     ChatSessionManager,
     is_channel_message_note,
-    is_partial_thinking_note,
     is_skill_available_note,
     is_skill_context_note,
     skill_activation_names,
@@ -25,8 +24,8 @@ from core.sessions.sessions import (
 
 __all__ = [
     "CHANNEL_MESSAGE_NOTE_PREFIX",
+    "CONTINUATION_FILE_SUFFIX",
     "FORK_SOURCE_META_KEY",
-    "PARTIAL_THINKING_NOTE_PREFIX",
     "SESSION_FILE_EXTENSION",
     "SESSION_FORK_ALWAYS_STRIP_META_KEYS",
     "SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS",
@@ -36,7 +35,6 @@ __all__ = [
     "ChatSessionError",
     "ChatSessionManager",
     "is_channel_message_note",
-    "is_partial_thinking_note",
     "is_skill_available_note",
     "is_skill_context_note",
     "skill_activation_names",

@@ -46,7 +46,7 @@ CommandActionName = Literal[
     "new_session",
     "reflect",
     "rename_session",
-    "retry_last_turn",
+    "continue",
     "set_model",
 ]
 StatusActivityName = Literal["idle", "running"]
@@ -263,9 +263,9 @@ class CommandDispatcher:
             argument="optional",
             output="toast",
         ),
-        "retry": CommandSpec(
-            "retry",
-            "Retry the last user turn in this session.",
+        "continue": CommandSpec(
+            "continue",
+            "Continue the interrupted work retained for this session.",
             argument="none",
             output="action",
         ),
@@ -316,7 +316,7 @@ class CommandDispatcher:
             "new": self._handle_new,
             "reflect": self._handle_reflect,
             "rename": self._handle_rename,
-            "retry": self._handle_retry,
+            "continue": self._handle_continue,
             "status": self._handle_status,
             "stop": self._handle_stop,
         }
@@ -530,7 +530,9 @@ class CommandDispatcher:
         self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
     ) -> CommandHandled:
         try:
-            self._chat_runs.cancel_by_session(agent_id, session_id, project_id=project_id)
+            self._chat_runs.cancel_by_session(
+                agent_id, session_id, project_id=project_id, reason="user"
+            )
         except RunNotFoundError:
             return CommandHandled(reply="No active run to cancel.", output="toast")
         return CommandHandled(reply="Run cancelled.", output="toast")
@@ -553,10 +555,10 @@ class CommandDispatcher:
         """
         return CommandAction(name="rename_session", argument=argument)
 
-    def _handle_retry(
+    def _handle_continue(
         self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
     ) -> CommandAction:
-        return CommandAction(name="retry_last_turn")
+        return CommandAction(name="continue")
 
     def _handle_status(
         self, agent_id: str, session_id: str, argument: str | None, project_id: str | None

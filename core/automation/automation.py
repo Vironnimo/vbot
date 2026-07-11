@@ -130,15 +130,17 @@ class TriggerService:
             return False
         return self._chat_run_manager.release_waiting_work(admission)
 
-    async def retry_run(
+    async def continue_run(
         self, agent_id: str, session_id: str, *, project_id: str | None = None
     ) -> Run:
-        """Retry the last user turn for a channel or automation entry point.
+        """Continue retained interrupted work for a channel or automation entry point.
 
         ``project_id=None`` keeps the identity scope — channels are identity-only
         callers today.
         """
-        return await self._trigger_chat_loop.retry_run(agent_id, session_id, project_id=project_id)
+        return await self._trigger_chat_loop.continue_run(
+            agent_id, session_id, project_id=project_id
+        )
 
     def has_active_run(
         self, agent_id: str, session_id: str, *, project_id: str | None = None

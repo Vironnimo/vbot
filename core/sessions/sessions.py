@@ -27,6 +27,7 @@ JsonObject = dict[str, Any]
 TIMESTAMP_SUFFIX = "+00:00"
 UTC_Z_SUFFIX = "Z"
 SESSION_FILE_EXTENSION = ".jsonl"
+CONTINUATION_FILE_SUFFIX = ".continuation.jsonl"
 SESSION_LINE_ENDING = "\n"
 SESSION_LINE_ENDING_BYTES = b"\n"
 SESSION_APPEND_FLAGS = os.O_APPEND | os.O_CREAT | os.O_WRONLY
@@ -79,7 +80,6 @@ SKILL_CONTEXT_NOTE_PREFIX = "[skill-context] "
 # into the skills domain). Drift is guarded by tests against the tool's constants.
 SKILL_TOOL_MESSAGE_NAME = "skill"
 SKILL_TOOL_LOADED_STATUS = "loaded"
-PARTIAL_THINKING_NOTE_PREFIX = "[partial-thinking] "
 CHANNEL_MESSAGE_NOTE_PREFIX = "[channel-message] "
 SKILL_AVAILABLE_NOTE_PREFIX = "[skill-available] "
 _TAIL_CHUNK_SIZE = 8192
@@ -121,6 +121,11 @@ class ChatSession:
         """Return the JSON metadata sidecar path for this session."""
         return self.path.with_name(f"{self.path.stem}.meta.json")
 
+    @property
+    def continuation_path(self) -> Path:
+        """Return the append-only continuation journal path for this session."""
+        return self.path.with_name(f"{self.path.stem}{CONTINUATION_FILE_SUFFIX}")
+
     def append(self, message: ChatMessage) -> None:
         """Append one canonical message as a single JSONL line."""
         payload = json.dumps(message.to_dict(), ensure_ascii=False, separators=(",", ":"))
@@ -130,6 +135,71 @@ class ChatSession:
             _append_bytes(self.path, line)
         except OSError as exc:
             raise ChatSessionError(f"failed to append message to session: {self.id}") from exc
+
+    def append_continuation_record(self, record: JsonObject) -> None:
+        """Append one compact object to the continuation journal and fsync it."""
+        self.append_continuation_records([record])
+
+    def append_continuation_records(self, records: list[JsonObject]) -> None:
+        """Append one journal batch through a single append+fsync operation."""
+        if not records:
+            return
+        encoded_lines: list[bytes] = []
+        for record in records:
+            if not isinstance(record, dict):
+                raise ChatSessionError("continuation record must be an object")
+            try:
+                payload = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+            except (TypeError, ValueError) as exc:
+                raise ChatSessionError("continuation record must be JSON-serializable") from exc
+            encoded_lines.append((payload + SESSION_LINE_ENDING).encode("utf-8"))
+        self.continuation_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            _append_bytes(self.continuation_path, b"".join(encoded_lines))
+        except OSError as exc:
+            raise ChatSessionError(
+                f"failed to append continuation record for session: {self.id}"
+            ) from exc
+
+    def load_continuation_records(self) -> list[JsonObject]:
+        """Load ordered continuation records, repairing only a torn final line."""
+        path = self.continuation_path
+        if not path.exists():
+            return []
+        records: list[JsonObject] = []
+        with path.open("rb") as journal_file:
+            line_number = 0
+            while True:
+                line_start_offset = journal_file.tell()
+                line_bytes = journal_file.readline()
+                if line_bytes == b"":
+                    break
+                line_number += 1
+                if not line_bytes.strip():
+                    continue
+                try:
+                    data = json.loads(line_bytes.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    if _is_unterminated_line(line_bytes):
+                        self._truncate_continuation_tail(
+                            byte_offset=line_start_offset,
+                            line_number=line_number,
+                        )
+                        break
+                    kind = "UTF-8" if isinstance(exc, UnicodeDecodeError) else "JSON"
+                    raise ChatSessionError(
+                        f"invalid continuation {kind} at line {line_number}"
+                    ) from exc
+                if not isinstance(data, dict):
+                    raise ChatSessionError(
+                        f"continuation record at line {line_number} must be an object"
+                    )
+                records.append(dict(data))
+        return records
+
+    def clear_continuation(self) -> None:
+        """Remove the disposable continuation journal if it exists."""
+        self.continuation_path.unlink(missing_ok=True)
 
     def begin_defer_notes(self) -> None:
         """Defer note persistence until tool-result messages have been appended."""
@@ -282,9 +352,10 @@ class ChatSession:
         return messages
 
     def delete(self) -> None:
-        """Delete the session file and metadata sidecar if they exist."""
+        """Delete the session file and both sidecars if they exist."""
         self.path.unlink(missing_ok=True)
         self.sidecar_path.unlink(missing_ok=True)
+        self.clear_continuation()
 
     @staticmethod
     def _parse_line_bytes(line: bytes, line_number: int) -> ChatMessage:
@@ -320,6 +391,22 @@ class ChatSession:
             ) from exc
         _LOGGER.warning(
             "Recovered session %s by truncating partial JSONL line %s",
+            self.id,
+            line_number,
+        )
+
+    def _truncate_continuation_tail(self, *, byte_offset: int, line_number: int) -> None:
+        try:
+            with self.continuation_path.open("r+b") as journal_file:
+                journal_file.truncate(byte_offset)
+                journal_file.flush()
+                os.fsync(journal_file.fileno())
+        except OSError as exc:
+            raise ChatSessionError(
+                f"failed to recover partial continuation write at line {line_number}"
+            ) from exc
+        _LOGGER.warning(
+            "Recovered session %s continuation journal by truncating partial JSONL line %s",
             self.id,
             line_number,
         )
@@ -534,7 +621,7 @@ class ChatSessionManager:
         target_project_id: str | None = None,
         strip_meta_keys: frozenset[str] = frozenset(),
     ) -> ChatSession:
-        """Relocate a session's two files from one (agent, project) home to another.
+        """Relocate a session's transcript and sidecars to another home.
 
         Storage-only: this neither resets any "current" pointer nor touches
         derived indexes — the caller owns those, so the sessions domain stays
@@ -562,7 +649,9 @@ class ChatSessionManager:
                 raise ChatSessionError(f"destination session already exists: {session_id}")
 
             source_sidecar = source.sidecar_path
+            source_continuation = source.continuation_path
             had_sidecar = source_sidecar.exists()
+            had_continuation = source_continuation.exists()
             sidecar_data = self._load_sidecar(source)
 
             destination_dir.mkdir(parents=True, exist_ok=True)
@@ -577,6 +666,17 @@ class ChatSessionManager:
                 }
                 self.set_metadata(target_agent_id, session_id, stripped, target_project_id)
                 source_sidecar.unlink(missing_ok=True)
+
+            if had_continuation:
+                destination_continuation = destination_path.with_name(
+                    f"{session_id}{CONTINUATION_FILE_SUFFIX}"
+                )
+                try:
+                    os.replace(source_continuation, destination_continuation)
+                except OSError as exc:
+                    raise ChatSessionError(
+                        f"failed to move continuation journal: {session_id}"
+                    ) from exc
 
             return ChatSession(destination_path)
 
@@ -671,7 +771,7 @@ class ChatSessionManager:
         return sessions_with_metadata
 
     def delete(self, agent_id: str, session_id: str, project_id: str | None = None) -> None:
-        """Hard-delete one agent session's two files.
+        """Hard-delete one agent session's transcript and sidecars.
 
         Low-level primitive (unlink transcript + sidecar). The session-deletion
         feature does not call this — it archives via :meth:`archive` so a
@@ -681,7 +781,7 @@ class ChatSessionManager:
         self.get(agent_id, session_id, project_id).delete()
 
     async def archive(self, agent_id: str, session_id: str, project_id: str | None = None) -> Path:
-        """Archive one session's two files instead of hard-deleting them.
+        """Archive one session's transcript and sidecars instead of deleting them.
 
         The deletion feature's storage step: mirrors ``AgentStore``/
         ``ProjectStore`` by moving the transcript and sidecar under
@@ -702,12 +802,15 @@ class ChatSessionManager:
             archive_dir.mkdir(parents=True, exist_ok=True)
             archived_transcript = archive_dir / source.path.name
             archived_sidecar = archive_dir / source.sidecar_path.name
+            archived_continuation = archive_dir / source.continuation_path.name
 
             # Replace any prior archive for the same id (mirrors agent/project).
             archived_transcript.unlink(missing_ok=True)
             archived_sidecar.unlink(missing_ok=True)
+            archived_continuation.unlink(missing_ok=True)
 
             had_sidecar = source.sidecar_path.exists()
+            had_continuation = source.continuation_path.exists()
             try:
                 os.replace(source.path, archived_transcript)
             except OSError as exc:
@@ -716,6 +819,8 @@ class ChatSessionManager:
                 ) from exc
             if had_sidecar:
                 os.replace(source.sidecar_path, archived_sidecar)
+            if had_continuation:
+                os.replace(source.continuation_path, archived_continuation)
             return archive_dir
 
     def _archive_dir(self, agent_id: str, project_id: str | None) -> Path:
@@ -905,15 +1010,6 @@ def skill_activation_names(messages: list[ChatMessage]) -> frozenset[str]:
     skill whose carrier already survives verbatim.
     """
     return frozenset(_skill_contexts_from_messages(messages))
-
-
-def is_partial_thinking_note(message: ChatMessage) -> bool:
-    """Return whether a note holds partial thinking from an interrupted run."""
-    return (
-        message.role == "note"
-        and isinstance(message.content, str)
-        and message.content.startswith(PARTIAL_THINKING_NOTE_PREFIX)
-    )
 
 
 def is_channel_message_note(message: ChatMessage) -> bool:

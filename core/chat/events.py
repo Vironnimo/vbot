@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import inspect
 import time
-from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -24,7 +23,6 @@ from core.chat.messages import (
     _format_timestamp,
 )
 from core.chat.streaming import (
-    StreamingAccumulator,
     StreamingChunkTimeoutError,
     StreamingDeltaError,
 )
@@ -40,7 +38,7 @@ from core.runs import (
     REASONING_EVENT,
     Run,
 )
-from core.sessions import PARTIAL_THINKING_NOTE_PREFIX, ChatSession
+from core.sessions import ChatSession
 from core.utils.errors import ConfigError, ProviderError, VBotError
 
 
@@ -83,33 +81,6 @@ def _emit_message_event(
         {"message": _visible_message_payload(message)},
         allow_after_cancel=allow_after_cancel,
     )
-
-
-PARTIAL_THINKING_CAP = 2000
-"""Max chars of partial reasoning kept in the interruption note (head retained)."""
-
-
-def _maybe_persist_partial_thinking(
-    accumulator: StreamingAccumulator,
-    note_hook: Callable[[str], None] | None,
-) -> None:
-    if note_hook is None:
-        return
-    partial = accumulator.partial_reasoning
-    if partial:
-        note_hook(_partial_thinking_note_content(partial))
-
-
-def _partial_thinking_note_content(partial: str) -> str:
-    """Prefix-tag and size-cap the interruption note.
-
-    The ``[partial-thinking]`` prefix lets ``_assemble_request_history`` embed
-    the note one-shot (only until the next run produces an assistant turn); the
-    cap stops a long aborted thinking stream from bloating every later request.
-    """
-    if len(partial) > PARTIAL_THINKING_CAP:
-        partial = f"{partial[:PARTIAL_THINKING_CAP]}\n[… partial thinking truncated]"
-    return f"{PARTIAL_THINKING_NOTE_PREFIX}Partial thinking before interruption:\n{partial}"
 
 
 def _visible_message_payload(message: ChatMessage) -> JsonObject:

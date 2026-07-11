@@ -247,6 +247,7 @@ async def test_dispatch_stop_with_active_run_returns_cancelled_reply() -> None:
     assert isinstance(result, CommandHandled)
     assert result.reply == "Run cancelled."
     assert run.cancel_requested is True
+    assert run.cancel_reason == "user"
 
     release.set()
     with pytest.raises(RunCancelledError):
@@ -289,7 +290,7 @@ def test_built_in_commands_include_current_catalog() -> None:
         "new",
         "reflect",
         "rename",
-        "retry",
+        "continue",
         "status",
         "stop",
     }
@@ -310,7 +311,7 @@ def test_built_in_commands_declare_argument_and_output_metadata() -> None:
         "new": "none",
         "reflect": "optional",
         "rename": "optional",
-        "retry": "none",
+        "continue": "none",
         "status": "none",
         "stop": "none",
     }
@@ -324,7 +325,7 @@ def test_built_in_commands_declare_argument_and_output_metadata() -> None:
         "new": "action",
         "reflect": "action",
         "rename": "toast",
-        "retry": "action",
+        "continue": "action",
         "status": "transient",
         "stop": "toast",
     }
@@ -677,7 +678,7 @@ def test_dispatch_no_argument_command_with_trailing_text_is_not_a_command() -> N
         ("/compact", "compact"),
         ("/new", "new_session"),
         ("/rename", "rename_session"),
-        ("/retry", "retry_last_turn"),
+        ("/continue", "continue"),
     ],
 )
 def test_dispatch_accessor_commands_return_actions(message: str, action_name: str) -> None:
@@ -764,7 +765,8 @@ def test_dispatch_help_returns_current_command_list() -> None:
     assert isinstance(result, CommandHandled)
     assert result.reply is not None
     assert "/compact - Compact the current session's context immediately." in result.reply
-    assert "/retry - Retry the last user turn in this session." in result.reply
+    assert "/continue - Continue the interrupted work retained for this session." in result.reply
+    assert "/retry" not in result.reply
     assert "$skill-name" in result.reply
 
 

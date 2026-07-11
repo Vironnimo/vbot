@@ -22,6 +22,12 @@ from core.chat import (
     MessageSender,
     ToolCall,
 )
+from core.chat.continuation import (
+    ContinuationTracker,
+    inject_continuation_reminder,
+    recover_continuation,
+    render_continuation_reminder,
+)
 from core.chat.messages import _notes_to_synthetic_user_message
 from core.chat.streaming import StreamingChunkTimeoutError, StreamingDeltaError
 from core.projects import AgentResolutionError, ConfigAgent
@@ -33,6 +39,7 @@ from core.providers.errors import (
     ProviderStreamingUnsupportedError,
 )
 from core.providers.reasoning import (
+    REASONING_REPLAY_CURRENT_RUN,
     REASONING_REPLAY_FULL_HISTORY,
     REASONING_REPLAY_NONE,
     ReasoningReplayPolicy,
@@ -429,6 +436,43 @@ class BlockingReasoningStreamingStubAdapter(ClosingStubAdapter):
         self.stream_started.set()
         await self.release.wait()
         yield {"type": "content_delta", "text": "late"}
+
+
+class TenToolsThenBlockingReasoningAdapter(ClosingStubAdapter):
+    """Completes ten tools, then exposes readable work until cancellation."""
+
+    def __init__(self) -> None:
+        super().__init__([])
+        self.second_step_started = asyncio.Event()
+
+    async def stream(
+        self,
+        messages: list[JsonObject],
+        *,
+        model_id: str,
+        **kwargs: Any,
+    ) -> Any:
+        self.stream_requests.append(
+            {"messages": deepcopy(messages), "model_id": model_id, "kwargs": deepcopy(kwargs)}
+        )
+        if len(self.stream_requests) == 1:
+            yield {"type": "reasoning_delta", "text": "Plan the batch. "}
+            yield {"type": "reasoning_delta", "text": "Inspect every result."}
+            for index in range(10):
+                yield {
+                    "type": "tool_call_delta",
+                    "id": f"call-{index}",
+                    "name_delta": "get_weather",
+                    "arguments_delta": '{"city":"Berlin"}',
+                }
+            yield {"type": "finish", "reason": "tool_calls"}
+            return
+        if len(self.stream_requests) == 2:
+            yield {"type": "reasoning_delta", "text": "Review the completed batch. "}
+            yield {"type": "reasoning_delta", "text": "Prepare the final answer."}
+            self.second_step_started.set()
+            await asyncio.Event().wait()
+        raise AssertionError("unexpected adapter stream request")
 
 
 class StalledStreamingStubAdapter(StubAdapter):
@@ -1441,6 +1485,76 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
     assert rebuilt[2]["content"] == "Tail user"
     assert rebuilt[3]["content"] == "Tail assistant"
     assert any(event.type == COMPACTION_COMPLETED_EVENT for event in run.events)
+
+
+@pytest.mark.asyncio
+async def test_compaction_reinjects_the_active_continuation_checkpoint(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        storage=StubStorage(
+            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 100}),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Original work"))
+    session.append(ChatMessage.assistant(model=agent.model, content="Partial"))
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="Compacted context.",
+        projection=session.load(),
+        compacted_token_count=42,
+    )
+    compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
+    loop = ChatLoop(runtime, compaction_service=cast(Any, compaction_service))
+
+    interrupted_tracker = ContinuationTracker(
+        session,
+        run_id="run-one",
+        request="Original work",
+    )
+    interrupted_tracker.record_stream_delta(reasoning="Keep this plan")
+    await interrupted_tracker.interrupt("network")
+    prior = recover_continuation(session)
+    assert prior is not None
+    active_tracker = ContinuationTracker(
+        session,
+        run_id="run-two",
+        request=None,
+        prior_state=prior,
+    )
+    reminder = render_continuation_reminder(prior, context_window=100)
+    messages = inject_continuation_reminder(
+        await loop._build_request_messages(agent, session),
+        reminder,
+        explicit_continue=True,
+    )
+    run = Run(run_id="run-two", agent_id=agent.id, session_id=session.id)
+
+    rebuilt = await loop._maybe_auto_compact(
+        agent,
+        adapter,
+        "gpt-5.2",
+        session,
+        messages,
+        usage={"input_tokens": 90},
+        run=run,
+        continuation_tracker=active_tracker,
+        continuation_reminder=reminder,
+        explicit_continue=True,
+    )
+
+    reminder_messages = [
+        message
+        for message in rebuilt
+        if "<continuation-checkpoint" in str(message.get("content") or "")
+    ]
+    assert len(reminder_messages) == 1
+    assert "Keep this plan" in reminder_messages[0]["content"]
+    await active_tracker.interrupt("network")
 
 
 @pytest.mark.asyncio
@@ -2814,20 +2928,23 @@ async def test_streaming_mode_malformed_tool_arguments_persist_provider_error(
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
+    loop = ChatLoop(runtime, streaming=True)
     with pytest.raises(StreamingDeltaError, match="malformed or incomplete arguments"):
-        await ChatLoop(runtime, streaming=True).send("coder", "Build it", session_id="session-one")
+        await loop.send("coder", "Build it", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
 
     assert run.status == RunStatus.FAILED
-    assert persisted_roles(messages) == ["user", "note", "error"]
-    assert (
-        messages[1].content
-        == "[partial-thinking] Partial thinking before interruption:\nNeed to write the file."
-    )
-    assert messages[2].error_kind == "provider_error"
-    assert "malformed or incomplete arguments" in (messages[2].content or "")
+    assert persisted_roles(messages) == ["user", "error"]
+    continuation = loop.continuation_summary("coder", "session-one")
+    assert continuation is not None
+    assert continuation["cause"] == "internal"
+    state = recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
+    assert state is not None
+    assert state.reasoning == "Need to write the file."
+    assert messages[1].error_kind == "provider_error"
+    assert "malformed or incomplete arguments" in (messages[1].content or "")
     assert [event.type for event in run.events][-2:] == [
         ERROR_MESSAGE_PERSISTED_EVENT,
         "run_failed",
@@ -3080,7 +3197,7 @@ async def test_streaming_mode_cancellation_closes_adapter_and_preserves_visible_
 
     run = await ChatLoop(runtime, streaming=True).start_run("coder", "Hi", session_id="session-one")
     await adapter.stream_started.wait()
-    run.request_cancel()
+    run.request_cancel(reason="user")
     await asyncio.sleep(0)
 
     with pytest.raises(RunCancelledError):
@@ -3106,26 +3223,27 @@ async def test_streaming_mode_cancellation_closes_adapter_and_preserves_visible_
 
 
 @pytest.mark.asyncio
-async def test_streaming_cancellation_with_reasoning_persists_partial_thinking_note(
+async def test_streaming_cancellation_with_reasoning_retains_continuation(
     tmp_path: Path,
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = MidStreamCancelledStubAdapter([])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
+    loop = ChatLoop(runtime, streaming=True)
     with pytest.raises(RunCancelledError):
-        await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
+        await loop.send("coder", "Hi", session_id="session-one")
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
-    assert persisted_roles(messages) == ["user", "note"]
-    assert (
-        messages[1].content
-        == "[partial-thinking] Partial thinking before interruption:\nNeed network."
-    )
+    assert persisted_roles(messages) == ["user"]
+    state = recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
+    assert state is not None
+    assert state.reasoning == "Need network."
+    assert state.cause == "internal"
 
 
 @pytest.mark.asyncio
-async def test_streaming_network_error_with_reasoning_persists_partial_thinking_note(
+async def test_streaming_network_error_with_reasoning_retains_continuation(
     tmp_path: Path,
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
@@ -3140,16 +3258,17 @@ async def test_streaming_network_error_with_reasoning_persists_partial_thinking_
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
+    loop = ChatLoop(runtime, streaming=True)
     with pytest.raises(NetworkError, match="offline"):
-        await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
+        await loop.send("coder", "Hi", session_id="session-one")
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
-    assert persisted_roles(messages) == ["user", "note", "error"]
-    assert (
-        messages[1].content
-        == "[partial-thinking] Partial thinking before interruption:\nNeed network."
-    )
-    assert messages[2].error_kind == "network_error"
+    assert persisted_roles(messages) == ["user", "error"]
+    state = recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
+    assert state is not None
+    assert state.reasoning == "Need network."
+    assert state.cause == "network"
+    assert messages[1].error_kind == "network_error"
 
 
 @pytest.mark.asyncio
@@ -3175,7 +3294,7 @@ async def test_streaming_network_error_after_visible_content_preserves_partial(
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     # Visible content present at the drop → preserved as an interrupted turn,
-    # not discarded with only a partial-thinking note.
+    # not discarded; the Continuation Checkpoint retains the readable state.
     assert assistant.content == "partial"
     assert assistant.interrupted is True
     assert run.status == RunStatus.COMPLETED
@@ -3216,7 +3335,7 @@ async def test_streaming_mode_restarts_after_transient_drop_before_visible_outpu
     assert assistant.content == "Recovered"
     assert len(adapter.stream_requests) == 2
     assert run.status == RunStatus.COMPLETED
-    # The discarded attempt leaves no error and no partial-thinking note.
+    # The discarded attempt leaves no error or durable readable state.
     assert persisted_roles(messages) == ["user", "assistant"]
 
 
@@ -3309,7 +3428,7 @@ async def test_streaming_mode_restarts_after_chunk_stall_before_visible_output(
     assert assistant.content == "Recovered"
     assert len(adapter.stream_requests) == 2
     assert run.status == RunStatus.COMPLETED
-    # The discarded attempt leaves no error and no partial-thinking note.
+    # The discarded attempt leaves no error or durable readable state.
     assert persisted_roles(messages) == ["user", "assistant"]
 
 
@@ -3491,7 +3610,7 @@ async def test_user_cancel_after_visible_stream_preserves_partial_and_stays_canc
 
     run = await ChatLoop(runtime, streaming=True).start_run("coder", "Hi", session_id="session-one")
     await adapter.stream_started.wait()
-    run.request_cancel()
+    run.request_cancel(reason="user")
     await asyncio.sleep(0)
 
     # A user cancel mid visible stream still ends as cancelled — never
@@ -3509,7 +3628,7 @@ async def test_user_cancel_after_visible_stream_preserves_partial_and_stays_canc
 
 
 @pytest.mark.asyncio
-async def test_user_cancel_without_visible_output_persists_nothing_but_run_summary(
+async def test_user_cancel_without_visible_output_retains_checkpoint_without_continue(
     tmp_path: Path,
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
@@ -3519,21 +3638,23 @@ async def test_user_cancel_without_visible_output_persists_nothing_but_run_summa
 
     run = await ChatLoop(runtime, streaming=True).start_run("coder", "Hi", session_id="session-one")
     await adapter.stream_started.wait()
-    run.request_cancel()
+    run.request_cancel(reason="user")
     await asyncio.sleep(0)
 
     with pytest.raises(RunCancelledError):
         await run.wait()
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
-    # Reasoning-only cancel: no assistant text is persisted (only the
-    # partial-thinking note), and the cancelled run summary is the timeline's
-    # only anchor for rendering the cancelled run row after a reload.
+    # Reasoning-only cancel: no assistant text or recovery note is persisted in
+    # canonical history; the durable checkpoint owns the readable working state.
     assert run.status == RunStatus.CANCELLED
-    assert persisted_roles(messages) == ["user", "note"]
-    assert messages[1].content == (
-        "[partial-thinking] Partial thinking before interruption:\nThinking hard."
-    )
+    assert persisted_roles(messages) == ["user"]
+    state = recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
+    assert state is not None
+    assert state.reasoning == "Thinking hard."
+    summary = state.public_summary()
+    assert summary is not None
+    assert summary["can_continue"] is False
     summaries = [message for message in messages if message.role == "run_summary"]
     assert summaries[-1].status == "cancelled"
 
@@ -3844,81 +3965,318 @@ async def test_start_run_requires_existing_session(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_retry_run_reuses_last_user_turn_without_appending_new_user_message(
+async def test_continue_run_uses_checkpoint_without_appending_duplicate_user_message(
     tmp_path: Path,
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = StubAdapter([{"content": "Retried", "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    session = runtime.chat_sessions.create("coder", session_id="session-one")
-    session.append(ChatMessage.user("Hi"))
-    session.append(ChatMessage.error("rate_limit", "Provider rate limited the previous run"))
+    interrupted_adapter = StubAdapter(
+        [],
+        stream_responses=[NetworkError("offline") for _ in range(3)],
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=interrupted_adapter)
+    loop = ChatLoop(runtime, streaming=True)
 
-    run = await ChatLoop(runtime).retry_run("coder", "session-one")
+    with pytest.raises(NetworkError):
+        await loop.send("coder", "Hi", session_id="session-one")
+
+    adapter = StubAdapter([{"content": "Continued", "tool_calls": None}])
+    runtime.adapter = adapter
+
+    run = await ChatLoop(runtime).continue_run("coder", "session-one")
     assistant = await run.wait()
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
-    assert assistant.content == "Retried"
+    assert assistant.content == "Continued"
     assert persisted_roles(messages) == ["user", "error", "assistant"]
     assert sum(1 for message in messages if message.role == "user") == 1
+    request_text = "\n".join(
+        str(message.get("content") or "") for message in adapter.requests[0]["messages"]
+    )
+    assert "<continuation-checkpoint" in request_text
+    assert "Original request(s):\nHi" in request_text
+    assert not runtime.chat_sessions.get("coder", "session-one").continuation_path.exists()
 
 
 @pytest.mark.asyncio
-async def test_retry_run_raises_chat_session_error_when_no_user_message_exists(
+async def test_continue_run_raises_when_no_checkpoint_exists(
     tmp_path: Path,
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter([{"content": "unused", "tool_calls": None}])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    session = runtime.chat_sessions.create("coder", session_id="session-one")
-    session.append(ChatMessage.error("rate_limit", "Provider rate limited the previous run"))
+    runtime.chat_sessions.create("coder", session_id="session-one")
 
-    with pytest.raises(ChatSessionError, match="no user message in session to retry"):
-        await ChatLoop(runtime).retry_run("coder", "session-one")
+    with pytest.raises(ChatSessionError, match="no interrupted work"):
+        await ChatLoop(runtime).continue_run("coder", "session-one")
 
     assert adapter.requests == []
 
 
 @pytest.mark.asyncio
-async def test_retry_run_rejects_second_run_for_same_session(tmp_path: Path) -> None:
+async def test_continue_run_rejects_second_run_for_same_session(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    interrupted_adapter = StubAdapter(
+        [],
+        stream_responses=[NetworkError("offline") for _ in range(3)],
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=interrupted_adapter)
+    with pytest.raises(NetworkError):
+        await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
     adapter = BlockingStubAdapter()
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    runtime.chat_sessions.create("coder", session_id="session-one")
+    runtime.adapter = adapter
 
-    first_run = await ChatLoop(runtime).start_run("coder", "Hi", session_id="session-one")
+    loop = ChatLoop(runtime)
+    first_run = await loop.continue_run("coder", "session-one")
     await adapter.request_started.wait()
 
     with pytest.raises(ActiveRunError, match="active run"):
-        await ChatLoop(runtime).retry_run("coder", "session-one")
+        await loop.continue_run("coder", "session-one")
 
-    first_run.request_cancel()
+    first_run.request_cancel(reason="user")
     adapter.release.set()
     with pytest.raises(RunCancelledError):
         await first_run.wait()
 
 
 @pytest.mark.asyncio
-async def test_retry_run_embeds_previous_visible_error_as_system_reminder(
+async def test_discard_continuation_clears_checkpoint(
     tmp_path: Path,
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = StubAdapter([{"content": "Retried", "tool_calls": None}])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[NetworkError("offline") for _ in range(3)],
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    loop = ChatLoop(runtime, streaming=True)
+    with pytest.raises(NetworkError):
+        await loop.send("coder", "Hi", session_id="session-one")
+
+    loop.discard_continuation("coder", "session-one")
+
+    assert loop.continuation_summary("coder", "session-one") is None
+
+
+@pytest.mark.asyncio
+async def test_initial_session_validation_failure_creates_no_checkpoint(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "unused", "tool_calls": None}])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    with pytest.raises(ChatSessionError):
+        await ChatLoop(runtime).start_run("coder", "work", session_id="missing-session")
+
+    sessions_dir = runtime.chat_sessions.sessions_dir("coder")
+    assert not list(sessions_dir.glob("*.continuation.jsonl"))
+
+
+@pytest.mark.asyncio
+async def test_internal_run_neither_consumes_nor_resolves_continuation(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "Background work complete", "tool_calls": None}])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
-    session.append(ChatMessage.user("Hi"))
-    session.append(ChatMessage.error("rate_limit", "Provider rate limited the previous run"))
+    tracker = ContinuationTracker(session, run_id="interrupted-run", request="visible work")
+    await tracker.interrupt("network")
+    before = ChatLoop(runtime).continuation_summary("coder", "session-one")
 
-    run = await ChatLoop(runtime).retry_run("coder", "session-one")
+    run = await ChatLoop(runtime).start_run(
+        "coder",
+        "background note",
+        session_id="session-one",
+        internal=True,
+    )
     await run.wait()
 
-    request_messages = adapter.requests[0]["messages"]
-    request_text = "\n".join(message.get("content", "") or "" for message in request_messages)
-    assert (
-        "<system-reminder>\nProvider rate limited the previous run\n</system-reminder>"
-        in request_text
+    after = ChatLoop(runtime).continuation_summary("coder", "session-one")
+    assert after == before
+    assert all(
+        "continuation-checkpoint" not in str(message.get("content") or "")
+        for message in adapter.requests[0]["messages"]
     )
-    assert all(message["role"] != "error" for message in request_messages)
+
+
+@pytest.mark.asyncio
+async def test_cancel_then_immediate_queued_correction_receives_finalized_checkpoint(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    first_adapter = BlockingReasoningStreamingStubAdapter()
+    second_adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "content_delta", "text": "Corrected"},
+                {"type": "finish", "reason": "stop"},
+            ]
+        ],
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=first_adapter)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    loop = ChatLoop(runtime, streaming=True)
+
+    first_run = await loop.start_run("coder", "Use the first folder", session_id="session-one")
+    await first_adapter.stream_started.wait()
+    runtime.adapter = second_adapter
+    first_run.request_cancel(reason="user")
+    queued = await loop.queue_run(
+        "coder",
+        "Not this folder; use the second one",
+        session_id="session-one",
+    )
+
+    with pytest.raises(RunCancelledError):
+        await first_run.wait()
+    second_run = await queued.future
+    assistant = await second_run.wait()
+
+    assert assistant.content == "Corrected"
+    request_messages = second_adapter.stream_requests[0]["messages"]
+    request_texts = [str(message.get("content") or "") for message in request_messages]
+    correction_index = request_texts.index("Not this folder; use the second one")
+    assert "<continuation-checkpoint" in request_texts[correction_index - 1]
+    assert "Thinking hard." in request_texts[correction_index - 1]
+    persisted = runtime.chat_sessions.get("coder", "session-one").load()
+    assert [message.content for message in persisted if message.role == "user"] == [
+        "Use the first folder",
+        "Not this folder; use the second one",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cancel_after_ten_tools_then_correction_reuses_canonical_results_once(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["get_weather"])
+    first_adapter = TenToolsThenBlockingReasoningAdapter()
+    second_adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "content_delta", "text": "Corrected from retained work"},
+                {"type": "finish", "reason": "stop"},
+            ]
+        ],
+    )
+    executions: list[str] = []
+    tools = ToolRegistry()
+
+    def get_weather(_context: Any, arguments: JsonObject) -> JsonObject:
+        executions.append(str(arguments["city"]))
+        return tool_success({"city": arguments["city"], "temperature": 22})
+
+    tools.register(
+        "get_weather",
+        "Get weather.",
+        {"type": "object"},
+        get_weather,
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=first_adapter,
+        tools=tools,
+    )
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    loop = ChatLoop(runtime, streaming=True)
+
+    first_run = await loop.start_run("coder", "Inspect ten cities", session_id="session-one")
+    await first_adapter.second_step_started.wait()
+    runtime.adapter = second_adapter
+    first_run.request_cancel(reason="user")
+    queued = await loop.queue_run(
+        "coder",
+        "Use those results, but correct the conclusion",
+        session_id="session-one",
+    )
+
+    with pytest.raises(RunCancelledError):
+        await first_run.wait()
+    second_run = await queued.future
+    assistant = await second_run.wait()
+
+    assert assistant.content == "Corrected from retained work"
+    assert executions == ["Berlin"] * 10
+    request_messages = second_adapter.stream_requests[0]["messages"]
+    assert sum(message["role"] == "tool" for message in request_messages) == 10
+    correction_index = next(
+        index
+        for index, message in enumerate(request_messages)
+        if message.get("content") == "Use those results, but correct the conclusion"
+    )
+    reminder = str(request_messages[correction_index - 1]["content"])
+    assert reminder.count("<continuation-checkpoint") == 1
+    assert "Plan the batch. Inspect every result." in reminder
+    assert "Review the completed batch. Prepare the final answer." in reminder
+    assert reminder.count(": completed") == 10
+
+
+@pytest.mark.asyncio
+async def test_second_interrupted_continue_extends_same_checkpoint(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    first_adapter = StubAdapter(
+        [],
+        stream_responses=[NetworkError("offline") for _ in range(3)],
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=first_adapter)
+    loop = ChatLoop(runtime, streaming=True)
+    with pytest.raises(NetworkError):
+        await loop.send("coder", "Do the work", session_id="session-one")
+    first_state = recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
+    assert first_state is not None
+
+    runtime.adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "reasoning_delta", "text": "Resume plan"},
+                NetworkError("offline again"),
+            ]
+        ],
+    )
+    second_run = await loop.continue_run("coder", "session-one")
+    with pytest.raises(NetworkError):
+        await second_run.wait()
+
+    second_state = recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
+    assert second_state is not None
+    assert second_state.checkpoint_id == first_state.checkpoint_id
+    assert second_state.origin_run_id == first_state.origin_run_id
+    assert second_state.latest_run_id == second_run.id
+    assert second_state.reasoning == "Resume plan"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "policy",
+    [REASONING_REPLAY_CURRENT_RUN, REASONING_REPLAY_FULL_HISTORY],
+)
+async def test_continuation_reminder_is_single_and_provider_policy_neutral(
+    tmp_path: Path,
+    policy: ReasoningReplayPolicy,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = PolicyStubAdapter([{"content": "Done", "tool_calls": None}], policy=policy)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Original work"))
+    tracker = ContinuationTracker(
+        session,
+        run_id="run-one",
+        request="Original work",
+    )
+    tracker.record_stream_delta(reasoning="Readable plan")
+    await tracker.interrupt("provider")
+
+    run = await ChatLoop(runtime).continue_run("coder", "session-one")
+    await run.wait()
+
+    request_text = "\n".join(
+        str(message.get("content") or "") for message in adapter.requests[0]["messages"]
+    )
+    assert request_text.count("<continuation-checkpoint") == 1
+    assert "Readable plan" in request_text
+    assert "reasoning_meta" not in request_text
 
 
 @pytest.mark.asyncio

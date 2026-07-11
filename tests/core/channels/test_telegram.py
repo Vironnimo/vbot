@@ -221,7 +221,7 @@ def make_adapter(
     bot_username: str | None = None,
     bot_id: int | None = None,
     trigger_run: AsyncMock | None = None,
-    retry_run: AsyncMock | None = None,
+    continue_run: AsyncMock | None = None,
     compact_session: AsyncMock | None = None,
     credential_resolver: Callable[[str], str] | None = None,
     attachment_store: AttachmentStore | None = None,
@@ -243,7 +243,7 @@ def make_adapter(
 
     trigger_service = SimpleNamespace(
         trigger_run=trigger_with_admission,
-        retry_run=retry_run or AsyncMock(),
+        continue_run=continue_run or AsyncMock(),
         compact_session=compact_session or AsyncMock(return_value="Context compacted."),
         # Synchronous like the real one (a bool, not a coroutine); idle by default.
         has_active_run=Mock(return_value=False),
@@ -792,32 +792,32 @@ async def test_new_command_starts_fresh_session(
 
 
 @pytest.mark.asyncio
-async def test_retry_command_action_retries_and_relays_run(
+async def test_continue_command_action_continues_and_relays_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session_id = "ch-tg-assistant-12345"
-    retry_mock = AsyncMock(
-        return_value=make_completed_run(session_id=session_id, output_text="retried reply")
+    continue_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="continued reply")
     )
-    command_dispatcher = make_command_dispatcher(result=CommandAction(name="retry_last_turn"))
+    command_dispatcher = make_command_dispatcher(result=CommandAction(name="continue"))
     adapter, _chat_sessions, trigger_mock, bot = make_adapter(
         tmp_path,
         monkeypatch,
         allowed_chat_ids=[12345],
-        retry_run=retry_mock,
+        continue_run=continue_mock,
         command_dispatcher=command_dispatcher,
     )
 
     await adapter._handle_inbound_message(
-        make_update(chat_id=12345, user_id=50, text="/retry"),
+        make_update(chat_id=12345, user_id=50, text="/continue"),
         SimpleNamespace(),
     )
     await drain_chat_queue(adapter, 12345)
 
-    retry_mock.assert_awaited_once_with("assistant", session_id)
+    continue_mock.assert_awaited_once_with("assistant", session_id)
     trigger_mock.assert_not_awaited()
-    bot.send_message.assert_awaited_once_with(chat_id=12345, text="retried reply")
+    bot.send_message.assert_awaited_once_with(chat_id=12345, text="continued reply")
     await adapter.stop()
 
 
@@ -3167,24 +3167,24 @@ async def test_compact_command_exception_is_logged_with_context(
 
 
 @pytest.mark.asyncio
-async def test_retry_command_exception_is_logged_with_context(
+async def test_continue_command_exception_is_logged_with_context(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    retry_mock = AsyncMock(side_effect=RuntimeError("retry failed"))
-    command_dispatcher = make_command_dispatcher(result=CommandAction(name="retry_last_turn"))
+    continue_mock = AsyncMock(side_effect=RuntimeError("continue failed"))
+    command_dispatcher = make_command_dispatcher(result=CommandAction(name="continue"))
     adapter, _chat_sessions, trigger_mock, bot = make_adapter(
         tmp_path,
         monkeypatch,
         allowed_chat_ids=[12345],
-        retry_run=retry_mock,
+        continue_run=continue_mock,
         command_dispatcher=command_dispatcher,
     )
     caplog.set_level(logging.ERROR, logger="vbot.channels.engine")
 
     await adapter._handle_inbound_message(
-        make_update(chat_id=12345, user_id=50, text="/retry"),
+        make_update(chat_id=12345, user_id=50, text="/continue"),
         SimpleNamespace(),
     )
     await drain_chat_queue(adapter, 12345)
@@ -3192,7 +3192,7 @@ async def test_retry_command_exception_is_logged_with_context(
     trigger_mock.assert_not_awaited()
     bot.send_message.assert_awaited_once()
     sent_text = bot.send_message.await_args.kwargs["text"]
-    assert "retry failed" not in sent_text
+    assert "continue failed" not in sent_text
     log_records = [
         record
         for record in caplog.records
@@ -3200,7 +3200,7 @@ async def test_retry_command_exception_is_logged_with_context(
     ]
     assert len(log_records) == 1
     assert log_records[0].exc_info is not None
-    assert "action=retry_last_turn" in log_records[0].message
+    assert "action=continue" in log_records[0].message
     assert "ch-tg-assistant-12345" in log_records[0].message
     await adapter.stop()
 

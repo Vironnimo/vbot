@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from core.chat.commands import NotACommand as NotACommand
     from core.chat.commands import parse_agent_argument as parse_agent_argument
     from core.chat.commands import parse_handoff_argument as parse_handoff_argument
+    from core.chat.continuation import ContinuationState as ContinuationState
     from core.chat.errors import ChatError as ChatError
     from core.chat.errors import ChatMessageValidationError as ChatMessageValidationError
     from core.chat.errors import ChatSessionError as ChatSessionError
@@ -47,6 +48,7 @@ _EXPORT_MODULES = {
     "CommandAction": "core.chat.commands",
     "CommandHandled": "core.chat.commands",
     "CommandSpec": "core.chat.commands",
+    "ContinuationState": "core.chat.continuation",
     "DispatchResult": "core.chat.commands",
     "HandoffArgument": "core.chat.commands",
     "INPUT_ORIGIN_SPEECH_TRANSCRIPTION": "core.chat.chat",

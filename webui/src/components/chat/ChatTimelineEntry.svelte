@@ -49,8 +49,6 @@
     agentName = '',
     isReasoningOpen = () => false,
     onReasoningOpenChange = () => {},
-    onRetry = () => {},
-    showRetry = false,
   } = $props();
 </script>
 
@@ -353,11 +351,6 @@
       <span>{labelForEvent(item.event)}</span>
       {#if metaForEvent(item.event)}
         <span>· {metaForEvent(item.event)}</span>
-      {/if}
-      {#if showRetry}
-        <button type="button" class="retry-btn" onclick={onRetry}
-          >{t('chat.retryRun', 'Retry last turn')}</button
-        >
       {/if}
     </p>
   {:else if textFromEvent(item.event) || hasUserContentBlocks(messageFromEvent(item.event))}

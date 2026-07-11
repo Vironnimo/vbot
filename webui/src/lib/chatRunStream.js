@@ -432,6 +432,9 @@ export function createChatRunStream({
     if (payload.session_usage) {
       runPayload.session_usage = payload.session_usage;
     }
+    if (payload.continuation) {
+      runPayload.continuation = payload.continuation;
+    }
     if (payload.timing) {
       runPayload.timing = payload.timing;
     }

@@ -194,6 +194,8 @@ def _server_event_from_run_event(event: RunEvent) -> JsonObject:
             payload["session_usage"] = remove_opaque_provider_metadata(
                 event.payload["session_usage"]
             )
+        if "continuation" in event.payload:
+            payload["continuation"] = remove_opaque_provider_metadata(event.payload["continuation"])
     if event.type == RUN_COMPLETED_EVENT and "usage" in event.payload:
         payload["usage"] = remove_opaque_provider_metadata(event.payload["usage"])
     return {"type": SERVER_EVENT_TYPES.get(event.type, RUN_OUTPUT_SERVER_EVENT), "payload": payload}

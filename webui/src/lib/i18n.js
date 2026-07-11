@@ -93,6 +93,15 @@ export const englishCatalog = Object.freeze({
   'chat.sendError': 'Message could not be sent.',
   'chat.skillsLoadError': 'Skill suggestions could not be loaded.',
   'chat.cancelError': 'Run could not be cancelled.',
+  'chat.continueError': 'Continue failed.',
+  'chat.discardContinuationError': 'Discard failed.',
+  'chat.continuation.title': 'Interrupted work retained',
+  'chat.continuation.hint':
+    'Continue without adding a duplicate message, or discard the retained work.',
+  'chat.continuation.cancelledHint':
+    'Type a correction or a new instruction to continue from the retained work.',
+  'chat.continuation.continue': 'Continue',
+  'chat.continuation.discard': 'Discard',
   'chat.sessionCreateError': 'New session could not be created.',
   'chat.noModel.title': 'Pick a model to start',
   'chat.noModel.hint':

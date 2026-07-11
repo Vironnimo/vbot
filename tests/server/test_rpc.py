@@ -5248,6 +5248,7 @@ async def test_chat_commands_returns_normalized_built_in_command_names(
     assert command_names == [
         "agent",
         "compact",
+        "continue",
         "handoff",
         "help",
         "learn",
@@ -5255,7 +5256,6 @@ async def test_chat_commands_returns_normalized_built_in_command_names(
         "new",
         "reflect",
         "rename",
-        "retry",
         "status",
         "stop",
     ]
@@ -5300,7 +5300,7 @@ async def test_chat_methods_handle_new_command_with_session_payload(
     ("method", "streaming"),
     [("chat.send", False), ("chat.stream", True)],
 )
-async def test_chat_methods_handle_retry_command_as_run_response(
+async def test_chat_methods_handle_continue_command_as_run_response(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     method: str,
@@ -5309,15 +5309,15 @@ async def test_chat_methods_handle_retry_command_as_run_response(
     state = make_state(tmp_path, StubAdapter())
     state.runtime.chat_sessions.create("coder", session_id="session-one")
     run = StubDelegateRun(
-        run_id="run-retry",
+        run_id="run-continue",
         agent_id="coder",
         session_id="session-one",
         status="running" if streaming else "completed",
-        final_message=ChatMessage.assistant(model="openai/gpt-5.2", content="Retried"),
+        final_message=ChatMessage.assistant(model="openai/gpt-5.2", content="Continued"),
     )
     captured: JsonObject = {}
 
-    async def fake_retry_run(
+    async def fake_continue_run(
         agent_id: str, session_id: str, project_id: str | None = None
     ) -> StubDelegateRun:
         captured["agent_id"] = agent_id
@@ -5328,10 +5328,10 @@ async def test_chat_methods_handle_retry_command_as_run_response(
         monkeypatch.setattr(
             chat_methods,
             "_streaming_chat_loop",
-            lambda _state: SimpleNamespace(retry_run=fake_retry_run),
+            lambda _state: SimpleNamespace(continue_run=fake_continue_run),
         )
     else:
-        monkeypatch.setattr(state.chat_loop, "retry_run", fake_retry_run)
+        monkeypatch.setattr(state.chat_loop, "continue_run", fake_continue_run)
     monkeypatch.setattr(chat_methods, "_bridge_run_to_event_bus", lambda _state, _run: None)
 
     response = await dispatch_rpc(
@@ -5341,18 +5341,18 @@ async def test_chat_methods_handle_retry_command_as_run_response(
             "params": {
                 "agent_id": "coder",
                 "session_id": "session-one",
-                "content": " /RETRY ",
+                "content": " /CONTINUE ",
             },
         },
     )
 
     assert response["ok"] is True
-    assert response["result"]["run_id"] == "run-retry"
+    assert response["result"]["run_id"] == "run-continue"
     assert captured == {"agent_id": "coder", "session_id": "session-one"}
     if streaming:
-        assert response["result"]["sse_url"] == "/api/runs/run-retry/events"
+        assert response["result"]["sse_url"] == "/api/runs/run-continue/events"
     else:
-        assert response["result"]["message"]["content"] == "Retried"
+        assert response["result"]["message"]["content"] == "Continued"
 
 
 @pytest.mark.asyncio

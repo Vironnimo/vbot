@@ -399,10 +399,16 @@ async def test_cancel_by_session_requests_cancel_and_returns_run() -> None:
     )
     await started.wait()
 
-    cancelled_run = manager.cancel_by_session("coder", "session-one", project_id=None)
+    cancelled_run = manager.cancel_by_session(
+        "coder",
+        "session-one",
+        project_id=None,
+        reason="user",
+    )
 
     assert cancelled_run is run
     assert run.cancel_requested is True
+    assert run.cancel_reason == "user"
 
     release.set()
     with pytest.raises(RunCancelledError):

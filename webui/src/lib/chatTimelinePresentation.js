@@ -944,43 +944,6 @@ export const isFailedToolEvent = (event) =>
 
 export const isTerminalEvent = (event) => event.type.startsWith('run_');
 
-export const latestTerminalStateForItems = (timelineItems) => {
-  for (let index = timelineItems.length - 1; index >= 0; index -= 1) {
-    const item = timelineItems[index];
-    if (item?.type === 'assistant_run') {
-      const terminalType = item.terminalEvent?.type;
-      if (typeof terminalType === 'string' && terminalType.startsWith('run_')) {
-        return {
-          itemId: item.id,
-          failed: terminalType === 'run_failed',
-        };
-      }
-      continue;
-    }
-    if (
-      item?.type === 'event' &&
-      typeof item.event?.type === 'string' &&
-      item.event.type.startsWith('run_')
-    ) {
-      return {
-        itemId: item.id,
-        failed: item.event.type === 'run_failed',
-      };
-    }
-  }
-  return {
-    itemId: '',
-    failed: false,
-  };
-};
-
-export const shouldRenderRetryButton = (item, latestTerminalState) =>
-  latestTerminalState.failed &&
-  item?.id === latestTerminalState.itemId &&
-  ((item.type === 'assistant_run' &&
-    item.terminalEvent?.type === 'run_failed') ||
-    (item.type === 'event' && item.event?.type === 'run_failed'));
-
 export const toolNameForRunTool = (tool) =>
   tool.name || tool.toolCall?.name || t('chat.toolPendingName', 'tool');
 
