@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from core.chat import ChatLoop
 from core.runs import ChatRunManager, RunStatus
 from core.runtime import Runtime
+from core.sessions import ChatSessionManager
 from core.utils.config import Config
 from server.app import (
     ServerEventBus,
@@ -21,6 +22,7 @@ from server.app import (
     _bus_last_sequence,
     _parse_query_string,
     _register_run_event_bridge,
+    _register_session_title_bridge,
     _shutdown_local_catalog_refresh,
     _stream_log_events,
     create_app,
@@ -250,6 +252,32 @@ async def test_run_event_bridge_publishes_non_rpc_runs() -> None:
         "run_completed",
     ]
     assert all(event["payload"]["run_id"] == run.id for event in state.event_bus.events)
+
+
+def test_session_title_bridge_publishes_sessions_invalidation(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="session-one")
+    state = type(
+        "State",
+        (),
+        {
+            "runtime": type("Runtime", (), {"chat_sessions": sessions})(),
+            "event_bus": ServerEventBus(),
+        },
+    )()
+    unsubscribe = _register_session_title_bridge(state)
+
+    try:
+        sessions.set_auto_title("coder", "session-one", "Local title")
+    finally:
+        if callable(unsubscribe):
+            unsubscribe()
+
+    assert state.event_bus.events[-1]["type"] == "resource_changed"
+    assert state.event_bus.events[-1]["payload"] == {
+        "kind": "sessions",
+        "scope": {"agent_id": "coder"},
+    }
 
 
 async def _wait_for_events(event_bus: ServerEventBus, count: int) -> None:

@@ -67,6 +67,10 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
                     "options": {"language": "auto"},
                 }
             },
+            "session_titles": {
+                "enabled": True,
+                "model": "openai/gpt-4.1-mini::api-key",
+            },
         }
     )
 
@@ -107,6 +111,10 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
                 "options": {"language": "auto"},
             }
         },
+        "session_titles": {
+            "enabled": True,
+            "model": "openai/gpt-4.1-mini::api-key",
+        },
     }
 
 
@@ -129,6 +137,15 @@ def test_parse_settings_update_omits_absent_chat_width() -> None:
         ({}, "settings.update requires a section"),
         ({"general": {}}, "unsupported settings sections: general"),
         ({"appearance": []}, "params.appearance must be an object"),
+        ({"session_titles": []}, "params.session_titles must be an object"),
+        (
+            {"session_titles": {"enabled": "yes"}},
+            "params.session_titles.enabled must be a boolean",
+        ),
+        (
+            {"session_titles": {"enabled": True, "model": 5}},
+            "params.session_titles.model must be a string",
+        ),
         (
             {"appearance": {"language": "en", "chat_width": "huge"}},
             "params.appearance.chat_width must be one of",

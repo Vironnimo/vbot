@@ -548,6 +548,40 @@ class TestChatSessionManager:
 
         assert sessions[0]["title"] == "Release planning"
 
+    def test_auto_title_stays_beneath_manual_override_and_reappears_when_cleared(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        manager.create("coder", session_id="session-one")
+        manager.set_auto_title("coder", "session-one", "Local request")
+        manager.set_title("coder", "session-one", "Manual name")
+
+        manager.set_auto_title("coder", "session-one", "Generated title")
+
+        metadata = manager.get_metadata("coder", "session-one")
+        assert metadata["title"] == "Manual name"
+        assert metadata["auto_title"] == "Generated title"
+        manager.set_title("coder", "session-one", "")
+        assert manager.get_metadata("coder", "session-one")["auto_title"] == "Generated title"
+
+    def test_title_change_callbacks_cover_manual_and_automatic_titles(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        manager.create("coder", session_id="session-one")
+        calls = []
+        unsubscribe = manager.add_title_changed_callback(
+            lambda agent_id, session_id, project_id: calls.append(
+                (agent_id, session_id, project_id)
+            )
+        )
+
+        manager.set_auto_title("coder", "session-one", "Local request")
+        manager.set_title("coder", "session-one", "Manual name")
+        unsubscribe()
+        manager.set_title("coder", "session-one", "Later name")
+
+        assert calls == [
+            ("coder", "session-one", None),
+            ("coder", "session-one", None),
+        ]
+
     def test_get_rejects_missing_session(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
 

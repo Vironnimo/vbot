@@ -40,6 +40,7 @@ DEFAULT_WEB_SEARCH_SETTINGS = {
     "default_count": DEFAULT_WEB_SEARCH_COUNT,
     "searxng": {"base_url": DEFAULT_SEARXNG_BASE_URL},
 }
+DEFAULT_SESSION_TITLE_SETTINGS = {"enabled": False, "model": ""}
 DEBUG_SETTING_DEFAULTS: dict[str, Any] = {
     "enabled": False,
     "trace_limit": 50,
@@ -312,6 +313,30 @@ def normalize_defaults_settings(defaults: Any) -> dict[str, Any]:
     if not normalized_agent_defaults:
         return {}
     return {"agent": normalized_agent_defaults}
+
+
+# --- automatic Session titles ------------------------------------------------
+
+
+def normalize_session_title_settings(session_titles: Any) -> dict[str, Any]:
+    """Return the complete automatic Session-title settings section."""
+    if session_titles is None:
+        return dict(DEFAULT_SESSION_TITLE_SETTINGS)
+    if not isinstance(session_titles, Mapping):
+        raise StorageError("Expected settings.session_titles to be an object")
+
+    unsupported_fields = sorted(set(session_titles) - {"enabled", "model"})
+    if unsupported_fields:
+        raise StorageError(f"Unsupported session_titles settings: {', '.join(unsupported_fields)}")
+
+    enabled = session_titles.get("enabled", DEFAULT_SESSION_TITLE_SETTINGS["enabled"])
+    if not isinstance(enabled, bool):
+        raise StorageError("Session-title enabled setting must be a boolean")
+
+    model = session_titles.get("model", DEFAULT_SESSION_TITLE_SETTINGS["model"])
+    if not isinstance(model, str):
+        raise StorageError("Session-title model setting must be a string")
+    return {"enabled": enabled, "model": model.strip()}
 
 
 def coerce_defaults_section(defaults: Any) -> dict[str, Any]:

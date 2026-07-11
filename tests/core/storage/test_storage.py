@@ -416,6 +416,29 @@ def test_load_recall_settings_defaults_to_jsonl_scan(tmp_path: Path) -> None:
     assert storage.load_recall_settings() == {"backend": "jsonl_scan"}
 
 
+def test_session_title_settings_default_disabled_and_replace_as_complete_section(
+    tmp_path: Path,
+) -> None:
+    storage = StorageManager(tmp_path)
+
+    assert storage.load_session_title_settings() == {"enabled": False, "model": ""}
+
+    updated = storage.update_settings_sections(
+        {
+            "session_titles": {
+                "enabled": True,
+                "model": " openai/gpt-4.1-mini::api-key ",
+            }
+        }
+    )
+
+    assert updated["session_titles"] == {
+        "enabled": True,
+        "model": "openai/gpt-4.1-mini::api-key",
+    }
+    assert storage.load_settings()["session_titles"] == updated["session_titles"]
+
+
 def test_load_recall_settings_reads_configured_backend(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
     storage.save_settings({"recall": {"backend": "sqlite_fts"}})

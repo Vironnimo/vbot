@@ -223,6 +223,23 @@ class ReflectionNotifier(Protocol):
         ...
 
 
+class SessionTitleNotifier(Protocol):
+    """Non-blocking first-message hook for automatic Session titles."""
+
+    def notify_user_message(
+        self,
+        *,
+        agent_id: str,
+        session_id: str,
+        project_id: str | None,
+        agent: Any,
+        content: str | list[ContentBlock],
+        run_id: str,
+    ) -> None:
+        """Persist the local title and optionally schedule its Model replacement."""
+        ...
+
+
 def _resolve_reasoning_replay_policy(adapter: Any, model_id: str) -> ReasoningReplayPolicy:
     """Resolve the adapter's reasoning replay policy for one request build.
 
@@ -306,6 +323,7 @@ class ChatLoop:
         attachment_resolver: ContentBlockResolver | None = None,
         compaction_service: CompactionService | None = None,
         reflection_service: ReflectionNotifier | None = None,
+        session_title_service: SessionTitleNotifier | None = None,
     ) -> None:
         if max_tool_iterations < 0:
             raise ChatError("max tool iterations must not be negative")
@@ -315,6 +333,7 @@ class ChatLoop:
         self._attachment_resolver = attachment_resolver
         self._compaction_service = compaction_service
         self._reflection_service = reflection_service
+        self._session_title_service = session_title_service
         self._nesting_depth = 0
 
     def child_loop(self, *, nesting_depth: int) -> ChatLoop:
@@ -331,6 +350,7 @@ class ChatLoop:
             attachment_resolver=self._attachment_resolver,
             compaction_service=self._compaction_service,
             reflection_service=self._reflection_service,
+            session_title_service=self._session_title_service,
         )
         child._nesting_depth = nesting_depth
         return child
@@ -851,6 +871,15 @@ class ChatLoop:
                 user_message = ChatMessage.user(content, sender=sender)
                 session.append(user_message)
                 _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
+                if self._session_title_service is not None:
+                    self._session_title_service.notify_user_message(
+                        agent_id=run.agent_id,
+                        session_id=run.session_id,
+                        project_id=project_id,
+                        agent=agent,
+                        content=content,
+                        run_id=run.id,
+                    )
                 if isinstance(content, str):
                     _activate_triggered_skills(agent, session, content, skill_registry)
             run.raise_if_cancelled()

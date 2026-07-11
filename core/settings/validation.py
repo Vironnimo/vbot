@@ -56,6 +56,7 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
         "recall",
         "reflection",
         "server_port",
+        "session_titles",
         "skill_directories",
         "speech_upload_max_size_bytes",
         "subagent_timeout_minutes",
@@ -77,6 +78,7 @@ WEB_SEARCH_FIELDS = frozenset({"provider", "default_count", "searxng"})
 WEB_SEARCH_SEARXNG_FIELDS = frozenset({"base_url"})
 MODEL_TASK_BINDING_FIELDS = frozenset({"target", "options"})
 DEBUG_FIELDS = frozenset({"enabled", "trace_limit"})
+SESSION_TITLE_FIELDS = frozenset({"enabled", "model"})
 MAX_TRACE_LIMIT = 500
 REFLECTION_FIELDS = frozenset({"enabled", "memory_turn_interval", "skill_tool_call_interval"})
 LOCAL_MODELS_FIELDS = frozenset({"context_windows"})
@@ -387,7 +389,30 @@ def validate_settings_data(data: Any) -> list[JsonDiagnostic]:
     _validate_reflection(diagnostics, data.get("reflection"))
     _validate_local_models(diagnostics, data.get("local_models"))
     _validate_providers(diagnostics, data.get("providers"))
+    _validate_session_titles(diagnostics, data.get("session_titles"))
     return diagnostics
+
+
+def _validate_session_titles(diagnostics: list[JsonDiagnostic], value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, Mapping):
+        _error(diagnostics, "$.session_titles", "must be an object")
+        return
+
+    _warn_unknown_keys(
+        diagnostics,
+        "$.session_titles",
+        value,
+        SESSION_TITLE_FIELDS,
+        "session_titles field",
+    )
+    enabled = value.get("enabled")
+    if "enabled" in value and not isinstance(enabled, bool):
+        _error(diagnostics, "$.session_titles.enabled", "must be a boolean")
+    model = value.get("model")
+    if "model" in value and not isinstance(model, str):
+        _error(diagnostics, "$.session_titles.model", "must be a string")
 
 
 def validate_agent_data(data: Any) -> list[JsonDiagnostic]:

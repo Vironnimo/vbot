@@ -45,11 +45,16 @@ export function selectSession(state, sessionId) {
 }
 
 export function sessionDisplayName(session) {
-  // A user-set title wins over every automatic label; clearing it falls back to
-  // the channel-derived name and then the raw id.
+  // A user-set title wins over the automatic first-message title; clearing it
+  // reveals that automatic title again, then the channel-derived name / raw id.
   const title = asOptionalText(session?.title);
   if (title !== null) {
     return title;
+  }
+
+  const autoTitle = asOptionalText(session?.auto_title);
+  if (autoTitle !== null) {
+    return autoTitle;
   }
 
   const platform = asOptionalText(session?.platform);
@@ -91,6 +96,7 @@ function normalizeSession(session) {
   const normalizedSession = {
     id,
     title: asOptionalText(session?.title),
+    auto_title: asOptionalText(session?.auto_title),
     created_at: asOptionalText(session?.created_at),
     last_active_at: asOptionalText(session?.last_active_at),
     source_channel_id: asOptionalText(session?.source_channel_id),

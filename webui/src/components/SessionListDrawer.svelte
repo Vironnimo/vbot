@@ -469,7 +469,11 @@
               onclick={() => handleSelectSession(session.id)}
             >
               <div class="session-row__heading">
-                <p class="session-row__name">
+                <p
+                  class="session-row__name"
+                  use:tooltip={session.display_name ||
+                    sessionDisplayName(session)}
+                >
                   {session.display_name || sessionDisplayName(session)}
                 </p>
                 {#if session.id === asText(agentCurrentSessionId)}

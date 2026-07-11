@@ -196,6 +196,31 @@ export function buildAgentDefaultsPayload(formValues) {
   };
 }
 
+export function normalizeSessionTitleSettings(rawSettings) {
+  const source =
+    rawSettings?.session_titles &&
+    typeof rawSettings.session_titles === 'object'
+      ? rawSettings.session_titles
+      : rawSettings && typeof rawSettings === 'object'
+        ? rawSettings
+        : {};
+
+  return {
+    enabled: source.enabled === true,
+    model: textOrEmpty(source.model),
+  };
+}
+
+export function buildSessionTitleSettingsPayload(formValues) {
+  const normalized = normalizeSessionTitleSettings(formValues);
+  return {
+    session_titles: {
+      enabled: normalized.enabled,
+      model: normalized.model,
+    },
+  };
+}
+
 export function createChannelPanelState() {
   return createChannelSettingsState();
 }

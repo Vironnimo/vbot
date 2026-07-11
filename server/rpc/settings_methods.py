@@ -217,6 +217,10 @@ def _validate_model_connections(models: Any, settings_update: JsonObject) -> Non
     if isinstance(summary_model, str):
         _ensure_model_connection_supported(models, "compaction.summary_model", summary_model)
 
+    title_model = settings_update.get("session_titles", {}).get("model")
+    if isinstance(title_model, str) and title_model:
+        _ensure_model_connection_supported(models, "session_titles.model", title_model)
+
 
 def _validate_recall_backend_known(runtime: Any, backend: str) -> None:
     """Reject a ``settings.update`` recall backend the registry does not know."""
@@ -283,6 +287,7 @@ def _settings_response(state: Any) -> JsonObject:
     debug = runtime.storage.load_debug_settings()
     reflection = runtime.storage.load_reflection_settings()
     model_tasks = runtime.storage.load_model_task_settings()
+    session_titles = runtime.storage.load_session_title_settings()
     defaults = runtime.storage.load_defaults()
     server_bind = _server_bind_response(state)
 
@@ -326,6 +331,7 @@ def _settings_response(state: Any) -> JsonObject:
         },
         "reflection": dict(reflection),
         "model_tasks": model_tasks,
+        "session_titles": session_titles,
         "local_models": runtime.storage.load_local_models_settings(),
     }
     skill_directory_loader = getattr(runtime.storage, "load_skill_directory_settings", None)

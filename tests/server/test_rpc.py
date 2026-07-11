@@ -716,6 +716,15 @@ class StubStorage:
         stored = self._settings.get("model_tasks")
         return dict(stored) if isinstance(stored, dict) else {}
 
+    def load_session_title_settings(self) -> JsonObject:
+        stored = self._settings.get("session_titles")
+        if not isinstance(stored, dict):
+            return {"enabled": False, "model": ""}
+        return {
+            "enabled": stored.get("enabled") is True,
+            "model": str(stored.get("model") or ""),
+        }
+
     def _apply_recall_settings(self, recall: object) -> JsonObject:
         if not isinstance(recall, dict):
             raise StorageError("Recall settings must be an object")
@@ -928,6 +937,13 @@ class StubStorage:
             }
             self._settings = {**self._settings, "reflection": merged_reflection}
             updated_sections["reflection"] = merged_reflection
+        if "session_titles" in settings_update:
+            normalized = {
+                "enabled": settings_update["session_titles"]["enabled"],
+                "model": settings_update["session_titles"].get("model", ""),
+            }
+            self._settings = {**self._settings, "session_titles": normalized}
+            updated_sections["session_titles"] = normalized
         return updated_sections
 
     def load_extensions_settings(self) -> JsonObject:
@@ -1580,6 +1596,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
             "skill_tool_call_interval": 25,
         },
         "model_tasks": {},
+        "session_titles": {"enabled": False, "model": ""},
         "local_models": {"context_windows": {}},
         "skills": {
             "default_directory": str(tmp_path / "skills"),
