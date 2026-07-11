@@ -49,6 +49,7 @@
   ];
   const STATUS_KEYS = ['completed', 'failed', 'cancelled'];
   const DONUT_CIRCUMFERENCE = 2 * Math.PI * 16;
+  const USAGE_REFRESH_INTERVAL_MS = 10_000;
 
   let report = $state(null);
   let loading = $state(false);
@@ -56,14 +57,17 @@
   let activeSubView = $state('overview');
   let granularity = $state('day');
   let destroyed = false;
+  let pageVisible = $state(true);
 
   // The Limits sub-view loads live provider usage on its own (provider.usage),
   // separate from the read-only statistics.report above. It is fetched lazily on
   // first open so opening Statistics never pings provider usage endpoints.
+  // While the sub-view stays visible it polls through the server's shared
+  // provider cache, so multiple windows do not multiply outbound requests.
   let usageReport = $state(null);
   let usageLoading = $state(false);
   let usageError = $state('');
-  let usageLoaded = $state(false);
+  let usageRequest = null;
 
   const locale = $derived(activeLocaleTag());
   const overview = $derived(report?.overview ?? null);
@@ -78,9 +82,24 @@
   );
 
   $effect(() => {
-    if (activeSubView === 'limits' && !usageLoaded) {
-      loadUsage();
+    if (activeSubView !== 'limits' || !pageVisible) {
+      return;
     }
+
+    let cancelled = false;
+    let timeoutId;
+    async function pollUsage() {
+      await loadUsage();
+      if (!cancelled) {
+        timeoutId = setTimeout(pollUsage, USAGE_REFRESH_INTERVAL_MS);
+      }
+    }
+
+    pollUsage();
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
   });
 
   const statusSegments = $derived(
@@ -123,9 +142,16 @@
   );
 
   onMount(() => {
+    const handleVisibilityChange = () => {
+      pageVisible = document.visibilityState !== 'hidden';
+    };
+
+    handleVisibilityChange();
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     loadReport();
     return () => {
       destroyed = true;
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   });
 
@@ -153,12 +179,19 @@
     }
   }
 
-  async function loadUsage() {
+  function loadUsage() {
+    if (usageRequest) {
+      return usageRequest;
+    }
+    usageRequest = fetchUsage().finally(() => {
+      usageRequest = null;
+    });
+    return usageRequest;
+  }
+
+  async function fetchUsage() {
     usageLoading = true;
     usageError = '';
-    // Set before awaiting so the lazy-open effect never re-fires while a fetch
-    // is in flight; the refresh / retry buttons call loadUsage() directly.
-    usageLoaded = true;
     try {
       const result = await rpc('provider.usage');
       if (destroyed) {
@@ -1341,12 +1374,9 @@
         <p class="stats-note">
           {t(
             'statistics.limits.note',
-            'Live subscription usage, fetched on demand — nothing is stored.',
+            'Live subscription usage, updated every 10 seconds while this tab is visible — nothing is stored.',
           )}
         </p>
-        <Button variant="secondary" onClick={loadUsage}>
-          {t('common.refresh', 'Refresh')}
-        </Button>
       </div>
 
       {#if usageError}

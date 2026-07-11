@@ -67,6 +67,22 @@ class HangingTransport:
         return FakeResponse()  # pragma: no cover
 
 
+class BlockingTransport:
+    def __init__(self, response: FakeResponse) -> None:
+        self._response = response
+        self.calls = 0
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def get(
+        self, url: str, *, headers: Any, timeout: float, params: Any = None
+    ) -> FakeResponse:
+        self.calls += 1
+        self.started.set()
+        await self.release.wait()
+        return self._response
+
+
 class RaisingTransport:
     async def get(
         self, url: str, *, headers: Any, timeout: float, params: Any = None
@@ -331,6 +347,51 @@ async def test_report_uses_ttl_cache_on_repeated_calls() -> None:
 
     assert len(transport.calls) == 1
     assert first.providers[0].windows == second.providers[0].windows
+
+
+@pytest.mark.asyncio
+async def test_report_refreshes_successful_snapshot_after_ten_seconds() -> None:
+    transport = FakeTransport(FakeResponse(payload=_OPENAI_BODY))
+    now = 1000.0
+    service = ProviderUsageService(_openai_runtime(), transport=transport, monotonic=lambda: now)
+
+    await service.report()
+    now += 10.0
+    await service.report()
+
+    assert len(transport.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_report_backs_off_error_snapshot_for_sixty_seconds() -> None:
+    transport = FakeTransport(FakeResponse(status_code=429))
+    now = 1000.0
+    service = ProviderUsageService(_openai_runtime(), transport=transport, monotonic=lambda: now)
+
+    await service.report()
+    now += 10.1
+    cached = await service.report()
+    now += 50.0
+    await service.report()
+
+    assert cached.providers[0].error == "HTTP 429"
+    assert len(transport.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_report_coalesces_concurrent_fetches_per_connection() -> None:
+    transport = BlockingTransport(FakeResponse(payload=_OPENAI_BODY))
+    service = ProviderUsageService(_openai_runtime(), transport=transport)
+
+    first = asyncio.create_task(service.report())
+    await transport.started.wait()
+    second = asyncio.create_task(service.report())
+    await asyncio.sleep(0)
+    transport.release.set()
+    first_report, second_report = await asyncio.gather(first, second)
+
+    assert transport.calls == 1
+    assert first_report.providers[0].windows == second_report.providers[0].windows
 
 
 @pytest.mark.asyncio

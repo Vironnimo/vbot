@@ -41,7 +41,8 @@ from core.utils.logging import get_logger
 _LOGGER = get_logger("providers.usage")
 
 DEFAULT_USAGE_TIMEOUT_SECONDS = 8.0
-DEFAULT_USAGE_CACHE_TTL_SECONDS = 60.0
+DEFAULT_USAGE_CACHE_TTL_SECONDS = 10.0
+DEFAULT_USAGE_ERROR_CACHE_TTL_SECONDS = 60.0
 
 OPENAI_USAGE_CONNECTION = "openai:subscription"
 COPILOT_USAGE_CONNECTION = "github-copilot:oauth"
@@ -260,14 +261,17 @@ class ProviderUsageService:
         transport: UsageTransport | None = None,
         timeout: float = DEFAULT_USAGE_TIMEOUT_SECONDS,
         cache_ttl: float = DEFAULT_USAGE_CACHE_TTL_SECONDS,
+        error_cache_ttl: float = DEFAULT_USAGE_ERROR_CACHE_TTL_SECONDS,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._runtime = runtime
         self._transport = transport or HttpxUsageTransport()
         self._timeout = timeout
         self._cache_ttl = cache_ttl
+        self._error_cache_ttl = error_cache_ttl
         self._monotonic = monotonic
-        self._cache: dict[str, tuple[float, ProviderUsageSnapshot]] = {}
+        self._cache: dict[str, tuple[float, float, ProviderUsageSnapshot]] = {}
+        self._fetch_locks: dict[str, asyncio.Lock] = {}
         # Only connections with a registered fetcher are queried.
         self._fetchers: dict[str, _Fetcher] = {
             OPENAI_USAGE_CONNECTION: self._fetch_openai,
@@ -314,9 +318,15 @@ class ProviderUsageService:
         cached = self._cached_snapshot(connection.connection_id)
         if cached is not None:
             return cached
-        snapshot = await self._run_fetcher(connection)
-        self._store_cache(connection.connection_id, snapshot)
-        return snapshot
+
+        lock = self._fetch_locks.setdefault(connection.connection_id, asyncio.Lock())
+        async with lock:
+            cached = self._cached_snapshot(connection.connection_id)
+            if cached is not None:
+                return cached
+            snapshot = await self._run_fetcher(connection)
+            self._store_cache(connection.connection_id, snapshot)
+            return snapshot
 
     async def _run_fetcher(self, connection: _SupportedConnection) -> ProviderUsageSnapshot:
         fetcher = self._fetchers[connection.connection_id]
@@ -355,13 +365,14 @@ class ProviderUsageService:
         entry = self._cache.get(connection_id)
         if entry is None:
             return None
-        stored_at, snapshot = entry
-        if self._monotonic() - stored_at > self._cache_ttl:
+        stored_at, ttl, snapshot = entry
+        if self._monotonic() - stored_at >= ttl:
             return None
         return snapshot
 
     def _store_cache(self, connection_id: str, snapshot: ProviderUsageSnapshot) -> None:
-        self._cache[connection_id] = (self._monotonic(), snapshot)
+        ttl = self._error_cache_ttl if snapshot.error else self._cache_ttl
+        self._cache[connection_id] = (self._monotonic(), ttl, snapshot)
 
     # ------------------------------------------------------------------
     # Per-provider fetchers
