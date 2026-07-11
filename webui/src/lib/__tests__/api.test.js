@@ -17,8 +17,10 @@ import {
   addProject,
   cancelRun,
   cancelToolCall,
+  continueRun,
   clearOverride,
   detectProject,
+  discardContinuation,
   setOverride,
   createRpcEnvelope,
   listProjects,
@@ -703,6 +705,24 @@ describe('cancelRun()', () => {
     expect(() => cancelRun('', { reason: 'user' })).toThrow(
       expect.objectContaining({ code: RPC_ERROR_INVALID_CLIENT_REQUEST }),
     );
+  });
+});
+
+describe('continuation actions', () => {
+  it.each([
+    ['chat.continue', continueRun],
+    ['chat.continuation_discard', discardContinuation],
+  ])('calls %s with the qualified session address', async (method, action) => {
+    const fetchFunction = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ ok: true, result: { ok: true } }));
+
+    await action('builder@vbot', 'session-1', { fetch: fetchFunction });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method,
+      params: { agent_id: 'builder@vbot', session_id: 'session-1' },
+    });
   });
 });
 

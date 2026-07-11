@@ -146,6 +146,26 @@ def test_server_event_omits_session_usage_when_absent() -> None:
     assert "session_usage" not in summary["payload"]
 
 
+def test_server_event_forwards_public_continuation_on_terminal_events() -> None:
+    continuation = {
+        "checkpoint_id": "checkpoint-one",
+        "cause": "network",
+        "can_continue": True,
+    }
+    event = RunEvent(
+        sequence=9,
+        run_id="run-1",
+        agent_id="builder",
+        session_id="sess-uuid",
+        type="run_failed",
+        payload={"status": "failed", "continuation": continuation},
+    )
+
+    summary = _server_event_from_run_event(event)
+
+    assert summary["payload"]["continuation"] == continuation
+
+
 def test_publish_resource_changed_emits_kind_only_payload() -> None:
     state = SimpleNamespace(event_bus=ServerEventBus())
 

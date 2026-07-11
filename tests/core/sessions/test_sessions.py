@@ -1015,6 +1015,7 @@ class TestChatSessionManagerMove:
         manager = ChatSessionManager(tmp_path)
         source = self._populate(manager, "alpha", "sess")
         manager.set_metadata("alpha", "sess", {"platform": "telegram"})
+        source.append_continuation_record({"type": "active"})
         # An (improbable) id collision already occupies the destination home.
         manager.create("beta", session_id="sess")
 
@@ -1024,6 +1025,7 @@ class TestChatSessionManagerMove:
         # No partial move: the source keeps both of its files.
         assert manager.exists("alpha", "sess") is True
         assert source.sidecar_path.exists()
+        assert source.load_continuation_records() == [{"type": "active"}]
         assert [message.role for message in source.load()] == ["user", "assistant"]
 
 
@@ -1158,3 +1160,91 @@ class TestForkStripPolicy:
             PINNED_SKILL_CATALOG_META_KEY,
             SEEN_SKILLS_META_KEY,
         } == SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS
+
+
+class TestContinuationJournal:
+    def test_round_trips_compact_ordered_records(self, tmp_path):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+
+        session.append_continuation_records(
+            [{"type": "first", "value": "ä"}, {"type": "second", "value": 2}]
+        )
+
+        assert session.continuation_path == tmp_path / "session-one.continuation.jsonl"
+        assert session.load_continuation_records() == [
+            {"type": "first", "value": "ä"},
+            {"type": "second", "value": 2},
+        ]
+        assert session.continuation_path.read_bytes().count(b"\n") == 2
+
+    def test_load_truncates_only_a_torn_final_record(self, tmp_path):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+        session.append_continuation_record({"type": "complete"})
+        with session.continuation_path.open("ab") as journal:
+            journal.write(b'{"type":"torn"')
+
+        assert session.load_continuation_records() == [{"type": "complete"}]
+        assert session.continuation_path.read_bytes().endswith(b"\n")
+
+    def test_load_rejects_a_malformed_complete_record(self, tmp_path):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+        session.continuation_path.write_bytes(b'{"type":}\n')
+
+        with pytest.raises(ChatSessionError, match="invalid continuation JSON"):
+            session.load_continuation_records()
+
+    def test_delete_removes_continuation_sidecar(self, tmp_path):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+        session.append_continuation_record({"type": "active"})
+
+        session.delete()
+
+        assert not session.continuation_path.exists()
+
+    def test_move_carries_continuation_for_identity_and_project_sessions(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        identity = manager.create("alpha", "identity")
+        identity.append_continuation_record({"scope": "identity"})
+        project = manager.create("alpha", "project", "acme")
+        project.append_continuation_record({"scope": "project"})
+
+        moved_identity = asyncio.run(manager.move("alpha", "identity", "beta"))
+        moved_project = asyncio.run(
+            manager.move(
+                "alpha",
+                "project",
+                "beta",
+                source_project_id="acme",
+                target_project_id="other",
+            )
+        )
+
+        assert moved_identity.load_continuation_records() == [{"scope": "identity"}]
+        assert moved_project.load_continuation_records() == [{"scope": "project"}]
+        assert not identity.continuation_path.exists()
+        assert not project.continuation_path.exists()
+
+    def test_archive_replaces_and_carries_continuation(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        session = manager.create("alpha", "session-one")
+        session.append_continuation_record({"generation": 2})
+        archive_dir = manager._archive_dir("alpha", None)
+        archive_dir.mkdir(parents=True)
+        archived = archive_dir / session.continuation_path.name
+        archived.write_text('{"generation":1}\n', encoding="utf-8")
+
+        asyncio.run(manager.archive("alpha", "session-one"))
+
+        assert json.loads(archived.read_text(encoding="utf-8")) == {"generation": 2}
+        assert not session.continuation_path.exists()
+
+    def test_fork_deliberately_omits_continuation(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        source = manager.create("alpha", "session-one")
+        source.append(ChatMessage.user("work"))
+        source.append_continuation_record({"type": "active"})
+
+        fork = asyncio.run(manager.fork("alpha", "session-one"))
+
+        assert source.continuation_path.exists()
+        assert not fork.continuation_path.exists()

@@ -190,7 +190,7 @@ def make_engine(
     owner_user_ids: list[str] | None = None,
     observe_unaddressed: bool = False,
     trigger_run: AsyncMock | None = None,
-    retry_run: AsyncMock | None = None,
+    continue_run: AsyncMock | None = None,
     compact_session: AsyncMock | None = None,
     has_active_run: Mock | None = None,
     command_dispatcher: object | None = None,
@@ -224,7 +224,7 @@ def make_engine(
 
     trigger_service = SimpleNamespace(
         trigger_run=trigger_with_admission,
-        retry_run=retry_run or AsyncMock(),
+        continue_run=continue_run or AsyncMock(),
         compact_session=compact_session or AsyncMock(return_value="Context compacted."),
         # Synchronous on purpose: the real has_active_run returns a bool, not a
         # coroutine. An AsyncMock would return a truthy coroutine -> always "busy".
@@ -647,19 +647,19 @@ async def test_new_session_in_one_chat_leaves_other_chat_untouched(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_retry_command_action_relays_retried_run(tmp_path: Path) -> None:
-    retry_mock = AsyncMock(return_value=make_completed_run(output_text="retried reply"))
-    command_dispatcher = make_command_dispatcher(result=CommandAction(name="retry_last_turn"))
+async def test_continue_command_action_relays_continued_run(tmp_path: Path) -> None:
+    continue_mock = AsyncMock(return_value=make_completed_run(output_text="continued reply"))
+    command_dispatcher = make_command_dispatcher(result=CommandAction(name="continue"))
     engine, _sessions, trigger_mock, transport = make_engine(
-        tmp_path, retry_run=retry_mock, command_dispatcher=command_dispatcher
+        tmp_path, continue_run=continue_mock, command_dispatcher=command_dispatcher
     )
 
-    await engine.handle_inbound_text(make_conversation(), "/retry")
+    await engine.handle_inbound_text(make_conversation(), "/continue")
     await drain(engine, 12345)
 
-    retry_mock.assert_awaited_once_with("assistant", SESSION_ID)
+    continue_mock.assert_awaited_once_with("assistant", SESSION_ID)
     trigger_mock.assert_not_awaited()
-    assert transport.sent == [("12345", "retried reply")]
+    assert transport.sent == [("12345", "continued reply")]
     await engine.stop()
 
 

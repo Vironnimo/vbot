@@ -83,6 +83,7 @@ export function ensureSessionState(state, agentId, sessionId) {
       streamStatus: CHAT_STATUS_IDLE,
       usage: null,
       sessionUsage: null,
+      continuation: null,
       hasOlderHistory: false,
       loadingOlderHistory: false,
     };
@@ -146,6 +147,9 @@ export function loadHistory(sessionState, messages, options = {}) {
   if (options.sessionUsage) {
     sessionState.sessionUsage = options.sessionUsage;
   }
+  if (Object.prototype.hasOwnProperty.call(options, 'continuation')) {
+    sessionState.continuation = options.continuation ?? null;
+  }
   return sessionState;
 }
 
@@ -184,6 +188,7 @@ export function startRun(sessionState, run) {
   sessionState.status = CHAT_STATUS_RUNNING;
   sessionState.error = null;
   sessionState.streamStatus = CHAT_STATUS_RUNNING;
+  sessionState.continuation = null;
   sessionState.streamingRunEvents = [];
   sessionState.streamingPhase = 0;
   sessionState.seenStreamingEventKeys = new Set();
@@ -290,6 +295,7 @@ export function finishRun(sessionState, event) {
   if (event?.payload?.session_usage) {
     sessionState.sessionUsage = event.payload.session_usage;
   }
+  sessionState.continuation = event?.payload?.continuation ?? null;
   return sessionState;
 }
 
@@ -756,7 +762,7 @@ const AGENT_ADDRESS_SEPARATOR = '@';
 // unchanged); a set project id yields `agent@projekt`. Inverse of the server's
 // `parse_agent_address`. This is the address sent to the RPCs that parse an
 // agent address: session.create / session.list / chat.history / chat.send /
-// chat.stream / chat.retry_last_turn (RPC-contract trap 2).
+// chat.stream / chat.continue (RPC-contract trap 2).
 export function formatAgentAddress(agentId, projectId) {
   const bareId = typeof agentId === 'string' ? agentId : '';
   const project = typeof projectId === 'string' ? projectId.trim() : '';

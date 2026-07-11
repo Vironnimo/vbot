@@ -27,11 +27,9 @@ from core.providers.reasoning import (
 )
 from core.sessions import (
     CHANNEL_MESSAGE_NOTE_PREFIX,
-    PARTIAL_THINKING_NOTE_PREFIX,
     SKILL_AVAILABLE_NOTE_PREFIX,
     ChatSession,
     is_channel_message_note,
-    is_partial_thinking_note,
     is_skill_context_note,
     skill_context_note_payload,
 )
@@ -737,14 +735,6 @@ def _embed_notes_into_request(
     return _repair_dangling_tool_calls(request_messages)
 
 
-def _last_assistant_index(messages: list[ChatMessage]) -> int:
-    """Return the index of the last assistant message, or -1 if none exists."""
-    for index in range(len(messages) - 1, -1, -1):
-        if messages[index].role == "assistant":
-            return index
-    return -1
-
-
 def _assemble_request_history(
     messages: list[ChatMessage],
     *,
@@ -755,16 +745,8 @@ def _assemble_request_history(
     pending_notes: list[ChatMessage] = []
     deferred_until_after_tools: list[ChatMessage] = []
 
-    last_assistant_index = _last_assistant_index(messages)
-
-    for index, message in enumerate(messages):
+    for message in messages:
         if message.role == "note":
-            # A partial-thinking note is the only trace of an interrupted run
-            # (no assistant message is persisted for it). Embed it one-shot:
-            # only while no assistant turn follows it; once the next run
-            # produced output it is stale and skipped (it stays in JSONL).
-            if is_partial_thinking_note(message) and index < last_assistant_index:
-                continue
             pending_notes.append(message)
             continue
 
@@ -983,7 +965,6 @@ def _system_reminder_block(message: ChatMessage) -> str:
     content = message.content
     if isinstance(content, str):
         for prefix in (
-            PARTIAL_THINKING_NOTE_PREFIX,
             SKILL_AVAILABLE_NOTE_PREFIX,
             COMPACTION_SUMMARY_NOTE_PREFIX,
         ):

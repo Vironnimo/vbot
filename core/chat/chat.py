@@ -4,19 +4,28 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from core.chat.content_blocks import ContentBlock, MediaBlock
+from core.chat.continuation import (
+    ContinuationCause,
+    ContinuationState,
+    ContinuationTracker,
+    fold_continuation_records,
+    inject_continuation_reminder,
+    normalize_interruption_cause,
+    recover_continuation,
+    render_continuation_reminder,
+)
 from core.chat.errors import ChatError, ChatSessionError, ToolIterationLimitError
 from core.chat.events import (
     _close_adapter,
     _emit_assistant_events,
     _emit_message_event,
     _emit_streaming_assistant_events,
-    _maybe_persist_partial_thinking,
     _persist_run_error,
     _timing_payload,
 )
@@ -132,6 +141,7 @@ from core.runs import (
     COMPACTION_COMPLETED_EVENT,
     MODEL_FALLBACK_ACTIVATED_EVENT,
     USER_MESSAGE_EVENT,
+    ActiveRunError,
     QueuedRunItem,
     Run,
     RunExecutor,
@@ -458,25 +468,72 @@ class ChatLoop:
             _display_content_preview(content),
         )
 
-    async def retry_run(self, agent_id: str, session_id: str, project_id: str | None = None) -> Run:
-        """Retry the last user turn without adding a new user message.
-
-        Only valid when the session already contains at least one user message.
-        ``project_id`` scopes the retried session/run to a project anchor.
-        """
+    async def continue_run(
+        self, agent_id: str, session_id: str, project_id: str | None = None
+    ) -> Run:
+        """Continue one unresolved checkpoint without adding a user message."""
         session = self._get_session(
             agent_id, session_id, create_missing=False, project_id=project_id
         )
-        messages = session.load()
-        if not any(message.role == "user" for message in messages):
-            raise ChatSessionError("no user message in session to retry")
+        active = self._runtime.chat_run_manager.active_run(
+            agent_id=agent_id,
+            session_id=session_id,
+            project_id=project_id,
+        )
+        if active is not None:
+            raise ActiveRunError(f"session already has an active run: {session_id}")
+        state = recover_continuation(
+            session,
+            active_run_id=None,
+        )
+        summary = state.public_summary() if state is not None else None
+        if summary is None:
+            raise ChatSessionError("no interrupted work is available to continue")
+        if summary["can_continue"] is not True:
+            raise ChatSessionError("cancelled work requires a new user message to continue")
         manager = self._runtime.chat_run_manager
         return await manager.start(
             agent_id=agent_id,
             session_id=session.id,
-            executor=lambda run: self._execute_run(run, content=None, retry=True),
+            executor=lambda run: self._execute_run(run, content=None, explicit_continue=True),
             project_id=project_id,
         )
+
+    def continuation_summary(
+        self, agent_id: str, session_id: str, project_id: str | None = None
+    ) -> JsonObject | None:
+        """Return the public unresolved checkpoint summary for one Session."""
+        session = self._get_session(
+            agent_id, session_id, create_missing=False, project_id=project_id
+        )
+        active = self._runtime.chat_run_manager.active_run(
+            agent_id=agent_id,
+            session_id=session_id,
+            project_id=project_id,
+        )
+        state = recover_continuation(
+            session,
+            active_run_id=active.id if active is not None else None,
+        )
+        return state.public_summary() if state is not None else None
+
+    def discard_continuation(
+        self, agent_id: str, session_id: str, project_id: str | None = None
+    ) -> None:
+        """Explicitly abandon one unresolved checkpoint."""
+        if (
+            self._runtime.chat_run_manager.active_run(
+                agent_id=agent_id,
+                session_id=session_id,
+                project_id=project_id,
+            )
+            is not None
+        ):
+            raise ChatSessionError("interrupted work cannot be discarded while a run is active")
+        session = self._get_session(
+            agent_id, session_id, create_missing=False, project_id=project_id
+        )
+        session.clear_continuation()
 
     async def compact_session(
         self,
@@ -617,10 +674,75 @@ class ChatLoop:
         content: str | list[ContentBlock] | None = None,
         *,
         internal: bool = False,
-        retry: bool = False,
+        explicit_continue: bool = False,
         input_origin: InputOrigin | None = None,
         sender: MessageSender | None = None,
         tool_restriction: Sequence[str] | None = None,
+    ) -> ChatMessage:
+        project_id = run.project_id
+        session = self._runtime.chat_sessions.get(
+            run.agent_id,
+            run.session_id,
+            project_id,
+        )
+        prior_continuation: ContinuationState | None = None
+        continuation_reminder: str | None = None
+        continuation_tracker: ContinuationTracker | None = None
+        if not internal:
+            prior_continuation = recover_continuation(session, active_run_id=run.id)
+            if explicit_continue and prior_continuation is None:
+                raise ChatSessionError("no interrupted work is available to continue")
+            if prior_continuation is not None and not prior_continuation.active:
+                continuation_reminder = render_continuation_reminder(
+                    prior_continuation,
+                    context_window=None,
+                )
+            continuation_tracker = ContinuationTracker(
+                session,
+                run_id=run.id,
+                request=content,
+                prior_state=prior_continuation,
+            )
+        try:
+            return await self._execute_run_impl(
+                run,
+                content,
+                internal=internal,
+                explicit_continue=explicit_continue,
+                input_origin=input_origin,
+                sender=sender,
+                tool_restriction=tool_restriction,
+                session=session,
+                prior_continuation=prior_continuation,
+                continuation_reminder=continuation_reminder,
+                continuation_tracker=continuation_tracker,
+            )
+        except BaseException as exc:
+            if continuation_tracker is not None and not continuation_tracker.closed:
+                cause: ContinuationCause = (
+                    "user"
+                    if run.cancel_requested and run.cancel_reason == "user"
+                    else normalize_interruption_cause(exc)
+                )
+                run.terminal_payload_extras["continuation"] = await continuation_tracker.interrupt(
+                    cause
+                )
+            raise
+
+    async def _execute_run_impl(
+        self,
+        run: Run,
+        content: str | list[ContentBlock] | None = None,
+        *,
+        internal: bool = False,
+        explicit_continue: bool = False,
+        input_origin: InputOrigin | None = None,
+        sender: MessageSender | None = None,
+        tool_restriction: Sequence[str] | None = None,
+        session: ChatSession,
+        prior_continuation: ContinuationState | None,
+        continuation_reminder: str | None,
+        continuation_tracker: ContinuationTracker | None,
     ) -> ChatMessage:
         # The run's project anchor lives on the Run (``run.project_id``), set by
         # the run manager at creation, not on a closure: the session anchor, tool
@@ -635,11 +757,6 @@ class ChatLoop:
         run.add_cancel_callback(lambda: _close_adapter(adapter))
         process_manager = self._runtime.process_manager
         run.add_cancel_callback(lambda: process_manager.cancel_scope(run.id))
-        session = self._runtime.chat_sessions.get(
-            run.agent_id,
-            run.session_id,
-            project_id,
-        )
         project_cwd = self._resolve_project_cwd(project_id)
         # System-prompt inputs. The config-agent body is verbatim (empty for an
         # identity agent). The project files come from the run's prompt-project: a
@@ -683,13 +800,15 @@ class ChatLoop:
         run_timing_started_at = datetime.now(UTC)
         run_timing_started_perf = time.perf_counter()
         _run_succeeded = True
+        run_error: BaseException | None = None
+        completed_assistant: ChatMessage | None = None
         start_line_extras = ""
         if project_id is not None:
             start_line_extras += f" project={project_id}"
         if internal:
             start_line_extras += " internal"
-        if retry:
-            start_line_extras += " retry"
+        if explicit_continue:
+            start_line_extras += " continue"
         _LOGGER.info(
             "Run %s started (agent=%s session=%s model=%s connection=%s%s)",
             run.id,
@@ -719,7 +838,7 @@ class ChatLoop:
             self._announce_newly_available_skills(
                 run.agent_id, run.session_id, session, agent, skill_registry, project_id
             )
-            if retry:
+            if explicit_continue:
                 pass
             elif internal:
                 if not isinstance(content, str):
@@ -745,10 +864,21 @@ class ChatLoop:
                 skill_registry=skill_registry,
                 skill_catalog=skill_catalog,
             )
+            if continuation_reminder is not None:
+                assert prior_continuation is not None
+                continuation_reminder = render_continuation_reminder(
+                    prior_continuation,
+                    context_window=self._resolve_context_window(agent),
+                )
+                messages = inject_continuation_reminder(
+                    messages,
+                    continuation_reminder,
+                    explicit_continue=explicit_continue,
+                )
             tools = self._runtime.system_prompts.provider_tool_definitions(agent)
 
             try:
-                return await self._send_until_final(
+                completed_assistant = await self._send_until_final(
                     agent,
                     adapter,
                     model_id,
@@ -762,7 +892,11 @@ class ChatLoop:
                     project_cwd=project_cwd,
                     rooted_project_id=rooted_project_id,
                     tool_restriction=tool_restriction,
+                    continuation_tracker=continuation_tracker,
+                    continuation_reminder=continuation_reminder,
+                    explicit_continue=explicit_continue,
                 )
+                return completed_assistant
             except ProviderError as primary_exc:
                 if _is_model_fallback_trigger(primary_exc):
                     fallback = _resolve_fallback(self._runtime, agent)
@@ -798,7 +932,7 @@ class ChatLoop:
                         # stale meta must never reach the fallback provider.
                         _strip_assistant_reasoning_fields(messages)
                         try:
-                            return await self._send_until_final(
+                            completed_assistant = await self._send_until_final(
                                 agent,
                                 fallback_adapter,
                                 fallback_model_id,
@@ -812,25 +946,34 @@ class ChatLoop:
                                 project_cwd=project_cwd,
                                 rooted_project_id=rooted_project_id,
                                 tool_restriction=tool_restriction,
+                                continuation_tracker=continuation_tracker,
+                                continuation_reminder=continuation_reminder,
+                                explicit_continue=explicit_continue,
                             )
+                            return completed_assistant
                         except (ProviderError, ChatError, ConfigError, VBotError) as fallback_exc:
                             _run_succeeded = False
+                            run_error = fallback_exc
                             _persist_run_error(run, session, fallback_exc)
                             raise fallback_exc
                         finally:
                             await _close_adapter(fallback_adapter)
 
                 _run_succeeded = False
+                run_error = primary_exc
                 _persist_run_error(run, session, primary_exc)
                 raise
             except (ChatError, ConfigError, VBotError) as exc:
                 _run_succeeded = False
+                run_error = exc
                 _persist_run_error(run, session, exc)
                 raise
             except asyncio.CancelledError:
+                run_error = asyncio.CancelledError()
                 raise
-            except BaseException:
+            except BaseException as exc:
                 _run_succeeded = False
+                run_error = exc
                 raise
         finally:
             outcome: Literal["success", "error", "cancelled"]
@@ -864,6 +1007,27 @@ class ChatLoop:
                     timing=run_timing,
                 )
             )
+            if continuation_tracker is not None:
+                if (
+                    outcome == "success"
+                    and completed_assistant is not None
+                    and not completed_assistant.interrupted
+                ):
+                    await continuation_tracker.resolve()
+                    continuation_summary = None
+                else:
+                    if outcome == "cancelled":
+                        cause: ContinuationCause = (
+                            "user" if run.cancel_reason == "user" else "internal"
+                        )
+                    else:
+                        cause = (
+                            continuation_tracker.interruption_cause
+                            or normalize_interruption_cause(run_error)
+                        )
+                    continuation_summary = await continuation_tracker.interrupt(cause)
+                if continuation_summary is not None:
+                    run.terminal_payload_extras["continuation"] = continuation_summary
             # Session usage totals ride every terminal event so accessors can
             # keep their session-level token/cache display current without
             # re-fetching history. Diagnostics only — never mask the outcome.
@@ -1239,6 +1403,9 @@ class ChatLoop:
         project_cwd: Path | None = None,
         rooted_project_id: str | None = None,
         tool_restriction: Sequence[str] | None = None,
+        continuation_tracker: ContinuationTracker | None = None,
+        continuation_reminder: str | None = None,
+        explicit_continue: bool = False,
     ) -> ChatMessage:
         replay_policy = _resolve_reasoning_replay_policy(adapter, model_id)
         wire_media_types = _resolve_wire_media_support(adapter, model_id)
@@ -1310,8 +1477,8 @@ class ChatLoop:
                 messages_for_request,
                 tools,
                 run,
-                note_hook=session.add_note,
                 chunk_timeout_seconds=chunk_timeout_seconds,
+                continuation_tracker=continuation_tracker,
             )
             # A user cancel after visible streamed output returns the preserved
             # partial as an interrupted turn — it must reach the persist block
@@ -1342,6 +1509,18 @@ class ChatLoop:
                 run.agent_id, run.session_id, project_id
             ):
                 session.append(assistant_message)
+                if continuation_tracker is not None:
+                    continuation_tracker.record_assistant_boundary(
+                        message_id=assistant_message.id,
+                        reasoning=assistant_message.reasoning,
+                        content=(
+                            assistant_message.content
+                            if isinstance(assistant_message.content, str)
+                            else None
+                        ),
+                        interrupted=assistant_message.interrupted,
+                        tool_calls=assistant_message.tool_calls,
+                    )
                 if not self._streaming:
                     _emit_assistant_events(run, assistant_message)
                 messages.append(
@@ -1373,6 +1552,9 @@ class ChatLoop:
                                     assistant_message, replay_policy=replay_policy
                                 ),
                             ],
+                            continuation_tracker=continuation_tracker,
+                            continuation_reminder=continuation_reminder,
+                            explicit_continue=explicit_continue,
                         )
                     return assistant_message
 
@@ -1383,6 +1565,8 @@ class ChatLoop:
 
                 session.begin_defer_notes()
                 try:
+                    if continuation_tracker is not None:
+                        continuation_tracker.record_tool_starts(assistant_message.tool_calls)
                     tool_messages, media_injections = await _dispatch_tool_calls(
                         self._runtime,
                         agent,
@@ -1398,6 +1582,8 @@ class ChatLoop:
                     for tool_message in tool_messages:
                         session.append(tool_message)
                         messages.append(_message_to_request_dict(tool_message))
+                    if continuation_tracker is not None:
+                        continuation_tracker.record_tool_results(tool_messages)
                     # A tool may ask to show media (e.g. read on an image): inject it
                     # as a synthetic current-turn user message after the tool results
                     # so the tool-cycle invariant (results before any non-tool message)
@@ -1449,6 +1635,9 @@ class ChatLoop:
                     project_id=project_id,
                     skill_project_id=skill_project_id,
                     tools=tools,
+                    continuation_tracker=continuation_tracker,
+                    continuation_reminder=continuation_reminder,
+                    explicit_continue=explicit_continue,
                 )
 
         raise ToolIterationLimitError("maximum tool iterations exceeded")
@@ -1510,6 +1699,9 @@ class ChatLoop:
         skill_project_id: str | None = None,
         tools: list[JsonObject] | None = None,
         continuation_request_messages: list[JsonObject] | None = None,
+        continuation_tracker: ContinuationTracker | None = None,
+        continuation_reminder: str | None = None,
+        explicit_continue: bool = False,
     ) -> list[JsonObject]:
         """Auto-compact when configured token thresholds are exceeded."""
         if self._compaction_service is None:
@@ -1594,6 +1786,8 @@ class ChatLoop:
                 await _close_adapter(summary_adapter)
 
         session.append(checkpoint)
+        if continuation_tracker is not None:
+            continuation_tracker.record_compaction_boundary()
         run.emit(COMPACTION_COMPLETED_EVENT, {"message": checkpoint.to_dict()})
         # Identity runs only, exactly like the run-start resolution: a config
         # agent's slug must not resolve a same-named identity agent's private home.
@@ -1614,6 +1808,19 @@ class ChatLoop:
                 run.agent_id, run.session_id, agent, compaction_skill_registry, project_id
             ),
         )
+        if continuation_reminder is not None:
+            if continuation_tracker is not None:
+                active_continuation = fold_continuation_records(session.load_continuation_records())
+                if active_continuation is not None:
+                    continuation_reminder = render_continuation_reminder(
+                        active_continuation,
+                        context_window=self._resolve_context_window(agent),
+                    )
+            rebuilt_messages = inject_continuation_reminder(
+                rebuilt_messages,
+                continuation_reminder,
+                explicit_continue=explicit_continue,
+            )
         _LOGGER.info(
             "Auto-compaction completed (run=%s session=%s estimated_tokens_after=%d)",
             run.id,
@@ -1751,8 +1958,8 @@ class ChatLoop:
         messages: list[JsonObject],
         tools: list[JsonObject],
         run: Run,
-        note_hook: Callable[[str], None] | None = None,
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
+        continuation_tracker: ContinuationTracker | None = None,
     ) -> ChatMessage:
         request_context = _resolve_request_context_kwargs(adapter, run)
         if self._streaming:
@@ -1763,9 +1970,9 @@ class ChatLoop:
                 messages,
                 tools,
                 run,
-                note_hook=note_hook,
                 chunk_timeout_seconds=chunk_timeout_seconds,
                 request_context=request_context,
+                continuation_tracker=continuation_tracker,
             )
 
         return await self._send_non_streaming_assistant_request(
@@ -1801,9 +2008,9 @@ class ChatLoop:
         messages: list[JsonObject],
         tools: list[JsonObject],
         run: Run,
-        note_hook: Callable[[str], None] | None = None,
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
         request_context: dict[str, Any] | None = None,
+        continuation_tracker: ContinuationTracker | None = None,
     ) -> ChatMessage:
         # A transient drop before any visible output is replayed as a full stream
         # restart (the not-yet-visible analogue of the non-streaming fallback).
@@ -1818,10 +2025,10 @@ class ChatLoop:
                     messages,
                     tools,
                     run,
-                    note_hook,
                     can_restart=attempt < MAX_STREAM_RESTARTS,
                     chunk_timeout_seconds=chunk_timeout_seconds,
                     request_context=request_context or {},
+                    continuation_tracker=continuation_tracker,
                 )
             except _StreamRestartNeeded as restart:
                 _LOGGER.warning(
@@ -1844,11 +2051,11 @@ class ChatLoop:
         messages: list[JsonObject],
         tools: list[JsonObject],
         run: Run,
-        note_hook: Callable[[str], None] | None,
         *,
         can_restart: bool,
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
         request_context: dict[str, Any] | None = None,
+        continuation_tracker: ContinuationTracker | None = None,
     ) -> ChatMessage:
         accumulator = StreamingAccumulator()
         emitted_visible_delta = False
@@ -1870,6 +2077,11 @@ class ChatLoop:
                 visible_deltas = accumulator.add_delta(delta)
                 for visible_delta in visible_deltas:
                     run.emit(visible_delta.event_type, visible_delta.payload)
+                    if continuation_tracker is not None:
+                        continuation_tracker.record_stream_delta(
+                            reasoning=str(visible_delta.payload.get("reasoning_delta", "")),
+                            content=str(visible_delta.payload.get("content_delta", "")),
+                        )
                     emitted_visible_delta = True
                 run.raise_if_cancelled()
             if accumulator.finish_reason is None:
@@ -1907,24 +2119,19 @@ class ChatLoop:
             elif action is StreamRecoveryAction.RESTART:
                 raise _StreamRestartNeeded(exc) from exc
             elif action is StreamRecoveryAction.PRESERVE_PARTIAL:
+                if continuation_tracker is not None:
+                    continuation_tracker.mark_interruption_cause(normalize_interruption_cause(exc))
                 return self._finalize_interrupted_partial(agent, accumulator, run)
             else:
-                if action is StreamRecoveryAction.DISCARD_WITH_NOTE:
-                    _maybe_persist_partial_thinking(accumulator, note_hook)
                 raise
         except asyncio.CancelledError:
             # User cancel mid-stream. Output the user already saw must not
             # vanish (GLOSSARY → Cancel), so accumulated visible content is
             # finalized like a stream break after visible output; the caller
-            # persists it and the Run still ends as cancelled. With no visible
-            # content (still thinking / reasoning-only) the existing
-            # partial-thinking note is the only trace, as before.
+            # persists it and the Run still ends as cancelled. Readable
+            # reasoning-only state already belongs to the Continuation Checkpoint.
             if run.cancel_requested and accumulator.partial_content is not None:
                 return self._finalize_interrupted_partial(agent, accumulator, run)
-            _maybe_persist_partial_thinking(accumulator, note_hook)
-            raise
-        except BaseException:
-            _maybe_persist_partial_thinking(accumulator, note_hook)
             raise
 
         assistant_message = _assistant_message_from_response(

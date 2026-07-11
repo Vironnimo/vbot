@@ -42,6 +42,16 @@ vi.mock('$lib/api.js', () => ({
   updateQueueItem: (...args) => updateQueueItemMock(...args),
   cancelRun: (...args) => cancelRunMock(...args),
   cancelToolCall: (...args) => cancelToolCallMock(...args),
+  continueRun: (agentId, sessionId) =>
+    rpcMock('chat.continue', {
+      agent_id: agentId,
+      session_id: sessionId,
+    }),
+  discardContinuation: (agentId, sessionId) =>
+    rpcMock('chat.continuation_discard', {
+      agent_id: agentId,
+      session_id: sessionId,
+    }),
   showProject: (...args) => showProjectMock(...args),
 }));
 
@@ -1114,14 +1124,14 @@ describe('ChatView', () => {
     ).toBe(true);
   });
 
-  it('subscribes to the run returned by a /retry command', async () => {
+  it('subscribes to the run returned by a /continue command', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({
         streamHandler: ({ content }) => {
-          if (content === '/retry') {
+          if (content === '/continue') {
             return {
-              run_id: 'run-retry-1',
-              sse_url: '/api/runs/run-retry-1/events',
+              run_id: 'run-continue-1',
+              sse_url: '/api/runs/run-continue-1/events',
               status: 'running',
               events: [],
             };
@@ -1139,7 +1149,7 @@ describe('ChatView', () => {
       100,
     );
 
-    sendComposerMessage('/retry');
+    sendComposerMessage('/continue');
 
     await waitForCondition(
       () => subscribeRunEventsMock.mock.calls.length === 1,
@@ -1149,10 +1159,10 @@ describe('ChatView', () => {
     expect(rpcMock).toHaveBeenCalledWith('chat.stream', {
       agent_id: 'alpha',
       session_id: 'session-1',
-      content: '/retry',
+      content: '/continue',
     });
     expect(subscribeRunEventsMock).toHaveBeenCalledWith(
-      '/api/runs/run-retry-1/events',
+      '/api/runs/run-continue-1/events',
       expect.any(Object),
       { afterSequence: 0 },
     );
@@ -2256,12 +2266,23 @@ describe('ChatView', () => {
     expect(activeAgentTab()?.textContent).toContain('Alpha');
   });
 
-  it('retries the sub-agent session when retry is requested from its override', async () => {
+  it('continues retained work in the displayed sub-agent session override', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({
-        retryRunResponse: {
-          run_id: 'retry-run-1',
-          sse_url: '/api/runs/retry-run-1/events',
+        continuations: {
+          'sub-session-1': {
+            checkpoint_id: 'checkpoint-1',
+            origin_run_id: 'interrupted-1',
+            latest_run_id: 'interrupted-1',
+            cause: 'network',
+            state: 'interrupted',
+            user_initiated: false,
+            can_continue: true,
+          },
+        },
+        continueRunResponse: {
+          run_id: 'continue-run-1',
+          sse_url: '/api/runs/continue-run-1/events',
           status: 'running',
           events: [],
         },
@@ -2287,26 +2308,67 @@ describe('ChatView', () => {
       100,
     );
 
-    expect(typeof mountedComponent.retryLastTurn).toBe('function');
-    await mountedComponent.retryLastTurn();
+    const continueButton = findButtonByText('Continue');
+    expect(continueButton).toBeTruthy();
+    continueButton.click();
     flushSync();
 
     await waitForCondition(
       () =>
         rpcMock.mock.calls.some(
           ([method, params]) =>
-            method === 'chat.retry_last_turn' &&
+            method === 'chat.continue' &&
             params?.agent_id === 'alpha' &&
             params?.session_id === 'sub-session-1',
         ),
       100,
     );
 
-    expect(rpcMock).toHaveBeenCalledWith('chat.retry_last_turn', {
+    expect(rpcMock).toHaveBeenCalledWith('chat.continue', {
       agent_id: 'alpha',
       session_id: 'sub-session-1',
     });
-    expect(rpcMock).not.toHaveBeenCalledWith('chat.retry_last_turn', {
+    expect(rpcMock).not.toHaveBeenCalledWith('chat.continue', {
+      agent_id: 'alpha',
+      session_id: 'session-1',
+    });
+  });
+
+  it('shows discard only for user-cancelled retained work and hides it after discard', async () => {
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        continuations: {
+          'session-1': {
+            checkpoint_id: 'checkpoint-cancelled',
+            origin_run_id: 'cancelled-run',
+            latest_run_id: 'cancelled-run',
+            cause: 'user',
+            state: 'interrupted',
+            user_initiated: true,
+            can_continue: false,
+          },
+        },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, { target: document.body });
+    flushSync();
+    await waitForCondition(
+      () => document.body.textContent.includes('Interrupted work retained'),
+      100,
+    );
+
+    expect(findButtonByText('Continue')).toBeFalsy();
+    const discardButton = findButtonByText('Discard');
+    expect(discardButton).toBeTruthy();
+    discardButton.click();
+    flushSync();
+
+    await waitForCondition(
+      () => !document.body.textContent.includes('Interrupted work retained'),
+      100,
+    );
+    expect(rpcMock).toHaveBeenCalledWith('chat.continuation_discard', {
       agent_id: 'alpha',
       session_id: 'session-1',
     });
@@ -4928,7 +4990,8 @@ function createChatRpcMock({
   contextWindow = 262144,
   sessionMessages,
   activeRuns,
-  retryRunResponse,
+  continuations,
+  continueRunResponse,
   streamResponse,
   streamHandler,
   commandsError = false,
@@ -4986,6 +5049,9 @@ function createChatRpcMock({
         if (activeRuns?.[params.session_id]) {
           response.active_run = activeRuns[params.session_id];
         }
+        if (continuations?.[params.session_id]) {
+          response.continuation = continuations[params.session_id];
+        }
         return response;
       }
 
@@ -5022,11 +5088,15 @@ function createChatRpcMock({
       throw new Error('Unexpected stream call');
     }
 
-    if (method === 'chat.retry_last_turn') {
-      if (retryRunResponse) {
-        return retryRunResponse;
+    if (method === 'chat.continue') {
+      if (continueRunResponse) {
+        return continueRunResponse;
       }
-      throw new Error('Unexpected retry call');
+      throw new Error('Unexpected continue call');
+    }
+
+    if (method === 'chat.continuation_discard') {
+      return { ok: true };
     }
 
     if (method === 'session.create') {

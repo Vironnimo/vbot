@@ -88,6 +88,36 @@ describe('chat state helpers', () => {
     expect(sessionState.queue).toHaveLength(1);
   });
 
+  it('uses history and terminal events as authoritative continuation state', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-continuation',
+    );
+    const continuation = {
+      checkpoint_id: 'checkpoint-one',
+      can_continue: true,
+    };
+
+    loadHistory(sessionState, [], { continuation });
+    expect(sessionState.continuation).toEqual(continuation);
+
+    startRun(sessionState, {
+      run_id: 'run-two',
+      sse_url: '/runs/run-two',
+      status: 'running',
+    });
+    expect(sessionState.continuation).toBeNull();
+
+    appendRunEvent(sessionState, {
+      type: 'run_failed',
+      run_id: 'run-two',
+      sequence: 1,
+      payload: { status: 'failed', continuation },
+    });
+    expect(sessionState.continuation).toEqual(continuation);
+  });
+
   it('merges persisted tool timing and run summary into history assistant runs', () => {
     const sessionState = ensureSessionState(
       createChatState(),

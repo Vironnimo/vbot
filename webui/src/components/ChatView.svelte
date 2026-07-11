@@ -5,6 +5,8 @@
   import {
     cancelRun,
     cancelToolCall,
+    continueRun,
+    discardContinuation,
     listQueue,
     listSessions,
     removeFromQueue,
@@ -125,6 +127,7 @@
   let cancellingRun = $state(false);
   let historyError = $state('');
   let actionError = $state('');
+  let continuationActionPending = $state('');
   let availableSkills = $state([]);
   // Chat-local bottom toast for `output: "toast"` command replies (e.g. /stop,
   // /compact). Replaces the old top `actionInfo` notice — command output now
@@ -209,6 +212,7 @@
 
   let activeAgent = $derived(getActiveAgent());
   let activeSessionState = $derived(getActiveSessionState());
+  let activeContinuation = $derived(activeSessionState?.continuation ?? null);
   // Outside address of the displayed agent (bare id for identity, full
   // `agent@projekt` otherwise) — what address-parsing RPCs like session.list
   // need (trap 2). The session drawer lists sessions through it.
@@ -1113,6 +1117,7 @@
       loadHistory(sessionState, history.messages ?? [], {
         hasMore: history.has_more === true,
         sessionUsage: history.session_usage,
+        continuation: history.continuation ?? null,
       });
       // History is the durable source of truth for which run is active. If
       // it says "no active run" but the local state still claims a run is
@@ -1876,6 +1881,8 @@
 
   const sendStream = async (agent, sessionState, content, options = {}) => {
     actionError = '';
+    const retainedContinuation = sessionState.continuation;
+    sessionState.continuation = null;
     // `sessionState.agentId` already carries the right outside spelling: a bare
     // id for an identity agent (byte-identical to today), the full
     // `agent@projekt` address for a project agent. `chat.stream` parses an
@@ -1949,6 +1956,7 @@
       });
       return true;
     } catch (error) {
+      sessionState.continuation = retainedContinuation;
       actionError = `${t('chat.sendError', 'Message could not be sent.')} ${error.message}`;
       markSessionError(sessionState, error);
       return false;
@@ -1964,7 +1972,7 @@
     cancellingRun = true;
     actionError = '';
     try {
-      await cancelRun(runId);
+      await cancelRun(runId, { reason: 'user' });
     } catch (error) {
       actionError = `${t('chat.cancelError', 'Run could not be cancelled.')} ${error.message}`;
     } finally {
@@ -2066,33 +2074,48 @@
     await handleVerifySubAgentStatus(agentId, sessionId, '');
   };
 
-  const handleRetry = async () => {
+  const handleContinue = async () => {
     const agent = activeAgent;
     const sessionState = activeSessionState;
     if (!agent || !sessionState || isRunActive(sessionState)) {
       return;
     }
     actionError = '';
+    continuationActionPending = 'continue';
+    sessionState.continuation = null;
     try {
-      // `chat.retry_last_turn` parses an agent address (trap 2): the session's
-      // stored `agentId` is the bare id for an identity agent (unchanged) and
-      // the full `agent@projekt` address for a project agent.
-      const run = await rpc('chat.retry_last_turn', {
-        agent_id: sessionState.agentId,
-        session_id: sessionState.sessionId,
-      });
+      const run = await continueRun(
+        sessionState.agentId,
+        sessionState.sessionId,
+      );
       startRun(sessionState, run);
       runStream.subscribeToRun(sessionState, run.sse_url, {
         afterSequence: 0,
       });
     } catch (error) {
-      actionError = `${t('chat.retryError', 'Retry failed.')} ${error.message}`;
+      actionError = `${t('chat.continueError', 'Continue failed.')} ${error.message}`;
+      await reloadActiveSessionHistory(sessionState);
+    } finally {
+      continuationActionPending = '';
     }
   };
 
-  export async function retryLastTurn() {
-    await handleRetry();
-  }
+  const handleDiscardContinuation = async () => {
+    const sessionState = activeSessionState;
+    if (!sessionState || isRunActive(sessionState)) {
+      return;
+    }
+    actionError = '';
+    continuationActionPending = 'discard';
+    try {
+      await discardContinuation(sessionState.agentId, sessionState.sessionId);
+      sessionState.continuation = null;
+    } catch (error) {
+      actionError = `${t('chat.discardContinuationError', 'Discard failed.')} ${error.message}`;
+    } finally {
+      continuationActionPending = '';
+    }
+  };
 
   // Exposed for tests and for the run-component verification wiring
   // (`onVerifySubAgentStatus` callback chain → ChatTimeline → ChatAssistantRun
@@ -2339,7 +2362,6 @@
             onNavigateToSubAgent={handleNavigateToSubAgentLink}
             onRequestSubAgentResult={requestSubAgentResult}
             onVerifySubAgentStatus={verifySubAgentStatus}
-            onRetry={handleRetry}
             onCancelToolCall={handleCancelToolCall}
             onCancelSubAgent={handleCancelSubAgent}
           />
@@ -2390,6 +2412,50 @@
                       'Return to current session',
                     )}
               </Button>
+            </Banner>
+          {/if}
+          {#if activeContinuation && !isRunActive(activeSessionState)}
+            <Banner
+              variant="warn"
+              class="chat-view__footer-banner"
+              aria-live="polite"
+            >
+              <div class="chat-view__footer-banner-copy">
+                <p class="chat-view__footer-banner-title">
+                  {t('chat.continuation.title', 'Interrupted work retained')}
+                </p>
+                <p class="chat-view__footer-banner-hint">
+                  {activeContinuation.user_initiated
+                    ? t(
+                        'chat.continuation.cancelledHint',
+                        'Type a correction or a new instruction to continue from the retained work.',
+                      )
+                    : t(
+                        'chat.continuation.hint',
+                        'Continue without adding a duplicate message, or discard the retained work.',
+                      )}
+                </p>
+              </div>
+              <div class="chat-view__footer-banner-actions">
+                {#if activeContinuation.can_continue}
+                  <Button
+                    variant="primary"
+                    disabled={Boolean(continuationActionPending)}
+                    loading={continuationActionPending === 'continue'}
+                    onClick={handleContinue}
+                  >
+                    {t('chat.continuation.continue', 'Continue')}
+                  </Button>
+                {/if}
+                <Button
+                  variant="secondary"
+                  disabled={Boolean(continuationActionPending)}
+                  loading={continuationActionPending === 'discard'}
+                  onClick={handleDiscardContinuation}
+                >
+                  {t('chat.continuation.discard', 'Discard')}
+                </Button>
+              </div>
             </Banner>
           {/if}
           {#if agentModelMissing}
@@ -2657,6 +2723,12 @@
     min-width: 0;
   }
 
+  .chat-view__footer-banner-actions {
+    display: flex;
+    flex-shrink: 0;
+    gap: 8px;
+  }
+
   .chat-view__footer-banner-title,
   .chat-view__footer-banner-hint {
     margin: 0;
@@ -2697,6 +2769,10 @@
     :global(.chat-view__footer-banner) {
       align-items: flex-start;
       flex-direction: column;
+    }
+
+    .chat-view__footer-banner-actions {
+      width: 100%;
     }
 
     :global(.chat-view__subagent-session-return) {

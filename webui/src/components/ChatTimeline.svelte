@@ -4,8 +4,6 @@
   import {
     dateKeyForTimestamp,
     formatDate,
-    latestTerminalStateForItems,
-    shouldRenderRetryButton,
     timestampForItem,
   } from '$lib/chatTimelinePresentation.js';
   import { t } from '$lib/i18n.js';
@@ -31,7 +29,6 @@
     onNavigateToSubAgent = () => {},
     onRequestSubAgentResult = () => {},
     onVerifySubAgentStatus = () => {},
-    onRetry = () => {},
     onCancelToolCall = () => {},
     onCancelSubAgent = () => {},
     hasOlderHistory = false,
@@ -73,9 +70,6 @@
   let handledSubmittedTurnScrollKey = $state(0);
   let loadingOlderFromScroll = $state(false);
   let submittedTurnSpacerHeight = $state(MIN_SUBMITTED_TURN_SPACER_HEIGHT);
-  let latestTerminalState = $derived(
-    latestTerminalStateForItems(timelineItems),
-  );
   let timelineSignature = $derived(
     `${timelineItems.map((item) => timelineItemSignature(item)).join('|')}` +
       `#${transientCards.map((card) => card.id).join(',')}`,
@@ -512,10 +506,8 @@
             {onNavigateToSubAgent}
             {onRequestSubAgentResult}
             {onVerifySubAgentStatus}
-            {onRetry}
             {onCancelToolCall}
             {onCancelSubAgent}
-            showRetry={shouldRenderRetryButton(item, latestTerminalState)}
           />
         {:else}
           <ChatTimelineEntry
@@ -523,8 +515,6 @@
             {agentName}
             {isReasoningOpen}
             onReasoningOpenChange={setReasoningOpen}
-            {onRetry}
-            showRetry={shouldRenderRetryButton(item, latestTerminalState)}
           />
         {/if}
         {#each transientCardGroups.byItemId.get(item.id) ?? [] as card (card.id)}

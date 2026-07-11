@@ -692,7 +692,7 @@ async def test_decide_recovery_visible_with_content_preserves_partial() -> None:
         assert action is StreamRecoveryAction.PRESERVE_PARTIAL, type(error).__name__
 
 
-async def test_decide_recovery_visible_reasoning_only_discards_with_note() -> None:
+async def test_decide_recovery_visible_reasoning_only_fails_for_checkpoint_handling() -> None:
     action = decide_stream_recovery(
         NetworkError("dropped"),
         emitted_visible_delta=True,
@@ -700,7 +700,7 @@ async def test_decide_recovery_visible_reasoning_only_discards_with_note() -> No
         has_partial_content=False,
     )
 
-    assert action is StreamRecoveryAction.DISCARD_WITH_NOTE
+    assert action is StreamRecoveryAction.FAIL
 
 
 async def test_local_provider_base_url_detects_loopback_and_local_names() -> None:

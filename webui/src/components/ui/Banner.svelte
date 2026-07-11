@@ -7,7 +7,7 @@
   // (transient, bottom-right) and the chat command-output surfaces; reach for
   // Banner when the message lives inside a view's own layout. Callers pass a
   // `variant` and already-translated `children` — plain text, or text plus a
-  // trailing action (a Retry button, a Review link): the box lays them out with
+  // trailing action (a Review button, a settings link): the box lays them out with
   // space-between, so a lone message sits left and an action floats right.
   //
   // `rest` is spread onto the element so each call site keeps its own

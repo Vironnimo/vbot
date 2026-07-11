@@ -44,14 +44,13 @@ class StreamRecoveryAction(Enum):
     The single, provider-agnostic vocabulary for stream-break recovery: deciding
     which action applies is :func:`decide_stream_recovery` (here); executing it —
     restarting, falling back to non-streaming, finalizing the partial answer,
-    leaving an interruption note, or re-raising — stays in the chat loop.
+    or re-raising — stays in the chat loop.
     """
 
     ACCEPT_COMPLETE = "accept_complete"
     RESTART = "restart"
     FALLBACK = "fallback"
     PRESERVE_PARTIAL = "preserve_partial"
-    DISCARD_WITH_NOTE = "discard_with_note"
     FAIL = "fail"
 
 
@@ -69,7 +68,7 @@ def decide_stream_recovery(
     state, so the same matrix holds for every adapter. The discriminators mirror
     the converged design of the reference harnesses — "did visible output
     escape?" gates whether a replay could duplicate, and the accumulated content
-    decides between preserving the partial answer and merely leaving a note.
+    decides whether a partial answer can be preserved.
 
     A normalized finish delta is the provider's logical completion boundary. A
     later transport error therefore cannot turn the completed response back into
@@ -79,8 +78,8 @@ def decide_stream_recovery(
     restartable transient (transport/timeout drop or chunk stall) replays the
     whole stream while restarts remain, anything else fails. Once visible output
     has escaped, the stream is never replayed: accumulated content is preserved
-    as an interrupted assistant turn, a reasoning-only interruption leaves a
-    partial-thinking note, and the error otherwise propagates.
+    as an interrupted assistant turn, while a reasoning-only interruption
+    propagates and its readable state remains in the Continuation Checkpoint.
     """
     if finish_received:
         return StreamRecoveryAction.ACCEPT_COMPLETE
@@ -92,7 +91,7 @@ def decide_stream_recovery(
         return StreamRecoveryAction.FAIL
     if has_partial_content:
         return StreamRecoveryAction.PRESERVE_PARTIAL
-    return StreamRecoveryAction.DISCARD_WITH_NOTE
+    return StreamRecoveryAction.FAIL
 
 
 def _is_streaming_fallback_error(error: Exception) -> bool:

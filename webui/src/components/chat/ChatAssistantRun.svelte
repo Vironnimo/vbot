@@ -50,10 +50,8 @@
     onNavigateToSubAgent = () => {},
     onRequestSubAgentResult = () => {},
     onVerifySubAgentStatus = () => {},
-    onRetry = () => {},
     onCancelToolCall = () => {},
     onCancelSubAgent = () => {},
-    showRetry = false,
   } = $props();
 
   function handleSubAgentNavigate(event, tool) {
@@ -221,11 +219,6 @@
     {#each runMetaParts(item) as metaPart (metaPart)}
       <span class="msg-meta-extra">· {metaPart}</span>
     {/each}
-    {#if showRetry}
-      <button type="button" class="retry-btn" onclick={onRetry}
-        >{t('chat.retryRun', 'Retry last turn')}</button
-      >
-    {/if}
   </div>
   <div class="msg-content assistant-run-content">
     {#each visibleRunChildren(item) as child (child.id)}

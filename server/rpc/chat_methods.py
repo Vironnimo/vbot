@@ -14,6 +14,7 @@ from core.chat import (
     parse_handoff_argument,
 )
 from core.chat.content_blocks import ContentBlock, TextBlock
+from core.chat.continuation import public_continuation_summary
 from core.chat.file_mentions import expand_file_mentions, resolve_mention_root
 from core.projects import (
     AgentResolutionError,
@@ -126,7 +127,23 @@ def _chat_history(state: Any, params: JsonObject) -> JsonObject:
             if _is_visible_history_message(message)
         ]
         messages, has_more = _history_page(visible_messages, limit=limit, before=before)
-        active_run = _active_run_response(state, agent_id, active_session_id, project_id)
+        active_run_object = _state_chat_runs(state).active_run(
+            agent_id=agent_id,
+            session_id=active_session_id,
+            project_id=project_id,
+        )
+        active_run = (
+            _run_response(
+                active_run_object,
+                sse_url=f"/api/runs/{active_run_object.id}/events",
+            )
+            if active_run_object is not None
+            else None
+        )
+        continuation = public_continuation_summary(
+            session,
+            active_run_id=active_run_object.id if active_run_object is not None else None,
+        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     response: JsonObject = {
@@ -140,6 +157,8 @@ def _chat_history(state: Any, params: JsonObject) -> JsonObject:
     }
     if active_run is not None:
         response["active_run"] = active_run
+    if continuation is not None:
+        response["continuation"] = continuation
     return response
 
 
@@ -297,8 +316,8 @@ async def _handle_command_action(
             return _handle_set_model_command(
                 state, agent_id, session_id, command_action.argument, project_id=project_id
             )
-        case "retry_last_turn":
-            return await _retry_chat_for_ids(
+        case "continue":
+            return await _continue_chat_for_ids(
                 state, agent_id, session_id, streaming=streaming, project_id=project_id
             )
     raise AssertionError(f"unsupported command action: {command_action.name}")
@@ -1042,15 +1061,15 @@ async def _handle_compact_command(
     return _command_handled_response(reply, output="toast")
 
 
-async def _retry_chat(state: Any, params: JsonObject) -> JsonObject:
+async def _continue_chat(state: Any, params: JsonObject) -> JsonObject:
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
-    return await _retry_chat_for_ids(
+    return await _continue_chat_for_ids(
         state, agent_id, session_id, streaming=True, project_id=project_id
     )
 
 
-async def _retry_chat_for_ids(
+async def _continue_chat_for_ids(
     state: Any,
     agent_id: str,
     session_id: str,
@@ -1060,7 +1079,7 @@ async def _retry_chat_for_ids(
 ) -> JsonObject:
     try:
         chat_loop = _streaming_chat_loop(state) if streaming else state.chat_loop
-        run = await chat_loop.retry_run(agent_id, session_id, project_id=project_id)
+        run = await chat_loop.continue_run(agent_id, session_id, project_id=project_id)
         _bridge_run_to_event_bus(state, run)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -1073,6 +1092,25 @@ async def _retry_chat_for_ids(
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return _run_response(run, final_message=assistant_message)
+
+
+def _discard_continuation(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(
+        params,
+        {"agent_id", "session_id"},
+        "chat.continuation_discard",
+    )
+    agent_id, project_id = _required_agent_address(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    try:
+        _streaming_chat_loop(state).discard_continuation(
+            agent_id,
+            session_id,
+            project_id=project_id,
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"ok": True}
 
 
 async def _cancel_chat(state: Any, params: JsonObject) -> JsonObject:
@@ -1248,7 +1286,8 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "chat.history": _chat_history,
         "chat.send": _send_chat,
         "chat.stream": _stream_chat,
-        "chat.retry_last_turn": _retry_chat,
+        "chat.continue": _continue_chat,
+        "chat.continuation_discard": _discard_continuation,
         "chat.cancel": _cancel_chat,
         "chat.cancel_tool_call": _cancel_tool_call_chat,
         "chat.queue_list": _chat_queue_list,
