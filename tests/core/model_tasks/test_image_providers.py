@@ -694,6 +694,40 @@ def test_build_openai_codex_payload_drops_n_and_model_even_from_extra_options() 
     }
 
 
+def test_build_openai_codex_payload_carries_source_images_for_editing() -> None:
+    payload = _build_openai_codex_image_payload(
+        "make the square blue while preserving its position",
+        {},
+        input_images=(
+            ImageInput(filename="square.jpg", media_type="image/jpeg", data=b"source-one"),
+            ImageInput(filename="style.png", media_type="image/png", data=b"source-two"),
+        ),
+    )
+
+    content = payload["input"][0]["content"]
+    assert content[0] == {
+        "type": "input_text",
+        "text": (
+            "Use the image_generation tool to edit the provided image(s): "
+            "make the square blue while preserving its position"
+        ),
+    }
+    assert content[1:] == [
+        {
+            "type": "input_image",
+            "image_url": (
+                "data:image/jpeg;base64," + base64.b64encode(b"source-one").decode("ascii")
+            ),
+        },
+        {
+            "type": "input_image",
+            "image_url": (
+                "data:image/png;base64," + base64.b64encode(b"source-two").decode("ascii")
+            ),
+        },
+    ]
+
+
 def test_openai_codex_image_tool_key_constant_matches_verified_wire() -> None:
     assert _OPENAI_CODEX_IMAGE_TOOL_KEYS == (
         "output_format",
@@ -957,17 +991,31 @@ async def test_openai_subscription_image_generate_requires_account_header() -> N
 
 
 @pytest.mark.asyncio
-async def test_openai_subscription_image_edit_is_explicitly_unsupported() -> None:
+@respx.mock
+async def test_openai_subscription_image_edit_posts_source_image() -> None:
+    route = respx.post(OPENAI_CODEX_RESPONSES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            text=_openai_codex_image_sse(b"edited-image"),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
     client = _openai_subscription_image_client("gpt-image-2")
 
-    with pytest.raises(ProviderError, match="subscription connection"):
-        await client.generate(
-            "make it rainy",
-            options={},
-            input_images=(
-                ImageInput(filename="photo.png", media_type="image/png", data=b"source"),
-            ),
-        )
+    result = await client.generate(
+        "make it rainy",
+        options={},
+        input_images=(ImageInput(filename="photo.png", media_type="image/png", data=b"source"),),
+    )
+
+    payload = json.loads(route.calls[0].request.content)
+    content = payload["input"][0]["content"]
+    assert "edit the provided image" in content[0]["text"]
+    assert content[1] == {
+        "type": "input_image",
+        "image_url": "data:image/png;base64," + base64.b64encode(b"source").decode("ascii"),
+    }
+    assert result.images == (b"edited-image",)
 
 
 @pytest.mark.asyncio

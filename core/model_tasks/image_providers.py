@@ -117,14 +117,11 @@ class ProviderImageClient(ProviderTaskClient):
             )
         if self._provider.id == "openai":
             if self._connection.mode == CODEX_RESPONSES_MODE:
-                if input_images:
-                    raise ProviderError(
-                        "Source-image editing is not supported through the OpenAI "
-                        "subscription connection; use an OpenAI API-key or OpenRouter "
-                        "image target",
-                        retryable=False,
-                    )
-                return await self._generate_openai_codex_responses(prompt, options=options)
+                return await self._generate_openai_codex_responses(
+                    prompt,
+                    options=options,
+                    input_images=input_images,
+                )
             if input_images:
                 return await self._edit_openai(
                     prompt,
@@ -233,8 +230,13 @@ class ProviderImageClient(ProviderTaskClient):
         prompt: str,
         *,
         options: JsonObject,
+        input_images: tuple[ImageInput, ...],
     ) -> ImageGenerationResult:
-        payload = _build_openai_codex_image_payload(prompt, options)
+        payload = _build_openai_codex_image_payload(
+            prompt,
+            options,
+            input_images=input_images,
+        )
         requested_output_format = _openai_codex_requested_output_format(payload)
 
         _LOGGER.debug(
@@ -378,6 +380,8 @@ def _build_openai_image_payload(
 def _build_openai_codex_image_payload(
     prompt: str,
     options: JsonObject,
+    *,
+    input_images: tuple[ImageInput, ...] = (),
 ) -> JsonObject:
     """Build the OpenAI subscription Codex Responses image request."""
 
@@ -390,6 +394,26 @@ def _build_openai_codex_image_payload(
     _drop_openai_codex_forbidden_tool_keys(tool, options)
     tool["type"] = "image_generation"
 
+    content: list[JsonObject] = [
+        {
+            "type": "input_text",
+            "text": _openai_codex_image_user_text(
+                prompt,
+                tool,
+                has_input_images=bool(input_images),
+            ),
+        }
+    ]
+    content.extend(
+        {
+            "type": "input_image",
+            "image_url": (
+                f"data:{image.media_type};base64,{base64.b64encode(image.data).decode('ascii')}"
+            ),
+        }
+        for image in input_images
+    )
+
     return {
         "model": _OPENAI_CODEX_IMAGE_CARRIER_MODEL,
         "stream": True,
@@ -399,12 +423,7 @@ def _build_openai_codex_image_payload(
             {
                 "type": "message",
                 "role": "user",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": _openai_codex_image_user_text(prompt, tool),
-                    }
-                ],
+                "content": content,
             }
         ],
         "tools": [tool],
@@ -422,15 +441,21 @@ def _drop_openai_codex_forbidden_tool_keys(tool: JsonObject, options: JsonObject
         _LOGGER.debug("Dropped unsupported OpenAI Codex image option: %s", key)
 
 
-def _openai_codex_image_user_text(prompt: str, tool: Mapping[str, Any]) -> str:
+def _openai_codex_image_user_text(
+    prompt: str,
+    tool: Mapping[str, Any],
+    *,
+    has_input_images: bool = False,
+) -> str:
     hints = [
         f"{key} {tool[key]}"
         for key in _OPENAI_CODEX_IMAGE_PROMPT_HINT_KEYS
         if key in tool and not is_omittable_option(tool[key])
     ]
+    action = "edit the provided image(s)" if has_input_images else "render"
     if not hints:
-        return f"Use the image_generation tool to render: {prompt}"
-    return f"Use the image_generation tool to render ({', '.join(hints)}): {prompt}"
+        return f"Use the image_generation tool to {action}: {prompt}"
+    return f"Use the image_generation tool to {action} ({', '.join(hints)}): {prompt}"
 
 
 def _openai_codex_requested_output_format(payload: Mapping[str, Any]) -> Any:
