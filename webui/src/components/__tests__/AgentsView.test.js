@@ -1036,7 +1036,7 @@ describe('AgentsView', () => {
     });
   });
 
-  it('opens New as a compact modal and sends selected create payload', async () => {
+  it('opens Add as a compact modal and sends selected create payload', async () => {
     const agents = [baseAgent()];
 
     rpcMock.mockImplementation(
@@ -1071,7 +1071,7 @@ describe('AgentsView', () => {
       100,
     );
 
-    getButton('New').click();
+    getButton('Add').click();
     flushSync();
 
     const modal = getDialog('Create agent');
@@ -1169,7 +1169,7 @@ describe('AgentsView', () => {
     });
   });
 
-  it('opens New in a modal while keeping the current agent selected', async () => {
+  it('opens Add in a modal while keeping the current agent selected', async () => {
     rpcMock.mockImplementation(createAgentsRpcMock());
 
     mountedComponent = mount(AgentsView, {
@@ -1183,12 +1183,12 @@ describe('AgentsView', () => {
       100,
     );
 
-    const newButton = Array.from(document.body.querySelectorAll('button')).find(
-      (button) => button.textContent.trim() === 'New',
+    const addButton = Array.from(document.body.querySelectorAll('button')).find(
+      (button) => button.textContent.trim() === 'Add',
     );
-    expect(newButton).toBeTruthy();
+    expect(addButton).toBeTruthy();
 
-    newButton.click();
+    addButton.click();
     flushSync();
     await Promise.resolve();
     flushSync();
@@ -1204,7 +1204,7 @@ describe('AgentsView', () => {
     expect(textInputValue(1)).toBe('Alpha');
   });
 
-  it('keeps existing agent selection after cancelling New modal', async () => {
+  it('keeps existing agent selection after cancelling Add modal', async () => {
     rpcMock.mockImplementation(
       createAgentsRpcMock({
         agents: [baseAgent(), { ...baseAgent(), id: 'bravo', name: 'Bravo' }],
@@ -1222,12 +1222,12 @@ describe('AgentsView', () => {
       100,
     );
 
-    const newButton = Array.from(document.body.querySelectorAll('button')).find(
-      (button) => button.textContent.trim() === 'New',
+    const addButton = Array.from(document.body.querySelectorAll('button')).find(
+      (button) => button.textContent.trim() === 'Add',
     );
-    expect(newButton).toBeTruthy();
+    expect(addButton).toBeTruthy();
 
-    newButton.click();
+    addButton.click();
     flushSync();
     await Promise.resolve();
     flushSync();
@@ -1781,7 +1781,7 @@ describe('AgentsView', () => {
       100,
     );
 
-    getButton('New').click();
+    getButton('Add').click();
     flushSync();
     await flushAsyncUpdates();
 

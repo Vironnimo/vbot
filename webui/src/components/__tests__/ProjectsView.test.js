@@ -189,7 +189,10 @@ describe('ProjectsView', () => {
     await waitForCondition(() =>
       document.querySelector('[data-testid="project-add-open"]'),
     );
-    buttonByTestId('project-add-open').click();
+    const addButton = buttonByTestId('project-add-open');
+    expect(addButton.textContent.trim()).toBe('Add');
+    expect(addButton.querySelector('svg')).toBeTruthy();
+    addButton.click();
     flushSync();
 
     await waitForCondition(() => inputById('projects-add-cwd'));

@@ -54,7 +54,7 @@
 
   // The detail pane edits either an existing job (a selected id) or a fresh
   // create draft (`isCreating`). Its form + validation state is panel-local; the
-  // list is the master. Selecting a row, or "New job", reseeds these.
+  // list is the master. Selecting a row, or starting a job, reseeds these.
   let selectedJobId = $state('');
   let isCreating = $state(false);
   let formValues = $state(createCronFormValues());
@@ -532,7 +532,7 @@
             <svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true">
               <path d="M7 1v12M1 7h12" />
             </svg>
-            {t('cron.newJob', 'New job')}
+            {t('common.add', 'Add')}
           </Button>
         </div>
       </div>

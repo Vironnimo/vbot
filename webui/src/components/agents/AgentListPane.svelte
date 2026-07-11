@@ -21,7 +21,7 @@
       <svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true">
         <path d="M7 1v12M1 7h12" />
       </svg>
-      {t('common.new', 'New')}
+      {t('common.add', 'Add')}
     </Button>
   </div>
 
