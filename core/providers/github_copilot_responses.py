@@ -54,10 +54,46 @@ class ResponsesStreamState:
 
     tool_call_ids_by_output_index: dict[int, str] = field(default_factory=dict)
     item_id_to_call_id: dict[str, str] = field(default_factory=dict)
-    emitted_tool_names: set[str] = field(default_factory=set)
+    tool_call_order: list[str] = field(default_factory=list)
+    emitted_tool_names: dict[str, str] = field(default_factory=dict)
     emitted_tool_arguments: dict[str, str] = field(default_factory=dict)
+    emitted_output_text: str = ""
     emitted_reasoning_text: str = ""
+    reasoning_meta: dict[str, Any] | None = None
+    usage: dict[str, int] | None = None
     completed_response: dict[str, Any] | None = None
+
+    def normalized_response(self) -> dict[str, Any]:
+        """Return canonical assistant fields accumulated across the SSE stream."""
+        tool_calls: list[dict[str, Any]] = []
+        known_tool_ids = [
+            *self.tool_call_order,
+            *self.emitted_tool_names,
+            *self.emitted_tool_arguments,
+        ]
+        for tool_call_id in dict.fromkeys(known_tool_ids):
+            arguments = _parse_tool_arguments(self.emitted_tool_arguments.get(tool_call_id, ""))
+            if arguments is None:
+                continue
+            tool_calls.append(
+                {
+                    "id": tool_call_id,
+                    "name": self.emitted_tool_names.get(tool_call_id, ""),
+                    "arguments": arguments,
+                }
+            )
+        result: dict[str, Any] = {
+            "role": "assistant",
+            "content": self.emitted_output_text or None,
+            "reasoning": self.emitted_reasoning_text or None,
+            "reasoning_meta": (
+                dict(self.reasoning_meta) if self.reasoning_meta is not None else None
+            ),
+            "tool_calls": tool_calls or None,
+        }
+        if self.usage is not None:
+            result["usage"] = dict(self.usage)
+        return result
 
 
 def build_responses_payload(
@@ -130,7 +166,7 @@ def normalize_responses_stream_event(
     if event_type in RESPONSES_ERROR_EVENTS:
         raise ProviderError(_responses_error_message(event_data), retryable=False)
     if event_type == "response.output_text.delta":
-        return _text_delta(event_data, "content_delta")
+        return _output_text_delta(event_data, state)
     if event_type in REASONING_SUMMARY_DELTA_EVENTS:
         return _reasoning_delta(event_data, state)
     if event_type == "response.function_call_arguments.delta":
@@ -545,6 +581,15 @@ def _text_delta(event_data: Mapping[str, Any], delta_type: str) -> list[dict[str
     return [{"type": delta_type, "text": delta}]
 
 
+def _output_text_delta(
+    event_data: Mapping[str, Any], state: ResponsesStreamState
+) -> list[dict[str, Any]]:
+    deltas = _text_delta(event_data, "content_delta")
+    if deltas:
+        state.emitted_output_text += deltas[0]["text"]
+    return deltas
+
+
 def _reasoning_delta(
     event_data: Mapping[str, Any],
     state: ResponsesStreamState,
@@ -592,6 +637,7 @@ def _output_item_event_deltas(
         reasoning_deltas.append(
             {"type": "reasoning_meta", "reasoning_meta": {"reasoning_items": [dict(item)]}}
         )
+        _record_reasoning_meta({"reasoning_items": [dict(item)]}, state)
         return reasoning_deltas
     if item.get("type") != "function_call":
         return []
@@ -607,7 +653,7 @@ def _output_item_event_deltas(
     arguments_delta: str | None = None
     if isinstance(name, str) and name and tool_call_id not in state.emitted_tool_names:
         name_delta = name
-        state.emitted_tool_names.add(tool_call_id)
+        state.emitted_tool_names[tool_call_id] = name
     if isinstance(arguments, str) and arguments:
         arguments_delta = _record_tool_argument_delta(tool_call_id, arguments, state)
     nested_arguments = _function_call_arguments(item)
@@ -655,18 +701,51 @@ def _completed_event_deltas(
     state.completed_response = dict(response)
     deltas: list[dict[str, Any]] = []
     output_items = _mapping_list(response.get("output"))
+    content = _joined_or_none(_extract_output_text_parts(output_items))
+    content_backfill = _text_backfill_delta(content, state.emitted_output_text)
+    if content_backfill is not None:
+        state.emitted_output_text += content_backfill
+        deltas.append({"type": "content_delta", "text": content_backfill})
     reasoning = _joined_or_none(_extract_reasoning_parts(output_items))
     reasoning_backfill = _reasoning_backfill_delta(reasoning, state)
     if reasoning_backfill is not None:
         deltas.append({"type": "reasoning_delta", "text": reasoning_backfill})
     reasoning_meta = _extract_reasoning_meta(response, output_items)
     if reasoning_meta is not None:
+        _record_reasoning_meta(reasoning_meta, state)
         deltas.append({"type": "reasoning_meta", "reasoning_meta": reasoning_meta})
     usage = _extract_responses_usage(response.get("usage"))
     if usage is not None:
+        state.usage = dict(usage)
         deltas.append({"type": "usage", **usage})
+    for output_index, item in enumerate(output_items):
+        if item.get("type") == "function_call":
+            _output_item_event_deltas(
+                {"item": item, "output_index": output_index},
+                state,
+            )
     deltas.append({"type": "finish", "reason": _responses_finish_reason(response, state)})
     return deltas
+
+
+def _record_reasoning_meta(meta: Mapping[str, Any], state: ResponsesStreamState) -> None:
+    if state.reasoning_meta is None:
+        state.reasoning_meta = dict(meta)
+        return
+    state.reasoning_meta.update(meta)
+
+
+def _text_backfill_delta(text: str | None, emitted_text: str) -> str | None:
+    if text is None or text == emitted_text or emitted_text.endswith(text):
+        return None
+    if not emitted_text:
+        return text
+    if text.startswith(emitted_text):
+        return text[len(emitted_text) :] or None
+    overlap = _suffix_prefix_overlap(emitted_text, text)
+    if overlap <= 0:
+        return None
+    return text[overlap:] or None
 
 
 def _reasoning_backfill_delta(
@@ -740,6 +819,7 @@ def _responses_error_message(event_data: Mapping[str, Any]) -> str:
 def _stream_tool_call_id(event_data: Mapping[str, Any], state: ResponsesStreamState) -> str:
     call_id = _non_empty_string_or_none(event_data.get("call_id"))
     if call_id is not None:
+        _record_tool_call_order(call_id, state)
         return call_id
     item_id = _non_empty_string_or_none(event_data.get("item_id"))
     if item_id is not None:
@@ -750,12 +830,16 @@ def _stream_tool_call_id(event_data: Mapping[str, Any], state: ResponsesStreamSt
     if isinstance(output_index, int):
         existing_id = state.tool_call_ids_by_output_index.get(output_index)
         if existing_id:
+            _record_tool_call_order(existing_id, state)
             return existing_id
         generated_id = f"tool_call_{output_index}"
         state.tool_call_ids_by_output_index[output_index] = generated_id
+        _record_tool_call_order(generated_id, state)
         return generated_id
     if item_id is not None:
+        _record_tool_call_order(item_id, state)
         return item_id
+    _record_tool_call_order("tool_call_0", state)
     return "tool_call_0"
 
 
@@ -767,6 +851,12 @@ def _remember_stream_tool_call_id(
     output_index = event_data.get("output_index")
     if isinstance(output_index, int):
         state.tool_call_ids_by_output_index[output_index] = tool_call_id
+    _record_tool_call_order(tool_call_id, state)
+
+
+def _record_tool_call_order(tool_call_id: str, state: ResponsesStreamState) -> None:
+    if tool_call_id not in state.tool_call_order:
+        state.tool_call_order.append(tool_call_id)
 
 
 def _function_call_id(item: Mapping[str, Any]) -> str:

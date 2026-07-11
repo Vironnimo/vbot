@@ -71,6 +71,7 @@ CODEX_CLIENT_VERSION = "0.136.0"
 # hermes-agent transport.
 CODEX_CACHE_SCOPE_HEADERS = ("session_id", "x-client-request-id")
 CONVERSATION_ID_KWARG = "conversation_id"
+_NORMALIZED_CODEX_STREAM_RESPONSE_KEY = "_normalized_codex_stream_response"
 
 
 class OpenAIAdapter(OpenAICompatibleAdapter):
@@ -257,7 +258,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 pass
             if state.completed_response is None:
                 raise NetworkError("Stream ended without a completed Responses object")
-            return state.completed_response
+            return {_NORMALIZED_CODEX_STREAM_RESPONSE_KEY: state.normalized_response()}
         return await super().send(messages, model_id=model_id, **kwargs)
 
     async def stream(
@@ -293,6 +294,9 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
     ) -> dict[str, Any]:
         """Normalize a provider response to canonical assistant fields."""
 
+        normalized_stream_response = response.get(_NORMALIZED_CODEX_STREAM_RESPONSE_KEY)
+        if isinstance(normalized_stream_response, dict):
+            return dict(normalized_stream_response)
         if self._connection_mode == CODEX_RESPONSES_MODE and isinstance(
             response.get("output"), list
         ):
