@@ -71,6 +71,33 @@ def test_trace_count_logger_name() -> None:
     assert settings_methods._LOGGER.name == "vbot.server.rpc.settings"
 
 
+@pytest.mark.asyncio
+async def test_session_title_settings_round_trip_and_validate_model_connection(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    result = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.update",
+            "params": {
+                "session_titles": {
+                    "enabled": True,
+                    "model": "openai/gpt-4.1-mini::api-key",
+                }
+            },
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["result"]["session_titles"] == {
+        "enabled": True,
+        "model": "openai/gpt-4.1-mini::api-key",
+    }
+    assert state.runtime.storage.load_session_title_settings() == result["result"]["session_titles"]
+
+
 # --- Extensions section: schema validation + restart-required split ----------
 
 

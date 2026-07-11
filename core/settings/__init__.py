@@ -3,6 +3,7 @@
 from core.settings.normalizers import (
     DEFAULT_APPEARANCE_LANGUAGE,
     DEFAULT_RECALL_SETTINGS,
+    DEFAULT_SESSION_TITLE_SETTINGS,
     SUPPORTED_APPEARANCE_LANGUAGES,
 )
 from core.settings.settings import (
@@ -61,6 +62,7 @@ __all__ = [
     "DEFAULT_APPEARANCE_LANGUAGE",
     "DEFAULT_PROJECT_SOURCE_FORMAT",
     "DEFAULT_RECALL_SETTINGS",
+    "DEFAULT_SESSION_TITLE_SETTINGS",
     "JsonDiagnostic",
     "JsonValidationReport",
     "MAX_TEMPERATURE",

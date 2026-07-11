@@ -10,6 +10,7 @@ import os
 import re
 import uuid
 from collections import deque
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -36,6 +37,8 @@ SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 # the title is single-line and the UI ellipsizes, so this just bounds absurd
 # input, it is not a meaningful length limit.
 SESSION_TITLE_KEY = "title"
+SESSION_AUTO_TITLE_KEY = "auto_title"
+SESSION_AUTO_TITLE_INITIALIZED_KEY = "auto_title_initialized"
 SESSION_TITLE_MAX_LENGTH = 200
 # Sidecar key recording a forked session's provenance: which source session it was
 # copied from and the fork point. Written on every fork (even when the source had no
@@ -472,6 +475,19 @@ class ChatSessionManager:
 
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = data_dir
+        self._title_changed_callbacks: list[Callable[[str, str, str | None], None]] = []
+
+    def add_title_changed_callback(
+        self, callback: Callable[[str, str, str | None], None]
+    ) -> Callable[[], None]:
+        """Register a display-title change callback and return its unsubscribe."""
+        self._title_changed_callbacks.append(callback)
+
+        def unsubscribe() -> None:
+            if callback in self._title_changed_callbacks:
+                self._title_changed_callbacks.remove(callback)
+
+        return unsubscribe
 
     def sessions_dir(self, agent_id: str, project_id: str | None = None) -> Path:
         """Return the sessions directory for an agent.
@@ -604,12 +620,69 @@ class ChatSessionManager:
         """
         normalized_title = _normalize_session_title(title)
         metadata = dict(self.get_metadata(agent_id, session_id, project_id))
+        previous_title = metadata.get(SESSION_TITLE_KEY)
         if normalized_title is None:
             metadata.pop(SESSION_TITLE_KEY, None)
         else:
             metadata[SESSION_TITLE_KEY] = normalized_title
         self.set_metadata(agent_id, session_id, metadata, project_id)
+        if previous_title != normalized_title:
+            self._notify_title_changed(agent_id, session_id, project_id)
         return normalized_title
+
+    def set_auto_title(
+        self,
+        agent_id: str,
+        session_id: str,
+        title: str,
+        project_id: str | None = None,
+        *,
+        initialized: bool = True,
+    ) -> str | None:
+        """Set the automatic title beneath the optional manual override.
+
+        ``title`` is the immediate local fallback first and may later be
+        replaced by the background Model result. The independent ``title`` key
+        remains the manual override, so a late background result can never
+        replace what the user sees after a rename; clearing the manual name
+        reveals the best automatic title again.
+        """
+        normalized_title = _normalize_session_title(title)
+        metadata = dict(self.get_metadata(agent_id, session_id, project_id))
+        previous_title = metadata.get(SESSION_AUTO_TITLE_KEY)
+        if normalized_title is None:
+            metadata.pop(SESSION_AUTO_TITLE_KEY, None)
+        else:
+            metadata[SESSION_AUTO_TITLE_KEY] = normalized_title
+        if initialized:
+            metadata[SESSION_AUTO_TITLE_INITIALIZED_KEY] = True
+        self.set_metadata(agent_id, session_id, metadata, project_id)
+        if previous_title != normalized_title:
+            self._notify_title_changed(agent_id, session_id, project_id)
+        return normalized_title
+
+    def mark_auto_title_initialized(
+        self,
+        agent_id: str,
+        session_id: str,
+        project_id: str | None = None,
+    ) -> None:
+        """Record that an existing Session must not be backfilled later."""
+        metadata = dict(self.get_metadata(agent_id, session_id, project_id))
+        metadata[SESSION_AUTO_TITLE_INITIALIZED_KEY] = True
+        self.set_metadata(agent_id, session_id, metadata, project_id)
+
+    def _notify_title_changed(self, agent_id: str, session_id: str, project_id: str | None) -> None:
+        for callback in list(self._title_changed_callbacks):
+            try:
+                callback(agent_id, session_id, project_id)
+            except Exception:
+                _LOGGER.warning(
+                    "Session title change callback failed (agent=%s session=%s)",
+                    agent_id,
+                    session_id,
+                    exc_info=True,
+                )
 
     async def move(
         self,

@@ -168,6 +168,22 @@ describe('sessionListView helpers', () => {
     ).toBe('telegram/-100123');
   });
 
+  it('uses the automatic title beneath the manual override', () => {
+    expect(
+      sessionDisplayName({
+        auto_title: 'Generated title',
+        id: 'session-001',
+      }),
+    ).toBe('Generated title');
+    expect(
+      sessionDisplayName({
+        title: 'Manual title',
+        auto_title: 'Generated title',
+        id: 'session-001',
+      }),
+    ).toBe('Manual title');
+  });
+
   it('carries the title through normalization and into the display name', () => {
     const next = applySessionList(createSessionListState(), [
       {

@@ -37,6 +37,7 @@ from core.settings.normalizers import (
     normalize_providers_settings,
     normalize_recall_settings,
     normalize_reflection_settings,
+    normalize_session_title_settings,
     normalize_skill_directories,
     normalize_subagent_integer,
     normalize_web_search_settings,
@@ -76,6 +77,7 @@ SETTINGS_UPDATE_SECTIONS = frozenset(
         "extensions",
         "reflection",
         "local_models",
+        "session_titles",
     }
 )
 PHASE_TWO_DIRECTORIES = (
@@ -353,6 +355,11 @@ class StorageManager:
                     settings,
                     settings_update["local_models"],
                 )
+            if "session_titles" in settings_update:
+                updated_sections["session_titles"] = self._apply_session_title_settings(
+                    settings,
+                    settings_update["session_titles"],
+                )
             return dict(updated_sections)
 
         return self.update_settings(apply_update)
@@ -451,6 +458,21 @@ class StorageManager:
 
         settings = self.load_settings()
         return normalize_defaults_settings(settings.get("defaults"))
+
+    def load_session_title_settings(self) -> dict[str, Any]:
+        """Return live automatic Session-title settings."""
+        settings = self.load_settings()
+        return normalize_session_title_settings(settings.get("session_titles"))
+
+    def _apply_session_title_settings(
+        self,
+        settings: dict[str, Any],
+        session_titles: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Replace the complete automatic Session-title settings section."""
+        normalized = normalize_session_title_settings(session_titles)
+        settings["session_titles"] = normalized
+        return normalized
 
     def load_recall_settings(self) -> dict[str, str]:
         """Return normalized persisted recall backend settings."""

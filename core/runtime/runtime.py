@@ -80,6 +80,7 @@ from core.runtime.interfaces import (
     ProviderCredentialResolverProtocol,
 )
 from core.sessions import ChatSessionManager
+from core.sessions.titles import SessionTitleService
 from core.skills.authoring import SkillAuthoringService
 from core.skills.skills import (
     SKILL_ORIGIN_AGENT,
@@ -404,6 +405,7 @@ class Runtime:
         self._started_at: datetime | None = None
         self._trigger_service: TriggerService | None = None
         self._reflection_service: ReflectionService | None = None
+        self._session_title_service: SessionTitleService | None = None
         self._channel_service: ChannelService | None = None
         self._cron_service: CronService | None = None
         self._subagent_coordinator: SubAgentCoordinator | None = None
@@ -596,12 +598,14 @@ class Runtime:
         # streaming loop lazily at review time, so constructing it before the
         # loops is safe — the loops only need its notify hook.
         self._reflection_service = ReflectionService(self)
+        self._session_title_service = SessionTitleService(self)
         self._chat_loop = ChatLoop(
             self,
             streaming=False,
             attachment_resolver=resolver,
             compaction_service=compaction_service,
             reflection_service=self._reflection_service,
+            session_title_service=self._session_title_service,
         )
         self._streaming_chat_loop = ChatLoop(
             self,
@@ -609,6 +613,7 @@ class Runtime:
             attachment_resolver=resolver,
             compaction_service=compaction_service,
             reflection_service=self._reflection_service,
+            session_title_service=self._session_title_service,
         )
         self._trigger_service = TriggerService(
             self._chat_loop,
@@ -757,6 +762,7 @@ class Runtime:
         self._cron_service = None
         self._trigger_service = None
         self._reflection_service = None
+        self._session_title_service = None
         self._subagent_coordinator = None
         self._chat_loop = None
         self._streaming_chat_loop = None

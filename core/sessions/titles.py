@@ -1,0 +1,317 @@
+"""Immediate local and optional Model-generated Session titles."""
+
+from __future__ import annotations
+
+import asyncio
+import re
+from typing import TYPE_CHECKING, Any
+
+from core.chat.content_blocks import (
+    ContentBlock,
+    FileBlock,
+    FileMentionBlock,
+    MediaBlock,
+    TextBlock,
+)
+from core.chat.model_resolution import (
+    _first_usable_connection_id,
+    _model_connection_allowlist,
+    parse_model_with_connection,
+)
+from core.debug import DebugContext
+from core.sessions.sessions import (
+    SESSION_AUTO_TITLE_INITIALIZED_KEY,
+    SESSION_TITLE_KEY,
+)
+from core.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from core.runtime.interfaces import RuntimeServices
+
+_LOGGER = get_logger("sessions.titles")
+
+LOCAL_TITLE_MAX_CHARACTERS = 40
+TITLE_INPUT_HEAD_BYTES = 3 * 1024
+TITLE_INPUT_TAIL_BYTES = 2 * 1024
+TITLE_ATTACHMENT_METADATA_MAX_BYTES = 1024
+TITLE_MAX_OUTPUT_TOKENS = 32
+TITLE_OMISSION_MARKER = "\n\n[large middle section omitted]\n\n"
+_SUBAGENT_SESSION_METADATA_FLAG = "is_subagent_session"
+_THINK_BLOCK_PATTERN = re.compile(r"<think>[\s\S]*?</think>\s*", re.IGNORECASE)
+
+TITLE_SYSTEM_PROMPT = (
+    "Create one concise display title for this chat Session from the first user message. "
+    "Describe the requested work, not your response. Use the user's language. Aim for 40 "
+    "characters or fewer, exceeding that only when clarity requires it. Return only the title "
+    "as one plain-text line, without quotes, Markdown, a label, or ending punctuation."
+)
+
+
+class SessionTitleService:
+    """Set a local title immediately and optionally improve it in the background."""
+
+    def __init__(self, runtime: RuntimeServices) -> None:
+        self._runtime = runtime
+        self._background_tasks: set[asyncio.Task[None]] = set()
+
+    def notify_user_message(
+        self,
+        *,
+        agent_id: str,
+        session_id: str,
+        project_id: str | None,
+        agent: Any,
+        content: str | list[ContentBlock],
+        run_id: str,
+    ) -> None:
+        """Handle the first visible user message without delaying its Run."""
+        try:
+            self._initialize_title(
+                agent_id=agent_id,
+                session_id=session_id,
+                project_id=project_id,
+                agent=agent,
+                content=content,
+                run_id=run_id,
+            )
+        except Exception:
+            _LOGGER.warning(
+                "Session title initialization failed (agent=%s session=%s)",
+                agent_id,
+                session_id,
+                exc_info=True,
+            )
+
+    def _initialize_title(
+        self,
+        *,
+        agent_id: str,
+        session_id: str,
+        project_id: str | None,
+        agent: Any,
+        content: str | list[ContentBlock],
+        run_id: str,
+    ) -> None:
+        sessions = self._runtime.chat_sessions
+        metadata = sessions.get_metadata(agent_id, session_id, project_id)
+        if metadata.get(SESSION_AUTO_TITLE_INITIALIZED_KEY) is True:
+            return
+        if metadata.get(_SUBAGENT_SESSION_METADATA_FLAG) is True:
+            return
+        has_manual_title = isinstance(metadata.get(SESSION_TITLE_KEY), str) and bool(
+            metadata[SESSION_TITLE_KEY].strip()
+        )
+
+        session = sessions.get(agent_id, session_id, project_id)
+        user_message_count = 0
+        for message in session.load():
+            if message.role == "user":
+                user_message_count += 1
+                if user_message_count > 1:
+                    break
+        if user_message_count != 1:
+            sessions.mark_auto_title_initialized(agent_id, session_id, project_id)
+            return
+
+        text, attachment_lines = _title_source_parts(content)
+        local_title = _local_title(text, attachment_lines)
+        sessions.set_auto_title(agent_id, session_id, local_title, project_id)
+
+        if has_manual_title:
+            return
+
+        settings = self._runtime.storage.load_session_title_settings()
+        if not settings["enabled"]:
+            return
+        title_input = _title_input(text, attachment_lines)
+        if not title_input:
+            return
+
+        configured_model = settings["model"]
+        model = configured_model or str(agent.model)
+        task = asyncio.create_task(
+            self._generate_title(
+                agent_id=agent_id,
+                session_id=session_id,
+                project_id=project_id,
+                model=model,
+                title_input=title_input,
+                run_id=run_id,
+            )
+        )
+        self._background_tasks.add(task)
+        task.add_done_callback(self._on_background_task_done)
+
+    def _on_background_task_done(self, task: asyncio.Task[None]) -> None:
+        self._background_tasks.discard(task)
+        if task.cancelled():
+            return
+        exception = task.exception()
+        if exception is not None:
+            _LOGGER.warning("Background Session title task failed", exc_info=exception)
+
+    async def _generate_title(
+        self,
+        *,
+        agent_id: str,
+        session_id: str,
+        project_id: str | None,
+        model: str,
+        title_input: str,
+        run_id: str,
+    ) -> None:
+        adapter: Any | None = None
+        try:
+            provider_id, model_id, connection_id = _resolve_model_target(self._runtime, model)
+            adapter = self._runtime.get_adapter(provider_id, connection_id)
+            if hasattr(adapter, "set_debug_context"):
+                adapter.set_debug_context(
+                    DebugContext(
+                        run_id=f"title-{run_id}",
+                        agent_id=agent_id,
+                        session_id=session_id,
+                        provider_id=provider_id,
+                        connection_id=connection_id,
+                        model_id=model_id,
+                        streaming=False,
+                        iteration_number=0,
+                    )
+                )
+            response = await adapter.send(
+                [
+                    {"role": "system", "content": TITLE_SYSTEM_PROMPT},
+                    {"role": "user", "content": title_input},
+                ],
+                model_id=model_id,
+                temperature=0.0,
+                thinking_effort="none",
+                max_tokens=TITLE_MAX_OUTPUT_TOKENS,
+            )
+            normalized = adapter.normalize_response(response, model_id=model_id)
+            title = _generated_title(normalized)
+            self._runtime.chat_sessions.set_auto_title(
+                agent_id,
+                session_id,
+                title,
+                project_id,
+            )
+            _LOGGER.info(
+                "Automatic Session title generated (agent=%s session=%s model=%s)",
+                agent_id,
+                session_id,
+                model,
+            )
+        except Exception:
+            # The immediate local title is the final fallback. An explicitly
+            # configured Title Model never cascades into another billable call.
+            _LOGGER.warning(
+                "Automatic Session title generation failed (agent=%s session=%s model=%s)",
+                agent_id,
+                session_id,
+                model,
+                exc_info=True,
+            )
+        finally:
+            if adapter is not None:
+                try:
+                    await adapter.aclose()
+                except Exception:
+                    _LOGGER.warning("Failed to close Session title adapter", exc_info=True)
+
+
+def _resolve_model_target(runtime: RuntimeServices, model: str) -> tuple[str, str, str]:
+    provider_id, model_id, connection_suffix = parse_model_with_connection(model)
+    if connection_suffix:
+        return provider_id, model_id, f"{provider_id}:{connection_suffix}"
+    connection_id = _first_usable_connection_id(
+        runtime,
+        provider_id,
+        _model_connection_allowlist(runtime, provider_id, model_id),
+    )
+    return provider_id, model_id, connection_id
+
+
+def _title_source_parts(content: str | list[ContentBlock]) -> tuple[str, list[str]]:
+    if isinstance(content, str):
+        return content, []
+
+    text_parts: list[str] = []
+    attachments: list[str] = []
+    for block in content:
+        if isinstance(block, TextBlock):
+            text_parts.append(block.text)
+        elif isinstance(block, (MediaBlock, FileBlock)):
+            attachments.append(f"- {block.filename} ({block.media_type})")
+        elif isinstance(block, FileMentionBlock):
+            filename = _mentioned_filename(block.path)
+            size = f", {block.size_bytes} bytes" if block.size_bytes is not None else ""
+            attachments.append(f"- {filename} (mentioned file{size})")
+    return "\n".join(text_parts), attachments
+
+
+def _local_title(text: str, attachment_lines: list[str]) -> str:
+    collapsed = " ".join(text.split())
+    if not collapsed and attachment_lines:
+        collapsed = attachment_lines[0].removeprefix("- ")
+    if len(collapsed) <= LOCAL_TITLE_MAX_CHARACTERS:
+        return collapsed
+    return collapsed[: LOCAL_TITLE_MAX_CHARACTERS - 1].rstrip() + "…"
+
+
+def _title_input(text: str, attachment_lines: list[str]) -> str:
+    projected_text = _bounded_text_projection(text)
+    bounded_attachments = _utf8_prefix(
+        "\n".join(attachment_lines), TITLE_ATTACHMENT_METADATA_MAX_BYTES
+    )
+    sections: list[str] = []
+    if projected_text.strip():
+        sections.append(f"First user message:\n{projected_text}")
+    if bounded_attachments.strip():
+        sections.append(f"Attachments:\n{bounded_attachments}")
+    return "\n\n".join(sections)
+
+
+def _bounded_text_projection(text: str) -> str:
+    encoded = text.encode("utf-8")
+    total_limit = TITLE_INPUT_HEAD_BYTES + TITLE_INPUT_TAIL_BYTES
+    if len(encoded) <= total_limit:
+        return text
+    head = encoded[:TITLE_INPUT_HEAD_BYTES].decode("utf-8", errors="ignore")
+    tail = encoded[-TITLE_INPUT_TAIL_BYTES:].decode("utf-8", errors="ignore")
+    return f"{head}{TITLE_OMISSION_MARKER}{tail}"
+
+
+def _utf8_prefix(value: str, max_bytes: int) -> str:
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def _generated_title(response: dict[str, Any]) -> str:
+    content = response.get("content")
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        chunks = [
+            item if isinstance(item, str) else item.get("text", "")
+            for item in content
+            if isinstance(item, (str, dict))
+        ]
+        text = "\n".join(chunk for chunk in chunks if isinstance(chunk, str))
+    else:
+        raise ValueError("Session title response did not include text content")
+
+    text = _THINK_BLOCK_PATTERN.sub("", text)
+    line = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    line = re.sub(r"^(?:title|titel)\s*:\s*", "", line, flags=re.IGNORECASE)
+    line = line.strip(" \t\"'`*_#")
+    line = " ".join(line.split()).rstrip(".!?:;").strip(" \t\"'`*_#")
+    if not line:
+        raise ValueError("Session title response was empty")
+    return line
+
+
+def _mentioned_filename(path: str) -> str:
+    normalized = path.replace("\\", "/").rstrip("/")
+    return normalized.rsplit("/", 1)[-1] or path

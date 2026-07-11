@@ -236,6 +236,9 @@ class IntegrationStorage:
     def load_model_task_settings(self) -> JsonObject:
         return {}
 
+    def load_session_title_settings(self) -> JsonObject:
+        return {"enabled": False, "model": ""}
+
 
 class IntegrationPrompts:
     def __init__(self, tools: ToolRegistry) -> None:
@@ -613,6 +616,7 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                 "skill_tool_call_interval": 25,
             },
             "model_tasks": {},
+            "session_titles": {"enabled": False, "model": ""},
             "local_models": {"context_windows": {}},
         },
     }

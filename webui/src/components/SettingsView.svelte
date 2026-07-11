@@ -13,6 +13,7 @@
   import SettingsProvidersPanel from './settings/SettingsProvidersPanel.svelte';
   import SettingsRecallPanel from './settings/SettingsRecallPanel.svelte';
   import SettingsReflectionPanel from './settings/SettingsReflectionPanel.svelte';
+  import SettingsSessionTitlesPanel from './settings/SettingsSessionTitlesPanel.svelte';
   import SettingsSkillsPanel from './settings/SettingsSkillsPanel.svelte';
   import SettingsSpecializedModelsPanel from './settings/SettingsSpecializedModelsPanel.svelte';
   import SettingsSubAgentsPanel from './settings/SettingsSubAgentsPanel.svelte';
@@ -134,6 +135,17 @@
             t(
               'settings.specializedModels.subtitle',
               'Task-specific model bindings for speech, image, and embedding tools. These bindings are independent of agent and project defaults.',
+            ),
+        },
+        {
+          id: 'session_titles',
+          labelKey: 'settings.sessionTitles.title',
+          labelFallback: 'Session titles',
+          label: () => t('settings.sessionTitles.title', 'Session titles'),
+          subtitle: () =>
+            t(
+              'settings.sessionTitles.subtitle',
+              'Immediate local names and optional Model-generated titles for new Sessions.',
             ),
         },
         {
@@ -717,6 +729,21 @@
         >
           {@render sectionHeader(panelById.get('specialized_models'))}
           <SettingsSpecializedModelsPanel
+            {settings}
+            onCommit={commitSettings}
+            {onToast}
+            onError={(message) => reportSettingsError(message)}
+            {modelsRefreshToken}
+          />
+        </section>
+
+        <section
+          class="s-section"
+          data-settings-section="session_titles"
+          aria-labelledby="settings-section-session_titles"
+        >
+          {@render sectionHeader(panelById.get('session_titles'))}
+          <SettingsSessionTitlesPanel
             {settings}
             onCommit={commitSettings}
             {onToast}

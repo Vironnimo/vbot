@@ -64,6 +64,7 @@ SETTINGS_UPDATE_SECTIONS = frozenset(
         "extensions",
         "reflection",
         "local_models",
+        "session_titles",
     }
 )
 REFLECTION_INTERVAL_FIELDS = ("memory_turn_interval", "skill_tool_call_interval")
@@ -127,7 +128,31 @@ def parse_settings_update(params: Mapping[str, Any]) -> JsonObject:
     if "local_models" in params:
         parsed_update["local_models"] = _parse_local_models_update(params["local_models"])
 
+    if "session_titles" in params:
+        parsed_update["session_titles"] = _parse_session_titles_update(params["session_titles"])
+
     return parsed_update
+
+
+def _parse_session_titles_update(session_titles: Any) -> JsonObject:
+    """Parse the complete automatic Session-title settings section."""
+    if not isinstance(session_titles, dict):
+        raise SettingsValidationError("params.session_titles must be an object")
+
+    unsupported_fields = sorted(set(session_titles) - {"enabled", "model"})
+    if unsupported_fields:
+        raise SettingsValidationError(
+            f"unsupported session_titles settings: {', '.join(unsupported_fields)}"
+        )
+
+    enabled = session_titles.get("enabled")
+    if not isinstance(enabled, bool):
+        raise SettingsValidationError("params.session_titles.enabled must be a boolean")
+
+    model = session_titles.get("model", "")
+    if not isinstance(model, str):
+        raise SettingsValidationError("params.session_titles.model must be a string")
+    return {"enabled": enabled, "model": model.strip()}
 
 
 def _parse_local_models_update(local_models: Any) -> JsonObject:

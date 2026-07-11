@@ -17,6 +17,7 @@ import {
   buildProviderDisconnectPayload,
   buildRecallBackendOptions,
   buildRecallSettingsPayload,
+  buildSessionTitleSettingsPayload,
   buildSubAgentSettingsPayload,
   buildWebSearchProviderOptions,
   buildWebSearchSettingsPayload,
@@ -44,6 +45,7 @@ import {
   normalizeAccountId,
   normalizeAgentDefaultsSettings,
   normalizeCompactionSettings,
+  normalizeSessionTitleSettings,
   normalizeSubAgentSettings,
 } from '../settingsView.js';
 
@@ -114,6 +116,7 @@ describe('SettingsView', () => {
     expect(document.body.textContent).toContain('Connected');
     expect(document.body.textContent).not.toContain('Anthropic');
     expect(document.body.textContent).toContain('Add provider');
+    expect(document.body.textContent).toContain('Session titles');
 
     clickButton('Server info');
 
@@ -362,6 +365,90 @@ describe('SettingsView', () => {
     expect(toastMock).toHaveBeenCalledWith(
       expect.objectContaining({
         title: 'Web search settings updated.',
+        variant: 'success',
+      }),
+    );
+  });
+
+  it('enables automatic Session titles and saves a separate Title Model', async () => {
+    const toastMock = vi.fn();
+    rpcMock.mockImplementation(
+      createSettingsRpcHandler({
+        'model.list': () => ({
+          models: [
+            {
+              id: 'openai/gpt-4.1-mini',
+              provider_id: 'openai',
+              context_window: 128000,
+              capabilities: { tools: true },
+            },
+          ],
+        }),
+        'connection.list': () => ({
+          connections: [
+            {
+              id: 'openai:api-key',
+              provider_id: 'openai',
+              label: 'API Key',
+              usable: true,
+              accounts: [],
+            },
+          ],
+        }),
+        'settings.update': (params) =>
+          createSettingsPayload({ session_titles: params.session_titles }),
+      }),
+    );
+
+    mountedComponent = mount(SettingsView, {
+      target: document.body,
+      props: { onToast: toastMock },
+    });
+    flushSync();
+
+    await waitForText('Add provider');
+    openSection('Session titles', 'session_titles');
+
+    const toggle = activeSection.querySelector(
+      'button[role="switch"][aria-label="Automatic Session titles"]',
+    );
+    expect(toggle).not.toBeNull();
+    toggle.click();
+    flushSync();
+
+    const modelTrigger = activeSection.querySelector(
+      '#settings-session-title-model',
+    );
+    expect(modelTrigger).not.toBeNull();
+    expect(modelTrigger.disabled).toBe(false);
+    modelTrigger.click();
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        document.body.querySelectorAll('.searchable-dropdown__option').length >
+        1,
+    );
+
+    const modelOption = Array.from(
+      document.body.querySelectorAll('.searchable-dropdown__option'),
+    ).find((option) => option.textContent.includes('openai/gpt-4.1-mini'));
+    expect(modelOption).toBeTruthy();
+    modelOption.click();
+    flushSync();
+
+    clickButton('Save');
+
+    expect(rpcMock).toHaveBeenCalledWith('settings.update', {
+      session_titles: {
+        enabled: true,
+        model: 'openai/gpt-4.1-mini::api-key',
+      },
+    });
+    await waitForCondition(() => toastMock.mock.calls.length > 0);
+    expect(toastMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Session title settings updated.',
         variant: 'success',
       }),
     );
@@ -1059,6 +1146,10 @@ function createSettingsPayload(overrides = {}) {
         base_url: 'http://localhost:8888',
       },
     },
+    session_titles: {
+      enabled: false,
+      model: '',
+    },
   };
 
   return mergeSettings(base, overrides);
@@ -1213,6 +1304,26 @@ function translate(key, fallback, values) {
       : match;
   });
 }
+
+describe('Session title settings', () => {
+  it('normalizes defaults and builds the complete update section', () => {
+    expect(normalizeSessionTitleSettings({})).toEqual({
+      enabled: false,
+      model: '',
+    });
+    expect(
+      buildSessionTitleSettingsPayload({
+        enabled: true,
+        model: 'openai/gpt-4.1-mini::api-key',
+      }),
+    ).toEqual({
+      session_titles: {
+        enabled: true,
+        model: 'openai/gpt-4.1-mini::api-key',
+      },
+    });
+  });
+});
 
 describe('comma decimal separators', () => {
   it('parses a comma temperature in agent defaults payloads', () => {
