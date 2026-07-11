@@ -80,6 +80,36 @@ describe('LogsView', () => {
     );
     expect(document.body.textContent).toContain('Ready');
     expect(simpleTriggerLabel('logs-file')).toContain('2026-05-11');
+    expect(buttonByText('Refresh')).toBeNull();
+  });
+
+  it('offers Retry only when the log catalog fails to load', async () => {
+    listLogsMock
+      .mockRejectedValueOnce(new Error('catalog unavailable'))
+      .mockResolvedValueOnce({
+        files: ['2026-05-11'],
+        default_file: '2026-05-11',
+      });
+    readLogFileMock.mockResolvedValue({
+      file: '2026-05-11',
+      entries: [entry({ message: 'Recovered' })],
+      cursor: 'cursor-recovered',
+    });
+
+    mountedComponent = mount(LogsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() => buttonByText('Retry') !== null);
+    expect(buttonByText('Refresh')).toBeNull();
+
+    buttonByText('Retry').click();
+    flushSync();
+
+    await waitForCondition(() =>
+      document.body.textContent.includes('Recovered'),
+    );
+    expect(buttonByText('Retry')).toBeNull();
+    expect(buttonByText('Refresh')).toBeNull();
   });
 
   it('filters and sorts entries locally through simple dropdown controls', async () => {
@@ -501,6 +531,14 @@ function inputByLabel(label) {
   const element = document.body.querySelector(`[aria-label="${label}"]`);
   expect(element).toBeTruthy();
   return element;
+}
+
+function buttonByText(text) {
+  return (
+    [...document.body.querySelectorAll('button')].find(
+      (button) => button.textContent.trim() === text,
+    ) ?? null
+  );
 }
 
 function logEntryMessages() {

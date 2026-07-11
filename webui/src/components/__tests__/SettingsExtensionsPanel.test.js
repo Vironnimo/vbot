@@ -100,6 +100,29 @@ describe('SettingsExtensionsPanel', () => {
     expect(document.body.textContent).toContain('Tools: word_count');
     expect(document.body.textContent).toContain('broken');
     expect(document.body.textContent).toContain('import failed: boom');
+    expect(buttonByText('Refresh')).toBeUndefined();
+  });
+
+  it('offers Retry only when the extension list fails to load', async () => {
+    rpcMock
+      .mockRejectedValueOnce(new Error('extension list unavailable'))
+      .mockResolvedValueOnce(extensionsResult());
+
+    mountedComponent = mount(SettingsExtensionsPanel, {
+      target: document.body,
+    });
+    flushSync();
+    await flushAsync();
+
+    expect(buttonByText('Refresh')).toBeUndefined();
+    expect(buttonByText('Retry')).toBeTruthy();
+
+    buttonByText('Retry').click();
+    await flushAsync();
+
+    expect(document.body.textContent).toContain('guard_bash');
+    expect(buttonByText('Retry')).toBeUndefined();
+    expect(buttonByText('Refresh')).toBeUndefined();
   });
 
   it('shows the waiting hint and names unset secret fields', async () => {

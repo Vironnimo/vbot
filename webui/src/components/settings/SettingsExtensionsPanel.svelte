@@ -462,9 +462,6 @@
 <div class="s-row s-row--stacked s-row--channels-header">
   <div class="s-row-control">
     <div class="s-row-actions s-row-actions--channel-header">
-      <Button variant="secondary" disabled={panelBusy} onClick={loadExtensions}>
-        {t('common.refresh', 'Refresh')}
-      </Button>
       <Button
         variant="secondary"
         disabled={panelBusy}
@@ -474,15 +471,6 @@
       </Button>
     </div>
     <dl class="s-ext-actions-help">
-      <div class="s-ext-actions-help-item">
-        <dt>{t('common.refresh', 'Refresh')}</dt>
-        <dd>
-          {t(
-            'settings.extensions.refreshHelp',
-            'Re-reads the extension list and current status from the server.',
-          )}
-        </dd>
-      </div>
       <div class="s-ext-actions-help-item">
         <dt>{t('settings.extensions.reload', 'Reload extensions')}</dt>
         <dd>
@@ -501,7 +489,12 @@
     {t('common.loading', 'Loading…')}
   </Banner>
 {:else if loadError}
-  <Banner variant="error">{loadError}</Banner>
+  <Banner variant="error" role="alert">
+    <span>{loadError}</span>
+    <Button variant="secondary" disabled={panelBusy} onClick={loadExtensions}>
+      {t('common.retry', 'Retry')}
+    </Button>
+  </Banner>
 {:else if extensions.length === 0}
   <EmptyState
     density="compact"

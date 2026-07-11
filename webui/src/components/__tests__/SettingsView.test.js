@@ -527,6 +527,14 @@ describe('SettingsView', () => {
     expect(document.body.textContent).toContain('tg-assistant');
     expect(document.body.textContent).toContain('tg-work');
     expect(rpcMock).toHaveBeenCalledWith('channel.list');
+    const channelsSection = document.body.querySelector(
+      '[data-settings-section="channels"]',
+    );
+    expect(
+      [...channelsSection.querySelectorAll('button')].some(
+        (button) => button.textContent.trim() === 'Refresh',
+      ),
+    ).toBe(false);
     expect(
       rpcMock.mock.calls.some(
         (call) =>

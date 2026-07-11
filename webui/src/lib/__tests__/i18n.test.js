@@ -1041,14 +1041,8 @@ describe('i18n t()', () => {
     );
   });
 
-  it('contains the Extensions header-action disambiguation help', () => {
-    expectCatalogKeys([
-      'settings.extensions.refreshHelp',
-      'settings.extensions.reloadHelp',
-    ]);
-    expect(t('settings.extensions.refreshHelp')).toBe(
-      'Re-reads the extension list and current status from the server.',
-    );
+  it('contains the Extensions reload help', () => {
+    expectCatalogKeys(['settings.extensions.reloadHelp']);
     expect(t('settings.extensions.reloadHelp')).toBe(
       'Rebuilds all extensions from disk — picks up code edits, new and removed extensions.',
     );

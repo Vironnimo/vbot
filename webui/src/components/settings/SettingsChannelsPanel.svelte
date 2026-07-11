@@ -151,10 +151,6 @@
     return t('common.unknown', 'Unknown');
   }
 
-  async function reloadChannelsPanel() {
-    await loadChannelsPanel();
-  }
-
   async function loadChannelsPanel() {
     channelPanelState = {
       ...channelPanelState,
@@ -359,13 +355,6 @@
   <div class="s-row-control">
     <div class="s-row-actions s-row-actions--channel-header">
       <Button
-        variant="secondary"
-        disabled={channelPanelBusy}
-        onClick={reloadChannelsPanel}
-      >
-        {t('common.refresh', 'Refresh')}
-      </Button>
-      <Button
         variant="primary"
         disabled={channelPanelBusy}
         onClick={startCreateChannel}
@@ -529,8 +518,15 @@
     {t('common.loading', 'Loading…')}
   </Banner>
 {:else if channelPanelState.error}
-  <Banner variant="error">
-    {channelPanelState.error}
+  <Banner variant="error" role="alert">
+    <span>{channelPanelState.error}</span>
+    <Button
+      variant="secondary"
+      disabled={channelPanelBusy}
+      onClick={loadChannelsPanel}
+    >
+      {t('common.retry', 'Retry')}
+    </Button>
   </Banner>
 {:else if channelPanelState.channels.length === 0}
   <EmptyState

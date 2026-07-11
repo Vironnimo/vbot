@@ -389,12 +389,6 @@
       <StatusChip variant={streamStatusVariant(viewState.streamStatus)}>
         {streamStatusLabel(viewState.streamStatus)}
       </StatusChip>
-      <Button
-        variant="secondary"
-        onClick={() => loadCatalogAndMaybeFile({ forceReload: true })}
-      >
-        {t('common.refresh', 'Refresh')}
-      </Button>
     </div>
   </header>
 
