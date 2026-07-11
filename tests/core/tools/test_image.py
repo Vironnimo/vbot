@@ -74,6 +74,58 @@ async def test_image_generation_tool_omits_blank_knobs(tmp_path: Path) -> None:
     assert service.received_call_options == {}
 
 
+@pytest.mark.asyncio
+async def test_image_generation_tool_resolves_local_source_images(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    source = workspace / "photo.png"
+    source.write_bytes(b"\x89PNG\r\n\x1a\nsource")
+    service = _ImageService(tmp_path / "artifact-1.png")
+    registry = ToolRegistry()
+    register_image_generation_tool(registry, service)
+    context = _make_context(workspace)
+
+    result = await registry.dispatch(
+        context,
+        {"prompt": "make it rainy", "source_images": ["photo.png"]},
+    )
+
+    assert result["ok"] is True
+    assert service.received_source_paths == (source.resolve(),)
+
+
+@pytest.mark.asyncio
+async def test_image_generation_tool_accepts_single_source_path_string(tmp_path: Path) -> None:
+    source = tmp_path / "photo.png"
+    source.write_bytes(b"\x89PNG\r\n\x1a\nsource")
+    service = _ImageService(tmp_path / "artifact-1.png")
+    registry = ToolRegistry()
+    register_image_generation_tool(registry, service)
+
+    result = await registry.dispatch(
+        _make_context(tmp_path),
+        {"prompt": "make it rainy", "source_images": str(source)},
+    )
+
+    assert result["ok"] is True
+    assert service.received_source_paths == (source.resolve(),)
+
+
+@pytest.mark.asyncio
+async def test_image_generation_tool_rejects_invalid_source_paths_shape(tmp_path: Path) -> None:
+    service = _ImageService(tmp_path / "artifact-1.png")
+    registry = ToolRegistry()
+    register_image_generation_tool(registry, service)
+
+    result = await registry.dispatch(
+        _make_context(tmp_path),
+        {"prompt": "make it rainy", "source_images": {"path": "photo.png"}},
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
+
+
 def _make_context(tmp_path: Path) -> ToolContext:
     return ToolContext(
         agent_id="agent",
@@ -104,15 +156,18 @@ class _ImageService:
         self._file_path = file_path
         self.received_prompt: str | None = None
         self.received_call_options: dict[str, object] | None = None
+        self.received_source_paths: tuple[Path, ...] | None = None
 
     async def generate_artifacts(
         self,
         prompt: str,
         *,
         call_options: dict[str, object] | None = None,
+        source_paths: tuple[Path, ...] | None = None,
     ) -> tuple[object, ...]:
         self.received_prompt = prompt
         self.received_call_options = call_options
+        self.received_source_paths = source_paths
         return (
             SimpleNamespace(
                 file_path=self._file_path,

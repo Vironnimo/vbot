@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from core.model_tasks import ImageError
@@ -17,8 +18,9 @@ from core.tools.tools import (
 
 IMAGE_GENERATION_TOOL_NAME = "image_generation"
 IMAGE_GENERATION_TOOL_DESCRIPTION = (
-    "Generate images from a text prompt using the configured image generation "
-    "model. The result includes each image's file path and the Markdown that "
+    "Generate new images or edit local source images using the configured image "
+    "generation model. Local source files are uploaded to the configured external "
+    "provider. The result includes each image's file path and the Markdown that "
     "displays it in the chat."
 )
 IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
@@ -32,9 +34,21 @@ IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
                 "and concrete — name the subject and its key attributes, the "
                 "setting, composition/framing, lighting, mood, and the visual "
                 "medium or style (e.g. photo, oil painting, 3D render, flat "
-                "vector). Detailed prompts produce markedly better images than "
-                "short vague ones; spell the scene out fully rather than "
-                "referring to things from the conversation."
+                "vector). For an edit, state both the requested changes and what "
+                "must remain unchanged. Detailed prompts produce markedly better "
+                "images than short vague ones."
+            ),
+        },
+        "source_images": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "minItems": 1,
+            "description": (
+                "Optional local image paths to edit or use as references. Paths may "
+                "be absolute or relative to the current working directory and are "
+                "uploaded to the configured external provider. Use the exact Path "
+                "shown for an attachment, a file loaded from disk, or a previously "
+                "generated image. Omit this field to generate from text only."
             ),
         },
         "aspect_ratio": {
@@ -77,6 +91,33 @@ def _collect_call_options(arguments: JsonObject) -> JsonObject:
     return call_options
 
 
+def _collect_source_paths(context: ToolContext, arguments: JsonObject) -> tuple[Path, ...]:
+    """Resolve optional source-image paths against the Run's effective cwd."""
+
+    raw_paths = arguments.get("source_images")
+    if raw_paths is None or raw_paths == []:
+        return ()
+    if isinstance(raw_paths, str):
+        raw_paths = [raw_paths]
+    if not isinstance(raw_paths, list):
+        raise ValueError("source_images must be an array of local image paths")
+
+    resolved_paths: list[Path] = []
+    for index, raw_path in enumerate(raw_paths):
+        path_text = optional_string(raw_path, field_name=f"source_images[{index}]")
+        if path_text is None:
+            raise ValueError(f"source_images[{index}] must be a non-empty string")
+        candidate = Path(path_text).expanduser()
+        resolved_paths.append(
+            candidate.resolve()
+            if candidate.is_absolute()
+            else (context.effective_cwd / candidate).resolve()
+        )
+    if not resolved_paths:
+        raise ValueError("source_images must contain at least one local image path")
+    return tuple(resolved_paths)
+
+
 def _image_display_message(artifacts: list[JsonObject]) -> str:
     """Tell the agent how to surface generated images in the chat.
 
@@ -97,18 +138,23 @@ def _image_display_message(artifacts: list[JsonObject]) -> str:
 def make_image_generation_handler(image_service: Any):
     """Create an image generation tool handler bound to the runtime image service."""
 
-    async def handler(_context: ToolContext, arguments: JsonObject) -> JsonObject:
+    async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         prompt = arguments.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
             return tool_failure("invalid_arguments", "prompt must be a non-empty string")
 
         try:
             call_options = _collect_call_options(arguments)
+            source_paths = _collect_source_paths(context, arguments)
         except ValueError as exc:
             return tool_failure("invalid_arguments", str(exc))
 
         try:
-            artifacts = await image_service.generate_artifacts(prompt, call_options=call_options)
+            artifacts = await image_service.generate_artifacts(
+                prompt,
+                call_options=call_options,
+                source_paths=source_paths,
+            )
         except ImageError as exc:
             return tool_failure("image_error", str(exc))
 
@@ -139,5 +185,7 @@ def register_image_generation_tool(registry: ToolRegistry, image_service: Any) -
         IMAGE_GENERATION_TOOL_DESCRIPTION,
         IMAGE_GENERATION_TOOL_PARAMETERS,
         make_image_generation_handler(image_service),
-        display=ToolDisplay(summary_fields=("prompt", "aspect_ratio", "resolution")),
+        display=ToolDisplay(
+            summary_fields=("prompt", "source_images", "aspect_ratio", "resolution")
+        ),
     )

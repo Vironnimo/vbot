@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
 from collections.abc import Mapping
 from typing import Any
 
-from core.model_tasks.image_types import ImageGenerationResult, JsonObject
+from core.model_tasks.image_types import ImageGenerationResult, ImageInput, JsonObject
 from core.providers._http_shared import parse_sse_json_data
 from core.providers.errors import ProviderAuthError, ProviderError
 from core.providers.openai import (
@@ -25,6 +26,7 @@ from core.utils.logging import get_logger
 
 _OPENROUTER_IMAGES_ENDPOINT = "/images"
 _OPENAI_IMAGES_GENERATIONS_ENDPOINT = "/images/generations"
+_OPENAI_IMAGES_EDITS_ENDPOINT = "/images/edits"
 _DEFAULT_IMAGE_TIMEOUT = 120.0
 _OPENAI_CODEX_IMAGE_TIMEOUT = 300.0
 _OPENAI_CODEX_IMAGE_CARRIER_MODEL = "gpt-5.5"
@@ -62,6 +64,20 @@ _OPENAI_IMAGE_KEYS: tuple[str, ...] = (
     "response_format",
 )
 
+# Multipart fields accepted by OpenAI's image-edit endpoint. ``input_fidelity``
+# is intentionally not a curated Tool/Settings control in this iteration, but
+# remains reachable through ``extra_options`` like other provider-native fields.
+_OPENAI_IMAGE_EDIT_KEYS: tuple[str, ...] = (
+    "n",
+    "size",
+    "quality",
+    "background",
+    "moderation",
+    "output_format",
+    "output_compression",
+    "response_format",
+)
+
 # OpenAI subscription image generation rides through the Codex Responses wire:
 # the task model remains ``gpt-image-2`` in vBot, while the request is carried
 # by a subscription text model that invokes the backend image_generation tool.
@@ -89,14 +105,32 @@ class ProviderImageClient(ProviderTaskClient):
         prompt: str,
         *,
         options: JsonObject,
+        input_images: tuple[ImageInput, ...] = (),
     ) -> ImageGenerationResult:
-        """Call the selected provider's image generation endpoint."""
+        """Call the selected provider's image generation or edit endpoint."""
 
         if self._provider.id == "openrouter":
-            return await self._generate_openrouter(prompt, options=options)
+            return await self._generate_openrouter(
+                prompt,
+                options=options,
+                input_images=input_images,
+            )
         if self._provider.id == "openai":
             if self._connection.mode == CODEX_RESPONSES_MODE:
+                if input_images:
+                    raise ProviderError(
+                        "Source-image editing is not supported through the OpenAI "
+                        "subscription connection; use an OpenAI API-key or OpenRouter "
+                        "image target",
+                        retryable=False,
+                    )
                 return await self._generate_openai_codex_responses(prompt, options=options)
+            if input_images:
+                return await self._edit_openai(
+                    prompt,
+                    options=options,
+                    input_images=input_images,
+                )
             return await self._generate_openai(prompt, options=options)
         raise ProviderError(
             f"Image generation not supported for provider '{self._provider.id}'",
@@ -108,8 +142,14 @@ class ProviderImageClient(ProviderTaskClient):
         prompt: str,
         *,
         options: JsonObject,
+        input_images: tuple[ImageInput, ...],
     ) -> ImageGenerationResult:
-        payload = _build_openrouter_image_payload(self._model_id, prompt, options)
+        payload = _build_openrouter_image_payload(
+            self._model_id,
+            prompt,
+            options,
+            input_images=input_images,
+        )
         requested_output_format = options.get("output_format")
 
         _LOGGER.debug(
@@ -128,6 +168,37 @@ class ProviderImageClient(ProviderTaskClient):
                 requested_output_format=requested_output_format,
             ),
             json=payload,
+        )
+
+    async def _edit_openai(
+        self,
+        prompt: str,
+        *,
+        options: JsonObject,
+        input_images: tuple[ImageInput, ...],
+    ) -> ImageGenerationResult:
+        form = _build_openai_image_edit_form(self._model_id, prompt, options)
+        files = _openai_image_edit_files(input_images)
+        requested_output_format = options.get("output_format")
+
+        _LOGGER.debug(
+            "Image edit request: url=%s%s model=%s inputs=%d",
+            self._base_url,
+            _OPENAI_IMAGES_EDITS_ENDPOINT,
+            self._model_id,
+            len(input_images),
+        )
+
+        return await self.post_and_parse(
+            _OPENAI_IMAGES_EDITS_ENDPOINT,
+            timeout=_DEFAULT_IMAGE_TIMEOUT,
+            parse=lambda response: _parse_openai_image_response(
+                response.json(),
+                model=self._model_id,
+                requested_output_format=requested_output_format,
+            ),
+            data=form,
+            files=files,
         )
 
     async def _generate_openai(
@@ -203,6 +274,8 @@ def _build_openrouter_image_payload(
     model_id: str,
     prompt: str,
     options: JsonObject,
+    *,
+    input_images: tuple[ImageInput, ...] = (),
 ) -> JsonObject:
     """Build the OpenRouter unified image API request payload.
 
@@ -224,12 +297,56 @@ def _build_openrouter_image_payload(
         if key in options and not is_omittable_option(options[key]):
             payload[key] = options[key]
 
+    if input_images:
+        payload["input_references"] = [
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": (
+                        f"data:{image.media_type};base64,"
+                        f"{base64.b64encode(image.data).decode('ascii')}"
+                    )
+                },
+            }
+            for image in input_images
+        ]
+
     provider_options = options.get(_PROVIDER_OPTIONS_KEY)
     if isinstance(provider_options, dict) and provider_options:
         payload["provider"] = {"options": provider_options}
 
     merge_extra_options(payload, options)
     return payload
+
+
+def _build_openai_image_edit_form(
+    model_id: str,
+    prompt: str,
+    options: JsonObject,
+) -> dict[str, str]:
+    """Build scalar multipart fields for OpenAI's image-edit endpoint."""
+
+    payload: JsonObject = {"model": model_id, "prompt": prompt}
+    for key in _OPENAI_IMAGE_EDIT_KEYS:
+        if key in options and not is_omittable_option(options[key]):
+            payload[key] = options[key]
+    merge_extra_options(payload, options)
+    return {key: _multipart_form_value(value) for key, value in payload.items()}
+
+
+def _multipart_form_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, dict | list):
+        return json.dumps(value, separators=(",", ":"))
+    return str(value)
+
+
+def _openai_image_edit_files(input_images: tuple[ImageInput, ...]) -> list[tuple[str, Any]]:
+    """Build OpenAI multipart file parts, using bracket notation for arrays."""
+
+    field_name = "image" if len(input_images) == 1 else "image[]"
+    return [(field_name, (image.filename, image.data, image.media_type)) for image in input_images]
 
 
 def _build_openai_image_payload(

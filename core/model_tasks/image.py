@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from core.attachments import sniff_media_type
 from core.model_tasks.artifacts import StoredArtifact, TaskArtifactStore
 from core.model_tasks.constants import TASK_IMAGE_GENERATION
 from core.model_tasks.image_providers import ProviderImageClient
-from core.model_tasks.image_types import ImageArtifact, ImageGenerationResult, JsonObject
-from core.model_tasks.model_tasks import TaskModelTargetRef
+from core.model_tasks.image_types import (
+    ImageArtifact,
+    ImageGenerationResult,
+    ImageInput,
+    JsonObject,
+)
 from core.model_tasks.task_execution import TaskBindingResolver
 from core.providers.task_client import TaskClientRuntime
 from core.utils.errors import TaskError, VBotError
@@ -43,6 +48,10 @@ class ImageExecutionError(ImageError):
     """Raised when a provider image generation request fails."""
 
 
+class ImageInputError(ImageError):
+    """Raised when a local source image cannot be loaded for editing."""
+
+
 class ImageService:
     """Execute image generation through configured task-model bindings."""
 
@@ -66,8 +75,9 @@ class ImageService:
         prompt: str,
         *,
         call_options: Mapping[str, Any] | None = None,
+        source_paths: Sequence[str | Path] | None = None,
     ) -> ImageGenerationResult:
-        """Generate images from a text prompt using the configured binding.
+        """Generate or edit images using the configured binding.
 
         ``call_options`` carries the agent's per-call intent knobs (aspect
         ratio, resolution). Each is routed against the resolved model's
@@ -75,6 +85,10 @@ class ImageService:
         binding default in the wire options, while an unsupported value is
         appended to the prompt as a best-effort hint instead. Empty or absent
         ``call_options`` reproduces the request the binding alone would make.
+
+        ``source_paths`` may name any local image file reachable by the process.
+        Each file is read and sent to the configured external provider. An empty
+        sequence keeps the text-to-image path unchanged.
         """
 
         normalized_prompt = prompt.strip() if isinstance(prompt, str) else ""
@@ -88,12 +102,30 @@ class ImageService:
                 f"Image generation does not support local targets: {target_ref.target}"
             )
 
-        wire_options, prompt_hints = self._route_call_options(target_ref, call_options)
+        model = None
+        if call_options or source_paths:
+            model = self._model_tasks.model_for_target(target_ref)
+
+        if source_paths and model is not None:
+            input_modalities = getattr(getattr(model, "capabilities", None), "input_modalities", ())
+            if "image" not in input_modalities:
+                raise ImageUnsupportedTargetError(
+                    f"Configured image model does not support source images: {target_ref.target}"
+                )
+
+        wire_options, prompt_hints = split_image_call_options(model, call_options or {})
         merged_options = {**options, **wire_options}
         request_prompt = _prompt_with_hints(normalized_prompt, prompt_hints)
+        input_images = _load_image_inputs(source_paths or ())
 
         provider_client = ProviderImageClient.from_runtime(self._runtime, target_ref)
         try:
+            if input_images:
+                return await provider_client.generate(
+                    request_prompt,
+                    options=merged_options,
+                    input_images=input_images,
+                )
             return await provider_client.generate(request_prompt, options=merged_options)
         except ImageError:
             raise
@@ -110,31 +142,20 @@ class ImageService:
             _LOGGER.error("Image generation failed", exc_info=True)
             raise ImageExecutionError(str(exc)) from exc
 
-    def _route_call_options(
-        self,
-        target_ref: TaskModelTargetRef,
-        call_options: Mapping[str, Any] | None,
-    ) -> tuple[JsonObject, list[str]]:
-        """Split per-call knobs into native wire options and prompt hints.
-
-        Resolving the model is skipped entirely when no knobs were supplied,
-        so the no-options path issues exactly the same request as before.
-        """
-
-        if not call_options:
-            return {}, []
-        model = self._model_tasks.model_for_target(target_ref)
-        return split_image_call_options(model, call_options)
-
     async def generate_artifacts(
         self,
         prompt: str,
         *,
         call_options: Mapping[str, Any] | None = None,
+        source_paths: Sequence[str | Path] | None = None,
     ) -> tuple[ImageArtifact, ...]:
         """Generate images and persist them as runtime artifacts."""
 
-        result = await self.generate(prompt, call_options=call_options)
+        result = await self.generate(
+            prompt,
+            call_options=call_options,
+            source_paths=source_paths,
+        )
         extension = _extension_for_media_type(result.media_type)
         return tuple(
             _image_artifact(
@@ -230,6 +251,48 @@ def _prompt_with_hints(prompt: str, hints: list[str]) -> str:
     if not hints:
         return prompt
     return f"{prompt} ({', '.join(hints)})"
+
+
+def _load_image_inputs(source_paths: Sequence[str | Path]) -> tuple[ImageInput, ...]:
+    """Read and validate local source images without imposing a path allowlist."""
+
+    inputs: list[ImageInput] = []
+    for source_path in source_paths:
+        path = Path(source_path).expanduser().resolve()
+        if not path.exists():
+            raise ImageInputError(f"Source image not found: {path}")
+        if not path.is_file():
+            raise ImageInputError(f"Source image path is not a file: {path}")
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            raise ImageInputError(f"Cannot read source image {path}: {exc}") from exc
+
+        media_type = sniff_media_type(data, path.name)
+        if not media_type.startswith("image/"):
+            raise ImageInputError(f"Source file is not a supported image: {path}")
+        inputs.append(
+            ImageInput(
+                filename=_input_filename(path, media_type),
+                media_type=media_type,
+                data=data,
+            )
+        )
+    return tuple(inputs)
+
+
+def _input_filename(path: Path, media_type: str) -> str:
+    """Give extensionless attachment blobs a provider-readable filename."""
+
+    if path.suffix:
+        return path.name
+    extension = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/gif": ".gif",
+        "image/webp": ".webp",
+    }.get(media_type, "")
+    return f"{path.name}{extension}"
 
 
 def _image_artifact(stored: StoredArtifact) -> ImageArtifact:

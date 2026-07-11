@@ -1382,6 +1382,10 @@ class TestModelRegistryRealResources:
         assert gpt_image_2.allows_connection("api-key") is True
         assert gpt_image_2.allows_connection("subscription") is True
 
+        for model_id in ("gpt-image-1", "gpt-image-1-mini", "gpt-image-1.5", "gpt-image-2"):
+            model = registry.get("openai", model_id)
+            assert model.capabilities.input_modalities == ("image", "text")
+
     def test_anthropic_opus_4_5_override_pins_budget_control(self):
         """``anthropic.overrides.json`` pins Opus 4.5 to ``budget`` control.
 

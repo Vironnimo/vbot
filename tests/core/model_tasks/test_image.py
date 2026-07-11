@@ -14,6 +14,7 @@ from core.model_tasks import (
     TASK_IMAGE_GENERATION,
     ImageConfigurationError,
     ImageExecutionError,
+    ImageInputError,
     ImageService,
     ImageUnsupportedTargetError,
     TaskModelError,
@@ -79,7 +80,8 @@ def _image_model(parameters: dict[str, Any]) -> Any:
 
     return SimpleNamespace(
         capabilities=SimpleNamespace(
-            task_options={TASK_IMAGE_GENERATION: {"parameters": parameters}}
+            task_options={TASK_IMAGE_GENERATION: {"parameters": parameters}},
+            input_modalities=("image", "text"),
         )
     )
 
@@ -172,10 +174,18 @@ class _RecordingImageClient:
     def __init__(self) -> None:
         self.prompt: str | None = None
         self.options: dict[str, Any] | None = None
+        self.input_images: tuple[Any, ...] = ()
 
-    async def generate(self, prompt: str, *, options: dict[str, Any]) -> ImageGenerationResult:
+    async def generate(
+        self,
+        prompt: str,
+        *,
+        options: dict[str, Any],
+        input_images: tuple[Any, ...] = (),
+    ) -> ImageGenerationResult:
         self.prompt = prompt
         self.options = options
+        self.input_images = input_images
         return ImageGenerationResult(images=(b"x",), media_type="image/png", model="m")
 
 
@@ -243,6 +253,67 @@ async def test_generate_without_call_options_reproduces_binding_request(tmp_path
     assert client.prompt == "a cat"
     # The no-options path must not even resolve the model.
     assert model_tasks.model_for_target_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_generate_loads_any_reachable_local_source_image(tmp_path: Path) -> None:
+    source_dir = tmp_path / "outside-workspace"
+    source_dir.mkdir()
+    source = source_dir / "photo.png"
+    source.write_bytes(b"\x89PNG\r\n\x1a\nsource-bytes")
+    model_tasks = _RoutingModelTasks(_image_model({}))
+    service = ImageService(model_tasks, cast(Any, object()), tmp_path / "data")
+    client = _RecordingImageClient()
+
+    with patch("core.model_tasks.image.ProviderImageClient.from_runtime", return_value=client):
+        await service.generate("make it rainy", source_paths=[source])
+
+    assert len(client.input_images) == 1
+    image = client.input_images[0]
+    assert image.filename == "photo.png"
+    assert image.media_type == "image/png"
+    assert image.data == b"\x89PNG\r\n\x1a\nsource-bytes"
+
+
+@pytest.mark.asyncio
+async def test_generate_gives_extensionless_source_a_provider_filename(tmp_path: Path) -> None:
+    source = tmp_path / "attachment-blob"
+    source.write_bytes(b"\xff\xd8\xffsource-bytes")
+    model_tasks = _RoutingModelTasks(_image_model({}))
+    service = ImageService(model_tasks, cast(Any, object()), tmp_path / "data")
+    client = _RecordingImageClient()
+
+    with patch("core.model_tasks.image.ProviderImageClient.from_runtime", return_value=client):
+        await service.generate("make it rainy", source_paths=[source])
+
+    assert client.input_images[0].filename == "attachment-blob.jpg"
+    assert client.input_images[0].media_type == "image/jpeg"
+
+
+@pytest.mark.asyncio
+async def test_generate_rejects_source_image_for_text_only_model(tmp_path: Path) -> None:
+    source = tmp_path / "photo.png"
+    source.write_bytes(b"\x89PNG\r\n\x1a\nsource")
+    model = _image_model({})
+    model.capabilities.input_modalities = ("text",)
+    service = ImageService(_RoutingModelTasks(model), cast(Any, object()), tmp_path / "data")
+
+    with pytest.raises(ImageUnsupportedTargetError, match="does not support source images"):
+        await service.generate("make it rainy", source_paths=[source])
+
+
+@pytest.mark.asyncio
+async def test_generate_rejects_missing_or_non_image_source(tmp_path: Path) -> None:
+    model_tasks = _RoutingModelTasks(_image_model({}))
+    service = ImageService(model_tasks, cast(Any, object()), tmp_path / "data")
+
+    with pytest.raises(ImageInputError, match="not found"):
+        await service.generate("make it rainy", source_paths=[tmp_path / "missing.png"])
+
+    text_file = tmp_path / "notes.txt"
+    text_file.write_text("not an image", encoding="utf-8")
+    with pytest.raises(ImageInputError, match="not a supported image"):
+        await service.generate("make it rainy", source_paths=[text_file])
 
 
 class _MissingModelTasks:
