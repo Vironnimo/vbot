@@ -528,9 +528,6 @@
           {t('cron.title', 'Cron')}
         </span>
         <div class="pane-header-actions">
-          <Button variant="secondary" onClick={() => loadJobs()}>
-            {t('common.refresh', 'Refresh')}
-          </Button>
           <Button variant="primary" disabled={!hasAgents} onClick={startCreate}>
             <svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true">
               <path d="M7 1v12M1 7h12" />

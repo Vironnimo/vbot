@@ -21,6 +21,7 @@
   text-rendering: optimizeLegibility;
 
   --bg: #221a12;
+  --secondary-surface: #271e15;
   --surface: #2b2217;
   --surface-2: #33291d;
   --surface-3: #3d3124;
@@ -76,6 +77,7 @@
   --space-lg: 20px;
   --space-xl: 28px;
   --sidebar-width: 210px;
+  --secondary-sidebar-width: 216px;
 
   /* Content-width / reading-measure layer. Single source of truth for how wide
      content is allowed to grow on large monitors (see DESIGN.md → Layout).

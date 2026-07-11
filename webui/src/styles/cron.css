@@ -26,12 +26,12 @@
 .cron-view .cron-list-pane {
   display: flex;
   min-height: 0;
-  width: 260px;
-  min-width: 260px;
+  width: var(--secondary-sidebar-width);
+  min-width: var(--secondary-sidebar-width);
   flex-direction: column;
   overflow: hidden;
   border-right: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--secondary-surface);
 }
 
 .cron-view .pane-header {
@@ -42,12 +42,6 @@
   gap: 8px;
   padding: 12px 14px 10px;
   border-bottom: 1px solid var(--border);
-}
-
-.cron-view .pane-title {
-  color: var(--text-hi);
-  font-size: 14px;
-  font-weight: 600;
 }
 
 .cron-view .pane-header-actions {

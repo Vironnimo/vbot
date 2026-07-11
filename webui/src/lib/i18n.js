@@ -433,7 +433,6 @@ export const englishCatalog = Object.freeze({
   'projects.title': 'Projects',
   'projects.subtitle':
     'Add a repository as a project to discover its team and chat with project agents. Adding a project also scans its repo for issues.',
-  'projects.refresh': 'Refresh',
   'projects.loading': 'Loading projects…',
   'projects.loadError': 'Projects could not be loaded.',
   'projects.emptyTitle': 'No projects yet',
@@ -508,6 +507,8 @@ export const englishCatalog = Object.freeze({
   'projects.manage.globalSkills': 'Global skills',
   'projects.manage.toggleSkill': 'Toggle skill {name}',
   'projects.manage.skillsEmpty': 'No skills available',
+  'projects.skills.refresh': 'Refresh skills',
+  'projects.skills.refreshing': 'Refreshing…',
   'projects.manage.save': 'Save changes',
   'projects.manage.saving': 'Saving…',
   'projects.manage.saveError': 'Project changes could not be saved.',
@@ -533,6 +534,8 @@ export const englishCatalog = Object.freeze({
   'projects.detail.sectionSkills': 'Skills',
   'projects.detail.empty': 'Select a project to view and edit it.',
   'projects.team.title': 'Team',
+  'projects.team.refresh': 'Rescan team',
+  'projects.team.refreshing': 'Scanning…',
   'projects.team.empty':
     'No agents discovered in this repository yet. An empty project is valid — add agent files to the repo to build a team.',
   'projects.team.noModel': 'No model',

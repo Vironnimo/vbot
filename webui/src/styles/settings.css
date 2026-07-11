@@ -20,22 +20,26 @@
 
 .settings-nav {
   display: flex;
-  width: 216px;
-  min-width: 216px;
+  width: var(--secondary-sidebar-width);
+  min-width: var(--secondary-sidebar-width);
   flex-shrink: 0;
   flex-direction: column;
   gap: 1px;
   padding: 20px 12px;
   border-right: 1px solid var(--border);
+  background: var(--secondary-surface);
   overflow-y: auto;
 }
 
 .settings-nav-title {
   padding: 2px 10px 10px;
-  color: var(--text-hi);
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  line-height: 1;
+  text-transform: uppercase;
 }
 
 .settings-search {
@@ -126,7 +130,7 @@
 .snav-item--active {
   border-left-color: var(--accent);
   color: var(--accent);
-  background: rgba(232, 135, 10, 0.07);
+  background: var(--accent-dim);
 }
 
 /* During a search, index entries whose section has no match stay clickable

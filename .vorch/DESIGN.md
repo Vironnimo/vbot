@@ -6,6 +6,7 @@ description: >
   Dense, technical, and deliberate — a control room that runs hot.
 colors:
   bg:          "#221A12"
+  secondary-surface: "#271E15"
   surface:     "#2B2217"
   surface-2:   "#33291D"
   surface-3:   "#3D3124"
@@ -96,6 +97,7 @@ spacing:
   lg: 20px
   xl: 28px
   sidebar: 210px
+  secondary-sidebar: 216px
 components:
   button-primary:
     backgroundColor: "rgba(232,135,10,0.10)"
@@ -207,10 +209,11 @@ Interaction is calm. Hover states are warm tint shifts, not bright flashes. The 
 
 ## Colors
 
-The palette is organized around four layers of warm dark surface and three semantic status colors.
+The palette is organized around five layers of warm dark surface and three semantic status colors.
 
-- **Bg (#221A12):** The page foundation — darkest, used behind the sidebar and the chat message stream. Warm near-black with a distinct brown cast.
-- **Surface (#2B2217):** Primary panel surface — sidebar, input bar, agent list. One step up from the background.
+- **Bg (#221A12):** The page foundation — darkest, used behind content areas and the chat message stream. Warm near-black with a distinct brown cast.
+- **Secondary-surface (#271E15):** The narrow intermediate layer used only by Secondary bars. It sits exactly between the main navigation and content backgrounds so the app descends from light on the left to dark on the right without adding elevation.
+- **Surface (#2B2217):** Primary panel surface — Main menu, input bar, and section cards. One step up from the Secondary bar.
 - **Surface-2 (#33291D):** Elevated cards, dropdown backgrounds, user message bubbles. Used whenever a component needs to sit above its container.
 - **Surface-3 (#3D3124):** Tertiary highlight layer — toggle tracks, code block backgrounds, hover surfaces for dropdowns.
 - **Border (#4A3928) / Border-2 (#5D4A35):** Two border strengths. `border` for structural dividers (sidebar edge, section separators). `border-2` for interactive element outlines (inputs, buttons, dropdowns).
@@ -255,9 +258,9 @@ The app shell is a fixed sidebar (210px) plus a fluid main content area. The sid
 
 Sidebar navigation is grouped by usage cadence into Work / Configure / Insights, each group introduced by a mono-xs uppercase section label (`--text-lo`, no divider lines); on mobile (≤640px) the groups collapse to a single scrolling top-bar row and the labels hide.
 
-Within views, two-pane splits (Agents: 240px list + fluid detail; Settings: 216px index + fluid document) use a thin `border` divider with no gap. Padding inside panels is 20–32px depending on context.
+Within views, every Secondary bar is 216px wide on desktop: the Agents, Projects, and Cron selection lists and the Settings index all use `--secondary-sidebar-width`, `--secondary-surface`, a thin `border` divider, and a muted mono-xs uppercase pane title. Their content differs by purpose — Settings alone has search and grouped navigation — but their width, depth, and title hierarchy do not drift. Two-pane detail content remains fluid, and the split stacks at its view's responsive breakpoint.
 
-Settings is the one-document pattern, built on three background layers: the app sidebar sits on `--surface`, the settings index and document scroll area sit on `--bg`, and each section card lifts back to `--surface` (`--content-max-narrow` measure, `lg` radius, `border` outline) headed by a 15px/600 title and a `text-med` subtitle above a divider. The left column is a search input plus a grouped table of contents (15px/600 "Settings" heading, mono-caps group labels); index entries are 12.5px/500 `text-med` rows with a 2px left accent rail as the active marker (accent text, 7% accent tint, radius only on the free right edge), hover brightens to `text-hi`, and non-matching entries dim to 35% during a search.
+Settings is the one-document pattern, built on the shared left-to-right depth sequence: the Main menu sits on `--surface`, the Settings index on `--secondary-surface`, the document scroll area on `--bg`, and each section card lifts back to `--surface` (`--content-max-narrow` measure, `lg` radius, `border` outline) headed by a 15px/600 title and a `text-med` subtitle above a divider. The Secondary bar starts with the common muted mono-xs pane title, then a search input and grouped table of contents; index entries are 12.5px/500 `text-med` rows with a 2px left accent rail as the active marker (accent text, `--accent-dim` tint, radius only on the free right edge), hover brightens to `text-hi`, and non-matching entries dim to 35% during a search.
 
 Dense detail inside settings rows (whole provider cards with their connections and accounts, per-target task-model options, extension config forms) collapses behind a disclosure: a 22px bordered chevron square (`▸`, `text-med`, rotates 90° when open, accent on hover) at the row's trailing edge, opening an indented sub-block carried by a 2px `border-2` left rail — the same visual language as expanded tool calls in chat. The collapsed sub stays in the DOM (`hidden` attribute) so settings search still matches its text.
 
