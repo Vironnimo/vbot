@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
-from core.chat.content_blocks import ContentBlock, MediaBlock
+from core.chat.content_blocks import ContentBlock, MediaBlock, content_block_to_dict
 from core.chat.continuation import (
     ContinuationCause,
     ContinuationState,
@@ -309,6 +309,15 @@ def _read_media_text_note(filename: str, media_type: str) -> JsonObject:
             "shown to this model directly.]"
         ),
     }
+
+
+def _serialize_continuation_request(
+    content: str | list[ContentBlock] | None,
+) -> str | list[JsonObject] | None:
+    """Return the canonical JSON form stored by the continuation journal."""
+    if isinstance(content, list):
+        return [content_block_to_dict(block) for block in content]
+    return content
 
 
 class ChatLoop:
@@ -720,7 +729,7 @@ class ChatLoop:
             continuation_tracker = ContinuationTracker(
                 session,
                 run_id=run.id,
-                request=content,
+                request=_serialize_continuation_request(content),
                 prior_state=prior_continuation,
             )
         try:

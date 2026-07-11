@@ -22,6 +22,7 @@ from core.chat import (
     MessageSender,
     ToolCall,
 )
+from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
 from core.chat.continuation import (
     ContinuationTracker,
     inject_continuation_reminder,
@@ -4055,6 +4056,48 @@ async def test_discard_continuation_clears_checkpoint(
     loop.discard_continuation("coder", "session-one")
 
     assert loop.continuation_summary("coder", "session-one") is None
+
+
+@pytest.mark.asyncio
+async def test_content_block_request_is_serialized_in_continuation_journal(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[NetworkError("offline") for _ in range(3)],
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    content: list[ContentBlock] = [
+        TextBlock(type="text", text="Describe this image"),
+        MediaBlock(
+            type="media",
+            attachment_id="attachment-one",
+            filename="photo.jpg",
+            media_type="image/jpeg",
+        ),
+    ]
+
+    with pytest.raises(NetworkError):
+        await ChatLoop(runtime, streaming=True).send(
+            "coder",
+            content,
+            session_id="session-one",
+        )
+
+    state = recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
+    assert state is not None
+    assert state.original_requests == [
+        [
+            {"type": "text", "text": "Describe this image"},
+            {
+                "type": "media",
+                "attachment_id": "attachment-one",
+                "filename": "photo.jpg",
+                "media_type": "image/jpeg",
+            },
+        ]
+    ]
 
 
 @pytest.mark.asyncio
