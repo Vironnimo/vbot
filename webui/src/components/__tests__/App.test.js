@@ -141,6 +141,85 @@ describe('App', () => {
     }
   });
 
+  it('shows one global server notice across tabs and refreshes after reconnect', () => {
+    vi.useFakeTimers();
+    try {
+      mountedComponent = mount(App, { target: document.body });
+      flushSync();
+
+      expect(document.querySelector('.server-availability-notice')).toBeNull();
+      const initialConnectionHandlers =
+        subscribeServerEventsMock.mock.calls[0][0];
+      initialConnectionHandlers.onClose();
+      flushSync();
+
+      expect(
+        document.querySelector('.app-shell')?.dataset.serverUnavailable,
+      ).toBe('true');
+      expect(document.querySelector('.app-shell__content')?.inert).toBe(true);
+
+      vi.advanceTimersByTime(999);
+      flushSync();
+      expect(document.querySelector('.server-availability-notice')).toBeNull();
+
+      vi.advanceTimersByTime(1);
+      flushSync();
+      const offlineNotice = document.querySelector(
+        '.server-availability-notice',
+      );
+      expect(offlineNotice).toBeTruthy();
+      expect(offlineNotice.getAttribute('role')).toBe('alert');
+      expect(offlineNotice.textContent).toContain('Server is not reachable');
+
+      const agentsNavigation = [
+        ...document.querySelectorAll('.app-shell__nav-item'),
+      ].find((item) => item.textContent.includes('Agents'));
+      agentsNavigation.click();
+      flushSync();
+      expect(agentsNavigation.getAttribute('aria-current')).toBe('page');
+      expect(document.querySelector('.server-availability-notice')).toBe(
+        offlineNotice,
+      );
+
+      const connectionCountBeforeRetry =
+        subscribeServerEventsMock.mock.calls.length;
+      const retryButton = [...offlineNotice.querySelectorAll('button')].find(
+        (button) => button.textContent.includes('Retry now'),
+      );
+      retryButton.click();
+      flushSync();
+      expect(subscribeServerEventsMock).toHaveBeenCalledTimes(
+        connectionCountBeforeRetry + 1,
+      );
+
+      const agentLoadsBeforeRecovery = rpcMock.mock.calls.filter(
+        ([method]) => method === 'agent.list',
+      ).length;
+      const recoveredConnectionHandlers =
+        subscribeServerEventsMock.mock.calls.at(-1)[0];
+      recoveredConnectionHandlers.onOpen();
+      flushSync();
+
+      const restoredNotice = document.querySelector(
+        '.server-availability-notice--restored',
+      );
+      expect(restoredNotice).toBeTruthy();
+      expect(restoredNotice.textContent).toContain('Server is reachable again');
+      expect(
+        document.querySelector('.app-shell__content')?.inert,
+      ).toBeUndefined();
+      expect(
+        rpcMock.mock.calls.filter(([method]) => method === 'agent.list').length,
+      ).toBeGreaterThan(agentLoadsBeforeRecovery);
+
+      vi.advanceTimersByTime(1400);
+      flushSync();
+      expect(document.querySelector('.server-availability-notice')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('processes rapid run WebSocket events without dropping the assistant output', async () => {
     const agents = [
       {

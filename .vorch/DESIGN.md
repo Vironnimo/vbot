@@ -414,6 +414,12 @@ If we use inline SVGs without explicit `width` and `height`, they can suddenly r
 
 **The rule: metadata tags (kind markers, origins, versions, scopes) use `Badge`; statuses use `StatusChip`.** A `use:tooltip` hint goes on a wrapping `<span class="tooltip-anchor" use:tooltip={…}>` at the call site, since Svelte actions cannot be applied to a component.
 
+### Server availability popup
+
+Server unavailability is represented once, globally, by the fixed non-modal popup owned by AppShell — never by repeating the same transport error inside each mounted view. It is horizontally centered at `24vh` (`18vh` on phone widths), 520px wide at most, uses `surface-3` with a red 1px outline plus 4px left edge, `lg` radius, the strong dropdown elevation, and the dedicated `--z-notice` layer between modals/toasts and portaled floating controls. A pulsing red status dot, Mono-caps connection label, clear heading, short automatic-retry message, optional Details disclosure, and a shared secondary Retry button provide the hierarchy; reduced-motion users get no entrance or pulse animation.
+
+The popup has no backdrop and never blocks the main navigation, so the user can move between Chat, Agents, Projects, and the other views while it remains in exactly the same viewport position. The active content stays visible and scrollable but is inert while disconnected; dependent inline errors and error toasts are suppressed because they are symptoms of the same outage. After recovery the popup switches to green long enough to confirm that the active view refreshed, then disappears. A one-second grace period prevents ordinary short reconnects from flashing the popup.
+
 ### Inline banners
 
 **Every persistent in-flow feedback box is the shared `Banner` component (`webui/src/components/ui/Banner.svelte`).** Use it for loading feedback, form or RPC errors, warnings, and non-blocking notices that belong inside a view; a known absence of content uses `EmptyState`, and transient app-wide feedback belongs in `ToastStack`. Callers pass `variant` (`neutral` / `info` / `success` / `warn` / `error`), already-translated `children`, and accessibility attributes such as `role="alert"` or `aria-live` when the state changes dynamically. The component owns the canonical `banner banner--<variant>` classes and the guard rejects both raw primitive classes and the retired view-specific feedback classes.
