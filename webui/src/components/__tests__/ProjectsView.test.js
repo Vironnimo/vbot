@@ -99,7 +99,7 @@ describe('ProjectsView', () => {
     vi.restoreAllMocks();
   });
 
-  it('shows the master-detail empty prompt until a project is selected', async () => {
+  it('automatically opens the first project when no selection is remembered', async () => {
     listProjectsMock.mockResolvedValue({
       projects: [project({ project_id: 'demo', display_name: 'Demo' })],
     });
@@ -108,19 +108,11 @@ describe('ProjectsView', () => {
     flushSync();
 
     await waitForCondition(() =>
-      document.querySelector('[data-testid="project-toggle-demo"]'),
+      document.querySelector('[data-testid="project-panel-demo"]'),
     );
-    // The list renders but the detail pane starts on its empty prompt.
-    expect(document.body.textContent).toContain('Select a project to view');
     expect(
       document.querySelector('[data-testid="project-panel-demo"]'),
-    ).toBeFalsy();
-
-    // Selecting the list row opens the detail pane with the ordered sections.
-    await selectDemo();
-    await waitForCondition(() =>
-      document.querySelector('[data-testid="project-panel-demo"]'),
-    );
+    ).toBeTruthy();
     expectSectionOrder([
       'Project settings',
       'Auto-load files',
@@ -128,6 +120,40 @@ describe('ProjectsView', () => {
       'Tools',
       'Skills',
     ]);
+  });
+
+  it('opens the remembered project and reports later list selections', async () => {
+    const onProjectSelected = vi.fn();
+    listProjectsMock.mockResolvedValue({
+      projects: [
+        project({ project_id: 'alpha', display_name: 'Alpha' }),
+        project({ project_id: 'beta', display_name: 'Beta' }),
+      ],
+    });
+    showProjectMock.mockImplementation((projectId) =>
+      Promise.resolve({
+        project: project({ project_id: projectId }),
+        scan: { team: [], report: { clean: true, findings: [] } },
+      }),
+    );
+
+    mountedComponent = mount(ProjectsView, {
+      target: document.body,
+      props: { selectedProjectId: 'beta', onProjectSelected },
+    });
+    flushSync();
+
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-panel-beta"]'),
+    );
+    expect(onProjectSelected).toHaveBeenLastCalledWith('beta');
+
+    document.querySelector('[data-testid="project-toggle-alpha"]').click();
+    flushSync();
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-panel-alpha"]'),
+    );
+    expect(onProjectSelected).toHaveBeenLastCalledWith('alpha');
   });
 
   it('adds a project from the modal and reviews its team and report', async () => {
@@ -525,7 +551,6 @@ describe('ProjectsView', () => {
     mountedComponent = mount(ProjectsView, { target: document.body });
     flushSync();
 
-    await selectDemo();
     await waitForCondition(() => showProjectMock.mock.calls.length === 1);
     await waitForCondition(
       () => !buttonByTestId('project-team-refresh').disabled,
@@ -549,7 +574,6 @@ describe('ProjectsView', () => {
     mountedComponent = mount(ProjectsView, { target: document.body });
     flushSync();
 
-    await selectDemo();
     await waitForCondition(() => showProjectMock.mock.calls.length === 1);
     await waitForCondition(
       () => !buttonByTestId('project-skills-refresh').disabled,
