@@ -117,6 +117,8 @@
   const noop = () => {};
 
   let {
+    selectedProjectId: preferredProjectId = '',
+    onProjectSelected = noop,
     onToast = noop,
     onNavigateToSettingsPanel = noop,
     modelsRefreshToken = 0,
@@ -349,6 +351,7 @@
   );
 
   onMount(() => {
+    selectedProjectId = preferredProjectId;
     void loadCatalogs();
     void loadGlobalDefaults();
     void loadProjects();
@@ -585,6 +588,15 @@
         return;
       }
       projects = normalizeProjects(result?.projects);
+      const preferredProject = projects.find(
+        (project) => project.project_id === selectedProjectId,
+      );
+      const projectToOpen = preferredProject ?? projects[0] ?? null;
+      if (projectToOpen) {
+        selectProject(projectToOpen.project_id);
+      } else {
+        clearSelectedProject();
+      }
     } catch (error) {
       if (destroyed || requestId !== listRequestId) {
         return;
@@ -717,6 +729,7 @@
     const project =
       projects.find((item) => item.project_id === projectId) ?? null;
     selectedProjectId = projectId;
+    onProjectSelected(projectId);
     editForm = createEditForm(project);
     autoLoadDraft = '';
     editError = '';
@@ -733,6 +746,20 @@
     }
 
     void loadScan(projectId);
+  }
+
+  function clearSelectedProject() {
+    selectedProjectId = '';
+    onProjectSelected('');
+    editForm = createEditForm();
+    autoLoadDraft = '';
+    editError = '';
+    activeTeam = [];
+    activeReport = null;
+    activeScanSkills = { project: [], bundled: [], global: [] };
+    expandedMembers = {};
+    overrideDrafts = {};
+    overrideBusyKey = '';
   }
 
   function applyScan(scan) {

@@ -120,6 +120,7 @@
   const SELECTED_AGENT_KEY = 'vbot.selectedAgentId';
   const SELECTED_PROJECT_KEY = 'vbot.selectedProjectId';
   const SELECTED_PROJECT_AGENT_KEY = 'vbot.selectedProjectAgentId';
+  const MANAGED_PROJECT_KEY = 'vbot.managedProjectId';
   // Accessor-local UI state only: whether the user set the first-run wizard
   // aside this browser. The real trigger stays the live operational state — a
   // credential removal clears this flag and brings the wizard back on its own.
@@ -154,6 +155,17 @@
         return '';
       }
       return localStorage.getItem(SELECTED_PROJECT_KEY) || '';
+    } catch {
+      return '';
+    }
+  };
+
+  const readStoredManagedProjectId = () => {
+    try {
+      if (typeof localStorage === 'undefined') {
+        return '';
+      }
+      return localStorage.getItem(MANAGED_PROJECT_KEY) || '';
     } catch {
       return '';
     }
@@ -220,10 +232,18 @@
   let debugEnabled = $state(false);
   let agents = $state([]);
   let selectedAgentId = $state(readStoredSelectedAgentId());
+  const initialSelectedProjectId = readStoredSelectedProjectId();
   // Project context for the two-bar chat. `projects` feeds the chat dropdown;
   // `selectedProjectId` is the chosen project (empty = Personal/identity path).
   let projects = $state([]);
-  let selectedProjectId = $state(readStoredSelectedProjectId());
+  let selectedProjectId = $state(initialSelectedProjectId);
+  // Projects-tab selection is remembered independently so browsing project
+  // settings does not silently change the Chat context. A selected Chat
+  // project seeds and updates this mirror; otherwise the Projects view keeps
+  // the user's last management selection.
+  let managedProjectId = $state(
+    initialSelectedProjectId || readStoredManagedProjectId(),
+  );
   // The remembered active agent inside the selected project (tri-state: null =
   // nothing remembered, '' = identity agent active alongside the project, or a
   // bare team-member id). Persisted like the selected agent/project; ChatView
@@ -288,6 +308,18 @@
         localStorage.setItem(SELECTED_AGENT_KEY, selectedAgentId);
       } else {
         localStorage.removeItem(SELECTED_AGENT_KEY);
+      }
+    } catch {
+      // localStorage unavailable (private browsing, storage quota)
+    }
+  });
+
+  $effect(() => {
+    try {
+      if (managedProjectId) {
+        localStorage.setItem(MANAGED_PROJECT_KEY, managedProjectId);
+      } else {
+        localStorage.removeItem(MANAGED_PROJECT_KEY);
       }
     } catch {
       // localStorage unavailable (private browsing, storage quota)
@@ -416,6 +448,13 @@
   // mirror stays current.
   const selectProject = (projectId) => {
     selectedProjectId = typeof projectId === 'string' ? projectId : '';
+    if (selectedProjectId) {
+      managedProjectId = selectedProjectId;
+    }
+  };
+
+  const selectManagedProject = (projectId) => {
+    managedProjectId = typeof projectId === 'string' ? projectId : '';
   };
 
   // ChatView reports the active project agent (a team-member id, or '' for an
@@ -443,6 +482,12 @@
       ) {
         selectedProjectId = '';
         selectedProjectAgentId = null;
+      }
+      if (
+        managedProjectId &&
+        !projects.some((project) => project.project_id === managedProjectId)
+      ) {
+        managedProjectId = '';
       }
     } catch {
       // Projects RPC unavailable — keep the chat in the identity-only path.
@@ -1004,6 +1049,8 @@
     />
   {:else if activeViewId === 'projects'}
     <ProjectsView
+      selectedProjectId={managedProjectId}
+      onProjectSelected={selectManagedProject}
       onToast={showToast}
       onNavigateToSettingsPanel={navigateToSettingsPanel}
       {modelsRefreshToken}
