@@ -297,7 +297,13 @@ async def test_rooted_agent_own_project_not_reinjected_as_reminder(tmp_path: Pat
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
-    agent = StubAgent(id="coder", model=MODEL, allowed_tools=["read"], workspace=repo)
+    agent = StubAgent(
+        id="coder",
+        model=MODEL,
+        allowed_tools=["read"],
+        workspace=repo,
+        root_project_id="vbot",
+    )
     adapter = StubAdapter(
         [_read_call(str(repo / "AGENTS.md")), {"content": "Done", "tool_calls": None}]
     )

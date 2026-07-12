@@ -98,6 +98,7 @@ AGENT_FIELDS = frozenset(
         "memory_prompt_mode",
         "model",
         "name",
+        "root_project_id",
         "temperature",
         "thinking_effort",
         "updated_at",
@@ -427,6 +428,12 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
     _validate_string(diagnostics, "$.model", data.get("model"), required=True)
     _validate_string(diagnostics, "$.fallback_model", data.get("fallback_model"), required=True)
     _validate_optional_path_string(diagnostics, "$.workspace", data.get("workspace"))
+    _validate_non_empty_string(
+        diagnostics,
+        "$.root_project_id",
+        data.get("root_project_id"),
+        required=False,
+    )
     _validate_temperature_value(
         diagnostics, "$.temperature", data.get("temperature"), allow_none=True
     )

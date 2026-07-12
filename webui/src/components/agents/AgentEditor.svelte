@@ -34,6 +34,7 @@
   } from '$lib/modelSelection.js';
   import { tooltip } from '$lib/tooltip.js';
   import InfoHint from '../ui/InfoHint.svelte';
+  import Modal from '../ui/Modal.svelte';
 
   const EMPTY_VALUE = '—';
   const AUTO_SAVE_DEBOUNCE_MS = 800;
@@ -51,6 +52,8 @@
     availableTools = [],
     availableSkills = [],
     invalidSkills = [],
+    projectOptions = [],
+    projectCatalogError = '',
     loadError = '',
     onAgentUpdated = () => {},
     onAgentCreated = async () => {},
@@ -80,9 +83,10 @@
   // Set only when the user switches the toggle off and the agent's scope reports
   // has_customizations; the toggle is reverted first and re-applied on confirm.
   let disableCustomPromptConfirmOpen = $state(false);
+  let workspaceDecisionOpen = $state(false);
 
   let canDeleteSelectedAgent = $derived(Boolean(agent) && agentsCount > 1);
-  // The agent points at a custom (e.g. repo-rooted) workspace rather than its
+  // The agent points at a custom identity/Memory home rather than its
   // default home under the agent folder — gates the "set to default" action.
   let workspaceIsCustom = $derived(
     formMode === AGENT_FORM_MODE_EDIT &&
@@ -211,6 +215,7 @@
       label: memoryPromptLabel(option),
     })),
   );
+  let projectDropdownOptions = $derived(buildProjectDropdownOptions());
 
   $effect(() => {
     if (loadError) {
@@ -247,7 +252,7 @@
       clearAgentAutoSaveTimer();
     }
 
-    if (isSaving || isDeleting) {
+    if (isSaving || isDeleting || workspaceDecisionOpen) {
       return;
     }
 
@@ -280,6 +285,25 @@
         showAgentToast(t('common.alreadySaved', 'Already saved'));
       }
       return;
+    }
+
+    if (
+      source === 'manual' &&
+      formMode === AGENT_FORM_MODE_EDIT &&
+      Object.hasOwn(result.payload, 'workspace') &&
+      options.workspaceCopyChoice === undefined
+    ) {
+      workspaceDecisionOpen = true;
+      return;
+    }
+
+    if (
+      Object.hasOwn(result.payload, 'workspace') &&
+      options.workspaceCopyChoice !== undefined
+    ) {
+      result.payload.copy_workspace_identity_files = Boolean(
+        options.workspaceCopyChoice,
+      );
     }
 
     isSaving = true;
@@ -322,6 +346,7 @@
       formMode !== AGENT_FORM_MODE_EDIT ||
       isSaving ||
       isDeleting ||
+      workspaceDecisionOpen ||
       destroyed
     ) {
       return false;
@@ -335,6 +360,7 @@
     return (
       result.isValid &&
       !Object.hasOwn(result.payload, 'workspace') &&
+      !Object.hasOwn(result.payload, 'root_project_id') &&
       agentPayloadHasChanges(result.payload)
     );
   }
@@ -353,6 +379,38 @@
     // was rooted in — so this only changes which directory the agent uses.
     formValues.workspace = agent.default_workspace;
     await saveAgent(null, { source: 'manual' });
+  }
+
+  function chooseWorkspaceCopy(copyFiles) {
+    workspaceDecisionOpen = false;
+    void saveAgent(null, {
+      source: 'manual',
+      workspaceCopyChoice: copyFiles,
+    });
+  }
+
+  function cancelWorkspaceDecision() {
+    workspaceDecisionOpen = false;
+  }
+
+  function buildProjectDropdownOptions() {
+    const options = [
+      {
+        value: '',
+        label: t('agents.form.noProject', 'No project'),
+      },
+      ...(Array.isArray(projectOptions) ? projectOptions : []),
+    ];
+    const selected = formValues.root_project_id;
+    if (selected && !options.some((option) => option.value === selected)) {
+      options.push({
+        value: selected,
+        label: t('agents.form.unavailableProject', 'Unavailable project'),
+        secondaryLabel: selected,
+        disabled: true,
+      });
+    }
+    return options;
   }
 
   function clearAgentAutoSaveTimer() {
@@ -912,6 +970,35 @@
             {/if}
           {/snippet}
         </FormField>
+
+        {#if formMode === AGENT_FORM_MODE_EDIT}
+          <FormField
+            controlId="agent-project"
+            full
+            label={t('agents.form.project', 'Project')}
+            help={projectCatalogError
+              ? t(
+                  'agents.form.projectUnavailableHelp',
+                  'The saved selection is preserved. Project editing is unavailable until the catalog reloads.',
+                )
+              : t(
+                  'agents.form.projectHelp',
+                  'Where relative file and shell work runs. Workspace remains the identity and memory home.',
+                )}
+          >
+            <Dropdown
+              id="agent-project"
+              value={formValues.root_project_id ?? ''}
+              options={projectDropdownOptions}
+              disabled={Boolean(projectCatalogError)}
+              ariaLabel={t('agents.form.project', 'Project')}
+              triggerClass="agents-view__dropdown"
+              onValueChange={(selectedValue) => {
+                formValues.root_project_id = selectedValue || null;
+              }}
+            />
+          </FormField>
+        {/if}
       </div>
     </div>
 
@@ -1341,4 +1428,31 @@
     onConfirm={confirmDisableCustomPrompt}
     onCancel={cancelDisableCustomPrompt}
   />
+{/if}
+
+{#if workspaceDecisionOpen}
+  <Modal
+    title={t('agents.workspaceMove.title', 'Change Workspace?')}
+    onClose={cancelWorkspaceDecision}
+  >
+    {#snippet body()}
+      <p>
+        {t(
+          'agents.workspaceMove.body',
+          'Choose whether to copy SOUL.md, USER.md, and MEMORY.md into the new Workspace. Source files remain in place; existing destination versions are backed up before replacement.',
+        )}
+      </p>
+    {/snippet}
+    {#snippet footer()}
+      <Button variant="secondary" onClick={cancelWorkspaceDecision}>
+        {t('common.cancel', 'Cancel')}
+      </Button>
+      <Button variant="secondary" onClick={() => chooseWorkspaceCopy(false)}>
+        {t('agents.workspaceMove.dontCopy', "Don't copy")}
+      </Button>
+      <Button variant="primary" onClick={() => chooseWorkspaceCopy(true)}>
+        {t('agents.workspaceMove.copy', 'Copy files')}
+      </Button>
+    {/snippet}
+  </Modal>
 {/if}

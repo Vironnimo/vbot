@@ -100,6 +100,13 @@ def _update_agent(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "id")
     try:
         changes = _agent_changes(params, blocked={"id"}, for_create=False)
+        copy_workspace_identity_files = changes.pop("copy_workspace_identity_files", False)
+        root_project_id = changes.get("root_project_id")
+        if root_project_id is not None and not state.runtime.projects.exists(root_project_id):
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                f"unknown Project: {root_project_id}",
+            )
         _ensure_agent_model_connections(state, changes)
         previous_agent = state.runtime.agents.get(agent_id)
         if (
@@ -107,10 +114,20 @@ def _update_agent(state: Any, params: JsonObject) -> JsonObject:
             and not previous_agent.custom_system_prompt_enabled
         ):
             _seed_agent_custom_prompt(state, agent_id)
-        agent = state.runtime.agents.update(agent_id, **changes)
+        update_result = state.runtime.agents.update_with_metadata(
+            agent_id,
+            copy_workspace_identity_files=copy_workspace_identity_files,
+            **changes,
+        )
+        agent = update_result.agent
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     response = _agent_response(state, agent)
+    response["workspace_relocation"] = {
+        "copied_files": list(update_result.copied_files),
+        "backed_up_files": list(update_result.backed_up_files),
+        "backup_created": update_result.backup_dir is not None,
+    }
     publish_resource_changed(state, RESOURCE_KIND_AGENTS)
     return response
 
@@ -523,6 +540,8 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
     if not for_create:
         public_fields.add("current_session_id")
         public_fields.add("workspace")
+        public_fields.add("root_project_id")
+        public_fields.add("copy_workspace_identity_files")
 
     rejected_fields = sorted(set(params) - public_fields - blocked)
     if rejected_fields:
@@ -551,6 +570,22 @@ def _validate_agent_field(key: str, value: Any) -> Any:
     if key in {"name", "current_session_id", "workspace"}:
         if not isinstance(value, str) or not value:
             raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a non-empty string")
+        return value
+    if key == "root_project_id":
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value.strip():
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                "params.root_project_id must be null or a non-empty string",
+            )
+        return value
+    if key == "copy_workspace_identity_files":
+        if not isinstance(value, bool):
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                "params.copy_workspace_identity_files must be a boolean",
+            )
         return value
     if key in {"model", "fallback_model"}:
         if not isinstance(value, str):

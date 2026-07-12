@@ -1087,41 +1087,27 @@ def test_scan_reports_connection_bound_model_as_bad_model_finding(
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class _AgentWithWorkspace:
-    """Minimal agent shape ``resolve_prompt_project`` reads (it only needs workspace)."""
-
-    workspace: str
-
-
-def _ws_agent(workspace: str) -> Any:
-    # Typed ``Any``: ``resolve_prompt_project`` takes a ``RuntimeAgent``, and this
-    # stub only needs to expose ``workspace`` for the rooting lookup.
-    return _AgentWithWorkspace(workspace=workspace)
-
-
 def test_resolve_prompt_project_uses_explicit_project(tmp_path: Path) -> None:
     store = ProjectStore(tmp_path / "data")
     repo = tmp_path / "repo"
     repo.mkdir()
     store.create("vbot", "vBot", repo)
     # A config agent has an empty workspace; the explicit project_id is what counts.
-    resolved = resolve_prompt_project(store, "vbot", _ws_agent(""))
+    resolved = resolve_prompt_project(store, "vbot")
 
     assert resolved is not None
     assert resolved.project_id == "vbot"
 
 
-def test_resolve_prompt_project_roots_identity_agent_by_workspace(tmp_path: Path) -> None:
-    # Identity session (project_id None) + workspace == a registered repo → rooted.
+def test_resolve_prompt_project_does_not_infer_from_workspace(tmp_path: Path) -> None:
+    # Workspace equality no longer selects a Project.
     store = ProjectStore(tmp_path / "data")
     repo = tmp_path / "repo"
     repo.mkdir()
     store.create("vbot", "vBot", repo)
-    resolved = resolve_prompt_project(store, None, _ws_agent(str(repo)))
+    resolved = resolve_prompt_project(store, None)
 
-    assert resolved is not None
-    assert resolved.project_id == "vbot"
+    assert resolved is None
 
 
 def test_resolve_prompt_project_none_when_workspace_not_a_repo(tmp_path: Path) -> None:
@@ -1132,18 +1118,16 @@ def test_resolve_prompt_project_none_when_workspace_not_a_repo(tmp_path: Path) -
     home = tmp_path / "workspace-coder"
     home.mkdir()
 
-    assert resolve_prompt_project(store, None, _ws_agent(str(home))) is None
+    assert resolve_prompt_project(store, None) is None
 
 
-def test_resolve_prompt_project_none_for_empty_workspace(tmp_path: Path) -> None:
-    # An identity agent at its data-dir home with no project match (or a config
-    # agent's empty workspace) is never rooted.
+def test_resolve_prompt_project_none_without_explicit_scope(tmp_path: Path) -> None:
     store = ProjectStore(tmp_path / "data")
     repo = tmp_path / "repo"
     repo.mkdir()
     store.create("vbot", "vBot", repo)
 
-    assert resolve_prompt_project(store, None, _ws_agent("")) is None
+    assert resolve_prompt_project(store, None) is None
 
 
 # ---------------------------------------------------------------------------

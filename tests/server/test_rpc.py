@@ -87,6 +87,7 @@ class StubAgent:
     model: str = "openai/gpt-5.2"
     fallback_model: str = ""
     workspace: str = "C:/workspace"
+    root_project_id: str | None = None
     temperature: float | None = 0.1
     thinking_effort: str | None = ""
     memory_prompt_mode: str = DEFAULT_MEMORY_PROMPT_MODE
@@ -180,6 +181,21 @@ class StubAgents:
         self._agents[agent_id] = updated
         return self.get(agent_id)
 
+    def update_with_metadata(
+        self,
+        agent_id: str,
+        *,
+        copy_workspace_identity_files: bool = False,
+        **changes: Any,
+    ) -> Any:
+        del copy_workspace_identity_files
+        return SimpleNamespace(
+            agent=self.update(agent_id, **changes),
+            copied_files=(),
+            backed_up_files=(),
+            backup_dir=None,
+        )
+
     def delete(self, agent_id: str) -> Path:
         self._get_raw(agent_id)
         del self._agents[agent_id]
@@ -209,6 +225,9 @@ class StubProjects:
             return self._projects[project_id]
         except KeyError as error:
             raise ProjectNotFoundError(f"project not found: {project_id}") from error
+
+    def exists(self, project_id: str) -> bool:
+        return project_id in self._projects
 
     def find_by_cwd(self, cwd: object) -> StubProject | None:
         # Mirror the real store: match on the cwd-identity key so the rooted-agent
@@ -6554,10 +6573,11 @@ async def test_prompt_preview_rejects_missing_agent_id(tmp_path: Path) -> None:
     assert response["error"]["code"] == "invalid_request"
 
 
-def _register_project_agent(state: SimpleNamespace) -> None:
+def _register_project_agent(state: SimpleNamespace, repo: Path) -> None:
     """Wire one project agent + its project anchor into the stub runtime."""
+    repo.mkdir()
     state.runtime.projects.add(
-        StubProject(project_id="vbot", cwd="/repo/vbot", auto_load=("CONTEXT.md",))
+        StubProject(project_id="vbot", cwd=str(repo), auto_load=("CONTEXT.md",))
     )
     state.runtime.agent_resolver.register_project_agent(
         "vbot",
@@ -6569,7 +6589,7 @@ def _register_project_agent(state: SimpleNamespace) -> None:
             allowed_tools=["*"],
             allowed_skills=["*"],
             body="Imported builder body",
-            source_path=Path("/repo/vbot/.opencode/agents/builder.md"),
+            source_path=repo / ".opencode" / "agents" / "builder.md",
             source_format="opencode",
         ),
     )
@@ -6580,7 +6600,7 @@ async def test_prompt_preview_project_agent_renders_body_and_project_context(
     tmp_path: Path,
 ) -> None:
     state = make_state(tmp_path, StubAdapter())
-    _register_project_agent(state)
+    _register_project_agent(state, tmp_path / "repo")
 
     response = await dispatch_rpc(
         state,
@@ -6616,13 +6636,15 @@ async def test_prompt_preview_identity_agent_carries_no_project_context(
 async def test_prompt_preview_rooted_identity_agent_renders_project_context(
     tmp_path: Path,
 ) -> None:
-    # A rooted identity agent: its workspace IS a registered project's repo. A bare
-    # preview then carries that project's context, matching what its real run sends.
+    # An explicit Rooted Identity Agent carries its selected Project context.
     state = make_state(tmp_path, StubAdapter())
-    coder_workspace = state.runtime.agents.get("coder").workspace
+    coder_workspace = tmp_path / "coder-workspace"
+    coder_workspace.mkdir()
+    state.runtime.agents.update("coder", workspace=str(coder_workspace))
     state.runtime.projects.add(
-        StubProject(project_id="vbot", cwd=coder_workspace, auto_load=("AGENTS.md",))
+        StubProject(project_id="vbot", cwd=str(coder_workspace), auto_load=("AGENTS.md",))
     )
+    state.runtime.agents.update("coder", root_project_id="vbot")
 
     response = await dispatch_rpc(
         state,
@@ -6636,7 +6658,7 @@ async def test_prompt_preview_rooted_identity_agent_renders_project_context(
 @pytest.mark.asyncio
 async def test_prompt_preview_rejects_unknown_project_agent(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
-    _register_project_agent(state)
+    _register_project_agent(state, tmp_path / "repo")
 
     response = await dispatch_rpc(
         state,

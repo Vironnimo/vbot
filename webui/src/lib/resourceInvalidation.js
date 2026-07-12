@@ -18,6 +18,7 @@ export const RESOURCE_TOKEN_SESSIONS = 'sessions';
 export const RESOURCE_TOKEN_CLIENTS = 'clients';
 export const RESOURCE_TOKEN_CHANNELS = 'channels';
 export const RESOURCE_TOKEN_DEBUG_TRACES = 'debug_traces';
+export const RESOURCE_TOKEN_PROJECTS = 'projects';
 
 // Which token group(s) each resource kind invalidates. Both a model-catalog
 // refresh ("models") and a provider/credential change ("providers") alter which
@@ -33,6 +34,7 @@ const KIND_TOKEN_GROUPS = {
   clients: [RESOURCE_TOKEN_CLIENTS],
   channels: [RESOURCE_TOKEN_CHANNELS],
   debug_traces: [RESOURCE_TOKEN_DEBUG_TRACES],
+  projects: [RESOURCE_TOKEN_PROJECTS],
 };
 
 // Return the refresh-token group(s) a resource kind invalidates (empty for an

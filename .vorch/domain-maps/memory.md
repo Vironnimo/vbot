@@ -50,6 +50,7 @@ Pinned memory contributes to the System Prompt as the declared **`memory:guidanc
 ## Storage Contract
 
 - `USER.md` and `MEMORY.md` live in the Agent workspace.
+- Rooting never changes this storage boundary: Memory always reads and writes Workspace even when relative file/shell Tools use a selected Project repository.
 - The file holds **only the entries**: one per line as a bare `- ` bullet, no preamble and no section heading. Anything else (freeform prose, a hand-written heading) is not an entry — it is ignored on read and dropped on the next write. The memory tool fully owns the file's content.
 - A missing file is created on first write; the last `remove` leaves the file present but empty (which reads back as no entries). This first-write creation is the **only** way these files come into being — nothing seeds them ahead of time.
 - `read_prompt_files(workspace, mode)` renders each selected scope under its heading label (`# Agent Memory` / `# User Profile`) followed by its `- ` bullet entries, joined with a blank line; `agent_user` orders the agent scope before the user scope. A scope with no entries (a missing or emptied file) renders the empty-scope placeholder `No entries yet.` (never omitted, never created); only `off` (no scope selected) returns `""`. This is **only** the entries — the `<memory>` wrapper and the guidance live in the `memory:guidance` block declaration (see Prompt Block), and the marker that injects these entries is `{generated:memory_files}`.

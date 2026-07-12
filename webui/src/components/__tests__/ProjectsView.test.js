@@ -1237,6 +1237,7 @@ describe('ProjectsView', () => {
     confirmDialog('Remove');
 
     await waitForCondition(() => removeProjectMock.mock.calls.length === 1);
+    expect(removeProjectMock).toHaveBeenCalledWith('demo', false);
     await waitForCondition(() =>
       document.body.textContent.includes('active or queued run'),
     );
@@ -1266,10 +1267,39 @@ describe('ProjectsView', () => {
     confirmDialog('Remove');
 
     await waitForCondition(() => removeProjectMock.mock.calls.length === 1);
+    expect(removeProjectMock).toHaveBeenCalledWith('demo', false);
     await waitForCondition(() =>
       document.body.textContent.includes('cron job'),
     );
     expect(document.body.textContent).toContain('cron job');
+  });
+
+  it('sends one aggregate identity-file copy choice when removing a project', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [project({ project_id: 'demo', display_name: 'Demo' })],
+    });
+    removeProjectMock.mockResolvedValue({
+      project_id: 'demo',
+      archived: true,
+      affected_agent_ids: ['alpha', 'beta'],
+    });
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+    await selectDemo();
+    buttonByTestId('project-remove-demo').click();
+    flushSync();
+
+    toggleByAriaLabel(
+      'Copy SOUL.md, USER.md, and MEMORY.md to affected Default Workspaces',
+    ).click();
+    flushSync();
+    confirmDialog('Remove');
+
+    await waitForCondition(() => removeProjectMock.mock.calls.length === 1);
+    expect(removeProjectMock).toHaveBeenCalledWith('demo', true);
+    await waitForCondition(() =>
+      document.body.textContent.includes('2 Agents were reset'),
+    );
   });
 
   it('reloads the model catalog when modelsRefreshToken changes', async () => {

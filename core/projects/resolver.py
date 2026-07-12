@@ -52,6 +52,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from core.memory import MemoryPromptMode
+from core.projects.projects import ProjectError
 from core.projects.scan_report import FindingType, ScanFinding
 from core.projects.scanners.base import (
     DetectorRegistration,
@@ -128,6 +129,9 @@ class RuntimeAgent(Protocol):
     def fallback_model(self) -> str: ...
     @property
     def workspace(self) -> str: ...
+
+    @property
+    def root_project_id(self) -> str | None: ...
     @property
     def temperature(self) -> float | None: ...
     @property
@@ -178,6 +182,7 @@ class ConfigAgent:
     thinking_effort: str | None = None
     fallback_model: str = _CONFIG_AGENT_FALLBACK_MODEL
     workspace: str = _CONFIG_AGENT_WORKSPACE
+    root_project_id: str | None = None
     memory_prompt_mode: MemoryPromptMode = _CONFIG_AGENT_MEMORY_MODE
     custom_system_prompt_enabled: bool = _CONFIG_AGENT_CUSTOM_PROMPT_ENABLED
     current_session_id: str = ""
@@ -757,31 +762,38 @@ def runtime_agent_body(agent: RuntimeAgent) -> str:
     return agent.body if isinstance(agent, ConfigAgent) else ""
 
 
+def resolve_working_project_id(project_id: str | None, agent: RuntimeAgent) -> str | None:
+    """Return the Project captured for work admission.
+
+    Project Config-Agent work uses its Session/address Project. Identity work uses
+    only the Agent's explicit saved selection; Workspace equality has no meaning.
+    """
+    if project_id is not None:
+        return project_id
+    return getattr(agent, "root_project_id", None)
+
+
 def resolve_prompt_project(
-    projects: ProjectStore, project_id: str | None, agent: RuntimeAgent
+    projects: ProjectStore, working_project_id: str | None
 ) -> Project | None:
     """Return the project whose auto-load files belong in this run's system prompt.
 
     The one rooting policy shared by the chat loop and the prompt-preview RPC, so
     the preview can never drift from what a run actually sends:
 
-    - ``project_id`` set → that project (a project-born session / config agent).
-    - ``project_id is None`` → the project the *identity* agent is **rooted** in:
-      its ``workspace`` IS a registered project's repo cwd (the rooted identity
-      agent). An agent at its data-dir home — or any workspace not matching a
-      registered repo — yields ``None``, so ``{project_files}`` collapses and the
-      prompt is byte-identical to an ordinary identity run.
+    - ``working_project_id`` set → that explicitly selected Project.
+    - ``working_project_id is None`` → no Project context.
 
     Kept beside :func:`runtime_agent_body` for the same reason: the chat loop and
-    the RPC call it on the agent they already resolved, so prompt assembly stays
-    on its Protocols and never learns the rooting rule itself.
+    the RPC call it with the already-resolved working scope, so prompt assembly
+    never learns Rooting or Session-addressing policy itself.
     """
-    if project_id is not None:
-        return projects.get(project_id)
-    workspace = getattr(agent, "workspace", "") or ""
-    if not workspace:
-        return None
-    return projects.find_by_cwd(workspace)
+    if working_project_id is not None:
+        project = projects.get(working_project_id)
+        if not Path(project.cwd).is_dir():
+            raise ProjectError(f"Project repository is unavailable: {project.cwd}")
+        return project
+    return None
 
 
 def resolve_skill_scope(

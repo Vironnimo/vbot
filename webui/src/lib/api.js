@@ -539,14 +539,35 @@ export function clearOverride(projectId, agentId, field, options = {}) {
   );
 }
 
-export function removeProject(projectId, options = {}) {
+export function removeProject(
+  projectId,
+  copyRootedAgentIdentityFiles = false,
+  options = {},
+) {
   requireNonEmptyString(
     projectId,
     'Project id must be a non-empty string',
     'project.rm',
   );
 
-  return rpc('project.rm', { project_id: projectId }, options);
+  const requestOptions =
+    copyRootedAgentIdentityFiles &&
+    typeof copyRootedAgentIdentityFiles === 'object'
+      ? copyRootedAgentIdentityFiles
+      : options;
+  const copyFiles =
+    typeof copyRootedAgentIdentityFiles === 'boolean'
+      ? copyRootedAgentIdentityFiles
+      : false;
+
+  return rpc(
+    'project.rm',
+    {
+      project_id: projectId,
+      copy_rooted_agent_identity_files: copyFiles,
+    },
+    requestOptions,
+  );
 }
 
 export function listSessions(agentId, options = {}) {

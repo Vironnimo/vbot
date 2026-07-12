@@ -128,6 +128,7 @@ class FakeRunManager:
         session_id: str,
         executor: Any,
         project_id: str | None = None,
+        working_project_id: str | None = None,
     ) -> Run:
         if (agent_id, session_id) in self.busy_sessions:
             raise ActiveRunError(f"session already has an active run: {session_id}")
@@ -136,6 +137,7 @@ class FakeRunManager:
             agent_id=agent_id,
             session_id=session_id,
             project_id=project_id,
+            working_project_id=working_project_id,
         )
         self.started.append(
             {
@@ -143,6 +145,7 @@ class FakeRunManager:
                 "session_id": session_id,
                 "executor": executor,
                 "project_id": project_id,
+                "working_project_id": working_project_id,
                 "run": run,
             }
         )

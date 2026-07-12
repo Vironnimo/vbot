@@ -7,7 +7,7 @@ repo (see add-projects.md → Speicherort & Datenmodell). Layout::
         project.json                 ← cwd, default agent/model, auto_load
         agents/<agent-id>/
             sessions/                ← project-scoped session ownership
-            workspace/               ← only for a rooted identity agent
+            workspace/               ← reserved legacy layout helper; not Rooting state
 
 The anchor holds **no run config** — only Sessions ownership and the local
 agent id; config comes live from the scan/repo (decision #4). This module owns
@@ -214,7 +214,7 @@ class ProjectStore:
         so a path that resolves to a registered project's repo matches it
         regardless of symlinks or path-case differences. cwd is unique across
         projects (the duplicate-cwd guard), so at most one project matches. Used to
-        detect a *rooted identity agent* whose workspace IS a project's repo; an
+        discover which registered Project owns an arbitrary repository path; an
         empty or unresolvable path yields ``None`` rather than raising.
         """
         try:
@@ -418,8 +418,8 @@ class ProjectStore:
     def workspace_dir(self, project_id: str, agent_id: str) -> Path:
         """Return the rooted-identity-agent workspace dir under the anchor.
 
-        ``projects/<project-id>/agents/<agent-id>/workspace/`` — only a rooted
-        identity agent populates this; config agents never have a workspace.
+        ``projects/<project-id>/agents/<agent-id>/workspace/``. Explicit Rooted
+        Identity Agents do not use this path; their Workspace remains Agent-owned.
         """
         return self._agent_anchor_dir(project_id, agent_id) / _WORKSPACE_DIRNAME
 

@@ -103,6 +103,7 @@
     RESOURCE_TOKEN_CLIENTS,
     RESOURCE_TOKEN_DEBUG_TRACES,
     RESOURCE_TOKEN_MODELS,
+    RESOURCE_TOKEN_PROJECTS,
     RESOURCE_TOKEN_SESSIONS,
     tokenKeysForKind,
   } from '$lib/resourceInvalidation.js';
@@ -261,6 +262,7 @@
   // Bumped by the generic `resource_changed` channel whenever model-catalog or
   // provider availability changes; model surfaces reload on each bump.
   let modelsRefreshToken = $state(0);
+  let projectsRefreshToken = $state(0);
   // Bumped by `resource_changed(kind:"sessions")`. ChatView forwards it to the
   // session drawer so a new/switched session in another window shows up in the
   // list — it deliberately does NOT switch the viewed conversation (other
@@ -858,6 +860,10 @@
       if (tokenKeys.includes(RESOURCE_TOKEN_MODELS)) {
         modelsRefreshToken += 1;
       }
+      if (tokenKeys.includes(RESOURCE_TOKEN_PROJECTS)) {
+        projectsRefreshToken += 1;
+        await loadProjects();
+      }
       if (tokenKeys.includes(RESOURCE_TOKEN_SESSIONS)) {
         sessionsRefreshToken += 1;
       }
@@ -1171,6 +1177,7 @@
         onNavigateToSettingsPanel={navigateToSettingsPanel}
         onNavigateToAgentPrompt={navigateToAgentPromptScope}
         {modelsRefreshToken}
+        {projectsRefreshToken}
       />
     {:else if activeViewId === 'projects'}
       <ProjectsView

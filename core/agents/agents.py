@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import builtins
 import json
 import os
 import shutil
+import uuid
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, replace
+from contextlib import suppress
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -39,6 +42,7 @@ DEFAULT_ALLOWED_ITEMS = ("*",)
 # to the memory system and are created lazily on the first memory write, so a
 # memory-off agent never gets them and deleting them does not resurrect them.
 WORKSPACE_TEMPLATE_FILES = ("SOUL.md",)
+WORKSPACE_IDENTITY_FILES = ("SOUL.md", "USER.md", "MEMORY.md")
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _DEFAULT_TEMPLATE_DIR = _PROJECT_ROOT / "resources" / "workspace-templates"
@@ -88,10 +92,23 @@ class Agent:
     allowed_skills: list[str]
     created_at: str
     updated_at: str
+    root_project_id: str | None = None
     current_session_id: str = ""
     custom_system_prompt_enabled: bool = DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED
     memory_prompt_mode: MemoryPromptMode = DEFAULT_MEMORY_PROMPT_MODE
     compaction_policy: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class AgentUpdateResult:
+    """An Agent update plus non-persisted Workspace relocation metadata."""
+
+    agent: Agent
+    copied_files: tuple[str, ...] = ()
+    backed_up_files: tuple[str, ...] = ()
+    backup_dir: str | None = None
+    created_files: tuple[str, ...] = field(default=(), repr=False)
+    destination: str | None = field(default=None, repr=False)
 
 
 class AgentStore:
@@ -169,6 +186,7 @@ class AgentStore:
             model=validated_model,
             fallback_model=validated_fallback_model,
             workspace=str(workspace_path.resolve()),
+            root_project_id=None,
             temperature=validated_temperature,
             thinking_effort=validated_thinking_effort,
             memory_prompt_mode=validated_memory_prompt_mode,
@@ -240,6 +258,23 @@ class AgentStore:
 
     def update(self, agent_id: str, **changes: Any) -> Agent:
         """Update mutable fields for an existing agent."""
+        return self.update_with_metadata(agent_id, **changes).agent
+
+    def update_with_metadata(
+        self,
+        agent_id: str,
+        *,
+        copy_workspace_identity_files: bool = False,
+        **changes: Any,
+    ) -> AgentUpdateResult:
+        """Update an Agent and transactionally relocate its identity files.
+
+        The copy directive is operation input, not persisted configuration. Only
+        ``SOUL.md``, ``USER.md``, and ``MEMORY.md`` can move. Sources are preserved,
+        replaced destination files are backed up under the Agent's data home, and
+        a failure restores every destination touched before leaving the config on
+        its original Workspace.
+        """
         self._validate_agent_id(agent_id)
         if "id" in changes and changes["id"] != agent_id:
             raise AgentError("Agent id is immutable")
@@ -251,7 +286,9 @@ class AgentStore:
 
         agent = self._load_raw_agent(agent_path)
         if not changes:
-            return self._apply_defaults(agent, self._agent_defaults())
+            if copy_workspace_identity_files:
+                raise AgentError("copy_workspace_identity_files requires a workspace change")
+            return AgentUpdateResult(self._apply_defaults(agent, self._agent_defaults()))
 
         allowed_fields = set(Agent.__dataclass_fields__) - {
             "id",
@@ -268,14 +305,22 @@ class AgentStore:
             "fallback_model",
             "current_session_id",
         }
-        for field in sorted(string_fields & set(changes)):
-            changes[field] = _validate_string_field(
-                field,
-                changes[field],
-                allow_empty=field in {"model", "fallback_model"},
+        for field_name in sorted(string_fields & set(changes)):
+            changes[field_name] = _validate_string_field(
+                field_name,
+                changes[field_name],
+                allow_empty=field_name in {"model", "fallback_model"},
             )
         if "workspace" in changes:
             changes["workspace"] = str(_validate_workspace(changes["workspace"]).resolve())
+            if changes["workspace"] == agent.workspace:
+                if copy_workspace_identity_files:
+                    raise AgentError("copy_workspace_identity_files requires a changed workspace")
+                changes.pop("workspace")
+        elif copy_workspace_identity_files:
+            raise AgentError("copy_workspace_identity_files requires a workspace change")
+        if "root_project_id" in changes:
+            changes["root_project_id"] = _validate_root_project_id(changes["root_project_id"])
         if "temperature" in changes:
             changes["temperature"] = _validate_temperature(changes["temperature"])
         if "thinking_effort" in changes:
@@ -304,11 +349,93 @@ class AgentStore:
         if "current_session_id" in changes:
             self._validate_current_session(agent_id, changes["current_session_id"])
 
+        if not changes:
+            return AgentUpdateResult(self._apply_defaults(agent, self._agent_defaults()))
+
         updated_agent = replace(agent, **changes, updated_at=_utc_now())
-        if "workspace" in changes:
-            self._seed_workspace(Path(updated_agent.workspace))
-        self._write_agent(updated_agent)
-        return self._apply_defaults(updated_agent, self._agent_defaults())
+        relocation = _WorkspaceRelocation()
+        try:
+            if "workspace" in changes:
+                relocation = self._relocate_workspace(
+                    agent,
+                    Path(updated_agent.workspace),
+                    copy_identity_files=copy_workspace_identity_files,
+                )
+            self._write_agent(updated_agent)
+        except Exception:
+            relocation.rollback()
+            raise
+        return AgentUpdateResult(
+            agent=self._apply_defaults(updated_agent, self._agent_defaults()),
+            copied_files=relocation.copied_files,
+            backed_up_files=relocation.backed_up_files,
+            backup_dir=str(relocation.backup_dir) if relocation.backup_dir else None,
+            created_files=relocation.created_files,
+            destination=str(relocation.destination) if relocation.destination else None,
+        )
+
+    def restore_update(self, previous_agent: Agent, result: AgentUpdateResult) -> None:
+        """Compensate a completed update during a larger coordinated operation."""
+        if result.destination is not None:
+            relocation = _WorkspaceRelocation(
+                destination=Path(result.destination),
+                copied_files=result.copied_files,
+                backed_up_files=result.backed_up_files,
+                created_files=result.created_files,
+                backup_dir=Path(result.backup_dir) if result.backup_dir else None,
+            )
+            relocation.rollback()
+        self._write_agent(previous_agent)
+
+    def agents_rooted_in(self, project_id: str) -> builtins.list[Agent]:
+        """Return Identity Agents explicitly referencing one Project."""
+        return [
+            self.get_raw(agent.id) for agent in self.list() if agent.root_project_id == project_id
+        ]
+
+    def _relocate_workspace(
+        self,
+        agent: Agent,
+        destination: Path,
+        *,
+        copy_identity_files: bool,
+    ) -> _WorkspaceRelocation:
+        source = Path(agent.workspace)
+        destination_existed = destination.exists()
+        destination.mkdir(parents=True, exist_ok=True)
+        relocation = _WorkspaceRelocation(
+            destination=destination,
+            remove_destination_dir=not destination_existed,
+        )
+        try:
+            if copy_identity_files:
+                for filename in WORKSPACE_IDENTITY_FILES:
+                    source_file = source / filename
+                    if not source_file.is_file():
+                        continue
+                    destination_file = destination / filename
+                    if destination_file.exists():
+                        backup_dir = relocation.ensure_backup_dir(self._agent_dir(agent.id))
+                        shutil.copy2(destination_file, backup_dir / filename)
+                        relocation.backed_up_files += (filename,)
+                    else:
+                        relocation.created_files += (filename,)
+                    temporary = destination / f".{filename}.{uuid.uuid4().hex}.tmp"
+                    try:
+                        shutil.copy2(source_file, temporary)
+                        os.replace(temporary, destination_file)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+                    relocation.copied_files += (filename,)
+
+            soul_path = destination / "SOUL.md"
+            if not soul_path.exists():
+                self._seed_workspace(destination)
+                relocation.created_files += ("SOUL.md",)
+            return relocation
+        except Exception:
+            relocation.rollback()
+            raise
 
     def delete(self, agent_id: str) -> Path:
         """Archive the agent directory, then remove the active copy.
@@ -381,7 +508,7 @@ class AgentStore:
         seeded to at creation and the target the WebUI "set workspace to default"
         action writes. Returned in the same ``str(Path.resolve())`` form as the
         persisted ``workspace`` field, so a caller can compare the two directly
-        to tell whether an agent uses a custom (e.g. repo-rooted) workspace.
+        to tell whether an agent uses a custom identity/Memory home.
         """
         return str(self._default_workspace(agent_id).resolve())
 
@@ -553,6 +680,14 @@ def _validate_workspace(workspace: str | Path) -> Path:
     return Path(workspace)
 
 
+def _validate_root_project_id(project_id: Any) -> str | None:
+    if project_id is None:
+        return None
+    if not isinstance(project_id, str) or not project_id.strip():
+        raise AgentError("root_project_id must be null or a non-empty string")
+    return project_id
+
+
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
@@ -571,6 +706,7 @@ def _agent_from_dict(data: dict[str, Any], *, default_workspace: str | Path | No
         model=data["model"],
         fallback_model=data["fallback_model"],
         workspace=str(_workspace_from_data(data.get("workspace"), default_workspace)),
+        root_project_id=data.get("root_project_id"),
         temperature=None if temperature is None else float(temperature),
         thinking_effort=data.get("thinking_effort"),
         memory_prompt_mode=cast(
@@ -602,3 +738,35 @@ def _workspace_from_data(workspace: Any, default_workspace: str | Path | None) -
 
 def _is_missing_workspace(workspace: Any) -> bool:
     return workspace is None or workspace == ""
+
+
+@dataclass
+class _WorkspaceRelocation:
+    destination: Path | None = None
+    remove_destination_dir: bool = False
+    copied_files: tuple[str, ...] = ()
+    backed_up_files: tuple[str, ...] = ()
+    created_files: tuple[str, ...] = ()
+    backup_dir: Path | None = None
+
+    def ensure_backup_dir(self, agent_dir: Path) -> Path:
+        if self.backup_dir is None:
+            timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
+            self.backup_dir = agent_dir / "workspace-backups" / f"{timestamp}-{uuid.uuid4().hex}"
+            self.backup_dir.mkdir(parents=True)
+        return self.backup_dir
+
+    def rollback(self) -> None:
+        if self.destination is None:
+            return
+        for filename in self.backed_up_files:
+            if self.backup_dir is not None:
+                backup = self.backup_dir / filename
+                if backup.exists():
+                    shutil.copy2(backup, self.destination / filename)
+        for filename in self.created_files:
+            if filename not in self.backed_up_files:
+                (self.destination / filename).unlink(missing_ok=True)
+        if self.remove_destination_dir and self.destination.exists():
+            with suppress(OSError):
+                self.destination.rmdir()

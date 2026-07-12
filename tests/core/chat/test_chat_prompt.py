@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 
-from core.chat import ChatLoop
+from core.chat import ChatError, ChatLoop
 from core.projects.resolver import ConfigAgent
 from core.prompts import ProjectPromptContext
 from tests.core.chat.test_chat_loop import (
@@ -200,13 +200,18 @@ async def test_visiting_with_no_project_files_adds_no_reminder(tmp_path: Path) -
 
 @pytest.mark.asyncio
 async def test_rooted_identity_agent_puts_project_files_in_system_prompt(tmp_path: Path) -> None:
-    # A rooted identity agent: its workspace IS a registered project's repo, on an
-    # identity session (no project_id). The project's auto-load files land in the
-    # system prompt — identity body stays empty (no config-agent body).
+    # A Rooted Identity Agent keeps an identity Session while its explicitly
+    # selected Project supplies the auto-load files and working repository.
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
-    agent = StubAgent(id="coder", model=MODEL, allowed_tools=["*"], workspace=repo)
+    agent = StubAgent(
+        id="coder",
+        model=MODEL,
+        allowed_tools=["*"],
+        workspace=repo,
+        root_project_id=PROJECT_ID,
+    )
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
     runtime: Any = StubRuntime(
         data_dir=tmp_path,
@@ -232,14 +237,18 @@ async def test_rooted_identity_agent_puts_project_files_in_system_prompt(tmp_pat
 
 @pytest.mark.asyncio
 async def test_rooted_identity_agent_resolves_skills_against_home_project(tmp_path: Path) -> None:
-    # A rooted identity agent runs on an identity session (project_id is None) but is
-    # homed in a registered repo. Its skill pool must be that project's, so the run
-    # resolves skills against the home project id + its own agent id, not None — the
-    # fix for the rooted-identity skill gap.
+    # A Rooted Identity Agent resolves the selected Project's skill pool while
+    # retaining its own private Agent layer.
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
-    agent = StubAgent(id="coder", model=MODEL, allowed_tools=["*"], workspace=repo)
+    agent = StubAgent(
+        id="coder",
+        model=MODEL,
+        allowed_tools=["*"],
+        workspace=repo,
+        root_project_id=PROJECT_ID,
+    )
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
     runtime: Any = StubRuntime(
         data_dir=tmp_path,
@@ -299,3 +308,85 @@ async def test_identity_agent_workspace_not_a_project_stays_unchanged(tmp_path: 
     _agent_id, agent_body, project_context = runtime.system_prompts.build_calls[-1]
     assert agent_body == ""
     assert project_context is None
+
+
+@pytest.mark.asyncio
+async def test_same_path_identity_agent_without_selection_has_no_project_context(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
+    agent = StubAgent(id="coder", model=MODEL, allowed_tools=["*"], workspace=repo)
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        projects=StubProjects(
+            {PROJECT_ID: StubProject(project_id=PROJECT_ID, cwd=str(repo), auto_load=["AGENTS.md"])}
+        ),
+    )
+    runtime.chat_sessions.create("coder", session_id="s1")
+
+    await ChatLoop(runtime).send("coder", "Hi", session_id="s1")
+
+    assert runtime.system_prompts.build_calls[-1][2] is None
+    assert "Team rules" not in _system_message(adapter)
+
+
+@pytest.mark.asyncio
+async def test_rooted_identity_missing_repository_fails_before_user_message(
+    tmp_path: Path,
+) -> None:
+    missing_repo = tmp_path / "missing-repo"
+    agent = StubAgent(
+        id="coder",
+        model=MODEL,
+        allowed_tools=["*"],
+        workspace=tmp_path / "workspace",
+        root_project_id=PROJECT_ID,
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=StubAdapter([{"content": "Hello", "tool_calls": None}]),
+        projects=StubProjects(
+            {
+                PROJECT_ID: StubProject(
+                    project_id=PROJECT_ID,
+                    cwd=str(missing_repo),
+                    auto_load=["AGENTS.md"],
+                )
+            }
+        ),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="s1")
+
+    with pytest.raises(ChatError, match="Project repository is unavailable"):
+        await ChatLoop(runtime).send("coder", "must not persist", session_id="s1")
+
+    assert session.load() == []
+
+
+@pytest.mark.asyncio
+async def test_rooted_identity_missing_project_fails_before_user_message(tmp_path: Path) -> None:
+    agent = StubAgent(
+        id="coder",
+        model=MODEL,
+        allowed_tools=["*"],
+        workspace=tmp_path / "workspace",
+        root_project_id="missing",
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=StubAdapter([{"content": "Hello", "tool_calls": None}]),
+        projects=StubProjects({}),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="s1")
+
+    with pytest.raises(KeyError, match="missing"):
+        await ChatLoop(runtime).send("coder", "must not persist", session_id="s1")
+
+    assert session.load() == []
