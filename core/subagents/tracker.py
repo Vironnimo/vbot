@@ -11,6 +11,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any
 
+from core.projects import format_agent_address
 from core.runs import RunStatus
 from core.tools.tools import JsonObject
 from core.utils.logging import get_logger
@@ -25,6 +26,7 @@ class _SubAgentEntry:
     agent_id: str
     session_id: str
     run_id: str | None
+    project_id: str | None = None
     queue_item_id: str | None = None
     complete: bool = False
     fetched: bool = False
@@ -56,11 +58,13 @@ class SubAgentBatchTracker:
         sub_agent_id: str,
         sub_session_id: str,
         sub_run_id: str,
+        project_id: str | None = None,
     ) -> None:
         """Register one spawned sub-agent run under a parent run batch."""
         batch = self._batches.setdefault(parent_key, _SubAgentBatch(entries={}))
         batch.entries[sub_run_id] = _SubAgentEntry(
             agent_id=sub_agent_id,
+            project_id=project_id,
             session_id=sub_session_id,
             run_id=sub_run_id,
         )
@@ -99,6 +103,7 @@ class SubAgentBatchTracker:
         sub_agent_id: str,
         sub_session_id: str,
         sub_run_id: str,
+        project_id: str | None = None,
     ) -> None:
         """Convert one reserved slot into a live sub-agent run entry."""
         batch = self._batches.setdefault(parent_key, _SubAgentBatch(entries={}))
@@ -106,6 +111,7 @@ class SubAgentBatchTracker:
             batch.reserved_count -= 1
         batch.entries[sub_run_id] = _SubAgentEntry(
             agent_id=sub_agent_id,
+            project_id=project_id,
             session_id=sub_session_id,
             run_id=sub_run_id,
         )
@@ -116,6 +122,7 @@ class SubAgentBatchTracker:
         sub_agent_id: str,
         sub_session_id: str,
         queue_item_id: str,
+        project_id: str | None = None,
     ) -> None:
         """Convert one reserved slot into a queued sub-agent run entry."""
         batch = self._batches.setdefault(parent_key, _SubAgentBatch(entries={}))
@@ -123,6 +130,7 @@ class SubAgentBatchTracker:
             batch.reserved_count -= 1
         batch.entries[_queue_entry_key(queue_item_id)] = _SubAgentEntry(
             agent_id=sub_agent_id,
+            project_id=project_id,
             session_id=sub_session_id,
             run_id=None,
             queue_item_id=queue_item_id,
@@ -171,13 +179,20 @@ class SubAgentBatchTracker:
         self,
         parent_key: ParentKey,
         sub_session_id: str,
+        *,
+        sub_agent_id: str | None = None,
+        project_id: str | None = None,
     ) -> _SubAgentEntry | None:
         """Return the latest queued entry for a sub-agent session, if any."""
         batch = self._batches.get(parent_key)
         if batch is None:
             return None
         for entry in reversed(list(batch.entries.values())):
-            if entry.session_id == sub_session_id and entry.run_id is None:
+            if (
+                entry.session_id == sub_session_id
+                and entry.run_id is None
+                and _entry_matches_target(entry, sub_agent_id, project_id)
+            ):
                 return entry
         return None
 
@@ -249,28 +264,51 @@ class SubAgentBatchTracker:
         parent_key: ParentKey,
         sub_session_id: str,
         sub_run_id: str | None = None,
+        *,
+        sub_agent_id: str | None = None,
+        project_id: str | None = None,
     ) -> None:
         """Mark one sub-agent result as fetched by run id within a session."""
         batch = self._batches.get(parent_key)
         if batch is None:
             return
 
-        target_run_id = sub_run_id or self.run_id_for_session(parent_key, sub_session_id)
+        target_run_id = sub_run_id or self.run_id_for_session(
+            parent_key,
+            sub_session_id,
+            sub_agent_id=sub_agent_id,
+            project_id=project_id,
+        )
         if target_run_id is None:
             return
         entry = batch.entries.get(target_run_id)
-        if entry is None or entry.session_id != sub_session_id:
+        if (
+            entry is None
+            or entry.session_id != sub_session_id
+            or not _entry_matches_target(entry, sub_agent_id, project_id)
+        ):
             return
         entry.fetched = True
         self._prune_if_finished(parent_key, batch)
 
-    def run_id_for_session(self, parent_key: ParentKey, sub_session_id: str) -> str | None:
+    def run_id_for_session(
+        self,
+        parent_key: ParentKey,
+        sub_session_id: str,
+        *,
+        sub_agent_id: str | None = None,
+        project_id: str | None = None,
+    ) -> str | None:
         """Return the registered run id for a sub-agent session in a parent batch."""
         batch = self._batches.get(parent_key)
         if batch is None:
             return None
         for entry in reversed(list(batch.entries.values())):
-            if entry.session_id == sub_session_id and entry.run_id is not None:
+            if (
+                entry.session_id == sub_session_id
+                and entry.run_id is not None
+                and _entry_matches_target(entry, sub_agent_id, project_id)
+            ):
                 return entry.run_id
         return None
 
@@ -329,7 +367,8 @@ def _batch_completion_message(entries: list[_SubAgentEntry]) -> str:
     ]
     for entry in entries:
         lines.append("")
-        lines.append(f"### {entry.agent_id} (session {entry.session_id}) — {_entry_status(entry)}")
+        address = format_agent_address(entry.agent_id, entry.project_id)
+        lines.append(f"### {address} (session {entry.session_id}) — {_entry_status(entry)}")
         lines.append(_entry_result_text(entry))
     return "\n".join(lines)
 
@@ -363,3 +402,13 @@ def _entry_result_text(entry: _SubAgentEntry) -> str:
 
 def _queue_entry_key(queue_item_id: str) -> str:
     return f"queued:{queue_item_id}"
+
+
+def _entry_matches_target(
+    entry: _SubAgentEntry,
+    sub_agent_id: str | None,
+    project_id: str | None,
+) -> bool:
+    if sub_agent_id is None:
+        return True
+    return entry.agent_id == sub_agent_id and entry.project_id == project_id

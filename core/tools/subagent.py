@@ -9,7 +9,9 @@ SUBAGENT_TOOL_NAME = "subagent"
 SUBAGENT_RESULT_TOOL_NAME = "subagent_result"
 
 SUBAGENT_TOOL_DESCRIPTION = (
-    "Spawn a sub-agent run in a persisted session. Runs in the background by "
+    "Spawn a sub-agent run in a persisted session. Target another project's "
+    "agent with agent@project; a bare agent id keeps the caller's current scope. "
+    "Runs in the background by "
     "default so you can fan out parallel work; set background:false to wait for "
     "the result. After a background spawn, end your turn instead of polling: when "
     "every sub-agent in the batch finishes, their complete final outputs are "
@@ -20,7 +22,8 @@ SUBAGENT_TOOL_DESCRIPTION = (
 )
 SUBAGENT_RESULT_TOOL_DESCRIPTION = (
     "Fetch the latest result from a spawned sub-agent session and mark it as "
-    "retrieved. You normally do not need this: completed background batches are "
+    "retrieved. For a project target, pass the same agent@project address used "
+    "to spawn it. You normally do not need this: completed background batches are "
     "delivered to you automatically. Use it only when the user explicitly asks to "
     "check a sub-agent's status or result before the batch finishes."
 )
@@ -34,7 +37,9 @@ SUBAGENT_TOOL_PARAMETERS: JsonObject = {
         },
         "agent_id": {
             "type": "string",
-            "description": "Target agent id. Defaults to the calling agent.",
+            "description": (
+                "Target agent id or qualified agent@project address. Defaults to the calling agent."
+            ),
         },
         "background": {
             "type": "boolean",
@@ -58,7 +63,9 @@ SUBAGENT_RESULT_TOOL_PARAMETERS: JsonObject = {
         "session_id": {"type": "string", "description": "Sub-agent session id."},
         "agent_id": {
             "type": "string",
-            "description": "Sub-agent id. Defaults to the calling agent.",
+            "description": (
+                "Sub-agent id or qualified agent@project address. Defaults to the calling agent."
+            ),
         },
         "run_id": {
             "type": "string",

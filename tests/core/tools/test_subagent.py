@@ -43,6 +43,7 @@ def make_context(
     tool_name: str = SUBAGENT_TOOL_NAME,
     nesting_depth: int = 0,
     emit_hook: Any | None = None,
+    project_id: str | None = None,
 ) -> ToolContext:
     return ToolContext(
         agent_id=agent_id,
@@ -56,6 +57,7 @@ def make_context(
         data_root=Path("data"),
         emit_hook=emit_hook,
         nesting_depth=nesting_depth,
+        project_id=project_id,
     )
 
 
@@ -140,7 +142,6 @@ class FakeRunManager:
         executor: Any,
         project_id: str | None = None,
     ) -> Run:
-        del project_id
         if self.start_error is not None:
             raise self.start_error
         if (agent_id, session_id) in self.busy_sessions:
@@ -149,6 +150,7 @@ class FakeRunManager:
             run_id=f"sub-run-{len(self.started) + 1}",
             agent_id=agent_id,
             session_id=session_id,
+            project_id=project_id,
         )
         self.started.append((agent_id, session_id, executor, run))
         self.runs[run.id] = run
@@ -165,7 +167,6 @@ class FakeRunManager:
         internal: bool = False,
         project_id: str | None = None,
     ) -> Any:
-        del project_id
         future: asyncio.Future[Run] = asyncio.get_running_loop().create_future()
         item = SimpleNamespace(
             future=future,
@@ -175,6 +176,7 @@ class FakeRunManager:
             run_id=f"queued-sub-run-{len(self.enqueued) + 1}",
             agent_id=agent_id,
             session_id=session_id,
+            project_id=project_id,
         )
         self.enqueued.append(
             {
@@ -183,6 +185,7 @@ class FakeRunManager:
                 "executor": executor,
                 "display_content": display_content,
                 "internal": internal,
+                "project_id": project_id,
                 "item": item,
                 "run": run,
             }
@@ -953,6 +956,67 @@ async def test_subagent_result_reports_queued_session(tmp_path: Path) -> None:
         "usage": None,
     }
     manager.remove_queued("parent", "queued-result-sub-session", "queued-item-1", project_id=None)
+    for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
+        await asyncio.sleep(0)
+
+
+async def test_qualified_subagent_queue_and_result_keep_target_project(
+    tmp_path: Path,
+) -> None:
+    manager = FakeRunManager()
+    manager.hold_enqueued_starts = True
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(project_id=None)
+    result_context = make_context(
+        tool_name=SUBAGENT_RESULT_TOOL_NAME,
+        project_id=None,
+    )
+    runtime.chat_sessions.create("worker", session_id="qualified-queued", project_id="vbot")
+    manager.busy_sessions[("worker", "qualified-queued")] = Run(
+        run_id="busy-project-run",
+        agent_id="worker",
+        session_id="qualified-queued",
+        project_id="vbot",
+    )
+
+    spawn_result = await _handle_subagent(
+        context,
+        {
+            "content": "spawn",
+            "agent_id": "worker@vbot",
+            "session_id": "qualified-queued",
+        },
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+    result = await _handle_subagent_result(
+        result_context,
+        {"agent_id": "worker@vbot", "session_id": "qualified-queued"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert spawn_result["ok"] is True
+    assert spawn_result["data"]["project_id"] == "vbot"
+    assert manager.enqueued[0]["project_id"] == "vbot"
+    assert result["ok"] is True
+    assert result["data"] == {
+        "agent_id": "worker",
+        "project_id": "vbot",
+        "session_id": "qualified-queued",
+        "run_id": None,
+        "queue_item_id": "queued-item-1",
+        "status": "queued",
+        "result": None,
+        "usage": None,
+    }
+    manager.remove_queued(
+        "worker",
+        "qualified-queued",
+        "queued-item-1",
+        project_id="vbot",
+    )
     for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
         await asyncio.sleep(0)
 

@@ -14,6 +14,7 @@ import {
   subAgentEffectiveRunId,
   subAgentLastToolName,
   subAgentNeedsStatusVerification,
+  subAgentNavigationTarget,
   subAgentResultEntryAllowsFetch,
   subAgentResultKey,
   subAgentResultTextFromMessages,
@@ -254,6 +255,37 @@ describe('chatTimelinePresentation', () => {
       }),
     ).toBe('worker::session-child::run-from-queue');
     expect(subAgentResultKey({ name: 'subagent', arguments: {} })).toBe('');
+  });
+
+  it('keeps a qualified sub-agent target address for navigation and status keys', () => {
+    const tool = queuedSubAgentTool({
+      // Shape merged from the live `subagent_session_started` event before the
+      // final persisted tool result exists.
+      subAgentSession: {
+        agent_id: 'worker',
+        project_id: 'vbot',
+        session_id: 'session-child',
+        queue_item_id: 'queue-item-1',
+        status: 'queued',
+      },
+    });
+
+    expect(subAgentNavigationTarget(tool)).toEqual({
+      agentId: 'worker@vbot',
+      sessionId: 'session-child',
+    });
+    expect(subAgentResultKey(tool)).toBe('worker@vbot::session-child');
+    expect(
+      subAgentRunDurationMs(tool, {
+        'sessionDuration:worker@vbot::session-child': 8700,
+      }),
+    ).toBe(8700);
+    expect(resolveSubAgentCancelPlan(tool)).toEqual({
+      kind: 'queue',
+      queueItemId: 'queue-item-1',
+      agentId: 'worker@vbot',
+      sessionId: 'session-child',
+    });
   });
 
   it('resolves the effective run id from the descriptor or the queue mapping', () => {
