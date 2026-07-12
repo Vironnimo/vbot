@@ -9,6 +9,7 @@ from core.chat import (
     ChatMessage,
     CommandAction,
     CommandHandled,
+    ReplySurface,
     aggregate_session_usage,
     parse_agent_argument,
     parse_handoff_argument,
@@ -91,6 +92,7 @@ CHANNEL_SOURCE_META_KEY = "source_channel_id"
 # <system-reminder>. Plain text, not i18n — an internal note to the model, never
 # shown to the user. The wording is deliberate; do not paraphrase.
 AGENT_TAKEOVER_NOTE = "This session was just moved to you from {source}."
+WEBUI_REPLY_SURFACE = ReplySurface.webui()
 
 
 def _publish_queue_changed(state: Any, agent_id: str, session_id: str) -> None:
@@ -496,6 +498,7 @@ async def _start_command_run(
     session_id: str,
     project_id: str | None,
     internal: bool,
+    reply_surface: ReplySurface | None = None,
 ) -> Any:
     """Start a command-driven run, identity via the trigger service, project on the loop.
 
@@ -512,12 +515,14 @@ async def _start_command_run(
             message,
             session_id=session_id,
             internal=internal,
+            reply_surface=reply_surface,
         )
     return await state.chat_loop.start_run(
         agent_id,
         message,
         session_id=session_id,
         internal=internal,
+        reply_surface=reply_surface,
         project_id=project_id,
     )
 
@@ -560,6 +565,7 @@ async def _handle_learn_command(
             session_id=session_id,
             project_id=project_id,
             internal=True,
+            reply_surface=WEBUI_REPLY_SURFACE,
         )
         learn_message = await learn_run.wait()
     except Exception as exc:
@@ -619,6 +625,7 @@ async def _handle_reflect_command(
             on_fork_created=lambda _fork_id: publish_resource_changed(
                 state, RESOURCE_KIND_SESSIONS, scope={"agent_id": agent_id}
             ),
+            reply_surface=WEBUI_REPLY_SURFACE,
         )
         reflection.reset_counters(agent_id, session_id, project_id)
     except Exception as exc:
@@ -713,6 +720,7 @@ async def _handle_handoff_command(
             session_id=new_session_id,
             project_id=target_project_id,
             internal=False,
+            reply_surface=WEBUI_REPLY_SURFACE,
         )
         _bridge_run_to_event_bus(state, run)
     except Exception as exc:
@@ -849,6 +857,7 @@ async def _handle_move_session_command(
                 session_id=session_id,
                 project_id=target_project_id,
                 internal=False,
+                reply_surface=WEBUI_REPLY_SURFACE,
             )
             _bridge_run_to_event_bus(state, run)
     except Exception as exc:
@@ -926,7 +935,11 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
     try:
         if input_origin is None:
             run = await state.chat_loop.start_run(
-                agent_id, content, session_id=session_id, project_id=project_id
+                agent_id,
+                content,
+                session_id=session_id,
+                reply_surface=WEBUI_REPLY_SURFACE,
+                project_id=project_id,
             )
         else:
             run = await state.chat_loop.start_run(
@@ -934,6 +947,7 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
                 content,
                 session_id=session_id,
                 input_origin=input_origin,
+                reply_surface=WEBUI_REPLY_SURFACE,
                 project_id=project_id,
             )
     except ActiveRunError:
@@ -943,6 +957,7 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
                     agent_id,
                     content,
                     session_id=session_id,
+                    reply_surface=WEBUI_REPLY_SURFACE,
                     project_id=project_id,
                 )
             else:
@@ -951,6 +966,7 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
                     content,
                     session_id=session_id,
                     input_origin=input_origin,
+                    reply_surface=WEBUI_REPLY_SURFACE,
                     project_id=project_id,
                 )
         except Exception as exc:
@@ -1000,7 +1016,11 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
     try:
         if input_origin is None:
             run = await streaming_chat_loop.start_run(
-                agent_id, content, session_id=session_id, project_id=project_id
+                agent_id,
+                content,
+                session_id=session_id,
+                reply_surface=WEBUI_REPLY_SURFACE,
+                project_id=project_id,
             )
         else:
             run = await streaming_chat_loop.start_run(
@@ -1008,6 +1028,7 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
                 content,
                 session_id=session_id,
                 input_origin=input_origin,
+                reply_surface=WEBUI_REPLY_SURFACE,
                 project_id=project_id,
             )
     except ActiveRunError:
@@ -1017,6 +1038,7 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
                     agent_id,
                     content,
                     session_id=session_id,
+                    reply_surface=WEBUI_REPLY_SURFACE,
                     project_id=project_id,
                 )
             else:
@@ -1025,6 +1047,7 @@ async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
                     content,
                     session_id=session_id,
                     input_origin=input_origin,
+                    reply_surface=WEBUI_REPLY_SURFACE,
                     project_id=project_id,
                 )
         except Exception as exc:
@@ -1087,7 +1110,12 @@ async def _continue_chat_for_ids(
 ) -> JsonObject:
     try:
         chat_loop = _streaming_chat_loop(state) if streaming else state.chat_loop
-        run = await chat_loop.continue_run(agent_id, session_id, project_id=project_id)
+        run = await chat_loop.continue_run(
+            agent_id,
+            session_id,
+            project_id=project_id,
+            reply_surface=WEBUI_REPLY_SURFACE,
+        )
         _bridge_run_to_event_bus(state, run)
     except Exception as exc:
         raise _map_expected_error(exc) from exc

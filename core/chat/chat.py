@@ -65,7 +65,9 @@ from core.chat.messages import (
 from core.chat.messages import (
     ChatMessage,
     JsonObject,
+    ReplySurface,
     _append_input_origin_note,
+    _append_reply_surface_note,
     _apply_usage_estimation,
     _assistant_continuation_dict,
     _assistant_message_from_response,
@@ -369,7 +371,12 @@ class ChatLoop:
         child._nesting_depth = nesting_depth
         return child
 
-    def run_executor(self, content: str | list[ContentBlock]) -> RunExecutor:
+    def run_executor(
+        self,
+        content: str | list[ContentBlock],
+        *,
+        reply_surface: ReplySurface | None = None,
+    ) -> RunExecutor:
         """Return a run-manager executor that runs *content* through this loop.
 
         The run's project anchor rides ``run.project_id`` (set by the run manager
@@ -379,7 +386,7 @@ class ChatLoop:
         project anchor, tool cwd = repo). The public way for other domains
         (sub-agents) to hand the run manager an executor.
         """
-        return lambda run: self._execute_run(run, content)
+        return lambda run: self._execute_run(run, content, reply_surface=reply_surface)
 
     async def send(
         self,
@@ -415,6 +422,7 @@ class ChatLoop:
         internal: bool = False,
         input_origin: InputOrigin | None = None,
         sender: MessageSender | None = None,
+        reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
         tool_restriction: Sequence[str] | None = None,
     ) -> Run:
@@ -437,6 +445,7 @@ class ChatLoop:
             internal=internal,
             input_origin=input_origin,
             sender=sender,
+            reply_surface=reply_surface,
             project_id=project_id,
             tool_restriction=tool_restriction,
         )
@@ -450,6 +459,7 @@ class ChatLoop:
         internal: bool = False,
         input_origin: InputOrigin | None = None,
         sender: MessageSender | None = None,
+        reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
         waiting_work_admission: WaitingWorkAdmission | None = None,
     ) -> QueuedRunItem:
@@ -475,6 +485,7 @@ class ChatLoop:
                 internal=internal,
                 input_origin=input_origin,
                 sender=sender,
+                reply_surface=reply_surface,
             ),
             display_content=_display_content_preview(content),
             internal=internal,
@@ -489,6 +500,7 @@ class ChatLoop:
         session_id: str,
         content: str | list[ContentBlock],
         input_origin: InputOrigin | None = None,
+        reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
     ) -> tuple[str, RunExecutor, str]:
         """Build replacement data for a queued run without mutating queue state."""
@@ -500,12 +512,22 @@ class ChatLoop:
         )
         return (
             session.id,
-            lambda run: self._execute_run(run, content, input_origin=input_origin),
+            lambda run: self._execute_run(
+                run,
+                content,
+                input_origin=input_origin,
+                reply_surface=reply_surface,
+            ),
             _display_content_preview(content),
         )
 
     async def continue_run(
-        self, agent_id: str, session_id: str, project_id: str | None = None
+        self,
+        agent_id: str,
+        session_id: str,
+        project_id: str | None = None,
+        *,
+        reply_surface: ReplySurface | None = None,
     ) -> Run:
         """Continue one unresolved checkpoint without adding a user message."""
         session = self._get_session(
@@ -533,7 +555,12 @@ class ChatLoop:
         return await manager.start(
             agent_id=agent_id,
             session_id=session.id,
-            executor=lambda run: self._execute_run(run, content=None, explicit_continue=True),
+            executor=lambda run: self._execute_run(
+                run,
+                content=None,
+                explicit_continue=True,
+                reply_surface=reply_surface,
+            ),
             project_id=project_id,
             working_project_id=working_project_id,
         )
@@ -685,6 +712,7 @@ class ChatLoop:
         internal: bool = False,
         input_origin: InputOrigin | None = None,
         sender: MessageSender | None = None,
+        reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
         tool_restriction: Sequence[str] | None = None,
     ) -> Run:
@@ -705,6 +733,7 @@ class ChatLoop:
                 internal=internal,
                 input_origin=input_origin,
                 sender=sender,
+                reply_surface=reply_surface,
                 tool_restriction=tool_restriction,
             ),
             project_id=project_id,
@@ -720,6 +749,7 @@ class ChatLoop:
         explicit_continue: bool = False,
         input_origin: InputOrigin | None = None,
         sender: MessageSender | None = None,
+        reply_surface: ReplySurface | None = None,
         tool_restriction: Sequence[str] | None = None,
     ) -> ChatMessage:
         project_id = run.project_id
@@ -754,6 +784,7 @@ class ChatLoop:
                 explicit_continue=explicit_continue,
                 input_origin=input_origin,
                 sender=sender,
+                reply_surface=reply_surface,
                 tool_restriction=tool_restriction,
                 session=session,
                 prior_continuation=prior_continuation,
@@ -781,6 +812,7 @@ class ChatLoop:
         explicit_continue: bool = False,
         input_origin: InputOrigin | None = None,
         sender: MessageSender | None = None,
+        reply_surface: ReplySurface | None = None,
         tool_restriction: Sequence[str] | None = None,
         session: ChatSession,
         prior_continuation: ContinuationState | None,
@@ -882,26 +914,32 @@ class ChatLoop:
             self._announce_newly_available_skills(
                 run.agent_id, run.session_id, session, agent, skill_registry, project_id
             )
-            if explicit_continue:
-                pass
-            elif internal:
-                if not isinstance(content, str):
-                    raise ChatError("internal runs require string content")
-                session.add_note(content)
-            else:
-                if content is None:
-                    raise ChatError("content is required for non-retry runs")
-                _append_input_origin_note(session, input_origin)
-                user_message = ChatMessage.user(content, sender=sender)
-                session.append(user_message)
-                _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
+            async with self._runtime.chat_sessions.write_lock(
+                run.agent_id, run.session_id, project_id
+            ):
+                if explicit_continue:
+                    _append_reply_surface_note(session, reply_surface)
+                elif internal:
+                    if not isinstance(content, str):
+                        raise ChatError("internal runs require string content")
+                    _append_reply_surface_note(session, reply_surface)
+                    session.add_note(content)
+                else:
+                    if content is None:
+                        raise ChatError("content is required for non-retry runs")
+                    _append_input_origin_note(session, input_origin)
+                    _append_reply_surface_note(session, reply_surface)
+                    user_message = ChatMessage.user(content, sender=sender)
+                    session.append(user_message)
+                    _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
+            if not explicit_continue and not internal:
                 if self._session_title_service is not None:
                     self._session_title_service.notify_user_message(
                         agent_id=run.agent_id,
                         session_id=run.session_id,
                         project_id=project_id,
                         agent=agent,
-                        content=content,
+                        content=cast(str | list[ContentBlock], content),
                         run_id=run.id,
                     )
                 if isinstance(content, str):

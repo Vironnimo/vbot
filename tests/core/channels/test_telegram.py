@@ -29,12 +29,18 @@ from core.channels.telegram import (
     TelegramChannelAdapter,
     split_telegram_message,
 )
-from core.chat import MessageSender
+from core.chat import MessageSender, ReplySurface
 from core.chat.commands import CommandAction, CommandHandled, NotACommand
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
 from core.extensions import ExtensionRegistry, InteractionButton, purge_extension_modules
 from core.runs import ASSISTANT_OUTPUT_EVENT, Run, WaitingWorkAdmission
 from core.sessions import ChatSessionManager
+
+CHANNEL_REPLY_SURFACE = ReplySurface.channel(
+    platform="telegram",
+    platform_display_name="Telegram",
+    channel_id="tg-assistant",
+)
 
 
 def make_config(
@@ -422,6 +428,7 @@ async def test_negative_chat_id_routes_to_shared_group_session(
         "hello",
         session_id,
         sender=MessageSender(id="50", display_name="50"),
+        reply_surface=CHANNEL_REPLY_SURFACE,
     )
     await adapter.stop()
 
@@ -536,7 +543,7 @@ async def test_denied_direct_chat_is_recorded_with_sender_name(
 
 
 @pytest.mark.asyncio
-async def test_system_reminder_written_once_for_new_session(
+async def test_inbound_session_creation_writes_no_reply_surface_note(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -565,7 +572,7 @@ async def test_system_reminder_written_once_for_new_session(
     notes = [message for message in session.load() if message.role == "note"]
     metadata = chat_sessions.get_metadata("assistant", session_id)
 
-    assert len(notes) == 1
+    assert notes == []
     assert metadata["last_reply_target"] == {
         "channel_id": "tg-assistant",
         "platform_target": "12345",
@@ -623,7 +630,7 @@ async def test_typing_indicator_refreshes_chat_action_and_stops_after_block(
 
 
 @pytest.mark.asyncio
-async def test_ensure_outbound_session_creates_session_with_channel_reminder(
+async def test_ensure_outbound_session_creates_session_without_reminder(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -639,8 +646,7 @@ async def test_ensure_outbound_session_creates_session_with_channel_reminder(
     assert route.session_id == "ch-tg-assistant-12345"
     session = chat_sessions.get("assistant", "ch-tg-assistant-12345")
     notes = [message for message in session.load() if message.role == "note"]
-    assert len(notes) == 1
-    assert "Telegram" in (notes[0].content or "")
+    assert notes == []
     await adapter.stop()
 
 
@@ -671,7 +677,7 @@ async def test_ensure_outbound_session_writes_channel_metadata(
 
 
 @pytest.mark.asyncio
-async def test_ensure_outbound_session_reuses_existing_session_without_extra_reminder(
+async def test_ensure_outbound_session_reuses_existing_session_without_notes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -686,7 +692,7 @@ async def test_ensure_outbound_session_reuses_existing_session_without_extra_rem
 
     session = chat_sessions.get("assistant", "ch-tg-assistant-12345")
     notes = [message for message in session.load() if message.role == "note"]
-    assert len(notes) == 1
+    assert notes == []
     await adapter.stop()
 
 
@@ -815,7 +821,9 @@ async def test_continue_command_action_continues_and_relays_run(
     )
     await drain_chat_queue(adapter, 12345)
 
-    continue_mock.assert_awaited_once_with("assistant", session_id)
+    continue_mock.assert_awaited_once_with(
+        "assistant", session_id, reply_surface=CHANNEL_REPLY_SURFACE
+    )
     trigger_mock.assert_not_awaited()
     bot.send_message.assert_awaited_once_with(chat_id=12345, text="continued reply")
     await adapter.stop()
@@ -2662,6 +2670,7 @@ async def test_dm_start_command_triggers_internal_greeting_run(
     trigger_mock.assert_awaited_once()
     assert trigger_mock.await_args is not None
     assert trigger_mock.await_args.kwargs.get("internal") is True
+    assert trigger_mock.await_args.kwargs.get("reply_surface") == CHANNEL_REPLY_SURFACE
     prompt = trigger_mock.await_args.args[1]
     assert "/start" in prompt
     assert "Greet them" in prompt

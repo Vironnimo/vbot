@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from core.channels import ChannelConfigError, channel_system_reminder
+from core.channels import ChannelConfigError
 from core.compaction import COMPACTION_POLICY_META_KEY
 from core.memory import MEMORY_PROMPT_MODES
 from core.projects import (
@@ -415,7 +415,7 @@ async def _link_session_to_channel(state: Any, params: JsonObject) -> JsonObject
             raise ChannelConfigError(
                 f"Channel {channel_id} belongs to agent {channel_config.agent_id}, not {agent_id}"
             )
-        session = state.runtime.chat_sessions.get(agent_id, session_id)
+        state.runtime.chat_sessions.get(agent_id, session_id)
         metadata = dict(state.runtime.chat_sessions.get_metadata(agent_id, session_id))
         metadata.update(
             {
@@ -429,16 +429,6 @@ async def _link_session_to_channel(state: Any, params: JsonObject) -> JsonObject
             }
         )
         state.runtime.chat_sessions.set_metadata(agent_id, session_id, metadata)
-        # Serialize the channel-link note against any open tool cycle on this
-        # session (a Run via another accessor) so it cannot split that cycle.
-        async with state.runtime.chat_sessions.write_lock(agent_id, session_id):
-            session.add_note(
-                channel_system_reminder(
-                    platform_display_name=channel_config.platform.capitalize(),
-                    channel_id=channel_id,
-                    chat_id=platform_conv_id,
-                )
-            )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"ok": True}

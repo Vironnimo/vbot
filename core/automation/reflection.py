@@ -32,6 +32,7 @@ from core.subagents.subagents import SUBAGENT_SESSION_METADATA_FLAG
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from core.chat import ReplySurface
     from core.runs import Run
     from core.runtime.interfaces import RuntimeServices
 
@@ -186,6 +187,7 @@ class ReflectionService:
         project_id: str | None = None,
         extra_instruction: str | None = None,
         on_fork_created: Callable[[str], None] | None = None,
+        reply_surface: ReplySurface | None = None,
     ) -> ReflectionResult:
         """Fork the session and run the reflection brief inside the fork.
 
@@ -220,6 +222,7 @@ class ReflectionService:
             self._build_instruction(extra_instruction),
             session_id=fork.id,
             internal=True,
+            reply_surface=reply_surface,
             project_id=project_id,
             tool_restriction=REFLECTION_TOOL_RESTRICTION,
         )

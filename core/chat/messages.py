@@ -51,6 +51,7 @@ MessageRole = Literal[
     "agent_takeover",
 ]
 InputOrigin = Literal["speech_transcription"]
+ReplySurfaceKind = Literal["webui", "channel"]
 JsonObject = dict[str, Any]
 
 TIMESTAMP_SUFFIX = "+00:00"
@@ -58,6 +59,12 @@ UTC_Z_SUFFIX = "Z"
 SYSTEM_REMINDER_OPEN_TAG = "<system-reminder>"
 SYSTEM_REMINDER_CLOSE_TAG = "</system-reminder>"
 COMPACTION_SUMMARY_NOTE_PREFIX = "[compaction-summary] "
+REPLY_SURFACE_NOTE_PREFIX = "[reply-surface] "
+
+WEBUI_REPLY_SURFACE_REMINDER = (
+    "Your reply to the following request will be shown in the WebUI. "
+    "The Desktop app uses the WebUI for this purpose."
+)
 
 # Header for passively observed, unaddressed group messages. They are useful
 # conversational background, but originate with other group members and must never
@@ -148,6 +155,83 @@ class MessageSender:
         if not isinstance(display_name, str) or not display_name:
             raise ChatMessageValidationError("sender display_name must be a non-empty string")
         return cls(id=sender_id, display_name=display_name)
+
+
+@dataclass(frozen=True)
+class ReplySurface:
+    """Immutable identity and rendering facts for one interactive reply destination."""
+
+    kind: ReplySurfaceKind
+    platform: str | None = None
+    platform_display_name: str | None = None
+    channel_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.kind == "webui":
+            if any(
+                value is not None
+                for value in (self.platform, self.platform_display_name, self.channel_id)
+            ):
+                raise ChatError("WebUI reply surfaces cannot include Channel fields")
+            return
+        if self.kind != "channel":
+            raise ChatError(f"unsupported reply surface kind: {self.kind}")
+        if not self.platform or not self.platform_display_name or not self.channel_id:
+            raise ChatError("channel reply surface fields must be non-empty")
+
+    @classmethod
+    def webui(cls) -> ReplySurface:
+        """Return the shared WebUI/Desktop reply surface."""
+        return cls(kind="webui")
+
+    @classmethod
+    def channel(
+        cls,
+        *,
+        platform: str,
+        platform_display_name: str,
+        channel_id: str,
+    ) -> ReplySurface:
+        """Return one configured Channel reply surface."""
+        return cls(
+            kind="channel",
+            platform=platform,
+            platform_display_name=platform_display_name,
+            channel_id=channel_id,
+        )
+
+    @property
+    def identity(self) -> tuple[str, ...]:
+        """Return the stable identity used to detect reply-surface switches."""
+        if self.kind == "webui":
+            return (self.kind,)
+        return (self.kind, cast(str, self.platform), cast(str, self.channel_id))
+
+    def to_note_content(self) -> str:
+        """Encode this surface as one tagged append-only Session note."""
+        payload: JsonObject = {"kind": self.kind}
+        if self.kind == "channel":
+            payload.update(
+                {
+                    "platform": self.platform,
+                    "platform_display_name": self.platform_display_name,
+                    "channel_id": self.channel_id,
+                }
+            )
+        return REPLY_SURFACE_NOTE_PREFIX + json.dumps(
+            payload, ensure_ascii=False, separators=(",", ":")
+        )
+
+    def reminder_text(self) -> str:
+        """Render the exact model-facing reminder for this destination."""
+        if self.kind == "webui":
+            return WEBUI_REPLY_SURFACE_REMINDER
+        return (
+            "Your reply to the following request will be delivered via "
+            f"{self.platform_display_name} using channel `{self.channel_id}`. "
+            "Return normal reply text; vBot delivers it automatically. To deliver any file, "
+            "always call `channel_send` and include every file path in `file_paths`."
+        )
 
 
 @dataclass(frozen=True)
@@ -497,6 +581,64 @@ def _append_input_origin_note(session: ChatSession, input_origin: InputOrigin | 
         session.add_note(SPEECH_TRANSCRIPTION_SYSTEM_REMINDER)
         return
     raise ChatError(f"unsupported input origin: {input_origin}")
+
+
+def reply_surface_from_note(message: ChatMessage) -> ReplySurface | None:
+    """Recover a reply surface from one tagged note, ignoring every older note form."""
+    if message.role != "note" or not isinstance(message.content, str):
+        return None
+    if not message.content.startswith(REPLY_SURFACE_NOTE_PREFIX):
+        return None
+    try:
+        payload = json.loads(message.content.removeprefix(REPLY_SURFACE_NOTE_PREFIX))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("kind") == "webui":
+        return ReplySurface.webui()
+    if payload.get("kind") != "channel":
+        return None
+    platform = payload.get("platform")
+    platform_display_name = payload.get("platform_display_name")
+    channel_id = payload.get("channel_id")
+    if not isinstance(platform, str) or not platform:
+        return None
+    if not isinstance(platform_display_name, str) or not platform_display_name:
+        return None
+    if not isinstance(channel_id, str) or not channel_id:
+        return None
+    return ReplySurface.channel(
+        platform=platform,
+        platform_display_name=platform_display_name,
+        channel_id=channel_id,
+    )
+
+
+def should_append_reply_surface_note(messages: list[ChatMessage], incoming: ReplySurface) -> bool:
+    """Return whether an interactive Run needs a fresh direct surface reminder."""
+    latest_surface: ReplySurface | None = None
+    latest_surface_index = -1
+    latest_checkpoint_index = -1
+    for index, message in enumerate(messages):
+        if message.role == "compaction_checkpoint":
+            latest_checkpoint_index = index
+        recovered = reply_surface_from_note(message)
+        if recovered is not None:
+            latest_surface = recovered
+            latest_surface_index = index
+    return (
+        latest_surface is None
+        or latest_surface.identity != incoming.identity
+        or latest_checkpoint_index > latest_surface_index
+    )
+
+
+def _append_reply_surface_note(session: ChatSession, surface: ReplySurface | None) -> None:
+    if surface is None:
+        return
+    if should_append_reply_surface_note(session.load(), surface):
+        session.add_note(surface.to_note_content())
 
 
 def _last_user_message_with_content_blocks(messages: list[ChatMessage]) -> ChatMessage | None:
@@ -963,6 +1105,9 @@ def _is_empty_assistant_history_message(
 def _system_reminder_block(message: ChatMessage) -> str:
     message.validate()
     content = message.content
+    reply_surface = reply_surface_from_note(message)
+    if reply_surface is not None:
+        content = reply_surface.reminder_text()
     if isinstance(content, str):
         for prefix in (
             SKILL_AVAILABLE_NOTE_PREFIX,

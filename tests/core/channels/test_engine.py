@@ -24,7 +24,7 @@ from core.channels.adapter import (
 )
 from core.channels.channels import ChannelConfig
 from core.channels.engine import ChannelConversationEngine
-from core.chat import MessageSender
+from core.chat import MessageSender, ReplySurface
 from core.chat.commands import CommandAction, CommandHandled, NotACommand
 from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
 from core.extensions.interactions import InteractionButton, InteractionEvent
@@ -32,6 +32,11 @@ from core.runs import ASSISTANT_OUTPUT_EVENT, ChatRunManager, Run, WaitingWorkAd
 from core.sessions import ChatSessionManager
 
 SESSION_ID = "ch-tg-assistant-12345"
+CHANNEL_REPLY_SURFACE = ReplySurface.channel(
+    platform="telegram",
+    platform_display_name="Telegram",
+    channel_id="tg-assistant",
+)
 
 
 class FakeTransport:
@@ -286,7 +291,7 @@ def test_derive_session_id(
 
 
 @pytest.mark.asyncio
-async def test_reminder_note_written_once_and_metadata_recorded(tmp_path: Path) -> None:
+async def test_session_creation_writes_metadata_without_reply_surface_note(tmp_path: Path) -> None:
     trigger_mock = AsyncMock(
         side_effect=[
             make_completed_run(output_text="first"),
@@ -304,8 +309,7 @@ async def test_reminder_note_written_once_and_metadata_recorded(tmp_path: Path) 
     notes = [message for message in session.load() if message.role == "note"]
     metadata = chat_sessions.get_metadata("assistant", SESSION_ID)
 
-    assert len(notes) == 1
-    assert "Telegram" in (notes[0].content or "")
+    assert notes == []
     assert metadata["source_channel_id"] == "tg-assistant"
     assert metadata["platform"] == "telegram"
     assert metadata["platform_conv_id"] == "12345"
@@ -317,7 +321,7 @@ async def test_reminder_note_written_once_and_metadata_recorded(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
-async def test_ensure_channel_session_reuses_session_without_extra_reminder(
+async def test_ensure_channel_session_reuses_session_without_writing_notes(
     tmp_path: Path,
 ) -> None:
     engine, chat_sessions, _trigger, _transport = make_engine(tmp_path)
@@ -328,7 +332,7 @@ async def test_ensure_channel_session_reuses_session_without_extra_reminder(
     assert route == RouteFacts(agent_id="assistant", session_id=SESSION_ID)
     session = chat_sessions.get("assistant", SESSION_ID)
     notes = [message for message in session.load() if message.role == "note"]
-    assert len(notes) == 1
+    assert notes == []
     await engine.stop()
 
 
@@ -494,8 +498,9 @@ async def test_new_session_command_starts_fresh_session_and_redirects_followups(
     assert new_session_id != SESSION_ID
     assert new_session_id.startswith(f"{SESSION_ID}-")
     assert chat_sessions.exists("assistant", new_session_id)
-    # The previous (anchor) session is left intact and still loadable.
-    assert chat_sessions.get("assistant", SESSION_ID).load()
+    # The previous (anchor) session is left intact and still loadable, but /new
+    # does not invent a model-facing note for either session.
+    assert chat_sessions.get("assistant", SESSION_ID).load() == []
     # /new confirms without triggering a run.
     assert transport.sent_texts == [engine_module._NEW_SESSION_STARTED_REPLY]
     trigger_mock.assert_not_awaited()
@@ -537,7 +542,7 @@ async def test_message_enqueued_behind_pending_new_routes_to_new_session(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_new_session_tags_fresh_session_with_reminder_and_metadata(tmp_path: Path) -> None:
+async def test_new_session_tags_fresh_session_with_metadata_but_no_reminder(tmp_path: Path) -> None:
     command_dispatcher = make_command_dispatcher(result=CommandAction(name="new_session"))
     engine, chat_sessions, _trigger, _transport = make_engine(
         tmp_path, command_dispatcher=command_dispatcher
@@ -554,8 +559,7 @@ async def test_new_session_tags_fresh_session_with_reminder_and_metadata(tmp_pat
         for message in chat_sessions.get("assistant", new_session_id).load()
         if message.role == "note"
     ]
-    assert len(notes) == 1
-    assert "Telegram" in (notes[0].content or "")
+    assert notes == []
     metadata = chat_sessions.get_metadata("assistant", new_session_id)
     assert metadata["source_channel_id"] == "tg-assistant"
     assert metadata["platform"] == "telegram"
@@ -599,7 +603,13 @@ async def test_channel_without_new_routes_to_derived_anchor(tmp_path: Path) -> N
     await drain(engine, 12345)
 
     # Byte-for-byte the pre-pointer behavior: route straight to the derived id.
-    trigger_mock.assert_awaited_once_with("assistant", "hello", SESSION_ID, sender=None)
+    trigger_mock.assert_awaited_once_with(
+        "assistant",
+        "hello",
+        SESSION_ID,
+        sender=None,
+        reply_surface=CHANNEL_REPLY_SURFACE,
+    )
     metadata = chat_sessions.get_metadata("assistant", SESSION_ID)
     assert engine_module.ACTIVE_SESSION_METADATA_KEY not in metadata
     await engine.stop()
@@ -639,7 +649,11 @@ async def test_new_session_in_one_chat_leaves_other_chat_untouched(tmp_path: Pat
 
     # Chat B is unaffected: it routes to its own derived anchor and has no pointer.
     trigger_mock.assert_awaited_once_with(
-        "assistant", "hello B", "ch-tg-assistant-67890", sender=None
+        "assistant",
+        "hello B",
+        "ch-tg-assistant-67890",
+        sender=None,
+        reply_surface=CHANNEL_REPLY_SURFACE,
     )
     metadata_b = chat_sessions.get_metadata("assistant", "ch-tg-assistant-67890")
     assert engine_module.ACTIVE_SESSION_METADATA_KEY not in metadata_b
@@ -657,7 +671,9 @@ async def test_continue_command_action_relays_continued_run(tmp_path: Path) -> N
     await engine.handle_inbound_text(make_conversation(), "/continue")
     await drain(engine, 12345)
 
-    continue_mock.assert_awaited_once_with("assistant", SESSION_ID)
+    continue_mock.assert_awaited_once_with(
+        "assistant", SESSION_ID, reply_surface=CHANNEL_REPLY_SURFACE
+    )
     trigger_mock.assert_not_awaited()
     assert transport.sent == [("12345", "continued reply")]
     await engine.stop()
@@ -1088,7 +1104,13 @@ async def test_block_content_skips_command_dispatch_and_triggers_run(tmp_path: P
     await engine._process_queued_message(queued)
 
     command_dispatcher.dispatch.assert_not_called()
-    trigger_mock.assert_awaited_once_with("assistant", content, SESSION_ID, sender=None)
+    trigger_mock.assert_awaited_once_with(
+        "assistant",
+        content,
+        SESSION_ID,
+        sender=None,
+        reply_surface=CHANNEL_REPLY_SURFACE,
+    )
     assert transport.sent == [("12345", "ok")]
     await engine.stop()
 
@@ -1180,6 +1202,7 @@ async def test_group_message_triggers_run_with_sender(tmp_path: Path) -> None:
         "hello",
         SESSION_ID,
         sender=MessageSender(id="50", display_name="Alice"),
+        reply_surface=CHANNEL_REPLY_SURFACE,
     )
     await engine.stop()
 
@@ -1195,7 +1218,13 @@ async def test_direct_message_triggers_run_without_sender(tmp_path: Path) -> Non
     )
     await drain(engine, 12345)
 
-    trigger_mock.assert_awaited_once_with("assistant", "hello", SESSION_ID, sender=None)
+    trigger_mock.assert_awaited_once_with(
+        "assistant",
+        "hello",
+        SESSION_ID,
+        sender=None,
+        reply_surface=CHANNEL_REPLY_SURFACE,
+    )
     await engine.stop()
 
 
@@ -1214,6 +1243,7 @@ async def test_group_sender_display_name_falls_back_to_user_id(tmp_path: Path) -
         "hello",
         SESSION_ID,
         sender=MessageSender(id="50", display_name="50"),
+        reply_surface=CHANNEL_REPLY_SURFACE,
     )
     await engine.stop()
 
@@ -1280,6 +1310,7 @@ async def test_media_path_carries_group_sender(tmp_path: Path) -> None:
         [block],
         SESSION_ID,
         sender=MessageSender(id="50", display_name="Alice"),
+        reply_surface=CHANNEL_REPLY_SURFACE,
     )
     await engine.stop()
 
@@ -1326,15 +1357,7 @@ async def test_group_unaddressed_text_is_observed_as_note(tmp_path: Path) -> Non
         for message in chat_sessions.get("assistant", SESSION_ID).load()
         if message.role == "note"
     ]
-    assert notes == [
-        (
-            "This session is receiving messages via Telegram "
-            "(channel: tg-assistant, chat: 12345).\n"
-            "Keep replies appropriate for Telegram. Text-only replies are delivered "
-            "automatically. For every file, call `channel_send` with `file_paths`."
-        ),
-        "[channel-message] Alice (50): hello\nworld",
-    ]
+    assert notes == ["[channel-message] Alice (50): hello\nworld"]
     trigger_mock.assert_not_awaited()
     command_dispatcher.dispatch.assert_not_called()
     assert transport.sent == []
@@ -1759,6 +1782,7 @@ async def test_interaction_tap_enqueues_internal_run_with_state(tmp_path: Path) 
     assert await_args is not None
     # An internal note-driven run: no visible user message, content is the note.
     assert await_args.kwargs.get("internal") is True
+    assert await_args.kwargs.get("reply_surface") == CHANNEL_REPLY_SURFACE
     note = await_args.args[1]
     assert "chk:milk" in note and "chk:bread" in note
     await engine.stop()

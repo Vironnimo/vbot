@@ -27,12 +27,11 @@ from core.channels.adapter import (
     MessageFacts,
     ReplyPlanFacts,
     RouteFacts,
-    channel_system_reminder,
 )
 from core.chat.commands import CommandAction, CommandDispatcher, CommandHandled
 from core.chat.content_blocks import ContentBlock
 from core.chat.errors import ChatSessionError
-from core.chat.messages import MessageSender
+from core.chat.messages import MessageSender, ReplySurface
 from core.runs import (
     ASSISTANT_OUTPUT_EVENT,
     RUN_CANCELLED_EVENT,
@@ -442,16 +441,7 @@ class ChannelConversationEngine:
         conversation: ConversationFacts,
     ) -> tuple[RouteFacts, ChatSession]:
         route = self._route_facts(conversation)
-        is_new_session = not self._session_exists(route)
         session = self._chat_sessions.get_or_create(route.agent_id, route.session_id)
-        if is_new_session:
-            session.add_note(
-                channel_system_reminder(
-                    platform_display_name=self._transport.platform_display_name,
-                    channel_id=self._config.id,
-                    chat_id=conversation.chat_id,
-                )
-            )
         return route, session
 
     def _route_facts(self, conversation: ConversationFacts) -> RouteFacts:
@@ -540,9 +530,6 @@ class ChannelConversationEngine:
 
     def _group_conversation_key(self, chat_id: str) -> str:
         return f"ch-{self._config.id}-{chat_id}"
-
-    def _session_exists(self, route: RouteFacts) -> bool:
-        return self._chat_sessions.exists(route.agent_id, route.session_id)
 
     def _update_session_metadata(
         self,
@@ -774,6 +761,7 @@ class ChannelConversationEngine:
                         content,
                         route.session_id,
                         internal=True,
+                        reply_surface=self._reply_surface(),
                     )
                 else:
                     run = await self._trigger_service.trigger_run(
@@ -781,6 +769,7 @@ class ChannelConversationEngine:
                         content,
                         route.session_id,
                         internal=True,
+                        reply_surface=self._reply_surface(),
                         waiting_work_admission=waiting_work_admission,
                     )
             else:
@@ -790,6 +779,7 @@ class ChannelConversationEngine:
                         content,
                         route.session_id,
                         sender=sender,
+                        reply_surface=self._reply_surface(),
                     )
                 else:
                     run = await self._trigger_service.trigger_run(
@@ -797,6 +787,7 @@ class ChannelConversationEngine:
                         content,
                         route.session_id,
                         sender=sender,
+                        reply_surface=self._reply_surface(),
                         waiting_work_admission=waiting_work_admission,
                     )
         except Exception as error:
@@ -951,6 +942,7 @@ class ChannelConversationEngine:
                     run = await self._trigger_service.continue_run(
                         route.agent_id,
                         route.session_id,
+                        reply_surface=self._reply_surface(),
                     )
                 except Exception as error:
                     self._log_command_action_failure(command_action.name, route, reply_plan, error)
@@ -1000,20 +992,12 @@ class ChannelConversationEngine:
 
         The id is anchored to the conversation for readability/grouping in the
         sessions list, falling back to a bare uuid when the anchored form would
-        exceed the session-id length contract. The fresh session gets the one-time
-        channel reminder note and the base channel sidecar metadata (no
-        participants), so it is recognizable as a channel session immediately.
+        exceed the session-id length contract. The fresh session gets base Channel
+        sidecar metadata (no participants), so it is recognizable immediately.
         """
         candidate = f"{anchor}-{uuid4().hex}"
         new_session_id = candidate if SESSION_ID_PATTERN.fullmatch(candidate) else uuid4().hex
-        session = self._chat_sessions.get_or_create(agent_id, new_session_id)
-        session.add_note(
-            channel_system_reminder(
-                platform_display_name=self._transport.platform_display_name,
-                channel_id=self._config.id,
-                chat_id=reply_plan.platform_target,
-            )
-        )
+        self._chat_sessions.get_or_create(agent_id, new_session_id)
         self._chat_sessions.set_metadata(
             agent_id,
             new_session_id,
@@ -1028,6 +1012,13 @@ class ChannelConversationEngine:
             },
         )
         return new_session_id
+
+    def _reply_surface(self) -> ReplySurface:
+        return ReplySurface.channel(
+            platform=self._config.platform,
+            platform_display_name=self._transport.platform_display_name,
+            channel_id=self._config.id,
+        )
 
     def _set_active_session_pointer(self, agent_id: str, anchor: str, new_session_id: str) -> None:
         """Point the conversation anchor at the newest session (single hop).

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from core.chat import ChatLoop, CommandDispatcher
+from core.chat import ChatLoop, CommandDispatcher, ReplySurface
 from core.chat.content_blocks import ContentBlock
 from core.runs import ChatRunManager, RunExecutor
 
@@ -30,6 +30,7 @@ def _build_streaming_queue_update(
             session_id,
             content,
             input_origin=cast(Any, input_origin),
+            reply_surface=ReplySurface.webui(),
             project_id=project_id,
         ),
     )

@@ -153,25 +153,6 @@ class FileData:
     data: bytes
 
 
-def channel_system_reminder(
-    *,
-    platform_display_name: str,
-    channel_id: str,
-    chat_id: str,
-) -> str:
-    """Build the one-time channel reminder note injected into a channel Session.
-
-    Shared by the conversation engine (new-session note) and the ``session.link_channel``
-    RPC so the two never drift.
-    """
-    return (
-        f"This session is receiving messages via {platform_display_name} "
-        f"(channel: {channel_id}, chat: {chat_id}).\n"
-        f"Keep replies appropriate for {platform_display_name}. Text-only replies are "
-        "delivered automatically. For every file, call `channel_send` with `file_paths`."
-    )
-
-
 def content_blocks_for_attachment(record: AttachmentRecord) -> list[ContentBlock]:
     """Classify one stored inbound attachment into its canonical content blocks.
 
