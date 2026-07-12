@@ -78,7 +78,8 @@ The Image Tool currently says `WebUI/Desktop`. The user has decided that this sh
 6. The system should establish an initial reply destination and then add a notice only when the destination changes.
 7. Change detection compares the incoming work with the last active reply destination, not with the Session's original destination. Example: Telegram → Telegram produces no notice; Telegram → WebUI produces one; additional WebUI → WebUI produces none; WebUI → Telegram produces one.
 8. The existing Channel-specific mechanism should become generic enough to cover WebUI and current/future Channels instead of adding one unrelated special case per accessor.
-9. No `Reply Destination` or `Reply Context` Glossary entry is approved yet. Those are Working Terms only until their exact boundary is decided.
+9. `Channel` remains the specialized external messaging-platform accessor; it does not become an umbrella term or product domain for WebUI, Desktop, or every other accessor. The shared Run-related abstraction for the automatic reply path sits above WebUI and Channels, with `Reply Route` as the current Working Term.
+10. No `Reply Route`, `Reply Destination`, or `Reply Context` Glossary entry is approved yet. Those are Working Terms only until the shared abstraction's exact boundary is decided.
 
 ## Rejected Directions
 
@@ -88,8 +89,11 @@ The Image Tool currently says `WebUI/Desktop`. The user has decided that this sh
 4. **Making the Agent distinguish Desktop from browser WebUI for this behavior.** Rejected for now because both use the same relevant renderer and file behavior. This does not establish that Desktop and WebUI are universally interchangeable for unrelated capabilities such as wakeword support.
 5. **Using image Markdown in Telegram or another Channel.** Rejected because Channel text relay does not upload the image file and the artifact URL is server-local.
 6. **Automatically sending generated artifacts through Channels.** Rejected in favor of explicit `channel_send` file delivery.
+7. **Making `Channel` the umbrella term or product domain for WebUI, Desktop, and messaging platforms.** Rejected because the existing Channel concept remains the specialized external messaging-platform accessor; the shared automatic-reply abstraction sits above WebUI and Channels instead.
 
 ## Conceptual Direction, Not Yet a Design
+
+The generic automatic-reply abstraction sits above WebUI and Channels. It does not turn WebUI or Desktop into Channels and does not expand the existing Channel product domain; `Reply Route` is the current Working Term for this shared Run-related layer, not an approved Glossary term.
 
 The current working model has two different kinds of state:
 
