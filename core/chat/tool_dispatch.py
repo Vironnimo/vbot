@@ -102,7 +102,8 @@ def _project_containing_path(path: Path, projects: Sequence[Any]) -> Any | None:
     best_root_length = -1
     for project in projects:
         root = os.path.normcase(os.path.realpath(project.cwd))
-        contained = target == root or target.startswith(root + os.sep)
+        root_prefix = root if root.endswith(os.sep) else root + os.sep
+        contained = target == root or target.startswith(root_prefix)
         if contained and len(root) > best_root_length:
             best = project
             best_root_length = len(root)

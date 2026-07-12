@@ -746,6 +746,27 @@ def test_set_override_thinking_effort_writes_override(tmp_path: Path) -> None:
     assert state.runtime.projects.get("vbot").overrides == {"builder": {"thinking_effort": "high"}}
 
 
+def test_set_override_rejects_agent_outside_project_team(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "vbot", "builder.md")
+    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+
+    with pytest.raises(RpcError) as exc_info:
+        _set_override(
+            state,
+            {
+                "project_id": "vbot",
+                "agent_id": "typo",
+                "field": "temperature",
+                "value": 0.4,
+            },
+        )
+
+    assert exc_info.value.code == "invalid_request"
+    assert exc_info.value.message == "agent 'typo' is not on project 'vbot' team"
+    assert state.runtime.projects.get("vbot").overrides == {}
+
+
 def test_set_override_rejects_unknown_field(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     repo = _make_repo(tmp_path, "vbot", "builder.md")

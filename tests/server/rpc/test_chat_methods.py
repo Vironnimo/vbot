@@ -341,12 +341,19 @@ class _LearnDispatcher:
         return CommandAction(name="learn", argument=argument)
 
 
-def _make_learn_state(captured: list[dict[str, Any]], *, active: bool = False) -> SimpleNamespace:
+def _make_learn_state(
+    captured: list[dict[str, Any]], *, workspace: str = "/home/agent", active: bool = False
+) -> SimpleNamespace:
     async def trigger_run(agent_id: str, message: Any, **kwargs: Any) -> _FakeRun:
         captured.append({"agent_id": agent_id, "message": message, **kwargs})
         return _FakeRun()
 
     runtime = SimpleNamespace(
+        agent_resolver=SimpleNamespace(
+            resolve_agent=lambda project_id, agent_id: SimpleNamespace(
+                id=agent_id, workspace=workspace
+            )
+        ),
         trigger_service=SimpleNamespace(trigger_run=trigger_run),
         storage=_fragment_storage(),
     )
@@ -404,6 +411,24 @@ async def test_learn_refused_while_run_active(monkeypatch: pytest.MonkeyPatch) -
 
     assert response["command_handled"] is True
     assert "after the current run finishes" in response["reply"]
+    assert captured == []
+
+
+@pytest.mark.asyncio
+async def test_learn_refuses_config_agent_without_starting_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[dict[str, Any]] = []
+    state = _make_learn_state(captured, workspace="")
+    monkeypatch.setattr("server.rpc.chat_methods._bridge_run_to_event_bus", lambda *a, **k: None)
+
+    response = await _send_chat(
+        state,
+        {"agent_id": "builder@vbot", "session_id": "s1", "content": "/learn deploy"},
+    )
+
+    assert response["command_handled"] is True
+    assert response["reply"] == "Skill authoring needs an identity agent with its own skill home."
     assert captured == []
 
 

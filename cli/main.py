@@ -486,9 +486,13 @@ def _project_set_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         changes["cwd"] = args.cwd
     if args.name is not None:
         changes["display_name"] = args.name
-    if args.default_agent is not None:
+    if args.clear_default_agent:
+        changes["default_agent"] = None
+    elif args.default_agent is not None:
         changes["default_agent"] = args.default_agent
-    if args.default_model is not None:
+    if args.clear_default_model:
+        changes["default_model"] = None
+    elif args.default_model is not None:
         changes["default_model"] = args.default_model
     _apply_project_default_knobs(args, changes)
     if args.format is not None:
