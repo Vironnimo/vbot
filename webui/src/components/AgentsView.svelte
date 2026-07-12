@@ -22,6 +22,7 @@
     onNavigateToSettingsPanel = noop,
     onNavigateToAgentPrompt = noop,
     modelsRefreshToken = 0,
+    projectsRefreshToken = 0,
   } = $props();
 
   let agents = $state([]);
@@ -35,6 +36,8 @@
   let availableTools = $state([]);
   let availableSkills = $state([]);
   let invalidSkills = $state([]);
+  let availableProjects = $state([]);
+  let projectCatalogError = $state('');
   // The global agent defaults, fetched once when the create modal opens so it can
   // label its inherit options from the live global default (an agent's
   // "effective" does not exist yet at create time). Empty object on failure.
@@ -45,6 +48,7 @@
   let modelDropdownOpenCount = $state(0);
   let pendingModelCatalogs = null;
   let lastModelsRefreshToken = null;
+  let lastProjectsRefreshToken = null;
 
   let selectedAgent = $derived(
     agents.find((agent) => agent.id === selectedAgentId) ?? null,
@@ -67,8 +71,38 @@
 
   onMount(() => {
     void loadCatalogs();
+    void loadProjectCatalog();
     void loadAgents({ preferredAgentId: sharedSelectedAgentId });
   });
+
+  $effect(() => {
+    if (lastProjectsRefreshToken === null) {
+      lastProjectsRefreshToken = projectsRefreshToken;
+      return;
+    }
+    if (projectsRefreshToken !== lastProjectsRefreshToken) {
+      lastProjectsRefreshToken = projectsRefreshToken;
+      void loadProjectCatalog();
+    }
+  });
+
+  async function loadProjectCatalog() {
+    try {
+      const result = await rpc('project.list');
+      availableProjects = Array.isArray(result?.projects)
+        ? result.projects.map((project) => ({
+            value: project.project_id,
+            label: project.display_name || project.project_id,
+          }))
+        : [];
+      projectCatalogError = '';
+    } catch (error) {
+      projectCatalogError = viewErrorMessage(
+        error,
+        t('agents.form.projectLoadError', 'Projects could not be loaded.'),
+      );
+    }
+  }
 
   // Reload the model catalog when the generic invalidation channel signals a
   // model/provider change (first run is a no-op: mount already loaded).
@@ -265,6 +299,8 @@
         {availableTools}
         {availableSkills}
         {invalidSkills}
+        projectOptions={availableProjects}
+        {projectCatalogError}
         {loadError}
         onAgentUpdated={handleAgentUpdated}
         onAgentCreated={handleAgentCreated}

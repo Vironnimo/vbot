@@ -141,6 +141,7 @@ class FakeRunManager:
         session_id: str,
         executor: Any,
         project_id: str | None = None,
+        working_project_id: str | None = None,
     ) -> Run:
         if self.start_error is not None:
             raise self.start_error
@@ -151,6 +152,7 @@ class FakeRunManager:
             agent_id=agent_id,
             session_id=session_id,
             project_id=project_id,
+            working_project_id=working_project_id,
         )
         self.started.append((agent_id, session_id, executor, run))
         self.runs[run.id] = run
@@ -166,6 +168,7 @@ class FakeRunManager:
         display_content: str = "",
         internal: bool = False,
         project_id: str | None = None,
+        working_project_id: str | None = None,
     ) -> Any:
         future: asyncio.Future[Run] = asyncio.get_running_loop().create_future()
         item = SimpleNamespace(
@@ -177,6 +180,7 @@ class FakeRunManager:
             agent_id=agent_id,
             session_id=session_id,
             project_id=project_id,
+            working_project_id=working_project_id,
         )
         self.enqueued.append(
             {
@@ -186,6 +190,7 @@ class FakeRunManager:
                 "display_content": display_content,
                 "internal": internal,
                 "project_id": project_id,
+                "working_project_id": working_project_id,
                 "item": item,
                 "run": run,
             }

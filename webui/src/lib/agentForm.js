@@ -40,6 +40,7 @@ const EDITABLE_AGENT_FIELDS = Object.freeze([
   'thinking_effort',
   'memory_prompt_mode',
   'workspace',
+  'root_project_id',
   'allowed_tools',
   'allowed_skills',
   'custom_system_prompt_enabled',
@@ -62,6 +63,9 @@ export function createAgentFormValues(agent = {}) {
     model: asText(raw.model),
     fallback_model: asText(raw.fallback_model),
     workspace: asText(agent.workspace),
+    root_project_id: hasValue(agent.root_project_id)
+      ? String(agent.root_project_id)
+      : null,
     temperature: hasValue(raw.temperature)
       ? String(raw.temperature)
       : DEFAULT_AGENT_TEMPERATURE,
@@ -183,6 +187,9 @@ function normalizeValues(values = {}) {
     model: asText(values.model).trim(),
     fallback_model: asText(values.fallback_model).trim(),
     workspace: asText(values.workspace).trim(),
+    root_project_id: hasValue(values.root_project_id)
+      ? String(values.root_project_id).trim() || null
+      : null,
     temperature: asText(values.temperature).trim(),
     thinking_effort: asText(values.thinking_effort).trim(),
     memory_prompt_mode: normalizeMemoryPromptMode(values.memory_prompt_mode),
@@ -252,6 +259,7 @@ function buildAgentPayload(normalized, temperature, options = {}) {
 
   if (options.includeWorkspace) {
     payload.workspace = normalized.workspace;
+    payload.root_project_id = normalized.root_project_id;
   }
 
   return payload;

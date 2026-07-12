@@ -9,7 +9,12 @@ from core.chat import (
     ChatMessage,
     ChatSessionError,
 )
-from core.projects import AgentResolutionError, InvalidAgentAddressError, parse_agent_address
+from core.projects import (
+    AgentResolutionError,
+    InvalidAgentAddressError,
+    parse_agent_address,
+    resolve_working_project_id,
+)
 from core.runs import (
     ActiveRunError,
     Run,
@@ -232,12 +237,14 @@ async def _handle_subagent(
                 )
 
             _, executor = _make_subagent_executor(runtime, content, context)
+            target_agent = runtime.agent_resolver.resolve_agent(target_project_id, target_agent_id)
             item = await runtime.chat_run_manager.enqueue(
                 agent_id=target_agent_id,
                 session_id=session.id,
                 executor=executor,
                 display_content=content,
                 project_id=target_project_id,
+                working_project_id=resolve_working_project_id(target_project_id, target_agent),
             )
             await _emit_subagent_session_started(
                 context,
@@ -467,11 +474,13 @@ async def _start_subagent_run(
     context: ToolContext,
 ) -> Run:
     _, executor = _make_subagent_executor(runtime, content, context)
+    target_agent = runtime.agent_resolver.resolve_agent(project_id, agent_id)
     return await runtime.chat_run_manager.start(
         agent_id=agent_id,
         session_id=session_id,
         executor=executor,
         project_id=project_id,
+        working_project_id=resolve_working_project_id(project_id, target_agent),
     )
 
 

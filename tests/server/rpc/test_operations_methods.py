@@ -49,6 +49,7 @@ class StubAgent:
     name: str
     model: str = "openai/gpt-5"
     workspace: str = ""
+    root_project_id: str | None = None
     thinking_effort: str | None = "high"
     memory_prompt_mode: str = "off"
     allowed_tools: tuple[str, ...] = ()
@@ -455,12 +456,16 @@ async def test_preview_includes_extension_block(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_preview_resolves_rooted_identity_skill_pool(tmp_path: Path) -> None:
-    # A rooted identity agent (workspace == a registered repo) must preview against
-    # its home project's skill pool — the same scope a run resolves — not the bare
-    # global registry (the old drift the shared ``resolve_skill_scope`` seam fixes).
+    # A Rooted Identity Agent previews against its explicitly selected Project's
+    # skill pool, matching live Run scope rather than the bare global registry.
     repo = tmp_path / "repo"
     repo.mkdir()
-    agent = StubAgent(id="coder", name="Coder", workspace=str(repo))
+    agent = StubAgent(
+        id="coder",
+        name="Coder",
+        workspace=str(repo),
+        root_project_id="vbot",
+    )
     manager = _manager(tmp_path, agents=[agent])
     home_project = SimpleNamespace(project_id="vbot", cwd=str(repo), auto_load=())
     skills_for_calls: list[tuple[str | None, str | None]] = []
@@ -471,7 +476,7 @@ async def test_preview_resolves_rooted_identity_skill_pool(tmp_path: Path) -> No
 
     runtime_extra = {
         "agent_resolver": SimpleNamespace(resolve_agent=lambda _project, _id: agent),
-        "projects": SimpleNamespace(find_by_cwd=lambda _cwd: home_project),
+        "projects": SimpleNamespace(get=lambda _project_id: home_project),
         "skills_for": skills_for,
     }
     state = _state(manager, runtime_extra=runtime_extra)
@@ -479,6 +484,35 @@ async def test_preview_resolves_rooted_identity_skill_pool(tmp_path: Path) -> No
     await _preview_prompt(state, {"agent_id": "coder"})
 
     assert skills_for_calls == [("vbot", "coder")]
+
+
+@pytest.mark.asyncio
+async def test_preview_missing_rooted_project_cwd_maps_error_without_fallback(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(
+        id="coder",
+        name="Coder",
+        workspace=str(tmp_path / "workspace"),
+        root_project_id="vbot",
+    )
+    manager = _manager(tmp_path, agents=[agent])
+    missing_project = SimpleNamespace(
+        project_id="vbot",
+        cwd=str(tmp_path / "missing-repo"),
+        auto_load=(),
+    )
+    state = _state(
+        manager,
+        runtime_extra={
+            "agent_resolver": SimpleNamespace(resolve_agent=lambda _project, _id: agent),
+            "projects": SimpleNamespace(get=lambda _project_id: missing_project),
+            "skills_for": lambda _project, _agent=None: StubSkills(),
+        },
+    )
+
+    with pytest.raises(RpcError, match="Project repository is unavailable"):
+        await _preview_prompt(state, {"agent_id": "coder"})
 
 
 @pytest.mark.asyncio

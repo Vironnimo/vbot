@@ -107,10 +107,11 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
         "model": agent.model,
         "fallback_model": agent.fallback_model,
         "workspace": agent.workspace,
+        "root_project_id": getattr(agent, "root_project_id", None),
         # The location a fresh agent's workspace is seeded to
         # (``agents/<id>/workspace/``), resolved to the same string form as
         # ``workspace`` above. The editor shows a "set to default" action when
-        # ``workspace`` differs from this (a custom / repo-rooted workspace).
+        # ``workspace`` differs from this (a custom identity/Memory home).
         "default_workspace": state.runtime.agents.default_workspace(agent.id),
         "temperature": agent.temperature,
         "thinking_effort": agent.thinking_effort,

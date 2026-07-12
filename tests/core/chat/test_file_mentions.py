@@ -13,6 +13,7 @@ from core.chat.content_blocks import (
     TextBlock,
     content_block_to_dict,
 )
+from core.chat.errors import ChatError
 from core.chat.file_mentions import (
     MENTION_FILE_LIST_LIMIT,
     MENTION_INLINE_MAX_BYTES,
@@ -263,12 +264,15 @@ class _FakeProjects:
         self._cwd = cwd
 
     def get(self, project_id: str) -> _FakeProject:
+        if project_id != "vbot":
+            raise KeyError(project_id)
         return _FakeProject(self._cwd)
 
 
 class _FakeAgent:
-    def __init__(self, workspace: str) -> None:
+    def __init__(self, workspace: str, root_project_id: str | None = None) -> None:
         self.workspace = workspace
+        self.root_project_id = root_project_id
 
 
 class _FakeResolver:
@@ -293,6 +297,7 @@ class _FakeRuntime:
 
 class TestResolveMentionRoot:
     def test_project_address_uses_project_cwd(self, tmp_path: Path) -> None:
+        (tmp_path / "repo").mkdir()
         runtime = _FakeRuntime(
             projects=_FakeProjects(str(tmp_path / "repo")),
             agent=_FakeAgent(str(tmp_path / "workspace")),
@@ -313,6 +318,43 @@ class TestResolveMentionRoot:
         root = resolve_mention_root(cast(Any, runtime), "main", None)
 
         assert root == Path(tmp_path / "workspace")
+
+    def test_rooted_identity_address_uses_selected_project_cwd(self, tmp_path: Path) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        runtime = _FakeRuntime(
+            projects=_FakeProjects(str(repo)),
+            agent=_FakeAgent(str(tmp_path / "workspace"), root_project_id="vbot"),
+            data_dir=tmp_path,
+        )
+
+        root = resolve_mention_root(cast(Any, runtime), "main", None)
+
+        assert root == repo
+
+    def test_rooted_identity_missing_project_does_not_fall_back(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        runtime = _FakeRuntime(
+            projects=_FakeProjects(str(tmp_path / "repo")),
+            agent=_FakeAgent(str(workspace), root_project_id="missing"),
+            data_dir=tmp_path,
+        )
+
+        with pytest.raises(KeyError, match="missing"):
+            resolve_mention_root(cast(Any, runtime), "main", None)
+
+    def test_rooted_identity_missing_cwd_does_not_fall_back(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        runtime = _FakeRuntime(
+            projects=_FakeProjects(str(tmp_path / "missing-repo")),
+            agent=_FakeAgent(str(workspace), root_project_id="vbot"),
+            data_dir=tmp_path,
+        )
+
+        with pytest.raises(ChatError, match="Project repository is unavailable"):
+            resolve_mention_root(cast(Any, runtime), "main", None)
 
     def test_identity_without_workspace_falls_back_to_data_dir(self, tmp_path: Path) -> None:
         runtime = _FakeRuntime(

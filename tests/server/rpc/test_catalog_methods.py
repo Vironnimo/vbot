@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -41,12 +42,14 @@ def _state(
     resolvable: bool = True,
     agent_workspace: str = "",
     rooted_project_id: str | None = None,
+    project_cwd: str | None = None,
 ) -> Any:
     global_registry = _Registry(global_names)
     project_registry = _Registry(project_names or [])
     agent = SimpleNamespace(
         allowed_skills=agent_allowed if agent_allowed is not None else ["*"],
         workspace=agent_workspace,
+        root_project_id=rooted_project_id,
     )
 
     def resolve_agent(project_id: str | None, agent_id: str) -> object:
@@ -59,14 +62,11 @@ def _state(
     def skills_for(project_id: str | None, agent_id: str | None = None) -> _Registry:
         return project_registry if project_id is not None else global_registry
 
-    # ``resolve_prompt_project`` reaches through this store: ``get`` for a project
-    # address, ``find_by_cwd`` for the rooted-identity lookup.
-    rooted = (
-        SimpleNamespace(project_id=rooted_project_id) if rooted_project_id is not None else None
-    )
     projects = SimpleNamespace(
-        get=lambda project_id: SimpleNamespace(project_id=project_id),
-        find_by_cwd=lambda _cwd: rooted,
+        get=lambda project_id: SimpleNamespace(
+            project_id=project_id,
+            cwd=project_cwd or str(Path.cwd()),
+        ),
     )
     runtime = SimpleNamespace(
         skills=global_registry,
@@ -114,9 +114,8 @@ def test_project_agent_address_uses_project_registry() -> None:
 
 
 def test_rooted_identity_agent_suggests_home_project_skills() -> None:
-    # A rooted identity agent (workspace == a registered repo, bare address) must
-    # autocomplete against its home project's pool — the same scope a run resolves —
-    # not the bare global registry.
+    # A bare Rooted Identity Agent autocompletes against its explicitly selected
+    # Project pool, not the bare global registry.
     state = _state(
         global_names=["bundled-only"],
         project_names=["home-skill"],
@@ -128,6 +127,20 @@ def test_rooted_identity_agent_suggests_home_project_skills() -> None:
     result = _list_commands(state, {"agent_id": "main"})
 
     assert _skill_names(result) == ["home-skill"]
+
+
+def test_rooted_identity_missing_project_cwd_maps_error_without_global_fallback(
+    tmp_path: Path,
+) -> None:
+    state = _state(
+        global_names=["must-not-fallback"],
+        project_names=["project-skill"],
+        rooted_project_id="vbot",
+        project_cwd=str(tmp_path / "missing-repo"),
+    )
+
+    with pytest.raises(RpcError, match="Project repository is unavailable"):
+        _list_commands(state, {"agent_id": "main"})
 
 
 def test_commands_are_always_present() -> None:
@@ -285,11 +298,20 @@ def _raise_ready() -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _files_state(*, project_cwd: str, workspace: str, data_dir: str) -> Any:
+def _files_state(
+    *,
+    project_cwd: str,
+    workspace: str,
+    data_dir: str,
+    root_project_id: str | None = None,
+) -> Any:
     runtime = SimpleNamespace(
         projects=SimpleNamespace(get=lambda project_id: SimpleNamespace(cwd=project_cwd)),
         agent_resolver=SimpleNamespace(
-            resolve_agent=lambda project_id, agent_id: SimpleNamespace(workspace=workspace)
+            resolve_agent=lambda project_id, agent_id: SimpleNamespace(
+                workspace=workspace,
+                root_project_id=root_project_id,
+            )
         ),
         storage=SimpleNamespace(data_dir=data_dir),
     )
@@ -324,6 +346,44 @@ async def test_files_list_identity_address_lists_workspace(tmp_path) -> None:
     result = await _list_files(state, {"agent_id": "main"})
 
     assert result["files"] == ["MEMORY.md"]
+
+
+@pytest.mark.asyncio
+async def test_files_list_rooted_identity_lists_selected_project(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "project.txt").write_text("project", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "private.txt").write_text("private", encoding="utf-8")
+    state = _files_state(
+        project_cwd=str(repo),
+        workspace=str(workspace),
+        data_dir=str(tmp_path),
+        root_project_id="vbot",
+    )
+
+    result = await _list_files(state, {"agent_id": "main"})
+
+    assert result["files"] == ["project.txt"]
+
+
+@pytest.mark.asyncio
+async def test_files_list_missing_rooted_cwd_maps_error_without_workspace_fallback(
+    tmp_path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "must-not-list.txt").write_text("private", encoding="utf-8")
+    state = _files_state(
+        project_cwd=str(tmp_path / "missing-repo"),
+        workspace=str(workspace),
+        data_dir=str(tmp_path),
+        root_project_id="vbot",
+    )
+
+    with pytest.raises(RpcError, match="Project repository is unavailable"):
+        await _list_files(state, {"agent_id": "main"})
 
 
 @pytest.mark.asyncio

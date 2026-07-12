@@ -21,7 +21,6 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
 
 import pytest
 
@@ -38,7 +37,7 @@ from core.runs import ChatRunManager, Run
 from core.runtime.runtime import Runtime
 from core.skills import SKILL_ORIGIN_BUNDLED, SKILL_ORIGIN_GLOBAL
 from core.utils.config import Config
-from server.rpc.errors import RpcError
+from server.rpc.errors import RPC_ERROR_PROJECT_BUSY, RpcError
 from server.rpc.methods import build_method_handlers
 from server.rpc.project_methods import (
     _add_project,
@@ -159,9 +158,9 @@ def _write_claude_agent(repo: Path, filename: str, name: str) -> None:
 def _make_state(tmp_path: Path, *, cron_jobs: list | None = None) -> SimpleNamespace:
     data_dir = tmp_path / "data"
     projects = ProjectStore(data_dir)
+    agents = AgentStore(data_dir)
     resolver = AgentResolver(
-        # The identity path is unused in these project-scoped tests.
-        agents=cast(AgentStore, SimpleNamespace()),
+        agents=agents,
         projects=projects,
         model_checker=_openai_configured(),
         global_agent_defaults=lambda: {},
@@ -170,6 +169,7 @@ def _make_state(tmp_path: Path, *, cron_jobs: list | None = None) -> SimpleNames
     cron_service = SimpleNamespace(list_jobs=lambda: list(cron_jobs or []))
     runtime = SimpleNamespace(
         projects=projects,
+        agents=agents,
         agent_resolver=resolver,
         cron_service=cron_service,
         # ``project.set_override``'s model gate reads ``runtime.models`` only for a pinned
@@ -1026,6 +1026,101 @@ async def test_rm_archives_project(tmp_path: Path) -> None:
     assert not state.runtime.projects.exists("vbot")
     # The repo (cwd) is never touched by removal.
     assert repo.joinpath(*OPENCODE_AGENTS_SUBPATH, "builder.md").exists()
+
+
+@pytest.mark.asyncio
+async def test_rm_unroots_identity_agents_and_resets_default_workspaces(
+    tmp_path: Path,
+) -> None:
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "vbot", "builder.md")
+    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+    custom_workspace = tmp_path / "identity-home"
+    agent = state.runtime.agents.create("coder", "Coder", workspace=custom_workspace)
+    Path(agent.workspace, "USER.md").write_text("user", encoding="utf-8")
+    state.runtime.agents.update("coder", root_project_id="vbot")
+
+    result = await _remove_project(
+        state,
+        {
+            "project_id": "vbot",
+            "copy_rooted_agent_identity_files": True,
+        },
+    )
+
+    reset_agent = state.runtime.agents.get("coder")
+    assert result["affected_agent_ids"] == ["coder"]
+    assert reset_agent.root_project_id is None
+    assert reset_agent.workspace == state.runtime.agents.default_workspace("coder")
+    assert Path(reset_agent.workspace, "USER.md").read_text(encoding="utf-8") == "user"
+    assert Path(agent.workspace, "USER.md").read_text(encoding="utf-8") == "user"
+    assert repo.exists()
+
+
+@pytest.mark.asyncio
+async def test_rm_rolls_back_agent_reset_when_project_archive_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "vbot")
+    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+    custom_workspace = tmp_path / "identity-home"
+    agent = state.runtime.agents.create("coder", "Coder", workspace=custom_workspace)
+    Path(agent.workspace, "USER.md").write_text("source", encoding="utf-8")
+    default_workspace = Path(state.runtime.agents.default_workspace("coder"))
+    default_workspace.mkdir(parents=True)
+    default_workspace.joinpath("USER.md").write_text("destination", encoding="utf-8")
+    state.runtime.agents.update("coder", root_project_id="vbot")
+
+    def fail_archive(_project_id: str) -> Path:
+        raise OSError("archive failed")
+
+    monkeypatch.setattr(state.runtime.projects, "delete", fail_archive)
+
+    with pytest.raises(OSError, match="archive failed"):
+        await _remove_project(
+            state,
+            {
+                "project_id": "vbot",
+                "copy_rooted_agent_identity_files": True,
+            },
+        )
+
+    restored = state.runtime.agents.get("coder")
+    assert state.runtime.projects.exists("vbot")
+    assert restored.root_project_id == "vbot"
+    assert restored.workspace == agent.workspace
+    assert Path(agent.workspace, "USER.md").read_text(encoding="utf-8") == "source"
+    assert default_workspace.joinpath("USER.md").read_text(encoding="utf-8") == "destination"
+
+
+@pytest.mark.asyncio
+async def test_rm_blocks_identity_run_using_project_as_working_context(
+    tmp_path: Path,
+) -> None:
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "vbot")
+    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+    release = asyncio.Event()
+
+    async def execute(_run: Run) -> None:
+        await release.wait()
+
+    run = await state.chat_runs.start(
+        agent_id="coder",
+        session_id="s1",
+        executor=execute,
+        project_id=None,
+        working_project_id="vbot",
+    )
+    try:
+        with pytest.raises(RpcError) as exc:
+            await _remove_project(state, {"project_id": "vbot"})
+        assert exc.value.code == RPC_ERROR_PROJECT_BUSY
+    finally:
+        release.set()
+        await run.wait()
 
 
 @pytest.mark.asyncio

@@ -75,6 +75,7 @@ def test_create_writes_agent_json_sessions_and_workspace(store: AgentStore) -> N
     assert data["model"] == ""
     assert data["fallback_model"] == ""
     assert data["workspace"] == str((store.data_dir / "agents" / "coder" / "workspace").resolve())
+    assert data["root_project_id"] is None
     assert data["temperature"] is None
     assert data["thinking_effort"] is None
     assert data["memory_prompt_mode"] == "agent_user"
@@ -299,6 +300,79 @@ def test_update_changes_workspace_and_seeds_templates(
     agent_path = store.data_dir / "agents" / "coder" / "agent.json"
     data = json.loads(agent_path.read_text(encoding="utf-8"))
     assert data["workspace"] == str(workspace.resolve())
+
+
+def test_explicit_root_project_round_trips_independently_of_workspace(
+    store: AgentStore,
+) -> None:
+    created = store.create("coder", "Coder Agent")
+
+    rooted = store.update("coder", root_project_id="vbot")
+    assert rooted.root_project_id == "vbot"
+    assert rooted.workspace == created.workspace
+
+    unrooted = store.update("coder", root_project_id=None)
+    assert unrooted.root_project_id is None
+    assert unrooted.workspace == created.workspace
+
+
+def test_workspace_copy_preserves_sources_and_backs_up_destinations(
+    store: AgentStore,
+    tmp_path: Path,
+) -> None:
+    agent = store.create("coder", "Coder Agent")
+    source = Path(agent.workspace)
+    (source / "SOUL.md").write_text("source soul", encoding="utf-8")
+    (source / "USER.md").write_text("source user", encoding="utf-8")
+    (source / "MEMORY.md").write_text("source memory", encoding="utf-8")
+    destination = tmp_path / "new-workspace"
+    destination.mkdir()
+    (destination / "SOUL.md").write_text("old soul", encoding="utf-8")
+
+    result = store.update_with_metadata(
+        "coder",
+        workspace=destination,
+        copy_workspace_identity_files=True,
+    )
+
+    assert result.copied_files == ("SOUL.md", "USER.md", "MEMORY.md")
+    assert result.backed_up_files == ("SOUL.md",)
+    assert (destination / "SOUL.md").read_text(encoding="utf-8") == "source soul"
+    assert (destination / "USER.md").read_text(encoding="utf-8") == "source user"
+    assert (destination / "MEMORY.md").read_text(encoding="utf-8") == "source memory"
+    assert (source / "SOUL.md").read_text(encoding="utf-8") == "source soul"
+    assert result.backup_dir is not None
+    assert Path(result.backup_dir, "SOUL.md").read_text(encoding="utf-8") == "old soul"
+
+
+def test_workspace_copy_rolls_back_destination_when_agent_write_fails(
+    store: AgentStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent = store.create("coder", "Coder Agent")
+    source = Path(agent.workspace)
+    (source / "SOUL.md").write_text("source soul", encoding="utf-8")
+    destination = tmp_path / "new-workspace"
+    destination.mkdir()
+    (destination / "SOUL.md").write_text("destination soul", encoding="utf-8")
+
+    monkeypatch.setattr(
+        store, "_write_agent", lambda _agent: (_ for _ in ()).throw(OSError("disk"))
+    )
+
+    with pytest.raises(OSError, match="disk"):
+        store.update_with_metadata(
+            "coder",
+            workspace=destination,
+            copy_workspace_identity_files=True,
+        )
+
+    assert (destination / "SOUL.md").read_text(encoding="utf-8") == "destination soul"
+    agent_json = json.loads(
+        (store.data_dir / "agents" / "coder" / "agent.json").read_text(encoding="utf-8")
+    )
+    assert agent_json["workspace"] == agent.workspace
 
 
 @pytest.mark.parametrize(

@@ -464,7 +464,10 @@ describe('project.* wrappers', () => {
 
     expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
       method: 'project.rm',
-      params: { project_id: 'demo' },
+      params: {
+        project_id: 'demo',
+        copy_rooted_agent_identity_files: false,
+      },
     });
   });
 
@@ -475,6 +478,21 @@ describe('project.* wrappers', () => {
         method: 'project.rm',
       }),
     );
+  });
+
+  it('sends the aggregate Rooted-Agent copy choice through project.rm', async () => {
+    const fetchFunction = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ ok: true, result: { project_id: 'demo' } }),
+      );
+
+    await removeProject('demo', true, { fetch: fetchFunction });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body).params).toEqual({
+      project_id: 'demo',
+      copy_rooted_agent_identity_files: true,
+    });
   });
 
   it('sets a per-agent override through project.set_override', async () => {

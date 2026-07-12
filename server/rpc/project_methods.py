@@ -47,6 +47,7 @@ from core.settings import (
     validate_thinking_effort,
 )
 from core.skills import SKILL_ORIGIN_GLOBAL
+from server.events import RESOURCE_KIND_AGENTS, RESOURCE_KIND_PROJECTS
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -56,9 +57,11 @@ from server.rpc.errors import (
     RPC_ERROR_PROJECT_IN_USE,
     RpcError,
 )
+from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.runtime_access import _state_chat_runs
 from server.rpc.validation import (
     _ensure_model_usable,
+    _optional_bool,
     _optional_string,
     _reject_unsupported,
     _required_string,
@@ -173,6 +176,7 @@ def _add_project(state: Any, params: JsonObject) -> JsonObject:
         raise _map_expected_error(exc) from exc
 
     scan = _scan_preview(state, project)
+    publish_resource_changed(state, RESOURCE_KIND_PROJECTS)
     return {"project": _project_response(project), "scan": scan}
 
 
@@ -248,6 +252,7 @@ def _set_project(state: Any, params: JsonObject) -> JsonObject:
     if "cwd" in changes or "source_format" in changes:
         _invalidate_project_caches(state, project_id)
     scan = _scan_preview(state, project)
+    publish_resource_changed(state, RESOURCE_KIND_PROJECTS)
     return {"project": _project_response(project), "scan": scan}
 
 
@@ -358,10 +363,18 @@ def _validate_override_value(state: Any, field: str, value: Any) -> Any:
 
 
 async def _remove_project(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"project_id"}, "project.rm")
+    _reject_unsupported(
+        params,
+        {"project_id", "copy_rooted_agent_identity_files"},
+        "project.rm",
+    )
 
     project_id = _required_string(params, "project_id")
+    copy_identity_files = _optional_bool(params, "copy_rooted_agent_identity_files", default=False)
     projects = _projects(state)
+    affected_agents: list[str] = []
+    copied_files: dict[str, list[str]] = {}
+    backed_up_files: dict[str, list[str]] = {}
     try:
         # Serialize the check-then-archive against any concurrent remove using the
         # same lock the Agent delete lock uses, so a busy check cannot race the
@@ -370,7 +383,29 @@ async def _remove_project(state: Any, params: JsonObject) -> JsonObject:
             projects.get(project_id)
             _ensure_not_busy(state, project_id)
             _ensure_no_cron_reference(state, project_id)
-            archive_path = projects.delete(project_id)
+            rooted_agents = state.runtime.agents.agents_rooted_in(project_id)
+            completed_updates: list[tuple[Any, Any]] = []
+            try:
+                for agent in rooted_agents:
+                    default_workspace = state.runtime.agents.default_workspace(agent.id)
+                    changes: JsonObject = {"root_project_id": None}
+                    workspace_changes = agent.workspace != default_workspace
+                    if workspace_changes:
+                        changes["workspace"] = default_workspace
+                    result = state.runtime.agents.update_with_metadata(
+                        agent.id,
+                        copy_workspace_identity_files=(copy_identity_files and workspace_changes),
+                        **changes,
+                    )
+                    completed_updates.append((agent, result))
+                    affected_agents.append(agent.id)
+                    copied_files[agent.id] = list(result.copied_files)
+                    backed_up_files[agent.id] = list(result.backed_up_files)
+                archive_path = projects.delete(project_id)
+            except Exception:
+                for previous_agent, result in reversed(completed_updates):
+                    state.runtime.agents.restore_update(previous_agent, result)
+                raise
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     # Removal drops this repo from resolution; clear both per-project caches so a
@@ -379,7 +414,16 @@ async def _remove_project(state: Any, params: JsonObject) -> JsonObject:
     # the lock: a deleted project can no longer repopulate either cache (every
     # load raises), so nothing can race a stale entry back in.
     _invalidate_project_caches(state, project_id)
-    return {"project_id": project_id, "archived": True, "archive_path": str(archive_path)}
+    publish_resource_changed(state, RESOURCE_KIND_AGENTS)
+    publish_resource_changed(state, RESOURCE_KIND_PROJECTS)
+    return {
+        "project_id": project_id,
+        "archived": True,
+        "archive_path": str(archive_path),
+        "affected_agent_ids": affected_agents,
+        "copied_files": copied_files,
+        "backed_up_files": backed_up_files,
+    }
 
 
 def _ensure_not_busy(state: Any, project_id: str) -> None:
@@ -390,6 +434,11 @@ def _ensure_not_busy(state: Any, project_id: str) -> None:
     blocked (``project_busy``), mirroring the Agent ``agent_busy`` guard.
     """
     chat_runs = _state_chat_runs(state)
+    if chat_runs.has_activity_for_working_project(project_id):
+        raise RpcError(
+            RPC_ERROR_PROJECT_BUSY,
+            "cannot remove project with active or queued rooted Agent work",
+        )
     for agent_id in _projects(state).session_owning_agents(project_id):
         # Scoped to this project: a same-named identity agent's (or another
         # project's) activity must not block removing this project.

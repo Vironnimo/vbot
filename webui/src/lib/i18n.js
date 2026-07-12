@@ -314,6 +314,19 @@ export const englishCatalog = Object.freeze({
   'agents.form.workspaceEditableHelp':
     "Home of this agent's identity and memory files (SOUL.md, USER.md, MEMORY.md); the memory tool works here. File tools follow the session's working directory instead — the project repository in project sessions.",
   'agents.form.workspaceSetToDefault': 'Set to default',
+  'agents.form.project': 'Project',
+  'agents.form.noProject': 'No project',
+  'agents.form.projectHelp':
+    'Where relative file and shell work runs. Workspace remains the identity and memory home.',
+  'agents.form.projectLoadError': 'Projects could not be loaded.',
+  'agents.form.projectUnavailableHelp':
+    'The saved selection is preserved. Project editing is unavailable until the catalog reloads.',
+  'agents.form.unavailableProject': 'Unavailable project',
+  'agents.workspaceMove.title': 'Change Workspace?',
+  'agents.workspaceMove.body':
+    'Choose whether to copy SOUL.md, USER.md, and MEMORY.md into the new Workspace. Source files remain in place; existing destination versions are backed up before replacement.',
+  'agents.workspaceMove.copy': 'Copy files',
+  'agents.workspaceMove.dontCopy': "Don't copy",
   'agents.form.submitCreate': 'Create agent',
   'agents.form.submitUpdate': 'Save changes',
   'agents.form.required': 'This field is required.',
@@ -511,6 +524,18 @@ export const englishCatalog = Object.freeze({
   'projects.manage.saveSuccess': 'Project updated.',
   'projects.remove': 'Remove',
   'projects.remove.confirmTitle': 'Remove project',
+  'projects.remove.rootedAgentsBody':
+    'Removing {name} clears it from every affected Rooted Agent and resets those Agents to their Default Workspace. Their Sessions and history stay unchanged. The repository and old Workspace files are never touched.',
+  'projects.remove.copyIdentityFiles':
+    'Copy SOUL.md, USER.md, and MEMORY.md to affected Default Workspaces',
+  'projects.remove.copyIdentityFilesHelp':
+    'When enabled, existing destination versions are backed up before replacement. One choice applies to every affected Agent.',
+  'projects.remove.successOneAgent':
+    'Project removed. 1 Agent was reset; identity files {copyState}.',
+  'projects.remove.successManyAgents':
+    'Project removed. {count} Agents were reset; identity files {copyState}.',
+  'projects.remove.filesCopied': 'were copied',
+  'projects.remove.filesNotCopied': 'were not copied',
   'projects.remove.confirm':
     'Remove project {name}? The project is archived and can be restored; the repository on disk is never touched.',
   'projects.remove.error': 'Project could not be removed.',

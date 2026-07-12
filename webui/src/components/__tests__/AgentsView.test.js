@@ -447,11 +447,14 @@ describe('AgentsView', () => {
     flushSync();
 
     submitAgentForm();
+    getButton("Don't copy").click();
+    flushSync();
     await waitForCondition(() => getAgentUpdateCalls().length === 1, 100);
 
     expect(getAgentUpdateCalls()[0][1]).toEqual({
       id: 'alpha',
       workspace: 'D:/agents/alpha',
+      copy_workspace_identity_files: false,
     });
   });
 
@@ -484,11 +487,85 @@ describe('AgentsView', () => {
     resetButton.click();
     flushSync();
 
+    getButton("Don't copy").click();
+    flushSync();
+
     await waitForCondition(() => getAgentUpdateCalls().length === 1, 100);
 
     expect(getAgentUpdateCalls()[0][1]).toEqual({
       id: 'alpha',
       workspace: 'C:/data/agents/alpha/workspace',
+      copy_workspace_identity_files: false,
+    });
+  });
+
+  it('copies identity files only after the workspace decision', async () => {
+    rpcMock.mockImplementation(createAgentsRpcMock());
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+    await waitForCondition(() =>
+      document.body.querySelector('#agent-workspace'),
+    );
+
+    const workspaceInput = document.body.querySelector('#agent-workspace');
+    workspaceInput.value = 'D:/agents/copied';
+    workspaceInput.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    submitAgentForm();
+
+    expect(getAgentUpdateCalls()).toHaveLength(0);
+    getButton('Copy files').click();
+    flushSync();
+    await waitForCondition(() => getAgentUpdateCalls().length === 1, 100);
+    expect(getAgentUpdateCalls()[0][1]).toEqual({
+      id: 'alpha',
+      workspace: 'D:/agents/copied',
+      copy_workspace_identity_files: true,
+    });
+  });
+
+  it('cancels a workspace save without discarding the draft', async () => {
+    rpcMock.mockImplementation(createAgentsRpcMock());
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+    await waitForCondition(() =>
+      document.body.querySelector('#agent-workspace'),
+    );
+
+    const workspaceInput = document.body.querySelector('#agent-workspace');
+    workspaceInput.value = 'D:/agents/draft';
+    workspaceInput.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    submitAgentForm();
+    getButton('Cancel').click();
+    flushSync();
+
+    expect(getAgentUpdateCalls()).toHaveLength(0);
+    expect(document.body.querySelector('#agent-workspace').value).toBe(
+      'D:/agents/draft',
+    );
+  });
+
+  it('saves the edit-only Project selection independently of Workspace', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        projects: [
+          { project_id: 'demo', display_name: 'Demo', cwd: 'C:/repos/demo' },
+        ],
+      }),
+    );
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+    await waitForCondition(() => document.body.querySelector('#agent-project'));
+
+    openSimpleDropdown('agent-project');
+    selectSimpleOption('agent-project', 'Demo');
+    submitAgentForm();
+    await waitForCondition(() => getAgentUpdateCalls().length === 1, 100);
+
+    expect(getAgentUpdateCalls()[0][1]).toEqual({
+      id: 'alpha',
+      root_project_id: 'demo',
     });
   });
 
@@ -2170,6 +2247,10 @@ function createAgentsRpcMock(options = {}) {
 
     if (method === 'skill.list') {
       return options.skills ?? skillCatalog();
+    }
+
+    if (method === 'project.list') {
+      return { projects: options.projects ?? [] };
     }
 
     if (method === 'agent.list') {

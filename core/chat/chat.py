@@ -132,7 +132,12 @@ from core.chat.tool_dispatch import (
 from core.chat.usage import aggregate_session_usage
 from core.debug import DebugContext
 from core.extensions import HookContext
-from core.projects import resolve_prompt_project, resolve_skill_scope, runtime_agent_body
+from core.projects import (
+    resolve_prompt_project,
+    resolve_skill_scope,
+    resolve_working_project_id,
+    runtime_agent_body,
+)
 from core.prompts import PinnedSkillCatalog, ProjectPromptContext
 from core.providers.errors import NetworkError
 from core.providers.providers import resolve_effective_context_window
@@ -454,6 +459,7 @@ class ChatLoop:
         today's identity behavior.
         """
         agent = self._runtime.agent_resolver.resolve_agent(project_id, agent_id)
+        working_project_id = resolve_working_project_id(project_id, agent)
         provider_id, _connection_id = _resolve_agent_connection(self._runtime, agent)
         _ensure_provider_exists(self._runtime.providers, provider_id)
         session = self._get_session(
@@ -473,6 +479,7 @@ class ChatLoop:
             display_content=_display_content_preview(content),
             internal=internal,
             project_id=project_id,
+            working_project_id=working_project_id,
             waiting_work_admission=waiting_work_admission,
         )
 
@@ -521,11 +528,14 @@ class ChatLoop:
         if summary["can_continue"] is not True:
             raise ChatSessionError("cancelled work requires a new user message to continue")
         manager = self._runtime.chat_run_manager
+        agent = self._runtime.agent_resolver.resolve_agent(project_id, agent_id)
+        working_project_id = resolve_working_project_id(project_id, agent)
         return await manager.start(
             agent_id=agent_id,
             session_id=session.id,
             executor=lambda run: self._execute_run(run, content=None, explicit_continue=True),
             project_id=project_id,
+            working_project_id=working_project_id,
         )
 
     def continuation_summary(
@@ -597,6 +607,7 @@ class ChatLoop:
         # (``project_id=None``) the identity session — both through the one
         # resolver/session seam.
         agent = self._runtime.agent_resolver.resolve_agent(project_id, agent_id)
+        working_project_id = resolve_working_project_id(project_id, agent)
         session = self._get_session(
             agent_id, session_id, create_missing=False, project_id=project_id
         )
@@ -608,6 +619,7 @@ class ChatLoop:
         adapter: Any | None = None
         summary_adapter: Any | None = None
         try:
+            self._resolve_project_cwd(working_project_id)
             provider_id, connection_id = _resolve_agent_connection(self._runtime, agent)
             adapter = self._runtime.get_adapter(provider_id, connection_id)
             _model_provider_id, model_id = _split_agent_model(agent.model)
@@ -617,7 +629,7 @@ class ChatLoop:
                 model_id,
                 settings,
             )
-            prompt_project = resolve_prompt_project(self._runtime.projects, project_id, agent)
+            prompt_project = resolve_prompt_project(self._runtime.projects, working_project_id)
             prompt_context = (
                 ProjectPromptContext.from_project(prompt_project.cwd, prompt_project.auto_load)
                 if prompt_project is not None
@@ -677,6 +689,7 @@ class ChatLoop:
         tool_restriction: Sequence[str] | None = None,
     ) -> Run:
         agent = self._runtime.agent_resolver.resolve_agent(project_id, agent_id)
+        working_project_id = resolve_working_project_id(project_id, agent)
         provider_id, _connection_id = _resolve_agent_connection(self._runtime, agent)
         _ensure_provider_exists(self._runtime.providers, provider_id)
         session = self._get_session(
@@ -695,6 +708,7 @@ class ChatLoop:
                 tool_restriction=tool_restriction,
             ),
             project_id=project_id,
+            working_project_id=working_project_id,
         )
 
     async def _execute_run(
@@ -778,6 +792,7 @@ class ChatLoop:
         # cwd, and the resolved agent profile all derive from it here. An identity
         # run carries ``run.project_id is None`` and behaves byte-identically.
         project_id = run.project_id
+        working_project_id = run.working_project_id
         agent = self._runtime.agent_resolver.resolve_agent(project_id, run.agent_id)
         _model_provider_id, model_id = _split_agent_model(agent.model)
         provider_id, connection_id = _resolve_agent_connection(self._runtime, agent)
@@ -786,15 +801,15 @@ class ChatLoop:
         run.add_cancel_callback(lambda: _close_adapter(adapter))
         process_manager = self._runtime.process_manager
         run.add_cancel_callback(lambda: process_manager.cancel_scope(run.id))
-        project_cwd = self._resolve_project_cwd(project_id)
+        project_cwd = self._resolve_project_cwd(working_project_id)
         # System-prompt inputs. The config-agent body is verbatim (empty for an
         # identity agent). The project files come from the run's prompt-project: a
         # project-born session uses its own project; an identity session uses the
-        # project the agent is *rooted* in (workspace == a registered repo), else
+        # Project captured from the Agent's explicit selection, else
         # there is none and both inputs collapse — an ordinary identity prompt is
         # byte-identical to today.
         agent_body = runtime_agent_body(agent)
-        prompt_project = resolve_prompt_project(self._runtime.projects, project_id, agent)
+        prompt_project = resolve_prompt_project(self._runtime.projects, working_project_id)
         project_prompt_context = (
             ProjectPromptContext.from_project(prompt_project.cwd, prompt_project.auto_load)
             if prompt_project is not None
@@ -1128,33 +1143,29 @@ class ChatLoop:
             return session_manager.create(agent_id, session_id=session_id, project_id=project_id)
 
     def _resolve_project_cwd(self, project_id: str | None) -> Path | None:
-        """Resolve the repo cwd for a project session, or ``None`` for identity.
-
-        For an identity session (``project_id is None``) tools keep resolving
-        against the agent workspace, so nothing is passed to tool dispatch. For a
-        project session the project's ``cwd`` (a ``str`` field) becomes a ``Path``
-        so file/shell tools resolve relative paths against the repo, not the
-        workspace.
-        """
+        """Resolve a working Project cwd, failing closed when unavailable."""
         if project_id is None:
             return None
-        return Path(self._runtime.projects.get(project_id).cwd)
+        cwd = Path(self._runtime.projects.get(project_id).cwd)
+        if not cwd.is_dir():
+            raise ChatError(f"Project repository is unavailable: {cwd}")
+        return cwd
 
     def _resolve_project_prompt_context(
-        self, project_id: str | None, agent: Any
+        self, project_id: str | None
     ) -> ProjectPromptContext | None:
         """Build the prompt-time project context for this run, or ``None``.
 
         Resolves through the shared rooting policy (:func:`resolve_prompt_project`):
         a project session uses its own project, an identity session uses the
-        project the agent is *rooted* in (workspace == a registered repo), and any
+        explicitly captured working Project, and any
         other identity run yields ``None`` → the ``{project_files}`` placeholder
         collapses and the prompt is unchanged. When present it carries the repo cwd
         + the project's auto-load list (AGENTS.md is the seeded first entry, not
         special-cased). Used by the compaction rebuild so a rooted agent keeps its
         project files across a mid-run compaction.
         """
-        project = resolve_prompt_project(self._runtime.projects, project_id, agent)
+        project = resolve_prompt_project(self._runtime.projects, project_id)
         if project is None:
             return None
         return ProjectPromptContext.from_project(project.cwd, project.auto_load)
@@ -1838,7 +1849,7 @@ class ChatLoop:
             replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
             wire_media_types=_resolve_wire_media_support(adapter, model_id),
             agent_body=runtime_agent_body(agent),
-            project_context=self._resolve_project_prompt_context(project_id, agent),
+            project_context=self._resolve_project_prompt_context(run.working_project_id),
             skill_registry=compaction_skill_registry,
             # Reuse the session's pinned snapshot so the rebuilt prompt's catalog is
             # byte-identical across the compaction checkpoint.

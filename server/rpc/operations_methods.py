@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from core.projects import resolve_prompt_project, resolve_skill_scope, runtime_agent_body
+from core.projects import (
+    resolve_prompt_project,
+    resolve_skill_scope,
+    resolve_working_project_id,
+    runtime_agent_body,
+)
 from core.prompts import ProjectPromptContext, PromptError, SystemPromptManager
 from core.utils.log_viewer import LogViewer
 from core.utils.tokens import estimate_json_tokens, estimate_tokens
@@ -165,13 +170,14 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
 
     try:
         agent = state.runtime.agent_resolver.resolve_agent(project_id, agent_id)
+        working_project_id = resolve_working_project_id(project_id, agent)
         # The preview resolves through the same shared rooting policy a run uses
         # (:func:`core.projects.resolve_prompt_project`), so it matches what is
         # actually sent: a project-qualified preview carries that project's cwd and
         # auto-load list; a bare identity preview carries the files of the project
-        # the agent is *rooted* in (workspace == a registered repo), or nothing —
+        # the Identity Agent explicitly selected, or nothing —
         # in which case ``{project_files}`` collapses and the prompt is unchanged.
-        prompt_project = resolve_prompt_project(state.runtime.projects, project_id, agent)
+        prompt_project = resolve_prompt_project(state.runtime.projects, working_project_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     project_context = (

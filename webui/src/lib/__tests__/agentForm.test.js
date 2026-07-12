@@ -18,6 +18,7 @@ describe('agent form helpers', () => {
       model: '',
       fallback_model: '',
       workspace: '',
+      root_project_id: null,
       temperature: '',
       thinking_effort: '',
       memory_prompt_mode: 'agent_user',
@@ -67,6 +68,25 @@ describe('agent form helpers', () => {
     expect(values.model).toBe('openai/gpt-5.2');
     expect(values.temperature).toBe('0.7');
     expect(values.thinking_effort).toBe('high');
+  });
+
+  it('includes Project only in sparse edit payloads', () => {
+    const initialValues = createAgentFormValues({
+      id: 'coder',
+      name: 'Coder',
+      workspace: 'C:/agents/coder',
+      root_project_id: null,
+    });
+    const values = { ...initialValues, root_project_id: 'vbot' };
+
+    const edit = normalizeAgentForm(values, {
+      mode: AGENT_FORM_MODE_EDIT,
+      initialValues,
+    });
+    const create = normalizeAgentForm(values);
+
+    expect(edit.payload).toEqual({ id: 'coder', root_project_id: 'vbot' });
+    expect(create.payload).not.toHaveProperty('root_project_id');
   });
 
   it('preserves inherit payload semantics when seeding from raw config', () => {

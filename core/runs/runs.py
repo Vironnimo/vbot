@@ -105,6 +105,7 @@ class QueuedRunItem:
     executor: RunExecutor
     internal: bool
     future: asyncio.Future[Run]
+    working_project_id: str | None = field(default=None, repr=False)
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     waiting_scope: str | None = field(default=None, repr=False)
 
@@ -178,6 +179,7 @@ class Run:
         agent_id: str,
         session_id: str,
         project_id: str | None = None,
+        working_project_id: str | None = None,
         event_retention_limit: int = DEFAULT_RUN_EVENT_RETENTION_LIMIT,
         subscriber_queue_limit: int = DEFAULT_RUN_SUBSCRIBER_QUEUE_LIMIT,
     ) -> None:
@@ -192,6 +194,9 @@ class Run:
         # run). Carried solely so the executor's session I/O finds the
         # project-scoped transcript path — it is not part of the run/queue key.
         self.project_id = project_id
+        # Internal working context. This never participates in Session identity,
+        # public addressing, events, or queue keys.
+        self.working_project_id = working_project_id
         self.status = RunStatus.RUNNING
         self.created_at = datetime.now(UTC).isoformat()
         self.updated_at = self.created_at
@@ -545,6 +550,7 @@ class ChatRunManager:
         session_id: str,
         executor: RunExecutor,
         project_id: str | None,
+        working_project_id: str | None = None,
     ) -> Run:
         """Start one run if the session has no active run.
 
@@ -560,6 +566,7 @@ class ChatRunManager:
             return self._start_run_locked(
                 session_key=session_key,
                 executor=executor,
+                working_project_id=working_project_id,
             )
 
     async def enqueue(
@@ -571,6 +578,7 @@ class ChatRunManager:
         display_content: str = "",
         internal: bool = False,
         project_id: str | None,
+        working_project_id: str | None = None,
         waiting_work_admission: WaitingWorkAdmission | None = None,
     ) -> QueuedRunItem:
         """Start immediately when idle or append one item to the session queue."""
@@ -582,6 +590,7 @@ class ChatRunManager:
             executor=executor,
             internal=internal,
             future=future,
+            working_project_id=working_project_id,
         )
 
         def remove_abandoned_item(completed_future: asyncio.Future[Run]) -> None:
@@ -605,6 +614,7 @@ class ChatRunManager:
                 run = self._start_run_locked(
                     session_key=session_key,
                     executor=item.executor,
+                    working_project_id=item.working_project_id,
                     queue_item_id=item.item_id,
                 )
                 item.future.set_result(run)
@@ -771,6 +781,19 @@ class ChatRunManager:
             for (queued_project_id, queued_agent_id, _session_id), queue in self._queues.items()
         )
 
+    def has_activity_for_working_project(self, project_id: str) -> bool:
+        """Return whether active or queued work depends on one Project."""
+        if any(
+            run.status == RunStatus.RUNNING and run.working_project_id == project_id
+            for run in self._active_by_session.values()
+        ):
+            return True
+        return any(
+            item.working_project_id == project_id
+            for queue in self._queues.values()
+            for item in queue
+        )
+
     def has_activity_for_session(
         self, agent_id: str, session_id: str, *, project_id: str | None
     ) -> bool:
@@ -878,6 +901,7 @@ class ChatRunManager:
                     session_key=session_key,
                     executor=item.executor,
                     queue_item_id=item.item_id,
+                    working_project_id=item.working_project_id,
                 )
                 item.future.set_result(run)
                 return
@@ -890,6 +914,7 @@ class ChatRunManager:
         session_key: SessionKey,
         executor: RunExecutor,
         queue_item_id: str | None = None,
+        working_project_id: str | None = None,
     ) -> Run:
         # The key is the single source of the run's identity: the project anchor,
         # agent, and session all come from it, so a drained queue item can never
@@ -900,6 +925,7 @@ class ChatRunManager:
             agent_id=agent_id,
             session_id=session_id,
             project_id=project_id,
+            working_project_id=working_project_id,
             event_retention_limit=self._run_event_retention_limit,
         )
         run._started_from_queue_item_id = queue_item_id  # noqa: SLF001 - run carries its own start origin.

@@ -6,7 +6,6 @@
   import CompactionPolicyEditor from './compaction/CompactionPolicyEditor.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
-  import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import EmptyState from './ui/EmptyState.svelte';
   import FormField from './ui/FormField.svelte';
   import Modal from './ui/Modal.svelte';
@@ -185,6 +184,7 @@
   let removingProjectId = $state('');
   // The project awaiting remove confirmation (null = dialog closed).
   let removeConfirmProject = $state(null);
+  let copyRootedAgentIdentityFiles = $state(false);
 
   // Which team-member rows are expanded (keyed agent id → true), plus each
   // member's override draft and the in-flight override field, so a row's expand state
@@ -1245,6 +1245,7 @@
 
   function removeOne(project) {
     removeConfirmProject = project;
+    copyRootedAgentIdentityFiles = false;
   }
 
   function cancelRemove() {
@@ -1264,7 +1265,10 @@
     editError = '';
 
     try {
-      await removeProject(project.project_id);
+      const result = await removeProject(
+        project.project_id,
+        copyRootedAgentIdentityFiles,
+      );
       if (destroyed) {
         return;
       }
@@ -1274,7 +1278,24 @@
         activeReport = null;
         activeScanSkills = { project: [], bundled: [], global: [] };
       }
-      statusMessage = t('projects.remove.success', 'Project removed.');
+      const affectedCount = Array.isArray(result?.affected_agent_ids)
+        ? result.affected_agent_ids.length
+        : 0;
+      const copyState = copyRootedAgentIdentityFiles
+        ? t('projects.remove.filesCopied', 'were copied')
+        : t('projects.remove.filesNotCopied', 'were not copied');
+      statusMessage =
+        affectedCount === 1
+          ? t(
+              'projects.remove.successOneAgent',
+              'Project removed. 1 Agent was reset; identity files {copyState}.',
+              { copyState },
+            )
+          : t(
+              'projects.remove.successManyAgents',
+              'Project removed. {count} Agents were reset; identity files {copyState}.',
+              { count: affectedCount, copyState },
+            );
       await loadProjects();
     } catch (error) {
       if (destroyed) {
@@ -2753,20 +2774,64 @@
   {/if}
 
   {#if removeConfirmProject}
-    <ConfirmDialog
+    <Modal
       title={t('projects.remove.confirmTitle', 'Remove project')}
-      body={t(
-        'projects.remove.confirm',
-        'Remove project {name}? The project is archived and can be restored; the repository on disk is never touched.',
-        {
-          name:
-            removeConfirmProject.display_name ||
-            removeConfirmProject.project_id,
-        },
-      )}
-      confirmLabel={t('common.remove', 'Remove')}
-      onConfirm={confirmRemove}
-      onCancel={cancelRemove}
-    />
+      onClose={cancelRemove}
+      closeDisabled={Boolean(removingProjectId)}
+    >
+      {#snippet body()}
+        <p>
+          {t(
+            'projects.remove.rootedAgentsBody',
+            'Removing {name} clears it from every affected Rooted Agent and resets those Agents to their Default Workspace. Their Sessions and history stay unchanged. The repository and old Workspace files are never touched.',
+            {
+              name:
+                removeConfirmProject.display_name ||
+                removeConfirmProject.project_id,
+            },
+          )}
+        </p>
+        <div class="projects-toggle-row">
+          <span>
+            {t(
+              'projects.remove.copyIdentityFiles',
+              'Copy SOUL.md, USER.md, and MEMORY.md to affected Default Workspaces',
+            )}
+          </span>
+          <Toggle
+            size="sm"
+            checked={copyRootedAgentIdentityFiles}
+            disabled={Boolean(removingProjectId)}
+            ariaLabel={t(
+              'projects.remove.copyIdentityFiles',
+              'Copy SOUL.md, USER.md, and MEMORY.md to affected Default Workspaces',
+            )}
+            onChange={(next) => (copyRootedAgentIdentityFiles = next)}
+          />
+        </div>
+        <p class="modal-hint">
+          {t(
+            'projects.remove.copyIdentityFilesHelp',
+            'When enabled, existing destination versions are backed up before replacement. One choice applies to every affected Agent.',
+          )}
+        </p>
+      {/snippet}
+      {#snippet footer()}
+        <Button
+          variant="secondary"
+          disabled={Boolean(removingProjectId)}
+          onClick={cancelRemove}
+        >
+          {t('common.cancel', 'Cancel')}
+        </Button>
+        <Button
+          variant="danger"
+          disabled={Boolean(removingProjectId)}
+          onClick={confirmRemove}
+        >
+          {t('common.remove', 'Remove')}
+        </Button>
+      {/snippet}
+    </Modal>
   {/if}
 </section>

@@ -58,6 +58,41 @@ async def test_replays_events_to_late_subscriber() -> None:
     assert events[1].payload == {"content": "hello"}
 
 
+async def test_working_project_is_internal_and_snapshotted_through_queue() -> None:
+    manager = ChatRunManager()
+    release = asyncio.Event()
+
+    async def blocked(_run: Run) -> str:
+        await release.wait()
+        return "done"
+
+    active = await manager.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=blocked,
+        project_id=None,
+        working_project_id="vbot",
+    )
+    queued = await manager.enqueue(
+        agent_id="coder",
+        session_id="session-one",
+        executor=lambda run: asyncio.sleep(0, result=run.working_project_id),
+        project_id=None,
+        working_project_id="other",
+    )
+
+    assert manager.has_activity_for_working_project("vbot") is True
+    assert manager.has_activity_for_working_project("other") is True
+    assert "working_project_id" not in queued.to_dict()
+
+    release.set()
+    await active.wait()
+    queued_run = await queued.future
+    assert queued_run.project_id is None
+    assert queued_run.working_project_id == "other"
+    assert await queued_run.wait() == "other"
+
+
 async def test_rejects_second_active_run_for_same_session() -> None:
     manager = ChatRunManager()
     release = asyncio.Event()

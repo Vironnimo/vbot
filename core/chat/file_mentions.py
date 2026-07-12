@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any
 from core.agents import default_workspace_dir
 from core.attachments import sniff_media_type
 from core.chat.content_blocks import ContentBlock, FileMentionBlock, TextBlock
+from core.chat.errors import ChatError
+from core.projects import resolve_working_project_id
 from core.tools.search import SearchBudget, ignore_rules_apply, iter_search_entries
 from core.utils.logging import get_logger
 
@@ -48,9 +50,13 @@ def resolve_mention_root(runtime: RuntimeServices, agent_id: str, project_id: st
     workspace — so the picker lists exactly the tree that relative tool paths
     resolve against.
     """
-    if project_id is not None:
-        return Path(runtime.projects.get(project_id).cwd)
-    agent = runtime.agent_resolver.resolve_agent(None, agent_id)
+    agent = runtime.agent_resolver.resolve_agent(project_id, agent_id)
+    working_project_id = resolve_working_project_id(project_id, agent)
+    if working_project_id is not None:
+        root = Path(runtime.projects.get(working_project_id).cwd)
+        if not root.is_dir():
+            raise ChatError(f"Project repository is unavailable: {root}")
+        return root
     workspace = getattr(agent, "workspace", None)
     if workspace:
         return Path(workspace)

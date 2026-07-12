@@ -7,7 +7,11 @@ from typing import Any
 
 from core.chat import CommandDispatcher
 from core.chat.file_mentions import list_mention_files, resolve_mention_root
-from core.projects import resolve_prompt_project, resolve_skill_scope
+from core.projects import (
+    resolve_prompt_project,
+    resolve_skill_scope,
+    resolve_working_project_id,
+)
 from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -106,7 +110,8 @@ def _command_skill_suggestions(state: Any, address: tuple[str, str | None] | Non
     agent_id, project_id = address
     agent = state.runtime.agent_resolver.resolve_agent(project_id, agent_id)
     allowed_skills = getattr(agent, "allowed_skills", ["*"])
-    prompt_project = resolve_prompt_project(state.runtime.projects, project_id, agent)
+    working_project_id = resolve_working_project_id(project_id, agent)
+    prompt_project = resolve_prompt_project(state.runtime.projects, working_project_id)
     skill_project_id, identity_agent_id = resolve_skill_scope(project_id, prompt_project, agent_id)
     return _sorted_filtered_skills(
         state.runtime.skills_for(skill_project_id, identity_agent_id), allowed_skills
