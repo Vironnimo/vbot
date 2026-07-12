@@ -31,7 +31,7 @@ python scripts/quality-frontend.py webui/src/lib/i18n.js      # single file (tes
 python scripts/quality-frontend.py webui/src/lib/__tests__/i18n.test.js   # one test file
 ```
 
-Paths are project-root-relative and may be files or directories. Both runners normalize input first (backslash → forward slash, trailing slash stripped) and deduplicate: a file already covered by a directory you also passed is dropped, so `core/utils/ core/utils/config.py` runs `core/utils/` once.
+Paths are project-root-relative and may be files or directories. Both runners normalize input first (backslash → forward slash, trailing slash stripped) and deduplicate: a file already covered by a directory you also passed is dropped, so `core/utils/ core/utils/config.py` runs `core/utils/` once. The backend runner routes direct files by registered capability: Ruff and mypy own `.py`/`.pyi`, while `pyproject.toml` configures and therefore triggers the full Python pipeline without being passed to a Python source formatter. A direct file with no registered capability aborts before any tool runs. Directories remain mixed scopes whose contents each tool filters itself; a future native module adds its suffixes and tool steps rather than widening Ruff's inputs.
 
 Use the current Python interpreter directly — no virtual environment is assumed. The frontend runner additionally needs `npx` and `npm` on `PATH`; it exits early if they are missing.
 
@@ -50,7 +50,7 @@ Frontend (`quality-frontend.py`), in order: `prettier --write` (fix) → `eslint
 
 On a **full scan** (no paths), the tools target fixed defaults rather than the whole tree indiscriminately:
 
-- Backend: ruff → `.`; mypy → `core/ server/ cli/ desktop/ tests/`; pytest → `tests/`. (Note: full-scan mypy does not include `scripts/`; a scoped run passes whatever path you give straight to mypy.)
+- Backend: ruff → `.`; mypy → `core/ server/ cli/ desktop/ tests/`; pytest → `tests/`. Full-scan mypy does not include `scripts/`; a scoped Python source path is routed to mypy, while `pyproject.toml` triggers these full defaults.
 - Frontend: prettier/eslint/vitest → `src/`; the build step runs only on a full scan.
 
 ## Output contract
@@ -88,6 +88,7 @@ When you pass a source path, `quality.py` runs the tests that mirror it — the 
 Two guardrails worth knowing:
 
 - **Bad paths abort with exit 2 before any tool runs.** A nonexistent input path would otherwise make pytest-xdist collect zero items across the whole invocation and silently skip even the valid paths beside it — a green run that tested nothing. Rejecting up front turns a typo into a clear error.
+- **Unsupported direct files also abort with exit 2 before any tool runs.** This is capability routing rather than a project-wide Python restriction: a format is safe only after its formatter, linter, type-checker, and test-selection behavior have been registered. Mixed directories remain valid scopes.
 - **A scoped run that maps to no tests skips pytest** (`NO TESTS (nothing mirrored)`) rather than falling back to running the entire suite.
 
 ## How frontend paths map to tests
@@ -104,7 +105,7 @@ Because a source file resolves to its **actual** mirrored test rather than just 
 
 ## How "auto-fixed files" is detected
 
-The gate does not trust the fixer to report what it changed. Before each fix step it snapshots content hashes of every fixable file under that step's targets; after the step it re-hashes and lists the files whose hash changed. "Fixable" is decided by a suffix set — `.py` on the backend; a broad web set (`.js`, `.svelte`, `.css`, `.scss`, `.json`, `.md`, `.html`, `.ts`, `.tsx`, `.jsx`, `.cjs`, `.mjs`, `.yaml`, `.yml`) on the frontend — and build/cache directories (`node_modules`, `dist`, `.git`, caches, etc.) are skipped while snapshotting.
+The gate does not trust the fixer to report what it changed. Before each fix step it snapshots content hashes of every fixable file under that step's targets; after the step it re-hashes and lists the files whose hash changed. "Fixable" is decided by a suffix set — `.py`/`.pyi` on the backend; a broad web set (`.js`, `.svelte`, `.css`, `.scss`, `.json`, `.md`, `.html`, `.ts`, `.tsx`, `.jsx`, `.cjs`, `.mjs`, `.yaml`, `.yml`) on the frontend — and build/cache directories (`node_modules`, `dist`, `.git`, caches, etc.) are skipped while snapshotting.
 
 This is why the changed-file list is reliable even across tools that print nothing about what they touched, and why it reflects real content changes rather than tool chatter.
 
@@ -112,7 +113,7 @@ This is why the changed-file list is reliable even across tools that print nothi
 
 - `0` — all gates passed.
 - `1` — at least one gate failed (or, frontend only, `npx`/`npm` was not found on `PATH`).
-- `2` — an input path did not exist; the run aborted before any tool ran.
+- `2` — an input path did not exist or a direct file had no registered quality capability; the run aborted before any tool ran.
 
 ## Improving the gate
 
@@ -122,6 +123,7 @@ Where the relevant behavior lives, when you come to fix it:
 
 - **Noise filtering** that could hide a real failure: `filter_pytest_failure_output` / `_is_pytest_progress_nodeid_line` in `quality.py`, `filter_vitest_failure_output` in `quality-frontend.py`.
 - **Test selection** that could miss or over-select tests: `translate_to_test_paths` and its `_owned_test_files` / `_owning_source_stem` helpers in `quality.py`; `translate_to_vitest_targets` and its `_find_named_test_files` / `_nearest_ancestor_with_tests` / `_is_explicit_test_file` helpers in `quality-frontend.py`.
+- **Backend format routing** that could send a file to the wrong tool or omit a newly supported language: `PYTHON_FILE_SUFFIXES`, `PYTHON_CONFIG_FILES`, and `_unsupported_direct_files` in `quality.py`, plus the pipeline steps that own each registered format.
 - **Fix detection** that could miss a changed file: the snapshot suffix sets and ignored-dir sets at the top of each runner, plus `snapshot_target_files` / `changed_snapshot_paths` in `_quality_common.py`.
 
 Their tests live in `tests/scripts/` (`test_quality.py`, `test_quality_frontend.py`, `test__quality_common.py`) — extend those alongside any change so the gate's own behavior stays gated.
