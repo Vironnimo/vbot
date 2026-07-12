@@ -296,6 +296,16 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
     assert "## Channels" in prompt
     assert "- tg-private: telegram (default target available)" in prompt
     assert "- tg-group: telegram (explicit target required)" in prompt
+    assert "You can send messages and files through these active channels:" in prompt
+    assert (
+        "Use `channel_send` for proactive outbound messages and whenever you send a file "
+        "through a channel."
+    ) in prompt
+    assert (
+        "Do not use `channel_send` for normal text-only replies to channel-originated turns; "
+        "those replies are routed automatically."
+    ) in prompt
+    assert ("Put every file path in `file_paths`; never send file Markdown to a channel.") in prompt
     assert "other-agent-channel" not in prompt
     # Skills block.
     assert "<name>agent-cli</name>" in prompt

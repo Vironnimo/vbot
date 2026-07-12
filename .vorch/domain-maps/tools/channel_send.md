@@ -1,6 +1,6 @@
 # Channel Send Tool
 
-Sends proactive outbound messages through configured channels.
+Sends proactive outbound messages and every file delivery through configured channels.
 
 ## Interfaces
 
@@ -12,7 +12,7 @@ Sends proactive outbound messages through configured channels.
 
 ## Conventions
 
-- The tool is proactive outbound only; automatic final replies are handled by channel adapters subscribing to Runs.
+- The tool handles proactive outbound messages and every channel file delivery, including files sent while replying to a channel-originated turn. Final text-only replies remain automatic through channel adapters subscribing to Runs.
 - `platform_target` resolution order: explicit argument → session metadata `last_reply_target.platform_target` (only when its `channel_id` matches the requested channel) → the channel config's sole `allowed_chat_ids` entry → otherwise `invalid_arguments`.
 - At least one of `message` or `file_paths` is required. When both are present, `message` acts as caption/accompanying text.
 - The tool is registered only while the runtime has at least one active channel, and is re-synced (registered/unregistered) when channel configs change — so it can appear or disappear mid-session.

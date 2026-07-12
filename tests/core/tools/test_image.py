@@ -7,7 +7,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.tools.image import IMAGE_GENERATION_TOOL_NAME, register_image_generation_tool
+from core.tools.image import (
+    IMAGE_GENERATION_TOOL_DESCRIPTION,
+    IMAGE_GENERATION_TOOL_NAME,
+    register_image_generation_tool,
+)
 from core.tools.tools import ToolContext, ToolRegistry
 
 
@@ -27,7 +31,20 @@ async def test_image_generation_tool_returns_artifact_payloads(tmp_path: Path) -
     assert isinstance(data, dict)
     # The model-facing copies carry the absolute file path for out-of-chat use.
     assert data["images"] == [{**_ARTIFACT_PAYLOAD, "path": str(image_path)}]
-    assert _ARTIFACT_PAYLOAD["url"] in data["message"]
+    assert IMAGE_GENERATION_TOOL_DESCRIPTION == (
+        "Generate new images or edit local source images using the configured image "
+        "generation model. Local source files are uploaded to the configured external "
+        "provider. The result includes each image's file path and WebUI/Desktop Markdown "
+        "for displaying it there. To send an image through a channel, use its file path "
+        "with `channel_send`."
+    )
+    assert data["message"] == (
+        "Image generation complete.\n\n"
+        "WebUI/Desktop: embed this Markdown in your reply:\n"
+        f"![generated image]({_ARTIFACT_PAYLOAD['url']})\n\n"
+        "Channel: call `channel_send` with the image `path` in `file_paths`. "
+        "Never send the Markdown to a channel."
+    )
 
 
 @pytest.mark.asyncio
