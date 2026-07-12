@@ -1,4 +1,5 @@
 import { getAttachmentUrl } from '$lib/api.js';
+import { formatAgentAddress } from '$lib/agentAddress.js';
 import {
   compactToolValue,
   toolNameHasHiddenArguments,
@@ -348,9 +349,7 @@ export const subAgentRunDurationMs = (tool, subAgentStatuses = {}) => {
     return Number.isFinite(durationMs) && durationMs >= 0 ? durationMs : null;
   }
 
-  const args = subAgentArguments(tool);
-  const data = subAgentResultData(tool);
-  const agentId = trimmedString(data.agent_id) || trimmedString(args.agent_id);
+  const agentId = subAgentTargetAddress(tool);
   const sessionId = subAgentSessionId(tool);
   if (agentId && sessionId) {
     const durationMs = statuses[`sessionDuration:${agentId}::${sessionId}`];
@@ -378,9 +377,7 @@ export const subAgentLastToolName = (tool, subAgentStatuses = {}) => {
     return trimmedString(statuses[`runTool:${runId}`]);
   }
 
-  const args = subAgentArguments(tool);
-  const data = subAgentResultData(tool);
-  const agentId = trimmedString(data.agent_id) || trimmedString(args.agent_id);
+  const agentId = subAgentTargetAddress(tool);
   const sessionId = subAgentSessionId(tool);
   if (agentId && sessionId) {
     return trimmedString(statuses[`sessionTool:${agentId}::${sessionId}`]);
@@ -483,13 +480,18 @@ const subAgentSessionId = (tool) => {
 };
 
 export const subAgentAgentId = (tool) => {
+  return subAgentTargetAddress(tool) || t('common.unknown', 'Unknown');
+};
+
+const subAgentTargetAddress = (tool) => {
   const args = subAgentArguments(tool);
   const data = subAgentResultData(tool);
-  return (
-    trimmedString(args.agent_id) ||
-    trimmedString(data.agent_id) ||
-    t('common.unknown', 'Unknown')
-  );
+  const dataAgentId = trimmedString(data.agent_id);
+  if (dataAgentId) {
+    const projectId = trimmedString(data.project_id);
+    return projectId ? formatAgentAddress(dataAgentId, projectId) : dataAgentId;
+  }
+  return trimmedString(args.agent_id);
 };
 
 const subAgentRunId = (tool) => {
@@ -599,8 +601,7 @@ export const subAgentDotStatus = (
 };
 
 export const subAgentNavigationTarget = (tool) => {
-  const data = subAgentResultData(tool);
-  const agentId = trimmedString(data.agent_id);
+  const agentId = subAgentTargetAddress(tool);
   const sessionId = subAgentSessionId(tool);
   if (!agentId || !sessionId) {
     return null;
@@ -684,9 +685,7 @@ export const subAgentNeedsStatusVerification = (
     return !Object.prototype.hasOwnProperty.call(statuses, `run:${runId}`);
   }
 
-  const args = subAgentArguments(tool);
-  const data = subAgentResultData(tool);
-  const agentId = trimmedString(data.agent_id) || trimmedString(args.agent_id);
+  const agentId = subAgentTargetAddress(tool);
   const sessionId = subAgentSessionId(tool);
   if (
     agentId &&
@@ -719,6 +718,10 @@ export const subAgentDisplayResult = (tool, fetchedResult = null) => {
     status: 'completed',
     result: resultText,
   };
+  const projectId = trimmedString(data.project_id);
+  if (projectId) {
+    payload.project_id = projectId;
+  }
   if (fetchedResult?.usage) {
     payload.usage = fetchedResult.usage;
   }
@@ -1196,6 +1199,7 @@ function matchingSubAgentResultStatus(tool, assistantRun) {
   }
 
   const sessionId = subAgentSessionId(tool);
+  const agentId = subAgentTargetAddress(tool);
   if (!sessionId) {
     return '';
   }
@@ -1203,6 +1207,7 @@ function matchingSubAgentResultStatus(tool, assistantRun) {
   const matchingResultTool = (assistantRun?.tools ?? []).find(
     (candidate) =>
       toolNameForRunTool(candidate) === 'subagent_result' &&
+      subAgentTargetAddress(candidate) === agentId &&
       subAgentSessionId(candidate) === sessionId &&
       candidate.resultEvent,
   );
@@ -1226,9 +1231,7 @@ function externalSubAgentStatus(tool, subAgentStatuses) {
     );
   }
 
-  const args = subAgentArguments(tool);
-  const data = subAgentResultData(tool);
-  const agentId = trimmedString(data.agent_id) || trimmedString(args.agent_id);
+  const agentId = subAgentTargetAddress(tool);
   const sessionId = subAgentSessionId(tool);
   if (!agentId || !sessionId) {
     return '';

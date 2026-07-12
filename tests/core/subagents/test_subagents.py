@@ -23,6 +23,7 @@ from core.subagents.subagents import (
     FORCED_FOREGROUND_NOTE,
     SubAgentBatchTracker,
     _handle_subagent,
+    _handle_subagent_result,
 )
 from core.tools.tools import ToolContext
 
@@ -39,6 +40,7 @@ def make_context(
     run_id: str = "parent-run",
     project_id: str | None = None,
     nesting_depth: int = 0,
+    emit_hook: Any | None = None,
 ) -> ToolContext:
     return ToolContext(
         agent_id=agent_id,
@@ -52,6 +54,7 @@ def make_context(
         data_root=Path("data"),
         project_id=project_id,
         nesting_depth=nesting_depth,
+        emit_hook=emit_hook,
     )
 
 
@@ -240,6 +243,70 @@ async def test_project_subagent_run_carries_project_id(tmp_path: Path) -> None:
     assert manager.started[0]["run"].project_id == "acme"
 
 
+async def test_identity_parent_can_spawn_qualified_project_agent(tmp_path: Path) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    emitted_events: list[tuple[str, JsonObject]] = []
+    context = make_context(
+        project_id=None,
+        emit_hook=lambda event_type, payload: emitted_events.append((event_type, payload)),
+    )
+
+    result = await _handle_subagent(
+        context,
+        {"content": "spawn", "agent_id": "worker@vbot"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["agent_id"] == "worker"
+    assert result["data"]["project_id"] == "vbot"
+    assert runtime.agent_resolver.calls[-1] == ("vbot", "worker")
+    assert manager.started[0]["project_id"] == "vbot"
+    assert manager.parent_run.project_id is None
+    assert emitted_events[0][1]["data"]["project_id"] == "vbot"
+    child_session_id = result["data"]["session_id"]
+    assert runtime.chat_sessions.get("worker", child_session_id, "vbot")
+    metadata = runtime.chat_sessions.get_metadata("worker", child_session_id, "vbot")
+    assert metadata["subagent_parent"]["project_id"] is None
+    manager.started[0]["run"].mark_completed(
+        ChatMessage.assistant(model="openai/gpt-5.2", content="done")
+    )
+    await asyncio.sleep(0)
+
+
+async def test_project_parent_can_spawn_qualified_agent_in_another_project(
+    tmp_path: Path,
+) -> None:
+    manager = FakeRunManager()
+    manager.parent_run.project_id = "acme"
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(project_id="acme")
+
+    result = await _handle_subagent(
+        context,
+        {"content": "spawn", "agent_id": "worker@vbot"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["project_id"] == "vbot"
+    assert runtime.agent_resolver.calls[-1] == ("vbot", "worker")
+    assert manager.started[0]["project_id"] == "vbot"
+    assert manager.parent_run.project_id == "acme"
+    child_session_id = result["data"]["session_id"]
+    metadata = runtime.chat_sessions.get_metadata("worker", child_session_id, "vbot")
+    assert metadata["subagent_parent"]["project_id"] == "acme"
+    manager.started[0]["run"].mark_completed(
+        ChatMessage.assistant(model="openai/gpt-5.2", content="done")
+    )
+    await asyncio.sleep(0)
+
+
 async def test_project_subagent_parent_link_metadata_carries_project_id(
     tmp_path: Path,
 ) -> None:
@@ -302,6 +369,94 @@ async def test_identity_subagent_session_unchanged_and_link_project_is_none(
     assert manager.started[0]["run"].project_id is None
     metadata = runtime.chat_sessions.get_metadata("worker", child_session_id)
     assert metadata["subagent_parent"]["project_id"] is None
+
+
+async def test_qualified_subagent_result_uses_target_project_for_persisted_fallback(
+    tmp_path: Path,
+) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(project_id=None)
+    session = runtime.chat_sessions.create("worker", session_id="project-child", project_id="vbot")
+    session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="project result"))
+    tracker.register(
+        (context.agent_id, context.session_id, context.run_id),
+        "worker",
+        "project-child",
+        "missing-run",
+        "vbot",
+    )
+
+    result = await _handle_subagent_result(
+        context,
+        {
+            "agent_id": "worker@vbot",
+            "session_id": "project-child",
+            "run_id": "missing-run",
+        },
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["project_id"] == "vbot"
+    assert result["data"]["result"] == "project result"
+
+
+async def test_qualified_subagent_result_uses_target_scope_for_live_run(tmp_path: Path) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(project_id="acme")
+    run = Run(
+        run_id="cross-project-run",
+        agent_id="worker",
+        session_id="project-child",
+        project_id="vbot",
+    )
+    manager.runs[run.id] = run
+    run.mark_completed(ChatMessage.assistant(model="openai/gpt-5.2", content="live result"))
+
+    result = await _handle_subagent_result(
+        context,
+        {
+            "agent_id": "worker@vbot",
+            "session_id": "project-child",
+            "run_id": run.id,
+        },
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["project_id"] == "vbot"
+    assert result["data"]["result"] == "live result"
+
+
+@pytest.mark.parametrize("tool_name", ["subagent", "subagent_result"])
+async def test_malformed_qualified_subagent_address_fails_cleanly(
+    tmp_path: Path,
+    tool_name: str,
+) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(project_id=None)
+    arguments: JsonObject = {"agent_id": "worker@vbot@extra", "session_id": "child"}
+    if tool_name == "subagent":
+        arguments["content"] = "spawn"
+
+    handler = _handle_subagent if tool_name == "subagent" else _handle_subagent_result
+    result = await handler(
+        context,
+        arguments,
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
 
 
 async def test_project_subagent_routes_into_existing_project_session(

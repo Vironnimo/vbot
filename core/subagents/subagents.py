@@ -9,7 +9,7 @@ from core.chat import (
     ChatMessage,
     ChatSessionError,
 )
-from core.projects import AgentResolutionError
+from core.projects import AgentResolutionError, InvalidAgentAddressError, parse_agent_address
 from core.runs import (
     ActiveRunError,
     Run,
@@ -144,12 +144,15 @@ async def _handle_subagent(
         )
 
     try:
-        target_agent_id = (
+        target_agent_address = (
             optional_string(arguments.get("agent_id"), field_name="agent_id") or context.agent_id
+        )
+        target_agent_id, target_project_id = _resolve_target_address(
+            target_agent_address, context.project_id
         )
         background = coerce_bool(arguments.get("background"), field_name="background", default=True)
         session_id = optional_string(arguments.get("session_id"), field_name="session_id")
-    except ToolArgumentError as error:
+    except (ToolArgumentError, InvalidAgentAddressError) as error:
         return tool_failure("invalid_arguments", str(error))
 
     # A sub-agent (depth >= 1) cannot park work for a later run, so force its spawns
@@ -163,6 +166,7 @@ async def _handle_subagent(
     if (
         session_id is not None
         and target_agent_id == context.agent_id
+        and target_project_id == context.project_id
         and session_id == context.session_id
     ):
         return tool_failure(
@@ -190,34 +194,35 @@ async def _handle_subagent(
         if context.is_cancelled():
             return tool_failure("run_cancelled", "Parent run was cancelled before sub-agent spawn")
 
-        # Resolve under the parent run's project: a config target must be on the
-        # project Team, an identity target (``project_id=None``) resolves the store
-        # agent exactly as before.
-        validation_error = _validate_target_agent(runtime, target_agent_id, context.project_id)
+        validation_error = _validate_target_agent(runtime, target_agent_id, target_project_id)
         if validation_error is not None:
             return validation_error
 
-        # The child inherits the parent run's project end-to-end: its session is
-        # created/opened under the project anchor (``None`` = identity layout).
         if session_id is None:
-            session = runtime.chat_sessions.create(target_agent_id, project_id=context.project_id)
+            session = runtime.chat_sessions.create(target_agent_id, project_id=target_project_id)
         else:
             try:
-                session = runtime.chat_sessions.get(target_agent_id, session_id, context.project_id)
+                session = runtime.chat_sessions.get(target_agent_id, session_id, target_project_id)
             except ChatSessionError:
                 return tool_failure("session_not_found", f"session does not exist: {session_id}")
 
-        _mark_subagent_session(runtime, target_agent_id, session.id, context)
+        _mark_subagent_session(runtime, target_agent_id, target_project_id, session.id, context)
         await _emit_subagent_session_started(
             context,
             target_agent_id,
+            target_project_id,
             session.id,
             status=RunStatus.RUNNING.value,
         )
 
         try:
             sub_run = await _start_subagent_run(
-                runtime, target_agent_id, session.id, content, context
+                runtime,
+                target_agent_id,
+                target_project_id,
+                session.id,
+                content,
+                context,
             )
         except ActiveRunError:
             if session_id is None:
@@ -232,11 +237,12 @@ async def _handle_subagent(
                 session_id=session.id,
                 executor=executor,
                 display_content=content,
-                project_id=context.project_id,
+                project_id=target_project_id,
             )
             await _emit_subagent_session_started(
                 context,
                 target_agent_id,
+                target_project_id,
                 session.id,
                 queue_item_id=item.item_id,
                 status=SUBAGENT_STATUS_QUEUED,
@@ -245,7 +251,11 @@ async def _handle_subagent(
                 queued_run = _started_run_from_queue_item(item)
                 if queued_run is None:
                     batch_tracker.register_queued(
-                        parent_key, target_agent_id, session.id, item.item_id
+                        parent_key,
+                        target_agent_id,
+                        session.id,
+                        item.item_id,
+                        target_project_id,
                     )
                     slot_registered = True
                     if _should_register_parent_cascade(background=True):
@@ -255,18 +265,21 @@ async def _handle_subagent(
                             queued_item=item,
                             queued_agent_id=target_agent_id,
                             queued_session_id=session.id,
-                            queued_project_id=context.project_id,
+                            queued_project_id=target_project_id,
                             batch_tracker=batch_tracker,
                             parent_key=parent_key,
                         )
                     _track_queued_subagent_completion(batch_tracker, parent_key, item)
                     return tool_success(
-                        {
-                            "agent_id": target_agent_id,
-                            "session_id": session.id,
-                            "queue_item_id": item.item_id,
-                            "status": SUBAGENT_STATUS_QUEUED,
-                        }
+                        _with_target_project(
+                            {
+                                "agent_id": target_agent_id,
+                                "session_id": session.id,
+                                "queue_item_id": item.item_id,
+                                "status": SUBAGENT_STATUS_QUEUED,
+                            },
+                            target_project_id,
+                        )
                     )
                 sub_run = queued_run
             else:
@@ -278,24 +291,27 @@ async def _handle_subagent(
                     queued_item=item,
                     queued_agent_id=target_agent_id,
                     queued_session_id=session.id,
-                    queued_project_id=context.project_id,
+                    queued_project_id=target_project_id,
                 )
                 try:
                     sub_run = await item.future
                 except asyncio.CancelledError:
                     runtime.chat_run_manager.remove_queued(
-                        target_agent_id, session.id, item.item_id, project_id=context.project_id
+                        target_agent_id, session.id, item.item_id, project_id=target_project_id
                     )
                     raise
 
         await _emit_subagent_session_started(
             context,
             target_agent_id,
+            target_project_id,
             session.id,
             run_id=sub_run.id,
             status=RunStatus.RUNNING.value,
         )
-        batch_tracker.register_reserved(parent_key, target_agent_id, session.id, sub_run.id)
+        batch_tracker.register_reserved(
+            parent_key, target_agent_id, session.id, sub_run.id, target_project_id
+        )
         slot_registered = True
         if _should_register_parent_cascade(background=background):
             _attach_parent_cancellation(
@@ -309,12 +325,15 @@ async def _handle_subagent(
         if background:
             _track_subagent_completion(batch_tracker, parent_key, sub_run)
             return tool_success(
-                {
-                    "agent_id": target_agent_id,
-                    "session_id": session.id,
-                    "run_id": sub_run.id,
-                    "status": RunStatus.RUNNING.value,
-                }
+                _with_target_project(
+                    {
+                        "agent_id": target_agent_id,
+                        "session_id": session.id,
+                        "run_id": sub_run.id,
+                        "status": RunStatus.RUNNING.value,
+                    },
+                    target_project_id,
+                )
             )
 
         timeout_seconds = settings["subagent_timeout_minutes"] * SECONDS_PER_MINUTE
@@ -332,14 +351,26 @@ async def _handle_subagent(
                 status=RunStatus.FAILED.value,
                 message=timeout_message,
             )
-            batch_tracker.mark_fetched(parent_key, session.id, sub_run.id)
+            batch_tracker.mark_fetched(
+                parent_key,
+                session.id,
+                sub_run.id,
+                sub_agent_id=target_agent_id,
+                project_id=target_project_id,
+            )
             batch_tracker.on_sub_agent_complete(parent_key, sub_run.id, result)
             return tool_failure(
                 "subagent_timeout",
                 f"Sub-agent run timed out after {settings['subagent_timeout_minutes']} minutes",
             )
 
-        batch_tracker.mark_fetched(parent_key, session.id, sub_run.id)
+        batch_tracker.mark_fetched(
+            parent_key,
+            session.id,
+            sub_run.id,
+            sub_agent_id=target_agent_id,
+            project_id=target_project_id,
+        )
         batch_tracker.on_sub_agent_complete(parent_key, sub_run.id, result)
         if forced_foreground:
             result = {**result, "spawn_note": FORCED_FOREGROUND_NOTE}
@@ -358,30 +389,56 @@ async def _handle_subagent_result(
 ) -> JsonObject:
     try:
         session_id = required_string(arguments.get("session_id"), field_name="session_id")
-        agent_id = (
+        agent_address = (
             optional_string(arguments.get("agent_id"), field_name="agent_id") or context.agent_id
         )
+        agent_id, target_project_id = _resolve_target_address(agent_address, context.project_id)
         run_id = optional_string(arguments.get("run_id"), field_name="run_id")
-    except ToolArgumentError as error:
+    except (ToolArgumentError, InvalidAgentAddressError) as error:
         return tool_failure("invalid_arguments", str(error))
 
     parent_key = _parent_key(context)
-    resolved_run_id = run_id or batch_tracker.run_id_for_session(parent_key, session_id)
+    resolved_run_id = run_id or batch_tracker.run_id_for_session(
+        parent_key,
+        session_id,
+        sub_agent_id=agent_id,
+        project_id=target_project_id,
+    )
     if resolved_run_id is None:
-        queued_entry = batch_tracker.queued_entry_for_session(parent_key, session_id)
+        queued_entry = batch_tracker.queued_entry_for_session(
+            parent_key,
+            session_id,
+            sub_agent_id=agent_id,
+            project_id=target_project_id,
+        )
         if queued_entry is not None:
             return tool_success(_queued_result_dict(queued_entry))
 
-    batch_tracker.mark_fetched(parent_key, session_id, resolved_run_id)
+    batch_tracker.mark_fetched(
+        parent_key,
+        session_id,
+        resolved_run_id,
+        sub_agent_id=agent_id,
+        project_id=target_project_id,
+    )
     result: JsonObject
     if resolved_run_id:
         try:
             run = runtime.chat_run_manager.get(resolved_run_id)
         except RunNotFoundError:
             result = await _poll_result_from_session(
-                runtime, agent_id, session_id, run_id=resolved_run_id, project_id=context.project_id
+                runtime,
+                agent_id,
+                session_id,
+                run_id=resolved_run_id,
+                project_id=target_project_id,
             )
         else:
+            if not _run_matches_target(run, agent_id, session_id, target_project_id):
+                return tool_failure(
+                    "run_not_found",
+                    f"run does not belong to target sub-agent session: {resolved_run_id}",
+                )
             result = await _wait_for_subagent_result(run)
             if _should_poll_session_result(result):
                 session_result = await _poll_result_from_session(
@@ -389,13 +446,13 @@ async def _handle_subagent_result(
                     agent_id,
                     session_id,
                     run_id=resolved_run_id,
-                    project_id=context.project_id,
+                    project_id=target_project_id,
                 )
                 if _session_result_has_output(session_result) or not result.get("result"):
                     result = session_result
     else:
         result = await _poll_result_from_session(
-            runtime, agent_id, session_id, run_id=None, project_id=context.project_id
+            runtime, agent_id, session_id, run_id=None, project_id=target_project_id
         )
 
     return tool_success(result)
@@ -404,6 +461,7 @@ async def _handle_subagent_result(
 async def _start_subagent_run(
     runtime: RuntimeServices,
     agent_id: str,
+    project_id: str | None,
     session_id: str,
     content: str,
     context: ToolContext,
@@ -413,7 +471,7 @@ async def _start_subagent_run(
         agent_id=agent_id,
         session_id=session_id,
         executor=executor,
-        project_id=context.project_id,
+        project_id=project_id,
     )
 
 
@@ -424,10 +482,10 @@ def _make_subagent_executor(
 ) -> tuple[ChatLoop, RunExecutor]:
     # Child Runs must match normal live Runs: the parent streaming loop
     # carries its attachment resolver and compaction service into the
-    # child; only the nesting depth differs. The parent run's project rides
-    # ``run.project_id`` (set when the child run is started/enqueued with
-    # ``project_id=context.project_id``), so the child executes project-scoped
-    # (cwd = repo) without the executor closure carrying it.
+    # child; only the nesting depth differs. The target project rides
+    # ``run.project_id`` (set when the child run is started/enqueued), so the
+    # child executes under its own addressed scope without the executor closure
+    # carrying it.
     sub_loop = runtime.streaming_chat_loop.child_loop(
         nesting_depth=context.nesting_depth + 1,
     )
@@ -510,41 +568,50 @@ def _result_from_session(
     project_id: str | None = None,
 ) -> JsonObject:
     try:
-        # Read the child session under the parent run's project anchor so a
-        # project-scoped child is found; ``None`` keeps the identity layout.
+        # Read the child session under its target project anchor;
+        # ``None`` keeps the identity layout.
         session = runtime.chat_sessions.get(agent_id, session_id, project_id)
         messages = session.load()
     except ChatSessionError as error:
-        return {
-            "agent_id": agent_id,
-            "session_id": session_id,
-            "run_id": run_id,
-            "status": RunStatus.FAILED.value,
-            "result": None,
-            "usage": None,
-            "note": str(error),
-        }
+        return _with_target_project(
+            {
+                "agent_id": agent_id,
+                "session_id": session_id,
+                "run_id": run_id,
+                "status": RunStatus.FAILED.value,
+                "result": None,
+                "usage": None,
+                "note": str(error),
+            },
+            project_id,
+        )
 
     assistant = _last_assistant_with_content(messages)
     if assistant is None:
-        return {
+        return _with_target_project(
+            {
+                "agent_id": agent_id,
+                "session_id": session_id,
+                "run_id": run_id,
+                "status": RunStatus.FAILED.value,
+                "result": None,
+                "usage": None,
+                "note": "No assistant output found in sub-agent session.",
+            },
+            project_id,
+        )
+
+    return _with_target_project(
+        {
             "agent_id": agent_id,
             "session_id": session_id,
             "run_id": run_id,
-            "status": RunStatus.FAILED.value,
-            "result": None,
-            "usage": None,
-            "note": "No assistant output found in sub-agent session.",
-        }
-
-    return {
-        "agent_id": agent_id,
-        "session_id": session_id,
-        "run_id": run_id,
-        "status": RunStatus.COMPLETED.value,
-        "result": assistant.content,
-        "usage": assistant.usage,
-    }
+            "status": RunStatus.COMPLETED.value,
+            "result": assistant.content,
+            "usage": assistant.usage,
+        },
+        project_id,
+    )
 
 
 async def _poll_result_from_session(
@@ -587,14 +654,17 @@ def _result_dict(
         content = str(message)
         usage = None
 
-    data: JsonObject = {
-        "agent_id": run.agent_id,
-        "session_id": run.session_id,
-        "run_id": run.id,
-        "status": status,
-        "result": content,
-        "usage": usage,
-    }
+    data = _with_target_project(
+        {
+            "agent_id": run.agent_id,
+            "session_id": run.session_id,
+            "run_id": run.id,
+            "status": status,
+            "result": content,
+            "usage": usage,
+        },
+        run.project_id,
+    )
     if cancelled_by_user:
         data["cancelled_by_user"] = True
     if status == RunStatus.FAILED.value and not content:
@@ -603,15 +673,18 @@ def _result_dict(
 
 
 def _queued_result_dict(entry: _SubAgentEntry) -> JsonObject:
-    return {
-        "agent_id": entry.agent_id,
-        "session_id": entry.session_id,
-        "run_id": None,
-        "queue_item_id": entry.queue_item_id,
-        "status": SUBAGENT_STATUS_QUEUED,
-        "result": None,
-        "usage": None,
-    }
+    return _with_target_project(
+        {
+            "agent_id": entry.agent_id,
+            "session_id": entry.session_id,
+            "run_id": None,
+            "queue_item_id": entry.queue_item_id,
+            "status": SUBAGENT_STATUS_QUEUED,
+            "result": None,
+            "usage": None,
+        },
+        entry.project_id,
+    )
 
 
 def _should_poll_session_result(result: JsonObject) -> bool:
@@ -655,11 +728,11 @@ def _positive_int(value: Any, default: int) -> int:
 def _validate_target_agent(
     runtime: RuntimeServices, target_agent_id: str, project_id: str | None
 ) -> JsonObject | None:
-    """Validate the spawn target resolves under the parent run's project.
+    """Validate the spawn target resolves under its addressed project.
 
     Routes through the one resolver seam: ``project_id=None`` resolves the store
-    identity agent (unchanged), a set ``project_id`` requires the target to be on
-    that project's Team with a usable model. Any resolver failure (unknown
+    identity agent, while a set ``project_id`` requires the target to be on that
+    project's Team with a usable model. Any resolver failure (unknown
     agent/project, off-Team target, or a model chain that fell through) becomes
     the validation failure envelope so the tool returns a clean result instead of
     letting the error escape the tool boundary.
@@ -674,16 +747,17 @@ def _validate_target_agent(
 def _mark_subagent_session(
     runtime: RuntimeServices,
     sub_agent_id: str,
+    sub_project_id: str | None,
     sub_session_id: str,
     context: ToolContext,
 ) -> None:
     # The child session's metadata is the durable side of the parent→child link.
-    # It is addressed under the project anchor (``context.project_id``) so a
+    # It is addressed under the target project anchor so a
     # project-scoped child's sidecar lives next to its session, and the link
     # records ``project_id`` so the child session is fully addressable after a
     # restart (its anchor cannot be derived from the parent ids alone).
     session_manager = runtime.chat_sessions
-    metadata = dict(session_manager.get_metadata(sub_agent_id, sub_session_id, context.project_id))
+    metadata = dict(session_manager.get_metadata(sub_agent_id, sub_session_id, sub_project_id))
     metadata[SUBAGENT_SESSION_METADATA_FLAG] = True
     metadata[SUBAGENT_PARENT_METADATA_KEY] = {
         "agent_id": context.agent_id,
@@ -693,12 +767,13 @@ def _mark_subagent_session(
         "tool_call_index": context.tool_call_index,
         "project_id": context.project_id,
     }
-    session_manager.set_metadata(sub_agent_id, sub_session_id, metadata, context.project_id)
+    session_manager.set_metadata(sub_agent_id, sub_session_id, metadata, sub_project_id)
 
 
 async def _emit_subagent_session_started(
     context: ToolContext,
     sub_agent_id: str,
+    sub_project_id: str | None,
     sub_session_id: str,
     *,
     run_id: str | None = None,
@@ -710,6 +785,8 @@ async def _emit_subagent_session_started(
         "session_id": sub_session_id,
         "status": status,
     }
+    if sub_project_id is not None:
+        data["project_id"] = sub_project_id
     if run_id:
         data["run_id"] = run_id
     if queue_item_id:
@@ -805,3 +882,34 @@ def _cancel_subagent_child(
 
 def _parent_key(context: ToolContext) -> ParentKey:
     return (context.agent_id, context.session_id, context.run_id)
+
+
+def _resolve_target_address(
+    address: str,
+    caller_project_id: str | None,
+) -> tuple[str, str | None]:
+    """Resolve the tool's address while preserving bare-target inheritance.
+
+    A qualified address explicitly supplies the target project. A bare address
+    keeps the subagent tool's existing behavior by inheriting the caller's
+    project scope (or remaining identity-scoped when the caller has none).
+    """
+    agent_id, addressed_project_id = parse_agent_address(address)
+    return agent_id, addressed_project_id or caller_project_id
+
+
+def _with_target_project(data: JsonObject, project_id: str | None) -> JsonObject:
+    if project_id is not None:
+        data["project_id"] = project_id
+    return data
+
+
+def _run_matches_target(
+    run: Run,
+    agent_id: str,
+    session_id: str,
+    project_id: str | None,
+) -> bool:
+    return (
+        run.agent_id == agent_id and run.session_id == session_id and run.project_id == project_id
+    )
