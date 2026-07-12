@@ -256,11 +256,31 @@ def test_main_rejects_unknown_input_path(monkeypatch, capsys):
     assert "ERROR: path not found: core/does_not_exist.py" in captured.out
 
 
-def test_main_skips_pytest_without_mirrored_tests(monkeypatch, capsys):
+def test_main_rejects_direct_file_without_registered_capability(monkeypatch, capsys):
+    module = _load_quality_module()
+
+    monkeypatch.setattr(module.sys, "argv", ["quality.py", "webui/package.json"])
+
+    def fail_run(*args, **kwargs):
+        raise AssertionError("no tool may receive a file without a registered capability")
+
+    monkeypatch.setattr(module.subprocess, "run", fail_run)
+
+    assert module.main() == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "ERROR: no backend quality capability is registered for direct file: webui/package.json"
+    ) in captured.out
+    assert "Add a format-specific quality route" in captured.out
+
+
+def test_main_routes_python_config_to_full_pipeline(monkeypatch, capsys):
     module = _load_quality_module()
     commands: list[list[str]] = []
 
-    monkeypatch.setattr(module.sys, "argv", ["quality.py", "webui/package.json"])
+    monkeypatch.setattr(module.sys, "argv", ["quality.py", "pyproject.toml"])
+    monkeypatch.setattr(module, "snapshot_target_files", lambda *args, **kwargs: {})
 
     def fake_run(cmd, capture_output, text, cwd, encoding, errors):
         commands.append(cmd)
@@ -271,9 +291,10 @@ def test_main_skips_pytest_without_mirrored_tests(monkeypatch, capsys):
     assert module.main() == 0
 
     captured = capsys.readouterr()
-    assert "NO TESTS (nothing mirrored)" in captured.out
-    assert "note: webui/package.json" in captured.out
-    assert not any(cmd[2] == "pytest" for cmd in commands)
+    assert "note: pyproject.toml configures the full Python pipeline" in captured.out
+    assert next(cmd for cmd in commands if cmd[2:4] == ["ruff", "format"])[4:] == ["."]
+    assert next(cmd for cmd in commands if cmd[2] == "mypy")[4:] == module.FULL_MYPY_PATHS
+    assert next(cmd for cmd in commands if cmd[2] == "pytest")[-1] == "tests/"
 
 
 def test_main_reports_no_tests_when_pytest_collects_none(monkeypatch, capsys):

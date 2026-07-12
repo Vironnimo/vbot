@@ -5,9 +5,10 @@ Usage:
     python scripts/quality.py [paths...]
 
 Paths can be files or directories. If no paths are given, the full project
-is checked. File paths (e.g. ``core/utils/config.py``) are translated to
-their corresponding test paths (``tests/core/utils/test_config.py``) for
-pytest; ruff and mypy receive them directly.
+is checked. Direct files are routed only to tools that explicitly own their
+format; directories remain mixed scopes. Python files (e.g.
+``core/utils/config.py``) are translated to their corresponding test paths
+(``tests/core/utils/test_config.py``) for pytest.
 """
 
 import re
@@ -28,7 +29,9 @@ from _quality_common import (
 
 configure_console_encoding()
 
-PYTHON_FILE_SUFFIXES = {".py"}
+PYTHON_FILE_SUFFIXES = {".py", ".pyi"}
+PYTHON_CONFIG_FILES = {"pyproject.toml"}
+FULL_MYPY_PATHS = ["core/", "server/", "cli/", "desktop/", "tests/"]
 SNAPSHOT_IGNORED_DIRS = {
     ".git",
     ".mypy_cache",
@@ -155,9 +158,10 @@ def translate_to_test_paths(paths: list[str]) -> tuple[list[str], list[str]]:
             notes.append(f"{p}: not under a mirrored test package, no tests selected")
             continue
 
-        if p.endswith(".py"):
+        suffix = Path(p).suffix
+        if suffix in PYTHON_FILE_SUFFIXES:
             directory, _, filename = p.rpartition("/")
-            stem = filename[: -len(".py")]
+            stem = filename[: -len(suffix)]
             mirror_dir = f"tests/{directory}" if directory else "tests"
             owned = _owned_test_files(directory, stem)
             if owned:
@@ -177,6 +181,30 @@ def translate_to_test_paths(paths: list[str]) -> tuple[list[str], list[str]]:
             notes.append(f"{p}: no mirrored test directory {mirror_dir}/")
 
     return test_paths, notes
+
+
+def _is_python_config(path: str) -> bool:
+    """Return whether *path* configures the whole Python quality pipeline."""
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        candidate = PROJECT_ROOT / candidate
+    return candidate.resolve() in {
+        (PROJECT_ROOT / config_path).resolve() for config_path in PYTHON_CONFIG_FILES
+    }
+
+
+def _unsupported_direct_files(paths: list[str]) -> list[str]:
+    """Return explicit files for which no backend quality capability is registered."""
+    unsupported: list[str] = []
+    for path in paths:
+        candidate = PROJECT_ROOT / path
+        if (
+            candidate.is_file()
+            and candidate.suffix not in PYTHON_FILE_SUFFIXES
+            and not _is_python_config(path)
+        ):
+            unsupported.append(path)
+    return unsupported
 
 
 def parse_pytest_counts(output: str) -> tuple[int, int, int]:
@@ -230,28 +258,45 @@ def main() -> int:
 
     # Normalize: backslash → forward slash, strip trailing slash.
     normalized = [p.replace("\\", "/").rstrip("/") for p in raw_paths]
-    paths = deduplicate_paths(normalized, lambda path: path.endswith(".py"))
 
     # Reject unknown paths before running anything: a typo would otherwise
     # surface as a confusing tool error (or worse, as a silently green run).
-    missing_inputs = [p for p in paths if not (PROJECT_ROOT / p).exists()]
+    missing_inputs = [p for p in normalized if not (PROJECT_ROOT / p).exists()]
     if missing_inputs:
         for missing in missing_inputs:
             print(f"ERROR: path not found: {missing}")
         return 2
 
+    paths = deduplicate_paths(normalized, lambda path: (PROJECT_ROOT / path).is_file())
+    unsupported_files = _unsupported_direct_files(paths)
+    if unsupported_files:
+        for unsupported in unsupported_files:
+            print(
+                f"ERROR: no backend quality capability is registered for direct file: {unsupported}"
+            )
+        print("Add a format-specific quality route before gating these files.")
+        return 2
+
     # ---------- Build command lists ----------
     if paths:
-        ruff_fmt_paths = paths
-        ruff_fix_paths = paths
-        ruff_check_paths = paths
-        mypy_paths = paths
-        test_paths, test_notes = translate_to_test_paths(paths)
+        if any(_is_python_config(path) for path in paths):
+            ruff_fmt_paths = ["."]
+            ruff_fix_paths = ["."]
+            ruff_check_paths = ["."]
+            mypy_paths = FULL_MYPY_PATHS
+            test_paths = ["tests/"]
+            test_notes = ["pyproject.toml configures the full Python pipeline"]
+        else:
+            ruff_fmt_paths = paths
+            ruff_fix_paths = paths
+            ruff_check_paths = paths
+            mypy_paths = paths
+            test_paths, test_notes = translate_to_test_paths(paths)
     else:
         ruff_fmt_paths = ["."]
         ruff_fix_paths = ["."]
         ruff_check_paths = ["."]
-        mypy_paths = ["core/", "server/", "cli/", "desktop/", "tests/"]
+        mypy_paths = FULL_MYPY_PATHS
         test_paths = ["tests/"]
         test_notes = []
 
