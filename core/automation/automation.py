@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from core.chat import ChatLoop, MessageSender
+from core.chat import ChatLoop, MessageSender, ReplySurface
 from core.chat.content_blocks import ContentBlock
 from core.runs import ActiveRunError, ChatRunManager, Run, WaitingWorkAdmission
 
@@ -36,6 +36,7 @@ class TriggerService:
         *,
         internal: bool = False,
         sender: MessageSender | None = None,
+        reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
         waiting_work_admission: WaitingWorkAdmission | None = None,
     ) -> Run:
@@ -50,7 +51,6 @@ class TriggerService:
             target_session_id = self._runtime.chat_sessions.create(
                 agent_id, project_id=project_id
             ).id
-
         try:
             if internal:
                 run = await self._trigger_chat_loop.start_run(
@@ -58,6 +58,7 @@ class TriggerService:
                     message,
                     session_id=target_session_id,
                     internal=True,
+                    reply_surface=reply_surface,
                     project_id=project_id,
                 )
             else:
@@ -66,6 +67,7 @@ class TriggerService:
                     message,
                     session_id=target_session_id,
                     sender=sender,
+                    reply_surface=reply_surface,
                     project_id=project_id,
                 )
         except ActiveRunError:
@@ -77,6 +79,7 @@ class TriggerService:
                             message,
                             session_id=target_session_id,
                             internal=True,
+                            reply_surface=reply_surface,
                             project_id=project_id,
                         )
                     else:
@@ -85,6 +88,7 @@ class TriggerService:
                             message,
                             session_id=target_session_id,
                             internal=True,
+                            reply_surface=reply_surface,
                             project_id=project_id,
                             waiting_work_admission=waiting_work_admission,
                         )
@@ -95,6 +99,7 @@ class TriggerService:
                             message,
                             session_id=target_session_id,
                             sender=sender,
+                            reply_surface=reply_surface,
                             project_id=project_id,
                         )
                     else:
@@ -103,6 +108,7 @@ class TriggerService:
                             message,
                             session_id=target_session_id,
                             sender=sender,
+                            reply_surface=reply_surface,
                             project_id=project_id,
                             waiting_work_admission=waiting_work_admission,
                         )
@@ -131,7 +137,12 @@ class TriggerService:
         return self._chat_run_manager.release_waiting_work(admission)
 
     async def continue_run(
-        self, agent_id: str, session_id: str, *, project_id: str | None = None
+        self,
+        agent_id: str,
+        session_id: str,
+        *,
+        project_id: str | None = None,
+        reply_surface: ReplySurface | None = None,
     ) -> Run:
         """Continue retained interrupted work for a channel or automation entry point.
 
@@ -139,7 +150,7 @@ class TriggerService:
         callers today.
         """
         return await self._trigger_chat_loop.continue_run(
-            agent_id, session_id, project_id=project_id
+            agent_id, session_id, project_id=project_id, reply_surface=reply_surface
         )
 
     def has_active_run(

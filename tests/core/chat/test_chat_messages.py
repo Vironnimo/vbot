@@ -8,7 +8,14 @@ from typing import Any
 
 import pytest
 
-from core.chat import ChatMessage, ChatMessageValidationError, MessageSender, ToolCall
+from core.chat import (
+    ChatError,
+    ChatMessage,
+    ChatMessageValidationError,
+    MessageSender,
+    ReplySurface,
+    ToolCall,
+)
 from core.chat.chat import (
     ERROR_KIND_AUTH,
     ERROR_KIND_CONFIG,
@@ -29,6 +36,8 @@ from core.chat.messages import (
     _message_to_request_dict,
     _repair_dangling_tool_calls,
     _restore_in_run_assistant_reasoning,
+    reply_surface_from_note,
+    should_append_reply_surface_note,
 )
 from core.providers.reasoning import (
     REASONING_REPLAY_FULL_HISTORY,
@@ -95,6 +104,80 @@ class TestMessageSender:
 
         with pytest.raises(FrozenInstanceError):
             sender.display_name = "changed"  # type: ignore[misc]
+
+
+class TestReplySurface:
+    def test_invalid_cross_kind_fields_are_rejected(self):
+        with pytest.raises(ChatError, match="cannot include Channel fields"):
+            ReplySurface(kind="webui", channel_id="tg-main")
+
+    def test_webui_note_round_trips_and_renders_exact_reminder(self):
+        surface = ReplySurface.webui()
+        note = ChatMessage.note(surface.to_note_content())
+
+        assert reply_surface_from_note(note) == surface
+        assert _embed_notes_into_request([note]) == [
+            {
+                "role": "user",
+                "content": (
+                    "<system-reminder>\n"
+                    "Your reply to the following request will be shown in the WebUI. "
+                    "The Desktop app uses the WebUI for this purpose.\n"
+                    "</system-reminder>"
+                ),
+            }
+        ]
+
+    def test_channel_note_round_trips_and_renders_exact_reminder(self):
+        surface = ReplySurface.channel(
+            platform="telegram",
+            platform_display_name="Telegram",
+            channel_id="tg-main",
+        )
+        note = ChatMessage.note(surface.to_note_content())
+
+        assert reply_surface_from_note(note) == surface
+        assert _embed_notes_into_request([note])[0]["content"] == (
+            "<system-reminder>\n"
+            "Your reply to the following request will be delivered via Telegram using channel "
+            "`tg-main`. Return normal reply text; vBot delivers it automatically. To deliver any "
+            "file, always call `channel_send` and include every file path in `file_paths`.\n"
+            "</system-reminder>"
+        )
+
+    def test_append_decision_uses_latest_tag_switch_and_compaction_chronology(self):
+        webui = ReplySurface.webui()
+        telegram = ReplySurface.channel(
+            platform="telegram",
+            platform_display_name="Telegram",
+            channel_id="tg-main",
+        )
+        webui_note = ChatMessage.note(webui.to_note_content())
+
+        assert should_append_reply_surface_note([], webui) is True
+        assert should_append_reply_surface_note([webui_note], webui) is False
+        assert should_append_reply_surface_note([webui_note], telegram) is True
+
+        checkpoint = ChatMessage.compaction_checkpoint(
+            summary="Earlier work.",
+            projection=[],
+            compacted_token_count=10,
+        )
+        assert should_append_reply_surface_note([webui_note, checkpoint], webui) is True
+        assert (
+            should_append_reply_surface_note(
+                [webui_note, checkpoint, ChatMessage.note(webui.to_note_content())], webui
+            )
+            is False
+        )
+
+    def test_old_untagged_channel_note_is_not_reply_surface_state(self):
+        old_note = ChatMessage.note(
+            "This session is receiving messages via Telegram (channel: tg-main, chat: 123)."
+        )
+
+        assert reply_surface_from_note(old_note) is None
+        assert should_append_reply_surface_note([old_note], ReplySurface.webui()) is True
 
 
 class TestChatMessageFactories:

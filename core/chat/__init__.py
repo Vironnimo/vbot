@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from core.chat.chat import ChatMessage as ChatMessage
     from core.chat.chat import InputOrigin as InputOrigin
     from core.chat.chat import MessageSender as MessageSender
+    from core.chat.chat import ReplySurface as ReplySurface
     from core.chat.chat import ToolCall as ToolCall
     from core.chat.chat import parse_bare_model as parse_bare_model
     from core.chat.commands import AgentArgument as AgentArgument
@@ -55,6 +56,7 @@ _EXPORT_MODULES = {
     "InputOrigin": "core.chat.chat",
     "MAX_TOOL_ITERATIONS": "core.chat.chat",
     "MessageSender": "core.chat.chat",
+    "ReplySurface": "core.chat.chat",
     "NotACommand": "core.chat.commands",
     "parse_agent_argument": "core.chat.commands",
     "parse_bare_model": "core.chat.chat",

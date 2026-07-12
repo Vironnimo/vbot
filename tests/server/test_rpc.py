@@ -19,7 +19,14 @@ import pytest
 
 from core.agents import default_workspace_dir
 from core.automation import TriggerService
-from core.chat import ChatLoop, ChatMessage, ChatSessionManager, CommandDispatcher, ToolCall
+from core.chat import (
+    ChatLoop,
+    ChatMessage,
+    ChatSessionManager,
+    CommandDispatcher,
+    ReplySurface,
+    ToolCall,
+)
 from core.chat.content_blocks import FileBlock, MediaBlock, TextBlock
 from core.memory import DEFAULT_MEMORY_PROMPT_MODE
 from core.models import Capabilities, Model, ModelQuery, ReasoningCapabilities
@@ -5354,10 +5361,15 @@ async def test_chat_methods_handle_continue_command_as_run_response(
     captured: JsonObject = {}
 
     async def fake_continue_run(
-        agent_id: str, session_id: str, project_id: str | None = None
+        agent_id: str,
+        session_id: str,
+        project_id: str | None = None,
+        *,
+        reply_surface: ReplySurface | None = None,
     ) -> StubDelegateRun:
         captured["agent_id"] = agent_id
         captured["session_id"] = session_id
+        captured["reply_surface"] = reply_surface
         return run
 
     if streaming:
@@ -5384,7 +5396,11 @@ async def test_chat_methods_handle_continue_command_as_run_response(
 
     assert response["ok"] is True
     assert response["result"]["run_id"] == "run-continue"
-    assert captured == {"agent_id": "coder", "session_id": "session-one"}
+    assert captured == {
+        "agent_id": "coder",
+        "session_id": "session-one",
+        "reply_surface": ReplySurface.webui(),
+    }
     if streaming:
         assert response["result"]["sse_url"] == "/api/runs/run-continue/events"
     else:
@@ -5539,11 +5555,13 @@ async def test_chat_send_accepts_content_block_list(
         content: str | list[Any],
         *,
         session_id: str,
+        reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
     ) -> StubDelegateRun:
         captured["agent_id"] = agent_id
         captured["content"] = content
         captured["session_id"] = session_id
+        captured["reply_surface"] = reply_surface
         return run
 
     monkeypatch.setattr(state.chat_loop, "start_run", fake_start_run)
@@ -5574,6 +5592,7 @@ async def test_chat_send_accepts_content_block_list(
     assert captured == {
         "agent_id": "coder",
         "session_id": "session-one",
+        "reply_surface": ReplySurface.webui(),
         "content": [
             TextBlock(type="text", text="Please inspect this image."),
             MediaBlock(
@@ -5609,12 +5628,14 @@ async def test_chat_methods_forward_speech_transcription_input_origin(
         *,
         session_id: str,
         input_origin: str | None = None,
+        reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
     ) -> StubDelegateRun:
         captured["agent_id"] = agent_id
         captured["content"] = content
         captured["session_id"] = session_id
         captured["input_origin"] = input_origin
+        captured["reply_surface"] = reply_surface
         return run
 
     class StubStreamingLoop:
@@ -5625,6 +5646,7 @@ async def test_chat_methods_forward_speech_transcription_input_origin(
             *,
             session_id: str,
             input_origin: str | None = None,
+            reply_surface: ReplySurface | None = None,
             project_id: str | None = None,
         ) -> StubDelegateRun:
             return await fake_start_run(
@@ -5632,6 +5654,7 @@ async def test_chat_methods_forward_speech_transcription_input_origin(
                 content,
                 session_id=session_id,
                 input_origin=input_origin,
+                reply_surface=reply_surface,
             )
 
     monkeypatch.setattr(state.chat_loop, "start_run", fake_start_run)
@@ -5657,6 +5680,7 @@ async def test_chat_methods_forward_speech_transcription_input_origin(
         "session_id": "session-one",
         "content": "helo wrld",
         "input_origin": "speech_transcription",
+        "reply_surface": ReplySurface.webui(),
     }
 
 
@@ -5681,11 +5705,13 @@ async def test_chat_stream_accepts_content_block_list(
             content: str | list[Any],
             *,
             session_id: str,
+            reply_surface: ReplySurface | None = None,
             project_id: str | None = None,
         ) -> StubDelegateRun:
             captured["agent_id"] = agent_id
             captured["content"] = content
             captured["session_id"] = session_id
+            captured["reply_surface"] = reply_surface
             return run
 
     monkeypatch.setattr(chat_methods, "_streaming_chat_loop", lambda _state: StubStreamingLoop())
@@ -5717,6 +5743,7 @@ async def test_chat_stream_accepts_content_block_list(
     assert captured == {
         "agent_id": "coder",
         "session_id": "session-one",
+        "reply_surface": ReplySurface.webui(),
         "content": [
             TextBlock(type="text", text="Review this document."),
             FileBlock(
@@ -6094,11 +6121,13 @@ async def test_chat_stream_uses_state_streaming_chat_loop(
             content: str | list[Any],
             *,
             session_id: str,
+            reply_surface: ReplySurface | None = None,
             project_id: str | None = None,
         ) -> StubDelegateRun:
             captured["agent_id"] = agent_id
             captured["content"] = content
             captured["session_id"] = session_id
+            captured["reply_surface"] = reply_surface
             return run
 
     runtime_streaming_loop = RuntimeStreamingLoop()
@@ -6115,7 +6144,12 @@ async def test_chat_stream_uses_state_streaming_chat_loop(
 
     assert response["ok"] is True
     assert response["result"]["run_id"] == "runtime-stream-loop"
-    assert captured == {"agent_id": "coder", "content": "Hi", "session_id": "session-one"}
+    assert captured == {
+        "agent_id": "coder",
+        "content": "Hi",
+        "session_id": "session-one",
+        "reply_surface": ReplySurface.webui(),
+    }
     assert state.streaming_chat_loop is runtime_streaming_loop
 
 

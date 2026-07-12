@@ -20,6 +20,7 @@ from core.chat import (
     ChatSessionError,
     ChatSessionManager,
     MessageSender,
+    ReplySurface,
     ToolCall,
 )
 from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
@@ -901,6 +902,127 @@ async def test_speech_transcription_origin_adds_system_reminder_before_user_turn
 
 
 @pytest.mark.asyncio
+async def test_reply_surface_note_follows_speech_note_and_precedes_user_turn(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+
+    run = await ChatLoop(runtime).start_run(
+        "coder",
+        "helo wrld",
+        session_id="session-one",
+        input_origin=INPUT_ORIGIN_SPEECH_TRANSCRIPTION,
+        reply_surface=ReplySurface.webui(),
+    )
+    await run.wait()
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert persisted_roles(messages) == ["note", "note", "user", "assistant"]
+    assert "speech-to-text transcription" in str(messages[0].content)
+    assert str(messages[1].content).startswith("[reply-surface] ")
+    assert messages[2].content == "helo wrld"
+    reminder_text = adapter.requests[0]["messages"][1]["content"]
+    assert reminder_text.index("speech-to-text transcription") < reminder_text.index(
+        "shown in the WebUI"
+    )
+
+
+@pytest.mark.asyncio
+async def test_reply_surface_initial_repeat_and_switches_follow_execution_chronology(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [
+            {"content": "One", "tool_calls": None},
+            {"content": "Two", "tool_calls": None},
+            {"content": "Three", "tool_calls": None},
+            {"content": "Four", "tool_calls": None},
+        ]
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    loop = ChatLoop(runtime)
+    webui = ReplySurface.webui()
+    telegram = ReplySurface.channel(
+        platform="telegram",
+        platform_display_name="Telegram",
+        channel_id="tg-main",
+    )
+
+    for content, surface in (
+        ("first", webui),
+        ("same", webui),
+        ("channel", telegram),
+        ("back", webui),
+    ):
+        run = await loop.start_run(
+            "coder", content, session_id="session-one", reply_surface=surface
+        )
+        await run.wait()
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    surface_note_indexes = [
+        index
+        for index, message in enumerate(messages)
+        if message.role == "note" and str(message.content).startswith("[reply-surface] ")
+    ]
+    user_indexes = [index for index, message in enumerate(messages) if message.role == "user"]
+    assert len(surface_note_indexes) == 3
+    assert surface_note_indexes == [
+        user_indexes[0] - 1,
+        user_indexes[2] - 1,
+        user_indexes[3] - 1,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_first_same_surface_run_after_compaction_appends_one_fresh_note(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [
+            {"content": "One", "tool_calls": None},
+            {"content": "Two", "tool_calls": None},
+            {"content": "Three", "tool_calls": None},
+        ]
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    loop = ChatLoop(runtime)
+    surface = ReplySurface.webui()
+
+    first = await loop.start_run("coder", "first", session_id="session-one", reply_surface=surface)
+    await first.wait()
+    session.append(
+        ChatMessage.compaction_checkpoint(
+            summary="Earlier work.",
+            projection=[],
+            compacted_token_count=10,
+        )
+    )
+    second = await loop.start_run(
+        "coder", "after compact", session_id="session-one", reply_surface=surface
+    )
+    await second.wait()
+    third = await loop.start_run(
+        "coder", "same again", session_id="session-one", reply_surface=surface
+    )
+    await third.wait()
+
+    surface_notes = [
+        message
+        for message in session.load()
+        if message.role == "note" and str(message.content).startswith("[reply-surface] ")
+    ]
+    assert len(surface_notes) == 2
+
+
+@pytest.mark.asyncio
 async def test_internal_start_run_embeds_content_without_visible_user_message(
     tmp_path: Path,
 ) -> None:
@@ -933,6 +1055,80 @@ async def test_internal_start_run_embeds_content_without_visible_user_message(
         "content": f"<system-reminder>\n{content}\n</system-reminder>",
     }
     assert all(message["role"] != "note" for message in request_messages)
+
+
+@pytest.mark.asyncio
+async def test_internal_interactive_run_places_surface_immediately_before_prompt(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    prompt = "Greet the user who opened this Channel."
+    surface = ReplySurface.channel(
+        platform="telegram",
+        platform_display_name="Telegram",
+        channel_id="tg-main",
+    )
+
+    run = await ChatLoop(runtime).start_run(
+        "coder",
+        prompt,
+        session_id="session-one",
+        internal=True,
+        reply_surface=surface,
+    )
+    await run.wait()
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert persisted_roles(messages) == ["note", "note", "assistant"]
+    assert str(messages[0].content).startswith("[reply-surface] ")
+    assert messages[1].content == prompt
+    request_content = adapter.requests[0]["messages"][1]["content"]
+    assert request_content.index("delivered via Telegram") < request_content.index(prompt)
+
+
+@pytest.mark.asyncio
+async def test_queued_cross_surface_run_decides_when_it_actually_starts(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = BlockingStubAdapter()
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    loop = ChatLoop(runtime)
+    channel_surface = ReplySurface.channel(
+        platform="telegram",
+        platform_display_name="Telegram",
+        channel_id="tg-main",
+    )
+
+    first_run = await loop.start_run(
+        "coder",
+        "web request",
+        session_id="session-one",
+        reply_surface=ReplySurface.webui(),
+    )
+    await adapter.request_started.wait()
+    queued = await loop.queue_run(
+        "coder",
+        "channel request",
+        session_id="session-one",
+        reply_surface=channel_surface,
+    )
+    adapter.release.set()
+    await first_run.wait()
+    second_run = await queued.future
+    await second_run.wait()
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    surface_notes = [
+        message
+        for message in messages
+        if message.role == "note" and str(message.content).startswith("[reply-surface] ")
+    ]
+    assert len(surface_notes) == 2
+    assert "webui" in str(surface_notes[0].content)
+    assert "telegram" in str(surface_notes[1].content)
 
 
 @pytest.mark.asyncio
@@ -3982,6 +4178,50 @@ async def test_continue_run_uses_checkpoint_without_appending_duplicate_user_mes
     assert "<continuation-checkpoint" in request_text
     assert "Original request(s):\nHi" in request_text
     assert not runtime.chat_sessions.get("coder", "session-one").continuation_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_continue_run_appends_surface_before_synthetic_continue_instruction(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    interrupted_adapter = StubAdapter(
+        [],
+        stream_responses=[NetworkError("offline") for _ in range(3)],
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=interrupted_adapter)
+    with pytest.raises(NetworkError):
+        await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
+
+    adapter = StubAdapter([{"content": "Continued", "tool_calls": None}])
+    runtime.adapter = adapter
+    run = await ChatLoop(runtime).continue_run(
+        "coder",
+        "session-one",
+        reply_surface=ReplySurface.webui(),
+    )
+    await run.wait()
+
+    session = runtime.chat_sessions.get("coder", "session-one")
+    messages = session.load()
+    surface_note_index = next(
+        index
+        for index, message in enumerate(messages)
+        if message.role == "note" and str(message.content).startswith("[reply-surface] ")
+    )
+    assert all(message.role != "user" for message in messages[surface_note_index + 1 :])
+    request_messages = adapter.requests[0]["messages"]
+    surface_request_index = next(
+        index
+        for index, message in enumerate(request_messages)
+        if "shown in the WebUI" in str(message.get("content"))
+    )
+    continuation_index = next(
+        index
+        for index, message in enumerate(request_messages)
+        if "<continuation-checkpoint" in str(message.get("content"))
+    )
+    assert surface_request_index < continuation_index
 
 
 @pytest.mark.asyncio

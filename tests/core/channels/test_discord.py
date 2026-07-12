@@ -20,12 +20,18 @@ from core.channels.discord import (
     DiscordChannelAdapter,
     split_discord_message,
 )
-from core.chat import MessageSender
+from core.chat import MessageSender, ReplySurface
 from core.chat.commands import NotACommand
 from core.chat.content_blocks import MediaBlock, TextBlock
 from core.extensions import InteractionButton
 from core.runs import ASSISTANT_OUTPUT_EVENT, Run, WaitingWorkAdmission
 from core.sessions import ChatSessionManager
+
+CHANNEL_REPLY_SURFACE = ReplySurface.channel(
+    platform="discord",
+    platform_display_name="Discord",
+    channel_id="dc-assistant",
+)
 
 
 class FakePartialMessage:
@@ -350,6 +356,7 @@ async def test_group_mention_triggers_shared_run_with_sender(tmp_path: Path) -> 
         "hello <@999>",
         session_id,
         sender=MessageSender(id="50", display_name="Alice"),
+        reply_surface=CHANNEL_REPLY_SURFACE,
     )
     assert channel.sent[0]["content"] == "ok"
     await adapter.stop()
@@ -490,7 +497,9 @@ async def test_mention_backfills_history_since_last_bot_reply_in_order(
         session_id: str,
         *,
         sender: MessageSender | None,
+        reply_surface: ReplySurface,
     ) -> Run:
+        assert reply_surface == CHANNEL_REPLY_SURFACE
         observed_at_trigger.extend(
             message.content
             for message in chat_sessions.get("assistant", session_id).load()

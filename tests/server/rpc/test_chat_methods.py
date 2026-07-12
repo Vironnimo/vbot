@@ -22,7 +22,7 @@ from typing import Any, cast
 import pytest
 
 from core.automation.reflection import REFLECTION_COUNTERS_META_KEY, ReflectionService
-from core.chat import ChatMessage, CommandAction
+from core.chat import ChatMessage, CommandAction, ReplySurface
 from core.chat.content_blocks import FileMentionBlock, TextBlock
 from core.projects import AgentResolutionError, format_agent_address
 from core.runs import ActiveRunError
@@ -100,6 +100,7 @@ async def test_send_bare_agent_runs_identity(monkeypatch: pytest.MonkeyPatch) ->
 
     assert loop.start_calls[0]["agent_id"] == "builder"
     assert loop.start_calls[0]["project_id"] is None
+    assert loop.start_calls[0]["reply_surface"] == ReplySurface.webui()
 
 
 @pytest.mark.asyncio
@@ -197,6 +198,7 @@ async def test_stream_qualified_agent_runs_project_scoped(
 
     assert loop.start_calls[0]["agent_id"] == "tester"
     assert loop.start_calls[0]["project_id"] == "vbot"
+    assert loop.start_calls[0]["reply_surface"] == ReplySurface.webui()
 
 
 # ---------------------------------------------------------------------------
@@ -305,6 +307,7 @@ async def test_handoff_targets_project_agent(monkeypatch: pytest.MonkeyPatch) ->
     assert ("vbot", "orchestrator") in resolver.resolved
     assert loop.calls[-1]["agent_id"] == "orchestrator"
     assert loop.calls[-1]["project_id"] == "vbot"
+    assert loop.calls[-1]["reply_surface"] == ReplySurface.webui()
     assert state._created_sessions[-1] == "orchestrator@vbot"
 
 
@@ -383,6 +386,7 @@ async def test_learn_starts_internal_authoring_run(monkeypatch: pytest.MonkeyPat
     assert response["reply"] == "handoff text"  # the run's final message content
     assert len(captured) == 1
     assert captured[0]["internal"] is True
+    assert captured[0]["reply_surface"] == ReplySurface.webui()
     assert "skill_manage" in captured[0]["message"]
     assert "the deploy steps" in captured[0]["message"]
 
@@ -527,6 +531,7 @@ async def test_reflect_forks_and_runs_restricted_review(monkeypatch: pytest.Monk
     assert captured[0]["session_id"] != "s1"
     assert captured[0]["internal"] is True
     assert captured[0]["tool_restriction"] == ("memory", "skill", "skill_manage")
+    assert captured[0]["reply_surface"] == ReplySurface.webui()
     # The brief carries the fragment marker plus the focus text.
     assert "Review this session" in captured[0]["message"]
     assert "focus on the memory side" in captured[0]["message"]
@@ -1013,6 +1018,7 @@ async def test_queue_update_rebuilds_against_address_project() -> None:
     )
 
     assert loop.build_calls[-1]["project_id"] == "vbot"
+    assert loop.build_calls[-1]["reply_surface"] == ReplySurface.webui()
     assert state.chat_runs.update_project_ids[-1] == "vbot"
     assert state.chat_runs.list_project_ids[-1] == "vbot"
 
@@ -1029,6 +1035,7 @@ async def test_queue_update_identity_item_rebuilds_without_project() -> None:
     )
 
     assert loop.build_calls[-1]["project_id"] is None
+    assert loop.build_calls[-1]["reply_surface"] == ReplySurface.webui()
     assert state.chat_runs.update_project_ids[-1] is None
 
 
@@ -1333,7 +1340,13 @@ async def test_move_with_task_auto_runs_identity_target(
 
     # The task rides as the receiving agent's first visible turn (identity → trigger).
     assert state._trigger_calls == [
-        {"agent_id": "planner", "message": "do the thing", "session_id": "s1", "internal": False}
+        {
+            "agent_id": "planner",
+            "message": "do the thing",
+            "session_id": "s1",
+            "internal": False,
+            "reply_surface": ReplySurface.webui(),
+        }
     ]
     assert "running your task" in result["reply"]
 
@@ -1356,6 +1369,7 @@ async def test_move_with_task_auto_runs_project_target(
     assert call["content"] == "ship it"
     assert call["project_id"] == "vbot"
     assert call["internal"] is False
+    assert call["reply_surface"] == ReplySurface.webui()
 
 
 @pytest.mark.asyncio

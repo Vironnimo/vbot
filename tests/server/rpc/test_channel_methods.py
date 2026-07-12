@@ -332,7 +332,7 @@ async def test_session_list_happy_path_returns_sessions_with_metadata() -> None:
 
 
 @pytest.mark.asyncio
-async def test_session_link_channel_sets_metadata_and_writes_system_reminder() -> None:
+async def test_session_link_channel_sets_metadata_without_writing_reminder() -> None:
     config = _channel_config()
     channel_service = Mock()
     channel_service.list_channels.return_value = [config]
@@ -373,11 +373,8 @@ async def test_session_link_channel_sets_metadata_and_writes_system_reminder() -
             },
         },
     )
-    linked_session.add_note.assert_called_once()
-    note = linked_session.add_note.call_args.args[0]
-    assert "Telegram" in note
-    assert "tg-assistant" in note
-    assert "12345" in note
+    linked_session.add_note.assert_not_called()
+    chat_sessions.write_lock.assert_not_called()
 
 
 @pytest.mark.asyncio
