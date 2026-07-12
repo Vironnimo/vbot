@@ -1330,7 +1330,8 @@ async def test_group_unaddressed_text_is_observed_as_note(tmp_path: Path) -> Non
         (
             "This session is receiving messages via Telegram "
             "(channel: tg-assistant, chat: 12345).\n"
-            "Respond in a style appropriate for Telegram messaging."
+            "Keep replies appropriate for Telegram. Text-only replies are delivered "
+            "automatically. For every file, call `channel_send` with `file_paths`."
         ),
         "[channel-message] Alice (50): hello\nworld",
     ]

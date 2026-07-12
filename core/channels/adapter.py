@@ -167,7 +167,8 @@ def channel_system_reminder(
     return (
         f"This session is receiving messages via {platform_display_name} "
         f"(channel: {channel_id}, chat: {chat_id}).\n"
-        f"Respond in a style appropriate for {platform_display_name} messaging."
+        f"Keep replies appropriate for {platform_display_name}. Text-only replies are "
+        "delivered automatically. For every file, call `channel_send` with `file_paths`."
     )
 
 

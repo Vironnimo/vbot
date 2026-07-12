@@ -10,12 +10,29 @@ from core.channels.adapter import FileData, RouteFacts
 from core.channels.channels import ChannelNotFoundError
 from core.extensions import InteractionButton
 from core.tools.channel import (
+    CHANNEL_SEND_TOOL_DESCRIPTION,
     CHANNEL_SEND_TOOL_NAME,
+    CHANNEL_SEND_TOOL_PARAMETERS,
     register_channel_send_tool,
 )
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope, tool_failure
 
 _TEST_MAX_ATTACHMENT_SIZE_BYTES = 20_971_520
+
+
+def test_channel_send_agent_guidance_requires_tool_for_channel_files() -> None:
+    assert CHANNEL_SEND_TOOL_DESCRIPTION == (
+        "Send a proactive message or any file through a configured channel. Always use "
+        "this tool for channel file delivery, including replies."
+    )
+    properties = CHANNEL_SEND_TOOL_PARAMETERS["properties"]
+    assert isinstance(properties, dict)
+    file_paths = properties["file_paths"]
+    assert isinstance(file_paths, dict)
+    assert file_paths["description"] == (
+        "File paths to deliver through the channel. Use for every channel file delivery, "
+        "including replies. Relative paths resolve from the working directory."
+    )
 
 
 class _NullAsyncContext:

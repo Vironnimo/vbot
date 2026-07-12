@@ -1,4 +1,4 @@
-"""Built-in channel_send tool for proactive outbound channel messaging."""
+"""Built-in channel_send tool for outbound channel messaging and files."""
 
 from __future__ import annotations
 
@@ -33,7 +33,8 @@ _LOGGER = get_logger("tools.channel")
 
 CHANNEL_SEND_TOOL_NAME = "channel_send"
 CHANNEL_SEND_TOOL_DESCRIPTION = (
-    "Send a proactive outbound message (text and/or files) through a configured channel."
+    "Send a proactive message or any file through a configured channel. Always use "
+    "this tool for channel file delivery, including replies."
 )
 _REQUIRED_CHANNEL_SEND_ARGUMENTS = frozenset(("channel_id",))
 _OPTIONAL_CHANNEL_SEND_ARGUMENTS = frozenset(
@@ -78,8 +79,9 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
                 "type": "string",
             },
             "description": (
-                "Optional list of file paths to send. Relative paths resolve from the "
-                "working directory."
+                "File paths to deliver through the channel. Use for every channel file "
+                "delivery, including replies. Relative paths resolve from the working "
+                "directory."
             ),
         },
         "buttons": {

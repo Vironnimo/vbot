@@ -20,8 +20,9 @@ IMAGE_GENERATION_TOOL_NAME = "image_generation"
 IMAGE_GENERATION_TOOL_DESCRIPTION = (
     "Generate new images or edit local source images using the configured image "
     "generation model. Local source files are uploaded to the configured external "
-    "provider. The result includes each image's file path and the Markdown that "
-    "displays it in the chat."
+    "provider. The result includes each image's file path and WebUI/Desktop Markdown "
+    "for displaying it there. To send an image through a channel, use its file path "
+    "with `channel_send`."
 )
 IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -129,9 +130,10 @@ def _image_display_message(artifacts: list[JsonObject]) -> str:
         f"![generated image]({artifact['url']})" for artifact in artifacts
     )
     return (
-        "Image generation complete. The chat displays an image only when you "
-        f"embed its Markdown in your reply:\n{markdown_snippets}\n"
-        "For file operations (copy, send, edit) use its 'path'."
+        "Image generation complete.\n\n"
+        f"WebUI/Desktop: embed this Markdown in your reply:\n{markdown_snippets}\n\n"
+        "Channel: call `channel_send` with the image `path` in `file_paths`. "
+        "Never send the Markdown to a channel."
     )
 
 
