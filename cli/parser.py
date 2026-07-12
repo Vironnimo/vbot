@@ -418,9 +418,19 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         "--default-agent", metavar="<agent-id>", help="New project default agent"
     )
     set_parser.add_argument(
+        "--clear-default-agent",
+        action="store_true",
+        help="Clear the project default agent",
+    )
+    set_parser.add_argument(
         "--default-model",
         metavar="<provider/model-id>",
         help="New project default model as <provider>/<model-id>",
+    )
+    set_parser.add_argument(
+        "--clear-default-model",
+        action="store_true",
+        help="Clear the project default model (fall through to the global default)",
     )
     set_parser.add_argument(
         "--default-temperature",

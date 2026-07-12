@@ -271,6 +271,13 @@ def _set_override(state: Any, params: JsonObject) -> JsonObject:
     value = _validate_override_value(state, field, params.get("value"))
 
     try:
+        current_project = _projects(state).get(project_id)
+        team = _agent_resolver(state).scan_project_report(current_project).team
+        if agent_id not in {member.agent_id for member in team}:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                f"agent '{agent_id}' is not on project '{project_id}' team",
+            )
         project = _projects(state).set_override(project_id, agent_id, field, value)
     except Exception as exc:
         raise _map_expected_error(exc) from exc

@@ -543,6 +543,14 @@ async def _handle_learn_command(
     if active_run is not None:
         return _command_handled_response("A skill can be authored after the current run finishes.")
     try:
+        agent = state.runtime.agent_resolver.resolve_agent(project_id, agent_id)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    if not getattr(agent, "workspace", ""):
+        return _command_handled_response(
+            "Skill authoring needs an identity agent with its own skill home."
+        )
+    try:
         learn_run = await _start_command_run(
             state,
             agent_id,

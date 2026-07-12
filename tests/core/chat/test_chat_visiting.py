@@ -113,6 +113,13 @@ def test_project_containing_path_matches_repo_root(tmp_path: Path) -> None:
     assert _project_containing_path(repo, [project]) is project
 
 
+def test_project_containing_path_matches_filesystem_root_project(tmp_path: Path) -> None:
+    filesystem_root = Path(tmp_path.anchor)
+    project = StubProject(project_id="root", cwd=str(filesystem_root), auto_load=[])
+
+    assert _project_containing_path(tmp_path / "file.py", [project]) is project
+
+
 def test_project_containing_path_returns_none_outside(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

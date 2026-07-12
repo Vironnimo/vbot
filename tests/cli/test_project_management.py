@@ -147,11 +147,15 @@ def test_parse_args_supports_project_clear_default_knobs() -> None:
             "project",
             "set",
             "vbot",
+            "--clear-default-agent",
+            "--clear-default-model",
             "--clear-default-temperature",
             "--clear-default-thinking-effort",
         ]
     )
 
+    assert args.clear_default_agent is True
+    assert args.clear_default_model is True
     assert args.clear_default_temperature is True
     assert args.clear_default_thinking_effort is True
 
@@ -552,6 +556,8 @@ def test_run_project_set_clear_flags_send_null(
             "project",
             "set",
             "vbot",
+            "--clear-default-agent",
+            "--clear-default-model",
             "--clear-default-temperature",
             "--clear-default-thinking-effort",
             "--port",
@@ -566,6 +572,8 @@ def test_run_project_set_clear_flags_send_null(
             "method": "project.set",
             "params": {
                 "project_id": "vbot",
+                "default_agent": None,
+                "default_model": None,
                 "default_temperature": None,
                 "default_thinking_effort": None,
             },
