@@ -69,12 +69,5 @@ If the user wants to design a plan with you, read `.opencode/agents/planner.md` 
 
 **A plan is a build order, not a changelog — write the end state, flat and in place.** Never layer a plan: no `v1`/`v2` decision strata, no separate "refinements"/"updates" section that shadows or overrides earlier text, and no resolved item left parked under an "Open Questions"/"Open Decisions" heading. When something is decided or changes, fold it into the one place it belongs and delete the now-stale version — a section heading is a promise about its contents, so an "Open Questions" section holds *only* genuinely open questions and nothing else. History lives in git, not as strata inside the file. This bites hardest at high context, where a "refines D6" link or a mislabeled section silently desyncs and the builder ships the wrong thing.
 
-## Code Claims Require Direct Verification
-
-**Treat every claim about the code or any system behavior as false unless you have directly verified it against the current source code.** This applies to every analysis, explanation, status report, recommendation, option, plan, handoff, and implementation decision without exception.
-
-Handoffs, plans, domain maps, project documents, prior conversation, memory, search results, tests, commit messages, and earlier agent statements are navigation aids, not proof of current behavior. Use them to find the relevant implementation, then read and trace that implementation before making the claim. Tests may corroborate the trace, but they do not replace reading the code that owns the behavior.
-
-Before stating how something works, trace the relevant path end to end through its actual owners and boundaries, including input, parsing, routing, state, execution, persistence, downstream consumers, and presentation wherever they affect the claim. A search hit, one call site, one type definition, or a single test is not end-to-end verification. If the full path has not been checked, state exactly what remains unverified and do not present a conclusion or ask the user to decide based on it.
-
-If an unverified or false baseline claim influenced a discussion, recommendation, or user decision, every dependent conclusion and decision is invalid even if the user previously agreed to it. Retract the affected baseline and all dependent decisions, re-read the current source and relevant history, then restart the discussion from the verified facts. Never preserve, summarize, or hand off a decision whose stated consequences were derived from false or unverified behavior.
+## Verify Before Planning
+ALWAYS re-read the actual source code before producing any plan or analysis. Never base plans, file paths, or claims on memory or assumptions — verify each claim against the real code first.
