@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
@@ -82,6 +83,9 @@ from core.chat.messages import (
     _restore_in_run_assistant_reasoning,
     _session_has_any_content_blocks,
     _strip_assistant_reasoning_fields,
+    checkpoint_ordinal,
+    finalize_checkpoint_history_guidance,
+    history_available,
 )
 from core.chat.messages import (
     InputOrigin as InputOrigin,
@@ -155,6 +159,7 @@ from core.runs import (
     WaitingWorkAdmission,
 )
 from core.sessions import SKILL_AVAILABLE_NOTE_PREFIX, ChatSession, skill_activation_names
+from core.tools import HISTORY_TOOL_NAME
 from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.logging import get_logger
 
@@ -178,6 +183,16 @@ VISITED_PROJECTS_META_KEY = "visited_projects"
 # stored in session metadata so a mid-session skill write never shifts the session's
 # system prompt (the prompt-cache invariant).
 PINNED_SKILL_CATALOG_META_KEY = "pinned_skill_catalog"
+
+
+@dataclass(frozen=True)
+class _RequestState:
+    messages: list[JsonObject]
+    tools: list[JsonObject]
+    allowed_tool_names: tuple[str, ...]
+    session_tool_grants: tuple[str, ...]
+
+
 # Skill names the session has already surfaced to the model: the pinned catalog at
 # first build, plus any later additions already announced. Diffed each run against the
 # agent's currently available+allowed skills so a newly available one is announced once.
@@ -668,7 +683,7 @@ class ChatLoop:
                 project_id, prompt_project, agent_id
             )
             skill_registry = self._runtime.skills_for(skill_project_id, identity_agent_id)
-            request_messages = await self._build_request_messages(
+            request_state = await self._build_request_state(
                 agent,
                 session,
                 replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
@@ -688,11 +703,16 @@ class ChatLoop:
                 storage=self._runtime.storage,
                 settings=settings,
                 instruction=instruction,
-                request_messages=request_messages,
+                request_messages=request_state.messages,
                 active_adapter=adapter,
                 active_model_id=model_id,
-                active_tools=self._runtime.system_prompts.provider_tool_definitions(agent),
+                active_tools=request_state.tools,
             )
+            ordinal = (
+                len([message for message in messages if message.role == "compaction_checkpoint"])
+                + 1
+            )
+            checkpoint = finalize_checkpoint_history_guidance(checkpoint, ordinal=ordinal)
             session.append(checkpoint)
         except Exception as exc:
             return f"Compaction failed: {exc}"
@@ -947,7 +967,7 @@ class ChatLoop:
                 if isinstance(content, str):
                     _activate_triggered_skills(agent, session, content, skill_registry)
             run.raise_if_cancelled()
-            messages = await self._build_request_messages(
+            request_state = await self._build_request_state(
                 agent,
                 session,
                 replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
@@ -957,6 +977,7 @@ class ChatLoop:
                 skill_registry=skill_registry,
                 skill_catalog=skill_catalog,
             )
+            messages = request_state.messages
             if continuation_reminder is not None:
                 assert prior_continuation is not None
                 continuation_reminder = render_continuation_reminder(
@@ -968,7 +989,7 @@ class ChatLoop:
                     continuation_reminder,
                     explicit_continue=explicit_continue,
                 )
-            tools = self._runtime.system_prompts.provider_tool_definitions(agent)
+            tools = request_state.tools
 
             try:
                 completed_assistant = await self._send_until_final(
@@ -985,6 +1006,8 @@ class ChatLoop:
                     project_cwd=project_cwd,
                     rooted_project_id=rooted_project_id,
                     tool_restriction=tool_restriction,
+                    base_allowed_tools=request_state.allowed_tool_names,
+                    session_tool_grants=request_state.session_tool_grants,
                     continuation_tracker=continuation_tracker,
                     continuation_reminder=continuation_reminder,
                     explicit_continue=explicit_continue,
@@ -1039,6 +1062,8 @@ class ChatLoop:
                                 project_cwd=project_cwd,
                                 rooted_project_id=rooted_project_id,
                                 tool_restriction=tool_restriction,
+                                base_allowed_tools=request_state.allowed_tool_names,
+                                session_tool_grants=request_state.session_tool_grants,
                                 continuation_tracker=continuation_tracker,
                                 continuation_reminder=continuation_reminder,
                                 explicit_continue=explicit_continue,
@@ -1414,12 +1439,47 @@ class ChatLoop:
         skill_registry: SkillRegistry | None = None,
         skill_catalog: PinnedSkillCatalog | None = None,
     ) -> list[JsonObject]:
+        state = await self._build_request_state(
+            agent,
+            session,
+            replay_policy=replay_policy,
+            wire_media_types=wire_media_types,
+            agent_body=agent_body,
+            project_context=project_context,
+            skill_registry=skill_registry,
+            skill_catalog=skill_catalog,
+        )
+        return state.messages
+
+    async def _build_request_state(
+        self,
+        agent: Any,
+        session: ChatSession,
+        *,
+        replay_policy: ReasoningReplayPolicy = REASONING_REPLAY_CURRENT_RUN,
+        wire_media_types: frozenset[str] = frozenset(),
+        agent_body: str = "",
+        project_context: ProjectPromptContext | None = None,
+        skill_registry: SkillRegistry | None = None,
+        skill_catalog: PinnedSkillCatalog | None = None,
+    ) -> _RequestState:
         # For a project-born session the project files land in the system prompt;
         # for an identity session both are empty and the prompt is unchanged. The
         # config-agent body is inserted verbatim (never re-expanded) by the builder.
         # ``skill_registry`` scopes the skills block to the project pool (``None`` =
         # the global registry); ``skill_catalog`` is the session-pinned snapshot the
         # skills block renders from, so a mid-session skill write never shifts it.
+        session_messages = session.load()
+        session_tool_grants = (HISTORY_TOOL_NAME,) if history_available(session_messages) else ()
+        tools = self._runtime.system_prompts.provider_tool_definitions(
+            agent,
+            session_tool_grants=session_tool_grants,
+        )
+        allowed_tool_names = tuple(
+            str(definition["name"])
+            for definition in tools
+            if isinstance(definition.get("name"), str)
+        )
         prompt_read_paths: list[Path] = []
         system_prompt = self._runtime.system_prompts.build_system_prompt(
             agent,
@@ -1428,6 +1488,8 @@ class ChatLoop:
             skill_registry=skill_registry,
             skill_catalog=skill_catalog,
             read_paths=prompt_read_paths,
+            effective_tool_names=allowed_tool_names,
+            session_tool_grants=session_tool_grants,
         )
         # Auto-injected prompt files (SOUL, pinned memory, project auto-load files,
         # workspace includes) count as read for this session, so the agent can edit
@@ -1440,7 +1502,6 @@ class ChatLoop:
             if system_prompt.strip()
             else []
         )
-        session_messages = session.load()
         checkpoint = _latest_compaction_checkpoint(session_messages)
         effective_messages = _effective_compaction_messages(session_messages)
         history = _embed_notes_into_request(
@@ -1461,9 +1522,19 @@ class ChatLoop:
         session.drain_pending_notes()
 
         if self._attachment_resolver is None:
-            return request_messages
+            return _RequestState(
+                request_messages,
+                tools,
+                allowed_tool_names,
+                session_tool_grants,
+            )
         if not _session_has_any_content_blocks(effective_messages):
-            return request_messages
+            return _RequestState(
+                request_messages,
+                tools,
+                allowed_tool_names,
+                session_tool_grants,
+            )
 
         # Use the most recently appended user turn as the current-turn marker.
         # If that turn is plain text, all content blocks resolve as historical.
@@ -1471,13 +1542,23 @@ class ChatLoop:
             effective_messages
         ) or _last_user_message(effective_messages)
         if current_user_message is None:
-            return request_messages
+            return _RequestState(
+                request_messages,
+                tools,
+                allowed_tool_names,
+                session_tool_grants,
+            )
 
-        return await self._attachment_resolver.resolve_messages(
-            request_messages,
-            current_user_message_id=current_user_message.id,
-            input_modalities=_model_input_modalities(self._runtime, agent),
-            wire_media_types=wire_media_types,
+        return _RequestState(
+            await self._attachment_resolver.resolve_messages(
+                request_messages,
+                current_user_message_id=current_user_message.id,
+                input_modalities=_model_input_modalities(self._runtime, agent),
+                wire_media_types=wire_media_types,
+            ),
+            tools,
+            allowed_tool_names,
+            session_tool_grants,
         )
 
     async def _send_until_final(
@@ -1495,6 +1576,8 @@ class ChatLoop:
         project_cwd: Path | None = None,
         rooted_project_id: str | None = None,
         tool_restriction: Sequence[str] | None = None,
+        base_allowed_tools: Sequence[str] = (),
+        session_tool_grants: Sequence[str] = (),
         continuation_tracker: ContinuationTracker | None = None,
         continuation_reminder: str | None = None,
         explicit_continue: bool = False,
@@ -1627,7 +1710,7 @@ class ChatLoop:
                         # Run cancelled despite the normal return.
                         return assistant_message
                     if self._compaction_service is not None:
-                        messages = await self._maybe_auto_compact(
+                        await self._maybe_auto_compact_state(
                             agent,
                             adapter,
                             model_id,
@@ -1638,6 +1721,8 @@ class ChatLoop:
                             project_id=project_id,
                             skill_project_id=skill_project_id,
                             tools=tools,
+                            base_allowed_tools=base_allowed_tools,
+                            session_tool_grants=session_tool_grants,
                             continuation_request_messages=[
                                 *messages_for_request,
                                 _assistant_continuation_dict(
@@ -1670,6 +1755,8 @@ class ChatLoop:
                         project_id=project_id,
                         skill_project_id=skill_project_id,
                         tool_restriction=tool_restriction,
+                        base_allowed_tools=base_allowed_tools,
+                        session_tool_grants=session_tool_grants,
                     )
                     for tool_message in tool_messages:
                         session.append(tool_message)
@@ -1716,7 +1803,7 @@ class ChatLoop:
                     session.flush_deferred_notes()
 
             if self._compaction_service is not None:
-                messages = await self._maybe_auto_compact(
+                compacted_state = await self._maybe_auto_compact_state(
                     agent,
                     adapter,
                     model_id,
@@ -1727,10 +1814,16 @@ class ChatLoop:
                     project_id=project_id,
                     skill_project_id=skill_project_id,
                     tools=tools,
+                    base_allowed_tools=base_allowed_tools,
+                    session_tool_grants=session_tool_grants,
                     continuation_tracker=continuation_tracker,
                     continuation_reminder=continuation_reminder,
                     explicit_continue=explicit_continue,
                 )
+                messages = compacted_state.messages
+                tools = compacted_state.tools
+                base_allowed_tools = compacted_state.allowed_tool_names
+                session_tool_grants = compacted_state.session_tool_grants
 
         raise ToolIterationLimitError("maximum tool iterations exceeded")
 
@@ -1790,14 +1883,62 @@ class ChatLoop:
         project_id: str | None = None,
         skill_project_id: str | None = None,
         tools: list[JsonObject] | None = None,
+        base_allowed_tools: Sequence[str] = (),
+        session_tool_grants: Sequence[str] = (),
         continuation_request_messages: list[JsonObject] | None = None,
         continuation_tracker: ContinuationTracker | None = None,
         continuation_reminder: str | None = None,
         explicit_continue: bool = False,
     ) -> list[JsonObject]:
+        state = await self._maybe_auto_compact_state(
+            agent,
+            adapter,
+            model_id,
+            session,
+            messages,
+            usage,
+            run=run,
+            project_id=project_id,
+            skill_project_id=skill_project_id,
+            tools=tools,
+            base_allowed_tools=base_allowed_tools,
+            session_tool_grants=session_tool_grants,
+            continuation_request_messages=continuation_request_messages,
+            continuation_tracker=continuation_tracker,
+            continuation_reminder=continuation_reminder,
+            explicit_continue=explicit_continue,
+        )
+        return state.messages
+
+    async def _maybe_auto_compact_state(
+        self,
+        agent: Any,
+        adapter: Any,
+        model_id: str,
+        session: ChatSession,
+        messages: list[JsonObject],
+        usage: JsonObject | None,
+        *,
+        run: Run,
+        project_id: str | None = None,
+        skill_project_id: str | None = None,
+        tools: list[JsonObject] | None = None,
+        base_allowed_tools: Sequence[str] = (),
+        session_tool_grants: Sequence[str] = (),
+        continuation_request_messages: list[JsonObject] | None = None,
+        continuation_tracker: ContinuationTracker | None = None,
+        continuation_reminder: str | None = None,
+        explicit_continue: bool = False,
+    ) -> _RequestState:
         """Auto-compact when configured token thresholds are exceeded."""
+        current_state = _RequestState(
+            messages,
+            list(tools or ()),
+            tuple(base_allowed_tools),
+            tuple(session_tool_grants),
+        )
         if self._compaction_service is None:
-            return messages
+            return current_state
 
         settings = self._load_compaction_settings(
             agent,
@@ -1806,13 +1947,13 @@ class ChatLoop:
             project_id=run.project_id,
         )
         if not settings.auto:
-            return messages
+            return current_state
         if settings.strategy == "continuation" and continuation_request_messages is None:
-            return messages
+            return current_state
 
         context_window = self._resolve_context_window(agent)
         if context_window is None:
-            return messages
+            return current_state
 
         if isinstance(usage, dict):
             input_tokens_raw = usage.get("input_tokens")
@@ -1838,7 +1979,7 @@ class ChatLoop:
                 settings=settings,
             )
         if not should_compact:
-            return messages
+            return current_state
 
         _LOGGER.info(
             "Auto-compaction triggered (run=%s agent=%s session=%s input_tokens=%d "
@@ -1872,21 +2013,38 @@ class ChatLoop:
             )
         except Exception:
             _LOGGER.warning("Compaction failed; continuing without compaction", exc_info=True)
-            return messages
+            return current_state
         finally:
             if close_summary_adapter:
                 await _close_adapter(summary_adapter)
 
+        session_messages = session.load()
+        ordinal = (
+            len(
+                [message for message in session_messages if message.role == "compaction_checkpoint"]
+            )
+            + 1
+        )
+        checkpoint = finalize_checkpoint_history_guidance(checkpoint, ordinal=ordinal)
         session.append(checkpoint)
         if continuation_tracker is not None:
             continuation_tracker.record_compaction_boundary()
-        run.emit(COMPACTION_COMPLETED_EVENT, {"message": checkpoint.to_dict()})
+        persisted_ordinal = checkpoint_ordinal(session.load(), checkpoint.id)
+        run.emit(
+            COMPACTION_COMPLETED_EVENT,
+            {
+                "message": checkpoint.to_dict(),
+                "checkpoint": persisted_ordinal,
+                "checkpoint_id": checkpoint.id,
+                "history_available": True,
+            },
+        )
         # Identity runs only, exactly like the run-start resolution: a config
         # agent's slug must not resolve a same-named identity agent's private home.
         compaction_skill_registry = self._runtime.skills_for(
             skill_project_id, run.agent_id if run.project_id is None else None
         )
-        rebuilt_messages = await self._build_request_messages(
+        rebuilt_state = await self._build_request_state(
             agent,
             session,
             replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
@@ -1900,6 +2058,7 @@ class ChatLoop:
                 run.agent_id, run.session_id, agent, compaction_skill_registry, project_id
             ),
         )
+        rebuilt_messages = rebuilt_state.messages
         if continuation_reminder is not None:
             if continuation_tracker is not None:
                 active_continuation = fold_continuation_records(session.load_continuation_records())
@@ -1919,7 +2078,12 @@ class ChatLoop:
             run.session_id,
             self._compaction_service.estimate_messages_tokens(rebuilt_messages),
         )
-        return _restore_in_run_assistant_reasoning(rebuilt_messages, messages)
+        return _RequestState(
+            _restore_in_run_assistant_reasoning(rebuilt_messages, messages),
+            rebuilt_state.tools,
+            rebuilt_state.allowed_tool_names,
+            rebuilt_state.session_tool_grants,
+        )
 
     def _load_compaction_settings(
         self,

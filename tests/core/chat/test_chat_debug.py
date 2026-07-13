@@ -186,6 +186,8 @@ class StubPrompts:
         skill_registry: Any = None,
         skill_catalog: Any = None,
         read_paths: list[Path] | None = None,
+        effective_tool_names: Any = None,
+        session_tool_grants: Any = (),
     ) -> str:
         return f"System for {agent.id}"
 
@@ -201,7 +203,12 @@ class StubPrompts:
         return PinnedSkillCatalog(catalog_text="")
 
     def provider_tool_definitions(
-        self, agent: StubAgent, *, skill_registry: Any = None, skill_catalog: Any = None
+        self,
+        agent: StubAgent,
+        *,
+        skill_registry: Any = None,
+        skill_catalog: Any = None,
+        session_tool_grants: Any = (),
     ) -> list[JsonObject]:
         return [
             {

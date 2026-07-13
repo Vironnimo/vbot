@@ -14,6 +14,7 @@ from core.providers.github_copilot_responses import (
     iter_responses_sse_deltas_with_state,
     normalize_responses_response,
 )
+from core.tools import HISTORY_TOOL_DESCRIPTION, HISTORY_TOOL_NAME, HISTORY_TOOL_PARAMETERS
 
 
 def _iter_deltas(lines):
@@ -81,6 +82,30 @@ def test_build_payload_maps_reasoning_and_gates_tools_and_structured_output() ->
     ]
     assert payload["tool_choice"] == "auto"
     assert "text" not in payload
+
+
+def test_build_payload_maps_history_tool_without_special_case() -> None:
+    payload = build_responses_payload(
+        [{"role": "user", "content": "Verify prior context"}],
+        model_id="gpt-5.4",
+        policy=responses_policy(),
+        tools=[
+            {
+                "name": HISTORY_TOOL_NAME,
+                "description": HISTORY_TOOL_DESCRIPTION,
+                "parameters": HISTORY_TOOL_PARAMETERS,
+            }
+        ],
+    )
+
+    assert payload["tools"] == [
+        {
+            "type": "function",
+            "name": HISTORY_TOOL_NAME,
+            "description": HISTORY_TOOL_DESCRIPTION,
+            "parameters": HISTORY_TOOL_PARAMETERS,
+        }
+    ]
 
 
 @pytest.mark.parametrize("model_id", ["gpt-5.4", "gpt-5.4-mini"])

@@ -38,6 +38,7 @@ from core.prompts.prompts import (
     SkillPromptMetadata,
     SystemPromptManager,
 )
+from core.tools import HISTORY_TOOL_NAME, ToolRegistry, tool_success
 
 _RESOURCES_PROMPTS_DIR = Path(__file__).resolve().parents[3] / "resources" / "prompts"
 # The core text-block fragment files whose contents are the blocks' default texts.
@@ -107,6 +108,7 @@ class StubTools:
         allowed_tools: Sequence[str] | None = None,
         *,
         include_internal: bool = False,
+        session_grants: Sequence[str] = (),
     ) -> list[dict[str, Any]]:
         self.prompt_allowlist = list(allowed_tools) if allowed_tools is not None else None
         self.prompt_allowlist_calls.append(self.prompt_allowlist)
@@ -128,6 +130,7 @@ class StubTools:
         allowed_tools: Sequence[str] | None = None,
         *,
         include_internal: bool = False,
+        session_grants: Sequence[str] = (),
     ) -> list[dict[str, Any]]:
         self.provider_allowlist = list(allowed_tools) if allowed_tools is not None else None
         self.provider_allowlist_calls.append(self.provider_allowlist)
@@ -208,7 +211,7 @@ def _manager(
     tmp_path: Path,
     *,
     storage: StubStorage | None = None,
-    tools: StubTools | None = None,
+    tools: Any | None = None,
     skills: StubSkills | None = None,
     channels: StubChannels | None = None,
     block_definitions: Sequence[BlockDefinition] = (),
@@ -963,6 +966,53 @@ def test_enabling_tools_list_block_renders_tool_descriptions(
     assert "## Available Tools" in prompt
     assert "- read_file: Read a workspace file" in prompt
     assert "## Tool Call Style" in prompt  # the style block stays on independently
+
+
+def test_session_grant_drives_provider_and_enabled_live_tool_list(
+    workspace: Path, tmp_path: Path
+) -> None:
+    registry = ToolRegistry()
+    registry.register(
+        name=HISTORY_TOOL_NAME,
+        description="Verify original Session records.",
+        parameters={"type": "object", "additionalProperties": False},
+        handler=lambda _context, _arguments: tool_success({}),
+        session_scoped=True,
+    )
+    store = StubBlockStore(
+        layouts={"default": [LayoutEntry(id="core:tools_list", enabled=True, source="core")]}
+    )
+    manager = SystemPromptManager(
+        StubStorage(),
+        registry,
+        StubSkills([]),
+        app_version="0.1.0",
+        app_dir=tmp_path / "app",
+        data_root=tmp_path / "data",
+        host="h",
+        os_name="o",
+        current_date=lambda: "2026-05-04",
+        block_store=store,
+    )
+    agent = _agent(workspace, allowed_tools=[])
+
+    preview_definitions = manager.provider_tool_definitions(agent)
+    preview_prompt = manager.build_system_prompt(agent)
+    live_definitions = manager.provider_tool_definitions(
+        agent,
+        session_tool_grants=(HISTORY_TOOL_NAME,),
+    )
+    live_names = [str(definition["name"]) for definition in live_definitions]
+    live_prompt = manager.build_system_prompt(
+        agent,
+        effective_tool_names=live_names,
+        session_tool_grants=(HISTORY_TOOL_NAME,),
+    )
+
+    assert preview_definitions == []
+    assert HISTORY_TOOL_NAME not in preview_prompt
+    assert live_names == [HISTORY_TOOL_NAME]
+    assert "- history: Verify original Session records." in live_prompt
 
 
 def test_block_override_replaces_owner_default_text(workspace: Path, tmp_path: Path) -> None:

@@ -36,6 +36,7 @@ CANONICAL_BUILTIN_TOOLS = [
     "edit",
     "glob",
     "grep",
+    "history",
     "image_generation",
     "memory",
     "process",
@@ -305,6 +306,7 @@ def test_start_registers_builtin_tools_once(config: Config):
 
     tool_names = sorted(tool.name for tool in runtime.tools.list_tools())
     assert tool_names == CANONICAL_REGISTERED_TOOLS
+    assert runtime.tools.get("history").session_scoped is True
 
 
 def test_runtime_selects_jsonl_recall_backend_by_default(config: Config) -> None:
@@ -354,7 +356,9 @@ def test_builtin_provider_definitions_expose_model_visible_metadata_only(config:
     definitions = runtime.tools.provider_definitions()
     definitions_by_name = {definition["name"]: definition for definition in definitions}
 
-    assert sorted(definitions_by_name) == CANONICAL_BUILTIN_TOOLS
+    assert sorted(definitions_by_name) == [
+        name for name in CANONICAL_BUILTIN_TOOLS if name != "history"
+    ]
     for tool_name, definition in definitions_by_name.items():
         tool = runtime.tools.get(tool_name)
         assert set(definition) == {"name", "description", "parameters"}
@@ -1426,6 +1430,8 @@ class _StubPrompts:
         skill_registry: object = None,
         skill_catalog: object = None,
         read_paths: list[Path] | None = None,
+        effective_tool_names: object = None,
+        session_tool_grants: object = (),
     ) -> str:
         return "System prompt"
 
@@ -1435,6 +1441,11 @@ class _StubPrompts:
         return PinnedSkillCatalog(catalog_text="")
 
     def provider_tool_definitions(
-        self, _agent: object, *, skill_registry: object = None, skill_catalog: object = None
+        self,
+        _agent: object,
+        *,
+        skill_registry: object = None,
+        skill_catalog: object = None,
+        session_tool_grants: object = (),
     ) -> list[dict[str, object]]:
         return []

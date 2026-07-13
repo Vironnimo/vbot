@@ -47,6 +47,10 @@ class ToolNotAllowedError(ToolError):
     """Raised when a tool exists but is not on the caller's allowlist."""
 
 
+class SessionToolUnavailableError(ToolError):
+    """Raised when a Session-scoped tool has no grant in the current Session."""
+
+
 class InvalidToolResultError(ValueError):
     """Raised when a tool handler returns a value that is not a valid result envelope.
 
@@ -141,6 +145,10 @@ class ToolContext:
     note_hook: ToolNoteHook | None = None
     skill_activation_hook: ToolSkillActivationHook | None = None
     allowed_skills: Sequence[str] | None = None
+    # Session-derived grants for tools whose authority belongs to persisted
+    # Session state rather than Agent configuration. The registry checks this
+    # axis before the ordinary allowlist.
+    session_tool_grants: Sequence[str] = field(default_factory=tuple)
     nesting_depth: int = 0
 
     @property
@@ -241,6 +249,7 @@ class ToolExecutionConfig:
     note_hook: ToolNoteHook | None = None
     skill_activation_hook: ToolSkillActivationHook | None = None
     allowed_skills: Sequence[str] | None = None
+    session_tool_grants: Sequence[str] = field(default_factory=tuple)
     nesting_depth: int = 0
 
 
@@ -253,6 +262,9 @@ class Tool:
     parameters: JsonObject
     handler: ToolHandler
     internal: bool = False
+    # A Session-scoped tool is configurable nowhere and model-visible only when
+    # the current Session supplies a matching persisted-state grant.
+    session_scoped: bool = False
     display: ToolDisplay = field(default_factory=ToolDisplay)
     # Optional readiness predicate (zero-arg, cheap, I/O-free) — e.g. "the token
     # is a non-empty string", never a network ping, since it runs on every
@@ -395,6 +407,7 @@ class ToolRegistry:
         handler: ToolHandler,
         *,
         internal: bool = False,
+        session_scoped: bool = False,
         display: ToolDisplay | None = None,
         ready: ToolReadinessPredicate | None = None,
         readiness_hint: str | None = None,
@@ -419,6 +432,7 @@ class ToolRegistry:
             parameters=dict(parameters),
             handler=handler,
             internal=internal,
+            session_scoped=session_scoped,
             display=display or ToolDisplay(),
             ready=ready,
             readiness_hint=readiness_hint,
@@ -447,6 +461,7 @@ class ToolRegistry:
         allowed_tools: Sequence[str] | None = None,
         *,
         include_internal: bool = False,
+        include_session_scoped: bool = True,
         ready_only: bool = False,
     ) -> list[Tool]:
         """Return registered tools filtered by an allowlist.
@@ -468,6 +483,9 @@ class ToolRegistry:
         if not include_internal:
             tools = [tool for tool in tools if not tool.internal]
 
+        if not include_session_scoped:
+            tools = [tool for tool in tools if not tool.session_scoped]
+
         if ready_only:
             tools = [tool for tool in tools if tool_is_ready(tool)]
 
@@ -478,6 +496,7 @@ class ToolRegistry:
         allowed_tools: Sequence[str] | None = None,
         *,
         include_internal: bool = False,
+        session_grants: Sequence[str] = (),
         ready_only: bool = True,
     ) -> list[JsonObject]:
         """Return provider-ready tool definitions for allowed, ready tools.
@@ -487,8 +506,11 @@ class ToolRegistry:
         """
         return [
             self._to_provider_definition(tool)
-            for tool in self.list_tools(
-                allowed_tools, include_internal=include_internal, ready_only=ready_only
+            for tool in self._model_facing_tools(
+                allowed_tools,
+                include_internal=include_internal,
+                session_grants=session_grants,
+                ready_only=ready_only,
             )
         ]
 
@@ -497,6 +519,7 @@ class ToolRegistry:
         allowed_tools: Sequence[str] | None = None,
         *,
         include_internal: bool = False,
+        session_grants: Sequence[str] = (),
         ready_only: bool = True,
     ) -> list[JsonObject]:
         """Return prompt-ready name and description pairs for allowed, ready tools.
@@ -507,8 +530,11 @@ class ToolRegistry:
         """
         return [
             {"name": tool.name, "description": tool.description}
-            for tool in self.list_tools(
-                allowed_tools, include_internal=include_internal, ready_only=ready_only
+            for tool in self._model_facing_tools(
+                allowed_tools,
+                include_internal=include_internal,
+                session_grants=session_grants,
+                ready_only=ready_only,
             )
         ]
 
@@ -520,6 +546,8 @@ class ToolRegistry:
     ) -> JsonObject:
         """Execute a registered allowed tool through an async interface."""
         tool = self.get(context.tool_name)
+        if tool.session_scoped and context.tool_name not in context.session_tool_grants:
+            raise SessionToolUnavailableError(f"Session tool unavailable: {context.tool_name}")
         if not self._is_allowed(context.tool_name, allowed_tools, internal=tool.internal):
             raise ToolNotAllowedError(f"Tool not allowed: {context.tool_name}")
         # Readiness safety net: dispatch is not list-filtered, so a prompt built
@@ -548,6 +576,30 @@ class ToolRegistry:
                 f"Tool handler must return a valid result envelope: {context.tool_name}"
             )
         return result
+
+    def _model_facing_tools(
+        self,
+        allowed_tools: Sequence[str] | None,
+        *,
+        include_internal: bool,
+        session_grants: Sequence[str],
+        ready_only: bool,
+    ) -> list[Tool]:
+        """Return one model-facing set from Agent policy plus Session grants."""
+        grants = set(session_grants)
+        tools: list[Tool] = []
+        for tool in self._tools.values():
+            if tool.internal and not include_internal:
+                continue
+            if tool.session_scoped:
+                if tool.name not in grants:
+                    continue
+            elif not self._is_allowed(tool.name, allowed_tools):
+                continue
+            if ready_only and not tool_is_ready(tool):
+                continue
+            tools.append(tool)
+        return sorted(tools, key=lambda tool: tool.name)
 
     @staticmethod
     def _validate_tool(
@@ -740,6 +792,7 @@ class ToolExecutor:
                 note_hook=config.note_hook,
                 skill_activation_hook=config.skill_activation_hook,
                 allowed_skills=config.allowed_skills,
+                session_tool_grants=config.session_tool_grants,
                 nesting_depth=config.nesting_depth,
             )
             return await self._dispatch_with_envelope(context, tool_call, config.allowed_tools)
@@ -763,6 +816,8 @@ class ToolExecutor:
             return await self._registry.dispatch(context, tool_call.arguments, allowed_tools)
         except ToolNotFoundError as error:
             return tool_failure("tool_not_found", str(error))
+        except SessionToolUnavailableError as error:
+            return tool_failure(f"{context.tool_name}_unavailable", str(error))
         except ToolNotAllowedError as error:
             return tool_failure("tool_not_allowed", str(error))
         except ValueError as error:
@@ -867,6 +922,7 @@ __all__ = [
     "DEFAULT_TOOL_CONCURRENCY_LIMIT",
     "DuplicateToolError",
     "JsonObject",
+    "SessionToolUnavailableError",
     "TOOL_ALLOWLIST_WILDCARD",
     "Tool",
     "ToolCall",

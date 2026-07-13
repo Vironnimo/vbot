@@ -76,6 +76,61 @@ def _decode_tool_result(message_content: object) -> JsonObject:
     return cast(JsonObject, json.loads(message_content))
 
 
+@pytest.mark.asyncio
+async def test_session_tool_grant_precedes_agent_and_run_dispatch_gates(tmp_path: Path) -> None:
+    tools = ToolRegistry()
+    tools.register(
+        "history",
+        "Session history",
+        {"type": "object"},
+        lambda _context, _arguments: tool_success({"ran": True}),
+        session_scoped=True,
+    )
+    runtime, wildcard_agent = _build_runtime_and_agent(tmp_path, tools)
+    agent = _StubAgent(
+        id=wildcard_agent.id,
+        workspace=wildcard_agent.workspace,
+        allowed_tools=[],
+    )
+    session = _build_session(tmp_path)
+    call = [ToolCall(id="history-call", name="history", arguments={})]
+
+    unavailable, _ = await _dispatch_tool_calls(
+        runtime,
+        agent,
+        call,
+        session,
+        Run(run_id="run-unavailable", agent_id=agent.id, session_id=session.id),
+        nesting_depth=0,
+        base_allowed_tools=("history",),
+    )
+    granted, _ = await _dispatch_tool_calls(
+        runtime,
+        agent,
+        call,
+        session,
+        Run(run_id="run-granted", agent_id=agent.id, session_id=session.id),
+        nesting_depth=0,
+        base_allowed_tools=("history",),
+        session_tool_grants=("history",),
+    )
+    restricted, _ = await _dispatch_tool_calls(
+        runtime,
+        agent,
+        call,
+        session,
+        Run(run_id="run-restricted", agent_id=agent.id, session_id=session.id),
+        nesting_depth=0,
+        base_allowed_tools=("history",),
+        session_tool_grants=("history",),
+        tool_restriction=("read",),
+    )
+
+    assert _decode_tool_result(unavailable[0].content)["error"]["code"] == "history_unavailable"
+    assert _decode_tool_result(granted[0].content) == tool_success({"ran": True})
+    assert _decode_tool_result(restricted[0].content)["error"]["code"] == "tool_not_allowed"
+
+
 class TestDispatchCancelWiring:
     @pytest.mark.asyncio
     async def test_cancel_registration_hook_receives_per_call_id_through_on_cancel(

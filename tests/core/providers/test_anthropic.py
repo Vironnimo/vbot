@@ -37,6 +37,7 @@ from core.providers.errors import (
 )
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
+from core.tools import HISTORY_TOOL_DESCRIPTION, HISTORY_TOOL_NAME, HISTORY_TOOL_PARAMETERS
 
 
 def _strip_cache_control(payload: dict) -> dict:
@@ -935,6 +936,34 @@ class TestSendRequestFormat:
                 "name": "read",
                 "description": READ_TOOL_DEFINITION["description"],
                 "input_schema": READ_TOOL_DEFINITION["parameters"],
+            }
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_maps_history_definition_to_input_schema(self, anthropic_adapter):
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+
+        await anthropic_adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="claude-sonnet-4-20250219",
+            tools=[
+                {
+                    "name": HISTORY_TOOL_NAME,
+                    "description": HISTORY_TOOL_DESCRIPTION,
+                    "parameters": HISTORY_TOOL_PARAMETERS,
+                }
+            ],
+        )
+
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
+        assert request_body["tools"] == [
+            {
+                "name": HISTORY_TOOL_NAME,
+                "description": HISTORY_TOOL_DESCRIPTION,
+                "input_schema": HISTORY_TOOL_PARAMETERS,
             }
         ]
 

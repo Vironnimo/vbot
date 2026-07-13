@@ -4,7 +4,7 @@ Session recall read model for tools that search or browse persisted chat Session
 
 ## Overview
 
-`core/recall/` is separate from both canonical Session persistence and curated memory. Sessions remain JSONL files owned by `core/sessions/`; curated durable facts remain in `core/memory/`. Recall backends provide a read/search model over stored Sessions for `session_search`.
+`core/recall/` is separate from both canonical Session persistence and curated memory. Sessions remain JSONL files owned by `core/sessions/`; curated durable facts remain in `core/memory/`. Recall backends provide a read/search model over stored Sessions for `session_search`. The Session-scoped `history` Tool bypasses this domain and reads the current Session's canonical storage directly after Compaction.
 
 ## Interfaces
 
@@ -104,6 +104,7 @@ Rules:
 ## Cross-Domain Rules
 
 - `core/tools/session_search.py` owns provider-visible schema, argument parsing, invalid-argument envelopes, and dispatch to `RecallBackend`.
+- `core/tools/history.py` is not a Recall backend consumer: it is current-Session-only, checkpoint-gated, exact canonical access with snapshot-bound cursors. `session_search` remains the cross-Session browse/search capability and may use disposable derived indexes.
 - `core/sessions/` remains the source of truth for Session messages and metadata.
 - `core/memory/` remains the curated-memory boundary. Do not put pinned memory CRUD or prompt-visible fact storage in recall.
 - A cross-agent `/agent` session **move** needs no recall reconcile hook. Every backend scopes results to the source agent's *active* candidate Sessions (`candidate_session_summaries` over `ChatSessionManager.list_with_metadata(agent_id, project_id)`): FTS restricts matches to those session ids and lazily drops missing-session rows (`_cleanup_missing_sessions`); the vector backend filters KNN hits by `(agent_id, project_id)` + active summary and lazily drops missing sessions (`_ensure_fresh_index`). A Session moved away from the source therefore can never surface under the old agent, and its stale derived-index rows self-heal on the next source-scope search — so no eager source-scope delete is wired (indexes stay disposable/rebuildable). The target re-indexes itself lazily on its next search.

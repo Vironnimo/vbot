@@ -89,12 +89,20 @@ class StubStorage:
 
 class StubTools:
     def prompt_definitions(
-        self, allowed_tools: Sequence[str] | None = None, *, include_internal: bool = False
+        self,
+        allowed_tools: Sequence[str] | None = None,
+        *,
+        include_internal: bool = False,
+        session_grants: Sequence[str] = (),
     ) -> list[JsonObject]:
         return [{"name": "read", "description": "Read a file"}]
 
     def provider_definitions(
-        self, allowed_tools: Sequence[str] | None = None, *, include_internal: bool = False
+        self,
+        allowed_tools: Sequence[str] | None = None,
+        *,
+        include_internal: bool = False,
+        session_grants: Sequence[str] = (),
     ) -> list[JsonObject]:
         return [{"name": "read", "description": "Read a file", "parameters": {"type": "object"}}]
 

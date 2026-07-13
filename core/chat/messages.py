@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
@@ -59,6 +60,13 @@ UTC_Z_SUFFIX = "Z"
 SYSTEM_REMINDER_OPEN_TAG = "<system-reminder>"
 SYSTEM_REMINDER_CLOSE_TAG = "</system-reminder>"
 COMPACTION_SUMMARY_NOTE_PREFIX = "[compaction-summary] "
+HISTORY_COMPACTION_GUIDANCE = (
+    "This is Compaction checkpoint {ordinal}. Some earlier original messages are no longer "
+    "directly present in active Context. If current work depends on earlier decisions, "
+    "requirements, exact wording, or completed work, use history to verify the relevant "
+    "originals before proceeding. Use checkpoint {ordinal} for the section immediately before "
+    "this checkpoint; omit checkpoint to access all earlier original history."
+)
 REPLY_SURFACE_NOTE_PREFIX = "[reply-surface] "
 
 WEBUI_REPLY_SURFACE_REMINDER = (
@@ -814,6 +822,42 @@ def _latest_compaction_checkpoint(messages: list[ChatMessage]) -> ChatMessage | 
     return None
 
 
+def history_available(messages: Sequence[ChatMessage]) -> bool:
+    """Return whether persisted Session history grants the History tool."""
+    return any(message.role == "compaction_checkpoint" for message in messages)
+
+
+def checkpoint_ordinal(messages: Sequence[ChatMessage], checkpoint_id: str) -> int | None:
+    """Return a checkpoint's one-based chronological ordinal."""
+    ordinal = 0
+    for message in messages:
+        if message.role != "compaction_checkpoint":
+            continue
+        ordinal += 1
+        if message.id == checkpoint_id:
+            return ordinal
+    return None
+
+
+def finalize_checkpoint_history_guidance(
+    checkpoint: ChatMessage,
+    *,
+    ordinal: int,
+) -> ChatMessage:
+    """Add the ordinal-specific History guidance to a new checkpoint once."""
+    if checkpoint.role != "compaction_checkpoint" or checkpoint.projection is None:
+        raise ChatMessageValidationError("History guidance requires a projected checkpoint")
+    guidance = HISTORY_COMPACTION_GUIDANCE.format(ordinal=ordinal)
+    projection = [dict(entry) for entry in checkpoint.projection]
+    leading = ChatMessage.from_dict(projection[0])
+    if leading.role != "note" or not isinstance(leading.content, str):
+        raise ChatMessageValidationError("checkpoint projection must begin with a summary note")
+    if guidance not in leading.content:
+        leading = replace(leading, content=f"{leading.content}\n\n{guidance}")
+        projection[0] = leading.to_dict()
+    return replace(checkpoint, projection=projection)
+
+
 def _effective_compaction_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
     """Return the latest checkpoint projection plus messages appended after it."""
     checkpoint = _latest_compaction_checkpoint(messages)
@@ -832,7 +876,47 @@ def _effective_compaction_messages(messages: list[ChatMessage]) -> list[ChatMess
         for message in messages[checkpoint_index + 1 :]
         if message.role != "compaction_checkpoint"
     ]
-    return [*projection, *appended]
+    effective = [*projection, *appended]
+    return _overlay_pending_tool_batch(messages, effective)
+
+
+def _overlay_pending_tool_batch(
+    canonical_messages: Sequence[ChatMessage],
+    effective_messages: list[ChatMessage],
+) -> list[ChatMessage]:
+    """Keep the latest complete unconsumed Tool batch in post-Compaction Context."""
+    latest_assistant_index = next(
+        (
+            index
+            for index in range(len(canonical_messages) - 1, -1, -1)
+            if canonical_messages[index].role == "assistant"
+        ),
+        None,
+    )
+    if latest_assistant_index is None:
+        return effective_messages
+    carrier = canonical_messages[latest_assistant_index]
+    if not carrier.tool_calls:
+        return effective_messages
+
+    expected_ids = [tool_call.id for tool_call in carrier.tool_calls]
+    results_by_id: dict[str, ChatMessage] = {}
+    for message in canonical_messages[latest_assistant_index + 1 :]:
+        if message.role == "assistant":
+            return effective_messages
+        if message.role == "tool" and message.tool_call_id in expected_ids:
+            results_by_id.setdefault(cast(str, message.tool_call_id), message)
+    if any(tool_call_id not in results_by_id for tool_call_id in expected_ids):
+        return effective_messages
+
+    batch = [carrier, *(results_by_id[tool_call_id] for tool_call_id in expected_ids)]
+    batch_ids = {message.id for message in batch}
+    if batch_ids.issubset({message.id for message in effective_messages}):
+        return effective_messages
+    without_partial_batch = [
+        message for message in effective_messages if message.id not in batch_ids
+    ]
+    return [*without_partial_batch, *batch]
 
 
 def _legacy_checkpoint_projection(

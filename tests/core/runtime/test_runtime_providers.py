@@ -1102,6 +1102,7 @@ def test_runtime_loads_phase_two_services(runtime: Runtime) -> None:
         "ha_get_state",
         "ha_list_entities",
         "ha_list_services",
+        "history",
         "image_generation",
         "memory",
         "process",

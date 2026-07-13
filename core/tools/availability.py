@@ -33,6 +33,7 @@ def effective_agent_allowed_tools(
     *,
     registered_tool_names: Sequence[str],
     workspace: str = "",
+    session_tool_grants: Sequence[str] = (),
 ) -> list[str] | None:
     """Return the runtime allowlist after applying Agent memory mode and identity-only gating.
 
@@ -48,8 +49,12 @@ def effective_agent_allowed_tools(
     if not memory_tool_enabled(memory_prompt_mode):
         excluded.add(MEMORY_TOOL_NAME)
 
+    grants = [tool_name for tool_name in session_tool_grants if tool_name in registered_tool_names]
+
     if allowed_tools is None:
-        return None if not excluded else _without(registered_tool_names, excluded)
+        if not excluded and not grants:
+            return None
+        return sorted(set(_without(registered_tool_names, excluded)) | set(grants))
 
     configured_tools = [
         tool_name
@@ -57,12 +62,15 @@ def effective_agent_allowed_tools(
         if tool_name not in excluded
     ]
     if "*" in configured_tools:
-        return configured_tools if not excluded else _without(registered_tool_names, excluded)
+        effective = configured_tools if not excluded else _without(registered_tool_names, excluded)
+        if "*" in effective:
+            return effective
+        return sorted(set(effective) | set(grants))
 
     if memory_tool_enabled(memory_prompt_mode):
-        return [*configured_tools, MEMORY_TOOL_NAME]
+        return list(dict.fromkeys([*configured_tools, MEMORY_TOOL_NAME, *grants]))
 
-    return configured_tools
+    return list(dict.fromkeys([*configured_tools, *grants]))
 
 
 def _without(tool_names: Sequence[str], excluded: set[str]) -> list[str]:

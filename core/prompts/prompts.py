@@ -233,13 +233,21 @@ class ToolPromptRegistry(Protocol):
     """Tool registry methods needed for prompt and provider definitions."""
 
     def prompt_definitions(
-        self, allowed_tools: Sequence[str] | None = None, *, include_internal: bool = False
+        self,
+        allowed_tools: Sequence[str] | None = None,
+        *,
+        include_internal: bool = False,
+        session_grants: Sequence[str] = (),
     ) -> list[dict[str, Any]]:
         """Return prompt-ready tool name and description mappings."""
         ...
 
     def provider_definitions(
-        self, allowed_tools: Sequence[str] | None = None, *, include_internal: bool = False
+        self,
+        allowed_tools: Sequence[str] | None = None,
+        *,
+        include_internal: bool = False,
+        session_grants: Sequence[str] = (),
     ) -> list[dict[str, Any]]:
         """Return provider-ready tool schemas."""
         ...
@@ -942,6 +950,8 @@ class SystemPromptManager:
         skill_registry: SkillPromptRegistry | None = None,
         skill_catalog: PinnedSkillCatalog | None = None,
         read_paths: list[Path] | None = None,
+        effective_tool_names: Sequence[str] | None = None,
+        session_tool_grants: Sequence[str] = (),
     ) -> str:
         """Build the complete system prompt for an agent (the block-model path).
 
@@ -981,7 +991,13 @@ class SystemPromptManager:
             scope=scope_key,
             read_observer=observer,
         )
-        producers = self._build_producers(agent, skill_registry, skill_catalog)
+        producers = self._build_producers(
+            agent,
+            skill_registry,
+            skill_catalog,
+            effective_tool_names=effective_tool_names,
+            session_tool_grants=session_tool_grants,
+        )
         layout = self._resolve_scope_layout(scope_key)
         definitions = self._collect_block_definitions(
             agent,
@@ -993,7 +1009,14 @@ class SystemPromptManager:
             definitions,
             layout,
             context,
-            owner_activity=CallableOwnerActivity(self._is_owner_active),
+            owner_activity=CallableOwnerActivity(
+                lambda owner, owner_agent: self._is_owner_active(
+                    owner,
+                    owner_agent,
+                    effective_tool_names=effective_tool_names,
+                    session_tool_grants=session_tool_grants,
+                )
+            ),
             override_resolver=self._build_override_resolver(prompt_scope),
             producers=producers,
             replacements=self._runtime_replacements(agent),
@@ -1336,7 +1359,12 @@ class SystemPromptManager:
         skills = registry.filter_allowed(agent.allowed_skills)
         return PinnedSkillCatalog(catalog_text=_format_skill_list(skills))
 
-    def provider_tool_definitions(self, agent: PromptAgent) -> list[dict[str, Any]]:
+    def provider_tool_definitions(
+        self,
+        agent: PromptAgent,
+        *,
+        session_tool_grants: Sequence[str] = (),
+    ) -> list[dict[str, Any]]:
         """Return provider tool definitions filtered by the agent allowlist.
 
         ``skill`` and ``skill_manage`` are ordinary allow-list tools, so they are
@@ -1346,7 +1374,7 @@ class SystemPromptManager:
         agent's own private skill home, so it is withheld from a config/project agent
         (empty ``workspace``) even under a wildcard allow-list.
         """
-        return self._provider_definitions_for_agent(agent)
+        return self._provider_definitions_for_agent(agent, session_tool_grants)
 
     def _resolve_skill_registry(
         self, skill_registry: SkillPromptRegistry | None
@@ -1359,6 +1387,9 @@ class SystemPromptManager:
         agent: PromptAgent,
         skill_registry: SkillPromptRegistry | None,
         skill_catalog: PinnedSkillCatalog | None = None,
+        *,
+        effective_tool_names: Sequence[str] | None = None,
+        session_tool_grants: Sequence[str] = (),
     ) -> dict[str, BlockProducer]:
         """Build the ``{generated:NAME}`` producer registry for this build.
 
@@ -1375,7 +1406,13 @@ class SystemPromptManager:
         active_skill_registry = self._resolve_skill_registry(skill_registry)
 
         def tool_list(context: BlockRenderContext) -> str:
-            return _format_tool_list(self._prompt_definitions_for_agent(context.agent))
+            return _format_tool_list(
+                self._prompt_definitions_for_agent(
+                    context.agent,
+                    session_tool_grants,
+                    effective_tool_names=effective_tool_names,
+                )
+            )
 
         def channel_list(context: BlockRenderContext) -> str:
             return _format_channel_list(self._agent_active_channels(context.agent))
@@ -1408,7 +1445,14 @@ class SystemPromptManager:
             MEMORY_FILES_PRODUCER_NAME: memory_files,
         }
 
-    def _is_owner_active(self, owner: str, agent: PromptAgent) -> bool:
+    def _is_owner_active(
+        self,
+        owner: str,
+        agent: PromptAgent,
+        *,
+        effective_tool_names: Sequence[str] | None = None,
+        session_tool_grants: Sequence[str] = (),
+    ) -> bool:
         """Return whether a block's owner is active for *agent* (gate 2, D5).
 
         Reads the same seams the manager already applies — never a hardcoded or
@@ -1431,37 +1475,78 @@ class SystemPromptManager:
         tool_prefix = "tool:"
         if owner.startswith(tool_prefix):
             tool_name = owner[len(tool_prefix) :]
-            return self._agent_tool_allowed(agent, tool_name)
+            return self._agent_tool_allowed(
+                agent,
+                tool_name,
+                effective_tool_names=effective_tool_names,
+                session_tool_grants=session_tool_grants,
+            )
         extension_prefix = "extension:"
         if owner.startswith(extension_prefix):
             return owner[len(extension_prefix) :] in self._loaded_extensions
         return False
 
-    def _agent_tool_allowed(self, agent: PromptAgent, tool_name: str) -> bool:
+    def _agent_tool_allowed(
+        self,
+        agent: PromptAgent,
+        tool_name: str,
+        *,
+        effective_tool_names: Sequence[str] | None = None,
+        session_tool_grants: Sequence[str] = (),
+    ) -> bool:
         """Return whether *tool_name* is in the agent's effective prompt tool set.
 
         Reuses the same prompt-definition path the tools block uses (allowlist +
         derived ``memory`` visibility), so gate 2 cannot drift from what the tool
         list actually shows.
         """
-        definitions = self._prompt_definitions_for_agent(agent)
+        definitions = self._prompt_definitions_for_agent(
+            agent,
+            session_tool_grants,
+            effective_tool_names=effective_tool_names,
+        )
         return any(definition.get("name") == tool_name for definition in definitions)
 
-    def _provider_definitions_for_agent(self, agent: PromptAgent) -> list[JsonObject]:
-        definitions = self._tool_registry.provider_definitions(agent.allowed_tools)
+    def _provider_definitions_for_agent(
+        self,
+        agent: PromptAgent,
+        session_tool_grants: Sequence[str] = (),
+    ) -> list[JsonObject]:
+        definitions = self._tool_registry.provider_definitions(
+            agent.allowed_tools,
+            session_grants=session_tool_grants,
+        )
         definitions = self._apply_memory_tool_visibility(
             definitions,
             agent,
-            self._tool_registry.provider_definitions,
+            lambda allowed: self._tool_registry.provider_definitions(
+                allowed,
+            ),
         )
         return self._apply_identity_only_tool_visibility(definitions, agent)
 
-    def _prompt_definitions_for_agent(self, agent: PromptAgent) -> list[JsonObject]:
-        definitions = self._tool_registry.prompt_definitions(agent.allowed_tools)
+    def _prompt_definitions_for_agent(
+        self,
+        agent: PromptAgent,
+        session_tool_grants: Sequence[str] = (),
+        *,
+        effective_tool_names: Sequence[str] | None = None,
+    ) -> list[JsonObject]:
+        if effective_tool_names is not None:
+            return self._tool_registry.prompt_definitions(
+                effective_tool_names,
+                session_grants=session_tool_grants,
+            )
+        definitions = self._tool_registry.prompt_definitions(
+            agent.allowed_tools,
+            session_grants=session_tool_grants,
+        )
         definitions = self._apply_memory_tool_visibility(
             definitions,
             agent,
-            self._tool_registry.prompt_definitions,
+            lambda allowed: self._tool_registry.prompt_definitions(
+                allowed,
+            ),
         )
         return self._apply_identity_only_tool_visibility(definitions, agent)
 
