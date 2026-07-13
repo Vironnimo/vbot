@@ -1,5 +1,6 @@
 """Tests for the built-in session_search tool."""
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,8 @@ from core.tools.session_search import (
     session_search_handler,
 )
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
+
+pytestmark = pytest.mark.asyncio
 
 JsonObject = dict[str, Any]
 
@@ -70,7 +73,7 @@ def assert_failure_envelope(result: JsonObject, code: str) -> dict[str, str]:
     return error  # type: ignore[return-value]
 
 
-def test_register_session_search_tool_exposes_provider_schema(tmp_path: Path) -> None:
+async def test_register_session_search_tool_exposes_provider_schema(tmp_path: Path) -> None:
     registry = ToolRegistry()
     sessions = ChatSessionManager(tmp_path)
 
@@ -109,7 +112,7 @@ def test_register_session_search_tool_exposes_provider_schema(tmp_path: Path) ->
     }
 
 
-def test_build_session_search_description_appends_backend_guidance(tmp_path: Path) -> None:
+async def test_build_session_search_description_appends_backend_guidance(tmp_path: Path) -> None:
     """Each backend contributes its own how-to-query guidance to the description."""
 
     sessions = ChatSessionManager(tmp_path)
@@ -131,7 +134,7 @@ def test_build_session_search_description_appends_backend_guidance(tmp_path: Pat
     assert _HYBRID_SEARCH_GUIDANCE in hybrid_description
 
 
-def test_build_session_search_description_falls_back_without_describe_search() -> None:
+async def test_build_session_search_description_falls_back_without_describe_search() -> None:
     """A backend without describe_search (e.g. an extension) gets the generic base."""
 
     class _BareBackend:
@@ -146,7 +149,7 @@ def test_build_session_search_description_falls_back_without_describe_search() -
     assert build_session_search_description(_BareBackend()) == SESSION_SEARCH_TOOL_DESCRIPTION
 
 
-def test_session_search_finds_all_query_terms_in_newest_sessions(tmp_path: Path) -> None:
+async def test_session_search_finds_all_query_terms_in_newest_sessions(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     old_session = sessions.create("coder", session_id="old-session")
     new_session = sessions.create("coder", session_id="new-session")
@@ -155,7 +158,7 @@ def test_session_search_finds_all_query_terms_in_newest_sessions(tmp_path: Path)
         ChatMessage.user("Release deploy plan for session search", timestamp=timestamp(3))
     )
 
-    result = session_search_handler(
+    result = await session_search_handler(
         make_context(tmp_path),
         {"query": "release deploy"},
         sessions,
@@ -171,7 +174,7 @@ def test_session_search_finds_all_query_terms_in_newest_sessions(tmp_path: Path)
     assert "Found 1 match" in data["content"]
 
 
-def test_session_search_scopes_recall_to_context_project(tmp_path: Path) -> None:
+async def test_session_search_scopes_recall_to_context_project(tmp_path: Path) -> None:
     """A project run's recall searches its project Sessions; a global run the global ones.
 
     The handler takes the project scope from ``ToolContext.project_id`` (the
@@ -186,12 +189,12 @@ def test_session_search_scopes_recall_to_context_project(tmp_path: Path) -> None
         ChatMessage.user("Release deploy plan project", timestamp=timestamp(2))
     )
 
-    project_result = session_search_handler(
+    project_result = await session_search_handler(
         make_context(tmp_path, project_id="alpha"),
         {"query": "release deploy"},
         sessions,
     )
-    global_result = session_search_handler(
+    global_result = await session_search_handler(
         make_context(tmp_path),
         {"query": "release deploy"},
         sessions,
@@ -203,7 +206,7 @@ def test_session_search_scopes_recall_to_context_project(tmp_path: Path) -> None
     assert [m["session_id"] for m in global_data["matches"]] == ["global-s"]
 
 
-def test_session_search_filters_by_time_range_and_role(tmp_path: Path) -> None:
+async def test_session_search_filters_by_time_range_and_role(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     old_session = sessions.create("coder", session_id="old-session")
     new_session = sessions.create("coder", session_id="new-session")
@@ -219,7 +222,7 @@ def test_session_search_filters_by_time_range_and_role(tmp_path: Path) -> None:
         )
     )
 
-    result = session_search_handler(
+    result = await session_search_handler(
         make_context(tmp_path),
         {"query": "needle", "since": "2026-05-02", "roles": ["assistant"]},
         sessions,
@@ -232,7 +235,7 @@ def test_session_search_filters_by_time_range_and_role(tmp_path: Path) -> None:
     assert matches[0]["snippet"] == "needle from assistant"
 
 
-def test_session_search_lists_recent_sessions_without_query(tmp_path: Path) -> None:
+async def test_session_search_lists_recent_sessions_without_query(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     old_session = sessions.create("coder", session_id="old-session")
     new_session = sessions.create("coder", session_id="new-session")
@@ -240,7 +243,7 @@ def test_session_search_lists_recent_sessions_without_query(tmp_path: Path) -> N
     new_session.append(ChatMessage.user("newer work", timestamp=timestamp(4)))
     sessions.set_metadata("coder", "new-session", {"platform": "telegram"})
 
-    result = session_search_handler(make_context(tmp_path), {"limit": 1}, sessions)
+    result = await session_search_handler(make_context(tmp_path), {"limit": 1}, sessions)
 
     data = assert_success_envelope(result)
     session_summaries = data["sessions"]
@@ -252,12 +255,12 @@ def test_session_search_lists_recent_sessions_without_query(tmp_path: Path) -> N
     assert "Results limited to 1 sessions" in data["content"]
 
 
-def test_session_search_blank_query_lists_sessions(tmp_path: Path) -> None:
+async def test_session_search_blank_query_lists_sessions(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="blank-query-session")
     session.append(ChatMessage.user("newer work", timestamp=timestamp(4)))
 
-    result = session_search_handler(make_context(tmp_path), {"query": "   "}, sessions)
+    result = await session_search_handler(make_context(tmp_path), {"query": "   "}, sessions)
 
     data = assert_success_envelope(result)
     session_summaries = data["sessions"]
@@ -267,13 +270,13 @@ def test_session_search_blank_query_lists_sessions(tmp_path: Path) -> None:
     ]
 
 
-def test_session_search_blank_agent_id_falls_back_to_current_agent(tmp_path: Path) -> None:
+async def test_session_search_blank_agent_id_falls_back_to_current_agent(tmp_path: Path) -> None:
     # A blank optional id must mean "omitted" (use the current agent), not error.
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="own-session")
     session.append(ChatMessage.user("some work", timestamp=timestamp(4)))
 
-    result = session_search_handler(
+    result = await session_search_handler(
         make_context(tmp_path, agent_id="coder"),
         {"agent_id": "", "session_id": ""},
         sessions,
@@ -283,19 +286,19 @@ def test_session_search_blank_agent_id_falls_back_to_current_agent(tmp_path: Pat
     assert [summary["session_id"] for summary in data["sessions"]] == ["own-session"]
 
 
-def test_session_search_accepts_string_encoded_limit(tmp_path: Path) -> None:
+async def test_session_search_accepts_string_encoded_limit(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     for index in range(3):
         session = sessions.create("coder", session_id=f"session-{index}")
         session.append(ChatMessage.user("work", timestamp=timestamp(index + 1)))
 
-    result = session_search_handler(make_context(tmp_path), {"limit": "2"}, sessions)
+    result = await session_search_handler(make_context(tmp_path), {"limit": "2"}, sessions)
 
     data = assert_success_envelope(result)
     assert len(data["sessions"]) == 2
 
 
-def test_session_search_includes_neighbor_context_when_requested(tmp_path: Path) -> None:
+async def test_session_search_includes_neighbor_context_when_requested(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="thread-session")
     session.append(ChatMessage.user("Can you inspect checkout bug?", timestamp=timestamp(2, 9)))
@@ -308,7 +311,7 @@ def test_session_search_includes_neighbor_context_when_requested(tmp_path: Path)
     )
     session.append(ChatMessage.user("Checkout bug reproduces again", timestamp=timestamp(2, 11)))
 
-    result = session_search_handler(
+    result = await session_search_handler(
         make_context(tmp_path),
         {"query": "checkout bug", "limit": 1, "context": 1},
         sessions,
@@ -325,7 +328,7 @@ def test_session_search_includes_neighbor_context_when_requested(tmp_path: Path)
     assert matches[0]["bookend_end"][-1]["role"] == "user"
 
 
-def test_session_search_returns_anchored_view_around_message(tmp_path: Path) -> None:
+async def test_session_search_returns_anchored_view_around_message(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="anchored-session")
     session.append(ChatMessage.user("Session goal is memory planning", timestamp=timestamp(2, 8)))
@@ -346,7 +349,7 @@ def test_session_search_returns_anchored_view_around_message(tmp_path: Path) -> 
         )
     )
 
-    result = session_search_handler(
+    result = await session_search_handler(
         make_context(tmp_path),
         {"session_id": "anchored-session", "around_message_id": anchor.id, "context": 1},
         sessions,
@@ -360,7 +363,7 @@ def test_session_search_returns_anchored_view_around_message(tmp_path: Path) -> 
     assert "Anchored view" in data["content"]
 
 
-def test_session_search_returns_session_overview_for_session_id_alone(tmp_path: Path) -> None:
+async def test_session_search_returns_session_overview_for_session_id_alone(tmp_path: Path) -> None:
     """session_id without a query returns that session's overview, not just metadata."""
 
     sessions = ChatSessionManager(tmp_path)
@@ -376,7 +379,7 @@ def test_session_search_returns_session_overview_for_session_id_alone(tmp_path: 
     )
     session.append(ChatMessage.user("final wrap-up question", timestamp=timestamp(2, 11)))
 
-    result = session_search_handler(
+    result = await session_search_handler(
         make_context(tmp_path),
         {"session_id": "overview-session", "bookends": 1},
         sessions,
@@ -391,7 +394,9 @@ def test_session_search_returns_session_overview_for_session_id_alone(tmp_path: 
     assert "2 message(s) omitted" in data["content"]
 
 
-def test_session_overview_returns_all_messages_when_bookends_cover_session(tmp_path: Path) -> None:
+async def test_session_overview_returns_all_messages_when_bookends_cover_session(
+    tmp_path: Path,
+) -> None:
     """A short session shows every message once, with no overlap and nothing omitted."""
 
     sessions = ChatSessionManager(tmp_path)
@@ -403,7 +408,7 @@ def test_session_overview_returns_all_messages_when_bookends_cover_session(tmp_p
         )
     )
 
-    result = session_search_handler(
+    result = await session_search_handler(
         make_context(tmp_path),
         {"session_id": "small-session", "bookends": 3},
         sessions,
@@ -416,10 +421,10 @@ def test_session_overview_returns_all_messages_when_bookends_cover_session(tmp_p
     assert data["truncated"] is False
 
 
-def test_session_overview_reports_missing_session(tmp_path: Path) -> None:
+async def test_session_overview_reports_missing_session(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
 
-    result = session_search_handler(
+    result = await session_search_handler(
         make_context(tmp_path),
         {"session_id": "does-not-exist"},
         sessions,
@@ -431,7 +436,7 @@ def test_session_overview_reports_missing_session(tmp_path: Path) -> None:
     assert "No session found" in data["content"]
 
 
-def test_session_search_anchors_on_message_outside_default_roles(tmp_path: Path) -> None:
+async def test_session_search_anchors_on_message_outside_default_roles(tmp_path: Path) -> None:
     """An explicit anchor id surfaces the message even when its role is filtered out."""
 
     sessions = ChatSessionManager(tmp_path)
@@ -445,7 +450,7 @@ def test_session_search_anchors_on_message_outside_default_roles(tmp_path: Path)
     )
     session.append(tool_message)
 
-    result = session_search_handler(
+    result = await session_search_handler(
         make_context(tmp_path),
         {"session_id": "tool-anchor-session", "around_message_id": tool_message.id},
         sessions,
@@ -456,10 +461,10 @@ def test_session_search_anchors_on_message_outside_default_roles(tmp_path: Path)
     assert any(item["message_id"] == tool_message.id for item in data["window"])
 
 
-def test_session_search_requires_session_for_anchored_view(tmp_path: Path) -> None:
+async def test_session_search_requires_session_for_anchored_view(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
 
-    result = session_search_handler(
+    result = await session_search_handler(
         make_context(tmp_path),
         {"around_message_id": "message-1"},
         sessions,
@@ -469,15 +474,15 @@ def test_session_search_requires_session_for_anchored_view(tmp_path: Path) -> No
     assert "requires session_id" in error["message"]
 
 
-def test_session_search_excludes_notes_until_requested(tmp_path: Path) -> None:
+async def test_session_search_excludes_notes_until_requested(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="note-session")
     session.add_note("hidden needle")
 
-    default_result = session_search_handler(
+    default_result = await session_search_handler(
         make_context(tmp_path), {"query": "hidden needle"}, sessions
     )
-    note_result = session_search_handler(
+    note_result = await session_search_handler(
         make_context(tmp_path),
         {"query": "hidden needle", "roles": ["note"]},
         sessions,
@@ -490,7 +495,7 @@ def test_session_search_excludes_notes_until_requested(tmp_path: Path) -> None:
     assert note_data["matches"][0]["role"] == "note"
 
 
-def test_session_search_excludes_tool_results_until_requested(tmp_path: Path) -> None:
+async def test_session_search_excludes_tool_results_until_requested(tmp_path: Path) -> None:
     """Tool results are opt-in: a default search skips them; ``roles: ["tool"]`` finds them."""
 
     sessions = ChatSessionManager(tmp_path)
@@ -504,10 +509,10 @@ def test_session_search_excludes_tool_results_until_requested(tmp_path: Path) ->
         )
     )
 
-    default_result = session_search_handler(
+    default_result = await session_search_handler(
         make_context(tmp_path), {"query": "checkout bug"}, sessions
     )
-    tool_result = session_search_handler(
+    tool_result = await session_search_handler(
         make_context(tmp_path),
         {"query": "checkout bug", "roles": ["tool"]},
         sessions,
@@ -520,7 +525,7 @@ def test_session_search_excludes_tool_results_until_requested(tmp_path: Path) ->
     assert tool_data["matches"][0]["role"] == "tool"
 
 
-def test_session_search_excludes_tool_results_from_context_until_requested(
+async def test_session_search_excludes_tool_results_from_context_until_requested(
     tmp_path: Path,
 ) -> None:
     """A tool result next to a match is hidden from context by default, shown when requested."""
@@ -537,12 +542,12 @@ def test_session_search_excludes_tool_results_from_context_until_requested(
         )
     )
 
-    default_result = session_search_handler(
+    default_result = await session_search_handler(
         make_context(tmp_path),
         {"query": "checkout bug", "context": 1, "bookends": 0},
         sessions,
     )
-    tool_result = session_search_handler(
+    tool_result = await session_search_handler(
         make_context(tmp_path),
         {"query": "checkout bug", "roles": ["user", "tool"], "context": 1, "bookends": 0},
         sessions,
@@ -556,7 +561,7 @@ def test_session_search_excludes_tool_results_from_context_until_requested(
     assert tool_data["matches"][0]["context"]["after"][0]["role"] == "tool"
 
 
-def test_session_search_excludes_its_own_prior_results(tmp_path: Path) -> None:
+async def test_session_search_excludes_its_own_prior_results(tmp_path: Path) -> None:
     """A persisted session_search result is never returned as a match.
 
     Its output is the recall tool's own derived content; returning it makes a
@@ -576,7 +581,7 @@ def test_session_search_excludes_its_own_prior_results(tmp_path: Path) -> None:
     )
     session.append(ChatMessage.user("the real needle is here", timestamp=timestamp(2)))
 
-    result = session_search_handler(make_context(tmp_path), {"query": "needle"}, sessions)
+    result = await session_search_handler(make_context(tmp_path), {"query": "needle"}, sessions)
 
     data = assert_success_envelope(result)
     matches = data["matches"]
@@ -585,7 +590,7 @@ def test_session_search_excludes_its_own_prior_results(tmp_path: Path) -> None:
     assert matches[0]["snippet"] == "the real needle is here"
 
 
-def test_recall_tool_result_name_matches_session_search_tool_name() -> None:
+async def test_recall_tool_result_name_matches_session_search_tool_name() -> None:
     """Drift guard: the recall layer's excluded-tool name must equal the tool's name.
 
     ``core.recall`` cannot import ``core.tools`` (lower layer), so it keeps a
@@ -607,14 +612,79 @@ def test_recall_tool_result_name_matches_session_search_tool_name() -> None:
         ({"unknown": True}, "Unknown argument"),
     ],
 )
-def test_session_search_rejects_invalid_arguments(
+async def test_session_search_rejects_invalid_arguments(
     tmp_path: Path,
     arguments: JsonObject,
     message: str,
 ) -> None:
     sessions = ChatSessionManager(tmp_path)
 
-    result = session_search_handler(make_context(tmp_path), arguments, sessions)
+    result = await session_search_handler(make_context(tmp_path), arguments, sessions)
 
     error = assert_failure_envelope(result, "invalid_arguments")
     assert message in error["message"]
+
+
+async def test_session_search_waits_for_calling_run_without_blocking_other_work(
+    tmp_path: Path,
+) -> None:
+    """The Tool result stays awaited while unrelated event-loop work can continue."""
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _WaitingBackend:
+        async def browse(self, request: Any) -> JsonObject:
+            return {}
+
+        async def overview(self, request: Any) -> JsonObject:
+            return {}
+
+        async def search(self, request: Any) -> JsonObject:
+            started.set()
+            await release.wait()
+            return {"content": "done", "matches": []}
+
+        async def scroll(self, request: Any) -> JsonObject:
+            return {}
+
+    tool_task = asyncio.create_task(
+        session_search_handler(
+            make_context(tmp_path),
+            {"query": "needle"},
+            _WaitingBackend(),
+        )
+    )
+
+    await asyncio.wait_for(started.wait(), timeout=1)
+    assert not tool_task.done()
+    await asyncio.sleep(0)
+    assert not tool_task.done()
+
+    release.set()
+    data = assert_success_envelope(await tool_task)
+    assert data["content"] == "done"
+
+
+async def test_session_search_offloads_existing_sync_extension_backend(tmp_path: Path) -> None:
+    class _SyncBackend:
+        def browse(self, request: Any) -> JsonObject:
+            return {}
+
+        def overview(self, request: Any) -> JsonObject:
+            return {}
+
+        def search(self, request: Any) -> JsonObject:
+            return {"content": "sync extension", "matches": []}
+
+        def scroll(self, request: Any) -> JsonObject:
+            return {}
+
+    result = await session_search_handler(
+        make_context(tmp_path),
+        {"query": "needle"},
+        _SyncBackend(),  # type: ignore[arg-type]
+    )
+
+    data = assert_success_envelope(result)
+    assert data["content"] == "sync extension"

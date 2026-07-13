@@ -10,6 +10,7 @@ that fall through the FTS trigram path.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,8 @@ from core.recall.hybrid import (
 )
 from core.recall.vector import _SEMANTIC_UNAVAILABLE_NOTICE
 from core.sessions import ChatSessionManager
+
+pytestmark = pytest.mark.asyncio
 
 
 def timestamp(day: int, hour: int = 12) -> datetime:
@@ -131,7 +134,7 @@ def backend(
 # ---------------------------------------------------------------------------
 
 
-def test_hybrid_backend_surfaces_literal_keyword_with_weak_semantic_match(
+async def test_hybrid_backend_surfaces_literal_keyword_with_weak_semantic_match(
     tmp_path: Path,
 ) -> None:
     """A keyword whose semantic distance exceeds the vector cutoff still surfaces via FTS.
@@ -151,7 +154,9 @@ def test_hybrid_backend_surfaces_literal_keyword_with_weak_semantic_match(
         )
     embeddings = _StubEmbeddings()
 
-    data = backend(tmp_path, sessions, embeddings=embeddings).search(request(query="bild", limit=3))
+    data = await backend(tmp_path, sessions, embeddings=embeddings).search(
+        request(query="bild", limit=3)
+    )
 
     session_ids = [match["session_id"] for match in data["matches"]]
     assert sorted(session_ids) == ["a", "b", "c"]
@@ -167,7 +172,7 @@ def test_hybrid_backend_surfaces_literal_keyword_with_weak_semantic_match(
 # ---------------------------------------------------------------------------
 
 
-def test_hybrid_backend_surfaces_conceptual_query_with_semantic_tag(
+async def test_hybrid_backend_surfaces_conceptual_query_with_semantic_tag(
     tmp_path: Path,
 ) -> None:
     """A purely conceptual query returns semantic-only matches with a distance."""
@@ -189,7 +194,7 @@ def test_hybrid_backend_surfaces_conceptual_query_with_semantic_tag(
             # cluster (the stub does that for "vehicle").
             return [1.0, 0.0, 0.0, 0.0] + [0.0] * (self.dimension - 4)
 
-    data = backend(tmp_path, sessions, embeddings=_TransportEmbeddings()).search(
+    data = await backend(tmp_path, sessions, embeddings=_TransportEmbeddings()).search(
         request(query="transport", limit=2)
     )
 
@@ -205,7 +210,7 @@ def test_hybrid_backend_surfaces_conceptual_query_with_semantic_tag(
 # ---------------------------------------------------------------------------
 
 
-def test_hybrid_backend_tags_session_in_both_arms_as_both(tmp_path: Path) -> None:
+async def test_hybrid_backend_tags_session_in_both_arms_as_both(tmp_path: Path) -> None:
     """A session matched by both arms appears once, tagged ``both`` with both signals."""
 
     sessions = ChatSessionManager(tmp_path)
@@ -217,7 +222,7 @@ def test_hybrid_backend_tags_session_in_both_arms_as_both(tmp_path: Path) -> Non
     # the vector match.
     embeddings = _StubEmbeddings()
 
-    data = backend(tmp_path, sessions, embeddings=embeddings).search(
+    data = await backend(tmp_path, sessions, embeddings=embeddings).search(
         request(query="vehicle", limit=2)
     )
 
@@ -240,7 +245,7 @@ def test_hybrid_backend_tags_session_in_both_arms_as_both(tmp_path: Path) -> Non
 # ---------------------------------------------------------------------------
 
 
-def test_hybrid_backend_returns_literal_only_when_no_embedding_binding(
+async def test_hybrid_backend_returns_literal_only_when_no_embedding_binding(
     tmp_path: Path,
 ) -> None:
     """Without an embedding binding the vector arm falls back; every result is literal."""
@@ -253,7 +258,9 @@ def test_hybrid_backend_returns_literal_only_when_no_embedding_binding(
         ChatMessage.user("vehicle there", timestamp=timestamp(2))
     )
 
-    data = backend(tmp_path, sessions, embeddings=None).search(request(query="vehicle", limit=2))
+    data = await backend(tmp_path, sessions, embeddings=None).search(
+        request(query="vehicle", limit=2)
+    )
 
     # Both sessions match via FTS, the vector arm falls back to JSONL
     # and its matches also have no ``distance``. After dedup both
@@ -263,7 +270,7 @@ def test_hybrid_backend_returns_literal_only_when_no_embedding_binding(
     assert all("distance" not in match for match in data["matches"])
 
 
-def test_hybrid_backend_surfaces_semantic_unavailable_notice(tmp_path: Path) -> None:
+async def test_hybrid_backend_surfaces_semantic_unavailable_notice(tmp_path: Path) -> None:
     """When the vector arm cannot run, the fused result re-surfaces the reason.
 
     Literal matches still come back, but the agent must know the semantic half
@@ -275,7 +282,9 @@ def test_hybrid_backend_surfaces_semantic_unavailable_notice(tmp_path: Path) -> 
         ChatMessage.user("vehicle here", timestamp=timestamp(1))
     )
 
-    data = backend(tmp_path, sessions, embeddings=None).search(request(query="vehicle", limit=2))
+    data = await backend(tmp_path, sessions, embeddings=None).search(
+        request(query="vehicle", limit=2)
+    )
 
     # The hybrid frames its own notice and embeds the vector arm's reason.
     assert "Semantic augmentation unavailable" in data["notice"]
@@ -290,7 +299,7 @@ def test_hybrid_backend_surfaces_semantic_unavailable_notice(tmp_path: Path) -> 
 # ---------------------------------------------------------------------------
 
 
-def test_hybrid_backend_orders_literal_group_then_semantic_group(
+async def test_hybrid_backend_orders_literal_group_then_semantic_group(
     tmp_path: Path,
 ) -> None:
     """Literal/both precede semantic-only; literal honors sort, semantic is distance-ascending."""
@@ -314,7 +323,7 @@ def test_hybrid_backend_orders_literal_group_then_semantic_group(
     )
     embeddings = _StubEmbeddings()
 
-    data = backend(tmp_path, sessions, embeddings=embeddings).search(
+    data = await backend(tmp_path, sessions, embeddings=embeddings).search(
         request(query="vehicle", sort="newest", limit=4)
     )
 
@@ -337,7 +346,7 @@ def test_hybrid_backend_orders_literal_group_then_semantic_group(
     assert "semantic-only" not in literal_session_ids
 
 
-def test_hybrid_backend_literal_group_honors_oldest_sort(tmp_path: Path) -> None:
+async def test_hybrid_backend_literal_group_honors_oldest_sort(tmp_path: Path) -> None:
     """With ``sort='oldest'`` the literal group is in ascending timestamp order."""
 
     sessions = ChatSessionManager(tmp_path)
@@ -350,7 +359,7 @@ def test_hybrid_backend_literal_group_honors_oldest_sort(tmp_path: Path) -> None
         )
     embeddings = _StubEmbeddings()
 
-    data = backend(tmp_path, sessions, embeddings=embeddings).search(
+    data = await backend(tmp_path, sessions, embeddings=embeddings).search(
         request(query="vehicle", sort="oldest", limit=3)
     )
 
@@ -367,7 +376,7 @@ def test_hybrid_backend_literal_group_honors_oldest_sort(tmp_path: Path) -> None
 # ---------------------------------------------------------------------------
 
 
-def test_hybrid_backend_overfetch_lets_other_literal_sessions_fill_budget(
+async def test_hybrid_backend_overfetch_lets_other_literal_sessions_fill_budget(
     tmp_path: Path,
 ) -> None:
     """A session with many literal message-hits does not starve other distinct literal sessions.
@@ -397,7 +406,7 @@ def test_hybrid_backend_overfetch_lets_other_literal_sessions_fill_budget(
     )
     embeddings = _StubEmbeddings()
 
-    data = backend(tmp_path, sessions, embeddings=embeddings).search(
+    data = await backend(tmp_path, sessions, embeddings=embeddings).search(
         request(query="vehicle", limit=2)
     )
 
@@ -412,11 +421,40 @@ def test_hybrid_backend_overfetch_lets_other_literal_sessions_fill_budget(
     assert set(session_ids) == {"distinct-a", "distinct-b"}
 
 
-def test_hybrid_backend_overfetch_uses_expected_multiplier_and_margin() -> None:
+async def test_hybrid_backend_overfetch_uses_expected_multiplier_and_margin() -> None:
     """The over-fetch constants are exposed and mirror the plan's starting point."""
 
     assert _FETCH_MULTIPLIER == 3
     assert _FETCH_MARGIN == 10
+
+
+async def test_hybrid_backend_runs_literal_and_semantic_arms_concurrently(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="s1").append(
+        ChatMessage.user("parallel recall", timestamp=timestamp(1))
+    )
+    recall = backend(tmp_path, sessions, embeddings=None)
+    fts_started = asyncio.Event()
+    vector_started = asyncio.Event()
+
+    async def fts_search(search_request: RecallRequest) -> dict[str, Any]:
+        fts_started.set()
+        await vector_started.wait()
+        return {"matches": [], "searched_sessions": 1, "total_candidate_sessions": 1}
+
+    async def vector_search(search_request: RecallRequest) -> dict[str, Any]:
+        vector_started.set()
+        await fts_started.wait()
+        return {"matches": [], "searched_sessions": 1, "total_candidate_sessions": 1}
+
+    recall._fts.search = fts_search  # type: ignore[assignment]
+    recall._vector.search = vector_search  # type: ignore[assignment]
+
+    result = await asyncio.wait_for(recall.search(request(query="parallel")), timeout=1)
+
+    assert result["matches"] == []
+    assert fts_started.is_set()
+    assert vector_started.is_set()
 
 
 # ---------------------------------------------------------------------------
@@ -424,7 +462,7 @@ def test_hybrid_backend_overfetch_uses_expected_multiplier_and_margin() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_hybrid_backend_two_char_query_merges_literal_and_semantic(
+async def test_hybrid_backend_two_char_query_merges_literal_and_semantic(
     tmp_path: Path,
 ) -> None:
     """A 2-character query (below FTS trigram's 3-char floor) still surfaces matches.
@@ -445,7 +483,9 @@ def test_hybrid_backend_two_char_query_merges_literal_and_semantic(
     # 0 — the vector arm returns a real match.
     embeddings = _StubEmbeddings()
 
-    data = backend(tmp_path, sessions, embeddings=embeddings).search(request(query="go", limit=2))
+    data = await backend(tmp_path, sessions, embeddings=embeddings).search(
+        request(query="go", limit=2)
+    )
 
     assert data["matches"], "hybrid must not return an empty result for a 2-char query"
     match = data["matches"][0]
@@ -461,7 +501,7 @@ def test_hybrid_backend_two_char_query_merges_literal_and_semantic(
 # ---------------------------------------------------------------------------
 
 
-def test_render_hybrid_matches_tags_each_line_with_source() -> None:
+async def test_render_hybrid_matches_tags_each_line_with_source() -> None:
     """The renderer tags each line with the source label and shows distance when present."""
 
     request_obj = request(query="vehicle")
@@ -504,14 +544,14 @@ def test_render_hybrid_matches_tags_each_line_with_source() -> None:
     assert "0.5000" in rendered
 
 
-def test_render_hybrid_matches_empty_result_message() -> None:
+async def test_render_hybrid_matches_empty_result_message() -> None:
     """An empty match list renders the no-matches banner with the query."""
 
     rendered = render_hybrid_matches(request(query="vehicle"), [], truncated=False)
     assert "No matches found for query: vehicle" in rendered
 
 
-def test_render_hybrid_matches_omits_distance_for_literal_only_entries() -> None:
+async def test_render_hybrid_matches_omits_distance_for_literal_only_entries() -> None:
     """Entries with no ``distance`` field do not render a distance line."""
 
     request_obj = request(query="vehicle")
@@ -531,7 +571,7 @@ def test_render_hybrid_matches_omits_distance_for_literal_only_entries() -> None
     assert "distance=" not in rendered
 
 
-def test_render_hybrid_matches_truncation_marker() -> None:
+async def test_render_hybrid_matches_truncation_marker() -> None:
     """A truncated result includes the limit marker."""
 
     request_obj = request(query="vehicle", limit=1)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
@@ -171,13 +173,13 @@ class _ParsedSearchRequest:
 def make_session_search_handler(recall_backend: RecallBackend):
     """Create a session_search tool handler bound to a recall backend."""
 
-    def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        return session_search_handler(context, arguments, recall_backend)
+    async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        return await session_search_handler(context, arguments, recall_backend)
 
     return handler
 
 
-def session_search_handler(
+async def session_search_handler(
     context: ToolContext,
     arguments: JsonObject,
     recall_backend: RecallBackend | ChatSessionManager,
@@ -198,14 +200,33 @@ def session_search_handler(
 
     try:
         if request.around_message_id is not None:
-            return tool_success(recall_backend.scroll(request))
+            return tool_success(await _invoke_recall_backend(recall_backend, "scroll", request))
         if request.query is None:
             if request.session_id is not None:
-                return tool_success(recall_backend.overview(request))
-            return tool_success(recall_backend.browse(request))
-        return tool_success(recall_backend.search(request))
+                return tool_success(
+                    await _invoke_recall_backend(recall_backend, "overview", request)
+                )
+            return tool_success(await _invoke_recall_backend(recall_backend, "browse", request))
+        return tool_success(await _invoke_recall_backend(recall_backend, "search", request))
     except ChatSessionError as error:
         return tool_failure("session_search_error", str(error))
+
+
+async def _invoke_recall_backend(
+    recall_backend: RecallBackend,
+    operation: str,
+    request: RecallRequest,
+) -> JsonObject:
+    """Await an async backend while keeping existing sync extensions non-blocking."""
+
+    method = getattr(recall_backend, operation)
+    if inspect.iscoroutinefunction(method):
+        result = await method(request)
+    else:
+        result = await asyncio.to_thread(method, request)
+        if inspect.isawaitable(result):
+            result = await result
+    return cast(JsonObject, result)
 
 
 def _parse_search_request(context: ToolContext, arguments: JsonObject) -> _ParsedSearchRequest:

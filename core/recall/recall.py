@@ -64,16 +64,16 @@ class RecallBackendContext:
 
 
 class RecallBackend(Protocol):
-    def browse(self, request: RecallRequest) -> JsonObject:
+    async def browse(self, request: RecallRequest) -> JsonObject:
         """Return session summaries for a recall request."""
 
-    def overview(self, request: RecallRequest) -> JsonObject:
+    async def overview(self, request: RecallRequest) -> JsonObject:
         """Return one session's overview: start/end messages and a total count."""
 
-    def search(self, request: RecallRequest) -> JsonObject:
+    async def search(self, request: RecallRequest) -> JsonObject:
         """Return query matches for a recall request."""
 
-    def scroll(self, request: RecallRequest) -> JsonObject:
+    async def scroll(self, request: RecallRequest) -> JsonObject:
         """Return an anchored context view for a recall request."""
 
 
@@ -91,7 +91,9 @@ class SupportsSessionRemoval(Protocol):
     self-healing rather than erroring.
     """
 
-    def remove_session(self, agent_id: str, session_id: str, project_id: str | None = None) -> None:
+    async def remove_session(
+        self, agent_id: str, session_id: str, project_id: str | None = None
+    ) -> None:
         """Remove all index entries for one session in the given project scope."""
 
 

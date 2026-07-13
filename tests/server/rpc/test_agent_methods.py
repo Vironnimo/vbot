@@ -162,6 +162,11 @@ def _make_state() -> tuple[SimpleNamespace, _FakeResolver, _FakeSessions]:
         resets.append((agent_id, session_id))
         return SimpleNamespace(current_session_id="landing")
 
+    async def _remove_session_from_recall(
+        agent_id: str, session_id: str, project_id: str | None = None
+    ) -> None:
+        recall_removals.append((agent_id, session_id, project_id))
+
     runtime = SimpleNamespace(
         agent_resolver=resolver,
         chat_sessions=sessions,
@@ -172,11 +177,7 @@ def _make_state() -> tuple[SimpleNamespace, _FakeResolver, _FakeSessions]:
                 current_session_id=agent_current["current_session_id"]
             ),
         ),
-        remove_session_from_recall=(
-            lambda agent_id, session_id, project_id=None: recall_removals.append(
-                (agent_id, session_id, project_id)
-            )
-        ),
+        remove_session_from_recall=_remove_session_from_recall,
         storage=SimpleNamespace(
             load_compaction_settings=lambda: {
                 "enabled": True,
