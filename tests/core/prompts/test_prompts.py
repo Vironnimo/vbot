@@ -292,6 +292,11 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
     # in the opt-in core:tools_list block, which ships disabled — the provider tool
     # definitions already carry every description.
     assert "## Tool Call Style" in prompt
+    assert (
+        "When multiple tool calls are independent and all required arguments are already known, "
+        "issue them together in the same response. Keep calls sequential when one depends on "
+        "another's result or when the calls may conflict."
+    ) in prompt
     assert "## Available Tools" not in prompt
     assert "- read_file: Read a workspace file" not in prompt
     assert "shell" not in prompt
