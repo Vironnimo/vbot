@@ -61,7 +61,14 @@ def _visiting_runtime(tmp_path: Path, repo: Path, adapter: StubAdapter) -> Any:
         adapter=adapter,
         tools=_read_tool_registry(),
         projects=StubProjects(
-            {"vbot": StubProject(project_id="vbot", cwd=str(repo), auto_load=["AGENTS.md"])}
+            {
+                "vbot": StubProject(
+                    project_id="vbot",
+                    cwd=str(repo),
+                    auto_load=["AGENTS.md"],
+                    display_name="vBot",
+                )
+            }
         ),
     )
 
@@ -154,8 +161,11 @@ async def test_file_tool_into_registered_project_injects_house_rules(tmp_path: P
     await ChatLoop(runtime).send("coder", "Look at the project", session_id="s1")
 
     # The house-rules reach the model as a <system-reminder> on the next turn.
-    reminders = _reminder_texts(adapter.requests[1])
-    assert any("<system-reminder>" in text and "Team rules" in text for text in reminders)
+    reminders = "\n".join(_reminder_texts(adapter.requests[1]))
+    assert "<system-reminder>" in reminders
+    assert f"You are visiting project 'vBot' at '{repo}'." in reminders
+    assert "Follow them for every action that affects this project" in reminders
+    assert "Team rules" in reminders
     # They are NOT in the system prompt — the visiting agent stays home.
     assert "Team rules" not in str(adapter.requests[0]["messages"][0]["content"])
     # Persisted as a note and recorded in the session meta.

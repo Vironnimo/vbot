@@ -191,8 +191,10 @@ SKILL_AVAILABLE_NEW_SKILLS_HEADER = (
 # Prepended (visiting path only) before a reached-into project's auto-loaded files
 # so the model knows why a foreign project's files appeared in its context.
 VISITING_PROJECT_FILES_PREAMBLE = (
-    "You've reached into the project at {path}. Treat its auto-loaded files below "
-    "as that project's instructions."
+    "You are visiting project '{project_name}' at '{path}'. The auto-loaded files below "
+    "are this project's instructions. Follow them for every action that affects this "
+    "project for as long as you work on it in this Session. They apply only to this "
+    "project and do not change your home Workspace or cwd."
 )
 
 # How often a streaming attempt may be restarted from scratch after a transient
@@ -1303,7 +1305,7 @@ class ChatLoop:
         session: ChatSession,
         project_context: ProjectPromptContext,
         *,
-        project_name: str = "",
+        project_name: str,
         project_skills: Sequence[Any] = (),
     ) -> bool:
         """Inject a visited project's files (and skills) into a session as a reminder.
@@ -1338,7 +1340,10 @@ class ChatLoop:
         sections = [section for section in (rendered_files, rendered_skills) if section.strip()]
         if not sections:
             return False
-        preamble = VISITING_PROJECT_FILES_PREAMBLE.format(path=project_context.cwd)
+        preamble = VISITING_PROJECT_FILES_PREAMBLE.format(
+            project_name=project_name,
+            path=project_context.cwd,
+        )
         session.add_note("\n".join([preamble, *sections]))
         return True
 

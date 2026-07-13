@@ -166,7 +166,7 @@ async def test_visiting_injects_project_files_as_system_reminder(tmp_path: Path)
     context = ProjectPromptContext.from_project(repo, ["AGENTS.md"])
 
     loop = ChatLoop(runtime)
-    injected = loop.inject_visiting_project_files(session, context)
+    injected = loop.inject_visiting_project_files(session, context, project_name="vBot")
     await loop.send("coder", "Hi", session_id="s1")
 
     assert injected is True
@@ -178,7 +178,14 @@ async def test_visiting_injects_project_files_as_system_reminder(tmp_path: Path)
     reminder_texts = [
         str(message.get("content", "")) for message in request_messages if message["role"] == "user"
     ]
-    assert any("<system-reminder>" in text and "Team rules" in text for text in reminder_texts)
+    joined = "\n".join(reminder_texts)
+    assert "<system-reminder>" in joined
+    assert f"You are visiting project 'vBot' at '{repo}'." in joined
+    assert "The auto-loaded files below are this project's instructions." in joined
+    assert "Follow them for every action that affects this project" in joined
+    assert "They apply only to this project" in joined
+    assert "do not change your home Workspace or cwd" in joined
+    assert "Team rules" in joined
 
 
 @pytest.mark.asyncio
@@ -192,7 +199,9 @@ async def test_visiting_with_no_project_files_adds_no_reminder(tmp_path: Path) -
     session = runtime.chat_sessions.create("coder", session_id="s1")
     context = ProjectPromptContext.from_project(repo, [])
 
-    injected = ChatLoop(runtime).inject_visiting_project_files(session, context)
+    injected = ChatLoop(runtime).inject_visiting_project_files(
+        session, context, project_name="vBot"
+    )
 
     assert injected is False
     assert session.load() == []
