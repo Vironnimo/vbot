@@ -51,8 +51,18 @@ class _StubPrompts:
         skill_registry: object = None,
         skill_catalog: object = None,
         read_paths: list[Path] | None = None,
+        effective_tool_names: object = None,
+        session_tool_grants: object = (),
     ) -> str:
         return "System prompt"
+
+    def provider_tool_definitions(
+        self,
+        _agent: object,
+        *,
+        session_tool_grants: object = (),
+    ) -> list[dict[str, object]]:
+        return []
 
     def render_project_files(self, project_context: object, *, on_read: object = None) -> str:
         return "" if project_context is None else "RENDERED-PROJECT-FILES"

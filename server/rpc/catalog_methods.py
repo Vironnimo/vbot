@@ -30,7 +30,7 @@ def _list_tools(state: Any, params: JsonObject) -> JsonObject:
         # Whitelist editor see every tool and style a not-ready one from the per-tool
         # ``ready``/``readiness_hint`` fields, rather than the tool vanishing. The
         # model-facing surfaces (provider/prompt definitions) still filter readiness.
-        tools = state.runtime.tools.list_tools()
+        tools = state.runtime.tools.list_tools(include_session_scoped=False)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     # ``default_project_tools`` is the project Tool Whitelist base list — the editor

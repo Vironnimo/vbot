@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
+from core.tools import ToolRegistry, tool_success
 from server.rpc.catalog_methods import _list_commands, _list_files, _list_tools
 from server.rpc.errors import RpcError
 
@@ -232,6 +233,29 @@ def test_tool_list_exposes_default_project_tools() -> None:
 
     assert [tool["name"] for tool in result["tools"]] == ["read", "edit"]
     # The base project Tool Whitelist rides along as the editor's reset target.
+    assert result["default_project_tools"] == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
+
+
+def test_tool_list_omits_session_scoped_tools() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        name="read",
+        description="Read a file",
+        parameters={"type": "object"},
+        handler=lambda _context, _arguments: tool_success({}),
+    )
+    registry.register(
+        name="history",
+        description="Read compacted Session history",
+        parameters={"type": "object"},
+        handler=lambda _context, _arguments: tool_success({}),
+        session_scoped=True,
+    )
+    state = SimpleNamespace(runtime=SimpleNamespace(tools=registry))
+
+    result = _list_tools(state, {})
+
+    assert [tool["name"] for tool in result["tools"]] == ["read"]
     assert result["default_project_tools"] == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
 
 

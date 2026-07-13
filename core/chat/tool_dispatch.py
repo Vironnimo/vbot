@@ -27,6 +27,7 @@ from core.tools import (
     READ_TOOL_NAME,
     WRITE_TOOL_NAME,
     InvalidToolResultError,
+    SessionToolUnavailableError,
     ToolContext,
     ToolExecutionConfig,
     ToolExecutor,
@@ -273,6 +274,8 @@ class _EmittingToolRegistry(ToolRegistry):
             )
         except ToolNotFoundError as error:
             return tool_failure("tool_not_found", str(error))
+        except SessionToolUnavailableError as error:
+            return tool_failure(f"{context.tool_name}_unavailable", str(error))
         except ToolNotAllowedError as error:
             return tool_failure("tool_not_allowed", str(error))
         except InvalidToolResultError as error:
@@ -309,6 +312,8 @@ async def _dispatch_tool_calls(
     project_id: str | None = None,
     skill_project_id: str | None = None,
     tool_restriction: Sequence[str] | None = None,
+    base_allowed_tools: Sequence[str] | None = None,
+    session_tool_grants: Sequence[str] = (),
 ) -> tuple[list[ChatMessage], list[JsonObject]]:
     run.raise_if_cancelled()
     emitting_registry = _EmittingToolRegistry(
@@ -342,7 +347,13 @@ async def _dispatch_tool_calls(
             # The run's effective skill project (rooted-aware) so the skill tool
             # resolves the same pool the run's catalog advertises.
             skill_project_id=skill_project_id,
-            allowed_tools=_dispatch_allowed_tools(agent, runtime.tools, tool_restriction),
+            allowed_tools=_dispatch_allowed_tools(
+                agent,
+                runtime.tools,
+                tool_restriction,
+                base_allowed_tools=base_allowed_tools,
+            ),
+            session_tool_grants=session_tool_grants,
             allowed_skills=getattr(agent, "allowed_skills", ["*"]),
             emit_hook=lambda event_type, payload: _emit_tool_context_event(
                 run,
@@ -572,6 +583,8 @@ def _dispatch_allowed_tools(
     agent: Any,
     tool_registry: ToolRegistry,
     tool_restriction: Sequence[str] | None,
+    *,
+    base_allowed_tools: Sequence[str] | None = None,
 ) -> Sequence[str] | None:
     """Return the dispatch allowlist, narrowed by an optional per-run restriction.
 
@@ -589,7 +602,11 @@ def _dispatch_allowed_tools(
     invariant). A restricted-out call fails through the existing
     ``ToolNotAllowedError`` → ``tool_not_allowed`` path — no new denial code.
     """
-    effective = _runtime_allowed_tools(agent, tool_registry)
+    effective = (
+        list(base_allowed_tools)
+        if base_allowed_tools is not None
+        else _runtime_allowed_tools(agent, tool_registry)
+    )
     if tool_restriction is None:
         return effective
     restriction = set(tool_restriction)

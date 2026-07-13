@@ -15,6 +15,7 @@ from core.tools import (
     FileReadState,
     ToolContext,
     ToolRegistry,
+    register_history_tool,
     register_write_tool,
     tool_success,
 )
@@ -600,6 +601,56 @@ async def test_tool_restriction_denies_at_dispatch_without_changing_definitions(
         restricted_adapter.requests[0]["kwargs"]["tools"]
         == unrestricted_adapter.requests[0]["kwargs"]["tools"]
     )
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_granted_history_stays_advertised_when_run_restricts_dispatch(
+    tmp_path: Path,
+) -> None:
+    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent, StubRuntime
+
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=[])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "history-call",
+                        "name": "history",
+                        "arguments": {"action": "overview"},
+                    }
+                ],
+            },
+            {"content": "done", "tool_calls": []},
+        ]
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    register_history_tool(runtime.tools, runtime.chat_sessions)
+    session = runtime.chat_sessions.create("coder", session_id="restricted-history")
+    session.append(ChatMessage.user("Earlier request"))
+    session.append(
+        ChatMessage.compaction_checkpoint(
+            summary="Earlier context",
+            projection=[],
+            compacted_token_count=10,
+        )
+    )
+
+    run = await ChatLoop(runtime).start_run(
+        "coder",
+        "Continue",
+        session_id=session.id,
+        tool_restriction=("memory",),
+    )
+    await run.wait()
+
+    tool_names_by_request = [
+        [tool["name"] for tool in request["kwargs"]["tools"]] for request in adapter.requests
+    ]
+    result = next(message for message in session.load() if message.tool_call_id == "history-call")
+    assert tool_names_by_request == [["history"], ["history"]]
+    assert json.loads(str(result.content))["error"]["code"] == "tool_not_allowed"
 
 
 def persisted_roles_of(messages: list[ChatMessage]) -> list[str]:

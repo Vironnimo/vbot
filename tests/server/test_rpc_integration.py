@@ -255,6 +255,8 @@ class IntegrationPrompts:
         skill_registry: object = None,
         skill_catalog: object = None,
         read_paths: list[Path] | None = None,
+        effective_tool_names: object = None,
+        session_tool_grants: object = (),
     ) -> str:
         return f"System prompt for {agent.id}"
 
@@ -269,6 +271,7 @@ class IntegrationPrompts:
         *,
         skill_registry: object = None,
         skill_catalog: object = None,
+        session_tool_grants: object = (),
     ) -> list[JsonObject]:
         return self._tools.provider_definitions(agent.allowed_tools)
 

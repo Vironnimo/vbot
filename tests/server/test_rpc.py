@@ -1075,6 +1075,9 @@ class StubStorage:
 class StubPrompts:
     app_dir = Path("app")
 
+    def __init__(self, tools: ToolRegistry) -> None:
+        self._tools = tools
+
     def validate_scope(self, scope: object = None) -> Any:
         # The preview handler validates an explicit scope through the manager; mirror
         # the real PromptScope shape the handler reads (``type`` / ``agent_id``).
@@ -1092,6 +1095,8 @@ class StubPrompts:
         skill_registry: object = None,
         skill_catalog: object = None,
         read_paths: list[Path] | None = None,
+        effective_tool_names: object = None,
+        session_tool_grants: object = (),
     ) -> str:
         if getattr(scope, "type", None) == "agent":
             scope_agent_id = getattr(scope, "agent_id", None)
@@ -1116,9 +1121,17 @@ class StubPrompts:
         return PinnedSkillCatalog(catalog_text="")
 
     def provider_tool_definitions(
-        self, _agent: StubAgent, *, skill_registry: object = None, skill_catalog: object = None
+        self,
+        _agent: StubAgent,
+        *,
+        skill_registry: object = None,
+        skill_catalog: object = None,
+        session_tool_grants: tuple[str, ...] = (),
     ) -> list[JsonObject]:
-        return []
+        return self._tools.provider_definitions(
+            _agent.allowed_tools,
+            session_grants=session_tool_grants,
+        )
 
 
 @dataclass(frozen=True)
@@ -1254,9 +1267,9 @@ class StubRuntime:
         self.agent_resolver = StubAgentResolver(self.agents)
         self.projects = StubProjects()
         self.chat_sessions = ChatSessionManager(tmp_path)
-        self.system_prompts = StubPrompts()
         self.file_read_state = FileReadState()
         self.tools = ToolRegistry()
+        self.system_prompts = StubPrompts(self.tools)
         self.skills: Any = StubSkills()
         self._models = StubModels()
         self.providers = StubProviders()

@@ -32,6 +32,7 @@ from core.providers.openai_compatible import (
     _to_openai_user_content_part,
 )
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+from core.tools import HISTORY_TOOL_DESCRIPTION, HISTORY_TOOL_NAME, HISTORY_TOOL_PARAMETERS
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -621,6 +622,21 @@ class TestSendRequestFormat:
                 },
             }
         ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_maps_history_definition_without_special_case(self, openai_adapter):
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+        definition = {
+            "name": HISTORY_TOOL_NAME,
+            "description": HISTORY_TOOL_DESCRIPTION,
+            "parameters": HISTORY_TOOL_PARAMETERS,
+        }
+
+        await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", tools=[definition])
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["tools"] == [{"type": "function", "function": definition}]
 
     @respx.mock
     @pytest.mark.asyncio

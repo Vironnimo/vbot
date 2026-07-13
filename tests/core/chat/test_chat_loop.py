@@ -30,7 +30,7 @@ from core.chat.continuation import (
     recover_continuation,
     render_continuation_reminder,
 )
-from core.chat.messages import _notes_to_synthetic_user_message
+from core.chat.messages import HISTORY_COMPACTION_GUIDANCE, _notes_to_synthetic_user_message
 from core.chat.streaming import StreamingChunkTimeoutError, StreamingDeltaError
 from core.projects import AgentResolutionError, ConfigAgent
 from core.providers.errors import (
@@ -62,16 +62,18 @@ from core.runs import (
 )
 from core.sessions import SKILL_AVAILABLE_NOTE_PREFIX, is_skill_available_note
 from core.skills.skills import SkillRegistry
-from core.tools import JsonObject as ToolJsonObject
 from core.tools import (
+    HISTORY_TOOL_NAME,
     ToolContext,
     ToolDisplay,
     ToolRegistry,
     register_glob_tool,
     register_grep_tool,
+    register_history_tool,
     tool_failure,
     tool_success,
 )
+from core.tools import JsonObject as ToolJsonObject
 from core.tools.file_state import FileReadState
 from core.utils.errors import ConfigError, ProviderError
 from core.utils.tokens import estimate_message_tokens
@@ -191,8 +193,9 @@ class StubProviderConfig:
 
 
 class StubPrompts:
-    def __init__(self) -> None:
+    def __init__(self, tool_registry: ToolRegistry | None = None) -> None:
         self.agent_for_tools: StubAgent | None = None
+        self.tool_registry = tool_registry
         self.app_dir = Path("app")
         self.build_calls: list[tuple[str, str, Any]] = []
         self.render_project_files_calls: list[Any] = []
@@ -208,6 +211,8 @@ class StubPrompts:
         skill_registry: Any = None,
         skill_catalog: Any = None,
         read_paths: list[Path] | None = None,
+        effective_tool_names: Any = None,
+        session_tool_grants: Any = (),
     ) -> str:
         self.build_calls.append((agent.id, agent_body, project_context))
         # Echo the body and rendered project files so chat tests can assert what
@@ -263,16 +268,31 @@ class StubPrompts:
         return "\n".join(blocks)
 
     def provider_tool_definitions(
-        self, agent: StubAgent, *, skill_registry: Any = None, skill_catalog: Any = None
+        self,
+        agent: StubAgent,
+        *,
+        skill_registry: Any = None,
+        skill_catalog: Any = None,
+        session_tool_grants: Any = (),
     ) -> list[JsonObject]:
         self.agent_for_tools = agent
-        return [
-            {
+        allowed = agent.allowed_tools
+        definitions = (
+            self.tool_registry.provider_definitions(
+                allowed,
+                session_grants=session_tool_grants,
+            )
+            if self.tool_registry is not None
+            else []
+        )
+        if allowed is None or "*" in allowed or "get_weather" in allowed:
+            weather = {
                 "name": "get_weather",
                 "description": "Get weather.",
                 "parameters": {"type": "object"},
             }
-        ]
+            definitions = [weather, *definitions]
+        return list({str(definition["name"]): definition for definition in definitions}.values())
 
 
 @dataclass(frozen=True)
@@ -564,11 +584,11 @@ class StubRuntime:
         self.agent_resolver = StubAgentResolver(self.agents, project_agents, unresolvable_agents)
         self.projects = projects if projects is not None else StubProjects({})
         self.chat_sessions = ChatSessionManager(data_dir)
-        self.system_prompts = StubPrompts()
         # Real guard instance so tests can assert auto-injected prompt files are
         # stamped as read-before-write for the session.
         self.file_read_state = FileReadState()
         self.tools = tools or ToolRegistry()
+        self.system_prompts = StubPrompts(self.tools)
         self.chat_runs = ChatRunManager()
         self.chat_run_manager = self.chat_runs
         self.process_manager = StubProcessManager()
@@ -838,6 +858,8 @@ async def test_send_omits_empty_system_prompt(tmp_path: Path) -> None:
             skill_registry: Any = None,
             skill_catalog: Any = None,
             read_paths: list[Path] | None = None,
+            effective_tool_names: Any = None,
+            session_tool_grants: Any = (),
         ) -> str:
             return "\n"
 
@@ -1664,10 +1686,72 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
     assert compaction_service.compact_calls[0]["summary_model_id"] == "gpt-5.2"
     assert compaction_service.compact_calls[0]["summary_adapter"] is adapter
     assert [message["role"] for message in rebuilt] == ["system", "user", "user", "assistant"]
-    assert rebuilt[1]["content"] == "<system-reminder>\nCompacted tail context.\n</system-reminder>"
+    assert rebuilt[1]["content"] == (
+        "<system-reminder>\nCompacted tail context.\n\n"
+        f"{HISTORY_COMPACTION_GUIDANCE.format(ordinal=1)}\n</system-reminder>"
+    )
     assert rebuilt[2]["content"] == "Tail user"
     assert rebuilt[3]["content"] == "Tail assistant"
     assert any(event.type == COMPACTION_COMPLETED_EVENT for event in run.events)
+    compaction_event = next(
+        event for event in run.events if event.type == COMPACTION_COMPLETED_EVENT
+    )
+    assert compaction_event.payload["checkpoint"] == 1
+    assert compaction_event.payload["checkpoint_id"] == checkpoint.id
+    assert compaction_event.payload["history_available"] is True
+
+
+@pytest.mark.asyncio
+async def test_final_assistant_compaction_activates_history_on_next_run(tmp_path: Path) -> None:
+    class CompactOnce:
+        def __init__(self) -> None:
+            self.compacted = False
+
+        def estimate_messages_tokens(self, _messages: list[JsonObject]) -> int:
+            return 90
+
+        def should_auto_compact(
+            self,
+            _input_tokens: int,
+            _context_window: int,
+            _threshold: float,
+        ) -> bool:
+            return not self.compacted
+
+        async def compact(self, messages: list[ChatMessage], **_kwargs: Any) -> ChatMessage:
+            self.compacted = True
+            return ChatMessage.compaction_checkpoint(
+                summary="Compacted finished turn.",
+                projection=messages[-2:],
+                compacted_token_count=20,
+            )
+
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=[])
+    adapter = StubAdapter(
+        [
+            {"content": "First answer", "tool_calls": None},
+            {"content": "Second answer", "tool_calls": None},
+        ]
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        storage=StubStorage(
+            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 100}),
+    )
+    register_history_tool(runtime.tools, runtime.chat_sessions)
+    loop = ChatLoop(runtime, compaction_service=cast(Any, CompactOnce()))
+
+    await loop.send("coder", "First", session_id="session-one")
+    await loop.send("coder", "Second", session_id="session-one")
+
+    first_names = [tool["name"] for tool in adapter.requests[0]["kwargs"]["tools"]]
+    second_names = [tool["name"] for tool in adapter.requests[1]["kwargs"]["tools"]]
+    assert HISTORY_TOOL_NAME not in first_names
+    assert second_names == [HISTORY_TOOL_NAME]
 
 
 @pytest.mark.asyncio
@@ -1973,6 +2057,7 @@ async def test_compact_session_refuses_while_run_is_active(tmp_path: Path) -> No
             }
         ),
     )
+    register_history_tool(runtime.tools, runtime.chat_sessions)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Hi"))
     release = asyncio.Event()
@@ -2011,6 +2096,7 @@ async def test_compact_session_appends_checkpoint_and_closes_adapter(tmp_path: P
             }
         ),
     )
+    register_history_tool(runtime.tools, runtime.chat_sessions)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     tail_user = ChatMessage.user("Tail user")
     session.append(tail_user)
@@ -2033,6 +2119,11 @@ async def test_compact_session_appends_checkpoint_and_closes_adapter(tmp_path: P
     assert compaction_service.compact_calls[0]["storage"] is runtime.storage
     assert compaction_service.compact_calls[0]["instruction"] is None
     assert adapter.closed is True
+    persisted_checkpoint = session.load()[-1]
+    assert persisted_checkpoint.projection is not None
+    assert HISTORY_COMPACTION_GUIDANCE.format(ordinal=1) in str(
+        persisted_checkpoint.projection[0]["content"]
+    )
 
 
 @pytest.mark.asyncio
@@ -2140,6 +2231,7 @@ async def test_compact_session_converts_compaction_failure_into_reply(tmp_path: 
             }
         ),
     )
+    register_history_tool(runtime.tools, runtime.chat_sessions)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Hi"))
     loop = ChatLoop(runtime, compaction_service=cast(Any, compaction_service))
@@ -2148,6 +2240,8 @@ async def test_compact_session_converts_compaction_failure_into_reply(tmp_path: 
 
     assert reply == "Compaction failed: compaction broke"
     assert persisted_roles(session.load()) == ["user"]
+    request_state = await loop._build_request_state(agent, session)
+    assert HISTORY_TOOL_NAME not in [tool["name"] for tool in request_state.tools]
 
 
 @pytest.mark.asyncio
@@ -2923,6 +3017,7 @@ async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
         ),
         models=StubModels({("openai", "gpt-5.2"): 100}),
     )
+    register_history_tool(runtime.tools, runtime.chat_sessions)
     compaction_service = SingleCheckpointCompactionService()
 
     assistant = await ChatLoop(
@@ -2931,8 +3026,12 @@ async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
     ).send("coder", "Weather?", session_id="session-one")
 
     continued_messages = adapter.requests[1]["messages"]
+    first_tool_names = [tool["name"] for tool in adapter.requests[0]["kwargs"]["tools"]]
+    continued_tool_names = [tool["name"] for tool in adapter.requests[1]["kwargs"]["tools"]]
     assert assistant.content == "Sunny"
     assert compaction_service.compact_calls == 1
+    assert HISTORY_TOOL_NAME not in first_tool_names
+    assert HISTORY_TOOL_NAME in continued_tool_names
     assert [message["role"] for message in continued_messages] == [
         "system",
         "user",
@@ -2941,7 +3040,8 @@ async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
         "tool",
     ]
     assert continued_messages[1]["content"] == (
-        "<system-reminder>\nCompacted prior context.\n</system-reminder>"
+        "<system-reminder>\nCompacted prior context.\n\n"
+        f"{HISTORY_COMPACTION_GUIDANCE.format(ordinal=1)}\n</system-reminder>"
     )
     assert continued_messages[3]["reasoning"] == "Need weather."
     assert continued_messages[3]["reasoning_meta"] == {"encrypted_content": "opaque-current-turn"}
@@ -4123,7 +4223,8 @@ async def test_auto_compaction_preserves_reasoning_for_all_current_run_turns(
         "tool",
     ]
     assert rebuilt[1]["content"] == (
-        "<system-reminder>\nCompacted prior context.\n</system-reminder>"
+        "<system-reminder>\nCompacted prior context.\n\n"
+        f"{HISTORY_COMPACTION_GUIDANCE.format(ordinal=1)}\n</system-reminder>"
     )
     # Both current-run assistant turns keep their reasoning after the rebuild,
     # not just the latest tool continuation.

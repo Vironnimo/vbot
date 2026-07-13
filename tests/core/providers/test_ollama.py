@@ -24,6 +24,7 @@ from core.models.models import (
 from core.providers.errors import ProviderError
 from core.providers.ollama import OllamaAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+from core.tools import HISTORY_TOOL_DESCRIPTION, HISTORY_TOOL_NAME, HISTORY_TOOL_PARAMETERS
 
 OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
 
@@ -229,6 +230,24 @@ class TestPayloadBuilding:
                     "parameters": tools[0]["parameters"],
                 },
             }
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_history_tool_is_wrapped_in_function_schema(self, adapter: OllamaAdapter) -> None:
+        route = respx.post(OLLAMA_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=TOOL_CALL_RESPONSE)
+        )
+        definition = {
+            "name": HISTORY_TOOL_NAME,
+            "description": HISTORY_TOOL_DESCRIPTION,
+            "parameters": HISTORY_TOOL_PARAMETERS,
+        }
+
+        await adapter.send(SAMPLE_MESSAGES, model_id="ministral-3:8b", tools=[definition])
+
+        assert _last_request_payload(route)["tools"] == [
+            {"type": "function", "function": definition}
         ]
 
     @respx.mock

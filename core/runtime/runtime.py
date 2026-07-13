@@ -102,6 +102,7 @@ from core.tools import (
     register_edit_tool,
     register_glob_tool,
     register_grep_tool,
+    register_history_tool,
     register_image_generation_tool,
     register_memory_tool,
     register_process_tool,
@@ -562,6 +563,7 @@ class Runtime:
             self.reload_skills,
         )
         self._chat_sessions = ChatSessionManager(self._storage.data_dir)
+        register_history_tool(self._tools, self._chat_sessions)
         self._projects = ProjectStore(self._storage.data_dir)
         self._agent_resolver = build_agent_resolver(
             self._agents,

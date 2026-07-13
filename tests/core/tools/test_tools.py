@@ -4,7 +4,7 @@ import asyncio
 import logging
 import threading
 from collections.abc import Callable
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from typing import Any
 
@@ -557,6 +557,16 @@ class TestAgentToolAvailability:
 
         assert allowed_tools == ["read_file", "write_file"]
 
+    def test_session_grant_overrides_empty_agent_allowlist(self) -> None:
+        allowed_tools = effective_agent_allowed_tools(
+            [],
+            "off",
+            registered_tool_names=["history", "read_file"],
+            session_tool_grants=["history"],
+        )
+
+        assert allowed_tools == ["history"]
+
 
 class TestToolRegistryDefinitions:
     def test_provider_definitions_include_schema_for_allowed_tools(self) -> None:
@@ -616,6 +626,43 @@ class TestToolRegistryDefinitions:
 
         assert registry.provider_definitions([]) == []
         assert registry.prompt_definitions([]) == []
+
+    def test_session_scoped_tool_requires_grant_and_overrides_allowlist(self) -> None:
+        registry = ToolRegistry()
+        registry.register(
+            name="history",
+            description="Read this Session's earlier original records.",
+            parameters={"type": "object"},
+            handler=read_file_handler,
+            session_scoped=True,
+        )
+
+        assert registry.provider_definitions(["*"]) == []
+        assert registry.prompt_definitions([]) == []
+        assert [
+            definition["name"]
+            for definition in registry.provider_definitions([], session_grants=["history"])
+        ] == ["history"]
+        assert [
+            definition["name"]
+            for definition in registry.prompt_definitions([], session_grants=["history"])
+        ] == ["history"]
+
+    def test_configurable_listing_can_exclude_session_scoped_tools(self) -> None:
+        registry = ToolRegistry()
+        register_read_file(registry)
+        registry.register(
+            name="history",
+            description="Read this Session's earlier original records.",
+            parameters={"type": "object"},
+            handler=read_file_handler,
+            session_scoped=True,
+        )
+
+        assert [tool.name for tool in registry.list_tools()] == ["history", "read_file"]
+        assert [tool.name for tool in registry.list_tools(include_session_scoped=False)] == [
+            "read_file"
+        ]
 
 
 class TestToolReadiness:
@@ -737,6 +784,41 @@ class TestToolReadiness:
 
 
 class TestToolRegistryDispatch:
+    @pytest.mark.asyncio
+    async def test_session_scoped_dispatch_checks_grant_before_allowlist(self) -> None:
+        registry = ToolRegistry()
+        registry.register(
+            name="history",
+            description="Read this Session's earlier original records.",
+            parameters={"type": "object"},
+            handler=lambda _context, _arguments: tool_success({}),
+            session_scoped=True,
+        )
+        executor = ToolExecutor(registry)
+
+        unavailable = await executor.execute_many(
+            [ToolCall(id="call-1", name="history", arguments={})],
+            make_execution_config(allowed_tools=[]),
+        )
+        denied = await executor.execute_many(
+            [ToolCall(id="call-2", name="history", arguments={})],
+            replace(
+                make_execution_config(allowed_tools=[]),
+                session_tool_grants=("history",),
+            ),
+        )
+        granted = await executor.execute_many(
+            [ToolCall(id="call-3", name="history", arguments={})],
+            replace(
+                make_execution_config(allowed_tools=["history"]),
+                session_tool_grants=("history",),
+            ),
+        )
+
+        assert unavailable[0]["error"]["code"] == "history_unavailable"
+        assert denied[0]["error"]["code"] == "tool_not_allowed"
+        assert granted[0]["ok"] is True
+
     def test_display_for_call_uses_registered_tool_display(self) -> None:
         registry = ToolRegistry()
         registry.register(
