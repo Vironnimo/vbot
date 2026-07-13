@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from datetime import UTC, datetime
@@ -68,19 +69,31 @@ class JsonlSessionRecallBackend:
     def __init__(self, sessions: ChatSessionManager) -> None:
         self.sessions = sessions
 
-    def browse(self, request: RecallRequest) -> JsonObject:
+    async def browse(self, request: RecallRequest) -> JsonObject:
+        return await asyncio.to_thread(self._browse, request)
+
+    def _browse(self, request: RecallRequest) -> JsonObject:
         summaries = self.candidate_session_summaries(request)
         return self.session_summary_result(request, summaries)
 
-    def overview(self, request: RecallRequest) -> JsonObject:
+    async def overview(self, request: RecallRequest) -> JsonObject:
+        return await asyncio.to_thread(self._overview, request)
+
+    def _overview(self, request: RecallRequest) -> JsonObject:
         summaries = self.candidate_session_summaries(request)
         return self.session_overview_result(request, summaries)
 
-    def search(self, request: RecallRequest) -> JsonObject:
+    async def search(self, request: RecallRequest) -> JsonObject:
+        return await asyncio.to_thread(self._search, request)
+
+    def _search(self, request: RecallRequest) -> JsonObject:
         summaries = self.candidate_session_summaries(request)
         return self.message_search_result(request, summaries)
 
-    def scroll(self, request: RecallRequest) -> JsonObject:
+    async def scroll(self, request: RecallRequest) -> JsonObject:
+        return await asyncio.to_thread(self._scroll, request)
+
+    def _scroll(self, request: RecallRequest) -> JsonObject:
         summaries = self.candidate_session_summaries(request)
         return self.anchored_view_result(request, summaries)
 

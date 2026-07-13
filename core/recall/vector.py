@@ -35,7 +35,6 @@ call, mirroring the SQLite FTS backend's safety net.
 from __future__ import annotations
 
 import asyncio
-import concurrent.futures
 import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -175,11 +174,14 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         # itself drops+rebuilds on a binding change, so the cache is always
         # in sync with the on-disk header after the first successful embed.
         self._resolved_header: VectorHeader | None = None
+        self._index_lock = asyncio.Lock()
 
     def describe_search(self) -> str:
         return _SEMANTIC_SEARCH_GUIDANCE
 
-    def remove_session(self, agent_id: str, session_id: str, project_id: str | None = None) -> None:
+    async def remove_session(
+        self, agent_id: str, session_id: str, project_id: str | None = None
+    ) -> None:
         """Evict one session's chunk vectors from the store (delete-time cleanup).
 
         Active counterpart to the on-search staleness drop in
@@ -187,14 +189,20 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         leaves semantic search immediately. ``project_id`` maps through
         ``_project_scope`` to match how chunks are keyed in the store.
         """
-        self.store.delete_session(agent_id, _project_scope(project_id), session_id)
+        async with self._index_lock:
+            await asyncio.to_thread(
+                self.store.delete_session,
+                agent_id,
+                _project_scope(project_id),
+                session_id,
+            )
 
     # ------------------------------------------------------------------
     # Search
     # ------------------------------------------------------------------
 
-    def search(self, request: RecallRequest) -> JsonObject:
-        summaries = self.candidate_session_summaries(request)
+    async def search(self, request: RecallRequest) -> JsonObject:
+        summaries = await asyncio.to_thread(self.candidate_session_summaries, request)
         if request.query is None:
             return self.session_summary_result(request, summaries)
         if not request.query.strip():
@@ -203,41 +211,43 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
             return self._message_result(request, [], searched_sessions=0, total_candidates=0)
 
         try:
-            return self._search_with_vector_store(request, summaries)
+            return await self._search_with_vector_store(request, summaries)
         except (VectorStoreError, EmbeddingError, OSError, sqlite3.Error) as error:
             self._warning("Vector recall failed; falling back to JSONL scan: %s", error)
-            return self._degraded_result(self._fallback.search(request), _SEMANTIC_FAILED_NOTICE)
+            fallback = await self._fallback.search(request)
+            return self._degraded_result(fallback, _SEMANTIC_FAILED_NOTICE)
 
-    def _search_with_vector_store(
+    async def _search_with_vector_store(
         self,
         request: RecallRequest,
         summaries: list[JsonObject],
     ) -> JsonObject:
-        binding_header = self._resolve_header()
-        if binding_header is None:
-            self._warning("Vector recall has no embedding binding; falling back to JSONL scan")
-            return self._degraded_result(
-                self._fallback.search(request), _SEMANTIC_UNAVAILABLE_NOTICE
+        async with self._index_lock:
+            binding_header = await asyncio.to_thread(self._resolve_header)
+            if binding_header is None:
+                self._warning("Vector recall has no embedding binding; falling back to JSONL scan")
+                fallback = await self._fallback.search(request)
+                return self._degraded_result(fallback, _SEMANTIC_UNAVAILABLE_NOTICE)
+
+            await self._ensure_fresh_index(request, summaries, binding_header)
+
+            # After the backfill the cached ``_resolved_header`` holds the real
+            # dimension observed from the embedding provider. Use that for the
+            # KNN call — the binding-resolution header only knows the (provider,
+            # model) pair and is unaware of dimension until the first embed runs.
+            # ``search()`` has already rejected ``None``/blank queries before
+            # calling us, so the cast is just narrowing for the type-checker.
+            query = cast(str, request.query)
+            query_vector = await self._embed_query(binding_header, query)
+            pinned_header = self._resolved_header
+            if pinned_header is None or pinned_header.dimension <= 0:
+                raise VectorStoreError("vector store header is not pinned after embed")
+            candidates, rowid_to_record = await asyncio.to_thread(
+                self._query_store,
+                pinned_header,
+                query_vector,
+                request.limit * _CHUNK_FETCH_MULTIPLIER + _KNN_FETCH_MARGIN,
             )
-
-        self._ensure_fresh_index(request, summaries, binding_header)
-
-        # After the backfill the cached ``_resolved_header`` holds the real
-        # dimension observed from the embedding provider. Use that for the
-        # KNN call — the binding-resolution header only knows the (provider,
-        # model) pair and is unaware of dimension until the first embed runs.
-        # ``search()`` has already rejected ``None``/blank queries before
-        # calling us, so the cast is just narrowing for the type-checker.
-        query = cast(str, request.query)
-        query_vector = self._embed_query(binding_header, query)
-        pinned_header = self._resolved_header
-        if pinned_header is None or pinned_header.dimension <= 0:
-            raise VectorStoreError("vector store header is not pinned after embed")
-        candidates = self.store.knn_search(
-            header=pinned_header,
-            query_vector=query_vector,
-            limit=request.limit * _CHUNK_FETCH_MULTIPLIER + _KNN_FETCH_MARGIN,
-        )
         if not candidates:
             return self._message_result(
                 request,
@@ -246,8 +256,35 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
                 total_candidates=len(summaries),
             )
 
-        rowid_to_record = self.store.get_chunks_by_rowids([rowid for rowid, _ in candidates])
+        return await asyncio.to_thread(
+            self._hydrate_vector_result,
+            request,
+            summaries,
+            candidates,
+            rowid_to_record,
+        )
 
+    def _query_store(
+        self,
+        header: VectorHeader,
+        query_vector: list[float],
+        limit: int,
+    ) -> tuple[list[tuple[int, float]], dict[int, ChunkVectorRecord]]:
+        candidates = self.store.knn_search(
+            header=header,
+            query_vector=query_vector,
+            limit=limit,
+        )
+        records = self.store.get_chunks_by_rowids([rowid for rowid, _ in candidates])
+        return candidates, records
+
+    def _hydrate_vector_result(
+        self,
+        request: RecallRequest,
+        summaries: list[JsonObject],
+        candidates: list[tuple[int, float]],
+        rowid_to_record: dict[int, ChunkVectorRecord],
+    ) -> JsonObject:
         # Walk candidates in distance order; keep the first (nearest) chunk
         # seen for each session so a single session cannot dominate the
         # results with several of its own chunks. Then drop everything
@@ -333,10 +370,10 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
     def _headers_match(left: VectorHeader, right: VectorHeader) -> bool:
         return left.provider_id == right.provider_id and left.model_id == right.model_id
 
-    def _embed_query(self, header: VectorHeader, query: str) -> list[float]:
+    async def _embed_query(self, header: VectorHeader, query: str) -> list[float]:
         """Embed a single query string and pin the dimension from the first response."""
 
-        result = self._run_embed([query])
+        result = await self._run_embed([query])
         if result.dimension <= 0:
             raise VectorStoreError(
                 f"embedding provider returned empty dimension for {header.model_id}"
@@ -348,10 +385,10 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         )
         return list(result.vectors[0])
 
-    def _embed_chunks(self, texts: list[str]) -> tuple[list[list[float]], VectorHeader]:
+    async def _embed_chunks(self, texts: list[str]) -> tuple[list[list[float]], VectorHeader]:
         """Embed a batch of chunk texts and return vectors with the resolved header."""
 
-        result = self._run_embed(texts)
+        result = await self._run_embed(texts)
         header = VectorHeader(
             provider_id=result.provider_id,
             model_id=result.model_id,
@@ -360,7 +397,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         self._resolved_header = header
         return [list(vector) for vector in result.vectors], header
 
-    def _run_embed(self, texts: list[str]) -> EmbeddingResult:
+    async def _run_embed(self, texts: list[str]) -> EmbeddingResult:
         """Embed *texts*, batching into ``_EMBED_BATCH_SIZE`` groups.
 
         Each batch is sent through the shrink-retry path independently so
@@ -378,7 +415,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
             raise EmbeddingError("embedding input is empty")
         if len(texts) == 1:
             # Fast path: a single query is one batch with no concatenation.
-            return self._run_embed_batch(texts[0])
+            return await self._run_embed_batch(texts[0])
 
         combined_vectors: list[list[float]] = []
         combined_provider: str | None = None
@@ -386,7 +423,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         combined_dimension: int | None = None
         for start in range(0, len(texts), _EMBED_BATCH_SIZE):
             batch = texts[start : start + _EMBED_BATCH_SIZE]
-            result = self._run_embed_batch(batch)
+            result = await self._run_embed_batch(batch)
             if combined_provider is None:
                 combined_provider = result.provider_id
                 combined_model = result.model_id
@@ -417,7 +454,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
             dimension=combined_dimension,
         )
 
-    def _run_embed_batch(self, batch: str | list[str]) -> EmbeddingResult:
+    async def _run_embed_batch(self, batch: str | list[str]) -> EmbeddingResult:
         """Embed one batch (single string or list) with the shrink-retry loop."""
 
         # ``_run_embed`` is the only caller and it raises when the
@@ -430,7 +467,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
             current = list(batch)
         for attempt in range(_EMBED_OVERFLOW_RETRIES + 1):
             try:
-                result = self._run_async(embeddings.embed, current)
+                result = await embeddings.embed(current)
                 return cast(EmbeddingResult, result)
             except EmbeddingError as error:
                 # Only the provider's context-length rejection is recoverable by
@@ -453,32 +490,11 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         # only reached if the retry budget is exhausted by repeated overflows.
         raise EmbeddingError("embedding input still exceeded the context window after retries")
 
-    def _run_async(self, awaitable_func: Any, *args: Any) -> Any:
-        """Drive an async coroutine from a sync backend call.
-
-        The recall backend is invoked from sync tool code; the embed
-        service is async. When no event loop is running we run it
-        inline via :func:`asyncio.run`. When a loop is already running
-        (production — FastAPI handlers) we cannot block on
-        ``run_coroutine_threadsafe(...).result()`` because the call
-        thread IS the loop thread, so the future can never make
-        progress. Instead we hand the coroutine to a worker thread
-        that runs its own loop via :func:`asyncio.run`.
-        """
-
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(awaitable_func(*args))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(asyncio.run, awaitable_func(*args))
-            return future.result()
-
     # ------------------------------------------------------------------
     # Freshness + backfill
     # ------------------------------------------------------------------
 
-    def _ensure_fresh_index(
+    async def _ensure_fresh_index(
         self,
         request: RecallRequest,
         summaries: list[JsonObject],
@@ -489,47 +505,32 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         agent_id = request.agent_id
         scope = _project_scope(request.project_id)
         active = {str(summary["id"]): summary for summary in summaries}
-        indexed = self.store.list_indexed_sessions(agent_id, scope)
+        indexed = await asyncio.to_thread(self.store.list_indexed_sessions, agent_id, scope)
 
         # Drop JSONL sessions that have been removed since last index.
         stale_to_remove = sorted(set(indexed) - set(active))
         if stale_to_remove:
-            self.store.drop_indexed_sessions(agent_id, scope, stale_to_remove)
+            await asyncio.to_thread(
+                self.store.drop_indexed_sessions,
+                agent_id,
+                scope,
+                stale_to_remove,
+            )
 
         # Collect every (session summary, mtime, size) that's missing or
         # whose JSONL changed since the last backfill. Sessions whose
         # mtime/size already match are skipped.
-        stale_sessions: list[tuple[JsonObject, int, int, list[Any]]] = []
-        for session_id, summary in active.items():
-            session = self.sessions.get(agent_id, session_id, request.project_id)
-            stat = session.path.stat()
-            cached = indexed.get(session_id)
-            if cached is not None and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
-                continue
-            messages = session.load()
-            stale_sessions.append((summary, stat.st_mtime_ns, stat.st_size, messages))
-
-        if not stale_sessions:
-            return
-
-        # Pack all stale sessions into chunks up front. A session that
-        # yields zero indexable chunks is *not* covered by
-        # ``upsert_many_chunks`` (it only wipes sessions present in its
-        # ``records``), so its prior rows would silently survive a JSONL
-        # change to all-empty content. ``delete_session`` clears them.
-        all_chunks: list[tuple[JsonObject, int, int, Chunk]] = []
-        for summary, mtime_ns, size_bytes, messages in stale_sessions:
-            chunks = build_session_chunks(messages)
-            if not chunks:
-                self.store.delete_session(agent_id, scope, str(summary["id"]))
-                continue
-            for chunk in chunks:
-                all_chunks.append((summary, mtime_ns, size_bytes, chunk))
+        all_chunks = await asyncio.to_thread(
+            self._collect_stale_chunks,
+            request,
+            active,
+            indexed,
+        )
         if not all_chunks:
             return
 
         texts = [chunk.text for _, _, _, chunk in all_chunks]
-        vectors, resolved_header = self._embed_chunks(texts)
+        vectors, resolved_header = await self._embed_chunks(texts)
         if resolved_header.dimension <= 0:
             raise VectorStoreError("embedding provider returned no vectors")
 
@@ -562,8 +563,42 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
                 )
             )
 
-        self.store.upsert_many_chunks(header=resolved_header, records=records)
+        await asyncio.to_thread(
+            self.store.upsert_many_chunks,
+            header=resolved_header,
+            records=records,
+        )
         self._resolved_header = resolved_header
+
+    def _collect_stale_chunks(
+        self,
+        request: RecallRequest,
+        active: dict[str, JsonObject],
+        indexed: dict[str, tuple[int, int]],
+    ) -> list[tuple[JsonObject, int, int, Chunk]]:
+        """Load changed Sessions and pack their chunks off the event loop."""
+
+        agent_id = request.agent_id
+        scope = _project_scope(request.project_id)
+        stale_sessions: list[tuple[JsonObject, int, int, list[Any]]] = []
+        for session_id, summary in active.items():
+            session = self.sessions.get(agent_id, session_id, request.project_id)
+            stat = session.path.stat()
+            cached = indexed.get(session_id)
+            if cached is not None and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
+                continue
+            stale_sessions.append((summary, stat.st_mtime_ns, stat.st_size, session.load()))
+
+        # A session that yields zero indexable chunks is not covered by
+        # ``upsert_many_chunks``. Clear its old rows explicitly.
+        all_chunks: list[tuple[JsonObject, int, int, Chunk]] = []
+        for summary, mtime_ns, size_bytes, messages in stale_sessions:
+            chunks = build_session_chunks(messages)
+            if not chunks:
+                self.store.delete_session(agent_id, scope, str(summary["id"]))
+                continue
+            all_chunks.extend((summary, mtime_ns, size_bytes, chunk) for chunk in chunks)
+        return all_chunks
 
     # ------------------------------------------------------------------
     # Hydration

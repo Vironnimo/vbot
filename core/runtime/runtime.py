@@ -5,6 +5,7 @@ all core services and manages the application lifecycle.
 """
 
 import asyncio
+import inspect
 import os
 import sqlite3
 import time
@@ -1471,7 +1472,7 @@ class Runtime:
             raise RuntimeError("Recall backend registry not available")
         return self._recall_backend_registry.names()
 
-    def remove_session_from_recall(
+    async def remove_session_from_recall(
         self, agent_id: str, session_id: str, project_id: str | None = None
     ) -> None:
         """Evict a removed session from the active recall index (best-effort).
@@ -1488,7 +1489,18 @@ class Runtime:
         if not isinstance(backend, SupportsSessionRemoval):
             return
         try:
-            backend.remove_session(agent_id, session_id, project_id)
+            remove_session = backend.remove_session
+            if inspect.iscoroutinefunction(remove_session):
+                await remove_session(agent_id, session_id, project_id)
+            else:
+                result = await asyncio.to_thread(
+                    remove_session,
+                    agent_id,
+                    session_id,
+                    project_id,
+                )
+                if inspect.isawaitable(result):
+                    await result
         except (OSError, sqlite3.Error) as error:
             if self.logger is not None:
                 self.logger.warning(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from collections.abc import Iterable
 from contextlib import closing
@@ -59,37 +60,43 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
         self.index_path = self.data_dir / _INDEX_DIR_NAME / _INDEX_FILE_NAME
         self.logger = context.logger
         self._fallback = JsonlSessionRecallBackend(context.sessions)
+        self._index_lock = asyncio.Lock()
 
-    def search(self, request: RecallRequest) -> JsonObject:
-        summaries = self.candidate_session_summaries(request)
+    async def search(self, request: RecallRequest) -> JsonObject:
+        summaries = await asyncio.to_thread(self.candidate_session_summaries, request)
         if request.query is None:
             return self.session_summary_result(request, summaries)
         if not summaries:
             return self._message_result(request, [], searched_sessions=0, total_candidates=0)
+        expression = _fts_expression(request)
+        if expression is None:
+            return await self._fallback.search(request)
 
-        try:
-            return self._search_with_sqlite(request, summaries)
-        except (OSError, sqlite3.DatabaseError) as error:
-            self._warning("SQLite recall index failed; rebuilding once: %s", error)
-            self._delete_index_file()
+        async with self._index_lock:
+            try:
+                return await asyncio.to_thread(
+                    self._search_with_sqlite, request, summaries, expression
+                )
+            except (OSError, sqlite3.DatabaseError) as error:
+                self._warning("SQLite recall index failed; rebuilding once: %s", error)
+                await asyncio.to_thread(self._delete_index_file)
 
-        try:
-            return self._search_with_sqlite(request, summaries)
-        except (OSError, sqlite3.DatabaseError) as error:
-            self._warning(
-                "SQLite recall index rebuild failed; falling back to JSONL scan: %s", error
-            )
-            return self._fallback.search(request)
+            try:
+                return await asyncio.to_thread(
+                    self._search_with_sqlite, request, summaries, expression
+                )
+            except (OSError, sqlite3.DatabaseError) as error:
+                self._warning(
+                    "SQLite recall index rebuild failed; falling back to JSONL scan: %s", error
+                )
+        return await self._fallback.search(request)
 
     def _search_with_sqlite(
         self,
         request: RecallRequest,
         summaries: list[JsonObject],
+        expression: str,
     ) -> JsonObject:
-        expression = _fts_expression(request)
-        if expression is None:
-            return self._fallback.search(request)
-
         with closing(self._connect()) as connection:
             self._initialize_schema(connection)
             self._cleanup_missing_sessions(connection, request, summaries)
@@ -324,7 +331,9 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
             (agent_id, scope, session_id),
         )
 
-    def remove_session(self, agent_id: str, session_id: str, project_id: str | None = None) -> None:
+    async def remove_session(
+        self, agent_id: str, session_id: str, project_id: str | None = None
+    ) -> None:
         """Evict one session's rows from the FTS index (delete-time cleanup).
 
         Active counterpart to ``_cleanup_missing_sessions`` (the on-search
@@ -334,6 +343,12 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
         ``_delete_session_rows``); deleting from a freshly initialized or empty
         index is a harmless no-op.
         """
+        async with self._index_lock:
+            await asyncio.to_thread(self._remove_session, agent_id, session_id, project_id)
+
+    def _remove_session(
+        self, agent_id: str, session_id: str, project_id: str | None = None
+    ) -> None:
         scope = _scope(project_id)
         with closing(self._connect()) as connection:
             self._initialize_schema(connection)

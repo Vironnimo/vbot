@@ -29,6 +29,7 @@ hybrid output is effectively literal-only with no special-casing.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 
 from core.recall.jsonl import (
@@ -73,15 +74,19 @@ class HybridRecallBackend(JsonlSessionRecallBackend):
     def describe_search(self) -> str:
         return _HYBRID_SEARCH_GUIDANCE
 
-    def remove_session(self, agent_id: str, session_id: str, project_id: str | None = None) -> None:
+    async def remove_session(
+        self, agent_id: str, session_id: str, project_id: str | None = None
+    ) -> None:
         """Evict one session from both fused arms' derived indexes."""
-        self._fts.remove_session(agent_id, session_id, project_id)
-        self._vector.remove_session(agent_id, session_id, project_id)
+        await asyncio.gather(
+            self._fts.remove_session(agent_id, session_id, project_id),
+            self._vector.remove_session(agent_id, session_id, project_id),
+        )
 
-    def search(self, request: RecallRequest) -> JsonObject:
+    async def search(self, request: RecallRequest) -> JsonObject:
         # ``browse`` and ``scroll`` keep the canonical JSONL behavior
         # (nothing to fuse). Only ``search`` is hybrid.
-        summaries = self.candidate_session_summaries(request)
+        summaries = await asyncio.to_thread(self.candidate_session_summaries, request)
         if request.query is None:
             return self.session_summary_result(request, summaries)
         if not request.query.strip():
@@ -97,8 +102,10 @@ class HybridRecallBackend(JsonlSessionRecallBackend):
         # Run both arms; each one is a self-contained backend with its
         # own fallback policy, so any per-arm failure surfaces only as
         # a missing contribution to the fused result.
-        fts_result = self._fts.search(over_fetched)
-        vector_result = self._vector.search(over_fetched)
+        fts_result, vector_result = await asyncio.gather(
+            self._fts.search(over_fetched),
+            self._vector.search(over_fetched),
+        )
 
         fts_matches = list(fts_result.get("matches", []))
         vector_matches = list(vector_result.get("matches", []))

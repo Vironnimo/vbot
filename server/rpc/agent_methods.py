@@ -250,7 +250,7 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
             deleting_current = state.runtime.agents.get(agent_id).current_session_id == session_id
         await chat_sessions.archive(agent_id, session_id, project_id)
         next_session_id = _resolve_post_delete_landing(state, agent_id, session_id, project_id)
-        state.runtime.remove_session_from_recall(agent_id, session_id, project_id)
+        await state.runtime.remove_session_from_recall(agent_id, session_id, project_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     # Same emit point as session.create/rename: other windows on this agent

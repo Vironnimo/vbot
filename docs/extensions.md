@@ -172,12 +172,7 @@ Skill instead.)
 
 ## Recall backends
 
-`api.register_recall_backend(name, factory)` adds a session-recall backend
-(`factory` is `RecallBackendContext -> RecallBackend`). The name must be
-lowercase snake_case and must not collide with a built-in. Once registered, a
-backend becomes selectable via `settings.recall.backend` (Settings → Recall).
-See [`.vorch/domain-maps/recall.md`](../.vorch/domain-maps/recall.md) for the backend
-protocol.
+`api.register_recall_backend(name, factory)` adds a session-recall backend (`factory` is `RecallBackendContext -> RecallBackend`). The name must be lowercase snake_case and must not collide with a built-in. Once registered, a backend becomes selectable via `settings.recall.backend` (Settings → Recall). Implement `browse`, `overview`, `search`, and `scroll` as async methods so provider and other I/O can be cancelled naturally. Existing synchronous backends remain supported and are run outside the server event loop. See [`.vorch/domain-maps/recall.md`](../.vorch/domain-maps/recall.md) for the backend protocol.
 
 ## Channel interaction handlers
 
