@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import pytest
@@ -354,3 +355,60 @@ def test_write_wakeword_settings_overwrites_existing_wakeword(tmp_path: Path) ->
     stored = json.loads(settings_file.read_text(encoding="utf-8"))
     assert stored["wakeword"]["enabled"] is False
     assert stored["wakeword"]["sensitivity"] == 0.3
+
+
+def test_parallel_section_writes_share_one_transaction_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(
+        json.dumps(
+            {
+                "servers": [{"host": "old.lan", "port": 8420}],
+                "wakeword": {"enabled": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+    original_read = desktop_settings._read_settings_unlocked
+    server_read_started = threading.Event()
+    release_server_write = threading.Event()
+    wakeword_write_finished = threading.Event()
+
+    def controlled_read(path: Path) -> dict[str, object]:
+        settings = original_read(path)
+        if threading.current_thread().name == "server-settings-writer":
+            server_read_started.set()
+            assert release_server_write.wait(timeout=2)
+        return settings
+
+    monkeypatch.setattr(desktop_settings, "_read_settings_unlocked", controlled_read)
+
+    server_thread = threading.Thread(
+        name="server-settings-writer",
+        target=desktop_settings.write_servers,
+        args=([{"host": "new.lan", "port": 9000}], settings_file),
+    )
+
+    def write_wakeword() -> None:
+        desktop_settings.write_wakeword_settings({"enabled": True}, settings_file)
+        wakeword_write_finished.set()
+
+    wakeword_thread = threading.Thread(target=write_wakeword)
+    server_thread.start()
+    assert server_read_started.wait(timeout=2)
+    wakeword_thread.start()
+
+    try:
+        assert not wakeword_write_finished.wait(timeout=0.1)
+    finally:
+        release_server_write.set()
+        server_thread.join(timeout=2)
+        wakeword_thread.join(timeout=2)
+
+    assert not server_thread.is_alive()
+    assert not wakeword_thread.is_alive()
+    stored = json.loads(settings_file.read_text(encoding="utf-8"))
+    assert stored["servers"] == [{"host": "new.lan", "port": 9000}]
+    assert stored["wakeword"] == {"enabled": True}
