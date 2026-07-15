@@ -1,16 +1,15 @@
-"""SQLite-vec vector store for per-chunk semantic recall.
+"""SQLite-vec vector store for Passage-level semantic Recall.
 
 The store is a **disposable derived index** — canonical Session storage
 stays in JSONL under ``<data_dir>/agents/<agent-id>/sessions/``. This
 module is responsible for opening the connection, observing the embedding
 dimension lazily, pinning ``(provider_id, model_id, dimension)`` in a
-header, and exposing chunk-level vector upsert/lookup primitives that the
+header, and exposing Passage-vector upsert/lookup primitives that the
 recall backend (``core/recall/vector.py``) builds on top of.
 
-A session's searchable text is split into one or more **chunks**
-(message-aware windows with overlap — see ``core/recall/vector.py`` for
-the chunking policy). Each chunk is its own row in the metadata table
-and its own row in the ``vec0`` virtual table, keyed by the chunk's
+A Session's searchable text is split into overlapping source-derived Passages.
+Each Passage is its own metadata row and its own row in the ``vec0`` virtual
+table, keyed by the compatibility-named chunk index in the
 ``(agent_id, session_id, chunk_index)`` tuple. The on-disk file lives at
 ``<data_dir>/recall/session_vectors.sqlite``; the ``sqlite-vec``
 extension is loaded via the same enable/disable dance as the rest of
@@ -41,7 +40,9 @@ _SQLITE_BUSY_TIMEOUT_MS = 1000
 #      older indexes hold constant-vector noise rows that must be purged.
 # v4 → chunk keys are project-scoped (``project_id`` column) so the same session
 #      UUID under a project vs. the global scope never collides in the index.
-_SCHEMA_VERSION = 4
+# v5 → vec0 carries scope, Session, and time metadata so structural filters run
+#      inside KNN instead of starving an eligible scope after global retrieval.
+_SCHEMA_VERSION = 5
 _VECTOR_TABLE_NAME = "session_vectors"
 _CHUNK_TABLE_NAME = "chunks"
 _HEADER_TABLE_NAME = "store_header"
@@ -106,6 +107,12 @@ class ChunkVectorRecord:
     start_message_id: str
     end_message_id: str
     project_id: str = ""
+    passage_id: str = ""
+    text: str = ""
+    start_timestamp: str = ""
+    end_timestamp: str = ""
+    start_role: str = ""
+    end_role: str = ""
 
 
 class VectorStore:
@@ -159,6 +166,12 @@ class VectorStore:
               chunk_index INTEGER NOT NULL,
               start_message_id TEXT NOT NULL,
               end_message_id TEXT NOT NULL,
+              passage_id TEXT NOT NULL,
+              text TEXT NOT NULL,
+              start_timestamp TEXT NOT NULL,
+              end_timestamp TEXT NOT NULL,
+              start_role TEXT NOT NULL,
+              end_role TEXT NOT NULL,
               UNIQUE (project_id, agent_id, session_id, chunk_index)
             );
 
@@ -280,6 +293,10 @@ class VectorStore:
             f"""
             CREATE VIRTUAL TABLE {_VECTOR_TABLE_NAME}
             USING vec0(
+              scope_key TEXT partition key,
+              session_id TEXT,
+              start_timestamp INTEGER,
+              end_timestamp INTEGER,
               embedding float[{dimension}] distance_metric=cosine
             )
             """
@@ -343,8 +360,9 @@ class VectorStore:
                         INSERT INTO {_CHUNK_TABLE_NAME} (
                           session_id, agent_id, project_id, started_at, mtime_ns, size_bytes,
                           anchor_message_id, snippet, chunk_index,
-                          start_message_id, end_message_id
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          start_message_id, end_message_id, passage_id, text,
+                          start_timestamp, end_timestamp, start_role, end_role
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             record.session_id,
@@ -358,6 +376,12 @@ class VectorStore:
                             record.chunk_index,
                             record.start_message_id,
                             record.end_message_id,
+                            record.passage_id or f"legacy-{record.chunk_index}",
+                            record.text or record.snippet,
+                            record.start_timestamp or record.started_at,
+                            record.end_timestamp or record.started_at,
+                            record.start_role,
+                            record.end_role,
                         ),
                     )
                     row_id = cursor.lastrowid
@@ -368,8 +392,17 @@ class VectorStore:
                         )
                     connection.execute(
                         "INSERT INTO "
-                        f"{_VECTOR_TABLE_NAME}(rowid, embedding) VALUES (?, vec_f32(?))",
-                        (row_id, json.dumps([float(value) for value in vector])),
+                        f"{_VECTOR_TABLE_NAME}("
+                        "rowid, scope_key, session_id, start_timestamp, end_timestamp, embedding"
+                        ") VALUES (?, ?, ?, ?, ?, vec_f32(?))",
+                        (
+                            row_id,
+                            _scope_key(record.project_id, record.agent_id),
+                            record.session_id,
+                            _timestamp_micros(record.start_timestamp or record.started_at),
+                            _timestamp_micros(record.end_timestamp or record.started_at),
+                            json.dumps([float(value) for value in vector]),
+                        ),
                     )
                     count += 1
         return count
@@ -476,8 +509,13 @@ class VectorStore:
         header: VectorHeader,
         query_vector: Sequence[float],
         limit: int,
+        agent_id: str | None = None,
+        project_id: str = "",
+        session_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
     ) -> list[tuple[int, float]]:
-        """Return up to ``limit + overshoot`` nearest rows by cosine distance."""
+        """Return nearest rows after optional structural metadata prefilters."""
 
         if limit <= 0:
             return []
@@ -488,16 +526,29 @@ class VectorStore:
             )
         vector_json = json.dumps([float(value) for value in query_vector])
         fetch_limit = limit + _KNN_OVERSHOOT
+        clauses = ["embedding MATCH vec_f32(?)", "k = ?"]
+        parameters: list[object] = [vector_json, fetch_limit]
+        if agent_id is not None:
+            clauses.append("scope_key = ?")
+            parameters.append(_scope_key(project_id, agent_id))
+        if session_id is not None:
+            clauses.append("session_id = ?")
+            parameters.append(session_id)
+        if since is not None:
+            clauses.append("end_timestamp >= ?")
+            parameters.append(_datetime_micros(since))
+        if until is not None:
+            clauses.append("start_timestamp <= ?")
+            parameters.append(_datetime_micros(until))
         with closing(self._connect()) as connection:
             self._initialize_schema(connection, expected_header=header)
             rows = connection.execute(
                 f"""
                 SELECT rowid, distance FROM {_VECTOR_TABLE_NAME}
-                WHERE embedding MATCH vec_f32(?)
+                WHERE {" AND ".join(clauses)}
                 ORDER BY distance
-                LIMIT ?
                 """,
-                (vector_json, fetch_limit),
+                parameters,
             ).fetchall()
         return [(int(row["rowid"]), float(row["distance"])) for row in rows]
 
@@ -514,7 +565,8 @@ class VectorStore:
             rows = connection.execute(
                 f"""
                 SELECT rowid, session_id, agent_id, project_id, started_at, mtime_ns, size_bytes,
-                       anchor_message_id, snippet, chunk_index, start_message_id, end_message_id
+                       anchor_message_id, snippet, chunk_index, start_message_id, end_message_id,
+                       passage_id, text, start_timestamp, end_timestamp, start_role, end_role
                 FROM {_CHUNK_TABLE_NAME}
                 WHERE rowid IN ({placeholders})
                 """,
@@ -533,6 +585,12 @@ class VectorStore:
                 chunk_index=int(row["chunk_index"]),
                 start_message_id=str(row["start_message_id"]),
                 end_message_id=str(row["end_message_id"]),
+                passage_id=str(row["passage_id"]),
+                text=str(row["text"]),
+                start_timestamp=str(row["start_timestamp"]),
+                end_timestamp=str(row["end_timestamp"]),
+                start_role=str(row["start_role"]),
+                end_role=str(row["end_role"]),
             )
             for row in rows
         }
@@ -604,3 +662,23 @@ def format_started_at(timestamp: str | datetime | None) -> str:
             return timestamp.replace(tzinfo=UTC).isoformat()
         return timestamp.astimezone(UTC).isoformat()
     return str(timestamp)
+
+
+def _scope_key(project_id: str, agent_id: str) -> str:
+    return f"{project_id}\0{agent_id}"
+
+
+def _timestamp_micros(value: str) -> int:
+    if not value:
+        return 0
+    normalized = value.removesuffix("Z") + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return 0
+    return _datetime_micros(parsed)
+
+
+def _datetime_micros(value: datetime) -> int:
+    normalized = value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+    return int(normalized.timestamp() * 1_000_000)

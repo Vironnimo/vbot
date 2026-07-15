@@ -1,40 +1,19 @@
-"""Vector recall backend — per-chunk semantic search over a sqlite-vec store.
+"""Vector Recall backend over a sqlite-vec Passage index.
 
-The backend inherits the canonical browse/scroll implementation from
-:class:`JsonlSessionRecallBackend` and only overrides search. The
-search path:
+The typed first-party search contract builds source-derived Passages, applies
+scope/Session/time metadata filters inside KNN, and returns pure semantic top-K
+Passages without Session deduplication, a universal distance cutoff, or literal
+fallback. The older ``RecallBackend.search`` entry point retains its chunk-based
+payload and degraded JSONL behavior solely for compatibility with legacy callers.
 
-1. Resolves the embedding binding through the runtime
-   :class:`core.model_tasks.EmbeddingService`; if no binding is
-   configured the backend logs a warning and falls back to the JSONL
-   scanner for that call.
-2. Ensures every JSONL session for the requested agent has fresh
-   **chunk** vectors in the sqlite-vec store (eager on-search backfill).
-   Each session's searchable text is split into one or more
-   ``Chunk`` windows of consecutive messages, each capped around
-   ``_CHUNK_TARGET_CHARS`` characters with ``_CHUNK_OVERLAP_MESSAGES``
-   carried into the next chunk. Chunk anchors pick the first
-   non-skill-context, non-note message so the matched region is the
-   part of the session the user actually asked about, not the session
-   opener.
-3. Embeds the query with the same binding, then runs a cosine KNN
-   over the chunk vectors.
-4. Dedups the KNN hits to the **nearest** chunk per session, drops
-   anything beyond ``_MAX_DISTANCE``, and hydrates a representative
-   window per surviving session from canonical JSONL, anchored at the
-   matching chunk's anchor message. Only **structural** filters apply
-   (agent/time/skill-note); ranking stays by vector distance because
-   semantic match has no literal query term to re-validate.
-
-The store pins ``(provider_id, model_id, dimension)`` in its header so
-switching the embedding binding drops and rebuilds the index on the
-next open. Any sqlite-vec/embed failure falls back to JSONL for the
-call, mirroring the SQLite FTS backend's safety net.
+The disposable store pins ``(provider_id, model_id, dimension)`` in its header;
+an embedding-space or schema change drops and lazily rebuilds the index.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -57,7 +36,17 @@ from core.recall.jsonl import (
     message_search_text,
     request_payload,
 )
-from core.recall.recall import JsonObject, RecallBackendContext, RecallRequest
+from core.recall.passages import Passage, build_session_passages
+from core.recall.recall import (
+    JsonObject,
+    RecallBackendContext,
+    RecallRequest,
+    RecallSearchCapabilities,
+    RecallSearchError,
+    RecallSearchHit,
+    RecallSearchPage,
+    RecallSearchRequest,
+)
 from core.recall.vector_store import (
     ChunkVectorRecord,
     VectorHeader,
@@ -83,9 +72,8 @@ _PER_MESSAGE_CHAR_CAP = 2000
 # contract has no hard limit, but splitting keeps the per-request
 # payload predictable and the shrink-retry path bounded per batch.
 _EMBED_BATCH_SIZE = 64
-# Cosine-distance cutoff. Distances run 0 (identical) to 2 (opposite);
-# 0.7 keeps anything that the embedding model considered meaningfully
-# related to the query and drops the long tail of weak hits.
+# Legacy-result cosine-distance cutoff. Typed Passage search intentionally has
+# no universal threshold because distance calibration is model-specific.
 _MAX_DISTANCE = 0.7
 # Over-fetch multiplier for KNN before chunk→session dedup. The
 # recall backend requests ``limit * multiplier + KNN margin`` chunks so
@@ -157,6 +145,11 @@ class Chunk:
     end_message_id: str
     text: str
     snippet: str
+    passage_id: str = ""
+    start_timestamp: str = ""
+    end_timestamp: str = ""
+    start_role: str = ""
+    end_role: str = ""
 
 
 class VectorRecallBackend(JsonlSessionRecallBackend):
@@ -178,6 +171,107 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
 
     def describe_search(self) -> str:
         return _SEMANTIC_SEARCH_GUIDANCE
+
+    def search_capabilities(self) -> RecallSearchCapabilities:
+        return RecallSearchCapabilities(
+            result_type="passage",
+            guidance=_SEMANTIC_SEARCH_GUIDANCE,
+            order_modes=("relevance",),
+            default_order="relevance",
+        )
+
+    async def search_page(self, request: RecallSearchRequest) -> RecallSearchPage:
+        summaries = await asyncio.to_thread(self._search_candidate_summaries, request)
+        binding_header = await asyncio.to_thread(self._resolve_header)
+        if binding_header is None:
+            raise RecallSearchError(
+                "semantic_unavailable",
+                "Semantic search is unavailable because no embedding model is configured.",
+            )
+        snapshot_id = self._vector_snapshot(request, summaries, binding_header)
+        if request.snapshot_id is not None and request.snapshot_id != snapshot_id:
+            raise RecallSearchError(
+                "stale_cursor", "Session search source changed; repeat the search."
+            )
+        if not summaries:
+            return RecallSearchPage(
+                hits=(),
+                result_type="passage",
+                ranking="cosine_distance",
+                snapshot_id=snapshot_id,
+                has_more=False,
+                total_candidate_sessions=0,
+            )
+
+        try:
+            async with self._index_lock:
+                await self._ensure_fresh_index(request, summaries, binding_header)
+                query_vector = await self._embed_query(binding_header, request.query)
+                pinned_header = self._resolved_header
+                if pinned_header is None or pinned_header.dimension <= 0:
+                    raise VectorStoreError("vector store header is not pinned after embed")
+                candidates = await asyncio.to_thread(
+                    self.store.knn_search,
+                    header=pinned_header,
+                    query_vector=query_vector,
+                    limit=request.offset + request.limit + 1,
+                    agent_id=request.agent_id,
+                    project_id=_project_scope(request.project_id),
+                    session_id=request.session_id,
+                    since=request.since,
+                    until=request.until,
+                )
+                records = await asyncio.to_thread(
+                    self.store.get_chunks_by_rowids,
+                    [rowid for rowid, _ in candidates],
+                )
+        except (VectorStoreError, EmbeddingError, OSError, sqlite3.Error) as error:
+            self._warning("Vector recall failed: %s", error)
+            raise RecallSearchError(
+                "semantic_unavailable",
+                "Semantic search failed; retry or check the embedding provider.",
+            ) from error
+
+        ranked: list[RecallSearchHit] = []
+        for rowid, distance in candidates:
+            record = records.get(rowid)
+            if record is None:
+                continue
+            ranked.append(
+                RecallSearchHit(
+                    result_type="passage",
+                    session_id=record.session_id,
+                    message_id=record.start_message_id,
+                    role=record.start_role,
+                    timestamp=record.start_timestamp,
+                    text=record.text,
+                    score=distance,
+                    passage_id=record.passage_id,
+                    start_message_id=record.start_message_id,
+                    end_message_id=record.end_message_id,
+                    end_timestamp=record.end_timestamp,
+                    sources=("semantic",),
+                )
+            )
+        page_hits = ranked[request.offset : request.offset + request.limit]
+        return RecallSearchPage(
+            hits=tuple(page_hits),
+            result_type="passage",
+            ranking="cosine_distance",
+            snapshot_id=snapshot_id,
+            has_more=len(ranked) > request.offset + len(page_hits),
+            total_candidate_sessions=len(summaries),
+        )
+
+    def _vector_snapshot(
+        self,
+        request: RecallSearchRequest,
+        summaries: list[JsonObject],
+        header: VectorHeader,
+    ) -> str:
+        source = self._search_snapshot(request, summaries)
+        payload = f"{source}\0{header.provider_id}\0{header.model_id}".encode()
+        return hashlib.sha256(payload).hexdigest()
 
     async def remove_session(
         self, agent_id: str, session_id: str, project_id: str | None = None
@@ -496,7 +590,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
 
     async def _ensure_fresh_index(
         self,
-        request: RecallRequest,
+        request: RecallRequest | RecallSearchRequest,
         summaries: list[JsonObject],
         header: VectorHeader,
     ) -> None:
@@ -558,6 +652,12 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
                         chunk_index=index,
                         start_message_id=chunk.start_message_id,
                         end_message_id=chunk.end_message_id,
+                        passage_id=chunk.passage_id,
+                        text=chunk.text,
+                        start_timestamp=chunk.start_timestamp,
+                        end_timestamp=chunk.end_timestamp,
+                        start_role=chunk.start_role,
+                        end_role=chunk.end_role,
                     ),
                     vector,
                 )
@@ -572,7 +672,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
 
     def _collect_stale_chunks(
         self,
-        request: RecallRequest,
+        request: RecallRequest | RecallSearchRequest,
         active: dict[str, JsonObject],
         indexed: dict[str, tuple[int, int]],
     ) -> list[tuple[JsonObject, int, int, Chunk]]:
@@ -593,7 +693,12 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         # ``upsert_many_chunks``. Clear its old rows explicitly.
         all_chunks: list[tuple[JsonObject, int, int, Chunk]] = []
         for summary, mtime_ns, size_bytes, messages in stale_sessions:
-            chunks = build_session_chunks(messages)
+            if isinstance(request, RecallSearchRequest):
+                chunks = [
+                    _chunk_from_passage(passage) for passage in build_session_passages(messages)
+                ]
+            else:
+                chunks = build_session_chunks(messages)
             if not chunks:
                 self.store.delete_session(agent_id, scope, str(summary["id"]))
                 continue
@@ -750,6 +855,21 @@ def _is_skippable_for_anchor(message: Any) -> bool:
     """
 
     return not is_context_message(message)
+
+
+def _chunk_from_passage(passage: Passage) -> Chunk:
+    return Chunk(
+        anchor_message_id=passage.start_message_id,
+        start_message_id=passage.start_message_id,
+        end_message_id=passage.end_message_id,
+        text=passage.text,
+        snippet=passage.text,
+        passage_id=passage.passage_id,
+        start_timestamp=passage.start_timestamp,
+        end_timestamp=passage.end_timestamp,
+        start_role=passage.start_role,
+        end_role=passage.end_role,
+    )
 
 
 def build_session_chunks(messages: Iterable[Any]) -> list[Chunk]:

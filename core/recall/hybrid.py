@@ -1,42 +1,32 @@
-"""Hybrid recall backend — fuses SQLite-FTS literal matches with vector semantic matches.
+"""Hybrid Recall backend combining Passage FTS and Vector rankings.
 
-The backend inherits from :class:`JsonlSessionRecallBackend` so ``browse``
-and ``scroll`` reuse the canonical JSONL implementation; only
-``search`` is overridden. The search path runs both arms in parallel
-and fuses their results:
-
-1. Over-fetch from each arm with an inflated limit so a single noisy
-   session cannot starve the literal group of distinct sessions.
-2. Group matches by session (FTS is per-message, collapse to the first
-   FTS hit per session).
-3. Classify the session's ``source`` by the presence of a ``distance``
-   field on any match from the vector arm — ``distance`` present
-   means a real semantic KNN hit. A session in both arms gets the
-   literal (FTS) payload with the vector's ``distance`` attached and
-   is tagged ``"both"``; a session in FTS only is tagged
-   ``"literal"``; a session in the vector arm only is tagged
-   ``"semantic"``.
-4. Order literal/both group by ``request.sort`` (FTS already produces
-   in-order candidates), then the semantic-only group by ascending
-   ``distance``; truncate to ``request.limit`` and set ``truncated``.
-
-The classification keying on ``distance`` presence is what makes
-graceful degradation fall out for free: when the vector arm has no
-embedding binding (or the embed call fails) it falls back to its
-own JSONL scanner, whose matches have no ``distance`` field, so the
-hybrid output is effectively literal-only with no special-casing.
+Typed first-party search runs both arms concurrently and applies true Reciprocal
+Rank Fusion with adaptive candidate depth. It preserves multiple Passages per
+Session and reports one-arm degradation explicitly. The older
+``RecallBackend.search`` method retains its session-grouped payload solely for
+legacy callers.
 """
 
 from __future__ import annotations
 
 import asyncio
 import dataclasses
+import hashlib
 
 from core.recall.jsonl import (
     JsonlSessionRecallBackend,
     request_payload,
 )
-from core.recall.recall import JsonObject, RecallBackendContext, RecallRequest
+from core.recall.recall import (
+    JsonObject,
+    RecallBackendContext,
+    RecallRequest,
+    RecallSearchCapabilities,
+    RecallSearchError,
+    RecallSearchHit,
+    RecallSearchPage,
+    RecallSearchRequest,
+)
 from core.recall.sqlite_fts import SqliteFtsRecallBackend
 from core.recall.vector import VectorRecallBackend, render_vector_matches
 
@@ -49,6 +39,8 @@ _FETCH_MULTIPLIER = 3
 # session with many FTS hits (FTS is per-message) does not starve the
 # literal group of other distinct sessions.
 _FETCH_MARGIN = 10
+_RRF_RANK_CONSTANT = 60
+_RRF_INITIAL_DEPTH = 20
 
 # Guidance appended to the session_search tool description when this backend is
 # active (see ``describe_search``). Static capability text — actual semantic
@@ -73,6 +65,91 @@ class HybridRecallBackend(JsonlSessionRecallBackend):
 
     def describe_search(self) -> str:
         return _HYBRID_SEARCH_GUIDANCE
+
+    def search_capabilities(self) -> RecallSearchCapabilities:
+        return RecallSearchCapabilities(
+            result_type="passage",
+            guidance=_HYBRID_SEARCH_GUIDANCE,
+            match_argument="literal_match",
+            match_modes=("all_terms", "any_term", "phrase"),
+            order_modes=("relevance",),
+            default_order="relevance",
+        )
+
+    async def search_page(self, request: RecallSearchRequest) -> RecallSearchPage:
+        depth = max(_RRF_INITIAL_DEPTH, request.offset + request.limit + 1)
+        literal_page: RecallSearchPage | None = None
+        semantic_page: RecallSearchPage | None = None
+        literal_error: Exception | None = None
+        semantic_error: Exception | None = None
+        fused: list[RecallSearchHit] = []
+
+        while True:
+            arm_request = dataclasses.replace(
+                request,
+                offset=0,
+                limit=depth,
+                snapshot_id=None,
+            )
+            literal_result, semantic_result = await asyncio.gather(
+                self._fts.search_passages(arm_request),
+                self._vector.search_page(arm_request),
+                return_exceptions=True,
+            )
+            literal_page = literal_result if isinstance(literal_result, RecallSearchPage) else None
+            semantic_page = (
+                semantic_result if isinstance(semantic_result, RecallSearchPage) else None
+            )
+            literal_error = literal_result if isinstance(literal_result, Exception) else None
+            semantic_error = semantic_result if isinstance(semantic_result, Exception) else None
+            if literal_page is None and semantic_page is None:
+                raise RecallSearchError(
+                    "hybrid_unavailable",
+                    "Both literal and semantic retrieval are unavailable.",
+                )
+            fused = _fuse_rrf(literal_page, semantic_page)
+            if _rrf_page_is_stable(
+                fused,
+                literal_page,
+                semantic_page,
+                request.offset + request.limit,
+                depth,
+            ):
+                break
+            depth *= 2
+
+        snapshot_id = _hybrid_snapshot(literal_page, semantic_page)
+        if request.snapshot_id is not None and request.snapshot_id != snapshot_id:
+            raise RecallSearchError(
+                "stale_cursor", "Session search source changed; repeat the search."
+            )
+        selected = fused[request.offset : request.offset + request.limit]
+        degraded = literal_page is None or semantic_page is None
+        reason: str | None = None
+        if degraded:
+            failed_arm = "literal" if literal_page is None else "semantic"
+            error = literal_error if literal_page is None else semantic_error
+            reason = f"{failed_arm} retrieval unavailable"
+            if isinstance(error, RecallSearchError):
+                reason = str(error)
+        total_sessions = max(
+            literal_page.total_candidate_sessions if literal_page is not None else 0,
+            semantic_page.total_candidate_sessions if semantic_page is not None else 0,
+        )
+        return RecallSearchPage(
+            hits=tuple(selected),
+            result_type="passage",
+            ranking="reciprocal_rank_fusion",
+            snapshot_id=snapshot_id,
+            has_more=(
+                request.offset + len(selected) < len(fused)
+                or (literal_page is not None and literal_page.has_more)
+                or (semantic_page is not None and semantic_page.has_more)
+            ),
+            total_candidate_sessions=total_sessions,
+            degraded=degraded,
+            degradation_reason=reason,
+        )
 
     async def remove_session(
         self, agent_id: str, session_id: str, project_id: str | None = None
@@ -262,6 +339,73 @@ class HybridRecallBackend(JsonlSessionRecallBackend):
             "total_candidate_sessions": total_candidates,
             "request": request_payload(request),
         }
+
+
+def _fuse_rrf(
+    literal_page: RecallSearchPage | None,
+    semantic_page: RecallSearchPage | None,
+) -> list[RecallSearchHit]:
+    hits_by_key: dict[tuple[str, str], RecallSearchHit] = {}
+    scores: dict[tuple[str, str], float] = {}
+    sources: dict[tuple[str, str], list[str]] = {}
+    for source, page in (("literal", literal_page), ("semantic", semantic_page)):
+        if page is None:
+            continue
+        for rank, hit in enumerate(page.hits, start=1):
+            key = (hit.session_id, hit.passage_id or hit.message_id)
+            scores[key] = scores.get(key, 0.0) + 1.0 / (_RRF_RANK_CONSTANT + rank)
+            if key not in hits_by_key or source == "literal":
+                hits_by_key[key] = hit
+            source_list = sources.setdefault(key, [])
+            if source not in source_list:
+                source_list.append(source)
+    fused = [
+        dataclasses.replace(hit, score=scores[key], sources=tuple(sources[key]))
+        for key, hit in hits_by_key.items()
+    ]
+    fused.sort(
+        key=lambda hit: (
+            -hit.score,
+            hit.session_id,
+            hit.passage_id or hit.message_id,
+        )
+    )
+    return fused
+
+
+def _rrf_page_is_stable(
+    fused: list[RecallSearchHit],
+    literal_page: RecallSearchPage | None,
+    semantic_page: RecallSearchPage | None,
+    needed: int,
+    depth: int,
+) -> bool:
+    literal_more = literal_page is not None and literal_page.has_more
+    semantic_more = semantic_page is not None and semantic_page.has_more
+    if not literal_more and not semantic_more:
+        return True
+    if len(fused) < needed:
+        return False
+    literal_bound = 1.0 / (_RRF_RANK_CONSTANT + depth + 1) if literal_more else 0.0
+    semantic_bound = 1.0 / (_RRF_RANK_CONSTANT + depth + 1) if semantic_more else 0.0
+    competitor_bound = literal_bound + semantic_bound
+    for hit in fused[needed:]:
+        upper = hit.score
+        if literal_more and "literal" not in hit.sources:
+            upper += literal_bound
+        if semantic_more and "semantic" not in hit.sources:
+            upper += semantic_bound
+        competitor_bound = max(competitor_bound, upper)
+    return fused[needed - 1].score > competitor_bound
+
+
+def _hybrid_snapshot(
+    literal_page: RecallSearchPage | None,
+    semantic_page: RecallSearchPage | None,
+) -> str:
+    literal = literal_page.snapshot_id if literal_page is not None else "unavailable"
+    semantic = semantic_page.snapshot_id if semantic_page is not None else "unavailable"
+    return hashlib.sha256(f"{literal}\0{semantic}".encode()).hexdigest()
 
 
 def _with_semantic_notice(result: JsonObject, vector_notice: str) -> JsonObject:

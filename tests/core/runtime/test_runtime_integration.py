@@ -883,10 +883,19 @@ def test_runtime_reload_recall_backend_creates_vector_backend(
     runtime.start()
     try:
         assert isinstance(runtime.recall_backend, JsonlSessionRecallBackend)
+        jsonl_tool = runtime.tools.get("session_search")
+        assert "match" in jsonl_tool.parameters["properties"]
+        assert "order" in jsonl_tool.parameters["properties"]
 
         _write_settings(config, {"recall": {"backend": "vector"}})
         runtime.reload_recall_backend()
         assert isinstance(runtime.recall_backend, VectorRecallBackend)
+        vector_tool = runtime.tools.get("session_search")
+        assert "match" not in vector_tool.parameters["properties"]
+        assert "literal_match" not in vector_tool.parameters["properties"]
+        assert "roles" not in vector_tool.parameters["properties"]
+        assert "order" not in vector_tool.parameters["properties"]
+        assert "meaning" in vector_tool.description
     finally:
         runtime.stop()
 

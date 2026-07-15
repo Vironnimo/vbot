@@ -13,7 +13,13 @@ import sqlite_vec  # type: ignore[import-untyped]
 
 from core.chat import ChatMessage
 from core.model_tasks import EmbeddingError, EmbeddingResult
-from core.recall import RecallBackendContext, RecallRequest, VectorRecallBackend
+from core.recall import (
+    RecallBackendContext,
+    RecallRequest,
+    RecallSearchError,
+    RecallSearchRequest,
+    VectorRecallBackend,
+)
 from core.recall.vector import (
     _CHUNK_FETCH_MULTIPLIER,
     _CHUNK_OVERLAP_MESSAGES,
@@ -170,6 +176,83 @@ def backend(
             embeddings=embeddings,
         )
     )
+
+
+def search_request(
+    query: str,
+    *,
+    limit: int = 10,
+    since: datetime | None = None,
+) -> RecallSearchRequest:
+    return RecallSearchRequest(
+        agent_id="coder",
+        project_id=None,
+        session_id=None,
+        query=query,
+        since=since,
+        until=None,
+        roles=("user", "assistant", "error", "compaction_checkpoint"),
+        match_mode="all_terms",
+        order="relevance",
+        offset=0,
+        limit=limit,
+    )
+
+
+async def test_typed_vector_search_returns_ranked_passages_without_session_dedup(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="fruit-heavy").append(
+        ChatMessage.user("fruit banana " * 400, timestamp=timestamp(1))
+    )
+    recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
+
+    page = await recall.search_page(search_request("fruit"))
+
+    assert page.result_type == "passage"
+    assert page.ranking == "cosine_distance"
+    assert len(page.hits) > 1
+    assert {hit.session_id for hit in page.hits} == {"fruit-heavy"}
+    assert len({hit.passage_id for hit in page.hits}) == len(page.hits)
+    assert all(hit.sources == ("semantic",) for hit in page.hits)
+
+
+async def test_typed_vector_search_has_no_literal_fallback_or_distance_cutoff(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="fruit").append(
+        ChatMessage.user("banana fruit", timestamp=timestamp(1))
+    )
+    sessions.create("coder", session_id="vegetable").append(
+        ChatMessage.user("carrot vegetable", timestamp=timestamp(2))
+    )
+    recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
+
+    page = await recall.search_page(search_request("fruit", limit=10))
+
+    assert [hit.session_id for hit in page.hits] == ["fruit", "vegetable"]
+    assert page.hits[-1].score > _MAX_DISTANCE
+
+    unavailable = backend(tmp_path / "none", ChatSessionManager(tmp_path / "none"))
+    with pytest.raises(RecallSearchError, match="embedding model"):
+        await unavailable.search_page(search_request("literal"))
+
+
+async def test_typed_vector_search_prefilters_time_inside_knn(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="old").append(
+        ChatMessage.user("banana fruit old", timestamp=timestamp(1))
+    )
+    sessions.create("coder", session_id="new").append(
+        ChatMessage.user("banana fruit new", timestamp=timestamp(3))
+    )
+    recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
+
+    page = await recall.search_page(search_request("fruit", since=datetime(2026, 5, 2, tzinfo=UTC)))
+
+    assert [hit.session_id for hit in page.hits] == ["new"]
 
 
 async def test_vector_backend_ranks_semantically_nearest_sessions(tmp_path: Path) -> None:
