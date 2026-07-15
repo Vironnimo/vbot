@@ -11,7 +11,7 @@ Read these two core files completely before doing anything (even saying 'hi'), e
 - `.vorch/PROJECT.md` — project context, architecture, conventions, dev/test commands, domain-maps index
 - `.vorch/GLOSSARY.md` — project-specific terms
 
-They hold the project's rules and conventions — **follow them.** Read more as the task needs it: a domain's map under `.vorch/domain-maps/` (index in PROJECT.md) when you work that domain, plus any adjacent map your change touches; `.vorch/DESIGN.md` for UI work; `.vorch/TESTER.md` for the live-testing playbook when you need to verify behavior in the running app.
+They hold the project's rules and conventions — **follow them.** Read more as the task needs it: a domain's map under `.vorch/domain-maps/` (index in PROJECT.md) when you work that domain, plus any adjacent map your change touches; `.vorch/DESIGN.md` for UI work; `.vorch/TESTER.md` for the live-testing playbook when you need to verify behavior in the running app. Domain maps are first-pass orientation: use them to find the responsible domain, relevant contracts, likely source, and tests. They do not prove the current implementation and never replace source code, which remains the source of truth for implemented behavior.
 
 ## Chat terminology
 
@@ -68,6 +68,3 @@ Only project-specific terms — never standard programming terms or anything sel
 If the user wants to design a plan with you, read `.opencode/agents/planner.md` first for the format we use (file-scoped tasks, `⚡` parallel markers, never committed). The planner defines where plans are saved.
 
 **A plan is a build order, not a changelog — write the end state, flat and in place.** Never layer a plan: no `v1`/`v2` decision strata, no separate "refinements"/"updates" section that shadows or overrides earlier text, and no resolved item left parked under an "Open Questions"/"Open Decisions" heading. When something is decided or changes, fold it into the one place it belongs and delete the now-stale version — a section heading is a promise about its contents, so an "Open Questions" section holds *only* genuinely open questions and nothing else. History lives in git, not as strata inside the file. This bites hardest at high context, where a "refines D6" link or a mislabeled section silently desyncs and the builder ships the wrong thing.
-
-## Verify Before Planning
-ALWAYS re-read the actual source code before producing any plan or analysis. Never base plans, file paths, or claims on memory or assumptions — verify each claim against the real code first.
