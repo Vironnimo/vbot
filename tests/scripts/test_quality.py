@@ -152,7 +152,13 @@ def test_translate_maps_existing_mirror_file():
 
     test_paths, notes = module.translate_to_test_paths(["core/prompts/prompts.py"])
 
-    assert test_paths == ["tests/core/prompts/test_prompts.py"]
+    assert test_paths == [
+        "tests/core/prompts/test_prompts_assembly.py",
+        "tests/core/prompts/test_prompts_edit_facade.py",
+        "tests/core/prompts/test_prompts_layouts_overrides.py",
+        "tests/core/prompts/test_prompts_skill_catalog.py",
+        "tests/core/prompts/test_prompts_tools_skills_extensions.py",
+    ]
     assert notes == []
 
 
