@@ -678,9 +678,11 @@ def test_http_session_create_send_sse_and_jsonl_persistence(tmp_path: Path) -> N
     assert [event["type"] for event in send_result["events"]] == [
         "run_started",
         "user_message_persisted",
+        "model_step_usage",
         "reasoning",
         "tool_call_started",
         "tool_call_result",
+        "model_step_usage",
         "assistant_output",
         "run_completed",
     ]
@@ -689,9 +691,11 @@ def test_http_session_create_send_sse_and_jsonl_persistence(tmp_path: Path) -> N
     assert [event["event"] for event in _parse_sse(sse_response.text)] == [
         "run_started",
         "user_message_persisted",
+        "model_step_usage",
         "reasoning",
         "tool_call_started",
         "tool_call_result",
+        "model_step_usage",
         "assistant_output",
         "run_completed",
     ]
@@ -762,6 +766,7 @@ def test_http_stream_sse_replays_visible_running_timeline(tmp_path: Path) -> Non
         "assistant_output_delta",
         "reasoning",
         "assistant_output",
+        "model_step_usage",
         "run_completed",
     ]
     assert events[2]["data"]["payload"]["reasoning_delta"] == "Readable thinking."
@@ -831,6 +836,7 @@ async def test_cancel_suppresses_late_output_and_prevents_new_tool_steps(tmp_pat
         "tool_call_delta",
         "reasoning",
         "assistant_output",
+        "model_step_usage",
         "tool_call_started",
         "run_cancelled",
     ]

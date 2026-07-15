@@ -59,10 +59,11 @@ def test_websocket_receives_run_lifecycle_events_without_provider_metadata(tmp_p
             # First frame is the connection_ready hello; skip it.
             hello = websocket.receive_json()
             assert hello["type"] == "connection_ready"
-            events = [websocket.receive_json() for _ in range(5)]
+            events = [websocket.receive_json() for _ in range(6)]
 
     assert [event["type"] for event in events] == [
         "run_started",
+        "run_output",
         "run_output",
         "run_output",
         "run_output",
@@ -105,10 +106,11 @@ def test_websocket_excludes_streaming_delta_events(tmp_path: Path) -> None:
             # First frame is the connection_ready hello; skip it.
             hello = websocket.receive_json()
             assert hello["type"] == "connection_ready"
-            events = [websocket.receive_json() for _ in range(5)]
+            events = [websocket.receive_json() for _ in range(6)]
 
     assert [event["type"] for event in events] == [
         "run_started",
+        "run_output",
         "run_output",
         "run_output",
         "run_output",
@@ -119,6 +121,7 @@ def test_websocket_excludes_streaming_delta_events(tmp_path: Path) -> None:
         "user_message_persisted",
         "reasoning",
         "assistant_output",
+        "model_step_usage",
         "run_completed",
     ]
     assert all(event["payload"]["run_id"] == run_id for event in events)

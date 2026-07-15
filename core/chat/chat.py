@@ -135,7 +135,7 @@ from core.chat.tool_dispatch import (
     _project_containing_path,
     _visiting_candidate_paths,
 )
-from core.chat.usage import aggregate_session_usage
+from core.chat.usage import add_session_turn_usage, aggregate_session_usage
 from core.debug import DebugContext
 from core.extensions import HookContext
 from core.projects import (
@@ -151,6 +151,7 @@ from core.providers.reasoning import REASONING_REPLAY_CURRENT_RUN, ReasoningRepl
 from core.runs import (
     COMPACTION_COMPLETED_EVENT,
     MODEL_FALLBACK_ACTIVATED_EVENT,
+    MODEL_STEP_USAGE_EVENT,
     USER_MESSAGE_EVENT,
     ActiveRunError,
     QueuedRunItem,
@@ -1585,6 +1586,10 @@ class ChatLoop:
         replay_policy = _resolve_reasoning_replay_policy(adapter, model_id)
         wire_media_types = _resolve_wire_media_support(adapter, model_id)
         chunk_timeout_seconds = self._resolve_chunk_timeout(provider_id, connection_id)
+        session_usage = run.terminal_payload_extras.get("session_usage")
+        if not isinstance(session_usage, dict):
+            session_usage = aggregate_session_usage(session.load())
+            run.terminal_payload_extras["session_usage"] = session_usage
         # Effective skill project: the run's own, or a rooted identity agent's home
         # project. Threaded onto tool contexts and the compaction rebuild so the
         # ``skill`` tool and a post-compaction catalog resolve the same skill pool.
@@ -1684,6 +1689,17 @@ class ChatLoop:
                 run.agent_id, run.session_id, project_id
             ):
                 session.append(assistant_message)
+                assert isinstance(assistant_message.usage, dict)
+                session_usage = add_session_turn_usage(session_usage, assistant_message.usage)
+                run.terminal_payload_extras["session_usage"] = session_usage
+                run.emit(
+                    MODEL_STEP_USAGE_EVENT,
+                    {
+                        "usage": dict(assistant_message.usage),
+                        "session_usage": dict(session_usage),
+                    },
+                    allow_after_cancel=preserve_cancelled_partial,
+                )
                 if continuation_tracker is not None:
                     continuation_tracker.record_assistant_boundary(
                         message_id=assistant_message.id,

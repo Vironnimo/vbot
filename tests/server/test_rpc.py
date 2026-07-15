@@ -5859,6 +5859,7 @@ async def test_chat_send_returns_collected_run_timeline_without_reasoning_meta(
     assert [event["type"] for event in result["events"]] == [
         "run_started",
         "user_message_persisted",
+        "model_step_usage",
         "reasoning",
         "assistant_output",
         "run_completed",

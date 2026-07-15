@@ -50,6 +50,7 @@ from core.runs import (
     COMPACTION_COMPLETED_EVENT,
     ERROR_MESSAGE_PERSISTED_EVENT,
     MODEL_FALLBACK_ACTIVATED_EVENT,
+    MODEL_STEP_USAGE_EVENT,
     REASONING_DELTA_EVENT,
     TOOL_CALL_DELTA_EVENT,
     TOOL_CALL_RESULT_EVENT,
@@ -805,11 +806,12 @@ async def test_send_appends_user_and_final_assistant_without_tools(tmp_path: Pat
     assert [event.type for event in run.events] == [
         "run_started",
         "user_message_persisted",
+        MODEL_STEP_USAGE_EVENT,
         "assistant_output",
         "run_completed",
     ]
     assert run.events[1].payload["message"]["content"] == "Hi"
-    assert run.events[2].payload["message"]["content"] == "Hello"
+    assert run.events[3].payload["message"]["content"] == "Hello"
 
 
 @pytest.mark.asyncio
@@ -1068,6 +1070,7 @@ async def test_internal_start_run_embeds_content_without_visible_user_message(
     assert messages[0].content == content
     assert [event.type for event in run.events] == [
         "run_started",
+        MODEL_STEP_USAGE_EVENT,
         "assistant_output",
         "run_completed",
     ]
@@ -2932,6 +2935,34 @@ async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Pa
         if event.type == "tool_call_result"
     ]
     assert tool_result_events[0].payload["timing"]["duration_ms"] >= 0
+    usage_events = [
+        event
+        for event in runtime.chat_runs.get(persisted[4]["run_id"]).events
+        if event.type == MODEL_STEP_USAGE_EVENT
+    ]
+    assistant_turns = [message for message in persisted if message["role"] == "assistant"]
+    assert [event.payload["usage"] for event in usage_events] == [
+        message["usage"] for message in assistant_turns
+    ]
+    assert usage_events[0].payload["session_usage"] == {
+        "measured_turns": 1,
+        "estimated_turns": 0,
+        "cache_turns": 0,
+        "input_tokens": 11,
+        "output_tokens": 7,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+    }
+    assert usage_events[1].payload["usage"]["estimated"] is True
+    assert usage_events[1].payload["session_usage"] == {
+        "measured_turns": 1,
+        "estimated_turns": 1,
+        "cache_turns": 0,
+        "input_tokens": 11,
+        "output_tokens": 7,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+    }
 
 
 @pytest.mark.asyncio
@@ -3085,6 +3116,7 @@ async def test_streaming_mode_emits_deltas_then_final_authoritative_message(
         ASSISTANT_OUTPUT_DELTA_EVENT,
         "reasoning",
         "assistant_output",
+        MODEL_STEP_USAGE_EVENT,
         "run_completed",
     ]
     assert run.events[2].payload == {"reasoning_delta": "Think"}
@@ -3268,6 +3300,7 @@ async def test_streaming_mode_missing_finish_delta_preserves_visible_partial(
         "user_message_persisted",
         ASSISTANT_OUTPUT_DELTA_EVENT,
         "assistant_output",
+        MODEL_STEP_USAGE_EVENT,
         "run_completed",
     ]
 
@@ -3370,6 +3403,7 @@ async def test_streaming_mode_falls_back_before_usable_streamed_output(tmp_path:
         "run_started",
         "user_message_persisted",
         "assistant_output",
+        MODEL_STEP_USAGE_EVENT,
         "run_completed",
     ]
     assert len(adapter.stream_requests) == 1
@@ -3432,6 +3466,7 @@ async def test_streaming_mode_preserves_partial_instead_of_fallback_after_visibl
         "user_message_persisted",
         ASSISTANT_OUTPUT_DELTA_EVENT,
         "assistant_output",
+        MODEL_STEP_USAGE_EVENT,
         "run_completed",
     ]
     assert adapter.requests == []
@@ -3465,6 +3500,7 @@ async def test_streaming_mode_chunk_timeout_preserves_partial_after_visible_outp
         "user_message_persisted",
         ASSISTANT_OUTPUT_DELTA_EVENT,
         "assistant_output",
+        MODEL_STEP_USAGE_EVENT,
         "run_completed",
     ]
 
@@ -3501,6 +3537,7 @@ async def test_streaming_mode_cancellation_closes_adapter_and_preserves_visible_
         "user_message_persisted",
         ASSISTANT_OUTPUT_DELTA_EVENT,
         "assistant_output",
+        MODEL_STEP_USAGE_EVENT,
         "run_cancelled",
     ]
 
