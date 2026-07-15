@@ -51,13 +51,11 @@ from desktop.main import (
     validate_port,
 )
 from desktop.settings import (
-    LAST_USED_KEY,
+    clear_last_used,
     read_last_used,
     read_servers,
-    read_settings,
     write_last_used,
     write_servers,
-    write_settings,
 )
 
 logger = logging.getLogger("vbot.desktop.connection")
@@ -795,7 +793,4 @@ def _clear_last_used(settings_file: Path | None) -> None:
     re-read, drop the key, and write back, preserving the other settings.
     """
 
-    full = read_settings(settings_file)
-    if LAST_USED_KEY in full:
-        del full[LAST_USED_KEY]
-        write_settings(full, settings_file)
+    clear_last_used(settings_file)

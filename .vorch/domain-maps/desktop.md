@@ -36,7 +36,7 @@ Domain-specific vocabulary for the Desktop accessor.
 - **Per-user Desktop settings store (`desktop/settings.py`).** Settings live in the **OS per-user config dir**, resolved by `resolve_config_dir`: Windows `%APPDATA%\vbot` (fallback `~/AppData/Roaming/vbot`), every other platform `$XDG_CONFIG_HOME/vbot` else `~/.config/vbot` (macOS falls into the XDG branch until a Mac installer exists). The file is `<config-dir>/settings.json`.
   - belongs to the Desktop app itself, not the shared server `data_dir`
   - on-disk schema `{ servers: [{host, port, label?}], last_used: {host, port}, wakeword: {…} }`; `last_used` is a `{host, port}` reference (not an index), so it survives list reordering
-  - reads tolerate a missing/unreadable/malformed file by returning empty defaults; writes are an atomic same-directory temp-file replace and **preserve unrelated top-level keys** (a servers write keeps `wakeword`, etc.); malformed individual `servers` entries are dropped, not fatal
+  - reads tolerate a missing/unreadable/malformed file by returning empty defaults; writes are an atomic same-directory temp-file replace and **preserve unrelated top-level keys** (a servers write keeps `wakeword`, etc.); each top-level section write holds one process-wide, per-file transaction lock across its complete read-modify-write, so concurrent pywebview threads cannot overwrite another section's change; malformed individual `servers` entries are dropped, not fatal
   - read/write retry a few times on transient I/O errors (e.g. a Windows file lock)
   - No legacy migration: the old program-adjacent `desktop/settings.json` is simply abandoned (it was gitignored dev state); users re-pick their server once.
 

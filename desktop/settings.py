@@ -26,6 +26,7 @@ import copy
 import json
 import os
 import tempfile
+import threading
 import time
 from collections.abc import Mapping
 from contextlib import suppress
@@ -41,6 +42,13 @@ WAKEWORD_KEY = "wakeword"
 # Windows file lock from antivirus or another accessor) before giving up.
 _IO_RETRY_ATTEMPTS = 3
 _IO_RETRY_BASE_DELAY_SECONDS = 0.05
+
+# pywebview may dispatch bridge calls on different threads. All sections share
+# one JSON document, so each section update must hold the same per-file lock for
+# its complete read-modify-write transaction. The registry also coordinates
+# callers that independently resolve the default settings path.
+_SETTINGS_LOCKS_GUARD = threading.Lock()
+_SETTINGS_LOCKS: dict[str, threading.RLock] = {}
 
 DEFAULT_WAKEWORD_SETTINGS: dict[str, Any] = {
     "enabled": False,
@@ -106,7 +114,14 @@ def read_settings(path: Path | None = None) -> dict[str, Any]:
     an empty dict rather than raising, so a corrupt file never crashes launch.
     """
 
-    resolved_path = path if path is not None else settings_path()
+    resolved_path = _resolve_settings_path(path)
+    with _settings_lock(resolved_path):
+        return _read_settings_unlocked(resolved_path)
+
+
+def _read_settings_unlocked(resolved_path: Path) -> dict[str, Any]:
+    """Read a resolved settings path while its caller owns the file lock."""
+
     if not resolved_path.exists():
         return {}
 
@@ -135,7 +150,14 @@ def write_settings(settings: dict[str, Any], path: Path | None = None) -> None:
     reader never observes a half-written file.
     """
 
-    resolved_path = path if path is not None else settings_path()
+    resolved_path = _resolve_settings_path(path)
+    with _settings_lock(resolved_path):
+        _write_settings_unlocked(settings, resolved_path)
+
+
+def _write_settings_unlocked(settings: dict[str, Any], resolved_path: Path) -> None:
+    """Write a resolved settings path while its caller owns the file lock."""
+
     resolved_path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(settings, indent=2, sort_keys=True) + "\n"
 
@@ -195,9 +217,7 @@ def read_servers(path: Path | None = None) -> list[dict[str, Any]]:
 def write_servers(servers: list[dict[str, Any]], path: Path | None = None) -> None:
     """Persist the remembered-servers list, preserving other settings keys."""
 
-    full = read_settings(path)
-    full[SERVERS_KEY] = servers
-    write_settings(full, path)
+    _write_section(SERVERS_KEY, servers, path)
 
 
 def read_last_used(path: Path | None = None) -> dict[str, Any] | None:
@@ -210,9 +230,19 @@ def read_last_used(path: Path | None = None) -> dict[str, Any] | None:
 def write_last_used(host: str, port: int, path: Path | None = None) -> None:
     """Persist the last-used target reference, preserving other settings keys."""
 
-    full = read_settings(path)
-    full[LAST_USED_KEY] = {"host": host, "port": port}
-    write_settings(full, path)
+    _write_section(LAST_USED_KEY, {"host": host, "port": port}, path)
+
+
+def clear_last_used(path: Path | None = None) -> None:
+    """Remove the last-used target reference while preserving other settings."""
+
+    resolved_path = _resolve_settings_path(path)
+    with _settings_lock(resolved_path):
+        full = _read_settings_unlocked(resolved_path)
+        if LAST_USED_KEY not in full:
+            return
+        del full[LAST_USED_KEY]
+        _write_settings_unlocked(full, resolved_path)
 
 
 def read_wakeword_settings(path: Path | None = None) -> dict[str, Any]:
@@ -233,9 +263,35 @@ def read_wakeword_settings(path: Path | None = None) -> dict[str, Any]:
 def write_wakeword_settings(wakeword_config: dict[str, Any], path: Path | None = None) -> None:
     """Merge wakeword config into full Desktop settings and persist atomically."""
 
-    full = read_settings(path)
-    full[WAKEWORD_KEY] = wakeword_config
-    write_settings(full, path)
+    _write_section(WAKEWORD_KEY, wakeword_config, path)
+
+
+def _write_section(key: str, value: Any, path: Path | None) -> None:
+    """Update one top-level section as a serialized read-modify-write transaction."""
+
+    resolved_path = _resolve_settings_path(path)
+    with _settings_lock(resolved_path):
+        full = _read_settings_unlocked(resolved_path)
+        full[key] = value
+        _write_settings_unlocked(full, resolved_path)
+
+
+def _resolve_settings_path(path: Path | None) -> Path:
+    """Resolve an explicit or default path once for a complete store operation."""
+
+    return path if path is not None else settings_path()
+
+
+def _settings_lock(resolved_path: Path) -> threading.RLock:
+    """Return the process-wide transaction lock for one settings file."""
+
+    key = os.path.normcase(os.path.abspath(os.fspath(resolved_path)))
+    with _SETTINGS_LOCKS_GUARD:
+        lock = _SETTINGS_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _SETTINGS_LOCKS[key] = lock
+        return lock
 
 
 def _normalize_server_entry(entry: Any) -> dict[str, Any] | None:
