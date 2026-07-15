@@ -51,13 +51,6 @@ WRITE_TOOL_PARAMETERS: JsonObject = {
 }
 
 
-def _resolve_write_path(context: ToolContext, path: str) -> Path:
-    candidate = Path(path).expanduser()
-    if candidate.is_absolute():
-        return candidate.resolve()
-    return (context.effective_cwd / candidate).resolve()
-
-
 def _file_starts_with_bom(path: Path) -> bool:
     """Return whether an existing file begins with a UTF-8 BOM (reads 3 bytes)."""
     try:
@@ -99,7 +92,7 @@ def write_handler(
         )
 
     try:
-        resolved = _resolve_write_path(context, path_argument)
+        resolved = context.resolve_path(path_argument)
     except RuntimeError as error:
         return tool_failure("invalid_path", str(error))
 

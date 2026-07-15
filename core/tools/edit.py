@@ -87,13 +87,6 @@ def _text_not_found_failure(old_string: str) -> JsonObject:
     )
 
 
-def _resolve_edit_path(context: ToolContext, path: str) -> Path:
-    candidate = Path(path).expanduser()
-    if candidate.is_absolute():
-        return candidate.resolve()
-    return (context.effective_cwd / candidate).resolve()
-
-
 _EDIT_ARGUMENT_ALIASES = {
     "oldString": "old_string",
     "newString": "new_string",
@@ -186,7 +179,7 @@ def edit_handler(
     path_argument, old_string, new_string, replace_all = validated_arguments
 
     try:
-        resolved = _resolve_edit_path(context, path_argument)
+        resolved = context.resolve_path(path_argument)
     except RuntimeError as error:
         return tool_failure("invalid_path", str(error))
 

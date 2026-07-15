@@ -506,10 +506,7 @@ def _resolve_workdir(context: ToolContext, workdir: object) -> Path:
     if workdir is None:
         return context.effective_cwd.resolve()
 
-    candidate = Path(str(workdir)).expanduser()
-    if candidate.is_absolute():
-        return candidate.resolve()
-    return (context.effective_cwd / candidate).resolve()
+    return context.resolve_path(str(workdir))
 
 
 def _shell_argv(command: str) -> list[str]:

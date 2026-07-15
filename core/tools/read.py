@@ -144,13 +144,6 @@ def _add_line_numbers(lines: list[str], start_line: int, start_character: int = 
     ]
 
 
-def _resolve_read_path(context: ToolContext, path: str) -> Path:
-    candidate = Path(path).expanduser()
-    if candidate.is_absolute():
-        return candidate.resolve()
-    return (context.effective_cwd / candidate).resolve()
-
-
 def render_text_file(raw: bytes, offset: object = None, limit: object = None) -> str:
     """Render file bytes as numbered text with offset/limit controls and truncation.
 
@@ -307,7 +300,7 @@ def make_read_handler(
             return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
 
         try:
-            resolved = _resolve_read_path(context, path_argument)
+            resolved = context.resolve_path(path_argument)
         except RuntimeError as error:
             return tool_failure("invalid_path", str(error))
 

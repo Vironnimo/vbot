@@ -256,10 +256,7 @@ def resolve_search_path(context: ToolContext, path: str | None) -> Path:
     if not isinstance(path, str) or not path.strip():
         raise ValueError("path must be a non-empty string")
 
-    candidate = Path(path).expanduser()
-    if candidate.is_absolute():
-        return candidate.resolve()
-    return (context.effective_cwd / candidate).resolve()
+    return context.resolve_path(path)
 
 
 def normalize_file_filter_pattern(
