@@ -188,16 +188,16 @@ async def test_sse_stream_close_removes_run_subscriber() -> None:
     next_event = asyncio.create_task(_read_next_sse_event(stream))
 
     await asyncio.sleep(0)
-    assert len(run._subscribers) == 1
+    assert run.subscriber_count == 1
 
     run.emit("visible", {"content": "hello"})
     rendered_event = await next_event
     assert "event: visible" in rendered_event
-    assert len(run._subscribers) == 1
+    assert run.subscriber_count == 1
 
     await stream.aclose()
 
-    assert len(run._subscribers) == 0
+    assert run.subscriber_count == 0
 
 
 async def _read_next_sse_event(stream: AsyncIterator[str]) -> str:

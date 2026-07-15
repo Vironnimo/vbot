@@ -32,6 +32,8 @@ Most stable event constants live in `core.runs`: lifecycle (`run_started`, `run_
 
 Every emitted event increments the Run-local `sequence`, including transient deltas. Sequences are monotonic for that Run and are never reused when old events fall out of the retained replay window. `Run.subscribe(after_sequence=...)` replays retained events with larger sequence numbers, then follows live events until a terminal event; late subscribers can only replay the retained window.
 
+`core/event_stream.py` owns the shared replay/live handoff, sequence de-duplication, bounded subscriber queues, and lag eviction used by both Run timelines and the server event bus. Run remains the owner of event creation, Run-local sequencing, cancellation suppression, and terminal-event semantics; do not move those domain rules into the generic stream.
+
 Run event payload ownership stays with the domain that emits the event. `core/chat/` owns ChatMessage, tool-call, fallback, compaction, and error-message payloads; `core/subagents/` owns `subagent_session_started`; `server/` only maps Run events to SSE/WebSocket/RPC payloads and strips opaque provider metadata.
 
 ## Interfaces
