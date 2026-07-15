@@ -1,15 +1,17 @@
 # Anthropic Provider
 
-Anthropic Messages API adapter and Anthropic-style request/response normalization.
+Native Anthropic Provider policy layered over the reusable Anthropic Messages-compatible wire.
 
 ## Interfaces
 
 - Provider config: `resources/providers/anthropic.json`
 - Adapter selector: `anthropic`
-- Adapter class: `AnthropicAdapter`
+- Native adapter class: `AnthropicAdapter`; reusable wire class: `AnthropicCompatibleAdapter`
 - Runtime endpoint: `POST /messages`
 - Auth/header shape: usually `x-api-key` with no Bearer prefix, plus `anthropic-version: 2023-06-01` and configured extra headers.
 - Catalog discovery: `GET /models` (provider `models_endpoint: /models`), registered in `discovery._DISCOVERY_ADAPTER_MAP` like every other provider — a Model-DB refresh fetches Anthropic too. `discovery_headers` adds `anthropic-version`; `discovery_params` pages at `limit=1000`; `normalize_catalog_entry` maps the live capability tree (see Catalog Discovery).
+
+`AnthropicCompatibleAdapter` owns the deep Messages mechanics: request and response blocks, tools, Reasoning rendering, usage, SSE, retry, headers, and optional prompt-cache/media policy. It can create and close its own HTTP client or borrow the outer Provider adapter's client, in which case it never closes that client. `AnthropicAdapter` is the concrete native subclass and owns Anthropic discovery, native catalog metadata/sampling policy, verified PDF capability, and Anthropic's chosen version/cache settings; another Provider may make its own explicit choices when composing the compatible wire. The compatible class is exported for composition by concrete Provider adapters but is not a Runtime adapter selector or discovery owner by itself.
 
 ## Catalog Discovery
 
@@ -36,7 +38,7 @@ The live `/models` listing is authoritative and rich — each entry carries `max
 
 ## Prompt Caching
 
-- Anthropic caching is **opt-in on the write side** — unlike OpenAI-style wires it caches nothing unless a content block carries `cache_control`. `_build_payload` calls `_apply_prompt_caching(payload)` last (after all other mutations, so markers land on the final wire shape); it is always on (no setting). The read side is already canonical (see Response Normalization → Usage).
+- Anthropic caching is **opt-in on the write side** — unlike OpenAI-style wires it caches nothing unless a content block carries `cache_control`. The compatible wire applies `_apply_prompt_caching(payload)` last only when its concrete Provider opts in; native `AnthropicAdapter` and OpenCode Go's Messages branch opt in, while the reusable default is off. The read side is already canonical (see Response Normalization → Usage).
 - **Placement.** Anthropic renders `tools → system → messages`, so one marker on the **last system block** caches tools + system together; up to `MAX_HISTORY_CACHE_BREAKPOINTS` (3) markers roll across the **most recent messages** to cache the growing conversation tail (the dominant cost at large context). Total never exceeds `CACHE_BREAKPOINT_LIMIT` (4, Anthropic's limit). The marker is `{"type": "ephemeral"}` (5-minute TTL — fits the agentic tool loop; the 1h TTL's doubled write cost only pays off across long idle gaps).
 - **Wire shape.** A string `system` is wrapped into a single `text` block to carry the marker (so the wire now sends block-form system even for a plain string prompt). The marker rides the last **cacheable** block — `thinking`/`redacted_thinking` blocks are skipped (`CACHE_UNMARKABLE_BLOCK_TYPES`) so a replayed reasoning block never becomes the breakpoint; it lands on the trailing `text`/`tool_use`/`tool_result` instead. Markers on prefixes below the model's cacheable minimum (Opus 4.8: 4096 tokens; Sonnet/Fable: 2048) are silent no-ops, so there is no size gate.
 - **Why it's safe.** Caching is a prefix match — any earlier byte change invalidates it. The only volatile element in our system prompt is `{current_date}`, which changes once per day, far outside the 5-minute TTL, so the prefix is byte-stable within a session. No per-request volatile content (time-of-day, session id) is in the prompt prefix.
@@ -84,4 +86,4 @@ The live `/models` listing is authoritative and rich — each entry carries `max
 
 - Same-model thinking blocks replay across the whole conversation (`full_history` policy); the chat layer's same-model gate strips cross-model entries, and the thinking-disabled guard strips them at payload build. Do not re-add history-wide reasoning strips in the adapter — the chat layer owns history shaping.
 - Preserve Anthropic signatures and redacted thinking bytes unchanged; vBot never interprets their contents.
-- Keep Anthropic protocol behavior in `AnthropicAdapter` or provider-specific wrappers such as `OpenCodeGoAdapter`; do not add Anthropic content-block rules to the generic OpenAI-compatible adapter.
+- Keep common Messages mechanics in `AnthropicCompatibleAdapter`; keep native discovery, sampling, verified PDF, and prompt-cache choices in `AnthropicAdapter`, and Provider routing/auth choices in wrappers such as `OpenCodeGoAdapter`. Do not add Anthropic content-block rules to the generic OpenAI-compatible adapter or embed the concrete native Provider inside another Provider.
