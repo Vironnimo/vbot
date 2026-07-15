@@ -908,7 +908,22 @@ async def _expand_content_file_mentions(
         raise _map_expected_error(exc) from exc
 
 
-async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
+async def _submit_chat(
+    state: Any,
+    params: JsonObject,
+    *,
+    streaming: bool,
+) -> Run | JsonObject:
+    """Submit one accessor chat request and return its immediate disposition.
+
+    Commands and queued work already have complete RPC payloads, while a Run
+    still needs the caller-specific response treatment: ``chat.send`` waits for
+    its final message and ``chat.stream`` returns the SSE location immediately.
+    Everything before that presentation split is one submission path so command
+    dispatch, file snapshots, queue fallback, and busy-to-idle handling cannot
+    drift between the two RPC methods.
+    """
+
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
     content = _parse_chat_content(params, "content")
@@ -922,7 +937,7 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
             agent_id,
             session_id,
             command_text,
-            streaming=False,
+            streaming=streaming,
             project_id=project_id,
         )
         if command_response is not None:
@@ -932,9 +947,10 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
         state, agent_id, project_id, session_id, content, file_mentions
     )
 
+    chat_loop = _streaming_chat_loop(state) if streaming else state.chat_loop
     try:
         if input_origin is None:
-            run = await state.chat_loop.start_run(
+            run = await chat_loop.start_run(
                 agent_id,
                 content,
                 session_id=session_id,
@@ -942,7 +958,7 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
                 project_id=project_id,
             )
         else:
-            run = await state.chat_loop.start_run(
+            run = await chat_loop.start_run(
                 agent_id,
                 content,
                 session_id=session_id,
@@ -953,7 +969,7 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
     except ActiveRunError:
         try:
             if input_origin is None:
-                queued_item = await state.chat_loop.queue_run(
+                queued_item = await chat_loop.queue_run(
                     agent_id,
                     content,
                     session_id=session_id,
@@ -961,7 +977,7 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
                     project_id=project_id,
                 )
             else:
-                queued_item = await state.chat_loop.queue_run(
+                queued_item = await chat_loop.queue_run(
                     agent_id,
                     content,
                     session_id=session_id,
@@ -980,92 +996,32 @@ async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
+    return run
+
+
+async def _send_chat(state: Any, params: JsonObject) -> JsonObject:
+    submission = await _submit_chat(state, params, streaming=False)
+    if isinstance(submission, dict):
+        return submission
+
     try:
-        _bridge_run_to_event_bus(state, run)
-        assistant_message = await run.wait()
+        _bridge_run_to_event_bus(state, submission)
+        assistant_message = await submission.wait()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return _run_response(run, final_message=assistant_message)
+    return _run_response(submission, final_message=assistant_message)
 
 
 async def _stream_chat(state: Any, params: JsonObject) -> JsonObject:
-    agent_id, project_id = _required_agent_address(params, "agent_id")
-    session_id = _required_string(params, "session_id")
-    content = _parse_chat_content(params, "content")
-    input_origin = _optional_chat_input_origin(params)
-    file_mentions = _optional_file_mentions(params)
-
-    command_text = _extract_command_text(content)
-    if command_text is not None:
-        command_response = await _dispatch_chat_command(
-            state,
-            agent_id,
-            session_id,
-            command_text,
-            streaming=True,
-            project_id=project_id,
-        )
-        if command_response is not None:
-            return command_response
-
-    content = await _expand_content_file_mentions(
-        state, agent_id, project_id, session_id, content, file_mentions
-    )
-
-    streaming_chat_loop = _streaming_chat_loop(state)
-    try:
-        if input_origin is None:
-            run = await streaming_chat_loop.start_run(
-                agent_id,
-                content,
-                session_id=session_id,
-                reply_surface=WEBUI_REPLY_SURFACE,
-                project_id=project_id,
-            )
-        else:
-            run = await streaming_chat_loop.start_run(
-                agent_id,
-                content,
-                session_id=session_id,
-                input_origin=input_origin,
-                reply_surface=WEBUI_REPLY_SURFACE,
-                project_id=project_id,
-            )
-    except ActiveRunError:
-        try:
-            if input_origin is None:
-                queued_item = await streaming_chat_loop.queue_run(
-                    agent_id,
-                    content,
-                    session_id=session_id,
-                    reply_surface=WEBUI_REPLY_SURFACE,
-                    project_id=project_id,
-                )
-            else:
-                queued_item = await streaming_chat_loop.queue_run(
-                    agent_id,
-                    content,
-                    session_id=session_id,
-                    input_origin=input_origin,
-                    reply_surface=WEBUI_REPLY_SURFACE,
-                    project_id=project_id,
-                )
-        except Exception as exc:
-            raise _map_expected_error(exc) from exc
-        started_run = _run_started_during_enqueue(queued_item)
-        if started_run is None:
-            _bridge_queued_item_to_event_bus(state, queued_item)
-            _publish_queue_changed(state, agent_id, session_id)
-            return _queued_response(queued_item)
-        run = started_run
-    except Exception as exc:
-        raise _map_expected_error(exc) from exc
+    submission = await _submit_chat(state, params, streaming=True)
+    if isinstance(submission, dict):
+        return submission
 
     try:
-        _bridge_run_to_event_bus(state, run)
+        _bridge_run_to_event_bus(state, submission)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return _run_response(run, sse_url=f"/api/runs/{run.id}/events")
+    return _run_response(submission, sse_url=f"/api/runs/{submission.id}/events")
 
 
 def _run_started_during_enqueue(item: QueuedRunItem) -> Run | None:
