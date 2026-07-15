@@ -4,6 +4,7 @@ import { vi } from 'vitest';
 import { flushSync, unmount } from 'svelte';
 
 import { init } from '../lib/i18n.js';
+import { rpcBackedApiMock } from '../components/__tests__/apiMock.js';
 
 export const rpcMock = vi.fn();
 export const listClientsMock = vi.fn(() => Promise.resolve({ clients: [] }));
@@ -29,23 +30,24 @@ vi.mock('svelte', async () => {
   return import('../../node_modules/svelte/src/index-client.js');
 });
 
-vi.mock('$lib/api.js', () => ({
-  RUN_EVENT_ASSISTANT_OUTPUT_DELTA: 'assistant_output_delta',
-  RUN_EVENT_REASONING_DELTA: 'reasoning_delta',
-  RUN_EVENT_TOOL_CALL_DELTA: 'tool_call_delta',
-  RUN_EVENT_TOOL_CALL_STDERR: 'tool_call_stderr',
-  RUN_EVENT_TOOL_CALL_STDOUT: 'tool_call_stdout',
-  debugStatus: (...args) => debugStatusMock(...args),
-  rpc: (...args) => rpcMock(...args),
-  listClients: (...args) => listClientsMock(...args),
-  listQueue: (...args) => listQueueMock(...args),
-  listSessions: (...args) => listSessionsMock(...args),
-  listLogs: (...args) => listLogsMock(...args),
-  readLogFile: (...args) => readLogFileMock(...args),
-  subscribeLogEvents: (...args) => subscribeLogEventsMock(...args),
-  subscribeRunEvents: (...args) => subscribeRunEventsMock(...args),
-  subscribeServerEvents: (...args) => subscribeServerEventsMock(...args),
-}));
+vi.mock('$lib/api.js', () =>
+  rpcBackedApiMock(rpcMock, {
+    RUN_EVENT_ASSISTANT_OUTPUT_DELTA: 'assistant_output_delta',
+    RUN_EVENT_REASONING_DELTA: 'reasoning_delta',
+    RUN_EVENT_TOOL_CALL_DELTA: 'tool_call_delta',
+    RUN_EVENT_TOOL_CALL_STDERR: 'tool_call_stderr',
+    RUN_EVENT_TOOL_CALL_STDOUT: 'tool_call_stdout',
+    debugStatus: (...args) => debugStatusMock(...args),
+    listClients: (...args) => listClientsMock(...args),
+    listQueue: (...args) => listQueueMock(...args),
+    listSessions: (...args) => listSessionsMock(...args),
+    listLogs: (...args) => listLogsMock(...args),
+    readLogFile: (...args) => readLogFileMock(...args),
+    subscribeLogEvents: (...args) => subscribeLogEventsMock(...args),
+    subscribeRunEvents: (...args) => subscribeRunEventsMock(...args),
+    subscribeServerEvents: (...args) => subscribeServerEventsMock(...args),
+  }),
+);
 
 export const { default: App } = await import('../App.svelte');
 

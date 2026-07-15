@@ -1,4 +1,4 @@
-import { rpc } from './api.js';
+import { updateSettings } from './api.js';
 import { t } from './i18n.js';
 
 /**
@@ -35,7 +35,7 @@ export async function runSettingsSave({
   onError('');
 
   try {
-    const nextSettings = await rpc('settings.update', buildPayload());
+    const nextSettings = await updateSettings(buildPayload());
     onCommit(nextSettings);
     applyResult?.(nextSettings);
     onToast({ title: t(successKey, successFallback), variant: 'success' });

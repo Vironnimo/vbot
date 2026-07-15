@@ -145,6 +145,313 @@ export async function rpc(method, params = {}, options = {}) {
   return payload.result;
 }
 
+export function getSettings(options = {}) {
+  return rpc('settings.get', {}, options);
+}
+
+export function updateSettings(settings, options = {}) {
+  requirePlainObject(
+    settings,
+    'Settings update must be an object',
+    'settings.update',
+  );
+  return rpc('settings.update', settings, options);
+}
+
+export function listAgents(options = {}) {
+  return rpc('agent.list', {}, options);
+}
+
+export function getAgent(id, options = {}) {
+  requireNonEmptyString(id, 'Agent id must be a non-empty string', 'agent.get');
+  return rpc('agent.get', { id }, options);
+}
+
+export function createAgent(params = {}, options = {}) {
+  requirePlainObject(params, 'Agent payload must be an object', 'agent.create');
+  return rpc('agent.create', params, options);
+}
+
+export function updateAgent(params = {}, options = {}) {
+  requirePlainObject(params, 'Agent payload must be an object', 'agent.update');
+  return rpc('agent.update', params, options);
+}
+
+export function deleteAgent(id, options = {}) {
+  requireNonEmptyString(
+    id,
+    'Agent id must be a non-empty string',
+    'agent.delete',
+  );
+  return rpc('agent.delete', { id }, options);
+}
+
+export function listModels(params = {}, options = {}) {
+  requirePlainObject(params, 'Model filters must be an object', 'model.list');
+  return rpc('model.list', params, options);
+}
+
+export function refreshModelDatabase(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Model refresh options must be an object',
+    'model.refresh_db',
+  );
+  return rpc('model.refresh_db', params, options);
+}
+
+export function listConnections(options = {}) {
+  return rpc('connection.list', {}, options);
+}
+
+export function setConnectionEnabled(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Connection update must be an object',
+    'connection.set_enabled',
+  );
+  return rpc('connection.set_enabled', params, options);
+}
+
+export function listTools(options = {}) {
+  return rpc('tool.list', {}, options);
+}
+
+export function listSkills(params = {}, options = {}) {
+  requirePlainObject(params, 'Skill filters must be an object', 'skill.list');
+  return rpc('skill.list', params, options);
+}
+
+export function readSkills(scope, options = {}) {
+  requireNonEmptyString(
+    scope,
+    'Skill scope must be a non-empty string',
+    'skill.read',
+  );
+  return rpc('skill.read', { scope }, options);
+}
+
+export function createSkill(params = {}, options = {}) {
+  requirePlainObject(params, 'Skill payload must be an object', 'skill.create');
+  return rpc('skill.create', params, options);
+}
+
+export function updateSkill(params = {}, options = {}) {
+  requirePlainObject(params, 'Skill payload must be an object', 'skill.update');
+  return rpc('skill.update', params, options);
+}
+
+export function deleteSkill(scope, name, options = {}) {
+  requireNonEmptyString(
+    scope,
+    'Skill scope must be a non-empty string',
+    'skill.delete',
+  );
+  requireNonEmptyString(
+    name,
+    'Skill name must be a non-empty string',
+    'skill.delete',
+  );
+  return rpc('skill.delete', { scope, name }, options);
+}
+
+export function listChatCommands(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Chat command filters must be an object',
+    'chat.commands',
+  );
+  return rpc('chat.commands', params, options);
+}
+
+export function loadChatHistory(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Chat history request must be an object',
+    'chat.history',
+  );
+  return rpc('chat.history', params, options);
+}
+
+export function createSession(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Session create request must be an object',
+    'session.create',
+  );
+  return rpc('session.create', params, options);
+}
+
+export function startChatRun(params = {}, options = {}) {
+  requirePlainObject(params, 'Chat request must be an object', 'chat.stream');
+  return rpc('chat.stream', params, options);
+}
+
+export function listFiles(agentId, options = {}) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'files.list',
+  );
+  return rpc('files.list', { agent_id: agentId }, options);
+}
+
+export function listPrompts(params = {}, options = {}) {
+  requirePlainObject(params, 'Prompt scope must be an object', 'prompt.list');
+  return rpc('prompt.list', params, options);
+}
+
+export function updatePromptBlock(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Prompt update must be an object',
+    'prompt.update',
+  );
+  return rpc('prompt.update', params, options);
+}
+
+export function resetPromptBlock(params = {}, options = {}) {
+  requirePlainObject(params, 'Prompt reset must be an object', 'prompt.reset');
+  return rpc('prompt.reset', params, options);
+}
+
+export function createPromptBlock(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Prompt block must be an object',
+    'prompt.create_block',
+  );
+  return rpc('prompt.create_block', params, options);
+}
+
+export function removePromptBlock(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Prompt block must be an object',
+    'prompt.remove_block',
+  );
+  return rpc('prompt.remove_block', params, options);
+}
+
+export function resetPromptLayout(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Prompt scope must be an object',
+    'prompt.reset_layout',
+  );
+  return rpc('prompt.reset_layout', params, options);
+}
+
+export function setPromptLayout(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Prompt layout must be an object',
+    'prompt.set_layout',
+  );
+  return rpc('prompt.set_layout', params, options);
+}
+
+export function previewPrompt(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Prompt preview must be an object',
+    'prompt.preview',
+  );
+  return rpc('prompt.preview', params, options);
+}
+
+export function setProviderKey(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Provider key payload must be an object',
+    'provider.set_key',
+  );
+  return rpc('provider.set_key', params, options);
+}
+
+export function unsetProviderKey(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Provider key payload must be an object',
+    'provider.unset_key',
+  );
+  return rpc('provider.unset_key', params, options);
+}
+
+export function getProviderUsage(options = {}) {
+  return rpc('provider.usage', {}, options);
+}
+
+export function listChannels(options = {}) {
+  return rpc('channel.list', {}, options);
+}
+
+export function getChannelStatus(id, options = {}) {
+  requireNonEmptyString(
+    id,
+    'Channel id must be a non-empty string',
+    'channel.status',
+  );
+  return rpc('channel.status', { id }, options);
+}
+
+export function createChannel(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Channel payload must be an object',
+    'channel.create',
+  );
+  return rpc('channel.create', params, options);
+}
+
+export function updateChannel(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Channel payload must be an object',
+    'channel.update',
+  );
+  return rpc('channel.update', params, options);
+}
+
+export function enableChannel(id, options = {}) {
+  requireNonEmptyString(
+    id,
+    'Channel id must be a non-empty string',
+    'channel.enable',
+  );
+  return rpc('channel.enable', { id }, options);
+}
+
+export function disableChannel(id, options = {}) {
+  requireNonEmptyString(
+    id,
+    'Channel id must be a non-empty string',
+    'channel.disable',
+  );
+  return rpc('channel.disable', { id }, options);
+}
+
+export function listExtensions(options = {}) {
+  return rpc('extensions.list', {}, options);
+}
+
+export function reloadExtensions(options = {}) {
+  return rpc('extensions.reload', {}, options);
+}
+
+export function setExtensionSecret(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Extension secret payload must be an object',
+    'extensions.set_secret',
+  );
+  return rpc('extensions.set_secret', params, options);
+}
+
+export function getStatisticsReport(options = {}) {
+  return rpc('statistics.report', {}, options);
+}
+
 export async function uploadAttachment(file, options = {}) {
   if (!file || typeof file !== 'object') {
     throw new ApiClientError(

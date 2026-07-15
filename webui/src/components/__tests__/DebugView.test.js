@@ -6,6 +6,7 @@ import { flushSync, mount, unmount } from 'svelte';
 import { init } from '../../lib/i18n.js';
 import { TOOLTIP_SHOW_DELAY_MS } from '../../lib/tooltip.js';
 import { reactiveProps } from './_reactiveProps.svelte.js';
+import { rpcBackedApiMock } from './apiMock.js';
 
 const debugStatusMock = vi.fn();
 const debugTraceListMock = vi.fn();
@@ -18,14 +19,15 @@ vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
 });
 
-vi.mock('../../lib/api.js', () => ({
-  debugStatus: (...args) => debugStatusMock(...args),
-  debugTraceList: (...args) => debugTraceListMock(...args),
-  debugTraceGet: (...args) => debugTraceGetMock(...args),
-  debugTraceClear: (...args) => debugTraceClearMock(...args),
-  debugModelProbe: (...args) => debugModelProbeMock(...args),
-  rpc: (...args) => rpcMock(...args),
-}));
+vi.mock('../../lib/api.js', () =>
+  rpcBackedApiMock(rpcMock, {
+    debugStatus: (...args) => debugStatusMock(...args),
+    debugTraceList: (...args) => debugTraceListMock(...args),
+    debugTraceGet: (...args) => debugTraceGetMock(...args),
+    debugTraceClear: (...args) => debugTraceClearMock(...args),
+    debugModelProbe: (...args) => debugModelProbeMock(...args),
+  }),
+);
 
 const { default: DebugView } = await import('../DebugView.svelte');
 

@@ -1,4 +1,217 @@
 import { normalizeCompactionPolicy } from './compactionPolicy.js';
+import {
+  addProject as requestAddProject,
+  clearOverride as requestClearOverride,
+  detectProject as requestDetectProject,
+  getSettings,
+  listConnections,
+  listModels,
+  listProjects,
+  listTools,
+  removeProject as requestRemoveProject,
+  setOverride as requestSetOverride,
+  setProject as requestSetProject,
+  showProject,
+} from './api.js';
+
+const PROJECT_AUTO_SAVE_DEBOUNCE_MS = 800;
+const PROJECT_DETECT_DEBOUNCE_MS = 500;
+
+function defaultProjectOperations() {
+  return {
+    addProject: requestAddProject,
+    clearOverride: requestClearOverride,
+    detectProject: requestDetectProject,
+    getSettings,
+    listConnections,
+    listModels,
+    listProjects,
+    listTools,
+    removeProject: requestRemoveProject,
+    setOverride: requestSetOverride,
+    setProject: requestSetProject,
+    showProject,
+  };
+}
+
+// Project management is one asynchronous surface: it owns stale-response
+// rejection, detect/auto-save timing, catalogs, scans, and every mutation. The
+// Svelte View keeps only presentation drafts and applies completed results.
+export function createProjectsController({
+  operations = defaultProjectOperations(),
+  autoSaveDelayMs = PROJECT_AUTO_SAVE_DEBOUNCE_MS,
+  detectDelayMs = PROJECT_DETECT_DEBOUNCE_MS,
+} = {}) {
+  let active = true;
+  let listRequestId = 0;
+  let scanRequestId = 0;
+  let autoSaveTimer = null;
+  let detectTimer = null;
+
+  async function loadProjects() {
+    const requestId = ++listRequestId;
+    try {
+      const result = await operations.listProjects();
+      if (!active || requestId !== listRequestId) {
+        return { requestId, stale: true, projects: [] };
+      }
+      return {
+        requestId,
+        stale: false,
+        projects: normalizeProjects(result?.projects),
+      };
+    } catch (error) {
+      if (!active || requestId !== listRequestId) {
+        return { requestId, stale: true, projects: [] };
+      }
+      return { error, requestId, stale: false, projects: [] };
+    }
+  }
+
+  async function loadScan(projectId) {
+    const requestId = ++scanRequestId;
+    try {
+      const result = await operations.showProject(projectId);
+      if (!active || requestId !== scanRequestId) {
+        return { requestId, stale: true, scan: null };
+      }
+      return { requestId, stale: false, scan: result?.scan ?? null };
+    } catch (error) {
+      if (!active || requestId !== scanRequestId) {
+        return { requestId, stale: true, scan: null };
+      }
+      return { error, requestId, stale: false, scan: null };
+    }
+  }
+
+  function invalidateScan() {
+    scanRequestId += 1;
+  }
+
+  async function loadGlobalSettings() {
+    return operations.getSettings();
+  }
+
+  async function loadCatalogs() {
+    const [modelsResult, connectionsResult, toolsResult] =
+      await Promise.allSettled([
+        operations.listModels(),
+        operations.listConnections(),
+        operations.listTools(),
+      ]);
+    if (!active) {
+      return { stale: true };
+    }
+    return {
+      stale: false,
+      modelCatalogsAvailable:
+        modelsResult.status === 'fulfilled' &&
+        connectionsResult.status === 'fulfilled',
+      models:
+        modelsResult.status === 'fulfilled' &&
+        Array.isArray(modelsResult.value?.models)
+          ? modelsResult.value.models
+          : [],
+      connections:
+        connectionsResult.status === 'fulfilled' &&
+        Array.isArray(connectionsResult.value?.connections)
+          ? connectionsResult.value.connections
+          : [],
+      tools:
+        toolsResult.status === 'fulfilled' &&
+        Array.isArray(toolsResult.value?.tools)
+          ? toolsResult.value.tools
+          : [],
+      defaultProjectTools:
+        toolsResult.status === 'fulfilled' &&
+        Array.isArray(toolsResult.value?.default_project_tools)
+          ? toolsResult.value.default_project_tools
+          : [],
+    };
+  }
+
+  function clearAutoSave() {
+    if (autoSaveTimer !== null) {
+      clearTimeout(autoSaveTimer);
+      autoSaveTimer = null;
+    }
+  }
+
+  function scheduleAutoSave(save) {
+    clearAutoSave();
+    autoSaveTimer = setTimeout(() => {
+      autoSaveTimer = null;
+      if (active) {
+        void save();
+      }
+    }, autoSaveDelayMs);
+  }
+
+  function clearDetect() {
+    if (detectTimer !== null) {
+      clearTimeout(detectTimer);
+      detectTimer = null;
+    }
+  }
+
+  function scheduleDetect(cwd, onResult) {
+    clearDetect();
+    const path = typeof cwd === 'string' ? cwd.trim() : '';
+    if (!path) {
+      onResult(null, path);
+      return;
+    }
+    detectTimer = setTimeout(async () => {
+      detectTimer = null;
+      try {
+        const result = await operations.detectProject(path);
+        if (active) {
+          onResult(normalizeDetectResult(result), path);
+        }
+      } catch {
+        if (active) {
+          onResult(null, path);
+        }
+      }
+    }, detectDelayMs);
+  }
+
+  function destroy() {
+    active = false;
+    listRequestId += 1;
+    scanRequestId += 1;
+    clearAutoSave();
+    clearDetect();
+  }
+
+  return {
+    addProject: (payload) => operations.addProject(payload),
+    clearAutoSave,
+    clearDetect,
+    clearOverride: (projectId, agentId, field) =>
+      operations.clearOverride(projectId, agentId, field),
+    destroy,
+    invalidateScan,
+    isCurrentProjectsRequest: (requestId) =>
+      active && requestId === listRequestId,
+    isCurrentScanRequest: (requestId) => active && requestId === scanRequestId,
+    isActive: () => active,
+    loadCatalogs,
+    loadGlobalSettings,
+    loadProjects,
+    loadScan,
+    removeProject: (projectId, copyIdentityFiles) =>
+      operations.removeProject(projectId, copyIdentityFiles),
+    repointProject: (projectId, cwd) =>
+      operations.setProject(projectId, buildRePointPayload(cwd)),
+    saveProject: (projectId, changes) =>
+      operations.setProject(projectId, changes),
+    scheduleAutoSave,
+    scheduleDetect,
+    setOverride: (projectId, agentId, field, value) =>
+      operations.setOverride(projectId, agentId, field, value),
+  };
+}
 
 // Pure view helpers for the Projects tab. Business and normalization logic
 // lives here so the Svelte component stays a thin display/input/orchestration

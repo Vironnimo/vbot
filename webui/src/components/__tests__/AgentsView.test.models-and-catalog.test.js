@@ -5,6 +5,7 @@ import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
 import { reactiveProps } from './_reactiveProps.svelte.js';
+import { rpcBackedApiMock } from './apiMock.js';
 import {
   rpcMock,
   modelListCallCount,
@@ -40,9 +41,7 @@ vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
 });
 
-vi.mock('$lib/api.js', () => ({
-  rpc: (...args) => rpcMock(...args),
-}));
+vi.mock('$lib/api.js', () => rpcBackedApiMock(rpcMock));
 
 const { default: AgentsView } = await import('../AgentsView.svelte');
 

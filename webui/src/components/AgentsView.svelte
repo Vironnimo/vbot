@@ -1,7 +1,15 @@
 <script>
   import { onMount } from 'svelte';
 
-  import { rpc } from '$lib/api.js';
+  import {
+    getSettings,
+    listAgents,
+    listConnections,
+    listModels,
+    listProjects,
+    listSkills,
+    listTools,
+  } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
     SURFACE_FORM,
@@ -88,7 +96,7 @@
 
   async function loadProjectCatalog() {
     try {
-      const result = await rpc('project.list');
+      const result = await listProjects();
       availableProjects = Array.isArray(result?.projects)
         ? result.projects.map((project) => ({
             value: project.project_id,
@@ -120,8 +128,8 @@
   async function fetchModelCatalogs() {
     try {
       const [modelsResult, connectionsResult] = await Promise.all([
-        rpc('model.list'),
-        rpc('connection.list'),
+        listModels(),
+        listConnections(),
       ]);
 
       return {
@@ -172,10 +180,10 @@
     try {
       const [modelsResult, connectionsResult, toolsResult, skillsResult] =
         await Promise.all([
-          rpc('model.list'),
-          rpc('connection.list'),
-          rpc('tool.list'),
-          rpc('skill.list'),
+          listModels(),
+          listConnections(),
+          listTools(),
+          listSkills(),
         ]);
 
       availableModels = Array.isArray(modelsResult?.models)
@@ -203,7 +211,7 @@
     loadError = '';
 
     try {
-      const result = await rpc('agent.list');
+      const result = await listAgents();
       agents = Array.isArray(result?.agents) ? result.agents : [];
       const preferredAgentId = options.preferredAgentId ?? selectedAgentId;
       selectAgent(resolveSelectedAgentId(agents, preferredAgentId));
@@ -249,7 +257,7 @@
     createModalAgentDefaults = {};
     isCreateModalOpen = true;
     try {
-      const result = await rpc('settings.get');
+      const result = await getSettings();
       const defaults = result?.defaults?.agent;
       createModalAgentDefaults =
         defaults && typeof defaults === 'object' ? defaults : {};

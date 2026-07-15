@@ -6,7 +6,8 @@
     debugTraceClear,
     debugTraceGet,
     debugTraceList,
-    rpc,
+    getSettings,
+    updateSettings,
   } from '../lib/api.js';
   import {
     applyDebugStatus,
@@ -91,7 +92,7 @@
 
   async function loadSettings() {
     try {
-      const result = await rpc('settings.get');
+      const result = await getSettings();
       return {
         providers: {
           items: extractProbeProviders(result),
@@ -213,7 +214,7 @@
     traceLimitDirty = false;
 
     try {
-      await rpc('settings.update', {
+      await updateSettings({
         debug: { trace_limit: value },
       });
       status = { ...status, traceLimit: value };

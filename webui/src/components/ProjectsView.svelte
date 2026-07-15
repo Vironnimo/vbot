@@ -14,33 +14,20 @@
   import Toggle from './ui/Toggle.svelte';
   import ToggleChipList from './ui/ToggleChipList.svelte';
   import {
-    addProject,
-    clearOverride,
-    detectProject,
-    listProjects,
-    removeProject,
-    rpc,
-    setOverride,
-    setProject,
-    showProject,
-  } from '$lib/api.js';
-  import {
     PROJECT_SOURCE_FORMATS,
     PROJECT_THINKING_EFFORT_NO_DEFAULT,
     PROJECT_THINKING_EFFORT_OPTIONS,
     buildAddProjectPayload,
     buildDefaultAgentOptions,
     buildManageProjectPayload,
-    buildRePointPayload,
     buildSkillToggleSections,
     buildToolToggleList,
+    createProjectsController,
     hasManageChanges,
     memberFieldIsOverridden,
     needsRePoint,
-    normalizeDetectResult,
     normalizeOverrideTemperature,
     normalizeProject,
-    normalizeProjects,
     normalizeScanReport,
     normalizeScanSkills,
     presentFormats,
@@ -71,13 +58,6 @@
 
   const PROJECT_BUSY_CODE = 'project_busy';
   const PROJECT_IN_USE_CODE = 'project_in_use';
-  // The project settings form is a settings-style surface, so it follows the
-  // shared save model (DESIGN.md → Save model): auto-save after a short idle,
-  // plus the explicit Save button for users who prefer to commit manually.
-  const AUTO_SAVE_DEBOUNCE_MS = 800;
-  // Idle delay before the add dialog probes a typed repository path with
-  // project.detect (per-format agent/skill counts drive the format choice).
-  const ADD_DETECT_DEBOUNCE_MS = 500;
 
   // Human-facing labels for the source-format vocabulary.
   const FORMAT_LABELS = Object.freeze({
@@ -123,6 +103,8 @@
     modelsRefreshToken = 0,
   } = $props();
 
+  const projectsController = createProjectsController();
+
   let projects = $state([]);
   let loadingProjects = $state(false);
   let listError = $state('');
@@ -153,7 +135,6 @@
   // The debounced project.detect result for the typed path (null until the
   // first probe answers). Drives the format choice and the CLAUDE.md suggestion.
   let addDetect = $state(null);
-  let addDetectTimer = null;
   const addFormatsPresent = $derived(
     addDetect ? presentFormats(addDetect) : [],
   );
@@ -204,11 +185,6 @@
   let rePointCwd = $state('');
   let rePointing = $state(false);
   let rePointError = $state('');
-
-  let destroyed = false;
-  let listRequestId = 0;
-  let scanRequestId = 0;
-  let autoSaveTimer = null;
 
   let hasProjects = $derived(projects.length > 0);
   let canSubmitAdd = $derived(addForm.cwd.trim().length > 0 && !addingProject);
@@ -355,15 +331,10 @@
     void loadCatalogs();
     void loadGlobalDefaults();
     void loadProjects();
-
-    return () => {
-      destroyed = true;
-    };
   });
 
   onDestroy(() => {
-    clearAutoSaveTimer();
-    clearAddDetectTimer();
+    projectsController.destroy();
   });
 
   // Auto-save the settings form once it has been idle for the debounce window.
@@ -372,13 +343,10 @@
       return;
     }
 
-    autoSaveTimer = setTimeout(() => {
-      autoSaveTimer = null;
-      void saveSelectedProject();
-    }, AUTO_SAVE_DEBOUNCE_MS);
+    projectsController.scheduleAutoSave(saveSelectedProject);
 
     return () => {
-      clearAutoSaveTimer();
+      projectsController.clearAutoSave();
     };
   });
 
@@ -438,13 +406,6 @@
     return value;
   }
 
-  function clearAutoSaveTimer() {
-    if (autoSaveTimer !== null) {
-      clearTimeout(autoSaveTimer);
-      autoSaveTimer = null;
-    }
-  }
-
   // The inherit-option label for the project default-model select. A present
   // global default names its value; an absent one shows the not-configured copy.
   function defaultModelInheritLabel() {
@@ -481,8 +442,8 @@
 
   async function loadGlobalDefaults() {
     try {
-      const result = await rpc('settings.get');
-      if (destroyed) {
+      const result = await projectsController.loadGlobalSettings();
+      if (!projectsController.isActive()) {
         return;
       }
       const defaults = result?.defaults?.agent;
@@ -495,28 +456,6 @@
     }
   }
 
-  async function fetchModelCatalogs() {
-    try {
-      const [modelsResult, connectionsResult] = await Promise.all([
-        rpc('model.list'),
-        rpc('connection.list'),
-      ]);
-      if (destroyed) {
-        return null;
-      }
-      return {
-        models: Array.isArray(modelsResult?.models) ? modelsResult.models : [],
-        connections: Array.isArray(connectionsResult?.connections)
-          ? connectionsResult.connections
-          : [],
-      };
-    } catch {
-      // A missing model catalog only degrades the model pickers (they still list
-      // the empty option); it must not block the projects list itself.
-      return null;
-    }
-  }
-
   function applyModelCatalogs(catalogs) {
     availableModels = catalogs.models;
     availableConnections = catalogs.connections;
@@ -524,35 +463,24 @@
   }
 
   async function loadCatalogs() {
-    const catalogs = await fetchModelCatalogs();
-    if (catalogs) {
-      applyModelCatalogs(catalogs);
-    }
-    await loadToolCatalog();
-  }
-
-  // The tool catalog feeds the Tool Whitelist toggle list and its reset target. A
-  // failure only degrades that one section (the toggles render empty), so it never
-  // blocks the projects list.
-  async function loadToolCatalog() {
-    try {
-      const result = await rpc('tool.list');
-      if (destroyed) {
-        return;
+    const catalogs = await projectsController.loadCatalogs();
+    if (!catalogs.stale) {
+      if (catalogs.modelCatalogsAvailable) {
+        applyModelCatalogs(catalogs);
       }
-      toolCatalog = Array.isArray(result?.tools) ? result.tools : [];
-      defaultProjectTools = Array.isArray(result?.default_project_tools)
-        ? result.default_project_tools
-        : [];
-    } catch {
-      toolCatalog = [];
-      defaultProjectTools = [];
+      toolCatalog = catalogs.tools;
+      defaultProjectTools = catalogs.defaultProjectTools;
     }
   }
 
   async function reloadModelCatalogs() {
-    const catalogs = await fetchModelCatalogs();
-    if (!catalogs) {
+    const catalogs = await projectsController.loadCatalogs();
+    if (catalogs.stale) {
+      return;
+    }
+    toolCatalog = catalogs.tools;
+    defaultProjectTools = catalogs.defaultProjectTools;
+    if (!catalogs.modelCatalogsAvailable) {
       return;
     }
     if (
@@ -577,17 +505,23 @@
   }
 
   async function loadProjects() {
-    const requestId = listRequestId + 1;
-    listRequestId = requestId;
+    let requestId = null;
     loadingProjects = true;
     listError = '';
 
     try {
-      const result = await listProjects();
-      if (destroyed || requestId !== listRequestId) {
+      const result = await projectsController.loadProjects();
+      requestId = result.requestId;
+      if (
+        result.stale ||
+        !projectsController.isCurrentProjectsRequest(result.requestId)
+      ) {
         return;
       }
-      projects = normalizeProjects(result?.projects);
+      if (result.error) {
+        throw result.error;
+      }
+      projects = result.projects;
       const preferredProject = projects.find(
         (project) => project.project_id === selectedProjectId,
       );
@@ -598,12 +532,12 @@
         clearSelectedProject();
       }
     } catch (error) {
-      if (destroyed || requestId !== listRequestId) {
+      if (!projectsController.isActive()) {
         return;
       }
       listError = `${t('projects.loadError', 'Projects could not be loaded.')} ${errorText(error)}`;
     } finally {
-      if (!destroyed && requestId === listRequestId) {
+      if (projectsController.isCurrentProjectsRequest(requestId)) {
         loadingProjects = false;
       }
     }
@@ -622,7 +556,7 @@
     }
     isAddOpen = false;
     addError = '';
-    clearAddDetectTimer();
+    projectsController.clearDetect();
   }
 
   function updateAddField(field, value) {
@@ -633,41 +567,16 @@
     }
   }
 
-  function clearAddDetectTimer() {
-    if (addDetectTimer !== null) {
-      clearTimeout(addDetectTimer);
-      addDetectTimer = null;
-    }
-  }
-
   // Probe the typed path after a short idle. Detection is advisory only: a
   // failed/void probe just leaves the dialog without a format choice (the
   // server auto-detects at add time anyway), so errors are swallowed.
   function scheduleAddDetect(cwd) {
-    clearAddDetectTimer();
-    const trimmed = cwd.trim();
-    if (trimmed.length === 0) {
-      addDetect = null;
-      return;
-    }
-    addDetectTimer = setTimeout(() => {
-      addDetectTimer = null;
-      void runAddDetect(trimmed);
-    }, ADD_DETECT_DEBOUNCE_MS);
-  }
-
-  async function runAddDetect(cwd) {
-    try {
-      const result = await detectProject(cwd);
-      if (destroyed || !isAddOpen || addForm.cwd.trim() !== cwd) {
+    projectsController.scheduleDetect(cwd, (result, detectedCwd) => {
+      if (!isAddOpen || addForm.cwd.trim() !== detectedCwd) {
         return;
       }
-      addDetect = normalizeDetectResult(result);
-    } catch {
-      if (!destroyed) {
-        addDetect = null;
-      }
-    }
+      addDetect = result;
+    });
   }
 
   async function submitAdd(event) {
@@ -696,8 +605,8 @@
         auto_load:
           addSuggestsClaudeMd && addForm.include_claude_md ? ['CLAUDE.md'] : [],
       });
-      const result = await addProject(payload);
-      if (destroyed) {
+      const result = await projectsController.addProject(payload);
+      if (!projectsController.isActive()) {
         return;
       }
       const project = normalizeProject(result?.project);
@@ -706,18 +615,18 @@
       addForm = createAddForm();
       addDetect = null;
       await loadProjects();
-      if (!destroyed) {
+      if (projectsController.isActive()) {
         // Select the freshly added project so its scan (team + report) is the
         // review surface right away (add-then-review, no dry-run).
         selectProject(project.project_id, result?.scan);
       }
     } catch (error) {
-      if (destroyed) {
+      if (!projectsController.isActive()) {
         return;
       }
       addError = `${t('projects.add.error', 'Project could not be added.')} ${errorText(error)}`;
     } finally {
-      if (!destroyed) {
+      if (projectsController.isActive()) {
         addingProject = false;
       }
     }
@@ -726,6 +635,7 @@
   // Select a project for the detail pane. When a scan is already in hand (right
   // after add) it seeds the team/report immediately; otherwise it fetches one.
   function selectProject(projectId, scan = null) {
+    projectsController.invalidateScan();
     const project =
       projects.find((item) => item.project_id === projectId) ?? null;
     selectedProjectId = projectId;
@@ -741,6 +651,7 @@
     overrideBusyKey = '';
 
     if (scan) {
+      scanLoading = false;
       applyScan(scan);
       return;
     }
@@ -749,6 +660,8 @@
   }
 
   function clearSelectedProject() {
+    projectsController.invalidateScan();
+    scanLoading = false;
     selectedProjectId = '';
     onProjectSelected('');
     editForm = createEditForm();
@@ -782,23 +695,29 @@
   }
 
   async function loadScan(projectId) {
-    const requestId = scanRequestId + 1;
-    scanRequestId = requestId;
+    let requestId = null;
     scanLoading = true;
 
     try {
-      const result = await showProject(projectId);
-      if (destroyed || requestId !== scanRequestId) {
+      const result = await projectsController.loadScan(projectId);
+      requestId = result.requestId;
+      if (
+        result.stale ||
+        !projectsController.isCurrentScanRequest(result.requestId)
+      ) {
         return;
       }
-      applyScan(result?.scan);
+      if (result.error) {
+        throw result.error;
+      }
+      applyScan(result.scan);
     } catch (error) {
-      if (destroyed || requestId !== scanRequestId) {
+      if (!projectsController.isActive()) {
         return;
       }
       editError = `${t('projects.loadError', 'Projects could not be loaded.')} ${errorText(error)}`;
     } finally {
-      if (!destroyed && requestId === scanRequestId) {
+      if (projectsController.isCurrentScanRequest(requestId)) {
         scanLoading = false;
       }
     }
@@ -812,7 +731,7 @@
     }
     scanRefreshRequested = true;
     await loadScan(selectedProjectId);
-    if (!destroyed) {
+    if (projectsController.isActive()) {
       scanRefreshRequested = false;
     }
   }
@@ -932,7 +851,7 @@
       });
       return;
     }
-    clearAutoSaveTimer();
+    projectsController.clearAutoSave();
     void saveSelectedProject();
   }
 
@@ -955,12 +874,15 @@
     statusMessage = '';
 
     try {
-      const result = await setProject(project.project_id, changes);
-      if (destroyed) {
+      const result = await projectsController.saveProject(
+        project.project_id,
+        changes,
+      );
+      if (!projectsController.isActive()) {
         return;
       }
       await loadProjects();
-      if (destroyed) {
+      if (!projectsController.isActive()) {
         return;
       }
       const saved = normalizeProject(result?.project);
@@ -971,12 +893,12 @@
         variant: 'success',
       });
     } catch (error) {
-      if (destroyed) {
+      if (!projectsController.isActive()) {
         return;
       }
       editError = `${t('projects.manage.saveError', 'Project changes could not be saved.')} ${errorText(error)}`;
     } finally {
-      if (!destroyed) {
+      if (projectsController.isActive()) {
         editSaving = false;
       }
     }
@@ -1163,13 +1085,13 @@
     editError = '';
 
     try {
-      const result = await setOverride(
+      const result = await projectsController.setOverride(
         project.project_id,
         agentId,
         field,
         overrideValueForField(agentId, field),
       );
-      if (destroyed) {
+      if (!projectsController.isActive()) {
         return;
       }
       refreshTeamFromScan(result?.scan);
@@ -1178,7 +1100,7 @@
         variant: 'success',
       });
     } catch (error) {
-      if (destroyed) {
+      if (!projectsController.isActive()) {
         return;
       }
       onToast({
@@ -1187,7 +1109,7 @@
         sticky: true,
       });
     } finally {
-      if (!destroyed) {
+      if (projectsController.isActive()) {
         overrideBusyKey = '';
       }
     }
@@ -1203,8 +1125,12 @@
     editError = '';
 
     try {
-      const result = await clearOverride(project.project_id, agentId, field);
-      if (destroyed) {
+      const result = await projectsController.clearOverride(
+        project.project_id,
+        agentId,
+        field,
+      );
+      if (!projectsController.isActive()) {
         return;
       }
       refreshTeamFromScan(result?.scan);
@@ -1213,7 +1139,7 @@
         variant: 'success',
       });
     } catch (error) {
-      if (destroyed) {
+      if (!projectsController.isActive()) {
         return;
       }
       onToast({
@@ -1222,7 +1148,7 @@
         sticky: true,
       });
     } finally {
-      if (!destroyed) {
+      if (projectsController.isActive()) {
         overrideBusyKey = '';
       }
     }
@@ -1265,11 +1191,11 @@
     editError = '';
 
     try {
-      const result = await removeProject(
+      const result = await projectsController.removeProject(
         project.project_id,
         copyRootedAgentIdentityFiles,
       );
-      if (destroyed) {
+      if (!projectsController.isActive()) {
         return;
       }
       if (selectedProjectId === project.project_id) {
@@ -1298,7 +1224,7 @@
             );
       await loadProjects();
     } catch (error) {
-      if (destroyed) {
+      if (!projectsController.isActive()) {
         return;
       }
       const message = removeErrorText(error);
@@ -1308,7 +1234,7 @@
         listError = message;
       }
     } finally {
-      if (!destroyed) {
+      if (projectsController.isActive()) {
         removingProjectId = '';
       }
     }
@@ -1347,26 +1273,26 @@
 
     try {
       const projectId = rePointProject.project_id;
-      const result = await setProject(
+      const result = await projectsController.repointProject(
         projectId,
-        buildRePointPayload(rePointCwd),
+        rePointCwd,
       );
-      if (destroyed) {
+      if (!projectsController.isActive()) {
         return;
       }
       statusMessage = t('projects.rePoint.success', 'Project re-pointed.');
       rePointProject = null;
       await loadProjects();
-      if (!destroyed && selectedProjectId === projectId) {
+      if (projectsController.isActive() && selectedProjectId === projectId) {
         selectProject(projectId, result?.scan);
       }
     } catch (error) {
-      if (destroyed) {
+      if (!projectsController.isActive()) {
         return;
       }
       rePointError = `${t('projects.rePoint.error', 'The project could not be re-pointed.')} ${errorText(error)}`;
     } finally {
-      if (!destroyed) {
+      if (projectsController.isActive()) {
         rePointing = false;
       }
     }

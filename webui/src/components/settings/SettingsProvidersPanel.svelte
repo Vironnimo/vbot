@@ -4,7 +4,14 @@
   import Button from '../ui/Button.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
-  import { rpc } from '$lib/api.js';
+  import {
+    disconnectProvider as disconnectProviderRequest,
+    listModels,
+    refreshModelDatabase as refreshModels,
+    setConnectionEnabled as setConnectionEnabledRequest,
+    unsetProviderKey,
+    updateSettings,
+  } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
   import {
@@ -182,7 +189,7 @@
 
   async function loadLocalModels() {
     try {
-      const result = await rpc('model.list', {});
+      const result = await listModels();
       localModels = (result?.models ?? []).filter(
         (model) => model?.local === true,
       );
@@ -246,7 +253,7 @@
     localContextBusy = true;
     localContextDrafts = { ...localContextDrafts, [model.id]: trimmed };
     try {
-      await rpc('settings.update', {
+      await updateSettings({
         local_models: { context_windows: { [model.id]: value } },
       });
       onError('');
@@ -308,7 +315,7 @@
     connectionToggleBusy = true;
 
     try {
-      const result = await rpc('connection.set_enabled', {
+      const result = await setConnectionEnabledRequest({
         provider_id: provider.id,
         connection_id: getPublicConnectionId(connection),
         enabled,
@@ -432,7 +439,7 @@
     onError('');
 
     try {
-      const result = await rpc('provider.unset_key', {
+      const result = await unsetProviderKey({
         provider_id: provider.id,
         connection_id: getPublicConnectionId(connection),
         account: account.id,
@@ -463,14 +470,10 @@
 
   async function callDisconnectProvider(providerId, connectionId, account) {
     if (typeof disconnectProvider === 'function') {
-      return disconnectProvider(providerId, connectionId, account, { rpc });
+      return disconnectProvider(providerId, connectionId, account);
     }
 
-    return rpc('provider.disconnect', {
-      provider_id: providerId,
-      connection_id: connectionId,
-      account,
-    });
+    return disconnectProviderRequest(providerId, connectionId, account);
   }
 
   async function refreshModelDatabase() {
@@ -482,9 +485,9 @@
     onError('');
 
     try {
-      const result = await rpc('model.refresh_db');
+      const result = await refreshModels();
       applyProviderRefreshResult(result);
-      await rpc('model.list');
+      await listModels();
       // Success is a toast, not inline text: the refresh triggers a settings
       // reload (resource_changed → onReloadSettings) that briefly unmounts this
       // panel, so an inline result would flash and vanish. The app-level toast

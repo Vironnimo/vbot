@@ -9,7 +9,13 @@
   import InfoHint from '../ui/InfoHint.svelte';
   import TextArea from '../ui/TextArea.svelte';
   import TextField from '../ui/TextField.svelte';
-  import { rpc } from '$lib/api.js';
+  import {
+    createSkill as createSkillRequest,
+    deleteSkill as deleteSkillRequest,
+    listAgents,
+    readSkills,
+    updateSkill,
+  } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
 
   const GLOBAL_SCOPE = 'global';
@@ -53,7 +59,7 @@
 
   async function loadAgents() {
     try {
-      const result = await rpc('agent.list');
+      const result = await listAgents();
       agents = Array.isArray(result?.agents) ? result.agents : [];
     } catch {
       // Non-fatal: without the agent list the scope selector just offers Global.
@@ -65,7 +71,7 @@
     loading = true;
     loadError = '';
     try {
-      const result = await rpc('skill.read', { scope });
+      const result = await readSkills(scope);
       skills = Array.isArray(result?.skills) ? result.skills : [];
     } catch (error) {
       loadError = `${t('settings.skills.loadError', 'Skills could not be loaded.')} ${error.message}`;
@@ -103,7 +109,7 @@
     busy = true;
     onError('');
     try {
-      await rpc('skill.update', {
+      await updateSkill({
         scope,
         name: editingName,
         content: editContent,
@@ -143,7 +149,7 @@
     busy = true;
     onError('');
     try {
-      await rpc('skill.delete', { scope, name });
+      await deleteSkillRequest(scope, name);
       onToast({
         title: t('settings.skills.deleted', 'Skill deleted.'),
         variant: 'success',
@@ -168,7 +174,7 @@
     busy = true;
     onError('');
     try {
-      await rpc('skill.create', {
+      await createSkillRequest({
         scope,
         name: newName.trim(),
         content: newContent,

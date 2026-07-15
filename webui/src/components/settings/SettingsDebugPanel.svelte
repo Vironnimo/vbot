@@ -4,7 +4,7 @@
   import Button from '../ui/Button.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
-  import { rpc } from '$lib/api.js';
+  import { updateSettings } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
 
   const AUTO_SAVE_DEBOUNCE_MS = 800;
@@ -112,7 +112,7 @@
     onError('');
 
     try {
-      const nextSettings = await rpc('settings.update', {
+      const nextSettings = await updateSettings({
         debug: getDebugSettings({ debug: debugSettings }),
       });
       onCommit(nextSettings);

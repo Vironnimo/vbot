@@ -5,6 +5,7 @@ import { flushSync as svelteFlushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
 import { TOOLTIP_SHOW_DELAY_MS } from '../../lib/tooltip.js';
+import { rpcBackedApiMock } from './apiMock.js';
 
 export const rpcMock = vi.fn();
 export const subscribeRunEventsMock = vi.fn(() => ({
@@ -31,32 +32,33 @@ vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
 });
 
-vi.mock('$lib/api.js', () => ({
-  RUN_EVENT_ASSISTANT_OUTPUT_DELTA: 'assistant_output_delta',
-  RUN_EVENT_REASONING_DELTA: 'reasoning_delta',
-  RUN_EVENT_TOOL_CALL_DELTA: 'tool_call_delta',
-  RUN_EVENT_TOOL_CALL_STDERR: 'tool_call_stderr',
-  RUN_EVENT_TOOL_CALL_STDOUT: 'tool_call_stdout',
-  rpc: (...args) => rpcMock(...args),
-  subscribeRunEvents: (...args) => subscribeRunEventsMock(...args),
-  listSessions: (...args) => listSessionsMock(...args),
-  listQueue: (...args) => listQueueMock(...args),
-  removeFromQueue: (...args) => removeFromQueueMock(...args),
-  updateQueueItem: (...args) => updateQueueItemMock(...args),
-  cancelRun: (...args) => cancelRunMock(...args),
-  cancelToolCall: (...args) => cancelToolCallMock(...args),
-  continueRun: (agentId, sessionId) =>
-    rpcMock('chat.continue', {
-      agent_id: agentId,
-      session_id: sessionId,
-    }),
-  discardContinuation: (agentId, sessionId) =>
-    rpcMock('chat.continuation_discard', {
-      agent_id: agentId,
-      session_id: sessionId,
-    }),
-  showProject: (...args) => showProjectMock(...args),
-}));
+vi.mock('$lib/api.js', () =>
+  rpcBackedApiMock(rpcMock, {
+    RUN_EVENT_ASSISTANT_OUTPUT_DELTA: 'assistant_output_delta',
+    RUN_EVENT_REASONING_DELTA: 'reasoning_delta',
+    RUN_EVENT_TOOL_CALL_DELTA: 'tool_call_delta',
+    RUN_EVENT_TOOL_CALL_STDERR: 'tool_call_stderr',
+    RUN_EVENT_TOOL_CALL_STDOUT: 'tool_call_stdout',
+    subscribeRunEvents: (...args) => subscribeRunEventsMock(...args),
+    listSessions: (...args) => listSessionsMock(...args),
+    listQueue: (...args) => listQueueMock(...args),
+    removeFromQueue: (...args) => removeFromQueueMock(...args),
+    updateQueueItem: (...args) => updateQueueItemMock(...args),
+    cancelRun: (...args) => cancelRunMock(...args),
+    cancelToolCall: (...args) => cancelToolCallMock(...args),
+    continueRun: (agentId, sessionId) =>
+      rpcMock('chat.continue', {
+        agent_id: agentId,
+        session_id: sessionId,
+      }),
+    discardContinuation: (agentId, sessionId) =>
+      rpcMock('chat.continuation_discard', {
+        agent_id: agentId,
+        session_id: sessionId,
+      }),
+    showProject: (...args) => showProjectMock(...args),
+  }),
+);
 
 // Wrap the real run-stream factory so the wiring test can observe calls to
 // `applyConnectionSnapshot` independently of whatever side effects the real

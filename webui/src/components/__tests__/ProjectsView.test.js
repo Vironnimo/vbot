@@ -5,6 +5,7 @@ import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
 import { reactiveProps } from './_reactiveProps.svelte.js';
+import { rpcBackedApiMock } from './apiMock.js';
 
 const addProjectMock = vi.fn();
 const listProjectsMock = vi.fn();
@@ -19,16 +20,17 @@ vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
 });
 
-vi.mock('$lib/api.js', () => ({
-  addProject: (...args) => addProjectMock(...args),
-  listProjects: (...args) => listProjectsMock(...args),
-  showProject: (...args) => showProjectMock(...args),
-  setProject: (...args) => setProjectMock(...args),
-  removeProject: (...args) => removeProjectMock(...args),
-  setOverride: (...args) => setOverrideMock(...args),
-  clearOverride: (...args) => clearOverrideMock(...args),
-  rpc: (...args) => rpcMock(...args),
-}));
+vi.mock('$lib/api.js', () =>
+  rpcBackedApiMock(rpcMock, {
+    addProject: (...args) => addProjectMock(...args),
+    listProjects: (...args) => listProjectsMock(...args),
+    showProject: (...args) => showProjectMock(...args),
+    setProject: (...args) => setProjectMock(...args),
+    removeProject: (...args) => removeProjectMock(...args),
+    setOverride: (...args) => setOverrideMock(...args),
+    clearOverride: (...args) => clearOverrideMock(...args),
+  }),
+);
 
 const { default: ProjectsView } = await import('../ProjectsView.svelte');
 

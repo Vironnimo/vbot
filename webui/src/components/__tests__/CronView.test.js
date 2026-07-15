@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
+import { rpcBackedApiMock } from './apiMock.js';
 
 const rpcMock = vi.fn();
 const listCronJobsMock = vi.fn();
@@ -17,15 +18,16 @@ vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
 });
 
-vi.mock('$lib/api.js', () => ({
-  rpc: (...args) => rpcMock(...args),
-  listCronJobs: (...args) => listCronJobsMock(...args),
-  createCronJob: (...args) => createCronJobMock(...args),
-  updateCronJob: (...args) => updateCronJobMock(...args),
-  deleteCronJob: (...args) => deleteCronJobMock(...args),
-  enableCronJob: (...args) => enableCronJobMock(...args),
-  disableCronJob: (...args) => disableCronJobMock(...args),
-}));
+vi.mock('$lib/api.js', () =>
+  rpcBackedApiMock(rpcMock, {
+    listCronJobs: (...args) => listCronJobsMock(...args),
+    createCronJob: (...args) => createCronJobMock(...args),
+    updateCronJob: (...args) => updateCronJobMock(...args),
+    deleteCronJob: (...args) => deleteCronJobMock(...args),
+    enableCronJob: (...args) => enableCronJobMock(...args),
+    disableCronJob: (...args) => disableCronJobMock(...args),
+  }),
+);
 
 const { default: CronView } = await import('../CronView.svelte');
 

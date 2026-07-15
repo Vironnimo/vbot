@@ -3,7 +3,7 @@
 
   import CompactionPolicyEditor from '../compaction/CompactionPolicyEditor.svelte';
   import Button from '../ui/Button.svelte';
-  import { rpc } from '$lib/api.js';
+  import { listConnections, listModels } from '$lib/api.js';
   import {
     compactionPoliciesEqual,
     normalizeCompactionPolicy,
@@ -93,8 +93,8 @@
   async function loadModelCatalogs() {
     try {
       const [modelsResult, connectionsResult] = await Promise.all([
-        rpc('model.list'),
-        rpc('connection.list'),
+        listModels(),
+        listConnections(),
       ]);
       availableModels = Array.isArray(modelsResult?.models)
         ? modelsResult.models

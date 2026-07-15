@@ -15,9 +15,9 @@
     deleteCronJob,
     disableCronJob,
     enableCronJob,
+    listAgents,
     listCronJobs,
     listProjects,
-    rpc,
     showProject,
     updateCronJob,
   } from '$lib/api.js';
@@ -155,7 +155,7 @@
     viewState.loadingAgents = true;
 
     try {
-      const result = await rpc('agent.list');
+      const result = await listAgents();
       if (destroyed || requestId !== agentsRequestId) {
         return;
       }

@@ -7,7 +7,7 @@
   import InfoHint from '../ui/InfoHint.svelte';
   import Modal from '../ui/Modal.svelte';
   import TextField from '../ui/TextField.svelte';
-  import { rpc } from '$lib/api.js';
+  import { createAgent } from '$lib/api.js';
   import {
     AGENT_FORM_MODE_CREATE,
     createAgentFormValues,
@@ -160,7 +160,7 @@
     isSaving = true;
 
     try {
-      const savedAgent = await rpc('agent.create', result.payload);
+      const savedAgent = await createAgent(result.payload);
       onToast({
         title: t('agents.created', 'Agent created.'),
         variant: 'success',

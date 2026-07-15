@@ -5,6 +5,7 @@ import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../i18n.js';
 import { createSettingsPayload } from './settingsView.support.js';
+import { rpcBackedApiMock } from '../../components/__tests__/apiMock.js';
 
 const rpcMock = vi.fn();
 
@@ -12,16 +13,17 @@ vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
 });
 
-vi.mock('$lib/api.js', () => ({
-  rpc: (...args) => rpcMock(...args),
-  listClients: () => Promise.resolve({ clients: [] }),
-  getTaskModelOptions: (taskType, target) =>
-    rpcMock('task_model.options', { task_type: taskType, target }),
-  listTaskModelTargets: (taskType) =>
-    rpcMock('task_model.list_targets', { task_type: taskType }),
-  updateTaskModelSettings: (modelTasks) =>
-    rpcMock('task_model.update', { model_tasks: modelTasks }),
-}));
+vi.mock('$lib/api.js', () =>
+  rpcBackedApiMock(rpcMock, {
+    listClients: () => Promise.resolve({ clients: [] }),
+    getTaskModelOptions: (taskType, target) =>
+      rpcMock('task_model.options', { task_type: taskType, target }),
+    listTaskModelTargets: (taskType) =>
+      rpcMock('task_model.list_targets', { task_type: taskType }),
+    updateTaskModelSettings: (modelTasks) =>
+      rpcMock('task_model.update', { model_tasks: modelTasks }),
+  }),
+);
 
 const { default: SettingsView } =
   await import('../../components/SettingsView.svelte');
