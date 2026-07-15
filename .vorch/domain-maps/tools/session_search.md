@@ -1,39 +1,29 @@
 # Session Search Tool
 
-Searches persisted chat Sessions for agent-relevant history.
+Discovers persisted Sessions through backend-native search and retrieves exact canonical Messages through explicit read references.
 
 ## Interfaces
 
-- Tool name: `session_search`
-- Registration: `register_session_search_tool(registry, recall_backend)`
-- Bound service: `RecallBackend`; backend implementations must use the Sessions API rather than constructing session file paths.
-- Schema: optional `query`, `agent_id`, `session_id`, `around_message_id`, `since`, `until`, `roles`, `match`, `limit`, `context`, `bookends`, and `sort`; `additionalProperties: false`.
-- Four dispatch modes, chosen by arguments (in `session_search_handler`): `around_message_id` set → anchored view (`scroll`); else no `query` + `session_id` set → single-session overview (`overview`); else no `query` + no `session_id` → recent session summaries (`browse`); else → message search (`search`).
-- `query`: case-insensitive keywords or phrase. Omit or leave blank to list Session summaries (no `session_id`) or one Session's overview (with `session_id`) instead of message matches.
-- `agent_id`: defaults to `ToolContext.agent_id`.
-- `session_id`: restricts a query search to one Session; alone (no `query`, no `around_message_id`) it returns that Session's overview.
-- `around_message_id`: with `session_id`, returns an anchored context view around that message. It requires `session_id` and cannot be combined with `query`. The anchored message is surfaced even when its role is outside `roles` (it was requested by explicit id); neighbors and bookends still respect `roles`.
-- `since` / `until`: inclusive UTC ISO-8601 timestamp or `YYYY-MM-DD`; date-only `until` covers the full day.
-- `roles`: defaults to visible chat history plus `compaction_checkpoint`; include `note` explicitly to search kernel notes.
-- `match`: `all_terms` (default), `any_term`, or `phrase`.
-- `limit`: maximum returned matches or Session summaries, default 20, max 100. Does not apply to the single-session overview.
-- `context`: number of neighboring visible messages before and after each match, default 0 for query matches and 2 for anchored views, max 2. Not used by the overview.
-- `bookends`: number of start/end Session messages to include for orientation, default 2, max 5. Drives the single-session overview, and adds Session edges to query matches and anchored views.
-- `sort`: Session activity order, `newest` default or `oldest`.
+- Tool name: `session_search`; registration receives the selected Recall backend, canonical `ChatSessionManager`, and resolved backend name.
+- `action` is required and selects exactly one operation: `list`, `overview`, `search`, or `read`. A continuation accepts only the same `action` plus its opaque `cursor`; action-specific validation rejects unrelated fields.
+- `list` returns recent Session summaries and paginates with `limit` (default 10, maximum 100).
+- `overview` requires `session_id` and returns metadata, total Message and per-role counts, and first/last canonical Message references. It does not return Message excerpts.
+- `search` requires a non-blank query and delegates only retrieval/ranking to the configured backend. Common scope, optional Session, time bounds, limit, and cursor controls remain stable; literal matching, role filtering, and ordering appear in the schema only when the active backend declares them.
+- `read` requires `session_id` plus either one `message_id` or an inclusive `start_message_id`/`end_message_id` range. `before`/`after` add canonical neighboring Messages (default 0, maximum 100).
+- Date-only `since` and `until` are inclusive UTC boundaries; date-only `until` covers the full day. Agent defaults to `ToolContext.agent_id`; project scope always comes from `ToolContext.project_id`.
 
 ## Result Contract
 
-- Success data always includes `content`, `truncated`, and `request`.
-- Query searches return `matches`, `searched_sessions`, and `total_candidate_sessions`.
-- Anchored searches return `session`, `around_message_id`, `window`, `bookend_start`, and `bookend_end`.
-- Summary searches return `sessions` and `total_candidates`.
-- Single-session overviews return `session`, `bookend_start`, `bookend_end`, and `total_messages` (count of role-eligible messages); `truncated` is true when messages are omitted between the bookends. A missing `session_id` returns a `session: null` overview with content `No session found: <id>`.
-- Match rows include `agent_id`, `session_id`, `message_id`, `timestamp`, `role`, a compact `snippet`, and an ordered `window`; `context` appears only when requested; `bookend_start` and `bookend_end` appear when `bookends` is greater than 0.
-- Session rows include `agent_id`, `session_id`, `created_at`, `last_active_at`, and sidecar fields under `metadata`.
+- Every success is a normal Tool envelope. Action data includes `action`, `has_more`, and `formatted_bytes`; paginated pages include `next_cursor`.
+- Search data identifies the resolved backend, result unit (`message`, `passage`, or `backend_defined`), and ranking. Items have a global rank, canonical identifiers, one source-faithful adaptive `excerpt`, and one `read_ref`. Passage results also carry `passage_id`, end timestamp, and literal/semantic source membership when available.
+- Search items do not repeat content in `content`, context windows, bookends, or backend scores. The whole result is capped at 50 KiB; excerpts expand as far as the page budget permits rather than using a fixed per-hit character cap.
+- Read returns complete `ChatMessage.to_dict()` records. It has no per-Message truncation. When one serialized Message cannot fit in the 50 KiB result, it returns consecutive `record_json` segments with source offsets and a cursor; concatenating all segments reconstructs the exact canonical JSON record.
+- List, read, and first-party search cursors bind action, normalized arguments, project, source snapshot, and (for search) resolved backend. A changed source or backend returns `stale_cursor`.
+- An extension backend without the typed first-party search capability is wrapped as one `backend_defined` result and has no claimed first-party match/order semantics.
 
 ## Constraints & Gotchas
 
-- Skill-context notes are not searched even when `note` is requested; they are prompt context, not discoverable history.
-- The default implementation scans JSONL Sessions through `JsonlSessionRecallBackend`; optional SQLite FTS is a derived index behind the same `RecallBackend` contract and does not change this public tool shape.
-- No-match cases are success envelopes so agents can continue refining the query.
-- Invalid arguments and expected Session lookup/storage errors return failure envelopes.
+- Exact content belongs to `read`, not `search`; agents should follow `read_ref` when wording or the full Message matters.
+- Search is not implicitly Session-grouped. JSONL/FTS may return many Messages from one Session, and Vector/Hybrid may return many Passages from one Session.
+- No-match pages are successful empty results. Invalid action fields, missing canonical references, stale cursors, and backend capability failures are failure envelopes with stable codes.
+- Search excerpts preserve source whitespace and Unicode. Their truncation flags and source offsets describe presentation loss only; canonical storage is untouched.

@@ -1,6 +1,9 @@
-"""Tests for the built-in session_search tool."""
+"""Contract tests for the built-in session_search Tool."""
 
-import asyncio
+from __future__ import annotations
+
+import json
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -8,16 +11,20 @@ from typing import Any
 import pytest
 
 from core.chat import ChatMessage
-from core.recall import RecallBackendContext
-from core.recall.hybrid import _HYBRID_SEARCH_GUIDANCE, HybridRecallBackend
-from core.recall.jsonl import SESSION_RECALL_LITERAL_SEARCH_GUIDANCE, JsonlSessionRecallBackend
-from core.recall.vector import _SEMANTIC_SEARCH_GUIDANCE, VectorRecallBackend
+from core.recall import (
+    JsonlSessionRecallBackend,
+    RecallBackendContext,
+    SqliteFtsRecallBackend,
+)
+from core.recall.hybrid import HybridRecallBackend
+from core.recall.vector import VectorRecallBackend
 from core.sessions import ChatSessionManager
 from core.tools.session_search import (
+    SESSION_SEARCH_RESULT_MAX_BYTES,
     SESSION_SEARCH_TOOL_DESCRIPTION,
     SESSION_SEARCH_TOOL_NAME,
-    SESSION_SEARCH_TOOL_PARAMETERS,
     build_session_search_description,
+    build_session_search_parameters,
     register_session_search_tool,
     session_search_handler,
 )
@@ -51,640 +58,416 @@ def timestamp(day: int, hour: int = 12) -> datetime:
     return datetime(2026, 5, day, hour, tzinfo=UTC)
 
 
-def assert_success_envelope(result: JsonObject) -> JsonObject:
-    assert is_tool_result_envelope(result) is True
+def success(result: JsonObject) -> JsonObject:
+    assert is_tool_result_envelope(result)
     assert result["ok"] is True
-    assert result["error"] is None
-    assert result["artifacts"] == []
     data = result["data"]
     assert isinstance(data, dict)
     return data
 
 
-def assert_failure_envelope(result: JsonObject, code: str) -> dict[str, str]:
-    assert is_tool_result_envelope(result) is True
+def failure(result: JsonObject, code: str) -> dict[str, str]:
+    assert is_tool_result_envelope(result)
     assert result["ok"] is False
-    assert result["data"] is None
-    assert result["artifacts"] == []
     error = result["error"]
     assert isinstance(error, dict)
     assert error["code"] == code
-    assert isinstance(error["message"], str)
     return error  # type: ignore[return-value]
 
 
-async def test_register_session_search_tool_exposes_provider_schema(tmp_path: Path) -> None:
+async def test_registered_schema_requires_explicit_action_and_matches_jsonl() -> None:
+    sessions = ChatSessionManager(Path.cwd())
     registry = ToolRegistry()
-    sessions = ChatSessionManager(tmp_path)
-
     register_session_search_tool(registry, sessions)
 
-    tool = registry.get("session_search")
-    assert tool.name == SESSION_SEARCH_TOOL_NAME == "session_search"
-    # A bare ChatSessionManager is wrapped in the JSONL backend, whose
-    # describe_search fragment (literal-substring guidance) is appended.
+    tool = registry.get(SESSION_SEARCH_TOOL_NAME)
+    properties = tool.parameters["properties"]
+    assert tool.parameters["required"] == ["action"]
+    assert {"action", "cursor", "match", "roles", "order"} <= set(properties)
+    assert properties["order"]["enum"] == ["newest", "oldest"]
     assert tool.description.startswith(SESSION_SEARCH_TOOL_DESCRIPTION)
-    assert SESSION_RECALL_LITERAL_SEARCH_GUIDANCE in tool.description
-    assert tool.parameters == SESSION_SEARCH_TOOL_PARAMETERS
-
-    definitions = registry.provider_definitions(["session_search"])
-    assert len(definitions) == 1
-    definition = definitions[0]
-    assert definition["name"] == "session_search"
-    assert definition["description"].startswith(SESSION_SEARCH_TOOL_DESCRIPTION)
-
-    parameters = definition["parameters"]
-    assert parameters["type"] == "object"
-    assert parameters["additionalProperties"] is False
-    assert set(parameters["properties"]) == {
-        "agent_id",
-        "around_message_id",
-        "bookends",
-        "context",
-        "limit",
-        "match",
-        "query",
-        "roles",
-        "session_id",
-        "since",
-        "sort",
-        "until",
-    }
 
 
-async def test_build_session_search_description_appends_backend_guidance(tmp_path: Path) -> None:
-    """Each backend contributes its own how-to-query guidance to the description."""
-
+async def test_schema_changes_with_backend_capabilities(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
     context = RecallBackendContext(data_dir=tmp_path, sessions=sessions)
 
-    jsonl_description = build_session_search_description(JsonlSessionRecallBackend(sessions))
-    vector_description = build_session_search_description(VectorRecallBackend(context))
-    hybrid_description = build_session_search_description(HybridRecallBackend(context))
+    vector = build_session_search_parameters(VectorRecallBackend(context).search_capabilities())
+    hybrid = build_session_search_parameters(HybridRecallBackend(context).search_capabilities())
+    vector_properties = vector["properties"]
+    hybrid_properties = hybrid["properties"]
 
-    # JSONL/literal default.
-    assert jsonl_description == (
-        f"{SESSION_SEARCH_TOOL_DESCRIPTION} {SESSION_RECALL_LITERAL_SEARCH_GUIDANCE}"
-    )
-    # Vector and hybrid override with their own capability text.
-    assert vector_description.startswith(SESSION_SEARCH_TOOL_DESCRIPTION)
-    assert _SEMANTIC_SEARCH_GUIDANCE in vector_description
-    assert SESSION_RECALL_LITERAL_SEARCH_GUIDANCE not in vector_description
-    assert hybrid_description.startswith(SESSION_SEARCH_TOOL_DESCRIPTION)
-    assert _HYBRID_SEARCH_GUIDANCE in hybrid_description
-
-
-async def test_build_session_search_description_falls_back_without_describe_search() -> None:
-    """A backend without describe_search (e.g. an extension) gets the generic base."""
-
-    class _BareBackend:
-        def browse(self, request: Any) -> Any: ...
-
-        def overview(self, request: Any) -> Any: ...
-
-        def search(self, request: Any) -> Any: ...
-
-        def scroll(self, request: Any) -> Any: ...
-
-    assert build_session_search_description(_BareBackend()) == SESSION_SEARCH_TOOL_DESCRIPTION
+    assert "match" not in vector_properties
+    assert "literal_match" not in vector_properties
+    assert "roles" not in vector_properties
+    assert "order" not in vector_properties
+    assert "literal_match" in hybrid_properties
+    assert "match" not in hybrid_properties
+    assert "roles" not in hybrid_properties
+    assert "order" not in hybrid_properties
 
 
-async def test_session_search_finds_all_query_terms_in_newest_sessions(tmp_path: Path) -> None:
+async def test_description_explains_active_backend(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
-    old_session = sessions.create("coder", session_id="old-session")
-    new_session = sessions.create("coder", session_id="new-session")
-    old_session.append(ChatMessage.user("Release notes mention migration", timestamp=timestamp(1)))
-    new_session.append(
-        ChatMessage.user("Release deploy plan for session search", timestamp=timestamp(3))
+    context = RecallBackendContext(data_dir=tmp_path, sessions=sessions)
+
+    assert (
+        "literal" in build_session_search_description(JsonlSessionRecallBackend(sessions)).lower()
     )
-
-    result = await session_search_handler(
-        make_context(tmp_path),
-        {"query": "release deploy"},
-        sessions,
-    )
-
-    data = assert_success_envelope(result)
-    matches = data["matches"]
-    assert isinstance(matches, list)
-    assert len(matches) == 1
-    assert matches[0]["session_id"] == "new-session"
-    assert matches[0]["role"] == "user"
-    assert "Release deploy" in matches[0]["snippet"]
-    assert "Found 1 match" in data["content"]
+    assert "meaning" in build_session_search_description(VectorRecallBackend(context)).lower()
+    assert "combines" in build_session_search_description(HybridRecallBackend(context)).lower()
 
 
-async def test_session_search_scopes_recall_to_context_project(tmp_path: Path) -> None:
-    """A project run's recall searches its project Sessions; a global run the global ones.
-
-    The handler takes the project scope from ``ToolContext.project_id`` (the
-    running run's project), not from a tool argument.
-    """
-
+async def test_action_is_required_and_fields_are_action_specific(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
-    sessions.create("coder", session_id="global-s").append(
-        ChatMessage.user("Release deploy plan global", timestamp=timestamp(1))
-    )
-    sessions.create("coder", session_id="proj-s", project_id="alpha").append(
-        ChatMessage.user("Release deploy plan project", timestamp=timestamp(2))
-    )
+    backend = JsonlSessionRecallBackend(sessions)
 
-    project_result = await session_search_handler(
-        make_context(tmp_path, project_id="alpha"),
-        {"query": "release deploy"},
-        sessions,
-    )
-    global_result = await session_search_handler(
-        make_context(tmp_path),
-        {"query": "release deploy"},
-        sessions,
+    missing = await session_search_handler(make_context(tmp_path), {"query": "needle"}, backend)
+    unsupported = await session_search_handler(
+        make_context(tmp_path), {"action": "list", "query": "needle"}, backend
     )
 
-    project_data = assert_success_envelope(project_result)
-    global_data = assert_success_envelope(global_result)
-    assert [m["session_id"] for m in project_data["matches"]] == ["proj-s"]
-    assert [m["session_id"] for m in global_data["matches"]] == ["global-s"]
+    failure(missing, "invalid_arguments")
+    error = failure(unsupported, "invalid_arguments")
+    assert "Unsupported arguments for list" in error["message"]
 
 
-async def test_session_search_filters_by_time_range_and_role(tmp_path: Path) -> None:
+async def test_list_and_overview_are_tool_owned(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
-    old_session = sessions.create("coder", session_id="old-session")
-    new_session = sessions.create("coder", session_id="new-session")
-    old_session.append(
-        ChatMessage.assistant(model="openai/gpt-5", content="needle", timestamp=timestamp(1))
+    session = sessions.create("coder", session_id="owned-session")
+    first = ChatMessage.user("first", timestamp=timestamp(1))
+    last = ChatMessage.assistant(model="test", content="last", timestamp=timestamp(2))
+    session.append(first)
+    session.append(last)
+    backend = JsonlSessionRecallBackend(sessions)
+
+    listed = success(
+        await session_search_handler(make_context(tmp_path), {"action": "list"}, backend)
     )
-    new_session.append(ChatMessage.user("needle from user", timestamp=timestamp(3, 9)))
-    new_session.append(
-        ChatMessage.assistant(
-            model="openai/gpt-5",
-            content="needle from assistant",
-            timestamp=timestamp(3, 10),
+    overview = success(
+        await session_search_handler(
+            make_context(tmp_path),
+            {"action": "overview", "session_id": "owned-session"},
+            backend,
         )
     )
 
-    result = await session_search_handler(
-        make_context(tmp_path),
-        {"query": "needle", "since": "2026-05-02", "roles": ["assistant"]},
-        sessions,
+    assert [item["session_id"] for item in listed["items"]] == ["owned-session"]
+    assert overview["session"]["message_count"] == 2
+    assert overview["session"]["first_message"]["message_id"] == first.id
+    assert overview["session"]["last_message"]["message_id"] == last.id
+
+
+async def test_jsonl_search_returns_every_literal_substring_match_globally_ordered(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    first_session = sessions.create("coder", session_id="first-session")
+    second_session = sessions.create("coder", session_id="second-session")
+    first = ChatMessage.user("Telegraminstallation one", timestamp=timestamp(1))
+    second = ChatMessage.assistant(model="test", content="telegram two", timestamp=timestamp(2))
+    third = ChatMessage.user("TELEGRAM three", timestamp=timestamp(3))
+    first_session.append(first)
+    second_session.append(second)
+    first_session.append(third)
+    backend = JsonlSessionRecallBackend(sessions)
+
+    data = success(
+        await session_search_handler(
+            make_context(tmp_path),
+            {"action": "search", "query": "telegram", "order": "oldest", "limit": 10},
+            backend,
+        )
     )
 
-    data = assert_success_envelope(result)
-    matches = data["matches"]
-    assert isinstance(matches, list)
-    assert [match["session_id"] for match in matches] == ["new-session"]
-    assert matches[0]["snippet"] == "needle from assistant"
+    assert [item["message_id"] for item in data["items"]] == [first.id, second.id, third.id]
+    assert data["result_type"] == "message"
+    assert data["ranking"] == "message_time_oldest"
+    assert all("content" not in item and "context" not in item for item in data["items"])
 
 
-async def test_session_search_lists_recent_sessions_without_query(tmp_path: Path) -> None:
+async def test_search_cursor_returns_more_than_one_hit_without_session_grouping(
+    tmp_path: Path,
+) -> None:
     sessions = ChatSessionManager(tmp_path)
-    old_session = sessions.create("coder", session_id="old-session")
-    new_session = sessions.create("coder", session_id="new-session")
-    old_session.append(ChatMessage.user("older work", timestamp=timestamp(1)))
-    new_session.append(ChatMessage.user("newer work", timestamp=timestamp(4)))
-    sessions.set_metadata("coder", "new-session", {"platform": "telegram"})
+    session = sessions.create("coder", session_id="many-hits")
+    messages = [
+        ChatMessage.user(f"needle {index}", timestamp=timestamp(index + 1)) for index in range(4)
+    ]
+    for message in messages:
+        session.append(message)
+    backend = JsonlSessionRecallBackend(sessions)
 
-    result = await session_search_handler(make_context(tmp_path), {"limit": 1}, sessions)
+    first_page = success(
+        await session_search_handler(
+            make_context(tmp_path),
+            {"action": "search", "query": "needle", "order": "oldest", "limit": 2},
+            backend,
+        )
+    )
+    second_page = success(
+        await session_search_handler(
+            make_context(tmp_path),
+            {"action": "search", "cursor": first_page["next_cursor"]},
+            backend,
+        )
+    )
 
-    data = assert_success_envelope(result)
-    session_summaries = data["sessions"]
-    assert isinstance(session_summaries, list)
-    assert len(session_summaries) == 1
-    assert session_summaries[0]["session_id"] == "new-session"
-    assert session_summaries[0]["metadata"] == {"platform": "telegram"}
-    assert data["truncated"] is True
-    assert "Results limited to 1 sessions" in data["content"]
+    assert [item["message_id"] for item in first_page["items"]] == [
+        messages[0].id,
+        messages[1].id,
+    ]
+    assert [item["message_id"] for item in second_page["items"]] == [
+        messages[2].id,
+        messages[3].id,
+    ]
+    assert second_page["has_more"] is False
 
 
-async def test_session_search_blank_query_lists_sessions(tmp_path: Path) -> None:
+async def test_search_excerpt_is_source_faithful_and_not_hard_capped(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="blank-query-session")
-    session.append(ChatMessage.user("newer work", timestamp=timestamp(4)))
+    session = sessions.create("coder", session_id="long-source")
+    original = "prefix\n\n" + ("ä  spacing\t" * 500) + " needle suffix"
+    message = ChatMessage.user(original, timestamp=timestamp(1))
+    session.append(message)
 
-    result = await session_search_handler(make_context(tmp_path), {"query": "   "}, sessions)
+    data = success(
+        await session_search_handler(
+            make_context(tmp_path),
+            {"action": "search", "query": "needle"},
+            JsonlSessionRecallBackend(sessions),
+        )
+    )
+    excerpt = data["items"][0]["excerpt"]
 
-    data = assert_success_envelope(result)
-    session_summaries = data["sessions"]
-    assert isinstance(session_summaries, list)
-    assert [session_summary["session_id"] for session_summary in session_summaries] == [
-        "blank-query-session"
+    assert excerpt["text"] == original
+    assert len(excerpt["text"]) > 360
+    assert excerpt["leading_truncated"] is False
+    assert excerpt["trailing_truncated"] is False
+
+
+async def test_multiple_large_excerpts_adapt_only_to_whole_result_limit(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="large-excerpts")
+    for index in range(3):
+        session.append(
+            ChatMessage.user(
+                f"needle-{index} " + (chr(65 + index) * 30_000),
+                timestamp=timestamp(index + 1),
+            )
+        )
+
+    result = await session_search_handler(
+        make_context(tmp_path),
+        {"action": "search", "query": "needle", "match": "any_term", "limit": 3},
+        JsonlSessionRecallBackend(sessions),
+    )
+    data = success(result)
+
+    assert len(data["items"]) == 3
+    assert all(len(item["excerpt"]["text"]) > 360 for item in data["items"])
+    encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()
+    assert len(encoded) <= SESSION_SEARCH_RESULT_MAX_BYTES
+
+
+async def test_read_returns_exact_canonical_message_and_neighbors(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="exact-read")
+    before = ChatMessage.user("before", timestamp=timestamp(1))
+    target = ChatMessage.assistant(
+        model="test", content="  exact\ntext\tkept  ", timestamp=timestamp(2)
+    )
+    after = ChatMessage.user("after", timestamp=timestamp(3))
+    for message in (before, target, after):
+        session.append(message)
+
+    data = success(
+        await session_search_handler(
+            make_context(tmp_path),
+            {
+                "action": "read",
+                "session_id": "exact-read",
+                "message_id": target.id,
+                "before": 1,
+                "after": 1,
+            },
+            JsonlSessionRecallBackend(sessions),
+        )
+    )
+
+    assert [item["message"] for item in data["items"]] == [
+        before.to_dict(),
+        target.to_dict(),
+        after.to_dict(),
     ]
 
 
-async def test_session_search_blank_agent_id_falls_back_to_current_agent(tmp_path: Path) -> None:
-    # A blank optional id must mean "omitted" (use the current agent), not error.
+async def test_oversized_read_record_is_losslessly_segmented(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="own-session")
-    session.append(ChatMessage.user("some work", timestamp=timestamp(4)))
+    session = sessions.create("coder", session_id="segmented-read")
+    message = ChatMessage.user("Ü\n" * 70_000, timestamp=timestamp(1))
+    session.append(message)
+    backend = JsonlSessionRecallBackend(sessions)
+    arguments: JsonObject = {
+        "action": "read",
+        "session_id": "segmented-read",
+        "message_id": message.id,
+    }
+    segments: list[str] = []
 
-    result = await session_search_handler(
-        make_context(tmp_path, agent_id="coder"),
-        {"agent_id": "", "session_id": ""},
-        sessions,
-    )
+    while True:
+        result = await session_search_handler(make_context(tmp_path), arguments, backend)
+        data = success(result)
+        encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode()
+        assert len(encoded) <= SESSION_SEARCH_RESULT_MAX_BYTES
+        segment = data["items"][0]["segment"]
+        segments.append(segment["record_json"])
+        if not data["has_more"]:
+            break
+        arguments = {"action": "read", "cursor": data["next_cursor"]}
 
-    data = assert_success_envelope(result)
-    assert [summary["session_id"] for summary in data["sessions"]] == ["own-session"]
+    assert json.loads("".join(segments)) == message.to_dict()
 
 
-async def test_session_search_accepts_string_encoded_limit(tmp_path: Path) -> None:
+async def test_project_scope_is_preserved_for_search_and_read(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
-    for index in range(3):
-        session = sessions.create("coder", session_id=f"session-{index}")
-        session.append(ChatMessage.user("work", timestamp=timestamp(index + 1)))
+    global_session = sessions.create("coder", session_id="global")
+    project_session = sessions.create("coder", session_id="project", project_id="p1")
+    global_session.append(ChatMessage.user("needle global", timestamp=timestamp(1)))
+    project_message = ChatMessage.user("needle project", timestamp=timestamp(2))
+    project_session.append(project_message)
+    backend = JsonlSessionRecallBackend(sessions)
 
-    result = await session_search_handler(make_context(tmp_path), {"limit": "2"}, sessions)
-
-    data = assert_success_envelope(result)
-    assert len(data["sessions"]) == 2
-
-
-async def test_session_search_includes_neighbor_context_when_requested(tmp_path: Path) -> None:
-    sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="thread-session")
-    session.append(ChatMessage.user("Can you inspect checkout bug?", timestamp=timestamp(2, 9)))
-    session.append(
-        ChatMessage.assistant(
-            model="openai/gpt-5",
-            content="I will inspect the payment flow.",
-            timestamp=timestamp(2, 10),
+    data = success(
+        await session_search_handler(
+            make_context(tmp_path, project_id="p1"),
+            {"action": "search", "query": "needle"},
+            backend,
         )
     )
-    session.append(ChatMessage.user("Checkout bug reproduces again", timestamp=timestamp(2, 11)))
-
-    result = await session_search_handler(
-        make_context(tmp_path),
-        {"query": "checkout bug", "limit": 1, "context": 1},
-        sessions,
-    )
-
-    data = assert_success_envelope(result)
-    matches = data["matches"]
-    assert isinstance(matches, list)
-    context = matches[0]["context"]
-    assert context["before"] == []
-    assert context["after"][0]["role"] == "assistant"
-    assert context["after"][0]["snippet"] == "I will inspect the payment flow."
-    assert matches[0]["window"][0]["role"] == "user"
-    assert matches[0]["bookend_end"][-1]["role"] == "user"
-
-
-async def test_session_search_returns_anchored_view_around_message(tmp_path: Path) -> None:
-    sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="anchored-session")
-    session.append(ChatMessage.user("Session goal is memory planning", timestamp=timestamp(2, 8)))
-    session.append(
-        ChatMessage.assistant(
-            model="openai/gpt-5",
-            content="We can keep JSONL canonical.",
-            timestamp=timestamp(2, 9),
-        )
-    )
-    anchor = ChatMessage.user("Now inspect SQLite FTS options", timestamp=timestamp(2, 10))
-    session.append(anchor)
-    session.append(
-        ChatMessage.assistant(
-            model="openai/gpt-5",
-            content="SQLite FTS should be an optional index.",
-            timestamp=timestamp(2, 11),
+    exact = success(
+        await session_search_handler(
+            make_context(tmp_path, project_id="p1"),
+            {
+                "action": "read",
+                "session_id": "project",
+                "message_id": project_message.id,
+            },
+            backend,
         )
     )
 
-    result = await session_search_handler(
-        make_context(tmp_path),
-        {"session_id": "anchored-session", "around_message_id": anchor.id, "context": 1},
-        sessions,
-    )
-
-    data = assert_success_envelope(result)
-    assert data["around_message_id"] == anchor.id
-    assert [item["role"] for item in data["window"]] == ["assistant", "user", "assistant"]
-    assert data["bookend_start"][0]["snippet"] == "Session goal is memory planning"
-    assert data["bookend_end"] == []
-    assert "Anchored view" in data["content"]
+    assert [item["session_id"] for item in data["items"]] == ["project"]
+    assert exact["items"][0]["message"] == project_message.to_dict()
 
 
-async def test_session_search_returns_session_overview_for_session_id_alone(tmp_path: Path) -> None:
-    """session_id without a query returns that session's overview, not just metadata."""
-
+async def test_fts_search_uses_relevance_and_substring_semantics(tmp_path: Path) -> None:
     sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="overview-session")
-    session.append(ChatMessage.user("first request about caching", timestamp=timestamp(2, 8)))
-    session.append(
-        ChatMessage.assistant(model="openai/gpt-5", content="middle one", timestamp=timestamp(2, 9))
-    )
-    session.append(
-        ChatMessage.assistant(
-            model="openai/gpt-5", content="middle two", timestamp=timestamp(2, 10)
-        )
-    )
-    session.append(ChatMessage.user("final wrap-up question", timestamp=timestamp(2, 11)))
-
-    result = await session_search_handler(
-        make_context(tmp_path),
-        {"session_id": "overview-session", "bookends": 1},
-        sessions,
-    )
-
-    data = assert_success_envelope(result)
-    assert data["session"]["session_id"] == "overview-session"
-    assert data["total_messages"] == 4
-    assert [item["snippet"] for item in data["bookend_start"]] == ["first request about caching"]
-    assert [item["snippet"] for item in data["bookend_end"]] == ["final wrap-up question"]
-    assert data["truncated"] is True
-    assert "2 message(s) omitted" in data["content"]
-
-
-async def test_session_overview_returns_all_messages_when_bookends_cover_session(
-    tmp_path: Path,
-) -> None:
-    """A short session shows every message once, with no overlap and nothing omitted."""
-
-    sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="small-session")
-    session.append(ChatMessage.user("only question", timestamp=timestamp(2, 8)))
-    session.append(
-        ChatMessage.assistant(
-            model="openai/gpt-5", content="only answer", timestamp=timestamp(2, 9)
-        )
-    )
-
-    result = await session_search_handler(
-        make_context(tmp_path),
-        {"session_id": "small-session", "bookends": 3},
-        sessions,
-    )
-
-    data = assert_success_envelope(result)
-    assert data["total_messages"] == 2
-    assert [item["snippet"] for item in data["bookend_start"]] == ["only question", "only answer"]
-    assert data["bookend_end"] == []
-    assert data["truncated"] is False
-
-
-async def test_session_overview_reports_missing_session(tmp_path: Path) -> None:
-    sessions = ChatSessionManager(tmp_path)
-
-    result = await session_search_handler(
-        make_context(tmp_path),
-        {"session_id": "does-not-exist"},
-        sessions,
-    )
-
-    data = assert_success_envelope(result)
-    assert data["session"] is None
-    assert data["total_messages"] == 0
-    assert "No session found" in data["content"]
-
-
-async def test_session_search_anchors_on_message_outside_default_roles(tmp_path: Path) -> None:
-    """An explicit anchor id surfaces the message even when its role is filtered out."""
-
-    sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="tool-anchor-session")
-    session.append(ChatMessage.user("run the build", timestamp=timestamp(2, 8)))
-    tool_message = ChatMessage.tool(
-        tool_call_id="c1",
-        name="bash",
-        content="build output dump",
-        timestamp=timestamp(2, 9),
-    )
-    session.append(tool_message)
-
-    result = await session_search_handler(
-        make_context(tmp_path),
-        {"session_id": "tool-anchor-session", "around_message_id": tool_message.id},
-        sessions,
-    )
-
-    data = assert_success_envelope(result)
-    assert data["around_message_id"] == tool_message.id
-    assert any(item["message_id"] == tool_message.id for item in data["window"])
-
-
-async def test_session_search_requires_session_for_anchored_view(tmp_path: Path) -> None:
-    sessions = ChatSessionManager(tmp_path)
-
-    result = await session_search_handler(
-        make_context(tmp_path),
-        {"around_message_id": "message-1"},
-        sessions,
-    )
-
-    error = assert_failure_envelope(result, "invalid_arguments")
-    assert "requires session_id" in error["message"]
-
-
-async def test_session_search_excludes_notes_until_requested(tmp_path: Path) -> None:
-    sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="note-session")
-    session.add_note("hidden needle")
-
-    default_result = await session_search_handler(
-        make_context(tmp_path), {"query": "hidden needle"}, sessions
-    )
-    note_result = await session_search_handler(
-        make_context(tmp_path),
-        {"query": "hidden needle", "roles": ["note"]},
-        sessions,
-    )
-
-    default_data = assert_success_envelope(default_result)
-    note_data = assert_success_envelope(note_result)
-    assert default_data["matches"] == []
-    assert len(note_data["matches"]) == 1
-    assert note_data["matches"][0]["role"] == "note"
-
-
-async def test_session_search_excludes_tool_results_until_requested(tmp_path: Path) -> None:
-    """Tool results are opt-in: a default search skips them; ``roles: ["tool"]`` finds them."""
-
-    sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="tool-session")
-    session.append(
-        ChatMessage.tool(
-            tool_call_id="c1",
-            name="bash",
-            content="checkout bug stack trace from the shell",
+    sparse = sessions.create("coder", session_id="sparse")
+    dense = sessions.create("coder", session_id="dense")
+    sparse.append(ChatMessage.user("telegram once " + ("filler " * 500), timestamp=timestamp(3)))
+    dense.append(
+        ChatMessage.user(
+            "telegraminstallation telegram twice",
             timestamp=timestamp(1),
         )
     )
+    backend = SqliteFtsRecallBackend(RecallBackendContext(data_dir=tmp_path, sessions=sessions))
 
-    default_result = await session_search_handler(
-        make_context(tmp_path), {"query": "checkout bug"}, sessions
-    )
-    tool_result = await session_search_handler(
-        make_context(tmp_path),
-        {"query": "checkout bug", "roles": ["tool"]},
-        sessions,
+    data = success(
+        await session_search_handler(
+            make_context(tmp_path), {"action": "search", "query": "telegram"}, backend
+        )
     )
 
-    default_data = assert_success_envelope(default_result)
-    tool_data = assert_success_envelope(tool_result)
-    assert default_data["matches"] == []
-    assert len(tool_data["matches"]) == 1
-    assert tool_data["matches"][0]["role"] == "tool"
+    assert data["backend"] == "sqlite_fts"
+    assert data["ranking"] == "bm25"
+    assert [item["session_id"] for item in data["items"]] == ["dense", "sparse"]
 
 
-async def test_session_search_excludes_tool_results_from_context_until_requested(
-    tmp_path: Path,
+@pytest.mark.parametrize("backend_kind", ["jsonl", "fts"])
+async def test_search_excludes_its_own_persisted_results_before_limiting(
+    tmp_path: Path, backend_kind: str
 ) -> None:
-    """A tool result next to a match is hidden from context by default, shown when requested."""
-
     sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="ctx-session")
-    session.append(ChatMessage.user("inspect the checkout bug", timestamp=timestamp(1)))
+    session = sessions.create("coder", session_id="artifact-loop")
     session.append(
         ChatMessage.tool(
-            tool_call_id="c1",
-            name="bash",
-            content="raw ansi terminal dump",
+            tool_call_id="call-1",
+            name="session_search",
+            content="needle artifact",
             timestamp=timestamp(2),
         )
     )
+    real = ChatMessage.user("needle real", timestamp=timestamp(1))
+    session.append(real)
+    recall: Any = JsonlSessionRecallBackend(sessions)
+    if backend_kind == "fts":
+        recall = SqliteFtsRecallBackend(RecallBackendContext(data_dir=tmp_path, sessions=sessions))
 
-    default_result = await session_search_handler(
-        make_context(tmp_path),
-        {"query": "checkout bug", "context": 1, "bookends": 0},
-        sessions,
-    )
-    tool_result = await session_search_handler(
-        make_context(tmp_path),
-        {"query": "checkout bug", "roles": ["user", "tool"], "context": 1, "bookends": 0},
-        sessions,
-    )
-
-    default_data = assert_success_envelope(default_result)
-    tool_data = assert_success_envelope(tool_result)
-    # The adjacent tool result is not a neighbor of the match by default.
-    assert default_data["matches"][0]["context"]["after"] == []
-    # ...but it shows as context once the caller opts into tool results.
-    assert tool_data["matches"][0]["context"]["after"][0]["role"] == "tool"
-
-
-async def test_session_search_excludes_its_own_prior_results(tmp_path: Path) -> None:
-    """A persisted session_search result is never returned as a match.
-
-    Its output is the recall tool's own derived content; returning it makes a
-    search match its previous results (a feedback loop). The real user message
-    in the same session still matches.
-    """
-
-    sessions = ChatSessionManager(tmp_path)
-    session = sessions.create("coder", session_id="loopy")
-    session.append(
-        ChatMessage.tool(
-            tool_call_id="c1",
-            name="session_search",
-            content="Found 3 match(es) for query: needle",
-            timestamp=timestamp(1),
-        )
-    )
-    session.append(ChatMessage.user("the real needle is here", timestamp=timestamp(2)))
-
-    result = await session_search_handler(make_context(tmp_path), {"query": "needle"}, sessions)
-
-    data = assert_success_envelope(result)
-    matches = data["matches"]
-    assert len(matches) == 1
-    assert matches[0]["role"] == "user"
-    assert matches[0]["snippet"] == "the real needle is here"
-
-
-async def test_recall_tool_result_name_matches_session_search_tool_name() -> None:
-    """Drift guard: the recall layer's excluded-tool name must equal the tool's name.
-
-    ``core.recall`` cannot import ``core.tools`` (lower layer), so it keeps a
-    private copy of the tool name; this asserts the copy stays in sync.
-    """
-
-    from core.recall.jsonl import RECALL_TOOL_RESULT_NAME
-
-    assert RECALL_TOOL_RESULT_NAME == SESSION_SEARCH_TOOL_NAME
-
-
-@pytest.mark.parametrize(
-    ("arguments", "message"),
-    [
-        ({"limit": 0}, "limit"),
-        ({"context": 3}, "context"),
-        ({"roles": ["system"]}, "roles"),
-        ({"since": "soon"}, "since"),
-        ({"unknown": True}, "Unknown argument"),
-    ],
-)
-async def test_session_search_rejects_invalid_arguments(
-    tmp_path: Path,
-    arguments: JsonObject,
-    message: str,
-) -> None:
-    sessions = ChatSessionManager(tmp_path)
-
-    result = await session_search_handler(make_context(tmp_path), arguments, sessions)
-
-    error = assert_failure_envelope(result, "invalid_arguments")
-    assert message in error["message"]
-
-
-async def test_session_search_waits_for_calling_run_without_blocking_other_work(
-    tmp_path: Path,
-) -> None:
-    """The Tool result stays awaited while unrelated event-loop work can continue."""
-
-    started = asyncio.Event()
-    release = asyncio.Event()
-
-    class _WaitingBackend:
-        async def browse(self, request: Any) -> JsonObject:
-            return {}
-
-        async def overview(self, request: Any) -> JsonObject:
-            return {}
-
-        async def search(self, request: Any) -> JsonObject:
-            started.set()
-            await release.wait()
-            return {"content": "done", "matches": []}
-
-        async def scroll(self, request: Any) -> JsonObject:
-            return {}
-
-    tool_task = asyncio.create_task(
-        session_search_handler(
+    data = success(
+        await session_search_handler(
             make_context(tmp_path),
-            {"query": "needle"},
-            _WaitingBackend(),
+            {
+                "action": "search",
+                "query": "needle",
+                "roles": ["user", "tool"],
+                "limit": 1,
+            },
+            recall,
         )
     )
 
-    await asyncio.wait_for(started.wait(), timeout=1)
-    assert not tool_task.done()
-    await asyncio.sleep(0)
-    assert not tool_task.done()
-
-    release.set()
-    data = assert_success_envelope(await tool_task)
-    assert data["content"] == "done"
+    assert [item["message_id"] for item in data["items"]] == [real.id]
 
 
-async def test_session_search_offloads_existing_sync_extension_backend(tmp_path: Path) -> None:
-    class _SyncBackend:
-        def browse(self, request: Any) -> JsonObject:
-            return {}
+async def test_legacy_extension_search_is_adapted_without_blocking(tmp_path: Path) -> None:
+    caller_thread = threading.get_ident()
 
-        def overview(self, request: Any) -> JsonObject:
-            return {}
+    class _SimpleLegacyBackend:
+        sessions = ChatSessionManager(tmp_path)
+
+        def __init__(self) -> None:
+            self.search_thread: int | None = None
 
         def search(self, request: Any) -> JsonObject:
-            return {"content": "sync extension", "matches": []}
+            self.search_thread = threading.get_ident()
+            return {"matches": [{"query": request.query}]}
 
-        def scroll(self, request: Any) -> JsonObject:
-            return {}
+    legacy = _SimpleLegacyBackend()
+    data = success(
+        await session_search_handler(
+            make_context(tmp_path),
+            {"action": "search", "query": "legacy"},
+            legacy,
+        )
+    )
+
+    assert data["result_type"] == "backend_defined"
+    assert data["items"][0]["backend_result"]["matches"][0]["query"] == "legacy"
+    assert legacy.search_thread is not None
+    assert legacy.search_thread != caller_thread
+
+
+async def test_cursor_rejects_changed_source(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="changing")
+    for index in range(2):
+        session.append(ChatMessage.user(f"needle {index}", timestamp=timestamp(index + 1)))
+    backend = JsonlSessionRecallBackend(sessions)
+    first = success(
+        await session_search_handler(
+            make_context(tmp_path),
+            {"action": "search", "query": "needle", "limit": 1},
+            backend,
+        )
+    )
+    session.append(ChatMessage.user("needle changed", timestamp=timestamp(3)))
 
     result = await session_search_handler(
         make_context(tmp_path),
-        {"query": "needle"},
-        _SyncBackend(),  # type: ignore[arg-type]
+        {"action": "search", "cursor": first["next_cursor"]},
+        backend,
     )
 
-    data = assert_success_envelope(result)
-    assert data["content"] == "sync extension"
+    failure(result, "stale_cursor")

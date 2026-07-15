@@ -13,6 +13,8 @@ from core.sessions import ChatSessionManager
 JsonObject = dict[str, Any]
 RecallMatchMode = Literal["all_terms", "any_term", "phrase"]
 RecallSortMode = Literal["newest", "oldest"]
+RecallOrder = Literal["relevance", "newest", "oldest"]
+RecallResultType = Literal["message", "passage", "backend_defined"]
 
 RECALL_BACKEND_JSONL_SCAN = "jsonl_scan"
 RECALL_BACKEND_SQLITE_FTS = "sqlite_fts"
@@ -27,6 +29,14 @@ FIRST_PARTY_RECALL_BACKENDS = frozenset(
         RECALL_BACKEND_HYBRID,
     }
 )
+
+
+class RecallSearchError(RuntimeError):
+    """Expected first-party search failure with a stable machine code."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -49,6 +59,71 @@ class RecallRequest:
     # before; a project id reaches that project's anchored Sessions. Additive
     # with a ``None`` default so every existing caller keeps today's behavior.
     project_id: str | None = None
+
+
+@dataclass(frozen=True)
+class RecallSearchCapabilities:
+    """Model-facing search behavior implemented by one first-party backend."""
+
+    result_type: RecallResultType
+    guidance: str
+    match_argument: str | None = None
+    match_modes: tuple[RecallMatchMode, ...] = ()
+    order_modes: tuple[RecallOrder, ...] = ("relevance",)
+    default_order: RecallOrder = "relevance"
+    supports_roles: bool = False
+
+
+@dataclass(frozen=True)
+class RecallSearchRequest:
+    """Normalized query-only request for the first-party Recall contract."""
+
+    agent_id: str
+    project_id: str | None
+    session_id: str | None
+    query: str
+    since: datetime | None
+    until: datetime | None
+    roles: tuple[str, ...]
+    match_mode: RecallMatchMode
+    order: RecallOrder
+    offset: int
+    limit: int
+    snapshot_id: str | None = None
+
+
+@dataclass(frozen=True)
+class RecallSearchHit:
+    """One ranked retrieval item before Tool-level excerpt fitting."""
+
+    result_type: RecallResultType
+    session_id: str
+    message_id: str
+    role: str
+    timestamp: str
+    text: str
+    score: float
+    passage_id: str | None = None
+    start_message_id: str | None = None
+    end_message_id: str | None = None
+    end_timestamp: str | None = None
+    match_start: int | None = None
+    match_end: int | None = None
+    sources: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RecallSearchPage:
+    """A deterministic slice of one backend ranking."""
+
+    hits: tuple[RecallSearchHit, ...]
+    result_type: RecallResultType
+    ranking: str
+    snapshot_id: str
+    has_more: bool
+    total_candidate_sessions: int
+    degraded: bool = False
+    degradation_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -75,6 +150,17 @@ class RecallBackend(Protocol):
 
     async def scroll(self, request: RecallRequest) -> JsonObject:
         """Return an anchored context view for a recall request."""
+
+
+@runtime_checkable
+class SupportsRecallSearch(Protocol):
+    """Typed query contract used by first-party and upgraded extension backends."""
+
+    def search_capabilities(self) -> RecallSearchCapabilities:
+        """Describe the search controls and result unit this backend implements."""
+
+    async def search_page(self, request: RecallSearchRequest) -> RecallSearchPage:
+        """Return one deterministic page from the backend-native ranking."""
 
 
 @runtime_checkable

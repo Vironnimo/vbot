@@ -3,13 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 from datetime import UTC, datetime
 from typing import Any
 
 from core.chat.content_blocks import FileBlock, FileMentionBlock, MediaBlock, TextBlock
-from core.recall.recall import JsonObject, RecallRequest
+from core.recall.recall import (
+    JsonObject,
+    RecallMatchMode,
+    RecallOrder,
+    RecallRequest,
+    RecallSearchCapabilities,
+    RecallSearchError,
+    RecallSearchHit,
+    RecallSearchPage,
+    RecallSearchRequest,
+)
 from core.sessions import ChatSessionManager, is_skill_context_note
 
 # Roles that count as a real conversation message. Used for vector chunk
@@ -35,8 +46,12 @@ SESSION_RECALL_DEFAULT_ROLES = (
     "compaction_checkpoint",
 )
 SESSION_RECALL_SUPPORTED_ROLES = (*SESSION_RECALL_CONVERSATION_ROLES, "note")
-SESSION_RECALL_MATCH_MODES = ("all_terms", "any_term", "phrase")
-SESSION_RECALL_SORT_MODES = ("newest", "oldest")
+SESSION_RECALL_MATCH_MODES: tuple[RecallMatchMode, ...] = (
+    "all_terms",
+    "any_term",
+    "phrase",
+)
+SESSION_RECALL_SORT_MODES: tuple[RecallOrder, ...] = ("newest", "oldest")
 SESSION_RECALL_SNIPPET_CHARS = 320
 SESSION_RECALL_CONTEXT_SNIPPET_CHARS = 180
 
@@ -106,6 +121,92 @@ class JsonlSessionRecallBackend:
         override it.
         """
         return SESSION_RECALL_LITERAL_SEARCH_GUIDANCE
+
+    def search_capabilities(self) -> RecallSearchCapabilities:
+        return RecallSearchCapabilities(
+            result_type="message",
+            guidance=SESSION_RECALL_LITERAL_SEARCH_GUIDANCE,
+            match_argument="match",
+            match_modes=SESSION_RECALL_MATCH_MODES,
+            order_modes=SESSION_RECALL_SORT_MODES,
+            default_order="newest",
+            supports_roles=True,
+        )
+
+    async def search_page(self, request: RecallSearchRequest) -> RecallSearchPage:
+        return await asyncio.to_thread(self._search_page, request)
+
+    def _search_page(self, request: RecallSearchRequest) -> RecallSearchPage:
+        summaries = self._search_candidate_summaries(request)
+        snapshot_id = self._search_snapshot(request, summaries)
+        if request.snapshot_id is not None and request.snapshot_id != snapshot_id:
+            raise RecallSearchError(
+                "stale_cursor", "Session search source changed; repeat the search."
+            )
+
+        ranked: list[tuple[datetime, str, int, RecallSearchHit]] = []
+        for summary in summaries:
+            session_id = str(summary["id"])
+            messages = self.sessions.get(request.agent_id, session_id, request.project_id).load()
+            for message_index, message in enumerate(messages):
+                if not message_matches_search_request(message, request):
+                    continue
+                text = message_search_text(message)
+                if not text_matches_search_request(text, request):
+                    continue
+                match_start, match_end = first_match_span(text, request.query, request.match_mode)
+                timestamp = parse_persisted_timestamp(message.timestamp) or datetime.min.replace(
+                    tzinfo=UTC
+                )
+                ranked.append(
+                    (
+                        timestamp,
+                        session_id,
+                        message_index,
+                        RecallSearchHit(
+                            result_type="message",
+                            session_id=session_id,
+                            message_id=str(message.id),
+                            role=str(message.role),
+                            timestamp=str(message.timestamp),
+                            text=text,
+                            score=0.0,
+                            match_start=match_start,
+                            match_end=match_end,
+                        ),
+                    )
+                )
+        ranked.sort(
+            key=lambda item: (item[0], item[1], item[2]),
+            reverse=request.order == "newest",
+        )
+        start = request.offset
+        end = min(start + request.limit, len(ranked))
+        return RecallSearchPage(
+            hits=tuple(item[3] for item in ranked[start:end]),
+            result_type="message",
+            ranking=f"message_time_{request.order}",
+            snapshot_id=snapshot_id,
+            has_more=end < len(ranked),
+            total_candidate_sessions=len(summaries),
+        )
+
+    def _search_candidate_summaries(self, request: RecallSearchRequest) -> list[JsonObject]:
+        summaries = self.sessions.list_with_metadata(request.agent_id, request.project_id)
+        return [
+            summary
+            for summary in summaries
+            if request.session_id is None or str(summary.get("id")) == request.session_id
+        ]
+
+    def _search_snapshot(self, request: RecallSearchRequest, summaries: list[JsonObject]) -> str:
+        fingerprint: list[str] = []
+        for summary in sorted(summaries, key=lambda item: str(item.get("id", ""))):
+            session_id = str(summary["id"])
+            session = self.sessions.get(request.agent_id, session_id, request.project_id)
+            stat = session.path.stat()
+            fingerprint.append(f"{session_id}:{stat.st_mtime_ns}:{stat.st_size}")
+        return hashlib.sha256("\n".join(fingerprint).encode("utf-8")).hexdigest()
 
     def candidate_session_summaries(self, request: RecallRequest) -> list[JsonObject]:
         summaries = [
@@ -342,6 +443,17 @@ def message_matches_request(message: Any, request: RecallRequest) -> bool:
     if is_recall_artifact_message(message):
         return False
 
+    timestamp = parse_persisted_timestamp(message.timestamp)
+    if request.since is not None and timestamp is not None and timestamp < request.since:
+        return False
+    return not (request.until is not None and timestamp is not None and timestamp > request.until)
+
+
+def message_matches_search_request(message: Any, request: RecallSearchRequest) -> bool:
+    if message.role not in request.roles:
+        return False
+    if is_skill_context_note(message) or is_recall_artifact_message(message):
+        return False
     timestamp = parse_persisted_timestamp(message.timestamp)
     if request.since is not None and timestamp is not None and timestamp < request.since:
         return False
@@ -585,6 +697,35 @@ def text_matches_query(text: str, request: RecallRequest) -> bool:
     if request.match_mode == "any_term":
         return any(term in haystack for term in terms)
     return all(term in haystack for term in terms)
+
+
+def text_matches_search_request(text: str, request: RecallSearchRequest) -> bool:
+    haystack = compact_text(text).casefold()
+    if not haystack:
+        return False
+    if request.match_mode == "phrase":
+        return compact_text(request.query).casefold() in haystack
+    terms = query_terms(request.query)
+    if request.match_mode == "any_term":
+        return any(term in haystack for term in terms)
+    return all(term in haystack for term in terms)
+
+
+def first_match_span(text: str, query: str, match_mode: str) -> tuple[int | None, int | None]:
+    """Locate a useful raw-source span without normalizing the returned text."""
+
+    haystack = text.casefold()
+    needles = (
+        [query.casefold()]
+        if match_mode == "phrase"
+        else [term for term in query_terms(query) if term]
+    )
+    matches = [(haystack.find(needle), len(needle)) for needle in needles if needle]
+    matches = [(index, length) for index, length in matches if index >= 0]
+    if not matches:
+        return None, None
+    index, length = min(matches, key=lambda item: item[0])
+    return index, index + length
 
 
 def snippet(text: str, request: RecallRequest, limit: int) -> str:

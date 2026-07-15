@@ -10,7 +10,12 @@ import pytest
 
 from core.chat import ChatMessage, ToolCall
 from core.chat.content_blocks import FileBlock, TextBlock
-from core.recall import RecallBackendContext, RecallRequest, SqliteFtsRecallBackend
+from core.recall import (
+    RecallBackendContext,
+    RecallRequest,
+    RecallSearchRequest,
+    SqliteFtsRecallBackend,
+)
 from core.sessions import ChatSessionManager
 
 pytestmark = pytest.mark.asyncio
@@ -45,6 +50,41 @@ def request(
 
 def backend(tmp_path: Path, sessions: ChatSessionManager) -> SqliteFtsRecallBackend:
     return SqliteFtsRecallBackend(RecallBackendContext(data_dir=tmp_path, sessions=sessions))
+
+
+def passage_request(query: str, *, limit: int = 20) -> RecallSearchRequest:
+    return RecallSearchRequest(
+        agent_id="coder",
+        project_id=None,
+        session_id=None,
+        query=query,
+        since=None,
+        until=None,
+        roles=("user", "assistant", "error", "compaction_checkpoint"),
+        match_mode="all_terms",
+        order="relevance",
+        offset=0,
+        limit=limit,
+    )
+
+
+async def test_sqlite_fts_passage_arm_returns_multiple_source_faithful_hits(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    original = "needle  spacing\n" * 250
+    sessions.create("coder", session_id="passages").append(
+        ChatMessage.user(original, timestamp=timestamp(1))
+    )
+
+    page = await backend(tmp_path, sessions).search_passages(passage_request("needle"))
+
+    assert page.result_type == "passage"
+    assert page.ranking == "bm25_trigram"
+    assert len(page.hits) > 1
+    assert all(hit.session_id == "passages" for hit in page.hits)
+    assert all(hit.sources == ("literal",) for hit in page.hits)
+    assert page.hits[0].text in original
 
 
 async def test_sqlite_fts_builds_index_lazily_and_finds_matches(tmp_path: Path) -> None:

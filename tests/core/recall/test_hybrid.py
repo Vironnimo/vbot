@@ -19,7 +19,7 @@ import pytest
 
 from core.chat import ChatMessage
 from core.model_tasks import EmbeddingResult
-from core.recall import RecallBackendContext, RecallRequest
+from core.recall import RecallBackendContext, RecallRequest, RecallSearchRequest
 from core.recall.hybrid import (
     _FETCH_MARGIN,
     _FETCH_MULTIPLIER,
@@ -127,6 +127,76 @@ def backend(
             embeddings=embeddings,
         )
     )
+
+
+def search_request(query: str, *, limit: int = 10) -> RecallSearchRequest:
+    return RecallSearchRequest(
+        agent_id="coder",
+        project_id=None,
+        session_id=None,
+        query=query,
+        since=None,
+        until=None,
+        roles=("user", "assistant", "error", "compaction_checkpoint"),
+        match_mode="all_terms",
+        order="relevance",
+        offset=0,
+        limit=limit,
+    )
+
+
+async def test_typed_hybrid_search_uses_passage_rrf_and_source_membership(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="both").append(
+        ChatMessage.user("I was driving today", timestamp=timestamp(1))
+    )
+    sessions.create("coder", session_id="semantic").append(
+        ChatMessage.user("vehicle maintenance", timestamp=timestamp(2))
+    )
+    recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
+
+    page = await recall.search_page(search_request("driving"))
+
+    assert page.result_type == "passage"
+    assert page.ranking == "reciprocal_rank_fusion"
+    assert page.hits[0].session_id == "both"
+    assert page.hits[0].sources == ("literal", "semantic")
+    assert any(hit.session_id == "semantic" and hit.sources == ("semantic",) for hit in page.hits)
+
+
+async def test_typed_hybrid_degrades_explicitly_to_literal_passages(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="literal").append(
+        ChatMessage.user("telegraminstallation", timestamp=timestamp(1))
+    )
+    recall = backend(tmp_path, sessions)
+
+    page = await recall.search_page(search_request("telegram"))
+
+    assert [hit.session_id for hit in page.hits] == ["literal"]
+    assert page.hits[0].sources == ("literal",)
+    assert page.degraded is True
+    assert page.degradation_reason is not None
+
+
+async def test_typed_hybrid_keeps_multiple_passages_from_one_session(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="repeated").append(
+        ChatMessage.user("needle context " * 400, timestamp=timestamp(1))
+    )
+    recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
+
+    page = await recall.search_page(search_request("needle"))
+
+    repeated = [hit for hit in page.hits if hit.session_id == "repeated"]
+    assert len(repeated) > 1
+    assert len({hit.passage_id for hit in repeated}) == len(repeated)
 
 
 # ---------------------------------------------------------------------------

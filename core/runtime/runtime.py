@@ -399,6 +399,7 @@ class Runtime:
         self._agent_resolver: AgentResolver | None = None
         self._recall_backend_registry: RecallBackendRegistry | None = None
         self._recall_backend: RecallBackend | None = None
+        self._recall_backend_name: str | None = None
         self._chat_run_manager: ChatRunManager | None = None
         self._command_dispatcher: CommandDispatcher | None = None
         self.chat_runs: ChatRunManager | None = None
@@ -579,7 +580,12 @@ class Runtime:
         recall_registry = self._build_recall_backend_registry()
         self._recall_backend_registry = recall_registry
         self._recall_backend = self._create_recall_backend(recall_registry)
-        register_session_search_tool(self._tools, self._recall_backend)
+        register_session_search_tool(
+            self._tools,
+            self._recall_backend,
+            self._chat_sessions,
+            self._recall_backend_name,
+        )
         self._chat_run_manager = ChatRunManager()
         self._command_dispatcher = CommandDispatcher(
             self._chat_run_manager,
@@ -761,6 +767,7 @@ class Runtime:
         self._agent_resolver = None
         self._recall_backend_registry = None
         self._recall_backend = None
+        self._recall_backend_name = None
         self._channel_service = None
         self._cron_service = None
         self._trigger_service = None
@@ -1280,7 +1287,9 @@ class Runtime:
             model_registry=self._models,
         )
         try:
-            return registry.create(backend_name, context)
+            backend = registry.create(backend_name, context)
+            self._recall_backend_name = backend_name
+            return backend
         except KeyError:
             if self.logger is not None:
                 self.logger.warning(
@@ -1288,6 +1297,7 @@ class Runtime:
                     backend_name,
                     DEFAULT_RECALL_BACKEND,
                 )
+            self._recall_backend_name = DEFAULT_RECALL_BACKEND
             return registry.create(DEFAULT_RECALL_BACKEND, context)
 
     def reload_channel_tool(self) -> None:
@@ -1308,7 +1318,12 @@ class Runtime:
         self._recall_backend = self._create_recall_backend(recall_registry)
         if self._tools is not None:
             self._tools.unregister("session_search")
-            register_session_search_tool(self._tools, self._recall_backend)
+            register_session_search_tool(
+                self._tools,
+                self._recall_backend,
+                self._chat_sessions,
+                self._recall_backend_name,
+            )
 
     async def reload_extensions(self) -> None:
         """Rebuild the whole extension layer from disk — restart-equivalent, live.
