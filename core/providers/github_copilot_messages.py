@@ -8,10 +8,9 @@ responses/stream events back to the adapter delta contract consumed by chat.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Any
 
-from core.providers.anthropic import apply_anthropic_cache_usage
+from core.providers.anthropic import AnthropicMessagesStreamDecoder, apply_anthropic_cache_usage
 from core.providers.errors import ProviderError
 from core.providers.github_copilot_policy import GitHubCopilotModelPolicy
 from core.providers.openai_compatible import DEFAULT_MAX_OUTPUT_TOKENS
@@ -27,15 +26,6 @@ THINKING_BLOCK_TYPE = "thinking"
 REDACTED_THINKING_BLOCK_TYPE = "redacted_thinking"
 REASONING_META_CONTENT_BLOCKS = "content_blocks"
 
-MESSAGE_TOOL_STOP_REASONS = {"tool_use"}
-MESSAGE_STOP_REASONS = {
-    "end_turn",
-    "max_tokens",
-    "pause_turn",
-    "refusal",
-    "stop_sequence",
-}
-
 SAFE_TOP_LEVEL_PARAMETERS = {
     "temperature",
     "top_p",
@@ -46,13 +36,17 @@ SAFE_THINKING_TYPES = {"adaptive", "disabled", "enabled"}
 SAFE_TOOL_CHOICE_TYPES = {"auto", "any", "tool"}
 
 
-@dataclass
-class CopilotMessagesStreamState:
-    """Mutable state for normalizing one Copilot Messages SSE stream."""
+class CopilotMessagesStreamState(AnthropicMessagesStreamDecoder):
+    """Copilot policy applied to the shared Anthropic Messages decoder."""
 
-    content_blocks_by_index: dict[int, dict[str, Any]] = field(default_factory=dict)
-    reasoning_meta_blocks: list[dict[str, Any]] = field(default_factory=list)
-    usage_from_start: dict[str, Any] | None = None
+    def __init__(self) -> None:
+        super().__init__(
+            error_detail=_messages_error_detail,
+            reasoning_block_normalizer=_safe_reasoning_block,
+            text_delta_in_thinking=True,
+            emit_usage_without_start=False,
+            drop_stopped_reasoning_block=True,
+        )
 
 
 def build_copilot_messages_payload(
@@ -114,21 +108,7 @@ def normalize_copilot_messages_stream_event(
 ) -> list[dict[str, Any]]:
     """Normalize one parsed Copilot Messages stream event."""
 
-    event_type = event.get("type")
-    if event_type == "error":
-        raise ProviderError(_messages_error_detail(event), retryable=False)
-    if event_type == "message_start":
-        _capture_message_start_usage(event, state)
-        return []
-    if event_type == "content_block_start":
-        return _normalize_content_block_start(event, state)
-    if event_type == "content_block_delta":
-        return _normalize_content_block_delta(event, state)
-    if event_type == "content_block_stop":
-        return _normalize_content_block_stop(event, state)
-    if event_type == "message_delta":
-        return _normalize_message_delta(event, state)
-    return []
+    return state.normalize(event)
 
 
 def _to_copilot_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -622,176 +602,6 @@ def _content_blocks(content_blocks: Any) -> list[dict[str, Any]]:
     return [block for block in content_blocks if isinstance(block, dict)]
 
 
-def _capture_message_start_usage(
-    event: dict[str, Any],
-    state: CopilotMessagesStreamState,
-) -> None:
-    message = event.get("message")
-    if not isinstance(message, dict):
-        return
-    usage = message.get("usage")
-    if not isinstance(usage, dict):
-        return
-    input_tokens = usage.get("input_tokens")
-    if isinstance(input_tokens, int):
-        usage_from_start: dict[str, Any] = {"input_tokens": input_tokens}
-        apply_anthropic_cache_usage(usage_from_start, usage)
-        state.usage_from_start = usage_from_start
-
-
-def _normalize_content_block_start(
-    event: dict[str, Any],
-    state: CopilotMessagesStreamState,
-) -> list[dict[str, Any]]:
-    index = _stream_index(event)
-    content_block = event.get("content_block")
-    if index is None or not isinstance(content_block, dict):
-        return []
-
-    block_type = content_block.get("type")
-    block_state: dict[str, Any] = {"type": block_type}
-    if block_type == TOOL_USE_BLOCK_TYPE:
-        tool_call_id = content_block.get("id")
-        if not isinstance(tool_call_id, str) or not tool_call_id:
-            tool_call_id = f"tool_call_{index}"
-        name = content_block.get("name")
-        block_state["id"] = tool_call_id
-        block_state["name"] = name if isinstance(name, str) else ""
-        state.content_blocks_by_index[index] = block_state
-        if block_state["name"]:
-            return [
-                {
-                    "type": "tool_call_delta",
-                    "id": tool_call_id,
-                    "name_delta": block_state["name"],
-                    "arguments_delta": "",
-                }
-            ]
-        return []
-
-    safe_reasoning_block = _safe_reasoning_block(content_block)
-    if safe_reasoning_block:
-        block_state["block"] = safe_reasoning_block
-    state.content_blocks_by_index[index] = block_state
-    return []
-
-
-def _normalize_content_block_delta(
-    event: dict[str, Any],
-    state: CopilotMessagesStreamState,
-) -> list[dict[str, Any]]:
-    index = _stream_index(event)
-    delta = event.get("delta")
-    if index is None or not isinstance(delta, dict):
-        return []
-    block_state = state.content_blocks_by_index.get(index, {})
-    delta_type = delta.get("type")
-    if delta_type == "text_delta":
-        return _normalize_text_delta(delta, block_state)
-    if delta_type == "thinking_delta":
-        return _normalize_thinking_delta(delta, block_state)
-    if delta_type == "signature_delta":
-        _apply_signature_delta(delta, block_state)
-        return []
-    if delta_type == "input_json_delta":
-        return _normalize_tool_input_delta(delta, block_state)
-    return []
-
-
-def _normalize_content_block_stop(
-    event: dict[str, Any],
-    state: CopilotMessagesStreamState,
-) -> list[dict[str, Any]]:
-    index = _stream_index(event)
-    if index is None:
-        return []
-    block_state = state.content_blocks_by_index.get(index, {})
-    block = block_state.get("block")
-    safe_block = _safe_reasoning_block(block)
-    if not safe_block:
-        return []
-
-    state.reasoning_meta_blocks.append(safe_block)
-    state.content_blocks_by_index.pop(index, None)
-    return [
-        {
-            "type": "reasoning_meta",
-            "reasoning_meta": {
-                REASONING_META_CONTENT_BLOCKS: [
-                    dict(meta_block) for meta_block in state.reasoning_meta_blocks
-                ]
-            },
-        }
-    ]
-
-
-def _normalize_message_delta(
-    event: dict[str, Any],
-    state: CopilotMessagesStreamState,
-) -> list[dict[str, Any]]:
-    normalized_deltas: list[dict[str, Any]] = []
-    delta = event.get("delta")
-    if isinstance(delta, dict):
-        stop_reason = delta.get("stop_reason")
-        if stop_reason is not None:
-            normalized_deltas.append(
-                {
-                    "type": "finish",
-                    "reason": _normalize_stop_reason(
-                        stop_reason,
-                        has_tool_calls=_has_stream_tool_calls(state),
-                    ),
-                }
-            )
-    usage = event.get("usage")
-    if isinstance(usage, dict):
-        output_tokens = usage.get("output_tokens")
-        if isinstance(output_tokens, int) and state.usage_from_start is not None:
-            normalized_deltas.append(
-                {
-                    "type": "usage",
-                    **state.usage_from_start,
-                    "output_tokens": output_tokens,
-                }
-            )
-    return normalized_deltas
-
-
-def _normalize_thinking_delta(
-    delta: dict[str, Any],
-    block_state: dict[str, Any],
-) -> list[dict[str, Any]]:
-    thinking = delta.get("thinking")
-    if not isinstance(thinking, str) or not thinking:
-        return []
-    block = block_state.get("block")
-    if isinstance(block, dict):
-        _append_reasoning_text(block, thinking, preferred_key="thinking")
-    return [{"type": "reasoning_delta", "text": thinking}]
-
-
-def _normalize_text_delta(
-    delta: dict[str, Any],
-    block_state: dict[str, Any],
-) -> list[dict[str, Any]]:
-    text = delta.get("text")
-    if not isinstance(text, str) or not text:
-        return []
-    if block_state.get("type") == THINKING_BLOCK_TYPE:
-        block = block_state.get("block")
-        if isinstance(block, dict):
-            _append_reasoning_text(block, text, preferred_key="text")
-        return [{"type": "reasoning_delta", "text": text}]
-    return [{"type": "content_delta", "text": text}]
-
-
-def _apply_signature_delta(delta: dict[str, Any], block_state: dict[str, Any]) -> None:
-    signature = delta.get("signature")
-    block = block_state.get("block")
-    if isinstance(signature, str) and signature and isinstance(block, dict):
-        block["signature"] = signature
-
-
 def _reasoning_text_from_block(block: dict[str, Any]) -> str | None:
     thinking = block.get("thinking")
     if isinstance(thinking, str):
@@ -800,58 +610,6 @@ def _reasoning_text_from_block(block: dict[str, Any]) -> str | None:
     if isinstance(text, str):
         return text
     return None
-
-
-def _append_reasoning_text(
-    block: dict[str, Any], text: str, *, preferred_key: str | None = None
-) -> None:
-    key = preferred_key
-    if key not in {"thinking", "text"}:
-        key = "thinking" if "thinking" in block or "text" not in block else "text"
-    block[key] = f"{block.get(key, '')}{text}"
-
-
-def _normalize_tool_input_delta(
-    delta: dict[str, Any],
-    block_state: dict[str, Any],
-) -> list[dict[str, Any]]:
-    if block_state.get("type") != TOOL_USE_BLOCK_TYPE:
-        return []
-    arguments_delta = delta.get("partial_json")
-    if not isinstance(arguments_delta, str):
-        arguments_delta = delta.get("input_delta")
-    if not isinstance(arguments_delta, str) or not arguments_delta:
-        return []
-    tool_call_id = block_state.get("id")
-    if not isinstance(tool_call_id, str) or not tool_call_id:
-        return []
-    return [
-        {
-            "type": "tool_call_delta",
-            "id": tool_call_id,
-            "name_delta": "",
-            "arguments_delta": arguments_delta,
-        }
-    ]
-
-
-def _normalize_stop_reason(stop_reason: Any, *, has_tool_calls: bool) -> str:
-    if stop_reason in MESSAGE_TOOL_STOP_REASONS:
-        return "tool_calls"
-    if stop_reason in MESSAGE_STOP_REASONS:
-        return "stop"
-    return "tool_calls" if has_tool_calls else "stop"
-
-
-def _stream_index(event: dict[str, Any]) -> int | None:
-    index = event.get("index")
-    return index if isinstance(index, int) else None
-
-
-def _has_stream_tool_calls(state: CopilotMessagesStreamState) -> bool:
-    return any(
-        block.get("type") == TOOL_USE_BLOCK_TYPE for block in state.content_blocks_by_index.values()
-    )
 
 
 def _messages_error_detail(event: dict[str, Any]) -> str:
