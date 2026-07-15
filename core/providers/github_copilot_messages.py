@@ -10,7 +10,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.providers.anthropic import AnthropicMessagesStreamDecoder, apply_anthropic_cache_usage
+from core.providers.anthropic_compatible import (
+    AnthropicMessagesStreamDecoder,
+    apply_anthropic_cache_usage,
+)
 from core.providers.errors import ProviderError
 from core.providers.github_copilot_policy import GitHubCopilotModelPolicy
 from core.providers.openai_compatible import DEFAULT_MAX_OUTPUT_TOKENS

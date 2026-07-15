@@ -26,6 +26,9 @@ from core.providers.anthropic import (
     ANTHROPIC_METADATA_KEY,
     SUPPORTS_TEMPERATURE_METADATA_FIELD,
     AnthropicAdapter,
+)
+from core.providers.anthropic_compatible import (
+    AnthropicCompatibleAdapter,
     _to_anthropic_user_content_block,
 )
 from core.providers.errors import (
@@ -38,6 +41,16 @@ from core.providers.errors import (
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
 from core.tools import HISTORY_TOOL_DESCRIPTION, HISTORY_TOOL_NAME, HISTORY_TOOL_PARAMETERS
+
+
+def test_native_anthropic_uses_reusable_compatible_adapter() -> None:
+    assert issubclass(AnthropicAdapter, AnthropicCompatibleAdapter)
+
+
+def test_public_package_exports_anthropic_compatible_adapter() -> None:
+    from core.providers import AnthropicCompatibleAdapter as PublicAnthropicCompatibleAdapter
+
+    assert PublicAnthropicCompatibleAdapter is AnthropicCompatibleAdapter
 
 
 def _strip_cache_control(payload: dict) -> dict:
@@ -167,6 +180,40 @@ API_KEY = "test-anthropic-key-12345"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 CUSTOM_URL = "https://custom.anthropic.example/v1/messages"
 MINIMAL_URL = "https://minimal.anthropic.example/v1/messages"
+
+
+@pytest.mark.asyncio
+async def test_compatible_defaults_do_not_leak_native_anthropic_policy() -> None:
+    adapter = AnthropicCompatibleAdapter(NO_DEFAULTS_CONFIG, API_KEY)
+    try:
+        payload = adapter._build_payload(
+            [{"role": "user", "content": "hello"}],
+            model_id="compatible-model",
+        )
+
+        assert adapter.wire_media_support("compatible-model") == IMAGE_WIRE_MEDIA_TYPES
+        assert "cache_control" not in payload["messages"][-1]["content"][-1]
+    finally:
+        await adapter.aclose()
+
+
+@pytest.mark.asyncio
+async def test_compatible_borrows_transport_and_allows_version_header_opt_out() -> None:
+    borrowed_client = AsyncMock()
+    adapter = AnthropicCompatibleAdapter(
+        NO_DEFAULTS_CONFIG,
+        API_KEY,
+        client=borrowed_client,
+        api_version=None,
+    )
+
+    headers = await adapter._build_headers()
+    await adapter.aclose()
+
+    assert headers["x-api-key"] == API_KEY
+    assert "anthropic-version" not in headers
+    borrowed_client.aclose.assert_not_awaited()
+
 
 SUCCESS_RESPONSE = {
     "id": "msg_01XFDUDYJGAAC8998t2N3v",

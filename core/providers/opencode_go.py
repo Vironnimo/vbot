@@ -9,7 +9,11 @@ if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
 
 from core.providers.adapter import ModelLookup
-from core.providers.anthropic import AnthropicAdapter
+from core.providers.anthropic_compatible import (
+    ANTHROPIC_OVERLOADED_STATUS,
+    ANTHROPIC_VERSION,
+    AnthropicCompatibleAdapter,
+)
 from core.providers.openai_compatible import OpenAICompatibleAdapter, _to_openai_assistant_message
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY, ReasoningReplayPolicy
@@ -82,9 +86,9 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         # The inner adapter shares the same recorder, so the single context
         # set via set_debug_context() is seen by whichever client handles the
         # request (OpenAI chat/completions or the Anthropic messages path).
-        self._anthropic = AnthropicAdapter(
+        self._messages = AnthropicCompatibleAdapter(
             config,
-            token_getter,
+            self._token_getter,
             base_url=base_url,
             auth_config=AuthConfig(
                 header="x-api-key",
@@ -93,11 +97,15 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             ),
             model_lookup=model_lookup,
             debug_recorder=debug_recorder,
+            client=self._client,
+            api_version=ANTHROPIC_VERSION,
+            prompt_caching=True,
+            extra_retryable_statuses=frozenset({ANTHROPIC_OVERLOADED_STATUS}),
         )
 
     async def aclose(self) -> None:
+        await self._messages.aclose()
         await super().aclose()
-        await self._anthropic.aclose()
 
     def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
         """Replay persisted reasoning across runs on both gateway routes.
@@ -110,6 +118,13 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         del model_id
         return REASONING_REPLAY_FULL_HISTORY
 
+    def wire_media_support(self, model_id: str) -> frozenset[str]:
+        """Resolve media support from the wire selected for this model."""
+
+        if self._uses_anthropic_messages_path(model_id):
+            return self._messages.wire_media_support(model_id)
+        return super().wire_media_support(model_id)
+
     async def send(
         self,
         messages: list[dict[str, Any]],
@@ -119,7 +134,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
     ) -> dict[str, Any]:
         request_kwargs = self._kwargs_with_model_output_limit(model_id, kwargs)
         if self._uses_anthropic_messages_path(model_id):
-            return await self._anthropic.send(
+            return await self._messages.send(
                 messages,
                 model_id=model_id,
                 **request_kwargs,
@@ -135,7 +150,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
     ) -> AsyncIterator[dict[str, Any]]:
         request_kwargs = self._kwargs_with_model_output_limit(model_id, kwargs)
         if self._uses_anthropic_messages_path(model_id):
-            return self._anthropic.stream(
+            return self._messages.stream(
                 messages,
                 model_id=model_id,
                 **request_kwargs,
@@ -145,9 +160,13 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
     def normalize_response(
         self, response: dict[str, Any], *, model_id: str | None = None
     ) -> dict[str, Any]:
+        if model_id is not None:
+            if self._uses_anthropic_messages_path(model_id):
+                return self._messages.normalize_response(response, model_id=model_id)
+            return super().normalize_response(response, model_id=model_id)
         if "choices" in response:
             return super().normalize_response(response, model_id=model_id)
-        return self._anthropic.normalize_response(response, model_id=model_id)
+        return self._messages.normalize_response(response, model_id=model_id)
 
     def _format_assistant_message(self, message: dict[str, Any]) -> dict[str, Any]:
         wire = _to_openai_assistant_message(message)

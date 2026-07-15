@@ -13,6 +13,8 @@ import respx
 
 import core.providers.opencode_go as opencode_go_module
 from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES
+from core.providers.anthropic_compatible import AnthropicCompatibleAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
@@ -396,12 +398,26 @@ class TestOpenCodeGoAdapterMinimaxRouting:
 
         try:
             assert str(adapter._client.base_url).rstrip("/") == runtime_base_url
-            assert str(adapter._anthropic._client.base_url).rstrip("/") == runtime_base_url
-            assert adapter._anthropic._auth_config.header == "x-api-key"
-            assert adapter._anthropic._auth_config.prefix == ""
-            assert adapter._anthropic._auth_config.credential_key == runtime_auth.credential_key
+            assert isinstance(adapter._messages, AnthropicCompatibleAdapter)
+            assert adapter._messages._client is adapter._client
+            assert adapter._messages._token_getter is adapter._token_getter
+            assert adapter._messages._auth_config.header == "x-api-key"
+            assert adapter._messages._auth_config.prefix == ""
+            assert adapter._messages._auth_config.credential_key == runtime_auth.credential_key
         finally:
             await adapter.aclose()
+
+    def test_wire_media_support_routes_by_model_protocol(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        assert opencode_go_adapter.wire_media_support("minimax-m2.7") == (IMAGE_WIRE_MEDIA_TYPES)
+        assert opencode_go_adapter.wire_media_support("deepseek-v4-flash") == (
+            OpenAICompatibleAdapter.wire_media_support(
+                opencode_go_adapter,
+                "deepseek-v4-flash",
+            )
+        )
 
     @pytest.mark.parametrize("model_id", ANTHROPIC_MESSAGES_MODELS)
     @respx.mock
@@ -443,6 +459,11 @@ class TestOpenCodeGoAdapterMinimaxRouting:
 
         assert messages_route.called
         assert not chat_route.called
+        request = messages_route.calls.last.request
+        assert request.headers["x-api-key"] == API_KEY
+        assert request.headers["anthropic-version"] == "2023-06-01"
+        body = json.loads(request.content)
+        assert body["messages"][-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
 
     @respx.mock
     @pytest.mark.asyncio
@@ -978,7 +999,8 @@ class TestOpenCodeGoAdapterMinimaxRouting:
                     }
                 ],
                 "id": "1",
-            }
+            },
+            model_id="deepseek-v4-flash",
         )
 
         assert result["role"] == "assistant"
@@ -1000,17 +1022,29 @@ class TestOpenCodeGoAdapterMinimaxRouting:
         assert result["role"] == "assistant"
         assert result["content"] == "hi"
 
-    @pytest.mark.asyncio
-    async def test_aclose_closes_both_clients(
+    def test_normalize_response_routes_by_model_when_shape_is_ambiguous(
         self,
         opencode_go_adapter: OpenCodeGoAdapter,
     ) -> None:
-        base_client = AsyncMock()
-        anthropic_client = AsyncMock()
-        opencode_go_adapter._client = base_client
-        opencode_go_adapter._anthropic._client = anthropic_client
+        result = opencode_go_adapter.normalize_response(
+            {
+                "choices": [{"message": {"role": "assistant", "content": "wrong wire"}}],
+                "content": [{"type": "text", "text": "messages wire"}],
+            },
+            model_id="minimax-m2.7",
+        )
+
+        assert result["content"] == "messages wire"
+
+    @pytest.mark.asyncio
+    async def test_aclose_closes_shared_client_once(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        shared_client = AsyncMock()
+        opencode_go_adapter._client = shared_client
+        opencode_go_adapter._messages._client = shared_client
 
         await opencode_go_adapter.aclose()
 
-        base_client.aclose.assert_awaited_once()
-        anthropic_client.aclose.assert_awaited_once()
+        shared_client.aclose.assert_awaited_once()

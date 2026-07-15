@@ -10,6 +10,7 @@ from core.providers.accounts import (
 )
 from core.providers.adapter import ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
+from core.providers.anthropic_compatible import AnthropicCompatibleAdapter
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.errors import (
     ProviderAuthError,
@@ -55,6 +56,7 @@ __all__ = [
     "REASONING_REPLAY_NONE",
     "REASONING_REPLAY_POLICIES",
     "AnthropicAdapter",
+    "AnthropicCompatibleAdapter",
     "AuthConfig",
     "ConnectionConfig",
     "GitHubCopilotAdapter",
