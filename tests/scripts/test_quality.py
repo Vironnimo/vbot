@@ -197,9 +197,9 @@ def test_translate_includes_split_sibling_test_files():
 
     test_paths, notes = module.translate_to_test_paths(["core/providers/openai_compatible.py"])
 
-    # The oauth split sibling has no own source file, so it belongs to the
-    # adapter and must run alongside the exact mirror.
-    assert "tests/core/providers/test_openai_compatible.py" in test_paths
+    # The behavior suites and oauth sibling have no own source files, so they
+    # all belong to the adapter even without an exact mirror collector.
+    assert "tests/core/providers/test_openai_compatible_requests.py" in test_paths
     assert "tests/core/providers/test_openai_compatible_oauth.py" in test_paths
     assert notes == []
 
