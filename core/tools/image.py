@@ -108,12 +108,7 @@ def _collect_source_paths(context: ToolContext, arguments: JsonObject) -> tuple[
         path_text = optional_string(raw_path, field_name=f"source_images[{index}]")
         if path_text is None:
             raise ValueError(f"source_images[{index}] must be a non-empty string")
-        candidate = Path(path_text).expanduser()
-        resolved_paths.append(
-            candidate.resolve()
-            if candidate.is_absolute()
-            else (context.effective_cwd / candidate).resolve()
-        )
+        resolved_paths.append(context.resolve_path(path_text))
     if not resolved_paths:
         raise ValueError("source_images must contain at least one local image path")
     return tuple(resolved_paths)

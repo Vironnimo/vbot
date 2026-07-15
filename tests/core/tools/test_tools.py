@@ -142,6 +142,22 @@ class TestToolContext:
 
         assert context.effective_cwd == Path("repo")
 
+    def test_resolve_path_uses_effective_cwd_for_relative_path(self, tmp_path: Path) -> None:
+        context = ToolContext(
+            agent_id="agent",
+            session_id="session",
+            run_id="run",
+            tool_call_id="call",
+            tool_name="read",
+            tool_call_index=0,
+            workspace=tmp_path / "workspace",
+            app_root=tmp_path / "app",
+            data_root=tmp_path / "data",
+            cwd=tmp_path / "repo",
+        )
+
+        assert context.resolve_path("src/main.py") == (tmp_path / "repo" / "src/main.py").resolve()
+
     @pytest.mark.asyncio
     async def test_emit_uses_async_hook(self) -> None:
         events: list[tuple[str, JsonObject]] = []

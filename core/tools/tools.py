@@ -161,6 +161,14 @@ class ToolContext:
         """
         return self.cwd if self.cwd is not None else self.workspace
 
+    def resolve_path(self, path: str | Path) -> Path:
+        """Resolve one user-supplied path against this call's working directory."""
+
+        candidate = Path(path).expanduser()
+        if candidate.is_absolute():
+            return candidate.resolve()
+        return (self.effective_cwd / candidate).resolve()
+
     async def emit(self, event_type: str, payload: JsonObject) -> None:
         """Emit a tool lifecycle event through the runtime hook, when present."""
         if self.emit_hook is None:

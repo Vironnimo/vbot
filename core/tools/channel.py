@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from core.attachments.attachments import _sniff_mime
@@ -162,7 +161,7 @@ async def _handle_channel_send_tool(
         message = optional_string(arguments.get("message"), field_name="message")
         files = _build_file_data(
             arguments.get("file_paths"),
-            base_dir=context.effective_cwd,
+            context=context,
             max_size_bytes=max_attachment_size_bytes,
         )
         buttons = _build_buttons(arguments.get("buttons"))
@@ -342,7 +341,12 @@ def _platform_target_from_channel_config(channel_config: ChannelConfig) -> str |
     return str(channel_config.allowed_chat_ids[0])
 
 
-def _build_file_data(value: object, *, base_dir: Path, max_size_bytes: int) -> list[FileData]:
+def _build_file_data(
+    value: object,
+    *,
+    context: ToolContext,
+    max_size_bytes: int,
+) -> list[FileData]:
     if value is None:
         return []
     if not isinstance(value, list):
@@ -353,7 +357,7 @@ def _build_file_data(value: object, *, base_dir: Path, max_size_bytes: int) -> l
         if not isinstance(raw_path, str) or not raw_path.strip():
             raise ValueError(f"file_paths[{index}] must be a non-empty string")
 
-        resolved_path = _resolve_path(raw_path.strip(), base_dir=base_dir)
+        resolved_path = context.resolve_path(raw_path.strip())
         if not resolved_path.is_file():
             raise ValueError(f"file_paths[{index}] is not a file: {raw_path}")
 
@@ -415,10 +419,3 @@ def _build_buttons(value: object) -> list[list[InteractionButton]] | None:
             buttons.append(InteractionButton(label=label, data=data))
         rows.append(buttons)
     return rows or None
-
-
-def _resolve_path(path: str, *, base_dir: Path) -> Path:
-    resolved = Path(path).expanduser()
-    if not resolved.is_absolute():
-        resolved = base_dir / resolved
-    return resolved.resolve()
