@@ -11,7 +11,12 @@
   import TextArea from '../ui/TextArea.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
-  import { rpc } from '$lib/api.js';
+  import {
+    listExtensions,
+    reloadExtensions as reloadExtensionsRequest,
+    setExtensionSecret,
+    updateSettings,
+  } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
     applyExtensionsPanelList,
@@ -150,7 +155,7 @@
     clearAllAutoSaveTimers();
 
     try {
-      const result = await rpc('extensions.list');
+      const result = await listExtensions();
       extensions = applyExtensionsPanelList(result);
       configDrafts = Object.fromEntries(
         extensions.map((extension) => [
@@ -185,7 +190,7 @@
     onError('');
 
     try {
-      await rpc('extensions.reload');
+      await reloadExtensionsRequest();
       onToast({
         title: t('settings.extensions.reloadSuccess', 'Extensions reloaded.'),
         variant: 'success',
@@ -277,7 +282,7 @@
     });
 
     try {
-      await rpc('settings.update', payload);
+      await updateSettings(payload);
       onToast({
         title: t(
           'settings.extensions.configSaveSuccess',
@@ -304,7 +309,7 @@
     onError('');
 
     try {
-      await rpc('extensions.set_secret', {
+      await setExtensionSecret({
         name: extension.name,
         key: field.key,
         value,
@@ -369,7 +374,7 @@
     });
 
     try {
-      await rpc('settings.update', payload);
+      await updateSettings(payload);
       onToast({
         title: extension.disabled
           ? t('settings.extensions.enableSuccess', 'Extension enabled.')
@@ -440,7 +445,7 @@
     });
 
     try {
-      await rpc('settings.update', payload);
+      await updateSettings(payload);
       onToast({
         title: t(
           'settings.extensions.configSaveSuccess',

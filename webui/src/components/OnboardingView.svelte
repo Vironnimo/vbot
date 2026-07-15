@@ -1,7 +1,14 @@
 <script>
   import { onMount } from 'svelte';
 
-  import { rpc } from '$lib/api.js';
+  import {
+    getAgent,
+    getSettings,
+    listConnections,
+    listModels,
+    refreshModelDatabase as refreshModels,
+    updateAgent,
+  } from '$lib/api.js';
   import { englishCatalog, t } from '$lib/i18n.js';
   import {
     AGENT_FORM_MODE_EDIT,
@@ -127,7 +134,7 @@
 
   async function loadSettings() {
     try {
-      settings = await rpc('settings.get');
+      settings = await getSettings();
       settingsError = '';
     } catch (error) {
       settingsError = `${t('onboarding.model.loadError', 'Models could not be loaded.')} ${error.message}`;
@@ -174,8 +181,8 @@
     modelsError = '';
     try {
       const [modelsResult, connectionsResult] = await Promise.all([
-        rpc('model.list'),
-        rpc('connection.list'),
+        listModels(),
+        listConnections(),
       ]);
       models = Array.isArray(modelsResult?.models) ? modelsResult.models : [];
       connections = Array.isArray(connectionsResult?.connections)
@@ -195,7 +202,7 @@
   // reloads silently (the loading state stays hidden once models are present).
   async function refreshModelDatabase() {
     try {
-      await rpc('model.refresh_db');
+      await refreshModels();
     } catch {
       // Ignored — the shipped catalog is enough to pick a model.
     }
@@ -214,7 +221,7 @@
     assigning = true;
     assignError = '';
     try {
-      const current = await rpc('agent.get', { id: targetAgentId });
+      const current = await getAgent(targetAgentId);
       const baseline = createAgentFormValues(current);
       const result = normalizeAgentForm(
         { ...baseline, model: selectedModelValue },
@@ -227,7 +234,7 @@
         );
         return;
       }
-      await rpc('agent.update', result.payload);
+      await updateAgent(result.payload);
       onComplete();
     } catch (error) {
       assignError = `${t('onboarding.model.assignError', 'The model could not be assigned.')} ${error.message}`;

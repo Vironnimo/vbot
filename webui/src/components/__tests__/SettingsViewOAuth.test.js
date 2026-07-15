@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
+import { rpcBackedApiMock } from './apiMock.js';
 
 const rpcMock = vi.fn();
 let toastMock;
@@ -17,7 +18,14 @@ vi.mock('$lib/api.js', async () => {
 
   return {
     ...actual,
-    rpc: (...args) => rpcMock(...args),
+    ...rpcBackedApiMock(rpcMock),
+    listClients: () => Promise.resolve({ clients: [] }),
+    getTaskModelOptions: (taskType, target) =>
+      rpcMock('task_model.options', { task_type: taskType, target }),
+    listTaskModelTargets: (taskType) =>
+      rpcMock('task_model.list_targets', { task_type: taskType }),
+    updateTaskModelSettings: (modelTasks) =>
+      rpcMock('task_model.update', { model_tasks: modelTasks }),
   };
 });
 

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
+import { rpcBackedApiMock } from './apiMock.js';
 
 const rpcMock = vi.fn();
 
@@ -11,9 +12,7 @@ vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
 });
 
-vi.mock('$lib/api.js', () => ({
-  rpc: (...args) => rpcMock(...args),
-}));
+vi.mock('$lib/api.js', () => rpcBackedApiMock(rpcMock));
 
 const { default: OnboardingView } = await import('../OnboardingView.svelte');
 

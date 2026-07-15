@@ -3,7 +3,7 @@
 
   import Dropdown from '../Dropdown.svelte';
   import Button from '../ui/Button.svelte';
-  import { rpc } from '$lib/api.js';
+  import { updateSettings } from '$lib/api.js';
   import { init, t } from '$lib/i18n.js';
   import { setChatWidth } from '$lib/appearancePrefs.svelte.js';
   import {
@@ -126,8 +126,7 @@
     onError('');
 
     try {
-      const nextSettings = await rpc(
-        'settings.update',
+      const nextSettings = await updateSettings(
         createAppearanceUpdatePayload({
           language: selectedLanguageId,
           chatWidth: selectedChatWidth,

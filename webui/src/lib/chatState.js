@@ -35,6 +35,81 @@ export function createChatState() {
   };
 }
 
+// Own the cross-cutting Chat lifecycle that used to live in ChatView effects:
+// reconnect snapshots, server event reconciliation, scoped Queue invalidation,
+// and subscription cleanup. The controller deliberately receives the transport
+// operations as dependencies so chatState remains the single state owner while
+// api.js remains the only module that knows RPC method names.
+export function createChatController({
+  chatState,
+  runStream,
+  listQueue,
+  onQueueSyncError = () => {},
+}) {
+  let handledConnectionSnapshot = null;
+  let handledQueueInvalidation = null;
+
+  async function syncSessionQueue(sessionState) {
+    if (!sessionState?.agentId || !sessionState?.sessionId) {
+      return;
+    }
+    try {
+      const result = await listQueue(
+        sessionState.agentId,
+        sessionState.sessionId,
+      );
+      syncQueueFromServer(sessionState, result?.items ?? []);
+    } catch (error) {
+      onQueueSyncError(error);
+    }
+  }
+
+  function applyConnectionSnapshot(snapshot) {
+    if (!snapshot || snapshot === handledConnectionSnapshot) {
+      return false;
+    }
+    handledConnectionSnapshot = snapshot;
+    runStream.applyConnectionSnapshot(snapshot);
+    return true;
+  }
+
+  function handleServerEvents(event, events) {
+    runStream.handleServerEvents(event, events);
+  }
+
+  function applyQueueInvalidation(scope) {
+    if (!scope || scope === handledQueueInvalidation) {
+      return false;
+    }
+    handledQueueInvalidation = scope;
+    if (!scope.sessionId) {
+      return true;
+    }
+    for (const sessionState of Object.values(chatState.sessions)) {
+      const { agentId } = parseAgentAddress(sessionState.agentId);
+      if (
+        sessionState.sessionId === scope.sessionId &&
+        agentId === scope.agentId
+      ) {
+        void syncSessionQueue(sessionState);
+      }
+    }
+    return true;
+  }
+
+  function destroy() {
+    runStream.closeSubscriptions();
+  }
+
+  return {
+    applyConnectionSnapshot,
+    applyQueueInvalidation,
+    destroy,
+    handleServerEvents,
+    syncSessionQueue,
+  };
+}
+
 export function setAgents(state, agents) {
   state.agents = Array.isArray(agents) ? agents : [];
   if (!state.selectedAgentId && state.agents.length > 0) {

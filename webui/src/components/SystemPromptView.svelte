@@ -14,7 +14,19 @@
     projectIdsFromList,
     projectTeamEntry,
   } from '$lib/agentTargetOptions.js';
-  import { listProjects, rpc, showProject } from '$lib/api.js';
+  import {
+    createPromptBlock,
+    listAgents,
+    listProjects,
+    listPrompts,
+    previewPrompt,
+    removePromptBlock,
+    resetPromptBlock,
+    resetPromptLayout,
+    setPromptLayout,
+    showProject,
+    updatePromptBlock,
+  } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
 
@@ -176,8 +188,8 @@
 
     try {
       const [agentsResult, promptsResult] = await Promise.all([
-        rpc('agent.list'),
-        rpc('prompt.list'),
+        listAgents(),
+        listPrompts(),
       ]);
 
       agents = Array.isArray(agentsResult?.agents) ? agentsResult.agents : [];
@@ -254,10 +266,7 @@
     isLoadingData = true;
 
     try {
-      const promptsResult = await rpc(
-        'prompt.list',
-        promptListParams(scopeKey),
-      );
+      const promptsResult = await listPrompts(promptListParams(scopeKey));
       promptScopes = normalizePromptScopes(promptsResult?.scopes, agents);
       selectedScopeKey = resolveScopeKey(scopeKey);
       applyBlocks(promptsResult?.blocks);
@@ -535,7 +544,7 @@
     blocks[index].isSaving = true;
 
     try {
-      const result = await rpc('prompt.update', {
+      const result = await updatePromptBlock({
         id: block.id,
         content: draftContent,
         ...scopedParams(),
@@ -628,7 +637,7 @@
     blocks[index].isBusy = true;
 
     try {
-      const result = await rpc('prompt.reset', scopedParams({ id: block.id }));
+      const result = await resetPromptBlock(scopedParams({ id: block.id }));
       const liveIndex = blockIndexById(blockId);
       if (liveIndex === -1) {
         return;
@@ -661,8 +670,7 @@
   // and send it to `prompt.set_layout`, which persists immediately (T6).
   async function persistLayout() {
     try {
-      await rpc(
-        'prompt.set_layout',
+      await setPromptLayout(
         scopedParams({
           layout: blocks.map((block) => ({
             id: block.id,
@@ -826,7 +834,7 @@
     }
 
     try {
-      await rpc('prompt.create_block', scopedParams({ slug: trimmed }));
+      await createPromptBlock(scopedParams({ slug: trimmed }));
       await loadBlocksForScope(selectedScopeKey);
       schedulePreviewRefresh();
     } catch {
@@ -857,7 +865,7 @@
 
     clearAutoSaveTimer(blockId);
     try {
-      await rpc('prompt.remove_block', scopedParams({ id: blockId }));
+      await removePromptBlock(scopedParams({ id: blockId }));
       await loadBlocksForScope(selectedScopeKey);
       schedulePreviewRefresh();
     } catch {
@@ -880,7 +888,7 @@
     resetLayoutConfirmOpen = false;
 
     try {
-      await rpc('prompt.reset_layout', scopedParams());
+      await resetPromptLayout(scopedParams());
       await loadBlocksForScope(selectedScopeKey);
       schedulePreviewRefresh();
     } catch {
@@ -919,7 +927,7 @@
     isRefreshingPreview = true;
 
     try {
-      const result = await rpc('prompt.preview', params);
+      const result = await previewPrompt(params);
       if (requestId !== previewRequestId) {
         return;
       }

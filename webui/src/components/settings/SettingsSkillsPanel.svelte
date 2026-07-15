@@ -5,7 +5,7 @@
   import EmptyState from '../ui/EmptyState.svelte';
   import TextField from '../ui/TextField.svelte';
   import SettingsSkillManagerPanel from './SettingsSkillManagerPanel.svelte';
-  import { rpc } from '$lib/api.js';
+  import { updateSettings } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
     createSkillDirectoriesUpdatePayload,
@@ -125,8 +125,7 @@
     onError('');
 
     try {
-      const nextSettings = await rpc(
-        'settings.update',
+      const nextSettings = await updateSettings(
         createSkillDirectoriesUpdatePayload(skillDirectories),
       );
       onCommit(nextSettings);

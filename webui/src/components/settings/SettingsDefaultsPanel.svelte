@@ -6,7 +6,7 @@
   import Button from '../ui/Button.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
   import TextField from '../ui/TextField.svelte';
-  import { rpc } from '$lib/api.js';
+  import { listConnections, listModels } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import { runSettingsSave } from '$lib/settingsSave.js';
   import {
@@ -193,8 +193,8 @@
   async function fetchModelCatalogs() {
     try {
       const [modelsResult, connectionsResult] = await Promise.all([
-        rpc('model.list'),
-        rpc('connection.list'),
+        listModels(),
+        listConnections(),
       ]);
 
       return {

@@ -4,7 +4,11 @@
   import FormField from '../ui/FormField.svelte';
   import Modal from '../ui/Modal.svelte';
   import TextField from '../ui/TextField.svelte';
-  import { rpc } from '$lib/api.js';
+  import {
+    connectProvider as connectProviderRequest,
+    disconnectProvider as disconnectProviderRequest,
+    setProviderKey,
+  } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
     DEFAULT_ACCOUNT_ID,
@@ -163,7 +167,7 @@
     errorMessage = '';
 
     try {
-      await rpc('provider.set_key', {
+      await setProviderKey({
         provider_id: selectedProvider.id,
         connection_id: getPublicConnectionId(selectedConnection),
         account: effectiveAccount(),
@@ -306,26 +310,18 @@
 
   async function callConnectProvider(providerId, connectionId, account) {
     if (typeof connectProvider === 'function') {
-      return connectProvider(providerId, connectionId, account, { rpc });
+      return connectProvider(providerId, connectionId, account);
     }
 
-    return rpc('provider.connect', {
-      provider_id: providerId,
-      connection_id: connectionId,
-      account,
-    });
+    return connectProviderRequest(providerId, connectionId, account);
   }
 
   async function callDisconnectProvider(providerId, connectionId, account) {
     if (typeof disconnectProvider === 'function') {
-      return disconnectProvider(providerId, connectionId, account, { rpc });
+      return disconnectProvider(providerId, connectionId, account);
     }
 
-    return rpc('provider.disconnect', {
-      provider_id: providerId,
-      connection_id: connectionId,
-      account,
-    });
+    return disconnectProviderRequest(providerId, connectionId, account);
   }
 
   function connectionMethodLabel(connection) {

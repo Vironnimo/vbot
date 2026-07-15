@@ -7,7 +7,7 @@
   import EmptyState from './ui/EmptyState.svelte';
   import InfoHint from './ui/InfoHint.svelte';
   import TabList from './ui/TabList.svelte';
-  import { rpc } from '$lib/api.js';
+  import { getProviderUsage, getStatisticsReport } from '$lib/api.js';
   import { t, activeLocaleTag } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
   import {
@@ -159,7 +159,7 @@
     loading = true;
     errorMessage = '';
     try {
-      const result = await rpc('statistics.report');
+      const result = await getStatisticsReport();
       if (destroyed) {
         return;
       }
@@ -193,7 +193,7 @@
     usageLoading = true;
     usageError = '';
     try {
-      const result = await rpc('provider.usage');
+      const result = await getProviderUsage();
       if (destroyed) {
         return;
       }

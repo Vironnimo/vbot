@@ -12,7 +12,12 @@
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import ToggleChipList from '../ui/ToggleChipList.svelte';
-  import { rpc } from '$lib/api.js';
+  import {
+    createAgent,
+    deleteAgent,
+    listPrompts,
+    updateAgent,
+  } from '$lib/api.js';
   import {
     AGENT_MEMORY_PROMPT_MODES,
     AGENT_FORM_MODE_CREATE,
@@ -313,9 +318,9 @@
     errorMessage = '';
 
     try {
-      const method =
-        saveMode === AGENT_FORM_MODE_CREATE ? 'agent.create' : 'agent.update';
-      const savedAgent = await rpc(method, result.payload);
+      const saveAgent =
+        saveMode === AGENT_FORM_MODE_CREATE ? createAgent : updateAgent;
+      const savedAgent = await saveAgent(result.payload);
       if (saveMode === AGENT_FORM_MODE_CREATE) {
         showAgentToast(t('agents.created', 'Agent created.'));
         await onAgentCreated(savedAgent.id ?? result.payload.id);
@@ -487,7 +492,7 @@
     errorMessage = '';
 
     try {
-      await rpc('agent.delete', { id: agent.id });
+      await deleteAgent(agent.id);
       showAgentToast(t('agents.deleted', 'Agent deleted.'));
       await onAgentDeleted(agent.id);
     } catch (error) {
@@ -759,7 +764,7 @@
       return false;
     }
     try {
-      const result = await rpc('prompt.list');
+      const result = await listPrompts();
       const scopes = Array.isArray(result?.scopes) ? result.scopes : [];
       const scope = scopes.find(
         (item) => item?.type === 'agent' && item.agent_id === agentId,

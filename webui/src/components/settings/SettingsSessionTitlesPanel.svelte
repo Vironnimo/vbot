@@ -4,7 +4,7 @@
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Button from '../ui/Button.svelte';
   import Toggle from '../ui/Toggle.svelte';
-  import { rpc } from '$lib/api.js';
+  import { listConnections, listModels } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
     buildModelSelectOptions,
@@ -106,8 +106,8 @@
   async function loadModelCatalogs() {
     try {
       const [modelsResult, connectionsResult] = await Promise.all([
-        rpc('model.list'),
-        rpc('connection.list'),
+        listModels(),
+        listConnections(),
       ]);
       availableModels = Array.isArray(modelsResult?.models)
         ? modelsResult.models

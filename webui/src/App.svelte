@@ -74,39 +74,25 @@
   import ToastStack from './components/ToastStack.svelte';
   import Banner from './components/ui/Banner.svelte';
   import Button from './components/ui/Button.svelte';
+  import { CONNECTION_STATUS_DISCONNECTED } from '$lib/connectionState.js';
   import {
-    CONNECTION_STATUS_CONNECTED,
-    CONNECTION_STATUS_DISCONNECTED,
-    createConnectionState,
-    connect,
-    disconnect,
-  } from '$lib/connectionState.js';
-  import { rpc, debugStatus, listProjects } from '$lib/api.js';
+    createAppController,
+    createAppControllerState,
+  } from '$lib/appController.js';
+  import {
+    debugStatus,
+    getSettings,
+    listAgents,
+    listProjects,
+  } from '$lib/api.js';
   import { init, t } from '$lib/i18n.js';
   import {
     appearancePrefs,
     setChatWidth,
   } from '$lib/appearancePrefs.svelte.js';
-  import {
-    createNavigationHistoryState,
-    isNavigationHistoryState,
-    locationHashForView,
-    sameNavigationSelection,
-    sameSessionOverride,
-    viewIdFromLocationHash,
-  } from '$lib/navigationHistory.js';
+  import { viewIdFromLocationHash } from '$lib/navigationHistory.js';
   import { createToastState, addToast, dismissToast } from '$lib/toastState.js';
   import { isOperational } from '$lib/onboarding.js';
-  import {
-    RESOURCE_TOKEN_AGENTS,
-    RESOURCE_TOKEN_CHANNELS,
-    RESOURCE_TOKEN_CLIENTS,
-    RESOURCE_TOKEN_DEBUG_TRACES,
-    RESOURCE_TOKEN_MODELS,
-    RESOURCE_TOKEN_PROJECTS,
-    RESOURCE_TOKEN_SESSIONS,
-    tokenKeysForKind,
-  } from '$lib/resourceInvalidation.js';
   import {
     isDesktopAccessor,
     getDesktopCapabilities,
@@ -131,19 +117,6 @@
   // credential removal clears this flag and brings the wizard back on its own.
   const ONBOARDING_DISMISSED_KEY = 'vbot.onboardingDismissed';
   const TOAST_AUTO_DISMISS_MS = 3200;
-  const MAX_RUN_SERVER_EVENTS = 500;
-  const CONNECTION_READY_EVENT_TYPE = 'connection_ready';
-  const SERVER_UNAVAILABLE_NOTICE_DELAY_MS = 1000;
-  const SERVER_RESTORED_NOTICE_DURATION_MS = 1400;
-  const SERVER_NOTICE_OFFLINE = 'offline';
-  const SERVER_NOTICE_RESTORED = 'restored';
-  const RUN_SERVER_EVENT_TYPES = new Set([
-    'run_started',
-    'run_output',
-    'run_completed',
-    'run_cancelled',
-    'run_failed',
-  ]);
 
   const readStoredSelectedAgentId = () => {
     try {
@@ -237,7 +210,9 @@
     }
   };
 
-  let activeViewId = $state(initialViewId());
+  const appControllerState = $state(createAppControllerState(initialViewId()));
+  let appController;
+  let activeViewId = $derived(appControllerState.activeViewId);
   let debugEnabled = $state(false);
   let agents = $state([]);
   let selectedAgentId = $state(readStoredSelectedAgentId());
@@ -259,29 +234,20 @@
   // reports changes back through `onProjectAgentSelected`.
   let selectedProjectAgentId = $state(readStoredSelectedProjectAgentId());
   let agentsRefreshToken = $state(0);
-  // Bumped by the generic `resource_changed` channel whenever model-catalog or
-  // provider availability changes; model surfaces reload on each bump.
-  let modelsRefreshToken = $state(0);
-  let projectsRefreshToken = $state(0);
-  // Bumped by `resource_changed(kind:"sessions")`. ChatView forwards it to the
-  // session drawer so a new/switched session in another window shows up in the
-  // list — it deliberately does NOT switch the viewed conversation (other
-  // windows "stay put").
-  let sessionsRefreshToken = $state(0);
-  // Scope of the latest `resource_changed(kind:"queue")` — a fresh object per
-  // signal so ChatView's effect re-fires. Carries the scope (not a bare token)
-  // because the watcher only re-syncs a queue for a session it actually holds.
-  let queueInvalidation = $state(null);
-  // Bumped by `resource_changed(kind:"clients")` — a window connecting or
-  // disconnecting. The General settings panel reloads its presence roster.
-  let clientsRefreshToken = $state(0);
-  let channelsRefreshToken = $state(0);
-  let debugTracesRefreshToken = $state(0);
-  let connectionState = $state(createConnectionState());
-  let serverNoticeState = $state('');
-  let serverRecoveryGeneration = $state(0);
-  let serverUnavailableNoticeTimer = null;
-  let serverRestoredNoticeTimer = null;
+  let modelsRefreshToken = $derived(appControllerState.modelsRefreshToken);
+  let projectsRefreshToken = $derived(appControllerState.projectsRefreshToken);
+  let sessionsRefreshToken = $derived(appControllerState.sessionsRefreshToken);
+  let queueInvalidation = $derived(appControllerState.queueInvalidation);
+  let clientsRefreshToken = $derived(appControllerState.clientsRefreshToken);
+  let channelsRefreshToken = $derived(appControllerState.channelsRefreshToken);
+  let debugTracesRefreshToken = $derived(
+    appControllerState.debugTracesRefreshToken,
+  );
+  let connectionState = $derived(appControllerState.connectionState);
+  let serverNoticeState = $derived(appControllerState.serverNoticeState);
+  let serverRecoveryGeneration = $derived(
+    appControllerState.serverRecoveryGeneration,
+  );
   let serverUnavailable = $derived(
     connectionState.status === CONNECTION_STATUS_DISCONNECTED,
   );
@@ -294,29 +260,22 @@
   // connect flip (operational → true) never yanks it before the model step.
   let onboardingActive = $state(false);
   let lastSettingsModelsToken = null;
-  let pendingSessionNavigation = $state(null);
-  let providerAuthEvent = $state(null);
-  let runServerEvents = $state([]);
-  // Holds the most recent `/ws` `connection_ready` hello frame (epoch,
-  // last_sequence, active_runs). The frame has no `payload.run_id`/
-  // `run_event_sequence`, so `runServerEvents` cannot ingest it — it lives
-  // alongside the lifecycle list and is forwarded to ChatView as a separate
-  // prop. ChatView decides what (if anything) to do with the snapshot.
-  let connectionSnapshot = $state(null);
+  let pendingSessionNavigation = $derived(
+    appControllerState.pendingSessionNavigation,
+  );
+  let providerAuthEvent = $derived(appControllerState.providerAuthEvent);
+  let runServerEvents = $derived(appControllerState.runServerEvents);
+  let connectionSnapshot = $derived(appControllerState.connectionSnapshot);
   let desktopCapabilities = $state(null);
   let wakewordStatus = $state({ enabled: false, state: 'off' });
-  let settingsPanelTarget = $state('');
-  let settingsPanelTargetRequestId = $state(0);
-  // System Prompt scope deep-link target (an agent id) + a fresh request id per
-  // request, so SystemPromptView selects that agent's scope when the id changes.
-  let promptScopeTarget = $state('');
-  let promptScopeTargetRequestId = $state(0);
-  let sessionNavigationRequestId = 0;
-  // Mirror of ChatView's accessor-local session override (sub-agent session or
-  // drawer selection), kept so history entries can encode it and history-driven
-  // restores can be distinguished from new user navigation. Only read inside
-  // handlers — no reactivity needed.
-  let chatSessionOverride = null;
+  let settingsPanelTarget = $derived(appControllerState.settingsPanelTarget);
+  let settingsPanelTargetRequestId = $derived(
+    appControllerState.settingsPanelTargetRequestId,
+  );
+  let promptScopeTarget = $derived(appControllerState.promptScopeTarget);
+  let promptScopeTargetRequestId = $derived(
+    appControllerState.promptScopeTargetRequestId,
+  );
   let cleanupWakewordPoll = null;
   let lastWakewordEventSequence = null;
   const toastDismissTimers = new SvelteMap();
@@ -389,7 +348,7 @@
   // the source of the operational state that drives onboarding.
   const loadAppSettings = async () => {
     try {
-      const result = await rpc('settings.get');
+      const result = await getSettings();
       settings = result;
       setChatWidth(result?.appearance?.chat_width);
       const language = result?.appearance?.language;
@@ -524,109 +483,9 @@
     projectAgentId: selectedProjectAgentId,
   });
 
-  const pushNavigationState = () => {
-    try {
-      history.pushState(
-        createNavigationHistoryState(
-          activeViewId,
-          chatSessionOverride,
-          currentNavigationSelection(),
-        ),
-        '',
-        locationHashForView(activeViewId),
-      );
-    } catch {
-      // History API unavailable (non-browser environment)
-    }
-  };
-
-  const selectView = (viewId) => {
-    // Navigating away while vBot is not operational sets the guided setup aside
-    // (the rest of the app stays reachable), leaving the "Finish setup" banner
-    // as the re-entry. This also blocks a late settings response from popping
-    // the wizard over the view the user just opened.
-    if (viewId !== activeViewId && !operational) {
-      onboardingActive = false;
-      onboardingDismissed = true;
-      writeOnboardingDismissed(true);
-    }
-    if (viewId === activeViewId) {
-      return;
-    }
-    if (activeViewId === 'chat') {
-      // ChatView unmounts and loses its local session override with it; a
-      // stale pending navigation must not re-apply on the next chat mount.
-      chatSessionOverride = null;
-      pendingSessionNavigation = null;
-    }
-    activeViewId = viewId;
-    pushNavigationState();
-  };
-
-  // ChatView reports user-initiated session-override changes (drawer
-  // selection, return-to-current, override cleared by an agent switch) so they
-  // become history entries. History-driven restores arrive back through
-  // `pendingSessionNavigation` and are reported nowhere, so they cannot
-  // re-push; this handler also dedups against the mirror for safety.
-  const handleChatSessionNavigation = (override) => {
-    const next = override ?? null;
-    if (sameSessionOverride(chatSessionOverride, next)) {
-      return;
-    }
-    chatSessionOverride = next;
-    pushNavigationState();
-  };
-
-  const applyNavigationState = (navState) => {
-    let viewId = knownViewIds.includes(navState.view)
-      ? navState.view
-      : navigationItems[0].id;
-    if (viewId === 'debug' && !debugEnabled) {
-      viewId = 'settings';
-    }
-    activeViewId = viewId;
-
-    if (viewId !== 'chat') {
-      chatSessionOverride = null;
-      pendingSessionNavigation = null;
-      return;
-    }
-
-    const target = navState.session ?? null;
-    // Entries written before the selection field existed (or foreign states)
-    // carry no selection; they restore only the session override, as before.
-    const selection = navState.selection ?? null;
-    const selectionDiffers =
-      selection &&
-      !sameNavigationSelection(selection, currentNavigationSelection());
-    if (!selectionDiffers && sameSessionOverride(chatSessionOverride, target)) {
-      return;
-    }
-    chatSessionOverride = target;
-    sessionNavigationRequestId += 1;
-    // ChatView applies the selection itself and reports it back through the
-    // normal non-pushing callbacks (`onAgentSelected`/`onProjectSelected`/
-    // `onProjectAgentSelected`), so App's mirrors converge without this
-    // restore ever echoing into a new history push.
-    pendingSessionNavigation = {
-      ...(target ? { ...target } : { returnToCurrent: true }),
-      requestId: sessionNavigationRequestId,
-      selection,
-    };
-  };
-
-  const handlePopState = (event) => {
-    if (isNavigationHistoryState(event.state)) {
-      applyNavigationState(event.state);
-      return;
-    }
-    // Entry without our state (e.g. a manually edited hash): derive the view
-    // from the hash and treat the chat surface as override-free.
-    const viewId =
-      viewIdFromLocationHash(window.location.hash, knownViewIds) ||
-      navigationItems[0].id;
-    applyNavigationState(createNavigationHistoryState(viewId, null));
-  };
+  const selectView = (viewId) => appController.selectView(viewId);
+  const handleChatSessionNavigation = (override) =>
+    appController.handleChatSessionNavigation(override);
 
   const syncAgents = (nextAgents = []) => {
     agents = Array.isArray(nextAgents) ? nextAgents : [];
@@ -647,30 +506,8 @@
       typeof agentOrId === 'string' ? agentOrId : (agentOrId?.id ?? '');
   };
 
-  const navigateToSubAgent = (targetOrAgentId, maybeSessionId) => {
-    const agentId =
-      typeof targetOrAgentId === 'string'
-        ? targetOrAgentId
-        : (targetOrAgentId?.agentId ?? '');
-    const sessionId =
-      typeof targetOrAgentId === 'string'
-        ? maybeSessionId
-        : targetOrAgentId?.sessionId;
-
-    if (!agentId || !sessionId) {
-      return;
-    }
-
-    selectView('chat');
-    handleChatSessionNavigation({ agentId, sessionId, subAgent: true });
-    sessionNavigationRequestId += 1;
-    pendingSessionNavigation = {
-      agentId,
-      sessionId,
-      subAgent: true,
-      requestId: sessionNavigationRequestId,
-    };
-  };
+  const navigateToSubAgent = (targetOrAgentId, maybeSessionId) =>
+    appController.navigateToSubAgent(targetOrAgentId, maybeSessionId);
 
   const refreshAgents = (nextAgents = []) => {
     syncAgents(nextAgents);
@@ -684,7 +521,7 @@
   // events.
   const reloadAgentsFromServer = async () => {
     try {
-      const result = await rpc('agent.list');
+      const result = await listAgents();
       refreshAgents(result.agents);
     } catch (error) {
       console.warn('Agent list refresh failed:', error);
@@ -746,17 +583,6 @@
     toastDismissTimers.set(id, timer);
   };
 
-  const clearServerNoticeTimers = () => {
-    if (serverUnavailableNoticeTimer) {
-      clearTimeout(serverUnavailableNoticeTimer);
-      serverUnavailableNoticeTimer = null;
-    }
-    if (serverRestoredNoticeTimer) {
-      clearTimeout(serverRestoredNoticeTimer);
-      serverRestoredNoticeTimer = null;
-    }
-  };
-
   const clearOutageErrorToasts = () => {
     const errorToastIds = new Set(
       toastState.toasts
@@ -771,142 +597,13 @@
     );
   };
 
-  const handleConnectionStatusChange = () => {
-    const status = connectionState.status;
-
-    if (status === CONNECTION_STATUS_DISCONNECTED) {
-      if (serverRestoredNoticeTimer) {
-        clearTimeout(serverRestoredNoticeTimer);
-        serverRestoredNoticeTimer = null;
-      }
-      if (serverNoticeState === SERVER_NOTICE_RESTORED) {
-        serverNoticeState = '';
-      }
-      if (
-        serverNoticeState !== SERVER_NOTICE_OFFLINE &&
-        !serverUnavailableNoticeTimer
-      ) {
-        serverUnavailableNoticeTimer = setTimeout(() => {
-          serverUnavailableNoticeTimer = null;
-          if (connectionState.status !== CONNECTION_STATUS_DISCONNECTED) {
-            return;
-          }
-          clearOutageErrorToasts();
-          serverNoticeState = SERVER_NOTICE_OFFLINE;
-        }, SERVER_UNAVAILABLE_NOTICE_DELAY_MS);
-      }
-      return;
-    }
-
-    if (serverUnavailableNoticeTimer) {
-      clearTimeout(serverUnavailableNoticeTimer);
-      serverUnavailableNoticeTimer = null;
-    }
-
-    if (
-      status === CONNECTION_STATUS_CONNECTED &&
-      serverNoticeState === SERVER_NOTICE_OFFLINE
-    ) {
-      serverNoticeState = SERVER_NOTICE_RESTORED;
-      serverRecoveryGeneration += 1;
-      serverRestoredNoticeTimer = setTimeout(() => {
-        serverRestoredNoticeTimer = null;
-        if (connectionState.status === CONNECTION_STATUS_CONNECTED) {
-          serverNoticeState = '';
-        }
-      }, SERVER_RESTORED_NOTICE_DURATION_MS);
-    }
-  };
-
-  const handleServerEvent = async (event) => {
-    if (event.type === 'app_error') {
-      // Error toasts stay until dismissed by default (see showToast) — a
-      // transport/server failure the user must acknowledge.
-      showToast({
-        title: t('errors.appError', 'Error'),
-        message: event.payload?.message ?? '',
-        variant: 'error',
-      });
-      return;
-    }
-
-    if (event.type === 'provider_auth_completed') {
-      providerAuthEvent = event;
-      return;
-    }
-
-    if (event.type === CONNECTION_READY_EVENT_TYPE) {
-      // Stash the full hello frame so ChatView can hydrate from the snapshot
-      // instead of relying on the WS replay buffer. Do NOT append to
-      // `runServerEvents`: the frame has no `run_id`/`run_event_sequence`,
-      // so `runServerEventKey` would drop it on the floor.
-      connectionSnapshot = event;
-      return;
-    }
-
-    if (RUN_SERVER_EVENT_TYPES.has(event.type)) {
-      runServerEvents = [...runServerEvents, event].slice(
-        -MAX_RUN_SERVER_EVENTS,
-      );
-      return;
-    }
-
-    if (event.type === 'resource_changed') {
-      // The signal carries only a `kind` (plus an optional scope); route it to
-      // the refresh token(s)/reload it invalidates and let the watching surfaces
-      // re-fetch through their normal RPCs.
-      const kind = event.payload?.kind;
-      const tokenKeys = tokenKeysForKind(kind);
-      if (tokenKeys.includes(RESOURCE_TOKEN_MODELS)) {
-        modelsRefreshToken += 1;
-      }
-      if (tokenKeys.includes(RESOURCE_TOKEN_PROJECTS)) {
-        projectsRefreshToken += 1;
-        await loadProjects();
-      }
-      if (tokenKeys.includes(RESOURCE_TOKEN_SESSIONS)) {
-        sessionsRefreshToken += 1;
-      }
-      if (kind === 'queue') {
-        // A fresh object per signal so ChatView's effect re-fires even for a
-        // repeat scope; ChatView re-syncs the matching held session's queue.
-        const scope = event.payload?.scope ?? {};
-        queueInvalidation = {
-          agentId: typeof scope.agent_id === 'string' ? scope.agent_id : '',
-          sessionId:
-            typeof scope.session_id === 'string' ? scope.session_id : '',
-        };
-      }
-      if (tokenKeys.includes(RESOURCE_TOKEN_CLIENTS)) {
-        clientsRefreshToken += 1;
-      }
-      if (tokenKeys.includes(RESOURCE_TOKEN_CHANNELS)) {
-        channelsRefreshToken += 1;
-      }
-      if (tokenKeys.includes(RESOURCE_TOKEN_DEBUG_TRACES)) {
-        debugTracesRefreshToken += 1;
-      }
-      if (tokenKeys.includes(RESOURCE_TOKEN_AGENTS)) {
-        await reloadAgentsFromServer();
-      }
-      return;
-    }
-  };
-
-  const connectServerEvents = () => {
-    connect(connectionState, {
-      onEvent: handleServerEvent,
-      onStatusChange: handleConnectionStatusChange,
-    });
-  };
+  const connectServerEvents = () => appController.connectServerEvents();
 
   // Deep-link to a specific Settings panel (Agent defaults, Extensions, Voice…).
   // Sets the target + a fresh request id, then switches to the Settings view;
   // SettingsView selects the panel when the request id changes.
   const navigateToSettingsPanel = (panelId) => {
-    settingsPanelTarget = panelId;
-    settingsPanelTargetRequestId += 1;
-    selectView('settings');
+    appController.navigateToSettingsPanel(panelId);
   };
 
   const navigateToVoiceSettings = () => {
@@ -947,9 +644,7 @@
   // SystemPromptView reacts to once scopes have loaded, falling back to the
   // default scope when the target scope is absent.
   const navigateToAgentPromptScope = (agentId) => {
-    promptScopeTarget = typeof agentId === 'string' ? agentId : '';
-    promptScopeTargetRequestId += 1;
-    selectView('system-prompt');
+    appController.navigateToPromptScope(agentId);
   };
 
   const handleDebugEnabledChange = (enabled) => {
@@ -960,81 +655,68 @@
     }
   };
 
+  appController = createAppController({
+    state: appControllerState,
+    knownViewIds,
+    defaultViewId: navigationItems[0].id,
+    currentNavigationSelection,
+    isDebugEnabled: () => debugEnabled,
+    isOperational: () => operational,
+    onAppError: (message) => {
+      showToast({
+        title: t('errors.appError', 'Error'),
+        message,
+        variant: 'error',
+      });
+    },
+    onClearOutageErrors: clearOutageErrorToasts,
+    onLoadProjects: loadProjects,
+    onReloadAgents: reloadAgentsFromServer,
+    onSetOnboardingAside: () => {
+      onboardingActive = false;
+      onboardingDismissed = true;
+      writeOnboardingDismissed(true);
+    },
+  });
+
   // Exposed for tests so the routing in `handleServerEvent` can be verified
   // without depending on ChatView's internal state. Production code reads
   // `connectionSnapshot` via the `<ChatView connectionSnapshot={...} />` prop
   // binding above.
   export function getConnectionSnapshot() {
-    return connectionSnapshot;
+    return appControllerState.connectionSnapshot;
   }
 
   // Exposed for tests so the `resource_changed` routing in `handleServerEvent`
   // can be verified without reaching into a child view's reload behavior.
   export function getModelsRefreshToken() {
-    return modelsRefreshToken;
+    return appControllerState.modelsRefreshToken;
   }
 
   export function getSessionsRefreshToken() {
-    return sessionsRefreshToken;
+    return appControllerState.sessionsRefreshToken;
   }
 
   export function getQueueInvalidation() {
-    return queueInvalidation;
+    return appControllerState.queueInvalidation;
   }
 
   export function getClientsRefreshToken() {
-    return clientsRefreshToken;
+    return appControllerState.clientsRefreshToken;
   }
 
   export function getChannelsRefreshToken() {
-    return channelsRefreshToken;
+    return appControllerState.channelsRefreshToken;
   }
 
   export function getDebugTracesRefreshToken() {
-    return debugTracesRefreshToken;
+    return appControllerState.debugTracesRefreshToken;
   }
 
   onMount(() => {
     let cancelled = false;
 
-    try {
-      const existingState = isNavigationHistoryState(history.state)
-        ? history.state
-        : null;
-      if (
-        existingState &&
-        existingState.view === activeViewId &&
-        existingState.session
-      ) {
-        // Reload with a session override on top of the history stack: adopt
-        // the entry instead of overwriting it, so the override survives the
-        // reload and Back/Forward keep working from it. The selection half is
-        // already restored through the localStorage mirrors — they were
-        // persisted by the same state that pushed this entry.
-        chatSessionOverride = existingState.session;
-        sessionNavigationRequestId += 1;
-        pendingSessionNavigation = {
-          ...existingState.session,
-          requestId: sessionNavigationRequestId,
-        };
-      } else {
-        // Seed the current history entry so Back can always restore it; later
-        // navigation pushes new entries on top.
-        history.replaceState(
-          createNavigationHistoryState(
-            activeViewId,
-            null,
-            currentNavigationSelection(),
-          ),
-          '',
-          locationHashForView(activeViewId),
-        );
-      }
-    } catch {
-      // History API unavailable (non-browser environment)
-    }
-    window.addEventListener('popstate', handlePopState);
-
+    appController.initializeNavigationHistory();
     connectServerEvents();
 
     // Load the project list for the chat dropdown (best-effort; the chat works
@@ -1098,9 +780,7 @@
 
     return () => {
       cancelled = true;
-      window.removeEventListener('popstate', handlePopState);
-      disconnect(connectionState);
-      clearServerNoticeTimers();
+      appController.destroy();
       clearToastDismissTimers();
       if (cleanupWakewordPoll) {
         cleanupWakewordPoll();

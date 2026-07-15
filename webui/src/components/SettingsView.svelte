@@ -21,7 +21,7 @@
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import EmptyState from './ui/EmptyState.svelte';
-  import { rpc } from '$lib/api.js';
+  import { getSettings } from '$lib/api.js';
   import { init, t } from '$lib/i18n.js';
   import { SETTINGS_LAYOUT_CLASS } from '$lib/settingsView.js';
 
@@ -550,7 +550,7 @@
     loadError = '';
 
     try {
-      const nextSettings = await rpc('settings.get');
+      const nextSettings = await getSettings();
       applySettings(nextSettings);
     } catch (error) {
       loadError = `${t('settings.loadError', 'Settings could not be loaded.')} ${error.message}`;

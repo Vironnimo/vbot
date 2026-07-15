@@ -10,7 +10,16 @@
   import InfoHint from '../ui/InfoHint.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
-  import { rpc } from '$lib/api.js';
+  import {
+    createChannel,
+    deleteChannel as deleteChannelRequest,
+    disableChannel,
+    enableChannel,
+    getChannelStatus,
+    listAgents,
+    listChannels,
+    updateChannel,
+  } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
   import {
     CHANNEL_DM_SCOPES,
@@ -183,8 +192,8 @@
 
     try {
       const [agentsResult, channelsResult] = await Promise.all([
-        rpc('agent.list'),
-        rpc('channel.list'),
+        listAgents(),
+        listChannels(),
       ]);
       channelAgents = getAgentItems(agentsResult);
 
@@ -195,7 +204,7 @@
       const statusResults = await Promise.all(
         nextState.channels.map(async (channel) => {
           try {
-            return await rpc('channel.status', { id: channel.id });
+            return await getChannelStatus(channel.id);
           } catch {
             return {
               id: channel.id,
@@ -242,19 +251,13 @@
 
     try {
       if (channelFormMode === CHANNEL_FORM_MODE_CREATE) {
-        await rpc(
-          'channel.create',
-          buildChannelCreatePayload(channelFormValues),
-        );
+        await createChannel(buildChannelCreatePayload(channelFormValues));
         onToast({
           title: t('settings.channels.createSuccess', 'Channel created.'),
           variant: 'success',
         });
       } else {
-        await rpc(
-          'channel.update',
-          buildChannelUpdatePayload(channelFormValues),
-        );
+        await updateChannel(buildChannelUpdatePayload(channelFormValues));
         onToast({
           title: t('settings.channels.updateSuccess', 'Channel updated.'),
           variant: 'success',
@@ -277,7 +280,7 @@
   async function toggleChannelEnabled(channel) {
     await runChannelAction(channel.id, async () => {
       if (channel.enabled) {
-        await rpc('channel.disable', { id: channel.id });
+        await disableChannel(channel.id);
         onToast({
           title: t('settings.channels.disableSuccess', 'Channel disabled.'),
           variant: 'success',
@@ -285,7 +288,7 @@
         return;
       }
 
-      await rpc('channel.enable', { id: channel.id });
+      await enableChannel(channel.id);
       onToast({
         title: t('settings.channels.enableSuccess', 'Channel enabled.'),
         variant: 'success',
@@ -302,7 +305,7 @@
         allowedChatIds.push(chatId);
       }
 
-      await rpc('channel.update', {
+      await updateChannel({
         id: channel.id,
         allowed_chat_ids: allowedChatIds,
       });
@@ -338,7 +341,7 @@
     }
 
     await runChannelAction(channel.id, async () => {
-      await rpc('channel.delete', { id: channel.id });
+      await deleteChannelRequest(channel.id);
       onToast({
         title: t('settings.channels.deleteSuccess', 'Channel deleted.'),
         variant: 'success',
