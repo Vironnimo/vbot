@@ -439,7 +439,12 @@ def test_cursor_survives_manager_restart_but_not_action_session_or_corruption(
     restarted_session = restarted.get("agent", "session-one")
     resumed = _call(restarted, restarted_session, {"action": "read", "cursor": cursor})
     wrong_action = _call(manager, session, {"action": "search", "cursor": cursor})
-    corrupted = _call(manager, session, {"action": "read", "cursor": f"{cursor[:-1]}x"})
+    replacement = "x" if cursor[0] != "x" else "y"
+    corrupted = _call(
+        manager,
+        session,
+        {"action": "read", "cursor": f"{replacement}{cursor[1:]}"},
+    )
 
     other = manager.create("agent", session_id="session-two")
     for message in session.load():
