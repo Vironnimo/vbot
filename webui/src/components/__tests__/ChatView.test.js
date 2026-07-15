@@ -220,6 +220,68 @@ describe('ChatView', () => {
     ).toBe(expectedBadge);
   });
 
+  it('refreshes the unchanged token badge after a model step while the run continues', async () => {
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        usage: { input_tokens: 1000, output_tokens: 50 },
+      }),
+    );
+
+    mountedComponent = mount(ChatView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(() => testRunStreamRefs.length === 1, 100);
+    testRunStreamRefs[0].handleServerEvents({
+      type: 'run_started',
+      payload: {
+        run_id: 'run-one',
+        agent_id: 'alpha',
+        project_id: null,
+        session_id: 'session-1',
+        run_event_type: 'run_started',
+        run_event_sequence: 1,
+        output: { status: 'running' },
+      },
+    });
+    testRunStreamRefs[0].handleServerEvents({
+      type: 'run_output',
+      payload: {
+        run_id: 'run-one',
+        agent_id: 'alpha',
+        project_id: null,
+        session_id: 'session-1',
+        run_event_type: 'model_step_usage',
+        run_event_sequence: 2,
+        output: {
+          usage: { input_tokens: 3886, output_tokens: 92 },
+          session_usage: {
+            measured_turns: 2,
+            estimated_turns: 0,
+            input_tokens: 4886,
+            output_tokens: 142,
+          },
+        },
+      },
+    });
+    flushSync();
+
+    const numberFormat = new Intl.NumberFormat('en');
+    const expectedBadge = `${numberFormat.format(3978)} / ${numberFormat.format(262144)} tok`;
+    await waitForCondition(
+      () =>
+        document.body.querySelector('.token-badge')?.textContent?.trim() ===
+        expectedBadge,
+      100,
+    );
+
+    expect(
+      document.body.querySelector('.token-badge')?.textContent?.trim(),
+    ).toBe(expectedBadge);
+    expect(testChatStateRefs[0].sessions['alpha::session-1'].status).toBe(
+      'running',
+    );
+  });
+
   it('keeps the estimated marker when combined usage is estimated', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({

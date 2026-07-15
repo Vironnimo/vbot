@@ -16,6 +16,7 @@ from typing import Any, cast
 import pytest
 
 from core.runs import (
+    MODEL_STEP_USAGE_EVENT,
     RUN_COMPLETED_EVENT,
     RUN_STARTED_EVENT,
     TOOL_CALL_STDERR_EVENT,
@@ -146,6 +147,32 @@ def test_server_event_omits_session_usage_when_absent() -> None:
     summary = _server_event_from_run_event(event)
 
     assert "session_usage" not in summary["payload"]
+
+
+def test_server_event_forwards_model_step_usage_as_run_output() -> None:
+    usage = {"input_tokens": 1200, "output_tokens": 45}
+    session_usage = {
+        "measured_turns": 3,
+        "estimated_turns": 0,
+        "input_tokens": 4200,
+        "output_tokens": 160,
+    }
+    event = RunEvent(
+        sequence=7,
+        run_id="run-1",
+        agent_id="builder",
+        session_id="sess-uuid",
+        type=MODEL_STEP_USAGE_EVENT,
+        payload={"usage": usage, "session_usage": session_usage},
+    )
+
+    summary = _server_event_from_run_event(event)
+
+    assert summary["type"] == "run_output"
+    assert summary["payload"]["output"] == {
+        "usage": usage,
+        "session_usage": session_usage,
+    }
 
 
 def test_server_event_forwards_public_continuation_on_terminal_events() -> None:

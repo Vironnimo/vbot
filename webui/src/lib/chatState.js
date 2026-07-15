@@ -226,11 +226,23 @@ export function appendRunEvent(sessionState, event) {
   if (normalizedEvent.type === 'run_started') {
     beginRunFromEvent(sessionState, normalizedEvent);
   }
+  if (normalizedEvent.type === 'model_step_usage') {
+    applyModelStepUsage(sessionState, normalizedEvent.payload);
+  }
   advanceStreamingPhase(sessionState, normalizedEvent);
   if (TERMINAL_RUN_EVENTS.has(normalizedEvent.type)) {
     finishRun(sessionState, normalizedEvent);
   }
   return normalizedEvent;
+}
+
+function applyModelStepUsage(sessionState, payload) {
+  if (payload?.usage) {
+    updateSessionUsage(sessionState, payload.usage);
+  }
+  if (payload?.session_usage) {
+    sessionState.sessionUsage = payload.session_usage;
+  }
 }
 
 function appendRunEvents(sessionState, events) {

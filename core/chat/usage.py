@@ -20,37 +20,46 @@ def aggregate_session_usage(messages: list[ChatMessage]) -> JsonObject:
     ``cache_read_tokens``/``cache_write_tokens`` are informational subsets of
     the input total, never added on top.
     """
-    measured_turns = 0
-    estimated_turns = 0
-    cache_turns = 0
-    input_tokens = 0
-    output_tokens = 0
-    cache_read_tokens = 0
-    cache_write_tokens = 0
+    totals = _empty_session_usage()
     for message in messages:
         if message.role != "assistant" or not isinstance(message.usage, dict):
             continue
-        if message.usage.get("estimated") is True:
-            estimated_turns += 1
-            continue
-        measured_turns += 1
-        # Field *presence* distinguishes "provider reported zero cache" from
-        # "provider does not report caching" — consumers need that to avoid
-        # painting a non-caching provider as a 0% hit rate.
-        if "cache_read_tokens" in message.usage or "cache_write_tokens" in message.usage:
-            cache_turns += 1
-        input_tokens += _non_negative_int(message.usage.get("input_tokens"))
-        output_tokens += _non_negative_int(message.usage.get("output_tokens"))
-        cache_read_tokens += _non_negative_int(message.usage.get("cache_read_tokens"))
-        cache_write_tokens += _non_negative_int(message.usage.get("cache_write_tokens"))
+        totals = add_session_turn_usage(totals, message.usage)
+    return totals
+
+
+def add_session_turn_usage(totals: JsonObject, usage: JsonObject) -> JsonObject:
+    """Return canonical session totals with one persisted assistant turn added."""
+    updated = dict(totals)
+    if usage.get("estimated") is True:
+        updated["estimated_turns"] = _non_negative_int(updated.get("estimated_turns")) + 1
+        return updated
+
+    updated["measured_turns"] = _non_negative_int(updated.get("measured_turns")) + 1
+    # Field *presence* distinguishes "provider reported zero cache" from
+    # "provider does not report caching" — consumers need that to avoid
+    # painting a non-caching provider as a 0% hit rate.
+    if "cache_read_tokens" in usage or "cache_write_tokens" in usage:
+        updated["cache_turns"] = _non_negative_int(updated.get("cache_turns")) + 1
+    for key in (
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+    ):
+        updated[key] = _non_negative_int(updated.get(key)) + _non_negative_int(usage.get(key))
+    return updated
+
+
+def _empty_session_usage() -> JsonObject:
     return {
-        "measured_turns": measured_turns,
-        "estimated_turns": estimated_turns,
-        "cache_turns": cache_turns,
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "cache_read_tokens": cache_read_tokens,
-        "cache_write_tokens": cache_write_tokens,
+        "measured_turns": 0,
+        "estimated_turns": 0,
+        "cache_turns": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
     }
 
 

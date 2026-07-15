@@ -3354,6 +3354,44 @@ describe('chat state helpers', () => {
     });
   });
 
+  it('updates token usage after a completed model step while the run stays active', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-one',
+      sse_url: '/api/runs/run-one/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+    const sessionUsage = {
+      measured_turns: 4,
+      estimated_turns: 0,
+      input_tokens: 20000,
+      output_tokens: 900,
+    };
+
+    appendRunEvent(sessionState, {
+      type: 'model_step_usage',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: {
+        usage: { input_tokens: 8432, output_tokens: 512 },
+        session_usage: sessionUsage,
+      },
+    });
+
+    expect(sessionState.usage).toEqual({
+      input_tokens: 8432,
+      output_tokens: 512,
+    });
+    expect(sessionState.sessionUsage).toEqual(sessionUsage);
+    expect(sessionState.status).toBe(CHAT_STATUS_RUNNING);
+    expect(sessionState.currentRun.status).toBe(CHAT_STATUS_RUNNING);
+    expect(visibleTimelineItemsForRender(sessionState)).toEqual([]);
+  });
+
   it('does not update usage when finishRun processes a run_failed event', () => {
     const sessionState = ensureSessionState(
       createChatState(),

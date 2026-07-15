@@ -24,10 +24,12 @@ EXPECTED_SSE_EVENT_NAMES = [
     "tool_call_delta",
     "reasoning",
     "assistant_output",
+    "model_step_usage",
     "tool_call_started",
     "tool_call_result",
     "assistant_output_delta",
     "assistant_output",
+    "model_step_usage",
     "run_completed",
 ]
 
@@ -73,15 +75,15 @@ def test_chat_stream_returns_sse_url_and_endpoint_replays_visible_timeline(tmp_p
 
     assert response.headers["content-type"].startswith("text/event-stream")
     events = _parse_sse(response.text)
-    assert [event["id"] for event in events] == [str(index) for index in range(1, 13)]
+    assert [event["id"] for event in events] == [str(index) for index in range(1, 15)]
     assert [event["event"] for event in events] == EXPECTED_SSE_EVENT_NAMES
     reasoning_delta_data = cast(dict[str, Any], events[2]["data"])
     tool_delta_data = cast(dict[str, Any], events[3]["data"])
     reasoning_data = cast(dict[str, Any], events[5]["data"])
-    tool_started_data = cast(dict[str, Any], events[7]["data"])
-    tool_result_data = cast(dict[str, Any], events[8]["data"])
-    assistant_delta_data = cast(dict[str, Any], events[9]["data"])
-    assistant_data = cast(dict[str, Any], events[10]["data"])
+    tool_started_data = cast(dict[str, Any], events[8]["data"])
+    tool_result_data = cast(dict[str, Any], events[9]["data"])
+    assistant_delta_data = cast(dict[str, Any], events[10]["data"])
+    assistant_data = cast(dict[str, Any], events[11]["data"])
     assert reasoning_delta_data["payload"]["reasoning_delta"] == "Thinking clearly"
     assert tool_delta_data["payload"]["name_delta"] == "read"
     assert reasoning_data["payload"]["message"]["reasoning"] == "Thinking clearly"
@@ -127,10 +129,12 @@ def test_sse_endpoint_replays_after_explicit_sequence(tmp_path: Path) -> None:
         "tool_call_delta",
         "reasoning",
         "assistant_output",
+        "model_step_usage",
         "tool_call_started",
         "tool_call_result",
         "assistant_output_delta",
         "assistant_output",
+        "model_step_usage",
         "run_completed",
     ]
 
@@ -142,10 +146,12 @@ def test_sse_endpoint_replays_after_last_event_id_header(tmp_path: Path) -> None
         "tool_call_delta",
         "reasoning",
         "assistant_output",
+        "model_step_usage",
         "tool_call_started",
         "tool_call_result",
         "assistant_output_delta",
         "assistant_output",
+        "model_step_usage",
         "run_completed",
     ]
 
@@ -165,10 +171,12 @@ def test_sse_endpoint_prefers_explicit_after_sequence_over_last_event_id(
         "tool_call_delta",
         "reasoning",
         "assistant_output",
+        "model_step_usage",
         "tool_call_started",
         "tool_call_result",
         "assistant_output_delta",
         "assistant_output",
+        "model_step_usage",
         "run_completed",
     ]
 
