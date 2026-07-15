@@ -1,0 +1,316 @@
+"""Prompt Tool, Skill, and extension block tests."""
+
+from .prompts_test_support import (
+    HISTORY_TOOL_NAME,
+    MEMORY_PROMPT_MODE_OFF,
+    Any,
+    BlockDefinition,
+    LayoutEntry,
+    Path,
+    StubBlockStore,
+    StubSkill,
+    StubSkills,
+    StubStorage,
+    StubTools,
+    SystemPromptManager,
+    ToolRegistry,
+    _agent,
+    _facade_manager,
+    _manager,
+    tool_success,
+)
+from .prompts_test_support import workspace as workspace
+
+
+def test_provider_tool_definitions_use_same_agent_allowlist(
+    workspace: Path, tmp_path: Path
+) -> None:
+    # skill/skill_manage are ordinary tools now: an allow-list without them does not
+    # offer them, which is exactly how the per-agent toggle works.
+    tools = StubTools()
+    manager = _manager(tmp_path, tools=tools)
+    agent = _agent(workspace, allowed_tools=["read_file"])
+
+    definitions = manager.provider_tool_definitions(agent)
+
+    assert definitions == [
+        {
+            "name": "read_file",
+            "description": "Read a workspace file",
+            "parameters": {"type": "object"},
+        },
+        {
+            "name": "memory",
+            "description": "Manage pinned memory",
+            "parameters": {"type": "object"},
+        },
+    ]
+    assert tools.provider_allowlist_calls == [["read_file"], ["memory"]]
+
+
+def test_provider_tool_definitions_omit_memory_when_agent_memory_is_off(
+    workspace: Path, tmp_path: Path
+) -> None:
+    manager = _manager(tmp_path)
+    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+
+    definitions = manager.provider_tool_definitions(agent)
+
+    assert "memory" not in [definition["name"] for definition in definitions]
+
+
+def test_provider_tool_definitions_offer_skill_and_skill_manage_for_identity_agent(
+    workspace: Path, tmp_path: Path
+) -> None:
+    manager = _manager(tmp_path, skills=StubSkills([StubSkill("debugging", "Debug failures")]))
+    agent = _agent(workspace, allowed_tools=["*"], allowed_skills=["debugging"])
+
+    names = [definition["name"] for definition in manager.provider_tool_definitions(agent)]
+
+    assert "skill" in names
+    assert "skill_manage" in names
+
+
+def test_provider_tool_definitions_offer_skill_even_without_skills(
+    workspace: Path, tmp_path: Path
+) -> None:
+    # The skill tool is never gated on the agent already having a skill: a skill can
+    # be authored or activated mid-session, so the loader stays available whenever the
+    # tool itself is allowed (here via the wildcard) even with an empty skill set.
+    manager = _manager(tmp_path, skills=StubSkills([]))
+    agent = _agent(workspace, allowed_tools=["*"], allowed_skills=[])
+
+    names = [definition["name"] for definition in manager.provider_tool_definitions(agent)]
+
+    assert "skill" in names
+    assert "skill_manage" in names
+
+
+def test_provider_tool_definitions_drop_skill_when_agent_disallows_it(
+    workspace: Path, tmp_path: Path
+) -> None:
+    # Toggling the tools off for an identity agent removes them, like any tool.
+    manager = _manager(tmp_path, skills=StubSkills([StubSkill("debugging", "Debug failures")]))
+    agent = _agent(workspace, allowed_tools=["read_file", "memory"], allowed_skills=["debugging"])
+
+    names = [definition["name"] for definition in manager.provider_tool_definitions(agent)]
+
+    assert "skill" not in names
+    assert "skill_manage" not in names
+
+
+def test_provider_tool_definitions_omit_skill_manage_for_config_agent(tmp_path: Path) -> None:
+    # A config/project agent (empty workspace) has no private skill home, so the
+    # authoring tool is withheld even under a wildcard allow-list; the loader stays.
+    manager = _manager(tmp_path, skills=StubSkills([StubSkill("debugging", "Debug failures")]))
+    agent = _agent("", allowed_tools=["*"], allowed_skills=["debugging"])
+
+    names = [definition["name"] for definition in manager.provider_tool_definitions(agent)]
+
+    assert "skill" in names
+    assert "skill_manage" not in names
+
+
+def test_skill_maintenance_block_renders_for_identity_agent_with_skill_manage(
+    workspace: Path, tmp_path: Path
+) -> None:
+    # An identity agent whose effective tools include skill_manage sees the block,
+    # rendering its bundled fragment text (owner tool:skill_manage passes gate 2).
+    manager = _manager(tmp_path)
+    agent = _agent(workspace, allowed_tools=["skill_manage"])
+
+    prompt = manager.build_system_prompt(agent)
+
+    assert "## Skill Maintenance" in prompt
+    assert "keep them alive with the `skill_manage` tool" in prompt
+
+
+def test_skill_maintenance_block_absent_without_skill_manage_tool(
+    workspace: Path, tmp_path: Path
+) -> None:
+    # An identity agent whose allow-list excludes skill_manage does not see it:
+    # gate 2 (tool:skill_manage) fails when the tool is not effectively allowed.
+    manager = _manager(tmp_path)
+    agent = _agent(workspace, allowed_tools=["read_file"])
+
+    prompt = manager.build_system_prompt(agent)
+
+    assert "## Skill Maintenance" not in prompt
+
+
+def test_skill_maintenance_block_absent_for_config_agent_even_with_wildcard(
+    tmp_path: Path,
+) -> None:
+    # A config/project agent (empty workspace) has no private skill home, so the
+    # IDENTITY_ONLY_TOOLS strip removes skill_manage from its effective tools even
+    # under a wildcard allow-list — the block gates out through gate 2.
+    manager = _manager(tmp_path)
+    agent = _agent("", allowed_tools=["*"], memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+
+    prompt = manager.build_system_prompt(agent, agent_body="You are the orchestrator.")
+
+    assert "## Skill Maintenance" not in prompt
+
+
+def test_list_blocks_shows_skill_maintenance_as_editable_tool_owned_block(
+    tmp_path: Path,
+) -> None:
+    # The listing surface exposes the block as an editable text block owned by
+    # tool:skill_manage (source core), directly after the skills block.
+    manager = _facade_manager(tmp_path)
+
+    blocks = {block["id"]: block for block in manager.list_blocks()}
+
+    maintenance = blocks["core:skill_maintenance"]
+    assert maintenance["kind"] == "text"
+    assert maintenance["editable"] is True
+    assert maintenance["source"] == "core"
+    assert maintenance["owner"] == "tool:skill_manage"
+    assert maintenance["enabled"] is True
+
+
+def test_extension_static_block_renders_when_extension_loaded(
+    workspace: Path, tmp_path: Path
+) -> None:
+    block = BlockDefinition(
+        id="extension:greeter",
+        owner="extension:greeter",
+        default_text="Hello from the greeter extension.",
+    )
+    manager = _manager(tmp_path, block_definitions=[block], loaded_extensions=["greeter"])
+    agent = _agent(workspace)
+
+    prompt = manager.build_system_prompt(agent)
+
+    assert "Hello from the greeter extension." in prompt
+
+
+def test_extension_block_dropped_when_extension_not_loaded(workspace: Path, tmp_path: Path) -> None:
+    # The owner gate (gate 2) drops a block whose extension is not in the loaded set.
+    block = BlockDefinition(
+        id="extension:greeter",
+        owner="extension:greeter",
+        default_text="Hello from the greeter extension.",
+    )
+    manager = _manager(tmp_path, block_definitions=[block], loaded_extensions=[])
+    agent = _agent(workspace)
+
+    prompt = manager.build_system_prompt(agent)
+
+    assert "Hello from the greeter extension." not in prompt
+
+
+def test_dynamic_block_renders_and_isolates_failure(workspace: Path, tmp_path: Path) -> None:
+    good = BlockDefinition(
+        id="extension:good",
+        owner="extension:good",
+        render=lambda context: "Dynamic OK",
+    )
+
+    def boom(context: Any) -> str:
+        raise RuntimeError("render failed")
+
+    bad = BlockDefinition(id="extension:bad", owner="extension:bad", render=boom)
+    manager = _manager(
+        tmp_path,
+        block_definitions=[good, bad],
+        loaded_extensions=["good", "bad"],
+    )
+    agent = _agent(workspace)
+
+    prompt = manager.build_system_prompt(agent)
+
+    # The good dynamic block renders; the raising one drops only itself (run lives).
+    assert "Dynamic OK" in prompt
+
+
+def test_tool_block_gated_on_tool_allowlist(workspace: Path, tmp_path: Path) -> None:
+    # A tool-owned block (id/owner tool:<name>) renders only when the tool is on the
+    # agent's effective allowlist (gate 2 reuses the prompt tool list).
+    block = BlockDefinition(
+        id="tool:read_file",
+        owner="tool:read_file",
+        default_text="Read-file guidance.",
+    )
+    manager = _manager(tmp_path, block_definitions=[block])
+    allowed = _agent(workspace, allowed_tools=["read_file"])
+    denied = _agent(workspace, allowed_tools=["shell"])
+
+    assert "Read-file guidance." in manager.build_system_prompt(allowed)
+    assert "Read-file guidance." not in manager.build_system_prompt(denied)
+
+
+def test_enabling_tools_list_block_renders_tool_descriptions(
+    workspace: Path, tmp_path: Path
+) -> None:
+    # core:tools_list ships disabled (default_enabled=False + bundled layout off);
+    # a saved layout that switches it on renders the full name/description list —
+    # the opt-in booster for models that attend poorly to native tool schemas.
+    layout = [LayoutEntry(id="core:tools_list", enabled=True, source="core")]
+    store = StubBlockStore(layouts={"default": layout})
+    manager = SystemPromptManager(
+        StubStorage(),
+        StubTools(),
+        StubSkills([]),
+        app_version="0.1.0",
+        app_dir=tmp_path / "app",
+        data_root=tmp_path / "data",
+        host="h",
+        os_name="o",
+        current_date=lambda: "2026-05-04",
+        block_store=store,
+    )
+    agent = _agent(workspace, allowed_tools=["read_file"])
+
+    prompt = manager.build_system_prompt(agent)
+
+    assert "## Available Tools" in prompt
+    assert "- read_file: Read a workspace file" in prompt
+    assert "## Tool Call Style" in prompt  # the style block stays on independently
+
+
+def test_session_grant_drives_provider_and_enabled_live_tool_list(
+    workspace: Path, tmp_path: Path
+) -> None:
+    registry = ToolRegistry()
+    registry.register(
+        name=HISTORY_TOOL_NAME,
+        description="Verify original Session records.",
+        parameters={"type": "object", "additionalProperties": False},
+        handler=lambda _context, _arguments: tool_success({}),
+        session_scoped=True,
+    )
+    store = StubBlockStore(
+        layouts={"default": [LayoutEntry(id="core:tools_list", enabled=True, source="core")]}
+    )
+    manager = SystemPromptManager(
+        StubStorage(),
+        registry,
+        StubSkills([]),
+        app_version="0.1.0",
+        app_dir=tmp_path / "app",
+        data_root=tmp_path / "data",
+        host="h",
+        os_name="o",
+        current_date=lambda: "2026-05-04",
+        block_store=store,
+    )
+    agent = _agent(workspace, allowed_tools=[])
+
+    preview_definitions = manager.provider_tool_definitions(agent)
+    preview_prompt = manager.build_system_prompt(agent)
+    live_definitions = manager.provider_tool_definitions(
+        agent,
+        session_tool_grants=(HISTORY_TOOL_NAME,),
+    )
+    live_names = [str(definition["name"]) for definition in live_definitions]
+    live_prompt = manager.build_system_prompt(
+        agent,
+        effective_tool_names=live_names,
+        session_tool_grants=(HISTORY_TOOL_NAME,),
+    )
+
+    assert preview_definitions == []
+    assert HISTORY_TOOL_NAME not in preview_prompt
+    assert live_names == [HISTORY_TOOL_NAME]
+    assert "- history: Verify original Session records." in live_prompt

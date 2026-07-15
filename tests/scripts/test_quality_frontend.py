@@ -21,7 +21,7 @@ def test_parse_vitest_counts_strips_ansi_color_codes():
     output = (
         "\x1b[1m\x1b[30m\x1b[46m RUN \x1b[49m\x1b[39m\x1b[22m\n"
         "\n"
-        " \x1b[32m✓\x1b[39m src/components/__tests__/AgentsView.test.js\n"
+        " \x1b[32m✓\x1b[39m src/components/__tests__/AgentsView.test.persistence.test.js\n"
         "\n"
         " Test Files  \x1b[32m1 passed\x1b[39m (1)\n"
         "      Tests  \x1b[32m16 passed\x1b[39m (16)\n"
@@ -41,20 +41,39 @@ def test_translate_to_vitest_targets_keeps_explicit_test_file():
     module = _load_quality_frontend_module()
 
     targets, notes = module.translate_to_vitest_targets(
-        ["src/components/__tests__/SettingsView.test.js"]
+        ["src/components/__tests__/SettingsView.test.behavior.test.js"]
     )
 
-    assert targets == ["src/components/__tests__/SettingsView.test.js"]
+    assert targets == ["src/components/__tests__/SettingsView.test.behavior.test.js"]
     assert notes == []
 
 
 def test_translate_to_vitest_targets_resolves_named_mirror_test():
     module = _load_quality_frontend_module()
 
-    # A component with a same-named mirror test resolves straight to that file.
+    # A component whose mirror was split resolves to every owned suite.
     targets, notes = module.translate_to_vitest_targets(["src/components/SettingsView.svelte"])
 
-    assert targets == ["src/components/__tests__/SettingsView.test.js"]
+    assert targets == [
+        "src/components/__tests__/SettingsView.test.behavior.test.js",
+        "src/components/__tests__/SettingsView.test.channels.test.js",
+        "src/components/__tests__/SettingsView.test.providers.test.js",
+        "src/components/__tests__/SettingsView.test.specialized-models.test.js",
+        "src/components/__tests__/SettingsView.test.subagents-and-voice.test.js",
+    ]
+    assert notes == []
+
+
+def test_translate_to_vitest_targets_resolves_split_lib_mirror_tests():
+    module = _load_quality_frontend_module()
+
+    targets, notes = module.translate_to_vitest_targets(["src/lib/settingsView.js"])
+
+    assert targets == [
+        "src/lib/__tests__/settingsView.test.integration.test.js",
+        "src/lib/__tests__/settingsView.test.normalization.test.js",
+        "src/lib/__tests__/settingsView.test.providers.test.js",
+    ]
     assert notes == []
 
 
@@ -124,12 +143,13 @@ def test_filter_vitest_failure_output_removes_pass_noise():
     output = (
         "\x1b[1m\x1b[46m RUN \x1b[49m\x1b[22m v4.1.5 C:/Development/projects/vBot/webui\n"
         "\n"
-        " \x1b[32m✓\x1b[39m src/components/__tests__/SettingsView.test.js (2 tests) 30ms\n"
+        " \x1b[32m✓\x1b[39m "
+        "src/components/__tests__/SettingsView.test.behavior.test.js (2 tests) 30ms\n"
         "   \x1b[32m✓\x1b[39m SettingsView (2)\n"
         "     \x1b[32m✓\x1b[39m saves automatically\n"
         "     \x1b[31m×\x1b[39m keeps dirty state on error 15ms\n"
         "\n"
-        "\x1b[31mFAIL\x1b[39m src/components/__tests__/SettingsView.test.js > "
+        "\x1b[31mFAIL\x1b[39m src/components/__tests__/SettingsView.test.behavior.test.js > "
         "SettingsView > keeps dirty state on error\n"
         "AssertionError: expected false to be true\n"
         "\n"
@@ -143,7 +163,7 @@ def test_filter_vitest_failure_output_removes_pass_noise():
     assert "RUN  v4.1.5" not in filtered
     assert "saves automatically" not in filtered
     assert (
-        "FAIL src/components/__tests__/SettingsView.test.js > "
+        "FAIL src/components/__tests__/SettingsView.test.behavior.test.js > "
         "SettingsView > keeps dirty state on error" in filtered
     )
     assert "AssertionError: expected false to be true" in filtered
@@ -158,7 +178,7 @@ def test_main_runs_vitest_with_verbose_reporter(monkeypatch, capsys):
     monkeypatch.setattr(
         module.sys,
         "argv",
-        ["quality-frontend.py", "webui/src/components/__tests__/AgentsView.test.js"],
+        ["quality-frontend.py", "webui/src/components/AgentsView.svelte"],
     )
 
     def fake_run(cmd, capture_output, text, cwd, encoding, errors):
@@ -182,7 +202,12 @@ def test_main_runs_vitest_with_verbose_reporter(monkeypatch, capsys):
         "--reporter=verbose",
         "--passWithNoTests",
     ]
-    assert vitest_command[-1] == "src/components/__tests__/AgentsView.test.js"
+    assert vitest_command[5:] == [
+        "src/components/__tests__/AgentsView.test.creation-and-layout.test.js",
+        "src/components/__tests__/AgentsView.test.identity-and-access.test.js",
+        "src/components/__tests__/AgentsView.test.models-and-catalog.test.js",
+        "src/components/__tests__/AgentsView.test.persistence.test.js",
+    ]
 
 
 def test_main_reports_no_tests_instead_of_pass(monkeypatch, capsys):
@@ -191,7 +216,10 @@ def test_main_reports_no_tests_instead_of_pass(monkeypatch, capsys):
     monkeypatch.setattr(
         module.sys,
         "argv",
-        ["quality-frontend.py", "webui/src/components/__tests__/AgentsView.test.js"],
+        [
+            "quality-frontend.py",
+            "webui/src/components/__tests__/AgentsView.test.persistence.test.js",
+        ],
     )
 
     def fake_run(cmd, capture_output, text, cwd, encoding, errors):
@@ -240,12 +268,13 @@ def test_main_filters_vitest_failure_output(monkeypatch, capsys):
     module = _load_quality_frontend_module()
     vitest_output = (
         "\x1b[1m\x1b[46m RUN \x1b[49m\x1b[22m v4.1.5 C:/Development/projects/vBot/webui\n"
-        " \x1b[32m✓\x1b[39m src/components/__tests__/SettingsView.test.js (2 tests) 30ms\n"
+        " \x1b[32m✓\x1b[39m "
+        "src/components/__tests__/SettingsView.test.behavior.test.js (2 tests) 30ms\n"
         "   \x1b[32m✓\x1b[39m SettingsView (2)\n"
         "     \x1b[32m✓\x1b[39m saves automatically\n"
         "     \x1b[31m×\x1b[39m keeps dirty state on error 15ms\n"
         "\n"
-        "\x1b[31mFAIL\x1b[39m src/components/__tests__/SettingsView.test.js > "
+        "\x1b[31mFAIL\x1b[39m src/components/__tests__/SettingsView.test.behavior.test.js > "
         "SettingsView > keeps dirty state on error\n"
         "AssertionError: expected false to be true\n"
         "\n"
@@ -271,7 +300,7 @@ def test_main_filters_vitest_failure_output(monkeypatch, capsys):
     assert "--- vitest ---" in captured.out
     assert "saves automatically" not in captured.out
     assert (
-        "FAIL src/components/__tests__/SettingsView.test.js > "
+        "FAIL src/components/__tests__/SettingsView.test.behavior.test.js > "
         "SettingsView > keeps dirty state on error" in captured.out
     )
 
