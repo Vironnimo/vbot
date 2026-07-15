@@ -570,6 +570,21 @@ def test_stream_usage_delta_folds_cache_tokens_from_message_start() -> None:
     ]
 
 
+def test_stream_does_not_invent_input_usage_without_message_start_tokens() -> None:
+    state = CopilotMessagesStreamState()
+
+    deltas = normalize_copilot_messages_stream_event(
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 11},
+        },
+        state,
+    )
+
+    assert deltas == [{"type": "finish", "reason": "stop"}]
+
+
 def test_normalize_response_extracts_visible_thinking_text_block() -> None:
     normalized = normalize_copilot_messages_response(
         {
@@ -777,7 +792,11 @@ def test_stream_preserves_redacted_thinking_block() -> None:
         {
             "type": "content_block_start",
             "index": 0,
-            "content_block": {"type": "redacted_thinking", "data": "opaque"},
+            "content_block": {
+                "type": "redacted_thinking",
+                "data": "opaque",
+                "provider_private": "must-not-leak",
+            },
         },
         state,
     )
@@ -797,7 +816,7 @@ def test_stream_preserves_redacted_thinking_block() -> None:
 
 
 def test_stream_error_event_raises_provider_error() -> None:
-    with pytest.raises(ProviderError, match="overloaded"):
+    with pytest.raises(ProviderError) as exc_info:
         normalize_copilot_messages_stream_event(
             {
                 "type": "error",
@@ -805,6 +824,8 @@ def test_stream_error_event_raises_provider_error() -> None:
             },
             CopilotMessagesStreamState(),
         )
+
+    assert str(exc_info.value) == ("Copilot Messages stream error (overloaded_error): overloaded")
 
 
 def test_build_payload_translates_user_image_media_block() -> None:

@@ -70,7 +70,7 @@ The live `/models` listing is authoritative and rich — each entry carries `max
 - `text` blocks concatenate into `content`.
 - Readable `thinking` blocks concatenate into visible `reasoning`; redacted thinking remains opaque metadata only.
 - `tool_use` blocks map to canonical `tool_calls`.
-- Streaming tracks content-block indexes and yields normalized vBot deltas only.
+- Streaming tracks content-block indexes and yields normalized vBot deltas only. `AnthropicMessagesStreamDecoder` owns the stateful Messages SSE protocol and is also consumed by GitHub Copilot's `/v1/messages` path; compatible providers configure only verified wire differences instead of copying the event state machine.
 - Usage: Anthropic reports `cache_read_input_tokens`/`cache_creation_input_tokens` **separately** from `input_tokens`. `apply_anthropic_cache_usage()` maps them to canonical `cache_read_tokens`/`cache_write_tokens` and adds both onto `input_tokens` so the canonical value is the total prompt (non-stream and the stream `message_start` path). `github_copilot_messages` reuses this helper for Copilot's Anthropic-style wire.
 
 ## Error Classification
