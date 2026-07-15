@@ -9,11 +9,13 @@ import time
 import uuid
 from collections import deque
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
+from contextlib import aclosing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, cast
 
+from core.event_stream import ReplayEventStream
 from core.utils.errors import VBotError
 
 JsonObject = dict[str, Any]
@@ -149,24 +151,11 @@ class RunEvent:
         }
 
 
-class _LaggedRunSubscriberSentinel:
-    """Internal marker that closes a lagging live Run subscriber."""
-
-
-_LAGGED_RUN_SUBSCRIBER = _LaggedRunSubscriberSentinel()
-
-
 class _CancelledToolCallSentinel:
     """Internal marker that a per-tool-call cancel was already invoked."""
 
 
 _CANCELLED_TOOL_CALL = _CancelledToolCallSentinel()
-
-
-@dataclass
-class _RunSubscriber:
-    queue: asyncio.Queue[RunEvent | _LaggedRunSubscriberSentinel]
-    closed: bool = False
 
 
 class Run:
@@ -183,10 +172,6 @@ class Run:
         event_retention_limit: int = DEFAULT_RUN_EVENT_RETENTION_LIMIT,
         subscriber_queue_limit: int = DEFAULT_RUN_SUBSCRIBER_QUEUE_LIMIT,
     ) -> None:
-        if event_retention_limit < 1:
-            raise ValueError("event_retention_limit must be positive")
-        if subscriber_queue_limit < 1:
-            raise ValueError("subscriber_queue_limit must be positive")
         self.id = run_id
         self.agent_id = agent_id
         self.session_id = session_id
@@ -204,10 +189,14 @@ class Run:
         self.error: BaseException | None = None
         self.cancel_requested = False
         self.cancel_reason: str | None = None
-        self._events: deque[RunEvent] = deque(maxlen=event_retention_limit)
         self._next_sequence = 1
-        self._subscribers: list[_RunSubscriber] = []
-        self._subscriber_queue_limit = subscriber_queue_limit
+        self._event_stream = ReplayEventStream[RunEvent](
+            event_retention_limit=event_retention_limit,
+            subscriber_queue_limit=subscriber_queue_limit,
+            sequence_of=lambda event: event.sequence,
+            terminal_when=lambda event: event.type in TERMINAL_EVENT_TYPES,
+            on_lagged=lambda: _LOGGER.warning("Evicted lagging run subscriber for run %s", self.id),
+        )
         self._done = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         # ``Task.cancel()`` before a newly created task gets its first event-loop
@@ -236,7 +225,13 @@ class Run:
     @property
     def events(self) -> list[RunEvent]:
         """Return a replayable snapshot of events emitted so far."""
-        return list(self._events)
+        return self._event_stream.events
+
+    @property
+    def subscriber_count(self) -> int:
+        """Return the number of active live event subscribers."""
+
+        return self._event_stream.subscriber_count
 
     def set_task(self, task: asyncio.Task[None]) -> None:
         """Attach the background execution task for cancellation."""
@@ -319,68 +314,20 @@ class Run:
             payload=dict(payload or {}),
         )
         self._next_sequence += 1
-        self._events.append(event)
+        self._event_stream.publish(event)
         self.updated_at = event.timestamp
-        for subscriber in list(self._subscribers):
-            self._publish_to_subscriber(subscriber, event)
         return event
 
     async def subscribe(self, *, after_sequence: int = 0) -> AsyncGenerator[RunEvent, None]:
         """Replay old events and stream future events until a terminal event."""
-        if self.status != RunStatus.RUNNING:
-            for event in list(self._events):
-                if event.sequence > after_sequence:
-                    yield event
-                    if event.type in TERMINAL_EVENT_TYPES:
-                        return
-            return
-
-        subscriber = _RunSubscriber(queue=asyncio.Queue(maxsize=self._subscriber_queue_limit))
-        self._subscribers.append(subscriber)
-        try:
-            for event in list(self._events):
-                if subscriber.closed:
-                    return
-                if event.sequence > after_sequence:
-                    yield event
-                    after_sequence = event.sequence
-                    if event.type in TERMINAL_EVENT_TYPES:
-                        return
-
-            while True:
-                item = await subscriber.queue.get()
-                if item is _LAGGED_RUN_SUBSCRIBER:
-                    return
-                event = cast(RunEvent, item)
-                if event.sequence <= after_sequence:
-                    continue
+        async with aclosing(
+            self._event_stream.subscribe(
+                after_sequence=after_sequence,
+                live=self.status == RunStatus.RUNNING,
+            )
+        ) as events:
+            async for event in events:
                 yield event
-                after_sequence = event.sequence
-                if event.type in TERMINAL_EVENT_TYPES:
-                    return
-        finally:
-            self._remove_subscriber(subscriber)
-
-    def _publish_to_subscriber(self, subscriber: _RunSubscriber, event: RunEvent) -> None:
-        if subscriber.closed:
-            return
-        try:
-            subscriber.queue.put_nowait(event)
-        except asyncio.QueueFull:
-            self._evict_lagging_subscriber(subscriber)
-
-    def _evict_lagging_subscriber(self, subscriber: _RunSubscriber) -> None:
-        if subscriber.closed:
-            return
-        self._remove_subscriber(subscriber)
-        _drain_queue(subscriber.queue)
-        subscriber.queue.put_nowait(_LAGGED_RUN_SUBSCRIBER)
-        _LOGGER.warning("Evicted lagging run subscriber for run %s", self.id)
-
-    def _remove_subscriber(self, subscriber: _RunSubscriber) -> None:
-        subscriber.closed = True
-        if subscriber in self._subscribers:
-            self._subscribers.remove(subscriber)
 
     async def wait(self) -> Any:
         """Wait for terminal state and return the run result."""
@@ -950,14 +897,6 @@ class ChatRunManager:
         overflow = len(terminal_run_ids) - self._completed_run_retention_limit
         for run_id in terminal_run_ids[: max(0, overflow)]:
             self._runs.pop(run_id, None)
-
-
-def _drain_queue(queue: asyncio.Queue[Any]) -> None:
-    while True:
-        try:
-            queue.get_nowait()
-        except asyncio.QueueEmpty:
-            return
 
 
 def _schedule_callback(callback: CancelCallback) -> None:
