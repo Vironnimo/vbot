@@ -65,6 +65,4 @@ Only project-specific terms — never standard programming terms or anything sel
 
 ## Plans
 
-If the user wants to design a plan with you, read `.opencode/agents/planner.md` first for the format we use (file-scoped tasks, `⚡` parallel markers, never committed). The planner defines where plans are saved.
-
-**A plan is a build order, not a changelog — write the end state, flat and in place.** Never layer a plan: no `v1`/`v2` decision strata, no separate "refinements"/"updates" section that shadows or overrides earlier text, and no resolved item left parked under an "Open Questions"/"Open Decisions" heading. When something is decided or changes, fold it into the one place it belongs and delete the now-stale version — a section heading is a promise about its contents, so an "Open Questions" section holds *only* genuinely open questions and nothing else. History lives in git, not as strata inside the file. This bites hardest at high context, where a "refines D6" link or a mislabeled section silently desyncs and the builder ships the wrong thing.
+When the user wants to design, create, or revise an implementation plan, activate the global `$plan` skill; do not read `.opencode/agents/planner.md` for Codex planning. For this repository, save plan artifacts under `.vorch/plans/` and never stage or commit them. The skill owns the plan format, research workflow, file scopes, parallelism markers, and in-place refinement rules.
