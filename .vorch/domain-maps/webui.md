@@ -11,9 +11,9 @@ The production server serves `webui/dist/`; source changes therefore require a f
 ## Interfaces and ownership
 
 - `webui/src/App.svelte` and `webui/src/lib/appController.js` own the application shell: active view, global loading and availability state, server-event routing, resource refreshes, and composition of the major views.
-- `webui/src/components/ChatView.svelte` plus `webui/src/lib/chatState.js`, `chatRunStream.js`, and `chatTimeline.js` own Chat presentation and client-side projections of server-owned Sessions, Runs, Queue items, and usage.
+- `webui/src/lib/chatState.js` owns Chat's reactive client projection and asynchronous workflows for roster, history, commands, sends, Queue mutations, continuation actions, and Run cancellation; `chatRunStream.js` owns stream reconciliation, while `ChatView.svelte` composes presentation, navigation consequences, and local input interactions.
 - `webui/src/components/SettingsView.svelte`, its panel components, and `webui/src/lib/settingsView.js` own Settings forms and management surfaces. They submit backend contracts; they do not reinterpret domain policy.
-- `webui/src/components/ProjectsView.svelte` and `webui/src/lib/projectsView.js` own Project management presentation. The Project selected for management is separate from the Project context selected in Chat.
+- `webui/src/lib/projectsView.js` owns the Project-management state and workflows through `createProjectsState()` and `createProjectsController()`; `ProjectsView.svelte` renders that state and forwards user intents. The Project selected for management is separate from the Project context selected in Chat.
 - `webui/src/lib/api.js` normalizes transport and protocol failures as `ApiClientError`, exposes RPC wrappers, and owns WebSocket, Run-SSE, and log-stream subscriptions. Binary attachment delivery stays outside RPC envelopes.
 - `webui/src/lib/i18n.js` and locale modules own user-visible copy. All visible strings, including labels, status text, validation, empty states, and error fallbacks, must go through i18n.
 
@@ -26,6 +26,7 @@ The production server serves `webui/dist/`; source changes therefore require a f
 - Resource invalidation refreshes backing data without unexpectedly replacing an active draft, picker, modal, or form. Controllers defer visible swaps when the user is editing and apply the refreshed data at the next safe boundary.
 - Dates and numbers shown to users use the active locale. Editable decimal settings remain text while being edited so comma-decimal input can be normalized deliberately at the payload boundary.
 - Shared feedback and affordances stay shared: use `ToastStack` for transient operation results, established hint components for explanatory help, and existing deep modules under `webui/src/lib/` for stateful behavior rather than growing view components into alternate controllers.
+- A feature View may keep DOM events, presentation-only derived values, and navigation callbacks, but multi-request sequencing, stale-response rejection, reconciliation, timers, and mutation error state belong to its existing controller. Extend that owner before adding a new helper, layer, or component-local workflow.
 - Frontend behavior changes require focused Vitest coverage beside the relevant controller or component. Visual and interaction-system decisions additionally follow `.vorch/DESIGN.md`.
 
 ## Constraints and gotchas

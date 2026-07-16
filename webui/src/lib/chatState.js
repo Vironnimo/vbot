@@ -2,6 +2,21 @@ import {
   RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
   RUN_EVENT_REASONING_DELTA,
   RUN_EVENT_TOOL_CALL_DELTA,
+  cancelRun as requestCancelRun,
+  cancelToolCall as requestCancelToolCall,
+  continueRun as requestContinueRun,
+  createSession as requestCreateSession,
+  discardContinuation as requestDiscardContinuation,
+  listAgents as requestListAgents,
+  listChatCommands as requestListChatCommands,
+  listFiles as requestListFiles,
+  listQueue as requestListQueue,
+  listSessions as requestListSessions,
+  loadChatHistory as requestLoadChatHistory,
+  removeFromQueue as requestRemoveFromQueue,
+  showProject as requestShowProject,
+  startChatRun as requestStartChatRun,
+  updateQueueItem as requestUpdateQueueItem,
 } from './api.js';
 
 import { parseAgentAddress } from './agentAddress.js';
@@ -25,6 +40,9 @@ export const TERMINAL_RUN_EVENTS = new Set([
   'run_cancelled',
 ]);
 
+const HISTORY_INITIAL_LIMIT = 100;
+const HISTORY_OLDER_LIMIT = 50;
+
 export function createChatState() {
   return {
     agents: [],
@@ -32,36 +50,387 @@ export function createChatState() {
     sessions: {},
     loadingAgents: false,
     agentsError: null,
+    loadingHistory: false,
+    historyError: '',
+    actionError: '',
+    cancellingRun: false,
+    continuationActionPending: '',
+    availableSkills: [],
   };
 }
 
-// Own the cross-cutting Chat lifecycle that used to live in ChatView effects:
-// reconnect snapshots, server event reconciliation, scoped Queue invalidation,
-// and subscription cleanup. The controller deliberately receives the transport
-// operations as dependencies so chatState remains the single state owner while
-// api.js remains the only module that knows RPC method names.
+function defaultChatOperations() {
+  return {
+    cancelRun: (...args) => requestCancelRun(...args),
+    cancelToolCall: (...args) => requestCancelToolCall(...args),
+    continueRun: (...args) => requestContinueRun(...args),
+    createSession: (...args) => requestCreateSession(...args),
+    discardContinuation: (...args) => requestDiscardContinuation(...args),
+    listAgents: (...args) => requestListAgents(...args),
+    listChatCommands: (...args) => requestListChatCommands(...args),
+    listFiles: (...args) => requestListFiles(...args),
+    listQueue: (...args) => requestListQueue(...args),
+    listSessions: (...args) => requestListSessions(...args),
+    loadChatHistory: (...args) => requestLoadChatHistory(...args),
+    removeFromQueue: (...args) => requestRemoveFromQueue(...args),
+    showProject: (...args) => requestShowProject(...args),
+    startChatRun: (...args) => requestStartChatRun(...args),
+    updateQueueItem: (...args) => requestUpdateQueueItem(...args),
+  };
+}
+
+// Own Chat's asynchronous lifecycle end-to-end. ChatView supplies only the few
+// navigation/display facts the controller cannot derive from Chat state; RPC
+// sequencing, durable-history reconciliation, Queue updates, run transitions,
+// error state, reconnects, and subscription cleanup stay behind this boundary.
 export function createChatController({
   chatState,
   runStream,
-  listQueue,
-  onQueueSyncError = () => {},
+  operations = defaultChatOperations(),
+  translate = (_key, fallback) => fallback,
+  isDisplayedSession = () => false,
+  shouldLoadCurrentHistory = () => true,
+  onAgentsChanged = () => {},
+  onAgentSelected = () => {},
   onRestartQueueDiscarded = () => {},
 }) {
   let handledConnectionSnapshot = null;
   let handledQueueInvalidation = null;
+
+  function errorMessage(error) {
+    return typeof error?.message === 'string' && error.message
+      ? error.message
+      : String(error ?? '');
+  }
 
   async function syncSessionQueue(sessionState) {
     if (!sessionState?.agentId || !sessionState?.sessionId) {
       return;
     }
     try {
-      const result = await listQueue(
+      const result = await operations.listQueue(
         sessionState.agentId,
         sessionState.sessionId,
       );
       syncQueueFromServer(sessionState, result?.items ?? []);
     } catch (error) {
-      onQueueSyncError(error);
+      chatState.actionError = `${translate('queue.syncError', 'Queued messages could not be synced.')} ${errorMessage(error)}`;
+    }
+  }
+
+  async function loadAgents({ preferredAgentId = '' } = {}) {
+    chatState.loadingAgents = true;
+    chatState.agentsError = null;
+    try {
+      const result = await operations.listAgents();
+      const preferred = chatState.selectedAgentId || preferredAgentId;
+      if (preferred) {
+        selectAgent(chatState, preferred);
+      }
+      const selectedAgentId = setAgents(chatState, result?.agents ?? []);
+      onAgentsChanged(chatState.agents);
+      if (selectedAgentId) {
+        onAgentSelected(selectedAgentId);
+      }
+      if (selectedAgentId && shouldLoadCurrentHistory()) {
+        await loadCurrentHistory();
+      }
+    } catch (error) {
+      chatState.agentsError = errorMessage(error);
+    } finally {
+      chatState.loadingAgents = false;
+    }
+  }
+
+  async function loadCurrentHistory() {
+    const agent = selectedAgent(chatState);
+    if (!agent?.current_session_id) {
+      return false;
+    }
+    return loadHistoryForSession(agent.id, agent.current_session_id);
+  }
+
+  async function loadHistoryForSession(agentId, sessionId) {
+    const sessionState = ensureSessionState(chatState, agentId, sessionId);
+    const isDisplayed = () => isDisplayedSession(agentId, sessionId);
+    const startedDisplayed = isDisplayed();
+    if (startedDisplayed) {
+      chatState.loadingHistory = true;
+      chatState.historyError = '';
+      runStream.closeSubscriptionsExcept(sessionState.key);
+    }
+    const staleRunId = sessionState.currentRun?.runId ?? '';
+    try {
+      const history = await operations.loadChatHistory({
+        agent_id: agentId,
+        session_id: sessionId,
+        limit: HISTORY_INITIAL_LIMIT,
+      });
+      loadHistory(sessionState, history?.messages ?? [], {
+        hasMore: history?.has_more === true,
+        sessionUsage: history?.session_usage,
+        continuation: history?.continuation ?? null,
+      });
+      if (
+        !history?.active_run &&
+        isRunActive(sessionState) &&
+        sessionState.currentRun?.runId === staleRunId
+      ) {
+        resetStaleRun(sessionState);
+        runStream.closeSubscriptionFor(sessionState.key);
+      }
+      if (isDisplayed()) {
+        runStream.attachRunStream(sessionState, history?.active_run);
+      }
+      await syncSessionQueue(sessionState);
+      return true;
+    } catch (error) {
+      if (isDisplayed()) {
+        chatState.historyError = errorMessage(error);
+      }
+      markSessionError(sessionState, error);
+      return false;
+    } finally {
+      if (startedDisplayed && isDisplayed()) {
+        chatState.loadingHistory = false;
+      }
+    }
+  }
+
+  async function loadOlderHistory(sessionState) {
+    if (
+      !sessionState?.agentId ||
+      !sessionState.hasOlderHistory ||
+      sessionState.loadingOlderHistory ||
+      sessionState.messages.length === 0
+    ) {
+      return false;
+    }
+    const before =
+      (sessionState.messages ?? []).find(
+        (message) => typeof message?.id === 'string' && message.id.length > 0,
+      )?.id ?? '';
+    if (!before) {
+      sessionState.hasOlderHistory = false;
+      return false;
+    }
+    sessionState.loadingOlderHistory = true;
+    chatState.actionError = '';
+    try {
+      const history = await operations.loadChatHistory({
+        agent_id: sessionState.agentId,
+        session_id: sessionState.sessionId,
+        limit: HISTORY_OLDER_LIMIT,
+        before,
+      });
+      prependHistory(sessionState, history?.messages ?? [], {
+        hasMore: history?.has_more === true,
+      });
+      return true;
+    } catch (error) {
+      chatState.actionError = `${translate('chat.historyOlderLoadError', 'Older chat history could not be loaded.')} ${errorMessage(error)}`;
+      return false;
+    } finally {
+      sessionState.loadingOlderHistory = false;
+    }
+  }
+
+  async function loadCommands(agentAddress) {
+    try {
+      const params = agentAddress ? { agent_id: agentAddress } : {};
+      const result = await operations.listChatCommands(params);
+      const items = Array.isArray(result?.items) ? result.items : [];
+      chatState.availableSkills = items
+        .filter(
+          (item) => typeof item?.name === 'string' && item.name.length > 0,
+        )
+        .map((item) => ({
+          name:
+            item.type === 'command'
+              ? normalizeBuiltInCommandName(item.name)
+              : item.name,
+          description: item.description ?? '',
+          type: item.type,
+          argument: item.argument,
+          output: item.output,
+        }))
+        .filter((item) => item.name.length > 0);
+    } catch (error) {
+      chatState.actionError = `${translate('chat.skillsLoadError', 'Command and skill suggestions could not be loaded.')} ${errorMessage(error)}`;
+      chatState.availableSkills = [];
+    }
+  }
+
+  async function sendMessage(sessionState, content, options = {}) {
+    if (!sessionState) {
+      return { kind: 'ignored' };
+    }
+    chatState.actionError = '';
+    const retainedContinuation = sessionState.continuation;
+    sessionState.continuation = null;
+    try {
+      const params = {
+        agent_id: sessionState.agentId,
+        session_id: sessionState.sessionId,
+        content,
+      };
+      if (options.inputOrigin) {
+        params.input_origin = options.inputOrigin;
+      }
+      if (
+        Array.isArray(options.fileMentions) &&
+        options.fileMentions.length > 0
+      ) {
+        params.file_mentions = options.fileMentions;
+      }
+      const run = await operations.startChatRun(params);
+      if (run?.command_handled) {
+        const move = resolveMoveActionFromResponse(run);
+        if (move) {
+          return { kind: 'move', move };
+        }
+        const sessionSwitch = commandSwitchFromResponse(run);
+        const { projectId } = parseAgentAddress(sessionState.agentId);
+        if (sessionSwitch && !projectId) {
+          return { kind: 'switch', sessionSwitch };
+        }
+        if (run.output === 'transient') {
+          return { kind: 'transient', reply: run.reply };
+        }
+        return {
+          kind: 'toast',
+          reply: run.reply,
+          reloadHistory: isCompactCommand(content),
+        };
+      }
+      if (run?.queued === true) {
+        addServerQueuedMessage(sessionState, run.item);
+        return { kind: 'queued' };
+      }
+      startRun(sessionState, run);
+      runStream.subscribeToRun(sessionState, run.sse_url, {
+        afterSequence: 0,
+      });
+      return { kind: 'started', runId: run.run_id ?? '' };
+    } catch (error) {
+      sessionState.continuation = retainedContinuation;
+      chatState.actionError = `${translate('chat.sendError', 'Message could not be sent.')} ${errorMessage(error)}`;
+      markSessionError(sessionState, error);
+      return { kind: 'failed' };
+    }
+  }
+
+  async function cancelActiveRun(sessionState) {
+    const runId = sessionState?.currentRun?.runId;
+    if (!runId) {
+      return;
+    }
+    chatState.cancellingRun = true;
+    chatState.actionError = '';
+    try {
+      await operations.cancelRun(runId, { reason: 'user' });
+    } catch (error) {
+      chatState.actionError = `${translate('chat.cancelError', 'Run could not be cancelled.')} ${errorMessage(error)}`;
+    } finally {
+      chatState.cancellingRun = false;
+    }
+  }
+
+  async function cancelTool({ agentId = '', runId, toolCallId } = {}) {
+    if (!runId || !toolCallId) {
+      return;
+    }
+    chatState.actionError = '';
+    try {
+      await operations.cancelToolCall({ agentId, runId, toolCallId });
+    } catch (error) {
+      chatState.actionError = `${translate('chat.cancelError', 'Run could not be cancelled.')} ${errorMessage(error)}`;
+    }
+  }
+
+  async function continueSession(sessionState) {
+    if (!sessionState || isRunActive(sessionState)) {
+      return false;
+    }
+    chatState.actionError = '';
+    chatState.continuationActionPending = 'continue';
+    sessionState.continuation = null;
+    try {
+      const run = await operations.continueRun(
+        sessionState.agentId,
+        sessionState.sessionId,
+      );
+      startRun(sessionState, run);
+      runStream.subscribeToRun(sessionState, run.sse_url, {
+        afterSequence: 0,
+      });
+      return true;
+    } catch (error) {
+      chatState.actionError = `${translate('chat.continueError', 'Continue failed.')} ${errorMessage(error)}`;
+      await loadHistoryForSession(sessionState.agentId, sessionState.sessionId);
+      return false;
+    } finally {
+      chatState.continuationActionPending = '';
+    }
+  }
+
+  async function discardSessionContinuation(sessionState) {
+    if (!sessionState || isRunActive(sessionState)) {
+      return;
+    }
+    chatState.actionError = '';
+    chatState.continuationActionPending = 'discard';
+    try {
+      await operations.discardContinuation(
+        sessionState.agentId,
+        sessionState.sessionId,
+      );
+      sessionState.continuation = null;
+    } catch (error) {
+      chatState.actionError = `${translate('chat.discardContinuationError', 'Discard failed.')} ${errorMessage(error)}`;
+    } finally {
+      chatState.continuationActionPending = '';
+    }
+  }
+
+  async function removeQueued(sessionState, queuedMessageId) {
+    if (!sessionState) {
+      return;
+    }
+    chatState.actionError = '';
+    try {
+      await operations.removeFromQueue(
+        sessionState.agentId,
+        sessionState.sessionId,
+        queuedMessageId,
+      );
+      removeQueuedMessage(sessionState, queuedMessageId);
+    } catch (error) {
+      chatState.actionError = `${translate('queue.removeError', 'Queued message could not be removed.')} ${errorMessage(error)}`;
+    }
+  }
+
+  async function updateQueued(
+    sessionState,
+    queuedMessageId,
+    newContent,
+    fileMentions,
+  ) {
+    if (!sessionState) {
+      return;
+    }
+    chatState.actionError = '';
+    try {
+      await operations.updateQueueItem(
+        sessionState.agentId,
+        sessionState.sessionId,
+        queuedMessageId,
+        newContent,
+        { fileMentions },
+      );
+      updateQueuedMessageContent(sessionState, queuedMessageId, newContent);
+    } catch (error) {
+      chatState.actionError = `${translate('queue.editError', 'Queued message could not be edited.')} ${errorMessage(error)}`;
     }
   }
 
@@ -140,10 +509,65 @@ export function createChatController({
   return {
     applyConnectionSnapshot,
     applyQueueInvalidation,
+    cancelActiveRun,
+    cancelRunById: (runId, options = { reason: 'user' }) =>
+      operations.cancelRun(runId, options),
+    cancelTool,
+    continueSession,
+    createSession: (agentAddress) => operations.createSession(agentAddress),
+    discardSessionContinuation,
     destroy,
     handleServerEvents,
+    listFiles: (agentAddress) => operations.listFiles(agentAddress),
+    listQueueItems: (agentAddress, sessionId) =>
+      operations.listQueue(agentAddress, sessionId),
+    listSessions: (agentAddress) => operations.listSessions(agentAddress),
+    loadAgents,
+    loadCommands,
+    loadCurrentHistory,
+    loadHistoryForSession,
+    loadHistoryPage: (params) => operations.loadChatHistory(params),
+    loadOlderHistory,
+    loadProject: (projectId) => operations.showProject(projectId),
+    removeQueueItem: (agentAddress, sessionId, queuedMessageId) =>
+      operations.removeFromQueue(agentAddress, sessionId, queuedMessageId),
+    removeQueued,
+    sendMessage,
     syncSessionQueue,
+    updateQueued,
   };
+}
+
+export function normalizeBuiltInCommandName(value) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  return value.trim().replace(/^\/+/, '').toLowerCase();
+}
+
+function isCompactCommand(content) {
+  if (typeof content !== 'string') {
+    return false;
+  }
+  const trimmed = content.trim();
+  if (!trimmed.startsWith('/')) {
+    return false;
+  }
+  return normalizeBuiltInCommandName(trimmed.split(/\s+/)[0]) === 'compact';
+}
+
+function commandSwitchFromResponse(response) {
+  const data = response?.data;
+  if (!data || typeof data.session_id !== 'string') {
+    return null;
+  }
+  const sessionId = data.session_id.trim();
+  if (!sessionId || (data.command !== 'new' && data.command !== 'handoff')) {
+    return null;
+  }
+  const targetAgentId =
+    typeof data.agent_id === 'string' ? data.agent_id.trim() : '';
+  return { sessionId, targetAgentId };
 }
 
 export function setAgents(state, agents) {

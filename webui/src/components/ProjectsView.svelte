@@ -17,23 +17,15 @@
     PROJECT_SOURCE_FORMATS,
     PROJECT_THINKING_EFFORT_NO_DEFAULT,
     PROJECT_THINKING_EFFORT_OPTIONS,
-    buildAddProjectPayload,
     buildDefaultAgentOptions,
-    buildManageProjectPayload,
     buildSkillToggleSections,
     buildToolToggleList,
     createProjectsController,
+    createProjectsState,
     hasManageChanges,
     memberFieldIsOverridden,
     needsRePoint,
-    normalizeOverrideTemperature,
-    normalizeProject,
-    normalizeScanReport,
-    normalizeScanSkills,
     presentFormats,
-    projectTeam,
-    seedTeamOverrideDraft,
-    setListMembership,
     shouldSuggestClaudeMd,
   } from '$lib/projectsView.js';
   import {
@@ -48,16 +40,9 @@
     effortOptionsForReasoning,
     reasoningForModelValue,
   } from '$lib/agentForm.js';
-  import {
-    SURFACE_FORM,
-    shouldApplyReloadNow,
-  } from '$lib/resourceInvalidation.js';
   import { t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
   import InfoHint from './ui/InfoHint.svelte';
-
-  const PROJECT_BUSY_CODE = 'project_busy';
-  const PROJECT_IN_USE_CODE = 'project_in_use';
 
   // Human-facing labels for the source-format vocabulary.
   const FORMAT_LABELS = Object.freeze({
@@ -103,40 +88,16 @@
     modelsRefreshToken = 0,
   } = $props();
 
-  const projectsController = createProjectsController();
+  const projectsState = $state(createProjectsState());
+  const projectsController = createProjectsController({
+    state: projectsState,
+    translate: t,
+    onProjectSelected: (projectId) => onProjectSelected(projectId),
+    onToast: (toast) => onToast(toast),
+  });
 
-  let projects = $state([]);
-  let loadingProjects = $state(false);
-  let listError = $state('');
-  let statusMessage = $state('');
-
-  // Model/connection catalogs feed the default-model / model-override searchable
-  // dropdowns (the same picker the Agents tab uses, see modelSelection.js).
-  let availableModels = $state([]);
-  let availableConnections = $state([]);
-  // A live model reload fetches in the background but holds the visible option
-  // swap while a picker is open, so an open selection is never disturbed.
-  let modelDropdownOpenCount = $state(0);
-  let pendingModelCatalogs = null;
-  let lastModelsRefreshToken = null;
-
-  // The global agent defaults (`settings.get` → `defaults.agent`), fetched once
-  // when the view loads so the project-default inherit options can name the
-  // global default. Empty object on failure → the absent-case labels render.
-  let globalAgentDefaults = $state({});
-  let globalCompactionPolicy = $state(null);
-
-  // Add modal state — the popup needs only the repo path plus an optional
-  // display name (blank → backend derives the name from the folder).
-  let isAddOpen = $state(false);
-  let addForm = $state(createAddForm());
-  let addingProject = $state(false);
-  let addError = $state('');
-  // The debounced project.detect result for the typed path (null until the
-  // first probe answers). Drives the format choice and the CLAUDE.md suggestion.
-  let addDetect = $state(null);
   const addFormatsPresent = $derived(
-    addDetect ? presentFormats(addDetect) : [],
+    projectsState.addDetect ? presentFormats(projectsState.addDetect) : [],
   );
   // Both formats found → the informed radio choice; exactly one → a quiet
   // "Detected" line (the server auto-detects the same); none → silent default.
@@ -145,81 +106,41 @@
     addFormatsPresent.length === 1 ? addFormatsPresent[0] : '',
   );
   const addSuggestsClaudeMd = $derived(
-    addDetect !== null && shouldSuggestClaudeMd(addDetect),
+    projectsState.addDetect !== null &&
+      shouldSuggestClaudeMd(projectsState.addDetect),
   );
 
-  // The selected project drives the detail pane. Its settings form, scanned
-  // team, report, and skill pool are held here and reset on selection change.
-  let selectedProjectId = $state('');
-  let editForm = $state(createEditForm());
-  let editSaving = $state(false);
-  let editError = $state('');
-  // The draft text for the auto-load "add a file" input, kept apart from editForm
-  // so typing a candidate path does not mark the form dirty until it is added.
-  let autoLoadDraft = $state('');
-  let activeTeam = $state([]);
-  let activeReport = $state(null);
-  let activeScanSkills = $state({ project: [], bundled: [], global: [] });
-  let scanLoading = $state(false);
-  let scanRefreshRequested = $state(false);
-  let removingProjectId = $state('');
-  // The project awaiting remove confirmation (null = dialog closed).
-  let removeConfirmProject = $state(null);
-  let copyRootedAgentIdentityFiles = $state(false);
-
-  // Which team-member rows are expanded (keyed agent id → true), plus each
-  // member's override draft and the in-flight override field, so a row's expand state
-  // and controls persist while the detail is open. Reset when the project changes.
-  let expandedMembers = $state({});
-  let overrideDrafts = $state({});
-  // The `${agentId}:${field}` currently being written, so its buttons disable.
-  let overrideBusyKey = $state('');
-
-  // The toggleable tool catalog and the base Tool Whitelist (reset target), both
-  // from the tool-catalog RPC so new tools appear without hardcoding names.
-  let toolCatalog = $state([]);
-  let defaultProjectTools = $state([]);
-
-  // Re-point modal state (a project whose cwd_exists === false).
-  let rePointProject = $state(null);
-  let rePointCwd = $state('');
-  let rePointing = $state(false);
-  let rePointError = $state('');
-
-  let hasProjects = $derived(projects.length > 0);
-  let canSubmitAdd = $derived(addForm.cwd.trim().length > 0 && !addingProject);
-
-  let selectedProject = $derived(
-    projects.find((item) => item.project_id === selectedProjectId) ?? null,
+  let hasProjects = $derived(projectsState.projects.length > 0);
+  let canSubmitAdd = $derived(
+    projectsState.addForm.cwd.trim().length > 0 && !projectsState.addingProject,
   );
 
-  let showAllModels = $state(false);
-  // Per-member reveal state for the override pickers, keyed by agent id.
-  let showAllOverrideModels = $state({});
+  let selectedProject = $derived(projectsController.selectedProject());
+
   let allModelOptions = $derived(
     buildModelSelectOptions({
-      models: availableModels,
-      connections: availableConnections,
-      selectedModelValue: editForm.default_model,
+      models: projectsState.availableModels,
+      connections: projectsState.availableConnections,
+      selectedModelValue: projectsState.editForm.default_model,
       emptyLabel: defaultModelInheritLabel(),
       translate: t,
     }),
   );
   let modelOptions = $derived(
     filterModelSelectOptions(allModelOptions, {
-      showAll: showAllModels,
-      selectedModelValue: editForm.default_model,
+      showAll: projectsState.showAllModels,
+      selectedModelValue: projectsState.editForm.default_model,
     }),
   );
   let modelFilterFooter = $derived(
     modelFilterFooterLabel({
-      showAll: showAllModels,
+      showAll: projectsState.showAllModels,
       hiddenCount: allModelOptions.length - modelOptions.length,
       translate: t,
     }),
   );
   let modelSelectValue = $derived(
-    selectModelValue(editForm.default_model, modelOptions),
+    selectModelValue(projectsState.editForm.default_model, modelOptions),
   );
   // The per-project source-format selector (exactly one format per project).
   let sourceFormatOptions = $derived(
@@ -231,8 +152,8 @@
 
   let agentOptions = $derived(
     buildDefaultAgentOptions({
-      team: activeTeam,
-      currentValue: editForm.default_agent,
+      team: projectsState.activeTeam,
+      currentValue: projectsState.editForm.default_agent,
       emptyLabel: t('projects.manage.defaultAgentEmpty', 'No project default'),
       unavailableLabel: (agentId) =>
         t(
@@ -263,43 +184,29 @@
 
   // The sparse project.set changes the open form represents versus the saved
   // project — empty when the form matches what the server already holds.
-  let pendingChanges = $derived(
-    selectedProject
-      ? buildManageProjectPayload(
-          {
-            display_name: editForm.display_name,
-            default_agent: editForm.default_agent,
-            default_model: editForm.default_model,
-            default_temperature: editForm.default_temperature,
-            default_thinking_effort: editForm.default_thinking_effort,
-            auto_load: editForm.auto_load,
-            allowed_tools: editForm.allowed_tools,
-            skills_bundled_enabled: editForm.skills_bundled_enabled,
-            skills_global_enabled: editForm.skills_global_enabled,
-            skills_project_disabled: editForm.skills_project_disabled,
-          },
-          selectedProject,
-        )
-      : {},
+  let pendingChanges = $derived(projectsController.pendingChanges());
+  let saveDisabled = $derived(
+    projectsState.editSaving || !hasManageChanges(pendingChanges),
   );
-  let saveDisabled = $derived(editSaving || !hasManageChanges(pendingChanges));
 
-  let temperatureIsInherit = $derived(editForm.default_temperature === '');
+  let temperatureIsInherit = $derived(
+    projectsState.editForm.default_temperature === '',
+  );
 
   let toolToggleRows = $derived(
     buildToolToggleList({
-      catalog: toolCatalog,
-      allowedTools: editForm.allowed_tools,
+      catalog: projectsState.toolCatalog,
+      allowedTools: projectsState.editForm.allowed_tools,
     }),
   );
   let skillToggleSections = $derived(
     buildSkillToggleSections({
-      projectSkills: activeScanSkills.project,
-      bundledSkills: activeScanSkills.bundled,
-      globalSkills: activeScanSkills.global,
-      skillsBundledEnabled: editForm.skills_bundled_enabled,
-      skillsGlobalEnabled: editForm.skills_global_enabled,
-      skillsProjectDisabled: editForm.skills_project_disabled,
+      projectSkills: projectsState.activeScanSkills.project,
+      bundledSkills: projectsState.activeScanSkills.bundled,
+      globalSkills: projectsState.activeScanSkills.global,
+      skillsBundledEnabled: projectsState.editForm.skills_bundled_enabled,
+      skillsGlobalEnabled: projectsState.editForm.skills_global_enabled,
+      skillsProjectDisabled: projectsState.editForm.skills_project_disabled,
     }),
   );
   // The shared chip list keys off `allowed`; the toggle builders track it as
@@ -337,10 +244,7 @@
   );
 
   onMount(() => {
-    selectedProjectId = preferredProjectId;
-    void loadCatalogs();
-    void loadGlobalDefaults();
-    void loadProjects();
+    void projectsController.initialize(preferredProjectId);
   });
 
   onDestroy(() => {
@@ -353,7 +257,9 @@
       return;
     }
 
-    projectsController.scheduleAutoSave(saveSelectedProject);
+    projectsController.scheduleAutoSave(() =>
+      projectsController.saveSelectedProject(),
+    );
 
     return () => {
       projectsController.clearAutoSave();
@@ -363,61 +269,11 @@
   // Reload the model catalog when the generic invalidation channel signals a
   // model/provider change (first run is a no-op: mount already loaded).
   $effect(() => {
-    if (lastModelsRefreshToken === null) {
-      lastModelsRefreshToken = modelsRefreshToken;
-      return;
-    }
-    if (modelsRefreshToken !== lastModelsRefreshToken) {
-      lastModelsRefreshToken = modelsRefreshToken;
-      void reloadModelCatalogs();
-    }
+    projectsController.updateModelsRefreshToken(modelsRefreshToken);
   });
 
-  function createAddForm() {
-    return {
-      cwd: '',
-      display_name: '',
-      // The explicit format pick when both formats are present (radio default:
-      // opencode) and the CLAUDE.md suggestion checkbox (opt-in, off).
-      source_format: 'opencode',
-      include_claude_md: false,
-    };
-  }
-
-  function createEditForm(project = null) {
-    return {
-      display_name: project?.display_name ?? '',
-      default_agent: project?.default_agent ?? '',
-      default_model: project?.default_model ?? '',
-      source_format: project?.source_format ?? 'opencode',
-      default_temperature: seedProjectTemperature(project?.default_temperature),
-      default_thinking_effort: seedProjectThinkingEffort(
-        project?.default_thinking_effort,
-      ),
-      auto_load: [...(project?.auto_load ?? [])],
-      allowed_tools: [...(project?.allowed_tools ?? [])],
-      skills_bundled_enabled: [...(project?.skills_bundled_enabled ?? [])],
-      skills_global_enabled: [...(project?.skills_global_enabled ?? [])],
-      skills_project_disabled: [...(project?.skills_project_disabled ?? [])],
-    };
-  }
-
-  // number → text box; null/absent → empty box ("no project default").
-  function seedProjectTemperature(value) {
-    return typeof value === 'number' ? String(value) : '';
-  }
-
-  // null/absent → the "no default" sentinel; '' (provider default) and a level
-  // seed verbatim so the dropdown shows the stored choice.
-  function seedProjectThinkingEffort(value) {
-    if (value === null || value === undefined) {
-      return PROJECT_THINKING_EFFORT_NO_DEFAULT;
-    }
-    return value;
-  }
-
-  // The inherit-option label for the project default-model select. A present
-  // global default names its value; an absent one shows the not-configured copy.
+  // Presentation-only labels and projections stay in the component. Project
+  // lifecycle, mutations, reconciliation, and async state belong to the controller.
   function defaultModelInheritLabel() {
     const value = globalDefaultText('model');
     if (value) {
@@ -428,7 +284,6 @@
     return t('inherit.optionNotConfigured', 'Inherit (not configured)');
   }
 
-  // The inherit ('') label for the project default thinking-effort select.
   function defaultThinkingEffortInheritLabel() {
     const value = globalDefaultText('thinking_effort');
     if (value) {
@@ -440,327 +295,49 @@
   }
 
   function globalDefaultText(fieldName) {
+    const defaults = projectsState.globalAgentDefaults;
     const raw =
-      globalAgentDefaults && typeof globalAgentDefaults === 'object'
-        ? globalAgentDefaults[fieldName]
-        : null;
-    if (raw === null || raw === undefined) {
-      return '';
-    }
-    return String(raw).trim();
-  }
-
-  async function loadGlobalDefaults() {
-    try {
-      const result = await projectsController.loadGlobalSettings();
-      if (!projectsController.isActive()) {
-        return;
-      }
-      const defaults = result?.defaults?.agent;
-      globalAgentDefaults =
-        defaults && typeof defaults === 'object' ? defaults : {};
-      globalCompactionPolicy = result?.compaction ?? null;
-    } catch {
-      globalAgentDefaults = {};
-      globalCompactionPolicy = null;
-    }
-  }
-
-  function applyModelCatalogs(catalogs) {
-    availableModels = catalogs.models;
-    availableConnections = catalogs.connections;
-    pendingModelCatalogs = null;
-  }
-
-  async function loadCatalogs() {
-    const catalogs = await projectsController.loadCatalogs();
-    if (!catalogs.stale) {
-      if (catalogs.modelCatalogsAvailable) {
-        applyModelCatalogs(catalogs);
-      }
-      toolCatalog = catalogs.tools;
-      defaultProjectTools = catalogs.defaultProjectTools;
-    }
-  }
-
-  async function reloadModelCatalogs() {
-    const catalogs = await projectsController.loadCatalogs();
-    if (catalogs.stale) {
-      return;
-    }
-    toolCatalog = catalogs.tools;
-    defaultProjectTools = catalogs.defaultProjectTools;
-    if (!catalogs.modelCatalogsAvailable) {
-      return;
-    }
-    if (
-      shouldApplyReloadNow(SURFACE_FORM, {
-        dropdownOpen: modelDropdownOpenCount > 0,
-      })
-    ) {
-      applyModelCatalogs(catalogs);
-    } else {
-      pendingModelCatalogs = catalogs;
-    }
+      defaults && typeof defaults === 'object' ? defaults[fieldName] : null;
+    return raw === null || raw === undefined ? '' : String(raw).trim();
   }
 
   function trackModelDropdownOpen(open) {
-    modelDropdownOpenCount = Math.max(
-      0,
-      modelDropdownOpenCount + (open ? 1 : -1),
-    );
-    if (modelDropdownOpenCount === 0 && pendingModelCatalogs) {
-      applyModelCatalogs(pendingModelCatalogs);
-    }
-  }
-
-  async function loadProjects() {
-    let requestId = null;
-    loadingProjects = true;
-    listError = '';
-
-    try {
-      const result = await projectsController.loadProjects();
-      requestId = result.requestId;
-      if (
-        result.stale ||
-        !projectsController.isCurrentProjectsRequest(result.requestId)
-      ) {
-        return;
-      }
-      if (result.error) {
-        throw result.error;
-      }
-      projects = result.projects;
-      const preferredProject = projects.find(
-        (project) => project.project_id === selectedProjectId,
-      );
-      const projectToOpen = preferredProject ?? projects[0] ?? null;
-      if (projectToOpen) {
-        selectProject(projectToOpen.project_id);
-      } else {
-        clearSelectedProject();
-      }
-    } catch (error) {
-      if (!projectsController.isActive()) {
-        return;
-      }
-      listError = `${t('projects.loadError', 'Projects could not be loaded.')} ${errorText(error)}`;
-    } finally {
-      if (projectsController.isCurrentProjectsRequest(requestId)) {
-        loadingProjects = false;
-      }
-    }
+    projectsController.trackModelDropdownOpen(open);
   }
 
   function openAdd() {
-    addForm = createAddForm();
-    addError = '';
-    addDetect = null;
-    isAddOpen = true;
+    projectsController.openAdd();
   }
 
   function closeAdd() {
-    if (addingProject) {
-      return;
-    }
-    isAddOpen = false;
-    addError = '';
-    projectsController.clearDetect();
+    projectsController.closeAdd();
   }
 
   function updateAddField(field, value) {
-    addForm[field] = value;
-    addError = '';
-    if (field === 'cwd') {
-      scheduleAddDetect(value);
-    }
+    projectsController.updateAddField(field, value);
   }
 
-  // Probe the typed path after a short idle. Detection is advisory only: a
-  // failed/void probe just leaves the dialog without a format choice (the
-  // server auto-detects at add time anyway), so errors are swallowed.
-  function scheduleAddDetect(cwd) {
-    projectsController.scheduleDetect(cwd, (result, detectedCwd) => {
-      if (!isAddOpen || addForm.cwd.trim() !== detectedCwd) {
-        return;
-      }
-      addDetect = result;
-    });
-  }
-
-  async function submitAdd(event) {
+  function submitAdd(event) {
     event.preventDefault();
-    if (addForm.cwd.trim().length === 0) {
-      addError = t(
-        'projects.add.missingCwd',
-        'Enter a repository path to add a project.',
-      );
-      return;
-    }
-
-    addingProject = true;
-    addError = '';
-    statusMessage = '';
-
-    try {
-      const payload = buildAddProjectPayload({
-        cwd: addForm.cwd,
-        display_name: addForm.display_name,
-        // Only an actual choice is sent: with both formats present the radio
-        // decides; otherwise the field is omitted and the server auto-detects.
-        source_format: addShowsFormatChoice ? addForm.source_format : '',
-        // The accepted CLAUDE.md suggestion becomes a normal auto_load entry
-        // (loads verbatim; the backend seeds AGENTS.md in front of it).
-        auto_load:
-          addSuggestsClaudeMd && addForm.include_claude_md ? ['CLAUDE.md'] : [],
-      });
-      const result = await projectsController.addProject(payload);
-      if (!projectsController.isActive()) {
-        return;
-      }
-      const project = normalizeProject(result?.project);
-      statusMessage = t('projects.add.success', 'Project added.');
-      isAddOpen = false;
-      addForm = createAddForm();
-      addDetect = null;
-      await loadProjects();
-      if (projectsController.isActive()) {
-        // Select the freshly added project so its scan (team + report) is the
-        // review surface right away (add-then-review, no dry-run).
-        selectProject(project.project_id, result?.scan);
-      }
-    } catch (error) {
-      if (!projectsController.isActive()) {
-        return;
-      }
-      addError = `${t('projects.add.error', 'Project could not be added.')} ${errorText(error)}`;
-    } finally {
-      if (projectsController.isActive()) {
-        addingProject = false;
-      }
-    }
+    void projectsController.submitAdd();
   }
 
-  // Select a project for the detail pane. When a scan is already in hand (right
-  // after add) it seeds the team/report immediately; otherwise it fetches one.
-  function selectProject(projectId, scan = null) {
-    projectsController.invalidateScan();
-    const project =
-      projects.find((item) => item.project_id === projectId) ?? null;
-    selectedProjectId = projectId;
-    onProjectSelected(projectId);
-    editForm = createEditForm(project);
-    autoLoadDraft = '';
-    editError = '';
-    activeTeam = [];
-    activeReport = null;
-    activeScanSkills = { project: [], bundled: [], global: [] };
-    expandedMembers = {};
-    overrideDrafts = {};
-    overrideBusyKey = '';
-
-    if (scan) {
-      scanLoading = false;
-      applyScan(scan);
-      return;
-    }
-
-    void loadScan(projectId);
+  function selectProject(projectId) {
+    projectsController.selectProject(projectId);
   }
 
-  function clearSelectedProject() {
-    projectsController.invalidateScan();
-    scanLoading = false;
-    selectedProjectId = '';
-    onProjectSelected('');
-    editForm = createEditForm();
-    autoLoadDraft = '';
-    editError = '';
-    activeTeam = [];
-    activeReport = null;
-    activeScanSkills = { project: [], bundled: [], global: [] };
-    expandedMembers = {};
-    overrideDrafts = {};
-    overrideBusyKey = '';
-  }
-
-  function applyScan(scan) {
-    activeTeam = projectTeam(scan);
-    activeReport = normalizeScanReport(scan?.report);
-    activeScanSkills = normalizeScanSkills(scan);
-    seedOverrideDrafts();
-  }
-
-  // Seed each team member's override draft from its current override/effective values,
-  // only for members that have no draft yet (an open control's typed text is kept).
-  function seedOverrideDrafts() {
-    const next = { ...overrideDrafts };
-    for (const member of activeTeam) {
-      if (!next[member.agent_id]) {
-        next[member.agent_id] = seedTeamOverrideDraft(member);
-      }
-    }
-    overrideDrafts = next;
-  }
-
-  async function loadScan(projectId) {
-    let requestId = null;
-    scanLoading = true;
-
-    try {
-      const result = await projectsController.loadScan(projectId);
-      requestId = result.requestId;
-      if (
-        result.stale ||
-        !projectsController.isCurrentScanRequest(result.requestId)
-      ) {
-        return;
-      }
-      if (result.error) {
-        throw result.error;
-      }
-      applyScan(result.scan);
-    } catch (error) {
-      if (!projectsController.isActive()) {
-        return;
-      }
-      editError = `${t('projects.loadError', 'Projects could not be loaded.')} ${errorText(error)}`;
-    } finally {
-      if (projectsController.isCurrentScanRequest(requestId)) {
-        scanLoading = false;
-      }
-    }
-  }
-
-  // Team and Skills are two projections of one repository scan, so the Project
-  // header owns the single explicit rescan action for both.
-  async function refreshScan() {
-    if (!selectedProjectId || scanLoading) {
-      return;
-    }
-    scanRefreshRequested = true;
-    await loadScan(selectedProjectId);
-    if (projectsController.isActive()) {
-      scanRefreshRequested = false;
-    }
+  function refreshScan() {
+    void projectsController.refreshScan();
   }
 
   function updateEditField(field, value) {
-    editForm[field] = value;
-    editError = '';
+    projectsController.updateEditField(field, value);
   }
 
   function toggleTool(name, enabled) {
-    editForm.allowed_tools = setListMembership(
-      editForm.allowed_tools,
-      name,
-      enabled,
-    );
-    editError = '';
+    projectsController.updateListField('allowed_tools', name, enabled);
   }
 
-  // A not-ready tool row's "Open Extensions" link jumps to Settings → Extensions.
   function navigateToExtensions(_extensionName) {
     onNavigateToSettingsPanel('extensions');
   }
@@ -770,189 +347,97 @@
   }
 
   function toggleProjectSkill(name, active) {
-    editForm.skills_project_disabled = setListMembership(
-      editForm.skills_project_disabled,
+    projectsController.updateListField(
+      'skills_project_disabled',
       name,
       !active,
     );
-    editError = '';
   }
 
   function toggleBundledSkill(name, enabled) {
-    editForm.skills_bundled_enabled = setListMembership(
-      editForm.skills_bundled_enabled,
-      name,
-      enabled,
-    );
-    editError = '';
+    projectsController.updateListField('skills_bundled_enabled', name, enabled);
   }
 
   function toggleGlobalSkill(name, enabled) {
-    editForm.skills_global_enabled = setListMembership(
-      editForm.skills_global_enabled,
-      name,
-      enabled,
-    );
-    editError = '';
+    projectsController.updateListField('skills_global_enabled', name, enabled);
   }
 
-  // Reset the Tool Whitelist to the base list (the server-provided default).
   function resetToolsToDefaults() {
-    editForm.allowed_tools = [...defaultProjectTools];
-    editError = '';
+    projectsController.replaceListField(
+      'allowed_tools',
+      projectsState.defaultProjectTools,
+    );
   }
 
-  // Bulk "all on / all off" for each whitelist list. Tools and bundled/global
-  // skills store the enabled names; project skills store the *disabled* names,
-  // so all-on clears the disabled list and all-off names every project skill.
   function setAllTools(enabled) {
-    editForm.allowed_tools = enabled
-      ? toolToggleRows.map((tool) => tool.name)
-      : [];
-    editError = '';
+    projectsController.replaceListField(
+      'allowed_tools',
+      enabled ? toolToggleRows.map((tool) => tool.name) : [],
+    );
   }
 
   function setAllProjectSkills(enabled) {
-    editForm.skills_project_disabled = enabled
-      ? []
-      : skillToggleSections.project.map((skill) => skill.name);
-    editError = '';
+    projectsController.replaceListField(
+      'skills_project_disabled',
+      enabled ? [] : skillToggleSections.project.map((skill) => skill.name),
+    );
   }
 
   function setAllBundledSkills(enabled) {
-    editForm.skills_bundled_enabled = enabled
-      ? skillToggleSections.bundled.map((skill) => skill.name)
-      : [];
-    editError = '';
+    projectsController.replaceListField(
+      'skills_bundled_enabled',
+      enabled ? skillToggleSections.bundled.map((skill) => skill.name) : [],
+    );
   }
 
   function setAllGlobalSkills(enabled) {
-    editForm.skills_global_enabled = enabled
-      ? skillToggleSections.global.map((skill) => skill.name)
-      : [];
-    editError = '';
+    projectsController.replaceListField(
+      'skills_global_enabled',
+      enabled ? skillToggleSections.global.map((skill) => skill.name) : [],
+    );
   }
 
   function updateModelSelection(selectedValue) {
     const selection = parseModelSelectionValue(selectedValue);
-    editForm.default_model = modelSelectionValue(
-      selection.model,
-      selection.connectionLocalId,
+    projectsController.updateEditField(
+      'default_model',
+      modelSelectionValue(selection.model, selection.connectionLocalId),
     );
-    editError = '';
   }
 
   function clearDefaultTemperature() {
-    updateEditField('default_temperature', '');
+    projectsController.updateEditField('default_temperature', '');
   }
 
-  // Explicit Save button / form submit. On a clean form it confirms trust with
-  // the shared "Already saved" toast instead of a no-op request (DESIGN.md →
-  // Save model); otherwise it pre-empts the pending debounce and saves now.
   function handleManualSave(event) {
     event.preventDefault();
-    if (editSaving) {
-      return;
-    }
-    if (saveDisabled) {
-      onToast({
-        title: t('common.alreadySaved', 'Already saved'),
-        variant: 'success',
-      });
-      return;
-    }
-    projectsController.clearAutoSave();
-    void saveSelectedProject();
+    void projectsController.saveSelectedProject({ manual: true });
   }
-
-  // Persist the settings form's pending changes. Shared by the debounced
-  // auto-save and the explicit Save button; both target the selected project and
-  // re-seed the panel from the saved state so the form reads as clean afterwards.
-  async function saveSelectedProject() {
-    const project = selectedProject;
-    if (!project || editSaving) {
-      return;
-    }
-
-    const changes = pendingChanges;
-    if (!hasManageChanges(changes)) {
-      return;
-    }
-
-    editSaving = true;
-    editError = '';
-    statusMessage = '';
-
-    try {
-      const result = await projectsController.saveProject(
-        project.project_id,
-        changes,
-      );
-      if (!projectsController.isActive()) {
-        return;
-      }
-      await loadProjects();
-      if (!projectsController.isActive()) {
-        return;
-      }
-      const saved = normalizeProject(result?.project);
-      editForm = createEditForm(saved);
-      applyScan(result?.scan);
-      onToast({
-        title: t('projects.manage.saveSuccess', 'Project updated.'),
-        variant: 'success',
-      });
-    } catch (error) {
-      if (!projectsController.isActive()) {
-        return;
-      }
-      editError = `${t('projects.manage.saveError', 'Project changes could not be saved.')} ${errorText(error)}`;
-    } finally {
-      if (projectsController.isActive()) {
-        editSaving = false;
-      }
-    }
-  }
-
-  // ── Team rows ──────────────────────────────────────────────────────────────
 
   function toggleMember(agentId) {
-    expandedMembers = {
-      ...expandedMembers,
-      [agentId]: !expandedMembers[agentId],
+    projectsState.expandedMembers = {
+      ...projectsState.expandedMembers,
+      [agentId]: !projectsState.expandedMembers[agentId],
     };
   }
 
   function overrideDraft(agentId) {
-    return (
-      overrideDrafts[agentId] ?? {
-        model: '',
-        temperature: '',
-        thinking_effort: '',
-        compaction_policy: null,
-      }
-    );
+    return projectsController.overrideDraft(agentId);
   }
 
   function updateOverrideDraft(agentId, field, value) {
-    overrideDrafts = {
-      ...overrideDrafts,
-      [agentId]: { ...overrideDraft(agentId), [field]: value },
-    };
-    editError = '';
+    projectsController.updateOverrideDraft(agentId, field, value);
   }
 
   function updateOverrideModelSelection(agentId, selectedValue) {
     const selection = parseModelSelectionValue(selectedValue);
-    updateOverrideDraft(
+    projectsController.updateOverrideDraft(
       agentId,
       'model',
       modelSelectionValue(selection.model, selection.connectionLocalId),
     );
   }
 
-  // The effective-value display: the label, the value text (with the null-case
-  // wording), and the source label — for one field of one member.
   function effectiveDisplay(member, field) {
     const meta = EFFECTIVE_FIELD_META[field];
     const entry = member?.effective?.[field] ?? { value: null, source: null };
@@ -982,15 +467,12 @@
     }
   }
 
-  // The thinking-effort override options, gated by the member's effective model via
-  // the shared agentForm helpers (mirrors the agent editor). The empty option is
-  // the "provider default" override value.
   function overrideEffortOptions(member) {
     const reasoning = reasoningForModelValue(
       overrideDraft(member.agent_id).model ||
         member?.effective?.model?.value ||
         '',
-      availableModels,
+      projectsState.availableModels,
     );
     return effortOptionsForReasoning(reasoning).map((option) => ({
       value: option,
@@ -1004,20 +486,18 @@
     }));
   }
 
-  // The model-override picker options for one member (its own draft as the selected
-  // value so a saved/overridden value stays visible even if unavailable).
   function overrideModelOptions(member) {
     const selectedModelValue = overrideDraft(member.agent_id).model;
     return filterModelSelectOptions(allOverrideModelOptions(member), {
-      showAll: Boolean(showAllOverrideModels[member.agent_id]),
+      showAll: Boolean(projectsState.showAllOverrideModels[member.agent_id]),
       selectedModelValue,
     });
   }
 
   function allOverrideModelOptions(member) {
     return buildModelSelectOptions({
-      models: availableModels,
-      connections: availableConnections,
+      models: projectsState.availableModels,
+      connections: projectsState.availableConnections,
       selectedModelValue: overrideDraft(member.agent_id).model,
       emptyLabel: t('projects.team.overrideModelPlaceholder', 'No override'),
       translate: t,
@@ -1025,7 +505,9 @@
   }
 
   function overrideModelFilterFooter(member) {
-    const showAll = Boolean(showAllOverrideModels[member.agent_id]);
+    const showAll = Boolean(
+      projectsState.showAllOverrideModels[member.agent_id],
+    );
     return modelFilterFooterLabel({
       showAll,
       hiddenCount:
@@ -1036,325 +518,78 @@
   }
 
   function toggleShowAllOverrideModels(agentId) {
-    showAllOverrideModels = {
-      ...showAllOverrideModels,
-      [agentId]: !showAllOverrideModels[agentId],
+    projectsState.showAllOverrideModels = {
+      ...projectsState.showAllOverrideModels,
+      [agentId]: !projectsState.showAllOverrideModels[agentId],
     };
   }
 
-  function overrideKey(agentId, field) {
-    return `${agentId}:${field}`;
-  }
-
   function isOverrideBusy(agentId, field) {
-    return overrideBusyKey === overrideKey(agentId, field);
+    return projectsController.isOverrideBusy(agentId, field);
   }
 
-  // Whether the Set-override button is enabled: not busy and the draft carries a real
-  // value for the field (an override must have a value; clearing is a separate action).
   function canSetOverride(agentId, field) {
-    if (overrideBusyKey) {
-      return false;
-    }
-    const draft = overrideDraft(agentId);
-    if (field === 'model') {
-      return typeof draft.model === 'string' && draft.model.trim().length > 0;
-    }
-    if (field === 'temperature') {
-      return normalizeOverrideTemperature(draft.temperature) !== null;
-    }
-    if (field === 'compaction_policy') {
-      return draft.compaction_policy !== null;
-    }
-    // thinking_effort: a level or '' (provider default) is a valid override value.
-    return typeof draft.thinking_effort === 'string';
+    return projectsController.canSetOverride(agentId, field);
   }
 
-  // The value sent to project.set_override for a field, from that field's draft.
-  function overrideValueForField(agentId, field) {
-    const draft = overrideDraft(agentId);
-    if (field === 'model') {
-      return draft.model.trim();
-    }
-    if (field === 'temperature') {
-      return normalizeOverrideTemperature(draft.temperature);
-    }
-    if (field === 'compaction_policy') {
-      return draft.compaction_policy;
-    }
-    return draft.thinking_effort;
+  function applySetOverride(agentId, field) {
+    void projectsController.setMemberOverride(agentId, field);
   }
 
-  async function applySetOverride(agentId, field) {
-    const project = selectedProject;
-    if (!project || overrideBusyKey || !canSetOverride(agentId, field)) {
-      return;
-    }
-
-    overrideBusyKey = overrideKey(agentId, field);
-    editError = '';
-
-    try {
-      const result = await projectsController.setOverride(
-        project.project_id,
-        agentId,
-        field,
-        overrideValueForField(agentId, field),
-      );
-      if (!projectsController.isActive()) {
-        return;
-      }
-      refreshTeamFromScan(result?.scan);
-      onToast({
-        title: t('projects.team.overrideSaved', 'Override saved.'),
-        variant: 'success',
-      });
-    } catch (error) {
-      if (!projectsController.isActive()) {
-        return;
-      }
-      onToast({
-        title: `${t('projects.team.overrideError', 'The override could not be saved.')} ${errorText(error)}`,
-        variant: 'error',
-        sticky: true,
-      });
-    } finally {
-      if (projectsController.isActive()) {
-        overrideBusyKey = '';
-      }
-    }
+  function applyClearOverride(agentId, field) {
+    void projectsController.clearMemberOverride(agentId, field);
   }
-
-  async function applyClearOverride(agentId, field) {
-    const project = selectedProject;
-    if (!project || overrideBusyKey) {
-      return;
-    }
-
-    overrideBusyKey = overrideKey(agentId, field);
-    editError = '';
-
-    try {
-      const result = await projectsController.clearOverride(
-        project.project_id,
-        agentId,
-        field,
-      );
-      if (!projectsController.isActive()) {
-        return;
-      }
-      refreshTeamFromScan(result?.scan);
-      onToast({
-        title: t('projects.team.overrideCleared', 'Override cleared.'),
-        variant: 'success',
-      });
-    } catch (error) {
-      if (!projectsController.isActive()) {
-        return;
-      }
-      onToast({
-        title: `${t('projects.team.overrideClearError', 'The override could not be cleared.')} ${errorText(error)}`,
-        variant: 'error',
-        sticky: true,
-      });
-    } finally {
-      if (projectsController.isActive()) {
-        overrideBusyKey = '';
-      }
-    }
-  }
-
-  // Re-seed the team/report/skills from an override RPC's returned scan, then refresh
-  // the affected members' override drafts so the controls reflect the new state.
-  function refreshTeamFromScan(scan) {
-    activeTeam = projectTeam(scan);
-    activeReport = normalizeScanReport(scan?.report);
-    activeScanSkills = normalizeScanSkills(scan);
-    const next = {};
-    for (const member of activeTeam) {
-      next[member.agent_id] = seedTeamOverrideDraft(member);
-    }
-    overrideDrafts = next;
-  }
-
-  // ── Remove / re-point ────────────────────────────────────────────────────
 
   function removeOne(project) {
-    removeConfirmProject = project;
-    copyRootedAgentIdentityFiles = false;
+    projectsController.openRemove(project);
   }
 
   function cancelRemove() {
-    removeConfirmProject = null;
+    projectsController.cancelRemove();
   }
 
-  async function confirmRemove() {
-    const project = removeConfirmProject;
-    removeConfirmProject = null;
-    if (!project) {
-      return;
-    }
-
-    removingProjectId = project.project_id;
-    statusMessage = '';
-    listError = '';
-    editError = '';
-
-    try {
-      const result = await projectsController.removeProject(
-        project.project_id,
-        copyRootedAgentIdentityFiles,
-      );
-      if (!projectsController.isActive()) {
-        return;
-      }
-      if (selectedProjectId === project.project_id) {
-        selectedProjectId = '';
-        activeTeam = [];
-        activeReport = null;
-        activeScanSkills = { project: [], bundled: [], global: [] };
-      }
-      const affectedCount = Array.isArray(result?.affected_agent_ids)
-        ? result.affected_agent_ids.length
-        : 0;
-      const copyState = copyRootedAgentIdentityFiles
-        ? t('projects.remove.filesCopied', 'were copied')
-        : t('projects.remove.filesNotCopied', 'were not copied');
-      statusMessage =
-        affectedCount === 1
-          ? t(
-              'projects.remove.successOneAgent',
-              'Project removed. 1 Agent was reset; identity files {copyState}.',
-              { copyState },
-            )
-          : t(
-              'projects.remove.successManyAgents',
-              'Project removed. {count} Agents were reset; identity files {copyState}.',
-              { count: affectedCount, copyState },
-            );
-      await loadProjects();
-    } catch (error) {
-      if (!projectsController.isActive()) {
-        return;
-      }
-      const message = removeErrorText(error);
-      if (selectedProjectId === project.project_id) {
-        editError = message;
-      } else {
-        listError = message;
-      }
-    } finally {
-      if (projectsController.isActive()) {
-        removingProjectId = '';
-      }
-    }
+  function confirmRemove() {
+    void projectsController.confirmRemove();
   }
 
   function openRePoint(project) {
-    rePointProject = project;
-    rePointCwd = '';
-    rePointError = '';
+    projectsController.openRePoint(project);
   }
 
   function closeRePoint() {
-    if (rePointing) {
-      return;
-    }
-    rePointProject = null;
-    rePointError = '';
+    projectsController.closeRePoint();
   }
 
-  async function submitRePoint(event) {
+  function submitRePoint(event) {
     event.preventDefault();
-    if (!rePointProject) {
-      return;
-    }
-    if (rePointCwd.trim().length === 0) {
-      rePointError = t(
-        'projects.rePoint.missingCwd',
-        'Enter the new repository path.',
-      );
-      return;
-    }
-
-    rePointing = true;
-    rePointError = '';
-    statusMessage = '';
-
-    try {
-      const projectId = rePointProject.project_id;
-      const result = await projectsController.repointProject(
-        projectId,
-        rePointCwd,
-      );
-      if (!projectsController.isActive()) {
-        return;
-      }
-      statusMessage = t('projects.rePoint.success', 'Project re-pointed.');
-      rePointProject = null;
-      await loadProjects();
-      if (projectsController.isActive() && selectedProjectId === projectId) {
-        selectProject(projectId, result?.scan);
-      }
-    } catch (error) {
-      if (!projectsController.isActive()) {
-        return;
-      }
-      rePointError = `${t('projects.rePoint.error', 'The project could not be re-pointed.')} ${errorText(error)}`;
-    } finally {
-      if (projectsController.isActive()) {
-        rePointing = false;
-      }
-    }
+    void projectsController.submitRePoint();
   }
 
   function groupLabel(type) {
     return t(`projects.report.group.${type}`, type);
   }
 
-  function removeErrorText(error) {
-    if (error?.code === PROJECT_BUSY_CODE) {
-      return t(
-        'projects.remove.busy',
-        'This project has an active or queued run and cannot be removed right now.',
-      );
-    }
-    if (error?.code === PROJECT_IN_USE_CODE) {
-      return t(
-        'projects.remove.inUse',
-        'A cron job points at one of this project’s agents, so it cannot be removed. Remove or retarget the cron job first.',
-      );
-    }
-    return `${t('projects.remove.error', 'Project could not be removed.')} ${errorText(error)}`;
-  }
-
-  function errorText(error) {
-    if (typeof error?.message === 'string' && error.message.trim()) {
-      return error.message.trim();
-    }
-    if (typeof error === 'string' && error.trim()) {
-      return error.trim();
-    }
-    return t('common.unknown', 'Unknown');
-  }
-
   function addAutoLoadEntry() {
-    const entry = autoLoadDraft.trim();
+    const entry = projectsState.autoLoadDraft.trim();
     if (entry === '') {
       return;
     }
-    if (!editForm.auto_load.includes(entry)) {
-      editForm.auto_load = [...editForm.auto_load, entry];
+    if (!projectsState.editForm.auto_load.includes(entry)) {
+      projectsController.updateEditField('auto_load', [
+        ...projectsState.editForm.auto_load,
+        entry,
+      ]);
     }
-    autoLoadDraft = '';
-    editError = '';
+    projectsState.autoLoadDraft = '';
   }
 
   function removeAutoLoadEntry(index) {
-    editForm.auto_load = editForm.auto_load.filter(
-      (_, position) => position !== index,
+    projectsController.updateEditField(
+      'auto_load',
+      projectsState.editForm.auto_load.filter(
+        (_, position) => position !== index,
+      ),
     );
-    editError = '';
   }
 
   function handleAutoLoadKeydown(event) {
@@ -1390,33 +625,36 @@
       </div>
 
       <div class="project-list-scroll">
-        {#if listError}
+        {#if projectsState.listError}
           <Banner variant="error" role="alert">
-            {listError}
+            {projectsState.listError}
           </Banner>
         {/if}
-        {#if statusMessage}
-          <p class="project-list-state" role="status">{statusMessage}</p>
+        {#if projectsState.statusMessage}
+          <p class="project-list-state" role="status">
+            {projectsState.statusMessage}
+          </p>
         {/if}
 
-        {#if loadingProjects}
+        {#if projectsState.loadingProjects}
           <p class="project-list-state" role="status">
-            {t('projects.loading', 'Loading projects…')}
+            {t('projects.loading', 'Loading projectsState.projects…')}
           </p>
         {:else if !hasProjects}
           <EmptyState
-            title={t('projects.emptyTitle', 'No projects yet')}
+            title={t('projects.emptyTitle', 'No projectsState.projects yet')}
             description={t(
               'projects.emptySubtitle',
               'Add a repository path below to create your first project.',
             )}
           />
         {:else}
-          {#each projects as project (project.project_id)}
+          {#each projectsState.projects as project (project.project_id)}
             <button
               type="button"
               class="project-item"
-              class:active={project.project_id === selectedProjectId}
+              class:active={project.project_id ===
+                projectsState.selectedProjectId}
               data-testid={`project-toggle-${project.project_id}`}
               onclick={() => selectProject(project.project_id)}
             >
@@ -1478,11 +716,11 @@
                 <Button
                   variant="secondary"
                   data-testid="project-repository-rescan"
-                  loading={scanRefreshRequested}
-                  disabled={scanLoading}
+                  loading={projectsState.scanRefreshRequested}
+                  disabled={projectsState.scanLoading}
                   onClick={refreshScan}
                 >
-                  {scanRefreshRequested
+                  {projectsState.scanRefreshRequested
                     ? t('projects.repository.rescanning', 'Scanning…')
                     : t('projects.repository.rescan', 'Rescan repository')}
                 </Button>
@@ -1490,7 +728,7 @@
                   <Button
                     variant="secondary"
                     data-testid={`project-repoint-${selectedProject.project_id}`}
-                    disabled={editSaving}
+                    disabled={projectsState.editSaving}
                     onClick={() => openRePoint(selectedProject)}
                   >
                     {t('projects.rePoint.submit', 'Re-point')}
@@ -1499,8 +737,8 @@
                 <Button
                   variant="danger"
                   data-testid={`project-remove-${selectedProject.project_id}`}
-                  disabled={removingProjectId === selectedProject.project_id ||
-                    editSaving}
+                  disabled={projectsState.removingProjectId ===
+                    selectedProject.project_id || projectsState.editSaving}
                   onClick={() => removeOne(selectedProject)}
                 >
                   {t('projects.remove', 'Remove')}
@@ -1508,9 +746,9 @@
               </div>
             </div>
 
-            {#if editError}
+            {#if projectsState.editError}
               <Banner variant="error" role="alert">
-                {editError}
+                {projectsState.editError}
               </Banner>
             {/if}
 
@@ -1530,8 +768,8 @@
                     </span>
                     <TextField
                       id="project-edit-name"
-                      value={editForm.display_name}
-                      disabled={editSaving}
+                      value={projectsState.editForm.display_name}
+                      disabled={projectsState.editSaving}
                       onInput={(next) => updateEditField('display_name', next)}
                     />
                   </label>
@@ -1548,13 +786,13 @@
                     </span>
                     <Dropdown
                       id="project-edit-source-format"
-                      value={editForm.source_format}
+                      value={projectsState.editForm.source_format}
                       options={sourceFormatOptions}
                       ariaLabel={t(
                         'projects.manage.sourceFormat',
                         'Source format',
                       )}
-                      disabled={editSaving}
+                      disabled={projectsState.editSaving}
                       triggerClass="projects-dropdown"
                       onValueChange={(value) =>
                         updateEditField('source_format', value)}
@@ -1573,7 +811,7 @@
                     </span>
                     <Dropdown
                       id="project-edit-agent"
-                      value={editForm.default_agent}
+                      value={projectsState.editForm.default_agent}
                       options={agentOptions}
                       placeholder={t(
                         'projects.manage.defaultAgentEmpty',
@@ -1583,7 +821,7 @@
                         'projects.manage.defaultAgent',
                         'Default agent',
                       )}
-                      disabled={editSaving}
+                      disabled={projectsState.editSaving}
                       triggerClass="projects-dropdown"
                       onValueChange={(value) =>
                         updateEditField('default_agent', value)}
@@ -1617,11 +855,13 @@
                         'projects.manage.defaultModel',
                         'Default model',
                       )}
-                      disabled={editSaving}
+                      disabled={projectsState.editSaving}
                       triggerClass="projects-dropdown"
                       panelClass="projects-view__search-panel"
                       footerActionLabel={modelFilterFooter}
-                      onFooterAction={() => (showAllModels = !showAllModels)}
+                      onFooterAction={() =>
+                        (projectsState.showAllModels =
+                          !projectsState.showAllModels)}
                       onOpenChange={trackModelDropdownOpen}
                       onValueChange={updateModelSelection}
                     />
@@ -1652,8 +892,8 @@
                         id="project-edit-temperature"
                         class="projects-override-input"
                         inputmode="decimal"
-                        value={editForm.default_temperature}
-                        disabled={editSaving}
+                        value={projectsState.editForm.default_temperature}
+                        disabled={projectsState.editSaving}
                         ariaLabel={t(
                           'projects.manage.defaultTemperature',
                           'Default temperature',
@@ -1713,13 +953,13 @@
                     </span>
                     <Dropdown
                       id="project-edit-thinking-effort"
-                      value={editForm.default_thinking_effort}
+                      value={projectsState.editForm.default_thinking_effort}
                       options={thinkingEffortOptions}
                       ariaLabel={t(
                         'projects.manage.defaultThinkingEffort',
                         'Default thinking effort',
                       )}
-                      disabled={editSaving}
+                      disabled={projectsState.editSaving}
                       triggerClass="projects-dropdown"
                       onValueChange={(value) =>
                         updateEditField('default_thinking_effort', value)}
@@ -1727,14 +967,14 @@
                   </label>
                 </div>
 
-                <div class="detail-btns projects-save-row">
+                <div class="detail-btns projectsState.projects-save-row">
                   <Button
                     variant="primary"
                     type="submit"
                     data-testid={`project-save-${selectedProject.project_id}`}
-                    disabled={editSaving}
+                    disabled={projectsState.editSaving}
                   >
-                    {editSaving
+                    {projectsState.editSaving
                       ? t('projects.manage.saving', 'Saving…')
                       : t('projects.manage.save', 'Save changes')}
                   </Button>
@@ -1755,16 +995,16 @@
               </div>
               <div class="detail-section-body">
                 <div class="projects-field">
-                  {#if editForm.auto_load.length > 0}
+                  {#if projectsState.editForm.auto_load.length > 0}
                     <ul class="projects-file-list">
-                      {#each editForm.auto_load as filePath, index (index)}
+                      {#each projectsState.editForm.auto_load as filePath, index (index)}
                         <li class="projects-file-row">
                           <span class="projects-file-name">{filePath}</span>
                           <button
                             type="button"
                             class="projects-file-remove"
                             data-testid={`project-auto-load-remove-${index}`}
-                            disabled={editSaving}
+                            disabled={projectsState.editSaving}
                             aria-label={t(
                               'projects.manage.autoLoadRemove',
                               'Remove {file}',
@@ -1790,25 +1030,26 @@
                     <TextField
                       id="project-edit-auto-load"
                       class="projects-file-input"
-                      value={autoLoadDraft}
+                      value={projectsState.autoLoadDraft}
                       placeholder={t(
                         'projects.manage.autoLoadPlaceholder',
                         'Add a file path…',
                       )}
-                      disabled={editSaving}
+                      disabled={projectsState.editSaving}
                       ariaLabel={t(
                         'projects.manage.autoLoad',
                         'Auto-load files',
                       )}
                       onInput={(next) => {
-                        autoLoadDraft = next;
+                        projectsState.autoLoadDraft = next;
                       }}
                       onkeydown={handleAutoLoadKeydown}
                     />
                     <Button
                       variant="secondary"
                       data-testid="project-auto-load-add"
-                      disabled={editSaving || autoLoadDraft.trim().length === 0}
+                      disabled={projectsState.editSaving ||
+                        projectsState.autoLoadDraft.trim().length === 0}
                       onClick={addAutoLoadEntry}
                     >
                       {t('projects.manage.autoLoadAdd', 'Add')}
@@ -1832,18 +1073,18 @@
                 </span>
               </div>
               <div class="detail-section-body">
-                {#if activeReport && !activeReport.clean}
+                {#if projectsState.activeReport && !projectsState.activeReport.clean}
                   <div class="projects-field">
                     <Banner variant="warn" role="status">
                       {t(
                         'projects.report.findingCount',
                         '{count} issues found',
                         {
-                          count: activeReport.findingCount,
+                          count: projectsState.activeReport.findingCount,
                         },
                       )}
                     </Banner>
-                    {#each activeReport.groups as group (group.type)}
+                    {#each projectsState.activeReport.groups as group (group.type)}
                       <div class="projects-finding-group">
                         <h4 class="projects-finding-title">
                           {groupLabel(group.type)}
@@ -1880,11 +1121,11 @@
                   </div>
                 {/if}
 
-                {#if scanLoading}
+                {#if projectsState.scanLoading}
                   <p class="projects-scan-loading" role="status">
-                    {t('projects.loading', 'Loading projects…')}
+                    {t('projects.loading', 'Loading projectsState.projects…')}
                   </p>
-                {:else if activeTeam.length === 0}
+                {:else if projectsState.activeTeam.length === 0}
                   <EmptyState
                     density="compact"
                     description={t(
@@ -1894,13 +1135,13 @@
                   />
                 {:else}
                   <ul class="projects-team">
-                    {#each activeTeam as member (member.agent_id)}
+                    {#each projectsState.activeTeam as member (member.agent_id)}
                       {@const expanded =
-                        expandedMembers[member.agent_id] === true}
+                        projectsState.expandedMembers[member.agent_id] === true}
                       {@const summary = effectiveDisplay(member, 'model')}
                       <li
                         class="projects-team-member"
-                        class:projects-team-member--expanded={expanded}
+                        class:projectsState.projects-team-member--expanded={expanded}
                         data-testid={`project-team-member-${member.agent_id}`}
                       >
                         <button
@@ -1912,7 +1153,7 @@
                         >
                           <svg
                             class="projects-team-chevron"
-                            class:projects-team-chevron--open={expanded}
+                            class:projectsState.projects-team-chevron--open={expanded}
                             viewBox="0 0 12 12"
                             width="11"
                             height="11"
@@ -1952,7 +1193,7 @@
                                   </span>
                                   <span
                                     class="projects-effective-value"
-                                    class:projects-effective-value--muted={display.isEmpty}
+                                    class:projectsState.projects-effective-value--muted={display.isEmpty}
                                   >
                                     {display.value}
                                   </span>
@@ -2214,7 +1455,7 @@
                               </div>
 
                               <div
-                                class="projects-override-row projects-override-row--policy"
+                                class="projects-override-row projectsState.projects-override-row--policy"
                               >
                                 <span class="projects-label">
                                   {t(
@@ -2288,7 +1529,8 @@
                                         member.agent_id,
                                         'compaction_policy',
                                         structuredClone(
-                                          globalCompactionPolicy ?? {},
+                                          projectsState.globalCompactionPolicy ??
+                                            {},
                                         ),
                                       )}
                                   >
@@ -2372,7 +1614,7 @@
                   </p>
                   <ToggleChipList
                     items={toolChipItems}
-                    disabled={editSaving}
+                    disabled={projectsState.editSaving}
                     emptyLabel={t(
                       'projects.manage.toolsEmpty',
                       'No tools available',
@@ -2389,7 +1631,7 @@
                       <Button
                         variant="tertiary"
                         data-testid="project-tools-reset"
-                        disabled={editSaving}
+                        disabled={projectsState.editSaving}
                         onClick={resetToolsToDefaults}
                       >
                         {t(
@@ -2425,7 +1667,7 @@
                     </span>
                     <ToggleChipList
                       items={projectSkillChips}
-                      disabled={editSaving}
+                      disabled={projectsState.editSaving}
                       ariaToggleLabel={(name) =>
                         t(
                           'projects.manage.toggleSkill',
@@ -2444,7 +1686,7 @@
                     </span>
                     <ToggleChipList
                       items={bundledSkillChips}
-                      disabled={editSaving}
+                      disabled={projectsState.editSaving}
                       ariaToggleLabel={(name) =>
                         t(
                           'projects.manage.toggleSkill',
@@ -2463,7 +1705,7 @@
                     </span>
                     <ToggleChipList
                       items={globalSkillChips}
-                      disabled={editSaving}
+                      disabled={projectsState.editSaving}
                       ariaToggleLabel={(name) =>
                         t(
                           'projects.manage.toggleSkill',
@@ -2494,12 +1736,12 @@
     {/if}
   </div>
 
-  {#if isAddOpen}
+  {#if projectsState.isAddOpen}
     <Modal
       title={t('projects.add.title', 'Add project')}
       labelledById="projects-add-title"
       class="projects-view__modal"
-      closeDisabled={addingProject}
+      closeDisabled={projectsState.addingProject}
       onClose={closeAdd}
     >
       {#snippet body()}
@@ -2523,12 +1765,12 @@
               <TextField
                 id="projects-add-cwd"
                 variant="modal"
-                value={addForm.cwd}
+                value={projectsState.addForm.cwd}
                 placeholder={t(
                   'projects.add.cwdPlaceholder',
                   'C:/path/to/repository',
                 )}
-                disabled={addingProject}
+                disabled={projectsState.addingProject}
                 onInput={(next) => updateAddField('cwd', next)}
               />
             </FormField>
@@ -2540,12 +1782,12 @@
               <TextField
                 id="projects-add-display-name"
                 variant="modal"
-                value={addForm.display_name}
+                value={projectsState.addForm.display_name}
                 placeholder={t(
                   'projects.add.displayNamePlaceholder',
                   'Optional — defaults to the folder name',
                 )}
-                disabled={addingProject}
+                disabled={projectsState.addingProject}
                 onInput={(next) => updateAddField('display_name', next)}
               />
             </FormField>
@@ -2565,11 +1807,12 @@
                     <button
                       type="button"
                       class="projects-format-option"
-                      class:projects-format-option--selected={addForm.source_format ===
-                        formatKey}
+                      class:projectsState.projects-format-option--selected={projectsState
+                        .addForm.source_format === formatKey}
                       role="radio"
-                      aria-checked={addForm.source_format === formatKey}
-                      disabled={addingProject}
+                      aria-checked={projectsState.addForm.source_format ===
+                        formatKey}
+                      disabled={projectsState.addingProject}
                       onclick={() => updateAddField('source_format', formatKey)}
                     >
                       <span class="projects-format-option__name">
@@ -2581,9 +1824,11 @@
                           '{agents} agents · {skills} skills',
                           {
                             agents:
-                              addDetect?.formats?.[formatKey]?.agents ?? 0,
+                              projectsState.addDetect?.formats?.[formatKey]
+                                ?.agents ?? 0,
                             skills:
-                              addDetect?.formats?.[formatKey]?.skills ?? 0,
+                              projectsState.addDetect?.formats?.[formatKey]
+                                ?.skills ?? 0,
                           },
                         )}
                       </span>
@@ -2603,8 +1848,8 @@
               <div class="projects-claude-md-suggestion">
                 <Toggle
                   size="sm"
-                  checked={addForm.include_claude_md}
-                  disabled={addingProject}
+                  checked={projectsState.addForm.include_claude_md}
+                  disabled={projectsState.addingProject}
                   ariaLabel={t(
                     'projects.add.claudeMdSuggestionLabel',
                     'Load CLAUDE.md as a project file',
@@ -2615,15 +1860,15 @@
                   {t(
                     'projects.add.claudeMdSuggestion',
                     'Load {path} as a project file. The repository has no AGENTS.md; the file is loaded as-is into project agent prompts.',
-                    { path: addDetect?.claude_md ?? 'CLAUDE.md' },
+                    { path: projectsState.addDetect?.claude_md ?? 'CLAUDE.md' },
                   )}
                 </span>
               </div>
             {/if}
 
-            {#if addError}
+            {#if projectsState.addError}
               <Banner variant="error" role="alert">
-                {addError}
+                {projectsState.addError}
               </Banner>
             {/if}
           </div>
@@ -2631,13 +1876,13 @@
           <div class="modal-footer">
             <Button
               variant="secondary"
-              disabled={addingProject}
+              disabled={projectsState.addingProject}
               onClick={closeAdd}
             >
               {t('common.cancel', 'Cancel')}
             </Button>
             <Button variant="primary" type="submit" disabled={!canSubmitAdd}>
-              {addingProject
+              {projectsState.addingProject
                 ? t('projects.add.submitting', 'Adding project…')
                 : t('projects.add.submit', 'Add project')}
             </Button>
@@ -2647,7 +1892,7 @@
     </Modal>
   {/if}
 
-  {#if rePointProject}
+  {#if projectsState.rePointProject}
     <Modal
       title={t('projects.rePoint.title', 'Repository not found')}
       labelledById="projects-repoint-title"
@@ -2670,22 +1915,22 @@
               <TextField
                 id="projects-repoint-cwd"
                 variant="modal"
-                value={rePointCwd}
+                value={projectsState.rePointCwd}
                 placeholder={t(
                   'projects.rePoint.cwdPlaceholder',
                   'C:/path/to/repository',
                 )}
-                disabled={rePointing}
+                disabled={projectsState.rePointing}
                 onInput={(next) => {
-                  rePointCwd = next;
-                  rePointError = '';
+                  projectsState.rePointCwd = next;
+                  projectsState.rePointError = '';
                 }}
               />
             </FormField>
 
-            {#if rePointError}
+            {#if projectsState.rePointError}
               <Banner variant="error" role="alert">
-                {rePointError}
+                {projectsState.rePointError}
               </Banner>
             {/if}
           </div>
@@ -2693,13 +1938,17 @@
           <div class="modal-footer">
             <Button
               variant="secondary"
-              disabled={rePointing}
+              disabled={projectsState.rePointing}
               onClick={closeRePoint}
             >
               {t('common.cancel', 'Cancel')}
             </Button>
-            <Button variant="primary" type="submit" disabled={rePointing}>
-              {rePointing
+            <Button
+              variant="primary"
+              type="submit"
+              disabled={projectsState.rePointing}
+            >
+              {projectsState.rePointing
                 ? t('projects.rePoint.submitting', 'Re-pointing…')
                 : t('projects.rePoint.submit', 'Re-point')}
             </Button>
@@ -2709,11 +1958,11 @@
     </Modal>
   {/if}
 
-  {#if removeConfirmProject}
+  {#if projectsState.removeConfirmProject}
     <Modal
       title={t('projects.remove.confirmTitle', 'Remove project')}
       onClose={cancelRemove}
-      closeDisabled={Boolean(removingProjectId)}
+      closeDisabled={Boolean(projectsState.removingProjectId)}
     >
       {#snippet body()}
         <p>
@@ -2722,8 +1971,8 @@
             'Removing {name} clears it from every affected Rooted Agent and resets those Agents to their Default Workspace. Their Sessions and history stay unchanged. The repository and old Workspace files are never touched.',
             {
               name:
-                removeConfirmProject.display_name ||
-                removeConfirmProject.project_id,
+                projectsState.removeConfirmProject.display_name ||
+                projectsState.removeConfirmProject.project_id,
             },
           )}
         </p>
@@ -2736,13 +1985,14 @@
           </span>
           <Toggle
             size="sm"
-            checked={copyRootedAgentIdentityFiles}
-            disabled={Boolean(removingProjectId)}
+            checked={projectsState.copyRootedAgentIdentityFiles}
+            disabled={Boolean(projectsState.removingProjectId)}
             ariaLabel={t(
               'projects.remove.copyIdentityFiles',
               'Copy SOUL.md, USER.md, and MEMORY.md to affected Default Workspaces',
             )}
-            onChange={(next) => (copyRootedAgentIdentityFiles = next)}
+            onChange={(next) =>
+              (projectsState.copyRootedAgentIdentityFiles = next)}
           />
         </div>
         <p class="modal-hint">
@@ -2755,14 +2005,14 @@
       {#snippet footer()}
         <Button
           variant="secondary"
-          disabled={Boolean(removingProjectId)}
+          disabled={Boolean(projectsState.removingProjectId)}
           onClick={cancelRemove}
         >
           {t('common.cancel', 'Cancel')}
         </Button>
         <Button
           variant="danger"
-          disabled={Boolean(removingProjectId)}
+          disabled={Boolean(projectsState.removingProjectId)}
           onClick={confirmRemove}
         >
           {t('common.remove', 'Remove')}

@@ -4,9 +4,9 @@ Read this reference only for the WebUI Projects management view, Project discove
 
 ## Ownership and selection
 
-`ProjectsView.svelte` owns the master-detail management surface; `createProjectsController()` in `projectsView.js` owns its loading, selected Project, form, scan, mutation, and removal state. The Project selected here is management state and is intentionally independent of Chat's selected Project context.
+`ProjectsView.svelte` renders the master-detail management surface; `createProjectsState()` provides its reactive state and `createProjectsController()` owns loading, selection, form drafts, catalogs, scans, mutation reconciliation, and removal/re-point workflows. The Project selected here is management state and is intentionally independent of Chat's selected Project context.
 
-The view submits user intent through the Project wrappers in `api.js`. It can normalize form inputs and present scan results, but it does not discover files, resolve Agent inheritance, or decide backend conflict policy.
+The view forwards user intent to the controller; the controller alone sequences the Project wrappers in `api.js`. Presentation-only labels and derived picker options stay in the view, while payload normalization and workflow state stay in `projectsView.js`. Neither layer discovers files, resolves Agent inheritance, or decides backend conflict policy.
 
 ## Adding and editing Projects
 
@@ -27,7 +27,7 @@ The view submits user intent through the Project wrappers in `api.js`. It can no
 ## Refresh and error behavior
 
 - List refresh preserves the selected Project when it still exists and selects a valid fallback when it does not. Detail and scan responses are discarded if they belong to a no-longer-selected Project.
-- Mutations refresh the authoritative Project detail or scan before clearing busy state. Errors stay attached to the operation that failed and do not silently discard the current management draft.
+- Mutations reconcile the authoritative Project list/detail or returned scan before clearing controller-owned busy state. Errors stay attached to the operation that failed and do not silently discard the current management draft.
 - `resource_changed` can request a Projects refresh through the app shell. The Projects controller decides when refreshed state can safely replace an active form or modal.
 
 ## Source and tests
