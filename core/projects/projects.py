@@ -26,6 +26,7 @@ from core.projects.paths import normalize_cwd
 from core.settings import (
     DEFAULT_PROJECT_SOURCE_FORMAT,
     PROJECT_SOURCE_FORMATS,
+    PROJECT_TOOL_ALLOWLIST_WILDCARD,
     SettingsValidationError,
     is_valid_project_id,
     validate_temperature,
@@ -63,6 +64,12 @@ PROJECT_DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
     "subagent",
     "skill",
 )
+
+# Registered normal tools that are not configurable through a Project Tool
+# Whitelist. ``memory`` follows an Agent's memory mode; ``skill_manage`` requires
+# an identity Agent Workspace that a config/project agent does not own. Server
+# validation and catalog projection share this set; the WebUI mirrors it.
+PROJECT_TOOL_WHITELIST_EXCLUDED: frozenset[str] = frozenset({"memory", "skill_manage"})
 
 # The optional fields a per-agent override may carry. Each maps to the top tier of
 # the matching config-agent resolver chain (model / temperature / thinking effort).
@@ -373,7 +380,10 @@ def _validate_allowed_tools(allowed_tools: list[str] | None) -> list[str]:
     """
     if allowed_tools is None:
         return list(PROJECT_DEFAULT_ALLOWED_TOOLS)
-    return _validate_string_list("allowed_tools", allowed_tools)
+    validated = _validate_string_list("allowed_tools", allowed_tools)
+    if PROJECT_TOOL_ALLOWLIST_WILDCARD in validated:
+        raise ProjectError("allowed_tools cannot contain the all-tools wildcard '*' for a Project")
+    return validated
 
 
 def _validate_string_list(field_name: str, values: list[str] | None) -> list[str]:

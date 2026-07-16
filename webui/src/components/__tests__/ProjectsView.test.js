@@ -370,6 +370,58 @@ describe('ProjectsView', () => {
     });
   });
 
+  it('shows a persisted unavailable tool and lets the user remove it', async () => {
+    listProjectsMock.mockResolvedValue({
+      projects: [
+        project({
+          project_id: 'demo',
+          display_name: 'Demo',
+          allowed_tools: ['read', 'disabled_extension_tool'],
+        }),
+      ],
+    });
+    showProjectMock.mockResolvedValue({
+      project: project({
+        project_id: 'demo',
+        allowed_tools: ['read', 'disabled_extension_tool'],
+      }),
+      scan: {
+        team: [],
+        report: {
+          clean: false,
+          findings: [
+            {
+              type: 'unavailable_tool',
+              detail: 'The Extension tool is not currently registered.',
+            },
+          ],
+        },
+        skills: {},
+      },
+    });
+    mockToolCatalog(['read'], ['read']);
+
+    mountedComponent = mount(ProjectsView, { target: document.body });
+    flushSync();
+
+    await selectDemo();
+    await waitForCondition(() =>
+      toggleByAriaLabel('Toggle tool disabled_extension_tool'),
+    );
+    expect(document.body.textContent).toContain('Currently unavailable');
+    expect(document.body.textContent).toContain(
+      'This stored Tool Whitelist entry is not currently registered for Projects.',
+    );
+
+    toggleByAriaLabel('Toggle tool disabled_extension_tool').click();
+    buttonByTestId('project-save-demo').click();
+
+    await waitForCondition(() => setProjectMock.mock.calls.length === 1);
+    expect(setProjectMock).toHaveBeenCalledWith('demo', {
+      allowed_tools: ['read'],
+    });
+  });
+
   it('renders a not-ready tool greyed with the shared notice and extensions link', async () => {
     const navigateMock = vi.fn();
     listProjectsMock.mockResolvedValue({

@@ -4,6 +4,7 @@ import {
   FINDING_TYPE_BAD_MODEL,
   FINDING_TYPE_ORPHAN,
   FINDING_TYPE_SLUG_COLLISION,
+  FINDING_TYPE_UNAVAILABLE_TOOL,
   FINDING_TYPE_UNSLUGIFIABLE_NAME,
   PROJECT_SOURCE_FORMATS,
   PROJECT_THINKING_EFFORT_NO_DEFAULT,
@@ -660,16 +661,21 @@ describe('normalizeScanReport', () => {
           detail: 'another collision',
           agent_id: 'dup2',
         },
+        {
+          type: FINDING_TYPE_UNAVAILABLE_TOOL,
+          detail: 'extension tool is unavailable',
+        },
       ],
     });
 
     expect(report.clean).toBe(false);
-    expect(report.findingCount).toBe(5);
+    expect(report.findingCount).toBe(6);
     expect(report.groups.map((group) => group.type)).toEqual([
       FINDING_TYPE_SLUG_COLLISION,
       FINDING_TYPE_UNSLUGIFIABLE_NAME,
       FINDING_TYPE_BAD_MODEL,
       FINDING_TYPE_ORPHAN,
+      FINDING_TYPE_UNAVAILABLE_TOOL,
     ]);
     expect(report.groups[0].findings).toHaveLength(2);
   });
@@ -748,6 +754,33 @@ describe('buildToolToggleList', () => {
         ready: false,
         readiness_hint: 'Set the Home Assistant token first.',
         extension: 'homeassistant',
+      },
+    ]);
+  });
+
+  it('keeps a persisted tool missing from the catalog visible and removable', () => {
+    const rows = buildToolToggleList({
+      catalog: [{ name: 'read' }],
+      allowedTools: ['read', 'disabled_extension_tool'],
+    });
+
+    expect(rows).toEqual([
+      {
+        name: 'disabled_extension_tool',
+        description: '',
+        enabled: true,
+        ready: false,
+        readiness_hint: null,
+        extension: null,
+        registered: false,
+      },
+      {
+        name: 'read',
+        description: '',
+        enabled: true,
+        ready: true,
+        readiness_hint: null,
+        extension: null,
       },
     ]);
   });

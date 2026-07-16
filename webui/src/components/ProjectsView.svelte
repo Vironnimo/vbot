@@ -305,7 +305,17 @@
   // The shared chip list keys off `allowed`; the toggle builders track it as
   // `enabled`, so map it across for each list.
   let toolChipItems = $derived(
-    toolToggleRows.map((tool) => ({ ...tool, allowed: tool.enabled })),
+    toolToggleRows.map((tool) => ({
+      ...tool,
+      allowed: tool.enabled,
+      readiness_hint:
+        tool.registered === false
+          ? t(
+              'projects.manage.unavailableToolHint',
+              'This stored Tool Whitelist entry is not currently registered for Projects. Turn it off to remove the permission, or leave it on so the permission returns with the Tool.',
+            )
+          : tool.readiness_hint,
+    })),
   );
   let projectSkillChips = $derived(
     skillToggleSections.project.map((skill) => ({

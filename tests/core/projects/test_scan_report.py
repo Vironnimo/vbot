@@ -163,6 +163,19 @@ def test_with_pointer_findings_appends_orphan_seam() -> None:
     assert enriched.findings_of(FindingType.ORPHAN) == (orphan,)
 
 
+def test_with_tool_findings_appends_unavailable_tool_seam() -> None:
+    report = ScanReport()
+    finding = ScanFinding(
+        type=FindingType.UNAVAILABLE_TOOL,
+        detail="tool 'extension_tool' is not currently registered",
+    )
+
+    enriched = report.with_tool_findings([finding])
+
+    assert report.is_clean
+    assert enriched.findings_of(FindingType.UNAVAILABLE_TOOL) == (finding,)
+
+
 def test_report_immutability_keeps_originals_clean() -> None:
     report = ScanReport()
 

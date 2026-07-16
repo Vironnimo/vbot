@@ -5,8 +5,8 @@ add-projects.md → "Projekt anlegen: Ordner scannen"). It collects only what is
 *unclean under what already exists* — an empty folder, no Team, and no AGENTS.md
 are all **normal** and produce a clean, empty report.
 
-Finding taxonomy (every finding points at a source file or pointer so it is
-actionable):
+Finding taxonomy (every finding carries actionable detail and, when it
+originates from the repository, its source file):
 
 - ``BAD_MODEL`` — a scanned agent's model does not exist / is not configured in
   this instance. The detector never judges the model and this module has **no**
@@ -23,6 +23,11 @@ actionable):
   via :func:`ScanReport.with_pointer_findings` because the pointers
   (project default-agent, existing session owners) come from the project anchor,
   not from the scan input.
+- ``UNAVAILABLE_TOOL`` — a persisted Project Tool Whitelist entry is not a
+  currently registered Project tool. The server appends these through
+  :func:`ScanReport.with_tool_findings`, because tool registration belongs to the
+  runtime rather than the repository scanner. The entry remains stored so a
+  temporarily disabled Extension regains its permission when enabled again.
 
 Collision resolution is deterministic and platform-neutral: the winner is the
 **first in a fixed order** — format precedence (detector rank, OpenCode first),
@@ -50,6 +55,7 @@ class FindingType(StrEnum):
     SLUG_COLLISION = "slug_collision"
     UNSLUGIFIABLE_NAME = "unslugifiable_name"
     ORPHAN = "orphan"
+    UNAVAILABLE_TOOL = "unavailable_tool"
 
 
 @dataclass(frozen=True)
@@ -57,10 +63,10 @@ class ScanFinding:
     """One reported problem, pointing at the source file or pointer that caused it.
 
     ``agent_id`` is the affected id when known (the resolved id for a collision,
-    the orphaned pointer's id for an orphan); empty when no id could be formed
-    (an unslugifiable name). ``source_path`` is the offending file when the
-    finding originates from a scanned file, ``None`` for a pointer-origin orphan.
-    ``detail`` is a short human-readable explanation.
+    the orphaned pointer's id for an orphan); empty when the finding is not tied
+    to an Agent. ``source_path`` is the offending file when the finding
+    originates from a scanned file, otherwise ``None``. ``detail`` is a short
+    human-readable explanation.
     """
 
     type: FindingType
@@ -109,6 +115,16 @@ class ScanReport:
         through this seam rather than this module reading the anchor.
         """
         return ScanReport(findings=(*self.findings, *pointer_findings))
+
+    def with_tool_findings(self, tool_findings: list[ScanFinding]) -> ScanReport:
+        """Return a new report with runtime Project-tool findings appended.
+
+        The repository scanner has no access to the live Tool Registry. The
+        server-facing Project preview supplies unavailable persisted whitelist
+        entries through this seam so they remain warnings rather than making a
+        Project unloadable when an Extension is temporarily disabled.
+        """
+        return ScanReport(findings=(*self.findings, *tool_findings))
 
 
 @dataclass(frozen=True)

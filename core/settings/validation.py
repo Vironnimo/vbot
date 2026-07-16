@@ -25,6 +25,7 @@ from core.settings.settings import (
     AGENT_ID_PATTERN,
     PROJECT_ID_PATTERN,
     PROJECT_SOURCE_FORMATS,
+    PROJECT_TOOL_ALLOWLIST_WILDCARD,
     RECALL_BACKEND_PATTERN,
     SUPPORTED_APPEARANCE_CHAT_WIDTHS,
     SettingsValidationError,
@@ -595,10 +596,19 @@ def validate_project_data(data: Any) -> list[JsonDiagnostic]:
     )
     _validate_auto_load_list(diagnostics, "$.auto_load", data.get("auto_load"))
     # The Tool/Skill Whitelist fields are optional (an old project.json omits them
-    # and falls back to defaults at load); validate shape only when present. Tool
-    # and skill names are not checked against any registry here — an unknown name is
-    # harmlessly ignored by the allowlist filters, not a config error.
+    # and falls back to defaults at load). Project tool entries stay shape-only at
+    # this filesystem layer because an Extension tool may be temporarily absent;
+    # the runtime scan reports such names non-fatally. The all-tools wildcard is
+    # different: it defeats the Project ceiling itself and is always invalid.
     _validate_optional_string_list(diagnostics, "$.allowed_tools", data.get("allowed_tools"))
+    if isinstance(data.get("allowed_tools"), list):
+        for index, tool_name in enumerate(data["allowed_tools"]):
+            if tool_name == PROJECT_TOOL_ALLOWLIST_WILDCARD:
+                _error(
+                    diagnostics,
+                    f"$.allowed_tools[{index}]",
+                    "the all-tools wildcard '*' is not allowed in a Project Tool Whitelist",
+                )
     _validate_optional_string_list(
         diagnostics, "$.skills_bundled_enabled", data.get("skills_bundled_enabled")
     )

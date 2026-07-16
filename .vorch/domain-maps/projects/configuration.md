@@ -11,7 +11,7 @@ The persisted contract contains:
 - Identity and location: stable `project_id`, user-facing `display_name`, normalized repository `cwd`, `created_at`, and `updated_at`.
 - Runtime defaults: `default_agent`, `default_model`, `default_temperature`, and `default_thinking_effort`.
 - Discovery: one `source_format` (`opencode` or `claude`) and `auto_load`.
-- Tool ceiling: `allowed_tools`, seeded from `PROJECT_DEFAULT_ALLOWED_TOOLS` (`read`, `write`, `edit`, `glob`, `grep`, `bash`, `process`, `web_fetch`, `web_search`, `status`, `subagent`, and `skill`).
+- Tool ceiling: `allowed_tools`, seeded from `PROJECT_DEFAULT_ALLOWED_TOOLS` (`read`, `write`, `edit`, `glob`, `grep`, `bash`, `process`, `web_fetch`, `web_search`, `status`, `subagent`, and `skill`). A Project requires explicit names: the all-tools wildcard `"*"` is invalid. A persisted name that is not currently a registered Project tool remains loadable so disabled Extension permissions survive; `project.show` reports it as `UNAVAILABLE_TOOL`, and the WebUI keeps it visible and removable.
 - Skill ceiling: `skills_bundled_enabled`, `skills_global_enabled`, and `skills_project_disabled`.
 - Per-Agent overrides: an `overrides` object keyed by Project Agent id. Supported override fields are exactly `model`, `temperature`, `thinking_effort`, and `compaction_policy`.
 
@@ -50,7 +50,7 @@ The repository at `cwd` remains outside the anchor and is never mutated. Changin
 
 - `project.add` validates that `cwd` exists, detects a source format when none is supplied, persists the Project, and returns the Project with its scan result.
 - `project.show` reloads Skills, invalidates relevant caches, rescans the repository, and returns current Project plus scan information.
-- `project.set` updates persisted fields. Changing `cwd` or `source_format` invalidates discovery/resolution caches because Team membership may change.
+- `project.set` updates persisted fields. For `allowed_tools`, it accepts registered normal non-Session-scoped Project tools, excluding `memory` and `skill_manage`; an unavailable name already present may be carried forward or removed, but an RPC caller cannot introduce a new unavailable name. Changing `cwd` or `source_format` invalidates discovery/resolution caches because Team membership may change.
 - Override mutation requires the target Agent to be on the current Project Team. A Model value calls `AgentResolver.require_model_configured`, the same raising domain seam used by Chat `/model`; RPC maps `ModelConfigurationError` to `invalid_request`. Temperature and thinking effort use canonical scalar validators; compaction policy uses the Settings normalizer. `OVERRIDE_FIELDS` in `core/projects/projects.py` is the authoritative supported-field set.
 - Successful mutations publish the relevant `resource_changed` events so connected clients refresh Projects and Agents.
 
@@ -73,6 +73,7 @@ Project configuration reuses canonical owners:
 - Temperature and thinking effort → the validators exported by `core/settings/`.
 - Compaction policy → `core/settings/normalizers.py`.
 - Identifier safety and addresses → `core/projects/paths.py` and `core/projects/address.py`.
+- Project Tool Whitelist membership → the live `ToolRegistry` catalog at the RPC/scan-preview boundary; raw file validation rejects the wildcard but deliberately does not require runtime registry membership.
 
 When adding a persisted field, decide whether it is a Project default, a capability ceiling, or a per-Agent override; update serialization, Store rebuild/update paths, RPC validation, WebUI state, resolver consumption, tests, and this reference together.
 

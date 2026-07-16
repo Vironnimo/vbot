@@ -14,9 +14,10 @@ spelling belongs to the session/chat RPC entry, not to this module.
 **Scan preview.** ``project.add`` and ``project.show`` return a ``scan`` block —
 the Team (callable agents discovered in the repo) plus the report (everything
 unclean under what exists: bad/unconfigured model, slug collision, unslugifiable
-name). ``add`` returns it for the just-created project; ``show`` re-scans live
-(the repo is the source of truth, no copy drift). An empty folder yields an empty
-team and a clean report — that is a valid Project, not an error.
+name, or a persisted Tool Whitelist entry unavailable in the live registry).
+``add`` returns it for the just-created project; ``show`` re-scans live (the repo
+is the source of truth, no copy drift). An empty folder yields an empty team and
+a clean report — that is a valid Project, not an error.
 
 **Remove lock.** ``project.rm`` archives the anchor (never the repo) unless a
 Project is in use: an atomic Run Admission Guard covers Project-anchored and
@@ -34,14 +35,15 @@ from core.projects import (
     cwd_exists,
     slugify_project_id,
 )
-from core.projects.projects import OVERRIDE_FIELDS
-from core.projects.scan_report import ScanFinding, ScanReport
+from core.projects.projects import OVERRIDE_FIELDS, PROJECT_TOOL_WHITELIST_EXCLUDED
+from core.projects.scan_report import FindingType, ScanFinding, ScanReport
 from core.projects.scanners import detect_project_formats
 from core.projects.scanners.base import ProjectFormatDetection, ScannedAgent, ScanResult
 from core.runs import RunAdmissionBlockedError
 from core.settings import (
     DEFAULT_PROJECT_SOURCE_FORMAT,
     PROJECT_SOURCE_FORMATS,
+    PROJECT_TOOL_ALLOWLIST_WILDCARD,
     SettingsValidationError,
     validate_temperature,
     validate_thinking_effort,
@@ -238,6 +240,13 @@ def _set_project(state: Any, params: JsonObject) -> JsonObject:
         )
 
     try:
+        if "allowed_tools" in changes:
+            current_project = _projects(state).get(project_id)
+            _validate_project_tool_change(
+                state,
+                current_project,
+                changes["allowed_tools"],
+            )
         project = _projects(state).update(project_id, **changes)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -471,9 +480,71 @@ def _scan_preview(state: Any, project: Project) -> JsonObject:
     """Scan one project into the agent-facing Team + report preview."""
     resolver = _agent_resolver(state)
     result = resolver.scan_project_report(project)
+    result = ScanResult(
+        team=result.team,
+        report=result.report.with_tool_findings(_unavailable_project_tool_findings(state, project)),
+    )
     response = _scan_response(resolver, result, project)
     response["skills"] = _project_skill_pool(state, project.project_id)
     return response
+
+
+def _registered_project_tool_names(state: Any) -> frozenset[str]:
+    """Return the live registry names eligible for a Project Tool Whitelist.
+
+    This matches the Project editor's catalog boundary: registered normal tools,
+    including not-ready tools, excluding Session-scoped tools and the two
+    Agent-owned capabilities that a config/project agent cannot configure.
+    """
+    registered = state.runtime.tools.list_tools(include_session_scoped=False)
+    return frozenset(
+        tool.name for tool in registered if tool.name not in PROJECT_TOOL_WHITELIST_EXCLUDED
+    )
+
+
+def _validate_project_tool_change(
+    state: Any,
+    current_project: Project,
+    requested_tools: list[str],
+) -> None:
+    """Reject wildcard or newly introduced unavailable Project tool names.
+
+    Existing unavailable names may be carried forward or removed. That narrow
+    exception preserves a disabled Extension's permission while still preventing
+    any RPC caller from granting a name that is not currently a registered
+    Project tool.
+    """
+    if PROJECT_TOOL_ALLOWLIST_WILDCARD in requested_tools:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.allowed_tools cannot contain the all-tools wildcard '*' for a Project",
+        )
+
+    registered = _registered_project_tool_names(state)
+    unavailable = set(requested_tools) - registered
+    newly_introduced = sorted(unavailable - set(current_project.allowed_tools))
+    if newly_introduced:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.allowed_tools contains tools that are not currently registered "
+            f"for Projects: {', '.join(newly_introduced)}",
+        )
+
+
+def _unavailable_project_tool_findings(state: Any, project: Project) -> list[ScanFinding]:
+    """Build non-fatal findings for persisted names outside the live catalog."""
+    registered = _registered_project_tool_names(state)
+    return [
+        ScanFinding(
+            type=FindingType.UNAVAILABLE_TOOL,
+            detail=(
+                f"Tool Whitelist entry '{tool_name}' is not a currently registered "
+                "Project tool. It remains stored but grants no access unless the "
+                "tool becomes available again."
+            ),
+        )
+        for tool_name in sorted(set(project.allowed_tools) - registered)
+    ]
 
 
 def _project_skill_pool(state: Any, project_id: str) -> JsonObject:
