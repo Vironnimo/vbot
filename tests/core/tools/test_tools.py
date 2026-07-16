@@ -1155,6 +1155,28 @@ class TestToolExecutor:
         ]
 
     @pytest.mark.asyncio
+    async def test_argument_error_message_does_not_determine_failure_code(self) -> None:
+        registry = ToolRegistry()
+
+        def validating_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+            raise ValueError("return_format must be a string")
+
+        registry.register(
+            "validating",
+            "Validate arguments for testing.",
+            {"type": "object"},
+            validating_handler,
+        )
+        executor = ToolExecutor(registry)
+
+        results = await executor.execute_many(
+            [ToolCall(id="call-1", name="validating", arguments={})],
+            make_execution_config(allowed_tools=["*"]),
+        )
+
+        assert results == [tool_failure("invalid_arguments", "return_format must be a string")]
+
+    @pytest.mark.asyncio
     async def test_handler_exception_becomes_failed_result(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:

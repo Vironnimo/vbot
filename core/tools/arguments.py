@@ -20,6 +20,7 @@ failure, so raising is the idiomatic signal here.
 
 from __future__ import annotations
 
+import math
 from typing import overload
 
 from core.tools.tools import JsonObject
@@ -295,13 +296,17 @@ def _to_float(value: object, field_name: str) -> float:
     if isinstance(value, bool):
         raise ToolArgumentError(f"{field_name} must be a number")
     if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
+        number = float(value)
+    elif isinstance(value, str):
         try:
-            return float(value.strip())
+            number = float(value.strip())
         except ValueError:
             raise ToolArgumentError(f"{field_name} must be a number") from None
-    raise ToolArgumentError(f"{field_name} must be a number")
+    else:
+        raise ToolArgumentError(f"{field_name} must be a number")
+    if not math.isfinite(number):
+        raise ToolArgumentError(f"{field_name} must be a finite number")
+    return number
 
 
 def _check_int_range(

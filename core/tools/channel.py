@@ -42,6 +42,7 @@ _OPTIONAL_CHANNEL_SEND_ARGUMENTS = frozenset(
 _CHANNEL_SEND_ALLOWED_ARGUMENTS = (
     _REQUIRED_CHANNEL_SEND_ARGUMENTS | _OPTIONAL_CHANNEL_SEND_ARGUMENTS
 )
+_INTERACTION_BUTTON_ARGUMENTS = frozenset(("label", "data"))
 
 CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -406,6 +407,12 @@ def _build_buttons(value: object) -> list[list[InteractionButton]] | None:
         for button_index, button in enumerate(row):
             if not isinstance(button, dict):
                 raise ValueError(f"buttons[{row_index}][{button_index}] must be an object")
+            unknown_fields = sorted(set(button) - _INTERACTION_BUTTON_ARGUMENTS)
+            if unknown_fields:
+                names = ", ".join(unknown_fields)
+                raise ValueError(
+                    f"buttons[{row_index}][{button_index}] has unknown field(s): {names}"
+                )
             label = button.get("label")
             data = button.get("data")
             if not isinstance(label, str) or not label:

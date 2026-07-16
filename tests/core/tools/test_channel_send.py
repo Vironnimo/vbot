@@ -234,6 +234,39 @@ def test_channel_send_rejects_malformed_buttons(tmp_path: Path) -> None:
     channel_service.send.assert_not_awaited()
 
 
+def test_channel_send_rejects_unknown_button_fields(tmp_path: Path) -> None:
+    channel_service = Mock()
+    channel_service.send = AsyncMock()
+    channel_service.list_channels.return_value = [make_channel_config()]
+    chat_sessions = make_chat_sessions()
+    registry = ToolRegistry()
+    register_channel_send_tool(
+        registry,
+        channel_service,
+        chat_sessions,
+        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
+    )
+
+    result = asyncio.run(
+        dispatch(
+            registry,
+            tmp_path,
+            {
+                "channel_id": "tg-assistant",
+                "message": "Shopping list",
+                "platform_target": "12345",
+                "buttons": [[{"label": "Milk", "data": "chk:milk", "unexpected": True}]],
+            },
+        )
+    )
+
+    assert result == tool_failure(
+        "invalid_arguments",
+        "buttons[0][0] has unknown field(s): unexpected",
+    )
+    channel_service.send.assert_not_awaited()
+
+
 def test_channel_send_records_outbound_note_in_target_session(tmp_path: Path) -> None:
     channel_service = Mock()
     channel_service.send = AsyncMock()

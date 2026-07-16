@@ -828,10 +828,10 @@ class ToolExecutor:
             return tool_failure(f"{context.tool_name}_unavailable", str(error))
         except ToolNotAllowedError as error:
             return tool_failure("tool_not_allowed", str(error))
+        except InvalidToolResultError as error:
+            return tool_failure("invalid_tool_result", str(error))
         except ValueError as error:
-            return tool_failure(
-                "invalid_tool_result" if "return" in str(error) else "invalid_arguments", str(error)
-            )
+            return tool_failure("invalid_arguments", str(error))
         except Exception as error:
             _LOGGER.error("Tool %s crashed unexpectedly", context.tool_name, exc_info=error)
             return tool_failure("tool_execution_error", str(error))

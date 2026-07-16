@@ -296,6 +296,25 @@ def test_status_tool_rejects_agent_id_without_session_id(tmp_path: Path) -> None
     assert error["code"] == "invalid_arguments"
 
 
+def test_status_tool_rejects_unknown_arguments(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    register_status_tool(
+        registry,
+        cast(AgentResolver, _StubResolver(_make_agent())),
+        cast(ChatSessionManager, _StubSessions([])),
+        cast(ModelRegistry, _StubModels(_make_model())),
+        ChatRunManager(),
+        None,
+    )
+
+    result = asyncio.run(_dispatch(registry, tmp_path, {"unexpected": True}))
+
+    assert result["ok"] is False
+    error = cast(dict[str, str], result["error"])
+    assert error["code"] == "invalid_arguments"
+    assert "unexpected" in error["message"]
+
+
 @pytest.mark.asyncio
 async def test_status_tool_reports_running_target_session(tmp_path: Path) -> None:
     started = asyncio.Event()
