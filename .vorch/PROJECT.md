@@ -64,7 +64,7 @@ Each domain has a **domain map** in `.vorch/domain-maps/`, named after its modul
 | `.vorch/domain-maps/skills.md` | `core/skills/` | Skill loading/validation, agent/project/global/bundled scopes, the validated authoring write core + write-scope boundary, origin-grouped session-pinned catalog |
 | `.vorch/domain-maps/automation.md` | `core/automation/` | Programmatic run triggering and in-memory queue semantics |
 | `.vorch/domain-maps/channels.md` | `core/channels/` | Channel configs, adapter lifecycle, shared conversation engine, metadata, outbound send; index to channel-specific maps |
-| `.vorch/domain-maps/server.md` | `server/` | RPC envelope, FastAPI app, SSE/WebSocket transport, static WebUI serving |
+| `.vorch/domain-maps/server.md` | `server/` | Transport/RPC boundary, public invariants, source routing, and event-reference index |
 | `.vorch/domain-maps/cli.md` | `cli/` | Local server lifecycle + `desktop` GUI-launch commands, targeting rules, status/logging contract |
 | `.vorch/domain-maps/desktop.md` | `desktop/` | pywebview thin-client contract, in-window connection screen, remembered servers, native menu, per-user config, voice bridge |
 | `.vorch/domain-maps/webui.md` | `webui/` | Svelte app shell, API client, Chat/Agents views, queue behavior |
