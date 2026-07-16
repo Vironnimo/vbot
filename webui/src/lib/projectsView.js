@@ -980,16 +980,6 @@ const WHITELIST_LIST_FIELDS = Object.freeze([
   'skills_project_disabled',
 ]);
 
-// Tools that are never part of a project Tool Whitelist, so the editor hides them from
-// the toggle catalog: `memory` is runtime-derived from the agent's memory mode, and
-// `skill_manage` is identity-only (it authors into an identity agent's private skill
-// home — a project/config agent never owns one). `skill` itself stays a normal,
-// toggleable project tool.
-export const PROJECT_TOOL_WHITELIST_EXCLUDED = Object.freeze([
-  'memory',
-  'skill_manage',
-]);
-
 // The dropdown sentinel for "no project default" thinking effort. Defined here
 // (not imported from settingsView.js) to keep the two view modules decoupled; it
 // mirrors AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT. Distinct from '' which is a
@@ -1140,23 +1130,24 @@ export function buildManageProjectPayload(formValues, project) {
   return changes;
 }
 
-// Build the tool toggle rows for the editor: every catalog tool (minus the tools
-// excluded from a project whitelist — see `PROJECT_TOOL_WHITELIST_EXCLUDED`) with
-// whether it is in the project's current Tool Whitelist. The catalog is the
-// tool-catalog RPC's tool list, so new tools appear automatically. Rows are sorted by
+// Build the tool toggle rows for the editor: every server-marked Project-configurable
+// catalog tool with whether it is in the project's current Tool Whitelist. The
+// tool-catalog RPC owns that policy, so new tools and policy changes appear without a
+// frontend name list. Rows are sorted by
 // name for a stable display. Each row carries the tool's readiness fields
 // (`ready`/`readiness_hint`/`extension`) so a not-ready tool renders the shared
 // "currently unavailable" notice (its toggle stays functional — the whitelist is
 // independent of readiness). A string catalog entry has no readiness metadata, so
 // it defaults to ready.
 export function buildToolToggleList({ catalog = [], allowedTools = [] } = {}) {
-  const excluded = new Set(PROJECT_TOOL_WHITELIST_EXCLUDED);
   const enabled = new Set(normalizeStringList(allowedTools));
   const byName = new Map();
   for (const tool of Array.isArray(catalog) ? catalog : []) {
     const isObject = tool !== null && typeof tool === 'object';
     const name = asText(isObject ? tool?.name : tool).trim();
-    if (name.length === 0 || excluded.has(name) || byName.has(name)) {
+    const projectConfigurable =
+      !isObject || tool?.project_configurable !== false;
+    if (name.length === 0 || !projectConfigurable || byName.has(name)) {
       continue;
     }
     byName.set(name, {

@@ -236,6 +236,28 @@ def test_tool_list_exposes_default_project_tools() -> None:
     assert result["default_project_tools"] == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
 
 
+def test_tool_list_projects_server_owned_configurability_policy() -> None:
+    runtime = SimpleNamespace(
+        tools=_ToolRegistry([_tool_stub("read"), _tool_stub("memory"), _tool_stub("skill_manage")])
+    )
+    state = SimpleNamespace(runtime=runtime)
+
+    result = _list_tools(state, {})
+
+    policy_by_name = {
+        tool["name"]: (
+            tool["project_configurable"],
+            tool["project_configurability_reason"],
+        )
+        for tool in result["tools"]
+    }
+    assert policy_by_name == {
+        "read": (True, None),
+        "memory": (False, "controlled_by_agent_memory_mode"),
+        "skill_manage": (False, "requires_identity_agent_workspace"),
+    }
+
+
 def test_tool_list_omits_session_scoped_tools() -> None:
     registry = ToolRegistry()
     registry.register(

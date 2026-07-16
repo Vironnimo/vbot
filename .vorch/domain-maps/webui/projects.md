@@ -22,7 +22,7 @@ The view forwards user intent to the controller; the controller alone sequences 
 - Team rows project effective settings. Model, temperature, and thinking effort preserve provenance (`override`, Agent value, Project default, global default, or null); compaction policy is currently a direct persisted override and has no `effective_config` provenance object.
 - Editing a Team field either sets an explicit override or clears it to restore inheritance. The frontend must not replace inherited values with copied explicit values merely because that is what the row currently displays.
 - Temperature, thinking-effort, and compaction-policy drafts preserve the distinction between no override and an explicit value. Normalization happens at the payload boundary.
-- Tool and Skill controls use the shared catalogs but apply Project policy. Catalog membership, allowed lists, and effective runtime availability are related projections, not interchangeable state.
+- Tool and Skill controls use the shared catalogs, but the browser does not own Project Tool policy. `tool.list` marks each Tool with server-owned `project_configurable` and `project_configurability_reason` metadata; `buildToolToggleList()` omits entries marked non-configurable without maintaining a Tool-name list. Catalog membership, allowed lists, and effective runtime availability are related projections, not interchangeable state.
 
 ## Refresh and error behavior
 

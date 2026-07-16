@@ -66,10 +66,18 @@ PROJECT_DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
 )
 
 # Registered normal tools that are not configurable through a Project Tool
-# Whitelist. ``memory`` follows an Agent's memory mode; ``skill_manage`` requires
-# an identity Agent Workspace that a config/project agent does not own. Server
-# validation and catalog projection share this set; the WebUI mirrors it.
-PROJECT_TOOL_WHITELIST_EXCLUDED: frozenset[str] = frozenset({"memory", "skill_manage"})
+# Whitelist. Keep the machine-readable reason here with the policy: RPC catalogs
+# project this metadata so accessors never need to mirror tool names or semantics.
+_PROJECT_TOOL_NON_CONFIGURABLE_REASONS: dict[str, str] = {
+    "memory": "controlled_by_agent_memory_mode",
+    "skill_manage": "requires_identity_agent_workspace",
+}
+
+
+def project_tool_configurability_reason(tool_name: str) -> str | None:
+    """Return why a registered Tool is not Project-configurable, if applicable."""
+    return _PROJECT_TOOL_NON_CONFIGURABLE_REASONS.get(tool_name)
+
 
 # The optional fields a per-agent override may carry. Each maps to the top tier of
 # the matching config-agent resolver chain (model / temperature / thinking effort).

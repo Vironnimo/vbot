@@ -33,9 +33,10 @@ from typing import Any
 from core.projects import (
     Project,
     cwd_exists,
+    project_tool_configurability_reason,
     slugify_project_id,
 )
-from core.projects.projects import OVERRIDE_FIELDS, PROJECT_TOOL_WHITELIST_EXCLUDED
+from core.projects.projects import OVERRIDE_FIELDS
 from core.projects.scan_report import FindingType, ScanFinding, ScanReport
 from core.projects.scanners import detect_project_formats
 from core.projects.scanners.base import ProjectFormatDetection, ScannedAgent, ScanResult
@@ -498,7 +499,7 @@ def _registered_project_tool_names(state: Any) -> frozenset[str]:
     """
     registered = state.runtime.tools.list_tools(include_session_scoped=False)
     return frozenset(
-        tool.name for tool in registered if tool.name not in PROJECT_TOOL_WHITELIST_EXCLUDED
+        tool.name for tool in registered if project_tool_configurability_reason(tool.name) is None
     )
 
 
