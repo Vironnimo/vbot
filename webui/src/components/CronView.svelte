@@ -360,6 +360,9 @@
       if (creating) {
         const created = await createCronJob(buildCreateCronPayload(formValues));
         targetJobId = typeof created?.id === 'string' ? created.id : '';
+        if (targetJobId) {
+          formValues.id = targetJobId;
+        }
         showToast(t('cron.messages.created', 'Cron job created.'));
       } else {
         await updateCronJob(buildUpdateCronPayload(formValues));
