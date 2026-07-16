@@ -564,10 +564,11 @@ describe('StatisticsView', () => {
     expect(document.body.textContent).toContain('GitHub Copilot');
     expect(document.body.textContent).toContain('HTTP 401');
     expect(
-      [...document.querySelectorAll('.stats-panel button')].some(
+      [...document.querySelectorAll('.stats-view button')].some(
         (button) => button.textContent.trim() === 'Refresh',
       ),
     ).toBe(false);
+    expect(document.querySelector('.stats-view__generated')).toBeNull();
     expect(document.body.textContent).toContain('updated every 10 seconds');
   });
 

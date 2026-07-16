@@ -208,6 +208,21 @@ def test_create_block_writes_override_and_layout_entry(tmp_path: Path) -> None:
     assert result["editable"] is True
 
 
+def test_created_empty_custom_block_is_returned_by_list_blocks(tmp_path: Path) -> None:
+    store = StubBlockStore()
+    manager = _facade_manager(tmp_path, store=store)
+
+    manager.create_block("empty-note")
+
+    blocks = {block["id"]: block for block in manager.list_blocks()}
+    custom = blocks["user:empty-note"]
+    assert custom["source"] == "user"
+    assert custom["kind"] == "text"
+    assert custom["editable"] is True
+    assert custom["enabled"] is True
+    assert custom["text"] == ""
+
+
 def test_create_block_inserts_at_requested_position(tmp_path: Path) -> None:
     store = StubBlockStore()
     manager = _facade_manager(tmp_path, store=store)

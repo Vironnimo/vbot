@@ -698,18 +698,21 @@ class SystemPromptManager:
         """Build the full block-definition list for a scope's listing/editing.
 
         Same set the build collects (core text blocks, memory, the SOUL/project-
-        files/agent-body data blocks, plus contributed blocks), deduped first-wins.
+        files/agent-body data blocks, contributed blocks, and custom blocks from the
+        active layout), deduped first-wins.
         The core text blocks read their default text scope-aware (the agent copy for
         an agent scope); the data blocks carry no per-run content here — for metadata
         their owner/kind suffice, and they are non-editable so their effective text
         is never part of the edit payload.
         """
         agent_id = prompt_scope.agent_id or ""
+        layout = self._resolve_scope_layout(self._scope_key(prompt_scope))
         definitions = [
             *self._core_listing_text_definitions(prompt_scope, agent_id),
             memory_block_definition(),
             *self._data_listing_definitions(),
             *self._block_definitions,
+            *self._custom_block_definitions(layout),
         ]
         return dedupe_definitions(definitions)
 
