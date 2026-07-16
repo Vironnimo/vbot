@@ -4,7 +4,13 @@ Verifies the 4-chars/token heuristic, including edge cases like empty
 strings, exact divisions, remainders, and multi-byte (CJK) characters.
 """
 
-from core.utils.tokens import estimate_json_tokens, estimate_message_tokens, estimate_tokens
+from core.utils.tokens import (
+    NATIVE_MEDIA_TOKEN_RESERVE,
+    estimate_json_tokens,
+    estimate_message_tokens,
+    estimate_request_input_tokens,
+    estimate_tokens,
+)
 
 # ----- Empty input -----
 
@@ -199,3 +205,54 @@ def test_estimate_message_tokens_ignores_storage_metadata():
 
     # Assert
     assert metadata_count == base_count
+
+
+def test_estimate_request_input_tokens_includes_messages_and_tools():
+    """The request estimate covers both conversation and Tool definitions."""
+    messages = [{"role": "user", "content": "hello"}]
+    tools = [
+        {
+            "name": "read",
+            "description": "Read a file",
+            "parameters": {"type": "object"},
+        }
+    ]
+    message_tokens, _ = estimate_message_tokens(messages[0])
+    tool_tokens, _ = estimate_json_tokens(tools)
+
+    request_tokens, is_estimate = estimate_request_input_tokens(messages, tools)
+
+    assert request_tokens == message_tokens + tool_tokens
+    assert is_estimate is True
+
+
+def test_estimate_request_input_tokens_reserves_native_media_without_counting_base64():
+    """Large encoded media uses fixed semantic reserves, not transport-byte size."""
+    encoded = "A" * 100_000
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{encoded}"},
+                },
+                {
+                    "type": "media",
+                    "media_type": "image/png",
+                    "base64": encoded,
+                },
+                {
+                    "type": "document",
+                    "media_type": "application/pdf",
+                    "filename": "report.pdf",
+                    "base64": encoded,
+                },
+            ],
+        }
+    ]
+
+    request_tokens, _ = estimate_request_input_tokens(messages)
+
+    assert request_tokens >= 3 * NATIVE_MEDIA_TOKEN_RESERVE
+    assert request_tokens < (3 * NATIVE_MEDIA_TOKEN_RESERVE) + 100

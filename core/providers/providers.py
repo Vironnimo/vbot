@@ -14,12 +14,13 @@ registry instance without re-reading disk.
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from core.utils.errors import ConfigError
+from core.utils.errors import ConfigError, ProviderError
 
 # Last-resort context-window floor, used when neither the model nor the
 # provider config supplies a window (e.g. custom models and thin providers
@@ -40,6 +41,67 @@ GLOBAL_CONTEXT_WINDOW_FLOOR = 8192
 # user overrides live in settings ``local_models.context_windows`` (see
 # ``resolve_effective_context_window``).
 LOCAL_CONTEXT_DEFAULT_CAP = 32768
+
+# Tokenizers and Provider-side Tool framing differ slightly from vBot's shared
+# request estimator. Keep both a request-relative and window-relative reserve,
+# plus a small absolute floor, then use whichever is largest.
+REQUEST_INPUT_ESTIMATE_RESERVE_RATIO = 0.25
+REQUEST_CONTEXT_WINDOW_RESERVE_RATIO = 0.01
+REQUEST_MIN_RESERVE_TOKENS = 256
+
+
+def resolve_request_output_limit(
+    *,
+    explicit_limit: Any,
+    model_output_limit: Any,
+    provider_default: Any,
+    effective_context_window: int,
+    estimated_input_tokens: int,
+) -> int | None:
+    """Resolve and context-clamp one request's output-token allowance.
+
+    Precedence remains explicit positive caller limit, positive Model ceiling,
+    then positive Provider default. The selected allowance is capped so the
+    estimated messages, Tool definitions, uncertainty reserve, and output all
+    fit inside the effective context window. A request whose input already
+    leaves no positive output capacity fails locally instead of sending a known
+    invalid Provider request.
+    """
+
+    requested = next(
+        (
+            value
+            for value in (explicit_limit, model_output_limit, provider_default)
+            if _positive_int(value) is not None
+        ),
+        None,
+    )
+    if requested is None:
+        return None
+    requested = int(requested)
+
+    input_tokens = max(0, int(estimated_input_tokens))
+    reserve = max(
+        math.ceil(input_tokens * REQUEST_INPUT_ESTIMATE_RESERVE_RATIO),
+        math.ceil(effective_context_window * REQUEST_CONTEXT_WINDOW_RESERVE_RATIO),
+        REQUEST_MIN_RESERVE_TOKENS,
+    )
+    available_output = effective_context_window - input_tokens - reserve
+    if available_output <= 0:
+        raise ProviderError(
+            "Request input leaves no output capacity in the Model context window "
+            f"(estimated_input_tokens={input_tokens}, reserve_tokens={reserve}, "
+            f"context_window={effective_context_window})",
+            retryable=False,
+        )
+    return min(requested, available_output)
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
+
 
 # ---------------------------------------------------------------------------
 # Nested dataclass for auth configuration

@@ -29,7 +29,12 @@ from core.providers._http_shared import (
 )
 from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, ModelLookup, ProviderAdapter
 from core.providers.errors import NetworkError, ProviderError
-from core.providers.providers import AuthConfig, ProviderConfig
+from core.providers.providers import (
+    AuthConfig,
+    ProviderConfig,
+    resolve_context_window,
+    resolve_request_output_limit,
+)
 from core.providers.reasoning import (
     REASONING_INTENT_BUDGET,
     REASONING_INTENT_EFFORT,
@@ -49,6 +54,7 @@ from core.providers.reasoning import (
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
+from core.utils.tokens import estimate_request_input_tokens
 
 _LOGGER = get_logger("providers.openai_compatible")
 
@@ -84,9 +90,7 @@ JSON_MODE_PARAMETER_NAMES = {"response_format", "structured_outputs", "json_mode
 REASONING_PARAMETER_NAMES = {"reasoning", "include_reasoning", "reasoning_effort"}
 # Any of these on a request means the caller set the output allowance
 # explicitly, so the model-ceiling default must not override it.
-OUTPUT_LIMIT_PARAMETER_NAMES = frozenset(
-    {"max_tokens", "max_completion_tokens", "max_output_tokens"}
-)
+OUTPUT_LIMIT_PARAMETER_NAMES = ("max_tokens", "max_completion_tokens", "max_output_tokens")
 
 
 class OpenAICompatibleAdapter(ProviderAdapter):
@@ -301,7 +305,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         # do not clobber provider defaults below. Falsy-but-non-None values
         # (e.g. ``temperature=0.0``) must survive.
         request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
-        self._apply_model_output_limit(request_kwargs, model_id)
+        self._apply_model_output_limit(request_kwargs, model_id, messages)
         payload: dict[str, Any] = {
             "model": model_id,
             "messages": [self._format_message(message) for message in messages],
@@ -311,13 +315,23 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         # Apply provider defaults (lower priority — caller kwargs win)
         if self._config.defaults:
             for key, value in self._config.defaults.items():
+                if key == "max_tokens" and any(
+                    alias in request_kwargs
+                    for alias in ("max_completion_tokens", "max_output_tokens")
+                ):
+                    continue
                 payload.setdefault(key, value)
         # Apply caller overrides (highest priority)
         payload.update(request_kwargs)
         return payload
 
-    def _apply_model_output_limit(self, request_kwargs: dict[str, Any], model_id: str) -> None:
-        """Default the output allowance to the model's own catalog ceiling.
+    def _apply_model_output_limit(
+        self,
+        request_kwargs: dict[str, Any],
+        model_id: str,
+        messages: list[dict[str, Any]],
+    ) -> None:
+        """Resolve the output allowance and clamp it to remaining context.
 
         The provider-config ``max_tokens`` default is a flat fallback (commonly
         8192) applied to every model regardless of its real ceiling, so a model
@@ -326,15 +340,44 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         the caller set no explicit output limit and the catalog knows this
         model's ``max_output_tokens``, inject it as ``max_tokens`` so it rides in
         ``request_kwargs`` and wins over the flat config default (applied last in
-        :meth:`_build_payload`). A model whose ceiling is unknown keeps the config
-        fallback. Mirrors the Anthropic adapter's ceiling-aware ``max_tokens``.
+        :meth:`_build_payload`). The selected allowance is then capped against
+        the current messages, Tool definitions, and effective context window so
+        a ceiling equal to the whole context cannot produce an invalid request.
+        Mirrors the Anthropic adapter's context-aware ``max_tokens``.
         """
 
-        if any(request_kwargs.get(key) is not None for key in OUTPUT_LIMIT_PARAMETER_NAMES):
+        explicit_values: list[int] = []
+        for key in OUTPUT_LIMIT_PARAMETER_NAMES:
+            explicit_value = _positive_int(request_kwargs.get(key))
+            if explicit_value is not None:
+                explicit_values.append(explicit_value)
+        explicit_limit = min(explicit_values) if explicit_values else None
+        for key in OUTPUT_LIMIT_PARAMETER_NAMES:
+            if key in request_kwargs and _positive_int(request_kwargs[key]) is None:
+                request_kwargs.pop(key)
+
+        tools = request_kwargs.get("tools")
+        tool_definitions = tools if isinstance(tools, list) else None
+        estimated_input, _ = estimate_request_input_tokens(messages, tool_definitions)
+        resolved = resolve_request_output_limit(
+            explicit_limit=explicit_limit,
+            model_output_limit=self._model_max_output_tokens(model_id),
+            provider_default=(
+                self._config.defaults.get("max_tokens") if self._config.defaults else None
+            ),
+            effective_context_window=resolve_context_window(
+                self._model_context_window(model_id), self._config
+            ),
+            estimated_input_tokens=estimated_input,
+        )
+        if resolved is None:
             return
-        ceiling = self._model_max_output_tokens(model_id)
-        if ceiling is not None:
-            request_kwargs["max_tokens"] = ceiling
+        if explicit_values:
+            for key in OUTPUT_LIMIT_PARAMETER_NAMES:
+                if _positive_int(request_kwargs.get(key)) is not None:
+                    request_kwargs[key] = min(int(request_kwargs[key]), resolved)
+            return
+        request_kwargs["max_tokens"] = resolved
 
     def _model_max_output_tokens(self, model_id: str) -> int | None:
         """The model's catalog output ceiling, or ``None`` when it is unknown.
@@ -352,6 +395,23 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         ceiling = model.max_output_tokens
         if isinstance(ceiling, int) and not isinstance(ceiling, bool) and ceiling > 0:
             return ceiling
+        return None
+
+    def _model_context_window(self, model_id: str) -> int | None:
+        """The Model's catalog context window, or ``None`` when unknown."""
+
+        if self._model_lookup is None:
+            return None
+        model = self._model_lookup(model_id.split("::", 1)[0])
+        if model is None:
+            return None
+        context_window = model.context_window
+        if (
+            isinstance(context_window, int)
+            and not isinstance(context_window, bool)
+            and context_window > 0
+        ):
+            return context_window
         return None
 
     def _model_reasoning_supported(self, model_id: str) -> bool | None:
@@ -1184,6 +1244,12 @@ def _parse_optional_int(value: Any) -> int | None:
     if isinstance(value, str) and value.isdecimal():
         return int(value)
     return None
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
 
 
 def _has_image_modality(raw: Mapping[str, Any], architecture: Mapping[str, Any]) -> bool:

@@ -1237,7 +1237,23 @@ def _is_non_vbot_conflict(result: CommandResult) -> bool:
 def main(argv: Sequence[str] | None = None) -> None:
     """Process entrypoint."""
 
+    _configure_console_output()
     sys.exit(run(argv))
+
+
+def _configure_console_output() -> None:
+    """Emit deterministic UTF-8 without crashing on legacy Windows code pages."""
+
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not callable(reconfigure):
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="backslashreplace")
+        except (OSError, ValueError):
+            # Imported/test streams may expose ``reconfigure`` while refusing an
+            # encoding change. CLI output still uses the stream's own contract.
+            continue
 
 
 if __name__ == "__main__":

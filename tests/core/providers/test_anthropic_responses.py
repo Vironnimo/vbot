@@ -926,7 +926,7 @@ class TestSendProviderConfig:
 
         # Assert
         request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
-        assert request_body["max_tokens"] == 8192
+        assert 0 < request_body["max_tokens"] < 8192
         assert request_body["temperature"] == 0.7
 
 
