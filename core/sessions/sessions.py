@@ -723,9 +723,10 @@ class ChatSessionManager:
         source sidecar remnant is deleted. A crash between steps never loses the
         conversation — the worst case is an orphan source sidecar, invisible to
         :meth:`list`. The source ``write_lock`` is held so an in-flight contiguous
-        append cannot interleave, but the real guarantee that nothing recreates
-        the source file is the caller's quiescence precondition (no active or
-        queued run), not this lock.
+        append cannot interleave. The Agent Takeover caller additionally holds a
+        Run Admission Guard over both source and destination Session keys; that
+        guard, not this storage lock, prevents new Runs from writing either home
+        during the transition.
         """
         _validate_session_id(session_id)
         async with self.write_lock(source_agent_id, session_id, source_project_id):
@@ -878,9 +879,9 @@ class ChatSessionManager:
 
         Crash-safety mirrors :meth:`move`: holds the source ``write_lock`` and
         moves the transcript first with :func:`os.replace` (atomic per file), so
-        an out-of-band note append cannot interleave. The caller's quiescence
-        precondition (no active or queued run on the session) is the real guard
-        that nothing recreates the file mid-archive.
+        an out-of-band note append cannot interleave. The ``session.delete``
+        caller holds a Run Admission Guard across this await; that guard, not
+        this storage lock, prevents new Runs from recreating the file.
         """
         _validate_session_id(session_id)
         async with self.write_lock(agent_id, session_id, project_id):

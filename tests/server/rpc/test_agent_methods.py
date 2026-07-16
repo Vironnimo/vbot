@@ -12,6 +12,7 @@ Coverage (AAA):
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -22,6 +23,7 @@ from core.agents.agents import AgentStore
 from core.chat import ChatSessionError
 from core.projects.resolver import AgentResolver
 from core.projects.store import ProjectStore
+from core.runs import ChatRunManager, RunAdmissionBlockedError
 from core.sessions import FORK_SOURCE_META_KEY
 from server.events import ServerEventBus
 from server.rpc.agent_methods import (
@@ -66,6 +68,8 @@ class _FakeSessions:
         # Fork metadata keyed by (agent_id, session_id, project_id) for get_metadata.
         self._fork_metadata: dict[tuple[str, str, str | None], dict[str, Any]] = {}
         self.saved_metadata: dict[tuple[str, str, str | None], dict[str, Any]] = {}
+        self.archive_started: asyncio.Event | None = None
+        self.archive_release: asyncio.Event | None = None
 
     def create(self, agent_id: str, *, session_id: Any = None, project_id: Any = None) -> Any:
         self.created.append(
@@ -81,6 +85,10 @@ class _FakeSessions:
 
     async def archive(self, agent_id: str, session_id: str, project_id: str | None = None) -> Any:
         self.archived.append((agent_id, session_id, project_id))
+        if self.archive_started is not None:
+            self.archive_started.set()
+        if self.archive_release is not None:
+            await self.archive_release.wait()
         return SimpleNamespace(id=session_id)
 
     def list_with_metadata(self, agent_id: str, project_id: str | None = None) -> list[Any]:
@@ -194,9 +202,7 @@ def _make_state() -> tuple[SimpleNamespace, _FakeResolver, _FakeSessions]:
         runtime=runtime,
         event_bus=ServerEventBus(),
         # _state_chat_runs reads state.chat_runs directly (not under runtime).
-        chat_runs=SimpleNamespace(
-            has_activity_for_session=lambda agent_id, session_id, project_id: False
-        ),
+        chat_runs=ChatRunManager(),
     )
     state._updates = updates  # type: ignore[attr-defined]
     state._resets = resets  # type: ignore[attr-defined]
@@ -440,15 +446,38 @@ async def test_delete_project_session_creates_fresh_when_none_remain() -> None:
 @pytest.mark.asyncio
 async def test_delete_busy_session_is_rejected() -> None:
     state, _resolver, sessions = _make_state()
-    state.chat_runs.has_activity_for_session = lambda agent_id, session_id, project_id: True
 
-    with pytest.raises(RpcError) as exc_info:
-        await _delete_session(state, {"agent_id": "builder", "session_id": "s1"})
+    async with state.chat_runs.session_admission_guard((None, "builder", "s1")):
+        with pytest.raises(RpcError) as exc_info:
+            await _delete_session(state, {"agent_id": "builder", "session_id": "s1"})
 
     assert exc_info.value.code == "session_busy"
     # The guard fires before any file work — nothing archived, nothing re-aimed.
     assert sessions.archived == []
     assert state._resets == []
+
+
+@pytest.mark.asyncio
+async def test_delete_guard_rejects_run_while_archive_is_waiting() -> None:
+    state, _resolver, sessions = _make_state()
+    sessions.archive_started = asyncio.Event()
+    sessions.archive_release = asyncio.Event()
+
+    delete_task = asyncio.create_task(
+        _delete_session(state, {"agent_id": "builder", "session_id": "s1"})
+    )
+    await asyncio.wait_for(sessions.archive_started.wait(), timeout=1)
+
+    with pytest.raises(RunAdmissionBlockedError, match="admission is blocked"):
+        await state.chat_runs.start(
+            agent_id="builder",
+            session_id="s1",
+            executor=lambda _run: asyncio.sleep(0),
+            project_id=None,
+        )
+    sessions.archive_release.set()
+    result = await asyncio.wait_for(delete_task, timeout=1)
+    assert result["session_id"] == "s1"
 
 
 @pytest.mark.asyncio
