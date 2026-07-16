@@ -230,6 +230,63 @@ describe('CronView', () => {
     });
   });
 
+  it('can update a newly created job without selecting its list row again', async () => {
+    const createdJob = cronJob({
+      id: 'job-created',
+      prompt: 'Prepare morning digest',
+      cron_expression: '0 6 * * *',
+    });
+    listCronJobsMock
+      .mockResolvedValueOnce({ jobs: [] })
+      .mockResolvedValueOnce({ jobs: [createdJob] })
+      .mockResolvedValue({ jobs: [createdJob] });
+
+    mountView();
+
+    await waitForCondition(() => {
+      const button = findButtonByText('Add');
+      return Boolean(button && !button.disabled);
+    });
+    buttonByText('Add').click();
+    flushSync();
+
+    await waitForCondition(() => document.getElementById('cron-job-prompt'));
+    inputById('cron-job-prompt').value = 'Prepare morning digest';
+    inputById('cron-job-prompt').dispatchEvent(
+      new Event('input', { bubbles: true }),
+    );
+    inputById('cron-job-expression').value = '0 6 * * *';
+    inputById('cron-job-expression').dispatchEvent(
+      new Event('input', { bubbles: true }),
+    );
+    flushSync();
+
+    buttonByText('Save').click();
+
+    await waitForCondition(() => listCronJobsMock.mock.calls.length === 2);
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="cron-delete-job-created"]'),
+    );
+
+    inputById('cron-job-prompt').value = 'Prepare updated digest';
+    inputById('cron-job-prompt').dispatchEvent(
+      new Event('input', { bubbles: true }),
+    );
+    flushSync();
+    buttonByText('Save').click();
+
+    await waitForCondition(() => updateCronJobMock.mock.calls.length === 1);
+    expect(updateCronJobMock).toHaveBeenCalledWith({
+      id: 'job-created',
+      agent_id: 'agent-alpha',
+      prompt: 'Prepare updated digest',
+      schedule_type: 'cron',
+      cron_expression: '0 6 * * *',
+      timezone: null,
+      session_id: null,
+    });
+  });
+
   it('fills the cron expression from a schedule preset selection', async () => {
     listCronJobsMock.mockResolvedValue({ jobs: [] });
 
