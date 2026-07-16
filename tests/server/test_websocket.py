@@ -10,6 +10,7 @@ from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
+from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-found]
 
 from core.runs import ChatRunManager, RunStatus
 from core.subagents import SUBAGENT_SESSION_STARTED_EVENT
@@ -149,6 +150,33 @@ def test_websocket_disconnect_removes_event_bus_subscriber(tmp_path: Path) -> No
         app.state.event_bus.publish("run_started", {"run_id": "run-one"})
 
     assert app.state.event_bus.subscriber_count == 0
+
+
+@pytest.mark.asyncio
+async def test_websocket_disconnect_during_hello_unregisters_client(tmp_path: Path) -> None:
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+    endpoint = next(
+        cast(Any, route).endpoint for route in app.routes if getattr(route, "path", None) == "/ws"
+    )
+
+    class DisconnectingWebSocket:
+        def __init__(self) -> None:
+            self.app = app
+            self.query_params: dict[str, str] = {
+                "connection_id": "disconnecting-tab",
+                "accessor": "browser",
+            }
+            self.headers: dict[str, str] = {}
+
+        async def accept(self) -> None:
+            return None
+
+        async def send_json(self, _payload: Any) -> None:
+            raise WebSocketDisconnect(code=1001)
+
+    with TestClient(app):
+        await endpoint(DisconnectingWebSocket())
+        assert app.state.client_registry.list() == []
 
 
 def test_websocket_receives_resource_changed_on_agent_create_via_rpc(tmp_path: Path) -> None:
