@@ -38,7 +38,7 @@ Each domain has a **domain map** in `.vorch/domain-maps/`, named after its modul
 | Map file | Domain | What it covers |
 |---|---|---|
 | `.vorch/domain-maps/runtime.md` | `core/runtime/` | Bootstrap, service lifecycle, DI wiring |
-| `.vorch/domain-maps/providers.md` | `core/providers/` | Provider domain overview, per-connection `mode` / `models_endpoint` and per-model `connections` allowlist, index to provider-specific maps |
+| `.vorch/domain-maps/providers.md` | `core/providers/` | Provider boundary and shared invariants with task-gated Connection, discovery, request, usage, and integration references |
 | `.vorch/domain-maps/models.md` | `core/models/` | Model data classes, registry, capabilities, model ID convention |
 | `.vorch/domain-maps/model_tasks.md` | `core/model_tasks/` | Specialized task-model bindings, target discovery, option schemas; index to the task-execution child maps |
 | `.vorch/domain-maps/model_tasks/speech.md` | speech execution | Speech-to-text and text-to-speech execution, artifacts, provider wire behavior |
