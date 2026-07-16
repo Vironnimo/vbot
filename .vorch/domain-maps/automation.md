@@ -44,7 +44,7 @@ Programmatic Run triggering, time-based scheduling, and background self-improvem
 ## Constraints & Gotchas
 
 - Runtime startup without a running asyncio loop wires `CronService` but does not start scheduler tasks; `Runtime._start_cron_service()` only calls `start()` when `asyncio.get_running_loop()` succeeds.
-- Busy-session queueing is in-memory and unbounded, so queued triggered work is lost on process restart.
+- Busy-session queueing is in-memory and shares `ChatRunManager`'s system-wide waiting-work ceiling of 32 queued Runs and ingress reservations; queued triggered work is lost on process restart.
 - Missed once jobs are not caught up on startup; they are logged at warn level and marked completed without firing. Missed cron jobs are not replayed; the next future fire is computed from current time.
 - Once jobs are retained after firing with `status = "completed"` and `last_fired_at` set.
 - Once-job fire claims intentionally prefer at-most-once behavior across restarts: a crash after claim creation but before `trigger_run(...)` may skip that once job on restart instead of risking duplicate execution.
