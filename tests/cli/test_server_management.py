@@ -998,6 +998,24 @@ def test_run_systemctl_restart_gets_a_longer_timeout_than_probes(
     assert captured["restart"] > captured["is-active"]
 
 
+def test_run_systemctl_decodes_captured_bytes_without_losing_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(_args: list[str], **_kwargs: Any) -> SimpleNamespace:
+        return SimpleNamespace(
+            returncode=0,
+            stdout="Łódź".encode(),
+            stderr=b"\x81tail",
+        )
+
+    monkeypatch.setattr(server_management.subprocess, "run", fake_run)
+
+    result = server_management._run_systemctl(["systemctl", "--user", "is-active", "vbot.service"])
+
+    assert result.stdout == "Łódź"
+    assert result.stderr == r"\x81tail"
+
+
 def test_run_systemctl_timeout_is_reported_distinctly_from_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

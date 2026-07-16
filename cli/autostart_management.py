@@ -22,6 +22,7 @@ from cli.server_management import (
     DEFAULT_SERVICE_NAME,
     CommandResult,
     ServerInstance,
+    decode_command_output,
     start_server,
 )
 
@@ -289,7 +290,6 @@ def _default_runner(command: list[str]) -> CommandRun:
         completed = subprocess.run(
             command,
             capture_output=True,
-            text=True,
             timeout=_COMMAND_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
@@ -300,8 +300,8 @@ def _default_runner(command: list[str]) -> CommandRun:
         )
     return CommandRun(
         returncode=completed.returncode,
-        stdout=(completed.stdout or "").strip(),
-        stderr=(completed.stderr or "").strip(),
+        stdout=decode_command_output(completed.stdout).strip(),
+        stderr=decode_command_output(completed.stderr).strip(),
     )
 
 

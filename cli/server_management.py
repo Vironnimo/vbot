@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import locale
 import os
 import socket
 import subprocess
@@ -38,6 +39,25 @@ _SYSTEMCTL_RESTART_TIMEOUT_SECONDS = 30.0
 _SYSTEMCTL_TIMEOUT_RETURN_CODE = 124
 _SYSTEMD_RESTART_READY_TIMEOUT_SECONDS = 10.0
 _SYSTEMD_RESTART_PROBE_INTERVAL_SECONDS = 0.2
+
+
+def decode_command_output(output: bytes | str | None) -> str:
+    """Decode captured local-command output without locale-dependent loss.
+
+    Git and Node commonly emit UTF-8 even on legacy Windows code pages, while
+    native tools such as ``schtasks`` may use the process locale. Prefer UTF-8,
+    then fall back to the locale with escaped undecodable bytes so lifecycle
+    decisions never receive ``None`` merely because output decoding failed.
+    """
+
+    if output is None:
+        return ""
+    if isinstance(output, str):
+        return output
+    try:
+        return output.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return output.decode(locale.getpreferredencoding(False), errors="backslashreplace")
 
 
 @dataclass(frozen=True)
@@ -488,7 +508,7 @@ def _run_systemctl(args: list[str]) -> _SystemctlRun:
         else _SYSTEMCTL_PROBE_TIMEOUT_SECONDS
     )
     try:
-        completed = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        completed = subprocess.run(args, capture_output=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return _SystemctlRun(
             returncode=_SYSTEMCTL_TIMEOUT_RETURN_CODE,
@@ -499,8 +519,8 @@ def _run_systemctl(args: list[str]) -> _SystemctlRun:
         return _SystemctlRun(returncode=127, stdout="", stderr="systemctl unavailable")
     return _SystemctlRun(
         returncode=completed.returncode,
-        stdout=(completed.stdout or "").strip(),
-        stderr=(completed.stderr or "").strip(),
+        stdout=decode_command_output(completed.stdout).strip(),
+        stderr=decode_command_output(completed.stderr).strip(),
     )
 
 

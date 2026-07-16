@@ -828,6 +828,74 @@ def test_run_extensions_set_reads_value_from_stdin(
     assert calls == [("homeassistant", "token", "token-from-stdin")]
 
 
+def test_run_extensions_set_decodes_utf8_bytes_from_stdin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import io
+
+    instance = make_instance(tmp_path)
+    calls: list[tuple[str, str, str]] = []
+
+    class BinaryStdin:
+        buffer = io.BytesIO(b"\xef\xbb\xbf" + "Łódź".encode() + b"\r\n")
+
+    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
+        return instance
+
+    def fake_set(
+        resolved_instance: ServerInstance, name: str, field: str, value: str
+    ) -> CommandResult:
+        calls.append((name, field, value))
+        return CommandResult(ok=True, message="ok", instance=resolved_instance)
+
+    monkeypatch.setattr(cli_main.sys, "stdin", BinaryStdin())
+
+    exit_code = cli_main.run(
+        ["extensions", "homeassistant", "set", "token", "--stdin"],
+        resolve=fake_resolve,
+        set_extension_fn=fake_set,
+    )
+
+    assert exit_code == 0
+    assert calls == [("homeassistant", "token", "Łódź")]
+
+
+def test_run_extensions_set_rejects_non_utf8_stdin_without_calling_setter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import io
+
+    instance = make_instance(tmp_path)
+    calls: list[tuple[str, str, str]] = []
+
+    class BinaryStdin:
+        buffer = io.BytesIO(b"\x81")
+
+    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
+        return instance
+
+    def fake_set(
+        resolved_instance: ServerInstance, name: str, field: str, value: str
+    ) -> CommandResult:
+        calls.append((name, field, value))
+        return CommandResult(ok=True, message="ok", instance=resolved_instance)
+
+    monkeypatch.setattr(cli_main.sys, "stdin", BinaryStdin())
+
+    exit_code = cli_main.run(
+        ["extensions", "homeassistant", "set", "token", "--stdin"],
+        resolve=fake_resolve,
+        set_extension_fn=fake_set,
+    )
+
+    assert exit_code == 1
+    assert calls == []
+    assert "cannot read --stdin value as UTF-8" in capsys.readouterr().out
+
+
 def test_run_extensions_unknown_subcommand_is_usage_error(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

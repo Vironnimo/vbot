@@ -843,7 +843,14 @@ def _dispatch_extensions_set(
         if len(rest) != 2:
             return _extensions_usage(instance, f"usage: extensions {name} set <field> --stdin")
         field = rest[1]
-        value = sys.stdin.read().rstrip("\n")
+        try:
+            value = _read_stdin_utf8()
+        except (OSError, UnicodeError) as exc:
+            return CommandResult(
+                ok=False,
+                message=f"cannot read --stdin value as UTF-8: {exc}",
+                instance=instance,
+            )
     else:
         if len(rest) != 3:
             return _extensions_usage(
@@ -852,6 +859,18 @@ def _dispatch_extensions_set(
         field = rest[1]
         value = rest[2]
     return set_extension_fn(instance, name, field, value)
+
+
+def _read_stdin_utf8() -> str:
+    """Read a piped extension value through an explicit UTF-8 contract."""
+
+    buffer = getattr(sys.stdin, "buffer", None)
+    if buffer is None:
+        return sys.stdin.read().rstrip("\r\n")
+    raw_value = buffer.read()
+    if isinstance(raw_value, bytes):
+        return raw_value.decode("utf-8-sig").rstrip("\r\n")
+    return str(raw_value).rstrip("\r\n")
 
 
 def _extensions_usage(instance: ServerInstance, message: str) -> CommandResult:
