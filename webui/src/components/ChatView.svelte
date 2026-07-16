@@ -22,6 +22,7 @@
   } from '$lib/api.js';
   import {
     mergeBoundedEntries,
+    replaceActiveSubAgentStatuses,
     subAgentGuardKeysForEvictedStatuses,
   } from '$lib/clientCaches.js';
   import {
@@ -134,10 +135,9 @@
   let actionError = $state('');
   let continuationActionPending = $state('');
   let availableSkills = $state([]);
-  // Chat-local bottom toast for `output: "toast"` command replies (e.g. /stop,
-  // /compact). Replaces the old top `actionInfo` notice — command output now
-  // lives at the bottom of the chat. Error notices stay in the top stack.
-  let commandToast = $state('');
+  // Chat-local bottom toast for transient command replies and lifecycle notices.
+  // Error notices stay in the top stack.
+  let chatToast = $state('');
   // Non-persisted `output: "transient"` command cards (/status, /help) rendered
   // in the chat stream. Kept in a dedicated array so incoming run events never
   // clear them; only a displayed-session change (or reload) empties them. Each
@@ -157,7 +157,7 @@
   let handledSessionNavigationKey = '';
   // Bottom command toast auto-dismiss. Kept as a single constant so the
   // dwell time can be tuned in one place.
-  const COMMAND_TOAST_TIMEOUT_MS = 5000;
+  const CHAT_TOAST_TIMEOUT_MS = 5000;
   const HISTORY_INITIAL_LIMIT = 100;
   const HISTORY_OLDER_LIMIT = 50;
   const SUBAGENT_RESULT_HISTORY_LIMIT = 20;
@@ -168,7 +168,7 @@
   // a still-rendered row simply refetches (missing entries allow fetch).
   const SUBAGENT_STATUS_CACHE_LIMIT = 2000;
   const SUBAGENT_RESULT_CACHE_LIMIT = 100;
-  let commandToastTimeoutId = null;
+  let chatToastTimeoutId = null;
 
   // --- Project (second-bar) state -----------------------------------------
   //
@@ -651,9 +651,9 @@
   });
 
   onDestroy(() => {
-    if (commandToastTimeoutId !== null) {
-      clearTimeout(commandToastTimeoutId);
-      commandToastTimeoutId = null;
+    if (chatToastTimeoutId !== null) {
+      clearTimeout(chatToastTimeoutId);
+      chatToastTimeoutId = null;
     }
   });
 
@@ -668,22 +668,22 @@
     }
   });
 
-  const showCommandToast = (message) => {
-    if (commandToastTimeoutId !== null) {
-      clearTimeout(commandToastTimeoutId);
-      commandToastTimeoutId = null;
+  const showChatToast = (message) => {
+    if (chatToastTimeoutId !== null) {
+      clearTimeout(chatToastTimeoutId);
+      chatToastTimeoutId = null;
     }
 
-    commandToast = typeof message === 'string' ? message : '';
+    chatToast = typeof message === 'string' ? message : '';
 
-    if (!commandToast) {
+    if (!chatToast) {
       return;
     }
 
-    commandToastTimeoutId = setTimeout(() => {
-      commandToast = '';
-      commandToastTimeoutId = null;
-    }, COMMAND_TOAST_TIMEOUT_MS);
+    chatToastTimeoutId = setTimeout(() => {
+      chatToast = '';
+      chatToastTimeoutId = null;
+    }, CHAT_TOAST_TIMEOUT_MS);
   };
 
   const appendTransientCard = (text) => {
@@ -809,12 +809,21 @@
   // release the verification guards of evicted `run:`/`session:` keys, so a
   // still-rendered row whose status entry aged out can self-heal again
   // instead of showing a frozen "running" dot behind a spent guard.
-  const applySubAgentRunStatusUpdates = (updates) => {
-    const { entries, evictedKeys } = mergeBoundedEntries(
-      subAgentRunStatuses,
-      updates,
-      SUBAGENT_STATUS_CACHE_LIMIT,
-    );
+  const applySubAgentRunStatusUpdates = (
+    updates,
+    { replaceActive = false } = {},
+  ) => {
+    const { entries, evictedKeys } = replaceActive
+      ? replaceActiveSubAgentStatuses(
+          subAgentRunStatuses,
+          updates,
+          SUBAGENT_STATUS_CACHE_LIMIT,
+        )
+      : mergeBoundedEntries(
+          subAgentRunStatuses,
+          updates,
+          SUBAGENT_STATUS_CACHE_LIMIT,
+        );
     subAgentRunStatuses = entries;
     for (const guardKey of subAgentGuardKeysForEvictedStatuses(evictedKeys)) {
       subAgentStatusVerificationKeys.delete(guardKey);
@@ -1883,7 +1892,7 @@
         } else {
           // `toast` channel (default): a chat-local bottom confirmation. /compact
           // additionally reloads history so the new checkpoint is shown.
-          showCommandToast(run.reply);
+          showChatToast(run.reply);
           if (isCompactCommand(content)) {
             await reloadActiveSessionHistory(sessionState);
           }
@@ -2170,6 +2179,20 @@
     onQueueSyncError: (error) => {
       actionError = `${t('queue.syncError', 'Queued messages could not be synced.')} ${error.message}`;
     },
+    onRestartQueueDiscarded: (count) => {
+      showChatToast(
+        count === 1
+          ? t(
+              'queue.restartDiscardedOne',
+              '1 queued message was discarded because the server restarted.',
+            )
+          : t(
+              'queue.restartDiscardedMany',
+              '{count} queued messages were discarded because the server restarted.',
+              { count },
+            ),
+      );
+    },
   });
 </script>
 
@@ -2450,13 +2473,13 @@
             />
           </div>
           <div class="chat-view__composer-shell">
-            {#if commandToast}
+            {#if chatToast}
               <div
                 class="chat-view__command-toast"
                 role="status"
                 aria-live="polite"
               >
-                <p class="chat-view__command-toast-message">{commandToast}</p>
+                <p class="chat-view__command-toast-message">{chatToast}</p>
               </div>
             {/if}
             <ChatComposer

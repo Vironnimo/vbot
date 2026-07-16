@@ -93,6 +93,10 @@ DEFAULT_SERVER_HOST = "127.0.0.1"
 DEFAULT_SERVER_PORT = 8420
 DEFAULT_SERVER_PORT_SOURCE = "default"
 UPLOAD_READ_CHUNK_SIZE_BYTES = 1_048_576
+REPLAY_STATUS_FRESH = "fresh"
+REPLAY_STATUS_RESUMED = "resumed"
+REPLAY_STATUS_GAP = "gap"
+REPLAY_STATUS_EPOCH_CHANGED = "epoch_changed"
 
 
 def create_app(
@@ -302,19 +306,23 @@ def create_app(
             # published during the await are still in the retained deque and get
             # replayed by the subsequent subscribe.
             last_sequence_at_hello = _bus_last_sequence(event_bus)
+            replay_status = _connection_replay_status(
+                event_bus,
+                client_epoch=client_epoch,
+                client_after_sequence=client_after_sequence,
+                last_sequence=last_sequence_at_hello,
+            )
             active_runs = _active_runs_snapshot(websocket.app.state)
             hello_frame: JsonObject = {
                 "type": "connection_ready",
                 "epoch": _bus_epoch(event_bus),
                 "last_sequence": last_sequence_at_hello,
+                "replay_status": replay_status,
                 "active_runs": active_runs,
+                "queues": _queues_snapshot(websocket.app.state),
             }
             await websocket.send_json(hello_frame)
-            if (
-                hello_frame["epoch"]
-                and client_epoch == hello_frame["epoch"]
-                and client_after_sequence > 0
-            ):
+            if replay_status == REPLAY_STATUS_RESUMED:
                 subscribe_after_sequence = client_after_sequence
             else:
                 subscribe_after_sequence = last_sequence_at_hello
@@ -720,6 +728,33 @@ def _bus_last_sequence(event_bus: ServerEventBus) -> int:
     return event_bus.last_sequence
 
 
+def _connection_replay_status(
+    event_bus: ServerEventBus,
+    *,
+    client_epoch: str,
+    client_after_sequence: int,
+    last_sequence: int,
+) -> str:
+    """Classify whether a reconnect cursor can be replayed without a gap."""
+    server_epoch = _bus_epoch(event_bus)
+    if client_epoch and client_epoch != server_epoch:
+        return REPLAY_STATUS_EPOCH_CHANGED
+    if not client_epoch or client_after_sequence <= 0:
+        return REPLAY_STATUS_FRESH
+    if client_after_sequence > last_sequence:
+        return REPLAY_STATUS_GAP
+
+    retained_events = event_bus.events
+    if not retained_events or client_after_sequence == last_sequence:
+        return REPLAY_STATUS_RESUMED
+    oldest_retained_sequence = retained_events[0].get("sequence")
+    if not isinstance(oldest_retained_sequence, int):
+        return REPLAY_STATUS_GAP
+    if client_after_sequence < oldest_retained_sequence - 1:
+        return REPLAY_STATUS_GAP
+    return REPLAY_STATUS_RESUMED
+
+
 def _active_runs_snapshot(state: Any) -> list[JsonObject]:
     """Build the active-runs list for the connection_ready hello frame.
 
@@ -751,6 +786,36 @@ def _active_runs_snapshot(state: Any) -> list[JsonObject]:
             }
         )
     return snapshot
+
+
+def _queues_snapshot(state: Any) -> list[JsonObject]:
+    """Build the public Queue snapshot for the connection-ready hello frame."""
+    try:
+        chat_runs = _app_chat_runs(state)
+    except HTTPException:
+        return []
+    all_queued = getattr(chat_runs, "all_queued", None)
+    if not callable(all_queued):
+        return []
+
+    grouped: dict[tuple[str | None, str, str], list[JsonObject]] = {}
+    for session_key, item in all_queued():
+        if item.internal:
+            continue
+        grouped.setdefault(session_key, []).append(item.to_dict())
+
+    return [
+        {
+            "project_id": project_id,
+            "agent_id": agent_id,
+            "session_id": session_id,
+            "items": grouped[(project_id, agent_id, session_id)],
+        }
+        for project_id, agent_id, session_id in sorted(
+            grouped,
+            key=lambda key: (key[0] or "", key[1], key[2]),
+        )
+    ]
 
 
 def _replay_after_sequence(request: Request) -> int:

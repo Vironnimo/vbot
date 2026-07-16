@@ -4,6 +4,10 @@ import { reconnectBackoffDelay } from './backoff.js';
 export const CONNECTION_STATUS_CONNECTED = 'connected';
 export const CONNECTION_STATUS_RECONNECTING = 'reconnecting';
 export const CONNECTION_STATUS_DISCONNECTED = 'disconnected';
+export const CONNECTION_REPLAY_STATUS_FRESH = 'fresh';
+export const CONNECTION_REPLAY_STATUS_RESUMED = 'resumed';
+export const CONNECTION_REPLAY_STATUS_GAP = 'gap';
+export const CONNECTION_REPLAY_STATUS_EPOCH_CHANGED = 'epoch_changed';
 
 const RECONNECT_INITIAL_DELAY_MS = 1000;
 const RECONNECT_MAX_DELAY_MS = 30000;
@@ -40,11 +44,12 @@ export function connect(state, handlers = {}) {
       onEvent: (event) => {
         if (event.type === 'connection_ready') {
           const nextEpoch = event.epoch ?? '';
-          const isReplayResume =
-            afterSequence > 0 &&
-            typeof nextEpoch === 'string' &&
-            nextEpoch.length > 0 &&
-            nextEpoch === resumeEpoch;
+          const isReplayResume = event.replay_status
+            ? event.replay_status === CONNECTION_REPLAY_STATUS_RESUMED
+            : afterSequence > 0 &&
+              typeof nextEpoch === 'string' &&
+              nextEpoch.length > 0 &&
+              nextEpoch === resumeEpoch;
           state.epoch = nextEpoch;
           if (!isReplayResume) {
             state.lastSequence = Number.isFinite(event.last_sequence)

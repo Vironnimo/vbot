@@ -21,6 +21,7 @@ An Agent address can be global or Project-scoped. `resolveAgentAddressing()` and
 - `createChatRunStream()` owns the Run EventSource lifecycle, expected sequence, reconnect cursor, and terminal cleanup for one Run. Replacing or leaving that Run closes the old stream.
 - `chatState.js` accepts ordered Run events and tracks the highest contiguous sequence. Gaps trigger recovery/reconnect behavior; duplicates and already-persisted events must not produce duplicate timeline items.
 - WebSocket lifecycle summaries can reveal a Run that started or finished elsewhere. They cause reconciliation, while the full output stream still comes from SSE.
+- The `connection_ready.active_runs` snapshot replaces locally projected active Run and Subagent status. Active `run:` and `session:` Subagent entries absent from the snapshot are removed, while terminal status, duration, tool, and Queue-to-Run metadata remain; visible historical rows can then verify their durable terminal state through `chat.history`.
 - Terminal events complete, fail, or cancel the local Run projection and close its stream. A continuation offer is server state and is only shown, continued, or discarded through the corresponding backend contracts.
 - Cancelling a Run and cancelling a cancellable tool call are distinct operations. The UI must preserve that distinction in labels, availability, and error handling.
 
@@ -29,6 +30,7 @@ An Agent address can be global or Project-scoped. `resolveAgentAddressing()` and
 - `visibleTimelineItemsForRender()` is the render boundary. `ChatTimeline.svelte` and its item components display derived items; they do not reconstruct event ordering from raw arrays.
 - Persisted messages prune matching transient Run events. Assistant output, reasoning, tool activity, child-Agent progress, compaction checkpoints, usage, and errors retain their distinct timeline semantics.
 - The server owns Queue order and contents. The client may show optimistic continuity for edit/remove operations, but `syncQueueFromServer()` is the authoritative reconciliation path.
+- `connection_ready.queues` authoritatively replaces every held Session's public Queue projection, including clearing scopes omitted from the complete snapshot. On `epoch_changed`, locally shown item ids absent from the new process trigger a transient restart-loss notice; a same-process replay gap reconciles silently because missing items may have started normally while disconnected.
 - Queue invalidation applies only to the addressed Agent and Session. Switching Session must not display another Session's queued items.
 - The timeline is Chat's scrolling surface. Autoscroll follows the existing near-bottom/user-intent rules; the page and composer do not become competing scroll containers.
 

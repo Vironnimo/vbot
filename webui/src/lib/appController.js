@@ -1,4 +1,6 @@
 import {
+  CONNECTION_REPLAY_STATUS_EPOCH_CHANGED,
+  CONNECTION_REPLAY_STATUS_GAP,
   CONNECTION_STATUS_CONNECTED,
   CONNECTION_STATUS_DISCONNECTED,
   connect,
@@ -310,6 +312,18 @@ export function createAppController({
     }
     if (event.type === CONNECTION_READY_EVENT_TYPE) {
       state.connectionSnapshot = event;
+      if (
+        event.replay_status === CONNECTION_REPLAY_STATUS_GAP ||
+        event.replay_status === CONNECTION_REPLAY_STATUS_EPOCH_CHANGED
+      ) {
+        state.modelsRefreshToken += 1;
+        state.projectsRefreshToken += 1;
+        state.sessionsRefreshToken += 1;
+        state.clientsRefreshToken += 1;
+        state.channelsRefreshToken += 1;
+        state.debugTracesRefreshToken += 1;
+        await Promise.all([onLoadProjects(), onReloadAgents()]);
+      }
       return;
     }
     if (RUN_SERVER_EVENT_TYPES.has(event.type)) {

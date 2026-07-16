@@ -784,7 +784,9 @@ def test_websocket_handshake_sends_connection_ready_frame_with_no_pre_connect_re
             # on register before the hello read; the 3 pre-connect run events
             # (1..3) are still not replayed below.
             assert hello["last_sequence"] == 4
+            assert hello["replay_status"] == "fresh"
             assert hello["active_runs"] == []
+            assert hello["queues"] == []
             # Critical: no "sequence" field on the hello frame — it must not feed
             # the client's lastSequence bookkeeping.
             assert "sequence" not in hello
@@ -823,6 +825,7 @@ def test_websocket_handshake_replays_when_epoch_and_after_sequence_match(
             # 6 = 5 retained run events + this window's own presence connect
             # signal (published on register before the hello read).
             assert hello["last_sequence"] == 6
+            assert hello["replay_status"] == "resumed"
 
             replayed = [websocket.receive_json() for _ in range(2)]
             assert [event["sequence"] for event in replayed] == [4, 5]
@@ -855,6 +858,7 @@ def test_websocket_handshake_live_only_for_stale_or_missing_epoch(
             # 6 = 5 retained run events + this window's own presence connect
             # signal (published on register before the hello read).
             assert hello["last_sequence"] == 6
+            assert hello["replay_status"] == "epoch_changed"
 
             bus.publish("run_started", {"id": "live-1"})
             bus.publish("run_output", {"id": "live-2"})
@@ -881,12 +885,35 @@ def test_websocket_handshake_live_only_for_stale_or_missing_epoch(
             # 1 = this window's own presence connect signal (the only event so
             # far); the live-only floor sits above it so it is not replayed.
             assert hello["last_sequence"] == 1
+            assert hello["replay_status"] == "fresh"
 
             bus2.publish("run_started", {"id": "live-1"})
 
             live_event = websocket.receive_json()
             assert live_event["sequence"] == 2
             assert live_event["payload"] == {"id": "live-1"}
+
+
+def test_websocket_handshake_reports_replay_gap_without_partial_replay(tmp_path: Path) -> None:
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+
+    with TestClient(app) as client:
+        bus = ServerEventBus(event_retention_limit=2)
+        _override_bus_epoch(bus, epoch="epoch-abc")
+        app.state.event_bus = bus
+        for index in range(4):
+            bus.publish("run_started", {"id": f"event-{index + 1}"})
+
+        with client.websocket_connect("/ws?after_sequence=1&epoch=epoch-abc") as websocket:
+            hello = websocket.receive_json()
+            assert hello["replay_status"] == "gap"
+            assert hello["last_sequence"] == 5
+
+            bus.publish("run_started", {"id": "live"})
+            first_event = websocket.receive_json()
+
+    assert first_event["sequence"] == 6
+    assert first_event["payload"] == {"id": "live"}
 
 
 def test_websocket_handshake_active_runs_lists_running_with_sse_url_and_omits_terminal(

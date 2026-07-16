@@ -20,7 +20,9 @@ from server.app import (
     _active_runs_snapshot,
     _bus_epoch,
     _bus_last_sequence,
+    _connection_replay_status,
     _parse_query_string,
+    _queues_snapshot,
     _register_run_event_bridge,
     _register_session_title_bridge,
     _shutdown_local_catalog_refresh,
@@ -318,6 +320,59 @@ def test_bus_last_sequence_is_zero_for_empty_bus() -> None:
     assert _bus_last_sequence(bus) == 0
 
 
+def test_connection_replay_status_distinguishes_complete_and_incomplete_cursors() -> None:
+    bus = ServerEventBus(event_retention_limit=2)
+    bus._epoch = "epoch-current"  # type: ignore[attr-defined]
+    for index in range(4):
+        bus.publish("run_started", {"id": f"run-{index}"})
+
+    assert (
+        _connection_replay_status(
+            bus,
+            client_epoch="",
+            client_after_sequence=0,
+            last_sequence=bus.last_sequence,
+        )
+        == "fresh"
+    )
+    assert (
+        _connection_replay_status(
+            bus,
+            client_epoch="epoch-current",
+            client_after_sequence=2,
+            last_sequence=bus.last_sequence,
+        )
+        == "resumed"
+    )
+    assert (
+        _connection_replay_status(
+            bus,
+            client_epoch="epoch-current",
+            client_after_sequence=1,
+            last_sequence=bus.last_sequence,
+        )
+        == "gap"
+    )
+    assert (
+        _connection_replay_status(
+            bus,
+            client_epoch="epoch-current",
+            client_after_sequence=5,
+            last_sequence=bus.last_sequence,
+        )
+        == "gap"
+    )
+    assert (
+        _connection_replay_status(
+            bus,
+            client_epoch="epoch-old",
+            client_after_sequence=2,
+            last_sequence=bus.last_sequence,
+        )
+        == "epoch_changed"
+    )
+
+
 def test_active_runs_snapshot_includes_only_running_runs_with_sse_url(
     tmp_path: Path,
 ) -> None:
@@ -508,6 +563,44 @@ def test_active_runs_snapshot_returns_empty_list_when_manager_lacks_accessor() -
     result = _active_runs_snapshot(state)
 
     assert result == []
+
+
+def test_queues_snapshot_groups_public_items_by_sorted_session_scope() -> None:
+    class StubItem:
+        def __init__(self, item_id: str, *, internal: bool = False) -> None:
+            self.item_id = item_id
+            self.internal = internal
+
+        def to_dict(self) -> dict[str, Any]:
+            return {"id": self.item_id, "internal": self.internal}
+
+    queued = [
+        (("project-b", "writer", "session-b"), StubItem("second")),
+        ((None, "coder", "session-a"), StubItem("first")),
+        ((None, "coder", "session-a"), StubItem("hidden", internal=True)),
+        (("project-b", "writer", "session-b"), StubItem("third")),
+    ]
+    chat_runs = ChatRunManager()
+    chat_runs.all_queued = lambda: cast(Any, list(queued))  # type: ignore[method-assign]
+    state = type("State", (), {"chat_runs": chat_runs})()
+
+    assert _queues_snapshot(state) == [
+        {
+            "project_id": None,
+            "agent_id": "coder",
+            "session_id": "session-a",
+            "items": [{"id": "first", "internal": False}],
+        },
+        {
+            "project_id": "project-b",
+            "agent_id": "writer",
+            "session_id": "session-b",
+            "items": [
+                {"id": "second", "internal": False},
+                {"id": "third", "internal": False},
+            ],
+        },
+    ]
 
 
 def _write_webui_build(tmp_path: Path) -> Path:

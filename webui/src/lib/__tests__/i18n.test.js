@@ -30,6 +30,9 @@ describe('i18n t()', () => {
 
   it('interpolates provided values in catalog text', () => {
     expect(t('queue.count', undefined, { count: 2 })).toBe('2 queued');
+    expect(t('queue.restartDiscardedMany', undefined, { count: 3 })).toBe(
+      '3 queued messages were discarded because the server restarted.',
+    );
   });
 
   it('leaves missing interpolation tokens intact', () => {

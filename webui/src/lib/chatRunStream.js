@@ -573,9 +573,7 @@ export function createChatRunStream({
         ] = 'running';
       }
     }
-    if (Object.keys(subAgentUpdates).length > 0) {
-      updateSubAgentRunStatuses(subAgentUpdates);
-    }
+    updateSubAgentRunStatuses(subAgentUpdates, { replaceActive: true });
 
     for (const activeRun of activeRuns) {
       if (!activeRun?.run_id || !activeRun.agent_id || !activeRun.session_id) {
