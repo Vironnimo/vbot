@@ -301,15 +301,19 @@ class TestChatSession:
         with pytest.raises(ChatSessionError, match="invalid JSON at line 1"):
             session.load()
 
-    def test_load_rejects_invalid_final_message_line(self, tmp_path):
+    def test_load_recovers_unterminated_final_line_with_invalid_message_shape(self, tmp_path):
         session = ChatSession.create(tmp_path, session_id="session-one")
-        session.path.write_text(
-            '{"id":"d4e5f6","timestamp":"2026-05-03T14:30:01+00:00","role":"user"}',
-            encoding="utf-8",
+        message = ChatMessage.user("Survives crash", timestamp=FIXED_TIMESTAMP)
+        session.append(message)
+        valid_content = session.path.read_bytes()
+        session.path.write_bytes(
+            valid_content + b'{"id":"d4e5f6","timestamp":"2026-05-03T14:30:01+00:00","role":"user"}'
         )
 
-        with pytest.raises(ChatSessionError, match="invalid message at line 1"):
-            session.load()
+        messages = session.load()
+
+        assert [loaded_message.to_dict() for loaded_message in messages] == [message.to_dict()]
+        assert session.path.read_bytes() == valid_content
 
     def test_load_rejects_invalid_message_line(self, tmp_path):
         session = ChatSession.create(tmp_path, session_id="session-one")
@@ -1219,6 +1223,23 @@ class TestContinuationJournal:
 
         assert session.load_continuation_records() == [{"type": "complete"}]
         assert session.continuation_path.read_bytes().endswith(b"\n")
+
+    def test_load_truncates_unterminated_final_record_with_non_object_shape(self, tmp_path):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+        session.append_continuation_record({"type": "complete"})
+        valid_content = session.continuation_path.read_bytes()
+        with session.continuation_path.open("ab") as journal:
+            journal.write(b"[]")
+
+        assert session.load_continuation_records() == [{"type": "complete"}]
+        assert session.continuation_path.read_bytes() == valid_content
+
+    def test_load_rejects_a_complete_record_with_non_object_shape(self, tmp_path):
+        session = ChatSession.create(tmp_path, session_id="session-one")
+        session.continuation_path.write_bytes(b"[]\n")
+
+        with pytest.raises(ChatSessionError, match="continuation record at line 1"):
+            session.load_continuation_records()
 
     def test_load_rejects_a_malformed_complete_record(self, tmp_path):
         session = ChatSession.create(tmp_path, session_id="session-one")
