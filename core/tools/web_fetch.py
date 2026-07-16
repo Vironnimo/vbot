@@ -864,7 +864,8 @@ async def _fetch_with_retry(
         # curl's RESOLVE is an slist option and accepts a list; the type stub
         # narrows the dict value to str, so the assignment is annotated away.
         session.curl_options[CurlOpt.RESOLVE] = [  # type: ignore[assignment]
-            f"{host}:{host_port}:{ip}" for (host, host_port), ip in resolve_map.items()
+            f"{host}:{host_port}:{_curl_resolve_address(ip)}"
+            for (host, host_port), ip in resolve_map.items()
         ]
 
         result = await _request_with_retry(session, current_url)
@@ -881,6 +882,14 @@ async def _fetch_with_retry(
         current_url = urljoin(current_url, location)
 
     raise RuntimeError("unreachable retry loop state")
+
+
+def _curl_resolve_address(address: str) -> str:
+    """Format a validated IP for curl's ``HOST:PORT:ADDRESS`` resolve syntax."""
+    parsed = ipaddress.ip_address(address)
+    if isinstance(parsed, ipaddress.IPv6Address):
+        return f"[{address}]"
+    return address
 
 
 def _response_media_type(headers: dict[str, str]) -> str:
