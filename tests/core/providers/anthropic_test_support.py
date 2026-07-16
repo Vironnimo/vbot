@@ -353,6 +353,8 @@ def _anthropic_control_model(
     *,
     control: str,
     budget_max: int | None = None,
+    context_window: int = 200000,
+    max_output_tokens: int = 64000,
 ) -> Model:
     """A reasoning Claude with a specific wire control (``budget`` / ``on_off``)."""
     return Model(
@@ -368,10 +370,10 @@ def _anthropic_control_model(
                 budget_max=budget_max,
             ),
         ),
-        context_window=200000,
+        context_window=context_window,
         # A realistic budget-Claude output ceiling: large enough that an effort's
         # thinking budget fits without the max_tokens clamp confounding the test.
-        max_output_tokens=64000,
+        max_output_tokens=max_output_tokens,
     )
 
 

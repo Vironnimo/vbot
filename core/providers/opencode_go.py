@@ -132,7 +132,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        request_kwargs = self._kwargs_with_model_output_limit(model_id, kwargs)
+        request_kwargs = self._kwargs_with_model_output_limit(model_id, messages, kwargs)
         if self._uses_anthropic_messages_path(model_id):
             return await self._messages.send(
                 messages,
@@ -148,7 +148,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
-        request_kwargs = self._kwargs_with_model_output_limit(model_id, kwargs)
+        request_kwargs = self._kwargs_with_model_output_limit(model_id, messages, kwargs)
         if self._uses_anthropic_messages_path(model_id):
             return self._messages.stream(
                 messages,
@@ -178,6 +178,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
     def _kwargs_with_model_output_limit(
         self,
         model_id: str,
+        messages: list[dict[str, Any]],
         kwargs: dict[str, Any],
     ) -> dict[str, Any]:
         """Copy the caller kwargs with the model output ceiling defaulted in.
@@ -192,7 +193,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         """
 
         request_kwargs = dict(kwargs)
-        self._apply_model_output_limit(request_kwargs, model_id)
+        self._apply_model_output_limit(request_kwargs, model_id, messages)
         return request_kwargs
 
     def _model_max_output_tokens(self, model_id: str) -> int | None:
@@ -207,6 +208,16 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
                 and model.max_output_tokens > 0
             ):
                 return model.max_output_tokens
+        return None
+
+    def _model_context_window(self, model_id: str) -> int | None:
+        if self._model_lookup is None:
+            return None
+
+        for candidate in _model_lookup_candidates(model_id):
+            model = self._model_lookup(candidate)
+            if model is not None and model.context_window is not None and model.context_window > 0:
+                return model.context_window
         return None
 
     def _uses_anthropic_messages_path(self, model_id: str) -> bool:

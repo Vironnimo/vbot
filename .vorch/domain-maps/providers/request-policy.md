@@ -30,7 +30,7 @@ Reasoning rejection/ignored-effort warnings are diagnostic only. They may warn c
 
 None-valued caller kwargs mean unspecified and are removed before Provider defaults; falsy real values such as `temperature=0.0` remain explicit overrides.
 
-When the caller supplies no output limit, compatible Adapters may use the Model catalog's positive `max_output_tokens` before a flat Provider default. Unknown ceilings remain unknown and fall back normally; they are never fabricated during normalization.
+Compatible Adapters resolve a positive output allowance in this order: explicit caller limit, Model catalog `max_output_tokens`, then flat Provider default. Before every request, `resolve_request_output_limit()` clamps that allowance so estimated Provider-visible messages, Tool definitions, a media-aware input reservation, an uncertainty reserve (`max(25% of estimated input, 1% of the effective context window, 256)`), and output fit inside the effective context window. A catalog output ceiling equal to the entire context therefore cannot produce an invalid request; exhausted input fails locally as a non-retryable `ProviderError`. The request estimator in `core/utils/tokens.py` is separate from persisted Usage estimation: native base64/data-URL media receives a fixed per-payload reservation instead of being counted as encoded prose bytes.
 
 `resolve_context_window()` owns the read-side chain: positive Model fact, then positive Provider-config default, then `GLOBAL_CONTEXT_WINDOW_FLOOR`. `resolve_effective_context_window()` adds local-Model policy: positive user setting, else the chain capped by `LOCAL_CONTEXT_DEFAULT_CAP`. These helpers inform budgeting/status/payloads; only verified local Adapters enforce the effective value on the wire.
 
@@ -64,6 +64,7 @@ Across Adapters, `input_tokens` means total prompt tokens including cached token
 - Base contract: `core/providers/adapter.py`
 - Shared HTTP/errors: `core/providers/_http_shared.py`, `errors.py`, `core/utils/http_status.py`, `core/utils/retry.py`
 - Reasoning: `core/providers/reasoning.py`
+- Request output/context policy: `core/providers/providers.py`, `core/utils/tokens.py`
 - Compatible and concrete Adapter modules: `core/providers/*.py`
 - Task HTTP base: `core/providers/task_client.py`
 - Focused coverage: Adapter/request/response/streaming/error/reasoning/task-client suites under `tests/core/providers/`

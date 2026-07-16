@@ -36,7 +36,12 @@ from core.providers._http_shared import (
 )
 from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, ModelLookup, ProviderAdapter
 from core.providers.errors import NetworkError, ProviderError
-from core.providers.providers import AuthConfig, ProviderConfig
+from core.providers.providers import (
+    AuthConfig,
+    ProviderConfig,
+    resolve_context_window,
+    resolve_request_output_limit,
+)
 from core.providers.reasoning import (
     BUDGET_FLOOR_TOKENS,
     REASONING_INTENT_BUDGET,
@@ -57,6 +62,7 @@ from core.providers.token_getter import StaticTokenGetter, TokenGetter
 from core.providers.tool_schema import sanitize_anthropic_tool_input_schema
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
+from core.utils.tokens import estimate_request_input_tokens
 
 _LOGGER = get_logger("providers.anthropic_compatible")
 
@@ -543,7 +549,12 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         # Resolve the output allowance once: it both bounds any thinking budget
         # and is the ``max_tokens`` that goes on the wire (set after overrides
         # below so it wins over the provider-default fallback).
-        resolved_max_tokens = self._resolve_max_tokens(request_kwargs, model_id)
+        resolved_max_tokens = self._resolve_max_tokens(
+            request_kwargs,
+            model_id,
+            messages,
+            tools=payload.get("tools"),
+        )
         self._apply_reasoning(
             payload,
             request_kwargs,
@@ -677,7 +688,14 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         elif intent.kind == REASONING_INTENT_OFF:
             payload["thinking"] = {"type": "disabled"}
 
-    def _resolve_max_tokens(self, request_kwargs: dict[str, Any], model_id: str) -> int | None:
+    def _resolve_max_tokens(
+        self,
+        request_kwargs: dict[str, Any],
+        model_id: str,
+        messages: list[dict[str, Any]],
+        *,
+        tools: Any = None,
+    ) -> int | None:
         """Return the output ``max_tokens`` for the request.
 
         Anthropic requires a positive ``max_tokens`` and rejects one above the
@@ -694,13 +712,21 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         """
 
         explicit = request_kwargs.get("max_tokens")
-        if _is_positive_int(explicit):
-            return explicit
-        ceiling = self._model_max_output_tokens(model_id)
-        if _is_positive_int(ceiling):
-            return ceiling
+        if not _is_positive_int(explicit):
+            request_kwargs.pop("max_tokens", None)
+            explicit = None
+        tool_definitions = tools if isinstance(tools, list) else None
+        estimated_input, _ = estimate_request_input_tokens(messages, tool_definitions)
         default = self._config.defaults.get("max_tokens") if self._config.defaults else None
-        return default if _is_positive_int(default) else None
+        return resolve_request_output_limit(
+            explicit_limit=explicit,
+            model_output_limit=self._model_max_output_tokens(model_id),
+            provider_default=default,
+            effective_context_window=resolve_context_window(
+                self._model_context_window(model_id), self._config
+            ),
+            estimated_input_tokens=estimated_input,
+        )
 
     def _model_max_output_tokens(self, model_id: str) -> int | None:
         """The model's catalog output ceiling, or ``None`` when it is unknown.
@@ -715,6 +741,19 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         if model is None:
             return None
         return model.max_output_tokens
+
+    def _model_context_window(self, model_id: str) -> int | None:
+        """The Model's catalog context window, or ``None`` when unknown."""
+
+        if self._model_lookup is None:
+            return None
+        model = self._model_lookup(model_id.split("::", 1)[0])
+        if model is None:
+            return None
+        context_window = model.context_window
+        if _is_positive_int(context_window):
+            return context_window
+        return None
 
     # ------------------------------------------------------------------
     # Error detail helper (Anthropic-specific)

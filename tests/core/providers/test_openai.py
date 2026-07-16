@@ -639,13 +639,13 @@ async def test_default_mode_send_targets_chat_completions_endpoint() -> None:
     assert "originator" not in request.headers
     assert "chatgpt-account-id" not in request.headers
     payload = json.loads(request.content)
+    assert 0 < payload.pop("max_tokens") < 8192
     assert payload == {
         "model": "gpt-5.2",
         "messages": [
             {"role": "system", "content": "Use concise answers."},
             {"role": "user", "content": "Hello"},
         ],
-        "max_tokens": 8192,
     }
     assert response == {
         "id": "chatcmpl-1",

@@ -16,6 +16,7 @@ import pytest
 from core.providers.providers import (
     GLOBAL_CONTEXT_WINDOW_FLOOR,
     LOCAL_CONTEXT_DEFAULT_CAP,
+    REQUEST_MIN_RESERVE_TOKENS,
     AuthConfig,
     ConnectionConfig,
     OAuthConfig,
@@ -25,8 +26,9 @@ from core.providers.providers import (
     model_is_local,
     resolve_context_window,
     resolve_effective_context_window,
+    resolve_request_output_limit,
 )
-from core.utils.errors import ConfigError
+from core.utils.errors import ConfigError, ProviderError
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -1376,3 +1378,52 @@ class TestResolveEffectiveContextWindow:
 
     def test_no_metadata_behaves_like_plain_chain(self) -> None:
         assert resolve_effective_context_window(None, None) == GLOBAL_CONTEXT_WINDOW_FLOOR
+
+
+class TestResolveRequestOutputLimit:
+    def test_explicit_limit_has_precedence_when_it_fits(self) -> None:
+        assert (
+            resolve_request_output_limit(
+                explicit_limit=500,
+                model_output_limit=8_000,
+                provider_default=4_096,
+                effective_context_window=10_000,
+                estimated_input_tokens=1_000,
+            )
+            == 500
+        )
+
+    def test_model_limit_is_clamped_to_remaining_context(self) -> None:
+        resolved = resolve_request_output_limit(
+            explicit_limit=None,
+            model_output_limit=10_000,
+            provider_default=4_096,
+            effective_context_window=10_000,
+            estimated_input_tokens=1_000,
+        )
+
+        assert resolved == 10_000 - 1_000 - REQUEST_MIN_RESERVE_TOKENS
+
+    def test_missing_limits_stay_unset(self) -> None:
+        assert (
+            resolve_request_output_limit(
+                explicit_limit=None,
+                model_output_limit=None,
+                provider_default=None,
+                effective_context_window=10_000,
+                estimated_input_tokens=1_000,
+            )
+            is None
+        )
+
+    def test_exhausted_context_fails_locally(self) -> None:
+        with pytest.raises(ProviderError, match="leaves no output capacity") as exc_info:
+            resolve_request_output_limit(
+                explicit_limit=None,
+                model_output_limit=8_192,
+                provider_default=None,
+                effective_context_window=8_192,
+                estimated_input_tokens=8_000,
+            )
+
+        assert exc_info.value.retryable is False

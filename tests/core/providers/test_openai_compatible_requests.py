@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from core.providers.providers import resolve_request_output_limit
+from core.utils.tokens import estimate_request_input_tokens
+
 from .openai_compatible_test_support import (
     API_KEY,
     CANONICAL_MESSAGES_WITH_TOOL_LOOP,
@@ -866,7 +869,12 @@ class TestBuildPayloadNoneKwargs:
 # ---------------------------------------------------------------------------
 
 
-def _model_with_output_ceiling(model_id: str, ceiling: int | None) -> Model:
+def _model_with_output_ceiling(
+    model_id: str,
+    ceiling: int | None,
+    *,
+    context_window: int = 200_000,
+) -> Model:
     return Model(
         model_id=model_id,
         name=model_id,
@@ -876,7 +884,7 @@ def _model_with_output_ceiling(model_id: str, ceiling: int | None) -> Model:
             json_mode=False,
             reasoning=ReasoningCapabilities(supported=False),
         ),
-        context_window=200_000,
+        context_window=context_window,
         max_output_tokens=ceiling,
     )
 
@@ -953,3 +961,45 @@ class TestOutputLimitDefault:
 
         request_body = json.loads(route.calls.last.request.content)
         assert request_body["max_tokens"] == 4096
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_equal_context_and_output_ceiling_leaves_room_for_nemo_request_input(self):
+        """Regression: Nemo's 256K output ceiling must not consume its whole context."""
+        route = respx.post(MINIMAL_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        messages = [
+            {"role": "system", "content": "You are a concise assistant."},
+            {"role": "user", "content": "x" * 8_000},
+        ]
+        tools = [
+            {
+                "name": "large_tool",
+                "description": "y" * 24_000,
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ]
+        adapter = OpenAICompatibleAdapter(
+            NO_DEFAULTS_CONFIG,
+            API_KEY,
+            model_lookup=lambda model_id: _model_with_output_ceiling(
+                model_id,
+                256_000,
+                context_window=256_000,
+            ),
+        )
+
+        await adapter.send(messages, model_id="nvidia/nemotron-nano-9b-v2:free", tools=tools)
+
+        request_body = json.loads(route.calls.last.request.content)
+        estimated_input, _ = estimate_request_input_tokens(messages, tools)
+        expected = resolve_request_output_limit(
+            explicit_limit=None,
+            model_output_limit=256_000,
+            provider_default=None,
+            effective_context_window=256_000,
+            estimated_input_tokens=estimated_input,
+        )
+        assert request_body["max_tokens"] == expected
+        assert 0 < request_body["max_tokens"] < 256_000

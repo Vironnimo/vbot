@@ -411,8 +411,8 @@ class TestSendRequestFormat:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_send_kwargs_override_defaults(self, anthropic_adapter):
-        """Caller kwargs take precedence over provider defaults."""
+    async def test_send_kwargs_override_defaults_with_context_safety(self, anthropic_adapter):
+        """Caller kwargs win, then clamp against the conservative unknown-model window."""
         # Arrange
         route = respx.post(ANTHROPIC_URL).mock(
             return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
@@ -427,7 +427,7 @@ class TestSendRequestFormat:
 
         # Assert
         request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
-        assert request_body["max_tokens"] == 8192  # overridden
+        assert 4096 < request_body["max_tokens"] < 8192
 
     @respx.mock
     @pytest.mark.asyncio
@@ -921,7 +921,7 @@ class TestSendRequestFormat:
         request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["thinking"] == {"type": "adaptive", "display": "summarized"}
         assert "temperature" not in request_body
-        assert request_body["max_tokens"] == 8192
+        assert 0 < request_body["max_tokens"] < 8192
 
     @respx.mock
     @pytest.mark.asyncio
@@ -1116,6 +1116,36 @@ class TestMaxTokensResolution:
 
         request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["max_tokens"] == 1234
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_context_clamp_also_bounds_reasoning_budget(self):
+        """A context-clamped output allowance remains the reasoning budget's hard bound."""
+        route = respx.post(MINIMAL_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        adapter = AnthropicAdapter(
+            NO_DEFAULTS_CONFIG,
+            API_KEY,
+            model_lookup=lambda model_id: _anthropic_control_model(
+                model_id,
+                control="budget",
+                context_window=10_000,
+                max_output_tokens=10_000,
+            ),
+        )
+        messages = [{"role": "user", "content": "x" * 8_000}]
+
+        await adapter.send(
+            messages, model_id="claude-context-equals-output", thinking_effort="high"
+        )
+
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
+        assert 0 < request_body["max_tokens"] < 10_000
+        assert request_body["thinking"] == {
+            "type": "enabled",
+            "budget_tokens": request_body["max_tokens"] - 1,
+        }
 
     @respx.mock
     @pytest.mark.asyncio

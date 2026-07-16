@@ -778,3 +778,26 @@ def test_main_exits_with_run_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
         cli_main.main(["server", "status"])
 
     assert exc_info.value.code == 7
+
+
+def test_configure_console_output_replaces_legacy_windows_encoding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class LegacyStream:
+        def __init__(self) -> None:
+            self.encoding = "cp1252"
+            self.errors = "strict"
+
+        def reconfigure(self, *, encoding: str, errors: str) -> None:
+            self.encoding = encoding
+            self.errors = errors
+
+    stdout = LegacyStream()
+    stderr = LegacyStream()
+    monkeypatch.setattr(cli_main.sys, "stdout", stdout)
+    monkeypatch.setattr(cli_main.sys, "stderr", stderr)
+
+    cli_main._configure_console_output()
+
+    assert (stdout.encoding, stdout.errors) == ("utf-8", "backslashreplace")
+    assert (stderr.encoding, stderr.errors) == ("utf-8", "backslashreplace")
