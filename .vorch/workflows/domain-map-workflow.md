@@ -2,14 +2,14 @@
 
 Use this workflow when creating, auditing, or updating `.vorch/domain-maps/<domain>.md`.
 
-Domain maps are factual working notes for agents. They are not architecture documentation, not generated API reference, and not a line-count contest.
+Domain maps are factual working notes for agents. They are the always-read routing and safety layer for a domain: they provide the context needed across work in that domain and point to task-gated depth. They are not architecture documentation, not generated API reference, not the container for every verified fact about the domain, and not a line-count contest.
 
 A good domain map is:
 - Short enough to stay readable
 - Factual enough to trust
 - Complete enough to keep agents from touching the wrong layer
 
-Shorter is useful only when it removes noise. Do not remove high-signal behavior, contracts, invariants, gotchas, decision rules, or source-of-truth pointers just because they duplicate code or may change later. If behavior changes, update the map with the behavior.
+Shorter is useful only when it removes noise. Do not lose high-signal behavior, contracts, invariants, gotchas, decision rules, or source-of-truth pointers merely to shorten a file. Preserving signal does not mean keeping it in the root map: keep always-relevant context there, move task-gated depth to a supplementary file, and replace repeated explanations with a precise pointer to their canonical documented owner when repetition adds no decision value. Source duplication alone is not a reason to remove decision-relevant semantics. If behavior changes, update its canonical documented home.
 
 ## Ownership
 
@@ -27,15 +27,17 @@ Before domain-map work:
 
 ## What Belongs In A Domain Map
 
-Keep information that helps agents choose the right file, layer, abstraction, or test:
+Keep information that helps agents choose the right file, layer, abstraction, or test across work in the domain:
 - Domain responsibility and boundary: what this domain owns and what it does not own
 - Cross-domain touchpoints: which other domains depend on it or feed it
-- Contracts other code relies on: public functions, events, API shapes, storage formats, message payloads, return shapes
+- Cross-task contracts other code relies on and agents need to recognize the correct boundary: public functions, events, API shapes, storage formats, message payloads, return shapes
 - Invariants: rules that must stay true, such as "only one active run per session"
 - Decision rules: "fix this here, not there" guidance
 - Domain-specific conventions beyond `AGENTS.md`
 - Constraints and gotchas: non-obvious behavior, fragile areas, previous failure modes, security or performance traps
 - Source-of-truth pointers when they help agents verify or extend behavior quickly
+
+These are eligible kinds of map content, not a requirement to place every instance in the root map. A contract can be important and still be task-gated; exact feature payloads, state transitions, and operational sequences belong in a supplementary file when agents working on other features in the domain do not need them.
 
 ## What To Cut
 
@@ -47,7 +49,7 @@ Cut information that slows agents down without making them safer:
 - Architecture prose that does not affect how an agent should work in the domain
 - Sections that do not apply
 
-Do not cut important behavior, field semantics, output contracts, or gotchas merely because they duplicate code. Short but wrong is worse than long.
+Do not discard important behavior, field semantics, output contracts, or gotchas merely because they duplicate code. Move task-gated signal to a supplementary file, and replace cross-map repetition with a pointer to the canonical owner. Short but wrong is worse than long.
 
 ## Domain Terms (the `## Terms` section)
 
@@ -73,10 +75,10 @@ domain-maps/
 ```
 
 **What to split out — decide by relevance per task, not by size:**
-- **Keep in the map:** what an agent needs to safely touch *anything* in the domain — boundaries, contracts, invariants, decision rules, gotchas.
-- **Split into a file:** *task-gated* material — step-by-step procedures ("how to add a provider"), deep references (exhaustive endpoint catalogs, probing recipes) — needed only when doing that specific task.
+- **Keep in the map:** what an agent needs to safely touch *anything* in the domain — boundaries, cross-task contracts, invariants, decision rules, gotchas.
+- **Split into a file:** *task-gated* material — feature-specific behavior and contracts, exact payload or state-transition detail, recovery matrices, step-by-step procedures ("how to add a provider"), and deep references (exhaustive endpoint catalogs, probing recipes) — needed only for that feature or task family.
 
-The test: *does an agent need this to work safely in the domain at all, or only for this one task?* Always → map. One task → supplementary file. A long map is a prompt to look for task-gated content to extract — never split content that is always needed just to shorten the file; that only forces an extra read.
+The test: *would an agent working on a different feature in this domain still need this to choose the correct owner/layer or avoid violating a domain-wide invariant?* Yes → map. No → supplementary file. Importance does not decide placement: a critical task-specific recovery contract still belongs in its task-gated reference. A long map is a prompt to look for task-gated content to extract — never split content that is always needed just to shorten the file; that only forces an extra read.
 
 **Linking.** The map carries a small index near the end. Each entry is a *trigger*, not a title — it tells an agent when to pull the file without opening it:
 
@@ -121,9 +123,11 @@ Use when a new domain emerges or an existing domain has no map.
 Use when implementation changes a domain, a Builder/Reviewer reports project-doc impact, a domain boundary changes, or an existing map is stale, noisy, misleading, incomplete, or large enough that task-gated content should move to supplementary files.
 
 For routine maintenance during implementation:
-1. Make the narrow factual update needed by the completed work.
-2. Base the change on Builder/Reviewer output, explorer summaries, source/test evidence, or explicit user decisions.
-3. Update the Domain Maps index if a map was created, renamed, split, or removed.
+1. Decide placement before writing: apply the different-feature test from References & Supplementary Files. Always-relevant context updates the map; task-gated context updates a supplementary file.
+2. Update one canonical documented home. When a supplementary file is created or its task scope changes, add or sharpen its trigger in the map's References index.
+3. Make the narrow factual update needed by the completed work.
+4. Base the change on Builder/Reviewer output, explorer summaries, source/test evidence, or explicit user decisions.
+5. Update the Domain Maps index if a map was created, renamed, split, or removed. Supplementary files never enter that index.
 
 For dedicated map cleanup or audit:
 1. Read the current map and identify what each section is trying to help agents do.
@@ -151,11 +155,11 @@ Use this as a starting point. Remove every section that does not apply.
 
 ## Data Model
 
-[Only include if this domain owns entities or persisted data. Name key entities, shapes, important fields, relationships, and invariants that other domains depend on.]
+[Only include if this domain owns entities or persisted data. Name the key entities, shapes, relationships, and invariants agents need across work in the domain. Move feature-specific fields and detailed schema inventories to a task-gated reference.]
 
 ## Interfaces
 
-[Contracts other parts of the system depend on: exported functions/classes/hooks, API endpoints, event shapes, message formats, storage formats, return shapes. Focus on what callers need to know.]
+[Cross-task contracts other parts of the system depend on: exported functions/classes/hooks, API boundaries, event families, message or storage formats, and return-shape invariants. Focus on what agents need to find the correct owner and preserve domain-wide behavior; move endpoint-, event-, and payload-level detail used only by one feature or task family to a task-gated reference.]
 
 ## Conventions
 
