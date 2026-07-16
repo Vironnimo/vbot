@@ -734,6 +734,29 @@ async def test_timeout_kills_process(
 
 
 @pytest.mark.asyncio
+async def test_timeout_remains_active_after_foreground_yields_to_background(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    context = make_context(tmp_path)
+
+    result = await bash_handler(
+        context,
+        {"command": "import time; time.sleep(30)", "timeout": 0.1, "yield_after": 0.01},
+        manager,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "running"
+    session_id = result["data"]["session_id"]
+    poll_result = await manager.poll(session_id, AGENT_ID, timeout_ms=2000)
+
+    assert poll_result["status"] == "killed"
+
+
+@pytest.mark.asyncio
 async def test_natural_completion_at_deadline_not_reported_as_timeout(
     manager: ProcessManager,
     tmp_path: Path,
