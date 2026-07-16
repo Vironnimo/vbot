@@ -10,6 +10,7 @@ from typing import Any
 from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     ASSISTANT_OUTPUT_EVENT,
+    COMPACTION_COMPLETED_EVENT,
     ERROR_MESSAGE_PERSISTED_EVENT,
     MODEL_FALLBACK_ACTIVATED_EVENT,
     MODEL_STEP_USAGE_EVENT,
@@ -205,6 +206,8 @@ def _server_event_from_run_event(event: RunEvent) -> JsonObject:
             payload["continuation"] = remove_opaque_provider_metadata(event.payload["continuation"])
     if event.type == RUN_COMPLETED_EVENT and "usage" in event.payload:
         payload["usage"] = remove_opaque_provider_metadata(event.payload["usage"])
+    if event.type == RUN_FAILED_EVENT and "error" in event.payload:
+        payload["error"] = remove_opaque_provider_metadata(event.payload["error"])
     return {"type": SERVER_EVENT_TYPES.get(event.type, RUN_OUTPUT_SERVER_EVENT), "payload": payload}
 
 
@@ -215,6 +218,7 @@ RUN_OUTPUT_EVENT_TYPES = {
     TOOL_CALL_RESULT_EVENT,
     SUBAGENT_SESSION_STARTED_EVENT,
     ASSISTANT_OUTPUT_EVENT,
+    COMPACTION_COMPLETED_EVENT,
     MODEL_FALLBACK_ACTIVATED_EVENT,
     MODEL_STEP_USAGE_EVENT,
     ERROR_MESSAGE_PERSISTED_EVENT,
@@ -235,6 +239,7 @@ SERVER_EVENT_TYPES = {
     TOOL_CALL_RESULT_EVENT: RUN_OUTPUT_SERVER_EVENT,
     SUBAGENT_SESSION_STARTED_EVENT: RUN_OUTPUT_SERVER_EVENT,
     ASSISTANT_OUTPUT_EVENT: RUN_OUTPUT_SERVER_EVENT,
+    COMPACTION_COMPLETED_EVENT: RUN_OUTPUT_SERVER_EVENT,
     MODEL_FALLBACK_ACTIVATED_EVENT: RUN_OUTPUT_SERVER_EVENT,
     MODEL_STEP_USAGE_EVENT: RUN_OUTPUT_SERVER_EVENT,
     ERROR_MESSAGE_PERSISTED_EVENT: RUN_OUTPUT_SERVER_EVENT,

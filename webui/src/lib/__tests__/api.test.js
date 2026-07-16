@@ -889,6 +889,7 @@ describe('subscribeRunEvents()', () => {
     expect(RUN_EVENT_TYPES).toContain('error_message_persisted');
     expect(RUN_EVENT_TYPES).toContain('compaction_completed');
     expect(RUN_EVENT_TYPES).toContain('subagent_session_started');
+    expect(RUN_EVENT_TYPES).toContain('model_step_usage');
   });
 
   it('subscribes to named SSE run events and closes on terminal events', () => {
@@ -990,6 +991,35 @@ describe('subscribeRunEvents()', () => {
             session_id: 'child-session',
             status: 'running',
           },
+        },
+      },
+      rawEvent: expect.any(Object),
+    });
+  });
+
+  it('delivers model-step usage events from the named SSE stream', () => {
+    const onEvent = vi.fn();
+    const connection = subscribeRunEvents(
+      '/api/runs/run-usage/events',
+      { onEvent },
+      { EventSource: MockEventSource },
+    );
+
+    connection.source.emit('model_step_usage', {
+      data: JSON.stringify({
+        payload: {
+          usage: { input_tokens: 12, output_tokens: 3 },
+          session_usage: { measured_turns: 1, input_tokens: 12 },
+        },
+      }),
+    });
+
+    expect(onEvent).toHaveBeenCalledWith({
+      type: 'model_step_usage',
+      data: {
+        payload: {
+          usage: { input_tokens: 12, output_tokens: 3 },
+          session_usage: { measured_turns: 1, input_tokens: 12 },
         },
       },
       rawEvent: expect.any(Object),

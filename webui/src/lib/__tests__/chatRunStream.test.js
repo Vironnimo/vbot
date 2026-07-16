@@ -198,6 +198,77 @@ describe('createChatRunStream().applyConnectionSnapshot()', () => {
     expect(sessionState.status).toBe(CHAT_STATUS_IDLE);
     expect(sessionState.currentRun).toBeNull();
   });
+
+  it('clears a locally running Run that is absent from the authoritative reconnect snapshot', () => {
+    const subscriptions = [];
+    const subscribeRunEvents = vi.fn(() => {
+      const subscription = { close: vi.fn() };
+      subscriptions.push(subscription);
+      return subscription;
+    });
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: DISPLAYED_AGENT_ID,
+      displayedSessionId: DISPLAYED_SESSION_ID,
+      subscribeRunEvents,
+    });
+    const sessionState = ensureSessionState(
+      chatState,
+      DISPLAYED_AGENT_ID,
+      DISPLAYED_SESSION_ID,
+    );
+
+    harness.stream.applyConnectionSnapshot({
+      type: 'connection_ready',
+      active_runs: [
+        {
+          run_id: 'run-before-restart',
+          agent_id: DISPLAYED_AGENT_ID,
+          session_id: DISPLAYED_SESSION_ID,
+          status: 'running',
+          sse_url: '/api/runs/run-before-restart/events',
+        },
+      ],
+    });
+    expect(sessionState.status).toBe(CHAT_STATUS_RUNNING);
+
+    harness.stream.applyConnectionSnapshot({
+      type: 'connection_ready',
+      active_runs: [],
+    });
+
+    expect(sessionState.status).toBe(CHAT_STATUS_IDLE);
+    expect(sessionState.currentRun).toBeNull();
+    expect(subscriptions[0].close).toHaveBeenCalledOnce();
+  });
+
+  it('preserves the server failure message when WebSocket is the terminal-event backstop', () => {
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: DISPLAYED_AGENT_ID,
+      displayedSessionId: DISPLAYED_SESSION_ID,
+    });
+
+    harness.stream.handleServerEvents({
+      type: 'run_failed',
+      payload: {
+        run_id: 'run-failed-1',
+        agent_id: DISPLAYED_AGENT_ID,
+        session_id: DISPLAYED_SESSION_ID,
+        run_event_type: 'run_failed',
+        run_event_sequence: 2,
+        status: 'failed',
+        error: 'Provider request failed',
+      },
+    });
+
+    const sessionState = ensureSessionState(
+      chatState,
+      DISPLAYED_AGENT_ID,
+      DISPLAYED_SESSION_ID,
+    );
+    expect(sessionState.error).toBe('Provider request failed');
+  });
 });
 
 describe('createChatRunStream() SSE reconnect budget (regression for B2)', () => {
