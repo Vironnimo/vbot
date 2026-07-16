@@ -25,7 +25,14 @@ from core.channels.adapter import (
 from core.channels.channels import ChannelConfig
 from core.channels.engine import ChannelConversationEngine
 from core.chat import MessageSender, ReplySurface
-from core.chat.commands import CommandAction, CommandHandled, NotACommand
+from core.chat.commands import (
+    CommandFeedback,
+    CommandNavigation,
+    CommandOutcome,
+    CommandRun,
+    CommandUnavailability,
+    PreparedCommand,
+)
 from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
 from core.extensions.interactions import InteractionButton, InteractionEvent
 from core.runs import ASSISTANT_OUTPUT_EVENT, ChatRunManager, Run, WaitingWorkAdmission
@@ -137,28 +144,82 @@ def make_conversation(
     )
 
 
-def make_command_dispatcher(*, result: object | None = None) -> SimpleNamespace:
-    dispatch_result = NotACommand() if result is None else result
+def command_outcome(
+    command: str,
+    text: str,
+    *,
+    kind: str = "notice",
+) -> CommandOutcome:
+    return CommandOutcome(
+        command=command,
+        feedback=CommandFeedback(kind=cast(Any, kind), text=text),
+    )
+
+
+def make_command_dispatcher(
+    *,
+    result: CommandOutcome | None = None,
+    argument: str | None = None,
+    execution_mode: str | None = None,
+    unavailable: CommandUnavailability | None = None,
+) -> SimpleNamespace:
+    prepared = (
+        PreparedCommand(
+            name=result.command,
+            argument=argument,
+            execution_mode=cast(
+                Any,
+                execution_mode
+                or ("immediate" if result.command in {"help", "status", "stop"} else "serialized"),
+            ),
+        )
+        if result is not None
+        else None
+    )
     return SimpleNamespace(
-        dispatch=Mock(return_value=dispatch_result),
-        # Mirrors the real dispatcher closely enough for engine tests: slash-prefixed
-        # text counts as a recognized command.
-        recognizes=Mock(side_effect=lambda text: text.strip().startswith("/")),
+        prepare=Mock(side_effect=lambda text: prepared if text.strip().startswith("/") else None),
+        unavailability=Mock(return_value=unavailable),
+        execute=AsyncMock(return_value=result),
     )
 
 
 def make_new_only_dispatcher() -> SimpleNamespace:
-    """Dispatcher mapping /new to the new_session action and other text to a run."""
+    """Dispatcher whose core execution creates the preferred `/new` Session."""
 
-    def dispatch_for(_agent_id: str, _session_id: str, text: str) -> object:
-        if text.strip() == "/new":
-            return CommandAction(name="new_session")
-        return NotACommand()
+    dispatcher = SimpleNamespace(chat_sessions=None)
 
-    return SimpleNamespace(
-        dispatch=Mock(side_effect=dispatch_for),
-        recognizes=Mock(side_effect=lambda text: text.strip().startswith("/")),
-    )
+    def prepare(text: str) -> PreparedCommand | None:
+        if text.strip() != "/new":
+            return None
+        return PreparedCommand(
+            name="new",
+            argument=None,
+            execution_mode="serialized",
+            accepts_preferred_session_id=True,
+        )
+
+    async def execute(_prepared: PreparedCommand, context: Any) -> CommandOutcome:
+        if dispatcher.chat_sessions is None:
+            raise AssertionError("new-only dispatcher was not bound to ChatSessionManager")
+        session = dispatcher.chat_sessions.create(
+            context.agent_id,
+            session_id=context.preferred_new_session_id,
+        )
+        return CommandOutcome(
+            command="new",
+            feedback=CommandFeedback(kind="notice", text=f"New session started: {session.id}"),
+            facts={"session_id": session.id},
+            navigation=CommandNavigation(
+                kind="continue_in_session",
+                agent_id=context.agent_id,
+                session_id=session.id,
+            ),
+        )
+
+    dispatcher.prepare = Mock(side_effect=prepare)
+    dispatcher.unavailability = Mock(return_value=None)
+    dispatcher.execute = AsyncMock(side_effect=execute)
+    return dispatcher
 
 
 def make_completed_run(*, output_text: str, session_id: str = SESSION_ID) -> Run:
@@ -238,6 +299,9 @@ def make_engine(
         release_waiting_work=release_waiting_work,
     )
     resolved_transport = transport or FakeTransport()
+    resolved_dispatcher = command_dispatcher or make_command_dispatcher()
+    if hasattr(resolved_dispatcher, "chat_sessions"):
+        resolved_dispatcher.chat_sessions = chat_sessions
     engine = ChannelConversationEngine(
         make_config(
             dm_scope=dm_scope,
@@ -249,7 +313,7 @@ def make_engine(
         cast(Any, trigger_service),
         cast(Any, chat_sessions),
         cast(Any, resolved_transport),
-        command_dispatcher=cast(Any, command_dispatcher or make_command_dispatcher()),
+        command_dispatcher=cast(Any, resolved_dispatcher),
     )
     return engine, chat_sessions, trigger_mock, resolved_transport
 
@@ -289,9 +353,12 @@ __all__ = [
     "ChannelConversationEngine",
     "MessageSender",
     "ReplySurface",
-    "CommandAction",
-    "CommandHandled",
-    "NotACommand",
+    "CommandFeedback",
+    "CommandNavigation",
+    "CommandOutcome",
+    "CommandRun",
+    "CommandUnavailability",
+    "PreparedCommand",
     "ContentBlock",
     "MediaBlock",
     "TextBlock",
@@ -308,6 +375,7 @@ __all__ = [
     "make_config",
     "make_conversation",
     "make_command_dispatcher",
+    "command_outcome",
     "make_new_only_dispatcher",
     "make_completed_run",
     "make_empty_completed_run",

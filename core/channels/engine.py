@@ -1,8 +1,8 @@
 """Platform-neutral conversation engine for channel adapters.
 
 The engine owns everything about a channel conversation that is not specific to one
-messaging platform: per-conversation queueing and worker serialization, slash-command
-dispatch handling, run trigger/relay, and session routing/metadata. A `ChannelAdapter`
+messaging platform: per-conversation queueing and worker serialization, neutral command
+projection, run trigger/relay, and session routing/metadata. A `ChannelAdapter`
 composes one engine in its ``__init__`` and delegates to it; raw platform messages flow
 through the engine as opaque values and are converted to canonical content blocks by the
 injected `ConversationTransport`.
@@ -28,7 +28,13 @@ from core.channels.adapter import (
     ReplyPlanFacts,
     RouteFacts,
 )
-from core.chat.commands import CommandAction, CommandDispatcher, CommandHandled
+from core.chat.commands import (
+    CommandDispatcher,
+    CommandExecutionContext,
+    CommandOutcome,
+    CommandUnavailability,
+    PreparedCommand,
+)
 from core.chat.content_blocks import ContentBlock
 from core.chat.errors import ChatSessionError
 from core.chat.messages import MessageSender, ReplySurface
@@ -71,8 +77,6 @@ ACTIVE_SESSION_METADATA_KEY = "active_session_id"
 _NEW_SESSION_STARTED_REPLY = (
     "Started a new session. Your previous conversation has been saved and is still available."
 )
-# Mirrors the WebUI /new refusal so the behavior reads the same across accessors.
-_NEW_SESSION_BUSY_REPLY = "A new session can be started after the current run finishes."
 
 
 class ConversationTransport(Protocol):
@@ -122,9 +126,9 @@ class _QueuedInboundMessage:
 
 
 @dataclass(slots=True, frozen=True)
-class _QueuedCommandAction:
+class _QueuedPreparedCommand:
     conversation: ConversationFacts
-    action: CommandAction
+    command: PreparedCommand
     admission: WaitingWorkAdmission | None = None
 
 
@@ -153,7 +157,7 @@ class _QueuedInternalPrompt:
 
 _QueuedWork = (
     _QueuedInboundMessage
-    | _QueuedCommandAction
+    | _QueuedPreparedCommand
     | _QueuedInboundMedia
     | _QueuedObservedMessage
     | _QueuedInternalPrompt
@@ -193,13 +197,12 @@ class ChannelConversationEngine:
         conversation: ConversationFacts,
         message_text: str,
     ) -> None:
-        """Gate, eagerly command-dispatch, and enqueue one inbound text message."""
-        if self._command_dispatcher.recognizes(message_text):
+        """Gate one inbound text and execute or enqueue a prepared command/message."""
+        prepared_command = self._command_dispatcher.prepare(message_text)
+        if prepared_command is not None:
             # Commands are inherently addressed; group commands are gated by sender
-            # authorization instead of response mode. The check must run before
-            # dispatch() because dispatch executes handler side effects (e.g. /stop
-            # cancels a Run). Commands dispatch eagerly against the session that is
-            # active on arrival, so /stop can cancel a Run a queued item waits on.
+            # authorization instead of response mode. Authorization precedes both
+            # availability projection and every command side effect.
             if conversation.kind == "group" and not self._command_sender_authorized(conversation):
                 _LOGGER.info(
                     "Channel command denied for non-owner (channel=%s chat=%s user=%s)",
@@ -208,16 +211,32 @@ class ChannelConversationEngine:
                     conversation.user_id,
                 )
                 return
-            route, reply_plan = self.prepare_inbound_route(conversation)
-            command_result = self._command_dispatcher.dispatch(
-                route.agent_id,
-                route.session_id,
-                message_text,
+            reply_plan = self._reply_plan_for(conversation)
+            unavailable = self._command_dispatcher.unavailability(
+                prepared_command, self._reply_surface()
             )
-            if await self._handle_dispatch_result(
-                command_result, conversation, route, reply_plan, defer_actions=True
-            ):
+            if unavailable is not None:
+                await self._send_command_unavailability(reply_plan, unavailable)
                 return
+            if prepared_command.execution_mode == "immediate":
+                route, reply_plan = self.prepare_inbound_route(conversation)
+                await self._execute_prepared_command(
+                    prepared_command,
+                    conversation,
+                    route,
+                    reply_plan,
+                    self._derive_session_id(conversation),
+                )
+                return
+            if not self._enqueue_chat_work(
+                conversation.chat_id,
+                _QueuedPreparedCommand(
+                    conversation=conversation,
+                    command=prepared_command,
+                ),
+            ):
+                await self._reject_overflow(conversation)
+            return
 
         if not self.should_respond(conversation, (message_text,)):
             if self._config.observe_unaddressed and conversation.kind == "group":
@@ -644,14 +663,14 @@ class ChannelConversationEngine:
         if isinstance(queued, _QueuedObservedMessage):
             await self._process_queued_observed_message(queued)
             return
-        if isinstance(queued, _QueuedCommandAction):
-            # Deferred actions re-resolve at processing time like every other queued
-            # item: a /new that ran ahead of this action in the queue has moved the
-            # pointer by now, and e.g. /compact must act on the now-active session.
+        if isinstance(queued, _QueuedPreparedCommand):
+            # Serialized commands re-resolve at processing time like every other
+            # queued item: an earlier navigation may have changed the active Session.
             self._trigger_service.release_waiting_work(queued.admission)
             route, reply_plan = self.prepare_inbound_route(queued.conversation)
-            await self._handle_command_action(
-                queued.action,
+            await self._execute_prepared_command(
+                queued.command,
+                queued.conversation,
                 route,
                 reply_plan,
                 self._derive_session_id(queued.conversation),
@@ -687,8 +706,8 @@ class ChannelConversationEngine:
             session.add_note(queued.note)
 
     async def _process_queued_message(self, queued: _QueuedInboundMessage) -> None:
-        # Commands were already dispatched eagerly on arrival; only plain messages
-        # reach this queue, so processing goes straight to trigger/relay.
+        # Prepared commands have their own queued-work type; only plain messages
+        # reach this path, so processing goes straight to trigger/relay.
         route, reply_plan = self.prepare_inbound_route(queued.conversation)
         await self._trigger_and_relay(
             route,
@@ -874,144 +893,93 @@ class ChannelConversationEngine:
             self._busy_reply_times.popitem(last=False)
         return True
 
-    # -- Command actions --------------------------------------------------------------
+    # -- Built-in Commands -----------------------------------------------------------
 
-    async def _handle_dispatch_result(
+    async def _send_command_unavailability(
+        self, reply_plan: ReplyPlanFacts, unavailable: CommandUnavailability
+    ) -> None:
+        await self._send_reply(
+            reply_plan,
+            f"The {unavailable.command} command is not available through "
+            f"{self._transport.platform_display_name}.",
+        )
+
+    async def _execute_prepared_command(
         self,
-        dispatch_result: object,
+        prepared: PreparedCommand,
         conversation: ConversationFacts,
         route: RouteFacts,
         reply_plan: ReplyPlanFacts,
-        *,
-        defer_actions: bool,
-    ) -> bool:
-        if isinstance(dispatch_result, CommandHandled):
-            reply = dispatch_result.reply
-            if isinstance(reply, str) and reply.strip():
-                await self._send_reply(reply_plan, reply)
-            return True
-
-        if isinstance(dispatch_result, CommandAction):
-            if defer_actions:
-                # Command actions can run long (compact = model call, continue = full Run
-                # relay). The adapter feeds updates sequentially, so they must not be
-                # awaited in the update handler; the per-conversation worker owns slow work.
-                if not self._enqueue_chat_work(
-                    conversation.chat_id,
-                    _QueuedCommandAction(
-                        conversation=conversation,
-                        action=dispatch_result,
-                    ),
+        conversation_key: str,
+    ) -> None:
+        preferred_session_id = (
+            self._preferred_session_id(conversation_key)
+            if prepared.accepts_preferred_session_id
+            else None
+        )
+        context = CommandExecutionContext(
+            agent_id=route.agent_id,
+            session_id=route.session_id,
+            project_id=None,
+            reply_surface=self._reply_surface(),
+            preferred_new_session_id=preferred_session_id,
+        )
+        try:
+            if prepared.execution_mode == "serialized":
+                async with self._transport.activity_indicator(
+                    reply_plan.platform_target, reply_plan.thread_id
                 ):
-                    await self._reject_overflow(conversation)
+                    outcome = await self._command_dispatcher.execute(prepared, context)
             else:
-                await self._handle_command_action(
-                    dispatch_result, route, reply_plan, self._derive_session_id(conversation)
-                )
-            return True
+                outcome = await self._command_dispatcher.execute(prepared, context)
+            await self._project_command_outcome(
+                outcome,
+                conversation,
+                reply_plan,
+                conversation_key,
+            )
+        except Exception as error:
+            self._log_command_failure(prepared.name, route, reply_plan, error)
+            await self._send_reply(reply_plan, _FAILED_REPLY)
 
-        return False
-
-    async def _handle_command_action(
+    async def _project_command_outcome(
         self,
-        command_action: CommandAction,
-        route: RouteFacts,
+        outcome: CommandOutcome,
+        conversation: ConversationFacts,
         reply_plan: ReplyPlanFacts,
         conversation_key: str,
     ) -> None:
-        platform = self._transport.platform_display_name
-        match command_action.name:
-            case "compact":
-                try:
-                    async with self._transport.activity_indicator(
-                        reply_plan.platform_target, reply_plan.thread_id
-                    ):
-                        reply = await self._trigger_service.compact_session(
-                            route.agent_id,
-                            route.session_id,
-                            command_action.argument,
-                        )
-                except Exception as error:
-                    self._log_command_action_failure(command_action.name, route, reply_plan, error)
-                    reply = _FAILED_REPLY
-                await self._send_reply(reply_plan, reply)
-            case "new_session":
-                await self._start_new_session(route, reply_plan, conversation_key)
-            case "continue":
-                try:
-                    run = await self._trigger_service.continue_run(
-                        route.agent_id,
-                        route.session_id,
-                        reply_surface=self._reply_surface(),
-                    )
-                except Exception as error:
-                    self._log_command_action_failure(command_action.name, route, reply_plan, error)
-                    await self._send_reply(reply_plan, _FAILED_REPLY)
-                    return
-                await self._relay_run_events(run, reply_plan)
-            case _:
-                # Recognized commands without a channel implementation (e.g. /handoff)
-                # must reply instead of silently swallowing the message.
-                await self._send_reply(
-                    reply_plan,
-                    f"This command is not available from {platform} channels yet.",
+        continued = False
+        navigation = outcome.navigation
+        if navigation is not None and navigation.kind == "continue_in_session":
+            if navigation.agent_id != self._config.agent_id or navigation.project_id is not None:
+                raise ValueError(
+                    "Channel continuation navigation must stay on its configured Agent"
                 )
+            route = RouteFacts(agent_id=navigation.agent_id, session_id=navigation.session_id)
+            self._update_session_metadata(
+                route,
+                conversation,
+                reply_plan,
+                track_participant=False,
+            )
+            self._set_active_session_pointer(
+                navigation.agent_id,
+                conversation_key,
+                navigation.session_id,
+            )
+            await self._send_reply(reply_plan, _NEW_SESSION_STARTED_REPLY)
+            continued = True
 
-    async def _start_new_session(
-        self,
-        route: RouteFacts,
-        reply_plan: ReplyPlanFacts,
-        conversation_key: str,
-    ) -> None:
-        """Start a fresh channel session and point this chat's anchor at it.
+        if not continued and outcome.feedback is not None and outcome.feedback.text.strip():
+            await self._send_reply(reply_plan, outcome.feedback.text)
+        for command_run in outcome.runs:
+            await self._relay_run_events(command_run.run, reply_plan)
 
-        The previous session is left untouched (saved, still searchable); only the
-        anchor's ``active_session_id`` pointer moves, so all later traffic for this
-        chat routes into the new session. Mirrors the WebUI ``/new``, including the
-        refusal while a run is active.
-        """
-        if self._trigger_service.has_active_run(route.agent_id, route.session_id):
-            await self._send_reply(reply_plan, _NEW_SESSION_BUSY_REPLY)
-            return
-
-        # conversation_key is the stable anchor; route.session_id is only the
-        # currently-active session (used for the run guard above).
-        new_session_id = self._create_fresh_channel_session(
-            route.agent_id, conversation_key, reply_plan
-        )
-        self._set_active_session_pointer(route.agent_id, conversation_key, new_session_id)
-        await self._send_reply(reply_plan, _NEW_SESSION_STARTED_REPLY)
-
-    def _create_fresh_channel_session(
-        self,
-        agent_id: str,
-        anchor: str,
-        reply_plan: ReplyPlanFacts,
-    ) -> str:
-        """Create and tag a brand-new channel session, returning its id.
-
-        The id is anchored to the conversation for readability/grouping in the
-        sessions list, falling back to a bare uuid when the anchored form would
-        exceed the session-id length contract. The fresh session gets base Channel
-        sidecar metadata (no participants), so it is recognizable immediately.
-        """
+    @staticmethod
+    def _preferred_session_id(anchor: str) -> str:
         candidate = f"{anchor}-{uuid4().hex}"
-        new_session_id = candidate if SESSION_ID_PATTERN.fullmatch(candidate) else uuid4().hex
-        self._chat_sessions.get_or_create(agent_id, new_session_id)
-        self._chat_sessions.set_metadata(
-            agent_id,
-            new_session_id,
-            {
-                "source_channel_id": self._config.id,
-                "platform": self._config.platform,
-                "platform_conv_id": reply_plan.platform_target,
-                "last_reply_target": {
-                    "channel_id": reply_plan.channel_id,
-                    "platform_target": reply_plan.platform_target,
-                },
-            },
-        )
-        return new_session_id
+        return candidate if SESSION_ID_PATTERN.fullmatch(candidate) else uuid4().hex
 
     def _reply_surface(self) -> ReplySurface:
         return ReplySurface.channel(
@@ -1036,17 +1004,16 @@ class ChannelConversationEngine:
         metadata[ACTIVE_SESSION_METADATA_KEY] = new_session_id
         self._chat_sessions.set_metadata(agent_id, anchor, metadata)
 
-    def _log_command_action_failure(
+    def _log_command_failure(
         self,
-        action_name: str,
+        command_name: str,
         route: RouteFacts,
         reply_plan: ReplyPlanFacts,
         error: Exception,
     ) -> None:
         _LOGGER.error(
-            "Channel command action failed (action=%s channel=%s agent=%s session=%s "
-            "target=%s): %s",
-            action_name,
+            "Channel command failed (command=%s channel=%s agent=%s session=%s target=%s): %s",
+            command_name,
             reply_plan.channel_id,
             route.agent_id,
             route.session_id,

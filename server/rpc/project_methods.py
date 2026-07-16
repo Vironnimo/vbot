@@ -60,7 +60,6 @@ from server.rpc.errors import (
 from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.runtime_access import _state_chat_runs
 from server.rpc.validation import (
-    _ensure_model_usable,
     _optional_bool,
     _optional_string,
     _reject_unsupported,
@@ -273,9 +272,9 @@ def _set_override(state: Any, params: JsonObject) -> JsonObject:
     project_id = _required_string(params, "project_id")
     agent_id = _required_string(params, "agent_id")
     field = _required_override_field(params)
-    value = _validate_override_value(state, field, params.get("value"))
 
     try:
+        value = _validate_override_value(state, field, params.get("value"))
         current_project = _projects(state).get(project_id)
         team = _agent_resolver(state).scan_project_report(current_project).team
         if agent_id not in {member.agent_id for member in team}:
@@ -342,7 +341,7 @@ def _validate_override_value(state: Any, field: str, value: Any) -> Any:
             raise RpcError(
                 RPC_ERROR_INVALID_REQUEST, "params.value must be a non-empty model string"
             )
-        _ensure_model_usable(state, value)
+        state.runtime.agent_resolver.require_model_configured(value)
         return value
     if field == "temperature":
         try:

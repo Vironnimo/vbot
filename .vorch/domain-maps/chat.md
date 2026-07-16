@@ -33,7 +33,7 @@ Exact role fields, request rendering, Content Blocks, Continuation state, events
 
 - `core/chat/messages.py` owns `ChatMessage`, `ToolCall`, `MessageSender`, `ReplySurface`, validation/round-trip, effective Compaction history, note embedding, reasoning replay shaping, and dangling Tool-call repair.
 - `core/chat/chat.py::ChatLoop` owns the Agentic Loop and exposes `send`, `start_run`, `queue_run`, `build_queue_update`, `continue_run`, Continuation summary/discard, and manual Compaction. `run_executor` is the seam passed to `ChatRunManager`; `child_loop` creates Sub-Agent loops with shared runtime services.
-- `core/chat/commands.py::CommandDispatcher` owns deterministic built-in slash-command recognition and pure command behavior. Server orchestration for action commands remains in `server/rpc/chat_methods.py`.
+- `core/chat/commands.py::CommandDispatcher` owns Built-in Commands end to end: catalog, recognition/parsing, scheduling policy, surface restrictions, domain guards, state changes, command-started Runs, and neutral outcomes. RPC and Channels supply addressing/`ReplySurface` and generically project feedback, navigation, Runs, and resource changes; command-specific behavior must not return to a transport. See `chat/commands.md`.
 - `core/chat/model_resolution.py` owns Model-string parsing, exact Connection selection, per-Model Connection allowlists, and Run-local fallback resolution.
 - `core/chat/continuation.py` owns the append-only Continuation journal, recovery fold, private reminder, public summary, and prompt budget. `core/chat/streaming.py` owns normalized delta accumulation, chunk timeout, and provider-agnostic stream-recovery decisions.
 - `core/chat/tool_dispatch.py` owns effective Tool dispatch, Extension Tool hooks, Tool lifecycle emission, Visiting detection, Skill activation, and `read_media` extraction. The Tool registry/result-envelope contracts live in `tools.md`; Extension dispatch semantics live in `extensions.md`.
@@ -69,4 +69,4 @@ Read these only when your task matches — not by default.
 - Changing canonical request history, notes, Skill activation/catalog stability, reasoning replay, Content Blocks, file mentions, attachment routing, or Tool-cycle repair → `chat/request-building.md`
 - Changing Run admission/execution, streaming recovery, cancellation, Continuation, Tool progression, Model/Connection resolution, fallback, or Compaction boundaries → `chat/run-execution.md`
 - Changing token normalization, estimation, persistence, whole-Session aggregation, Usage events, or the server-owned token projection → `chat/usage.md`
-- Changing built-in slash-command recognition, argument/output modes, a command's effects, payload, or server orchestration → `chat/commands.md`
+- Changing Built-in Command recognition, scheduling, effects, neutral outcomes, surface availability, or projection → `chat/commands.md`

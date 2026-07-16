@@ -16,7 +16,7 @@ The model chain is:
 per-Agent override → repository Agent → Project default → global default → error
 ```
 
-Each model tier must pass the same `ModelConfigurationChecker` before it can win. The checker validates the Provider, Model catalog entry, and an allowed usable Connection, including an explicitly pinned account suffix. A syntactically present but unusable model falls through to the next tier; if no usable model exists, resolution fails rather than constructing a broken Agent.
+Each model tier must pass the same `ModelConfigurationChecker` before it can win. The checker validates the Provider, Model catalog entry, and an allowed usable Connection, including an explicitly pinned account suffix. `is_configured` supplies the boolean fallback/scan decision; `require_configured` and `AgentResolver.require_model_configured` expose the same invariant as a raising mutation seam for Chat `/model` and Project Agent overrides. A forbidden pin names the rejected Connection and the Model's allowed Connections; other failures use the general unusable-Model diagnostic. A syntactically present but unusable Model falls through to the next tier; if no usable Model exists, resolution fails rather than constructing a broken Agent.
 
 Temperature and thinking effort use:
 

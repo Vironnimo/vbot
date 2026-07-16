@@ -15,7 +15,10 @@ from core.chat import (
     ChatMessage,
     ChatSessionManager,
     CommandDispatcher,
-    CommandHandled,
+    CommandExecutionContext,
+    CommandFeedback,
+    CommandOutcome,
+    PreparedCommand,
     ReplySurface,
 )
 from core.chat.content_blocks import TextBlock
@@ -70,21 +73,20 @@ class ContinueLoopStub:
         return self._run
 
 
-class CommandHandledDispatcher(CommandDispatcher):
+class CommandOutcomeDispatcher(CommandDispatcher):
     def __init__(self, reply: str) -> None:
         super().__init__(ChatRunManager())
         self._reply = reply
         self.calls: list[tuple[str, str, str]] = []
 
-    def dispatch(
-        self,
-        agent_id: str,
-        session_id: str,
-        message_text: str,
-        project_id: str | None = None,
-    ) -> CommandHandled:
-        self.calls.append((agent_id, session_id, message_text))
-        return CommandHandled(reply=self._reply)
+    async def execute(
+        self, prepared: PreparedCommand, context: CommandExecutionContext
+    ) -> CommandOutcome:
+        self.calls.append((context.agent_id, context.session_id, f"/{prepared.name}"))
+        return CommandOutcome(
+            command=prepared.name,
+            feedback=CommandFeedback(kind="notice", text=self._reply),
+        )
 
 
 class QueueManagerStub:
@@ -128,6 +130,42 @@ class QueueManagerStub:
             (agent_id, session_id, item_id, new_executor, new_display_content, project_id)
         )
         return self._update_result
+
+
+def test_transport_layers_do_not_own_command_workflows() -> None:
+    root = Path(__file__).parents[3]
+    chat_source = (root / "server" / "rpc" / "chat_methods.py").read_text(encoding="utf-8")
+    channel_source = (root / "core" / "channels" / "engine.py").read_text(encoding="utf-8")
+    combined = f"{chat_source}\n{channel_source}"
+
+    for forbidden in (
+        "Command" + "Action",
+        "Command" + "Handled",
+        "Dispatch" + "Result",
+        "_handle_command_" + "action",
+        "unsupported command " + "action",
+    ):
+        assert forbidden not in combined
+    for server_owned_workflow in (
+        "HANDOFF_FRAGMENT_NAME",
+        "LEARN_FRAGMENT_NAME",
+        "AGENT_TAKEOVER_NOTE",
+        "_build_handoff_prompt",
+        "_build_learn_prompt",
+        "_session_move_block_reason",
+    ):
+        assert server_owned_workflow not in chat_source
+    for command in (
+        "compact",
+        "handoff",
+        "learn",
+        "reflect",
+        "new",
+        "rename",
+        "model",
+        "continue",
+    ):
+        assert f'case "{command}"' not in combined
 
 
 def _make_queued_item(*, item_id: str, content: str, internal: bool = False) -> QueuedRunItem:
@@ -514,7 +552,7 @@ async def test_chat_commands_returns_combined_command_and_skill_items() -> None:
 @pytest.mark.asyncio
 async def test_chat_stream_slash_command_returns_handled_result_without_starting_run() -> None:
     streaming_chat_loop = SimpleNamespace(start_run=AsyncMock())
-    command_dispatcher = CommandHandledDispatcher(reply="Run cancelled.")
+    command_dispatcher = CommandOutcomeDispatcher(reply="Run cancelled.")
     state = SimpleNamespace(
         command_dispatcher=command_dispatcher,
         streaming_chat_loop=streaming_chat_loop,

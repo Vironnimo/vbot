@@ -6,16 +6,15 @@ from .engine_test_support import (
     CHANNEL_REPLY_SURFACE,
     SESSION_ID,
     AsyncMock,
-    CommandAction,
     Path,
     RouteFacts,
     drain,
     engine_module,
     logging,
-    make_command_dispatcher,
     make_completed_run,
     make_conversation,
     make_engine,
+    make_new_only_dispatcher,
     pytest,
 )
 
@@ -139,7 +138,7 @@ async def test_channel_without_new_routes_to_derived_anchor(tmp_path: Path) -> N
 
 @pytest.mark.asyncio
 async def test_ensure_channel_session_follows_pointer_after_new(tmp_path: Path) -> None:
-    command_dispatcher = make_command_dispatcher(result=CommandAction(name="new_session"))
+    command_dispatcher = make_new_only_dispatcher()
     engine, chat_sessions, _trigger, _transport = make_engine(
         tmp_path, command_dispatcher=command_dispatcher
     )

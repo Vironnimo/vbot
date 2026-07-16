@@ -22,9 +22,15 @@ from typing import Any, cast
 import pytest
 
 from core.automation.reflection import REFLECTION_COUNTERS_META_KEY, ReflectionService
-from core.chat import ChatMessage, CommandAction, ReplySurface
+from core.chat import (
+    ChatMessage,
+    CommandDispatcher,
+    CommandExecutionContext,
+    CommandOutcome,
+    ReplySurface,
+)
 from core.chat.content_blocks import FileMentionBlock, TextBlock
-from core.projects import AgentResolutionError, format_agent_address
+from core.projects import AgentResolutionError, ModelConfigurationError, format_agent_address
 from core.runs import ActiveRunError
 from core.sessions import SESSION_FORK_ALWAYS_STRIP_META_KEYS, SESSION_MOVE_STRIP_META_KEYS
 from core.tools.file_state import FileReadState
@@ -32,9 +38,6 @@ from server.events import ServerEventBus
 from server.rpc.chat_methods import (
     _chat_queue_remove,
     _chat_queue_update,
-    _handle_move_session_command,
-    _handle_rename_session_command,
-    _handle_set_model_command,
     _send_chat,
     _stream_chat,
 )
@@ -69,10 +72,47 @@ class _RecordingLoop:
 class _NoCommandDispatcher:
     """Treats every message as plain chat (no slash command recognized)."""
 
-    def dispatch(
-        self, agent_id: str, session_id: str, text: str, project_id: str | None = None
-    ) -> None:
+    def prepare(self, content: Any) -> None:
         return None
+
+
+def _core_dispatcher(state: SimpleNamespace) -> CommandDispatcher:
+    runtime = state.runtime
+    return CommandDispatcher(
+        state.chat_runs,
+        agent_resolver=getattr(runtime, "agent_resolver", None),
+        sessions=getattr(runtime, "chat_sessions", None),
+        models=getattr(runtime, "models", None),
+        projects=getattr(runtime, "projects", None),
+        agents=getattr(runtime, "agents", None),
+        trigger_service=getattr(runtime, "trigger_service", None),
+        reflection_service=getattr(runtime, "reflection", None),
+        storage=getattr(runtime, "storage", None),
+    )
+
+
+async def _execute_core_command(
+    state: SimpleNamespace,
+    message: str,
+    *,
+    agent_id: str = "builder",
+    session_id: str = "s1",
+    project_id: str | None = None,
+) -> CommandOutcome:
+    dispatcher = _core_dispatcher(state)
+    prepared = dispatcher.prepare(message)
+    assert prepared is not None
+    observed_changes = getattr(state, "_command_changes", None)
+    return await dispatcher.execute(
+        prepared,
+        CommandExecutionContext(
+            agent_id=agent_id,
+            session_id=session_id,
+            project_id=project_id,
+            reply_surface=ReplySurface.webui(),
+            on_change=observed_changes.append if observed_changes is not None else None,
+        ),
+    )
 
 
 def _make_state(loop: _RecordingLoop) -> SimpleNamespace:
@@ -252,9 +292,7 @@ def _make_handoff_state(loop: _HandoffLoop, resolver: _FakeResolver) -> SimpleNa
     chat_sessions = SimpleNamespace(create=create_session)
 
     async def trigger_run(agent_id: str, message: Any, **kwargs: Any) -> _FakeRun:
-        # Identity (no project) handoff-writing run path; records nothing the tests
-        # assert on, it only has to return a run whose ``wait`` yields handoff text.
-        loop.calls.append({"agent_id": agent_id, "project_id": None, "via": "trigger"})
+        loop.calls.append({"agent_id": agent_id, "message": message, **kwargs})
         return _FakeRun()
 
     runtime = SimpleNamespace(
@@ -269,21 +307,11 @@ def _make_handoff_state(loop: _HandoffLoop, resolver: _FakeResolver) -> SimpleNa
         streaming_chat_loop=loop,
         runtime=runtime,
         chat_runs=SimpleNamespace(active_run=lambda **k: None),
-        command_dispatcher=_HandoffDispatcher(),
         event_bus=SimpleNamespace(publish=lambda *a, **k: None),
     )
+    state.command_dispatcher = _core_dispatcher(state)
     state._created_sessions = created_sessions  # type: ignore[attr-defined]
     return state
-
-
-class _HandoffDispatcher:
-    def dispatch(
-        self, agent_id: str, session_id: str, text: str, project_id: str | None = None
-    ) -> CommandAction:
-        # Pass the slash text after ``/handoff`` through as the action argument,
-        # mirroring the real dispatcher's ``optional`` argument handling.
-        argument = text[len("/handoff") :].strip() or None
-        return CommandAction(name="handoff", argument=argument)
 
 
 @pytest.mark.asyncio
@@ -336,14 +364,6 @@ async def test_handoff_bare_target_stays_in_source_scope(
 # ---------------------------------------------------------------------------
 
 
-class _LearnDispatcher:
-    def dispatch(
-        self, agent_id: str, session_id: str, text: str, project_id: str | None = None
-    ) -> CommandAction:
-        argument = text[len("/learn") :].strip() or None
-        return CommandAction(name="learn", argument=argument)
-
-
 def _make_learn_state(
     captured: list[dict[str, Any]], *, workspace: str = "/home/agent", active: bool = False
 ) -> SimpleNamespace:
@@ -361,14 +381,15 @@ def _make_learn_state(
         storage=_fragment_storage(),
     )
     active_run = _FakeRun() if active else None
-    return SimpleNamespace(
+    state = SimpleNamespace(
         chat_loop=SimpleNamespace(),
         streaming_chat_loop=SimpleNamespace(),
         runtime=runtime,
         chat_runs=SimpleNamespace(active_run=lambda **k: active_run),
-        command_dispatcher=_LearnDispatcher(),
         event_bus=SimpleNamespace(publish=lambda *a, **k: None),
     )
+    state.command_dispatcher = _core_dispatcher(state)
+    return state
 
 
 @pytest.mark.asyncio
@@ -441,14 +462,6 @@ async def test_learn_refuses_config_agent_without_starting_run(
 # ---------------------------------------------------------------------------
 
 
-class _ReflectDispatcher:
-    def dispatch(
-        self, agent_id: str, session_id: str, text: str, project_id: str | None = None
-    ) -> CommandAction:
-        argument = text[len("/reflect") :].strip() or None
-        return CommandAction(name="reflect", argument=argument)
-
-
 def _make_reflect_state(
     captured: list[dict[str, Any]],
     forked: list[dict[str, Any]],
@@ -498,14 +511,15 @@ def _make_reflect_state(
     )
     runtime.reflection = ReflectionService(cast("Any", runtime))
     active_run = _FakeRun() if active else None
-    return SimpleNamespace(
+    state = SimpleNamespace(
         chat_loop=SimpleNamespace(start_run=start_run),
         streaming_chat_loop=SimpleNamespace(start_run=start_run),
         runtime=runtime,
         chat_runs=SimpleNamespace(active_run=lambda **k: active_run),
-        command_dispatcher=_ReflectDispatcher(),
         event_bus=SimpleNamespace(publish=lambda *a, **k: None),
     )
+    state.command_dispatcher = _core_dispatcher(state)
+    return state
 
 
 @pytest.mark.asyncio
@@ -638,13 +652,14 @@ class _RecordingProjects:
 
 
 class _ModelResolver:
-    """``is_model_configured`` stub: only the configured set is usable."""
+    """Model-validation stub: only the configured set is usable."""
 
     def __init__(self, configured: set[str]) -> None:
         self._configured = configured
 
-    def is_model_configured(self, model: str) -> bool:
-        return model in self._configured
+    def require_model_configured(self, model: str) -> None:
+        if model not in self._configured:
+            raise ModelConfigurationError(f"model is not configured: {model}")
 
 
 def _make_model_state(
@@ -656,47 +671,53 @@ def _make_model_state(
         projects=projects,
         models=models,
     )
-    return SimpleNamespace(runtime=runtime)
+    return SimpleNamespace(runtime=runtime, chat_runs=SimpleNamespace())
 
 
-def test_set_model_identity_updates_agent_model() -> None:
+@pytest.mark.asyncio
+async def test_set_model_identity_updates_agent_model() -> None:
     agents = _RecordingAgents()
     projects = _RecordingProjects()
     state = _make_model_state(
         configured={"openai/gpt-5"}, agents=agents, projects=projects, models=SimpleNamespace()
     )
 
-    result = _handle_set_model_command(state, "coder", "s1", "openai/gpt-5", project_id=None)
+    result = await _execute_core_command(
+        state, "/model openai/gpt-5", agent_id="coder", project_id=None
+    )
 
     # Identity session writes the agent's own model; the project store is untouched.
     assert agents.updates == [("coder", {"model": "openai/gpt-5"})]
     assert projects.set_calls == []
-    assert result["data"] == {"command": "model", "agent_id": "coder", "model": "openai/gpt-5"}
-    assert result["output"] == "toast"
+    assert result.facts == {"agent_id": "coder", "model": "openai/gpt-5"}
+    assert result.feedback is not None
+    assert result.feedback.kind == "notice"
 
 
-def test_set_model_identity_reset_clears_model() -> None:
+@pytest.mark.asyncio
+async def test_set_model_identity_reset_clears_model() -> None:
     agents = _RecordingAgents()
     projects = _RecordingProjects()
     state = _make_model_state(
         configured=set(), agents=agents, projects=projects, models=SimpleNamespace()
     )
 
-    result = _handle_set_model_command(state, "coder", "s1", "reset", project_id=None)
+    result = await _execute_core_command(state, "/model reset", agent_id="coder", project_id=None)
 
     # reset writes an empty model (falls to the global default) and skips validation.
     assert agents.updates == [("coder", {"model": ""})]
-    assert result["data"]["model"] == ""
+    assert result.facts["model"] == ""
 
 
-def test_set_model_project_writes_override() -> None:
+@pytest.mark.asyncio
+async def test_set_model_project_writes_override() -> None:
     agents = _RecordingAgents()
     projects = _RecordingProjects()
     state = _make_model_state(
         configured={"openai/gpt-mini"}, agents=agents, projects=projects, models=SimpleNamespace()
     )
 
-    _handle_set_model_command(state, "builder", "s1", "openai/gpt-mini", project_id="vbot")
+    await _execute_core_command(state, "/model openai/gpt-mini", project_id="vbot")
 
     # Project session writes a per-agent model override; the identity store is untouched.
     assert projects.set_calls == [("vbot", "builder", "model", "openai/gpt-mini")]
@@ -722,47 +743,55 @@ class _RecordingTitleSessions:
 
 def _make_rename_state(sessions: _RecordingTitleSessions) -> SimpleNamespace:
     runtime = SimpleNamespace(chat_sessions=sessions)
-    return SimpleNamespace(runtime=runtime, event_bus=ServerEventBus())
+    return SimpleNamespace(
+        runtime=runtime,
+        chat_runs=SimpleNamespace(),
+        event_bus=ServerEventBus(),
+    )
 
 
-def test_rename_command_sets_title_with_toast() -> None:
+@pytest.mark.asyncio
+async def test_rename_command_sets_title_with_toast() -> None:
     sessions = _RecordingTitleSessions()
     state = _make_rename_state(sessions)
 
-    result = _handle_rename_session_command(state, "coder", "s1", "Release planning")
+    result = await _execute_core_command(
+        state, "/rename Release planning", agent_id="coder", project_id=None
+    )
 
     assert sessions.renamed == [("coder", "s1", "Release planning", None)]
-    assert result["output"] == "toast"
-    assert "Release planning" in result["reply"]
-    assert result["data"] == {
-        "command": "rename",
-        "session_id": "s1",
-        "title": "Release planning",
-    }
+    assert result.feedback is not None
+    assert result.feedback.kind == "notice"
+    assert "Release planning" in result.feedback.text
+    assert result.facts == {"session_id": "s1", "title": "Release planning"}
 
 
-def test_rename_command_without_argument_clears() -> None:
+@pytest.mark.asyncio
+async def test_rename_command_without_argument_clears() -> None:
     sessions = _RecordingTitleSessions()
     state = _make_rename_state(sessions)
 
-    result = _handle_rename_session_command(state, "coder", "s1", None)
+    result = await _execute_core_command(state, "/rename", agent_id="coder", project_id=None)
 
     # No argument clears: the handler passes "" and reports the cleared name.
     assert sessions.renamed == [("coder", "s1", "", None)]
-    assert result["data"]["title"] is None
-    assert "cleared" in result["reply"].lower()
+    assert result.facts["title"] is None
+    assert result.feedback is not None
+    assert "cleared" in result.feedback.text.lower()
 
 
-def test_rename_command_project_session_scopes_to_project() -> None:
+@pytest.mark.asyncio
+async def test_rename_command_project_session_scopes_to_project() -> None:
     sessions = _RecordingTitleSessions()
     state = _make_rename_state(sessions)
 
-    _handle_rename_session_command(state, "builder", "s1", "Docs", project_id="vbot")
+    await _execute_core_command(state, "/rename Docs", project_id="vbot")
 
     assert sessions.renamed == [("builder", "s1", "Docs", "vbot")]
 
 
-def test_set_model_project_reset_clears_override() -> None:
+@pytest.mark.asyncio
+async def test_set_model_project_reset_clears_override() -> None:
     agents = _RecordingAgents()
     projects = _RecordingProjects()
     state = _make_model_state(
@@ -770,27 +799,28 @@ def test_set_model_project_reset_clears_override() -> None:
     )
 
     # The reset token is case-insensitive.
-    _handle_set_model_command(state, "builder", "s1", "RESET", project_id="vbot")
+    await _execute_core_command(state, "/model RESET", project_id="vbot")
 
     assert projects.clear_calls == [("vbot", "builder", "model")]
     assert projects.set_calls == []
 
 
-def test_set_model_rejects_unusable_model() -> None:
+@pytest.mark.asyncio
+async def test_set_model_rejects_unusable_model() -> None:
     agents = _RecordingAgents()
     projects = _RecordingProjects()
     state = _make_model_state(
         configured={"openai/gpt-5"}, agents=agents, projects=projects, models=SimpleNamespace()
     )
 
-    with pytest.raises(RpcError) as exc_info:
-        _handle_set_model_command(state, "coder", "s1", "openai/ghost", project_id=None)
+    with pytest.raises(ModelConfigurationError):
+        await _execute_core_command(state, "/model openai/ghost", agent_id="coder")
 
-    assert exc_info.value.code == "invalid_request"
     assert agents.updates == []  # nothing is written when the model is rejected
 
 
-def test_set_model_rejects_forbidden_pinned_connection() -> None:
+@pytest.mark.asyncio
+async def test_set_model_rejects_forbidden_pinned_connection() -> None:
     agents = _RecordingAgents()
     projects = _RecordingProjects()
 
@@ -808,12 +838,12 @@ def test_set_model_rejects_forbidden_pinned_connection() -> None:
         models=models,
     )
 
-    with pytest.raises(RpcError) as exc_info:
-        _handle_set_model_command(
-            state, "coder", "s1", "openai/gpt-5::subscription", project_id=None
+    state.runtime.agent_resolver = _ModelResolver(set())
+    with pytest.raises(ModelConfigurationError):
+        await _execute_core_command(
+            state, "/model openai/gpt-5::subscription", agent_id="coder", project_id=None
         )
 
-    assert exc_info.value.code == "invalid_request"
     assert agents.updates == []
 
 
@@ -1178,6 +1208,7 @@ def _make_move_state(
     state._agents = agents  # type: ignore[attr-defined]
     state._trigger_calls = trigger_calls  # type: ignore[attr-defined]
     state._task_loop = task_loop  # type: ignore[attr-defined]
+    state._command_changes = []  # type: ignore[attr-defined]
     return state
 
 
@@ -1201,8 +1232,8 @@ async def test_move_directions_relocate_and_re_home_pointers(
 ) -> None:
     state = _make_move_state()
 
-    result = await _handle_move_session_command(
-        state, "builder", "s1", target_address, project_id=source_project
+    result = await _execute_core_command(
+        state, f"/agent {target_address}", project_id=source_project
     )
 
     move_call = state._sessions.move_calls[0]
@@ -1229,7 +1260,10 @@ async def test_move_directions_relocate_and_re_home_pointers(
     # The relocation is announced like session.create/delete: a sessions signal
     # for each side's list, plus one agents signal when an identity current
     # pointer was re-aimed on either side.
-    resource_events = _queue_resource_events(state)
+    resource_events = [
+        {"kind": change.kind, **({"scope": dict(change.scope)} if change.scope else {})}
+        for change in state._command_changes
+    ]
     assert {"kind": "sessions", "scope": {"agent_id": "builder"}} in resource_events
     assert {"kind": "sessions", "scope": {"agent_id": target_agent}} in resource_events
     agents_events = [event for event in resource_events if event["kind"] == "agents"]
@@ -1245,33 +1279,32 @@ async def test_move_directions_relocate_and_re_home_pointers(
     # No task → the target waits; payload lands the accessor on the same session.
     assert state._trigger_calls == []
     assert state._task_loop.start_calls == []
-    assert result["output"] == "action"
-    assert result["data"] == {
-        "command": "agent",
-        "session_id": "s1",
-        "agent_id": target_address,
-    }
+    assert result.navigation is not None
+    assert result.navigation.kind == "offer_session"
+    assert result.facts == {"session_id": "s1", "agent_id": target_address}
 
 
 @pytest.mark.asyncio
 async def test_move_to_same_pair_is_a_no_op_hint() -> None:
     state = _make_move_state()
 
-    result = await _handle_move_session_command(state, "builder", "s1", "builder", project_id=None)
+    result = await _execute_core_command(state, "/agent builder", project_id=None)
 
-    assert "already belongs" in result["reply"]
+    assert result.feedback is not None
+    assert "already belongs" in result.feedback.text
     assert state._sessions.move_calls == []
     # A refused move announces nothing — the signals fire only after relocation.
-    assert _queue_resource_events(state) == []
+    assert state._command_changes == []
 
 
 @pytest.mark.asyncio
 async def test_move_refused_while_run_active() -> None:
     state = _make_move_state(active=_FakeRun())
 
-    result = await _handle_move_session_command(state, "builder", "s1", "planner", project_id=None)
+    result = await _execute_core_command(state, "/agent planner", project_id=None)
 
-    assert "current run" in result["reply"]
+    assert result.feedback is not None
+    assert "current run" in result.feedback.text
     assert state._sessions.move_calls == []
 
 
@@ -1279,9 +1312,10 @@ async def test_move_refused_while_run_active() -> None:
 async def test_move_refused_while_run_queued() -> None:
     state = _make_move_state(queued=[SimpleNamespace(item_id="q-1")])
 
-    result = await _handle_move_session_command(state, "builder", "s1", "planner", project_id=None)
+    result = await _execute_core_command(state, "/agent planner", project_id=None)
 
-    assert "queued run" in result["reply"]
+    assert result.feedback is not None
+    assert "queued run" in result.feedback.text
     assert state._sessions.move_calls == []
 
 
@@ -1289,11 +1323,10 @@ async def test_move_refused_while_run_queued() -> None:
 async def test_move_refused_for_unknown_target() -> None:
     state = _make_move_state(resolver_error=AgentResolutionError("no such agent"))
 
-    result = await _handle_move_session_command(
-        state, "builder", "s1", "ghost@vbot", project_id=None
-    )
+    result = await _execute_core_command(state, "/agent ghost@vbot", project_id=None)
 
-    assert "unknown agent" in result["reply"]
+    assert result.feedback is not None
+    assert "unknown agent" in result.feedback.text
     assert state._sessions.move_calls == []
 
 
@@ -1301,11 +1334,10 @@ async def test_move_refused_for_unknown_target() -> None:
 async def test_move_refused_for_invalid_address() -> None:
     state = _make_move_state()
 
-    result = await _handle_move_session_command(
-        state, "builder", "s1", "agent:planner", project_id=None
-    )
+    result = await _execute_core_command(state, "/agent agent:planner", project_id=None)
 
-    assert "invalid agent address" in result["reply"]
+    assert result.feedback is not None
+    assert "invalid agent address" in result.feedback.text
     assert state._sessions.move_calls == []
 
 
@@ -1321,9 +1353,10 @@ async def test_move_refused_for_invalid_address() -> None:
 async def test_move_refused_for_excluded_sessions(metadata: dict[str, Any]) -> None:
     state = _make_move_state(metadata=metadata)
 
-    result = await _handle_move_session_command(state, "builder", "s1", "planner", project_id=None)
+    result = await _execute_core_command(state, "/agent planner", project_id=None)
 
-    assert "cannot be moved" in result["reply"]
+    assert result.feedback is not None
+    assert "cannot be moved" in result.feedback.text
     assert state._sessions.move_calls == []
 
 
@@ -1334,9 +1367,7 @@ async def test_move_with_task_auto_runs_identity_target(
     state = _make_move_state()
     monkeypatch.setattr("server.rpc.chat_methods._bridge_run_to_event_bus", lambda *a, **k: None)
 
-    result = await _handle_move_session_command(
-        state, "builder", "s1", "planner do the thing", project_id=None
-    )
+    result = await _execute_core_command(state, "/agent planner do the thing", project_id=None)
 
     # The task rides as the receiving agent's first visible turn (identity → trigger).
     assert state._trigger_calls == [
@@ -1344,11 +1375,13 @@ async def test_move_with_task_auto_runs_identity_target(
             "agent_id": "planner",
             "message": "do the thing",
             "session_id": "s1",
+            "project_id": None,
             "internal": False,
             "reply_surface": ReplySurface.webui(),
         }
     ]
-    assert "running your task" in result["reply"]
+    assert result.feedback is not None
+    assert "running your task" in result.feedback.text
 
 
 @pytest.mark.asyncio
@@ -1358,27 +1391,26 @@ async def test_move_with_task_auto_runs_project_target(
     state = _make_move_state()
     monkeypatch.setattr("server.rpc.chat_methods._bridge_run_to_event_bus", lambda *a, **k: None)
 
-    await _handle_move_session_command(
-        state, "builder", "s1", "planner@vbot ship it", project_id=None
-    )
+    await _execute_core_command(state, "/agent planner@vbot ship it", project_id=None)
 
-    # A project target has no trigger service yet → it runs through the chat loop.
-    assert state._trigger_calls == []
-    call = state._task_loop.start_calls[-1]
+    # Core uses the same trigger seam for identity and project targets.
+    call = state._trigger_calls[-1]
     assert call["agent_id"] == "planner"
-    assert call["content"] == "ship it"
+    assert call["message"] == "ship it"
     assert call["project_id"] == "vbot"
     assert call["internal"] is False
     assert call["reply_surface"] == ReplySurface.webui()
+    assert state._task_loop.start_calls == []
 
 
 @pytest.mark.asyncio
 async def test_move_without_task_waits() -> None:
     state = _make_move_state()
 
-    result = await _handle_move_session_command(state, "builder", "s1", "planner", project_id=None)
+    result = await _execute_core_command(state, "/agent planner", project_id=None)
 
-    assert "waiting" in result["reply"]
+    assert result.feedback is not None
+    assert "waiting" in result.feedback.text
     assert state._trigger_calls == []
     assert state._task_loop.start_calls == []
 
@@ -1387,7 +1419,7 @@ async def test_move_without_task_waits() -> None:
 async def test_move_divider_and_note_carry_both_addresses() -> None:
     state = _make_move_state()
 
-    await _handle_move_session_command(state, "builder", "s1", "planner@vbot", project_id="acme")
+    await _execute_core_command(state, "/agent planner@vbot", project_id="acme")
 
     divider = state._sessions.destination.appended[0]
     assert json.loads(divider.content) == {

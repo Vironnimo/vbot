@@ -174,7 +174,7 @@ async def test_dm_start_command_triggers_internal_greeting_run(
 
     # The literal "/start" never reaches command dispatch or the model as user text;
     # an internal note-driven run carries the greeting instruction instead.
-    command_dispatcher.dispatch.assert_not_called()
+    command_dispatcher.execute.assert_not_awaited()
     trigger_mock.assert_awaited_once()
     assert trigger_mock.await_args is not None
     assert trigger_mock.await_args.kwargs.get("internal") is True

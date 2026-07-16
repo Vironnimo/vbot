@@ -68,6 +68,8 @@ class _FakeProviderConfig:
 class _FakeCatalogModel:
     """Catalog-model stub with no connection allowlist (every connection allowed)."""
 
+    connections: tuple[str, ...] = ()
+
     def allows_connection(self, connection_id: str) -> bool:
         return True
 

@@ -6,9 +6,9 @@ from .engine_test_support import (
     CHANNEL_REPLY_SURFACE,
     SESSION_ID,
     AsyncMock,
-    CommandHandled,
     MessageSender,
     Path,
+    command_outcome,
     drain,
     make_command_dispatcher,
     make_completed_run,
@@ -131,7 +131,7 @@ async def test_group_unaddressed_text_is_dropped_in_mention_mode(tmp_path: Path)
     await drain(engine, 12345)
 
     trigger_mock.assert_not_awaited()
-    command_dispatcher.dispatch.assert_not_called()
+    command_dispatcher.execute.assert_not_awaited()
     assert transport.sent == []
     # Dropped messages must not create a Session either.
     assert not chat_sessions.exists("assistant", SESSION_ID)
@@ -164,7 +164,7 @@ async def test_group_unaddressed_text_is_observed_as_note(tmp_path: Path) -> Non
     ]
     assert notes == ["[channel-message] Alice (50): hello\nworld"]
     trigger_mock.assert_not_awaited()
-    command_dispatcher.dispatch.assert_not_called()
+    command_dispatcher.execute.assert_not_awaited()
     assert transport.sent == []
     await engine.stop()
 
@@ -279,7 +279,7 @@ async def test_direct_message_always_triggers_in_mention_mode(tmp_path: Path) ->
 
 @pytest.mark.asyncio
 async def test_group_command_from_owner_is_dispatched(tmp_path: Path) -> None:
-    command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
+    command_dispatcher = make_command_dispatcher(result=command_outcome("stop", "Run cancelled."))
     engine, _sessions, trigger_mock, transport = make_engine(
         tmp_path, command_dispatcher=command_dispatcher, owner_user_ids=["50"]
     )
@@ -287,7 +287,7 @@ async def test_group_command_from_owner_is_dispatched(tmp_path: Path) -> None:
     await engine.handle_inbound_text(make_conversation(kind="group"), "/stop")
     await drain(engine, 12345)
 
-    command_dispatcher.dispatch.assert_called_once_with("assistant", SESSION_ID, "/stop")
+    command_dispatcher.execute.assert_awaited_once()
     trigger_mock.assert_not_awaited()
     assert transport.sent_texts == ["Run cancelled."]
     await engine.stop()
@@ -295,7 +295,7 @@ async def test_group_command_from_owner_is_dispatched(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_group_command_from_non_owner_is_denied_without_dispatch(tmp_path: Path) -> None:
-    command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
+    command_dispatcher = make_command_dispatcher(result=command_outcome("stop", "Run cancelled."))
     engine, chat_sessions, trigger_mock, transport = make_engine(
         tmp_path,
         command_dispatcher=command_dispatcher,
@@ -306,7 +306,7 @@ async def test_group_command_from_non_owner_is_denied_without_dispatch(tmp_path:
     await engine.handle_inbound_text(make_conversation(kind="group", user_id=50), "/stop")
     await drain(engine, 12345)
 
-    command_dispatcher.dispatch.assert_not_called()
+    command_dispatcher.execute.assert_not_awaited()
     trigger_mock.assert_not_awaited()
     assert transport.sent == []
     assert not chat_sessions.exists("assistant", SESSION_ID)
@@ -337,7 +337,7 @@ async def test_group_mention_from_non_owner_starts_a_normal_run(tmp_path: Path) 
 async def test_group_command_denied_for_everyone_when_owner_list_is_empty(
     tmp_path: Path,
 ) -> None:
-    command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
+    command_dispatcher = make_command_dispatcher(result=command_outcome("stop", "Run cancelled."))
     engine, _sessions, _trigger, transport = make_engine(
         tmp_path, command_dispatcher=command_dispatcher
     )
@@ -345,14 +345,14 @@ async def test_group_command_denied_for_everyone_when_owner_list_is_empty(
     await engine.handle_inbound_text(make_conversation(kind="group"), "/stop")
     await drain(engine, 12345)
 
-    command_dispatcher.dispatch.assert_not_called()
+    command_dispatcher.execute.assert_not_awaited()
     assert transport.sent == []
     await engine.stop()
 
 
 @pytest.mark.asyncio
 async def test_group_command_auth_applies_in_all_response_mode(tmp_path: Path) -> None:
-    command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
+    command_dispatcher = make_command_dispatcher(result=command_outcome("stop", "Run cancelled."))
     engine, _sessions, _trigger, transport = make_engine(
         tmp_path, command_dispatcher=command_dispatcher, response_mode="all"
     )
@@ -360,14 +360,14 @@ async def test_group_command_auth_applies_in_all_response_mode(tmp_path: Path) -
     await engine.handle_inbound_text(make_conversation(kind="group"), "/stop")
     await drain(engine, 12345)
 
-    command_dispatcher.dispatch.assert_not_called()
+    command_dispatcher.execute.assert_not_awaited()
     assert transport.sent == []
     await engine.stop()
 
 
 @pytest.mark.asyncio
 async def test_dm_command_is_authorized_without_owner_list(tmp_path: Path) -> None:
-    command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
+    command_dispatcher = make_command_dispatcher(result=command_outcome("stop", "Run cancelled."))
     engine, _sessions, _trigger, transport = make_engine(
         tmp_path, command_dispatcher=command_dispatcher
     )
@@ -375,6 +375,6 @@ async def test_dm_command_is_authorized_without_owner_list(tmp_path: Path) -> No
     await engine.handle_inbound_text(make_conversation(kind="direct"), "/stop")
     await drain(engine, 12345)
 
-    command_dispatcher.dispatch.assert_called_once_with("assistant", SESSION_ID, "/stop")
+    command_dispatcher.execute.assert_awaited_once()
     assert transport.sent_texts == ["Run cancelled."]
     await engine.stop()

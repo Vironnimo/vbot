@@ -1,5 +1,7 @@
 """Connection-bound Model configuration tests."""
 
+from core.projects import ModelConfigurationError
+
 from .resolver_test_support import (
     AgentResolutionError,
     AgentStore,
@@ -80,6 +82,32 @@ def test_pinned_connection_forbidden_by_model_allowlist_is_unconfigured() -> Non
         usable={"openai:api-key", "openai:subscription"}, allowlist=("subscription",)
     )
     assert checker.is_configured("openai/gpt-5.2::api-key") is False
+
+
+def test_require_configured_explains_forbidden_pinned_connection() -> None:
+    checker = _two_connection_checker(
+        usable={"openai:api-key", "openai:subscription"}, allowlist=("subscription",)
+    )
+
+    with pytest.raises(
+        ModelConfigurationError,
+        match=r"not available on connection 'api-key'.*allowed connections: subscription",
+    ):
+        checker.require_configured("openai/gpt-5.2::api-key")
+
+
+def test_resolver_require_model_configured_uses_domain_validation_seam(
+    agents: AgentStore, projects: ProjectStore
+) -> None:
+    resolver = _resolver(
+        agents,
+        projects,
+        _two_connection_checker(usable={"openai:subscription"}, allowlist=("subscription",)),
+    )
+
+    resolver.require_model_configured("openai/gpt-5.2::subscription")
+    with pytest.raises(ModelConfigurationError, match="not usable in this instance"):
+        resolver.require_model_configured("openai/ghost-model")
 
 
 def test_empty_suffix_after_separator_is_unconfigured() -> None:

@@ -1,15 +1,22 @@
-"""Slash command dispatch for chat entry points."""
+"""End-to-end Built-in Command preparation and execution for Chat entry points."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
+from core.chat.content_blocks import ContentBlock, TextBlock
+from core.chat.messages import ChatMessage, ReplySurface
 from core.chat.usage import aggregate_session_usage
-from core.projects import format_agent_address
+from core.projects import (
+    AgentResolutionError,
+    InvalidAgentAddressError,
+    format_agent_address,
+    parse_agent_address,
+)
 from core.providers.providers import resolve_effective_context_window
 from core.providers.reasoning import (
     REASONING_INTENT_BUDGET,
@@ -18,12 +25,12 @@ from core.providers.reasoning import (
     REASONING_INTENT_ON,
     resolve_reasoning_intent,
 )
-from core.runs import ChatRunManager, RunNotFoundError
+from core.runs import ChatRunManager, Run, RunNotFoundError
+from core.sessions import SESSION_MOVE_STRIP_META_KEYS
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.agents import AgentStore
-    from core.chat.chat import ChatMessage
     from core.models.models import ModelRegistry
     from core.projects import AgentResolver, ProjectStore, RuntimeAgent
     from core.providers.providers import ProviderRegistry
@@ -31,36 +38,23 @@ if TYPE_CHECKING:
 else:
     AgentResolver = Any
     AgentStore = Any
-    ChatMessage = Any
     ChatSessionManager = Any
     ModelRegistry = Any
     ProjectStore = Any
     ProviderRegistry = Any
     RuntimeAgent = Any
 
-CommandActionName = Literal[
-    "compact",
-    "handoff",
-    "learn",
-    "move_session",
-    "new_session",
-    "reflect",
-    "rename_session",
-    "continue",
-    "set_model",
-]
 StatusActivityName = Literal["idle", "running"]
 
-# Argument mode drives the autocomplete trigger behavior: ``none`` commands run
-# immediately on selection; ``optional``/``required`` insert the token and wait
-# for text. ``required`` is unused today but kept deliberately for future
-# commands. Output channel drives how the accessor presents a handled command:
-# ``toast`` (transient confirmation), ``transient`` (a non-persisted chat card),
-# or ``action`` (a state change such as a session switch or a re-run).
+# Argument mode drives autocomplete: ``none`` commands run immediately on
+# selection; ``optional``/``required`` insert the token and wait for text.
 CommandArgumentMode = Literal["none", "optional", "required"]
-CommandOutputChannel = Literal["toast", "transient", "action"]
-
-CommandHandler = Callable[[str, str, "str | None", "str | None"], "CommandHandled | CommandAction"]
+CommandCatalogResult = Literal["notice", "detail", "state_change"]
+CommandExecutionMode = Literal["immediate", "serialized"]
+CommandFeedbackKind = Literal["notice", "detail"]
+CommandNavigationKind = Literal["continue_in_session", "offer_session"]
+CommandRunRole = Literal["result", "follow_up"]
+CommandSurfaceKind = Literal["webui", "channel"]
 
 _LOGGER = get_logger("chat.commands")
 
@@ -92,42 +86,122 @@ _STATUS_MODEL_DISPLAY_OVERRIDE: ContextVar[str | None] = ContextVar(
     "status_model_display_override",
     default=None,
 )
+HANDOFF_FRAGMENT_NAME = "handoff.md"
+LEARN_FRAGMENT_NAME = "learn.md"
+CHANNEL_SOURCE_META_KEY = "source_channel_id"
+SUBAGENT_SESSION_METADATA_FLAG = "is_subagent_session"
+SUBAGENT_PARENT_METADATA_KEY = "subagent_parent"
+AGENT_TAKEOVER_NOTE = "This session was just moved to you from {source}."
+MODEL_RESET_TOKEN = "reset"
 
 
 @dataclass(frozen=True)
 class CommandSpec:
     """Declarative metadata for a built-in slash command.
 
-    ``argument`` and ``output`` replace per-command special cases: trigger and
-    presentation behavior are derived from these two attributes instead of
-    being hardcoded at each call site.
+    The spec stays surface-neutral. Accessors project ``catalog_result`` into
+    their own presentation vocabulary and honor availability/mode without
+    branching on the command name.
     """
 
     name: str
     description: str
     argument: CommandArgumentMode
-    output: CommandOutputChannel
+    catalog_result: CommandCatalogResult
+    execution_mode: CommandExecutionMode
+    argument_execution_mode: CommandExecutionMode | None = None
+    accepts_preferred_session_id: bool = False
+    unavailable_surfaces: frozenset[CommandSurfaceKind] = frozenset()
 
 
 @dataclass(frozen=True)
-class CommandHandled:
-    """Result indicating command dispatch handled the message."""
+class PreparedCommand:
+    """One recognized and parsed Built-in Command, ready for execution."""
 
-    reply: str | None
-    data: dict[str, object] | None = None
-    output: CommandOutputChannel | None = None
+    name: str
+    argument: str | None
+    execution_mode: CommandExecutionMode
+    accepts_preferred_session_id: bool = False
 
 
 @dataclass(frozen=True)
-class CommandAction:
-    """Result indicating a recognized command needs accessor-level execution."""
+class CommandUnavailability:
+    """A Chat-owned surface restriction discovered before execution."""
 
-    name: CommandActionName
-    # Optional command argument, kept as the raw text after the command token so
-    # the dataclass stays reusable across argument-bearing commands. ``compact``
-    # passes its free-text instruction through verbatim; ``handoff`` carries the
-    # ``agent:<id>``-prefixed grammar that ``parse_handoff_argument`` interprets.
-    argument: str | None = None
+    command: str
+    surface: CommandSurfaceKind
+
+    def __post_init__(self) -> None:
+        if not self.command.startswith("/"):
+            raise ValueError("command unavailability token must start with '/'")
+
+
+@dataclass(frozen=True)
+class CommandFeedback:
+    """Surface-neutral user feedback from a completed command."""
+
+    kind: CommandFeedbackKind
+    text: str
+
+
+@dataclass(frozen=True)
+class CommandNavigation:
+    """A neutral Session destination and how an accessor should treat it."""
+
+    kind: CommandNavigationKind
+    agent_id: str
+    session_id: str
+    project_id: str | None = None
+
+
+@dataclass(frozen=True)
+class CommandRun:
+    """A Run exposed by the command and its relationship to the response."""
+
+    role: CommandRunRole
+    run: Run
+
+
+@dataclass(frozen=True)
+class CommandResourceChange:
+    """Accessor-neutral shared-resource invalidation fact."""
+
+    kind: str
+    scope: Mapping[str, str] = field(default_factory=dict)
+
+
+CommandChangeObserver = Callable[[CommandResourceChange], None]
+
+
+@dataclass(frozen=True)
+class CommandExecutionContext:
+    """Execution addressing and surface facts supplied by an accessor."""
+
+    agent_id: str
+    session_id: str
+    project_id: str | None
+    reply_surface: ReplySurface
+    on_change: CommandChangeObserver | None = None
+    preferred_new_session_id: str | None = None
+
+    def report_change(self, change: CommandResourceChange) -> None:
+        if self.on_change is not None:
+            self.on_change(change)
+
+
+@dataclass(frozen=True)
+class CommandOutcome:
+    """Complete surface-neutral result of one Built-in Command."""
+
+    command: str
+    feedback: CommandFeedback | None = None
+    facts: Mapping[str, object] = field(default_factory=dict)
+    navigation: CommandNavigation | None = None
+    runs: tuple[CommandRun, ...] = ()
+    resource_changes: tuple[CommandResourceChange, ...] = ()
+
+
+CommandExecutionHandler = Callable[[CommandExecutionContext, str | None], Awaitable[CommandOutcome]]
 
 
 @dataclass(frozen=True)
@@ -187,6 +261,46 @@ def parse_agent_argument(argument: str) -> AgentArgument:
     return AgentArgument(address=first_token, task=remainder.strip() or None)
 
 
+def _build_handoff_prompt(base_instruction: str, instruction: str | None) -> str:
+    base = base_instruction.strip()
+    cleaned = (instruction or "").strip()
+    if not cleaned:
+        return base
+    return (
+        f"{base}\n\n"
+        "The user added a specific instruction for this handoff. Follow it while "
+        "writing, without dropping anything else that genuinely matters:\n"
+        f"{cleaned}"
+    )
+
+
+def _build_learn_prompt(base_instruction: str, argument: str | None) -> str:
+    base = base_instruction.strip()
+    cleaned = (argument or "").strip()
+    if not cleaned:
+        return (
+            f"{base}\n\n"
+            "No request was given. Ask the user what they want captured into a skill, or, "
+            "if the recent conversation clearly demonstrates a reusable procedure, author "
+            "a skill from that."
+        )
+    return f"{base}\n\nThe request to learn from:\n{cleaned}"
+
+
+def _extract_text(content: str | list[ContentBlock] | None) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        return "\n".join(block.text for block in content if isinstance(block, TextBlock)).strip()
+    return ""
+
+
+def _require_dependency(value: Any, name: str) -> Any:
+    if value is None:
+        raise RuntimeError(f"CommandDispatcher requires {name} for this command")
+    return value
+
+
 @dataclass(frozen=True)
 class StatusActivity:
     """Run activity summary for one Session."""
@@ -197,89 +311,97 @@ class StatusActivity:
     updated_at: str | None
 
 
-@dataclass(frozen=True)
-class NotACommand:
-    """Result indicating message should continue through normal chat flow."""
-
-
-DispatchResult = CommandHandled | CommandAction | NotACommand
-
-
 class CommandDispatcher:
-    """Dispatches built-in slash commands before run startup."""
+    """Prepares and executes Built-in Commands before normal Chat Run startup."""
 
     BUILT_IN_COMMANDS: dict[str, CommandSpec] = {
         "agent": CommandSpec(
             "agent",
             "Move this session to another agent; no argument lists the directory.",
             argument="optional",
-            output="action",
+            catalog_result="state_change",
+            execution_mode="immediate",
+            argument_execution_mode="serialized",
+            unavailable_surfaces=frozenset({"channel"}),
         ),
         "compact": CommandSpec(
             "compact",
             "Compact the current session's context immediately.",
             argument="optional",
-            output="toast",
+            catalog_result="notice",
+            execution_mode="serialized",
         ),
         "handoff": CommandSpec(
             "handoff",
             "Write a handoff and start a new session (optionally for another agent).",
             argument="optional",
-            output="action",
+            catalog_result="state_change",
+            execution_mode="serialized",
         ),
         "help": CommandSpec(
             "help",
             "Show available built-in slash commands.",
             argument="none",
-            output="transient",
+            catalog_result="detail",
+            execution_mode="immediate",
         ),
         "learn": CommandSpec(
             "learn",
             "Author a reusable skill into your own home from a source (folder, URL, or text).",
             argument="optional",
-            output="action",
+            catalog_result="state_change",
+            execution_mode="serialized",
         ),
         "model": CommandSpec(
             "model",
             "Show, set, or reset this session's model (/model reset to clear).",
             argument="optional",
-            output="action",
+            catalog_result="state_change",
+            execution_mode="immediate",
+            argument_execution_mode="serialized",
         ),
         "new": CommandSpec(
             "new",
             "Start a new session for the current agent.",
             argument="none",
-            output="action",
+            catalog_result="state_change",
+            execution_mode="serialized",
+            accepts_preferred_session_id=True,
         ),
         "reflect": CommandSpec(
             "reflect",
             "Review this session in a fork and save durable memory and skill updates.",
             argument="optional",
-            output="action",
+            catalog_result="state_change",
+            execution_mode="serialized",
         ),
         "rename": CommandSpec(
             "rename",
             "Rename this session; no argument clears the name.",
             argument="optional",
-            output="toast",
+            catalog_result="notice",
+            execution_mode="serialized",
         ),
         "continue": CommandSpec(
             "continue",
             "Continue the interrupted work retained for this session.",
             argument="none",
-            output="action",
+            catalog_result="state_change",
+            execution_mode="serialized",
         ),
         "status": CommandSpec(
             "status",
             "Show current session and runtime status.",
             argument="none",
-            output="transient",
+            catalog_result="detail",
+            execution_mode="immediate",
         ),
         "stop": CommandSpec(
             "stop",
             "Cancel the active run for this session.",
             argument="none",
-            output="toast",
+            catalog_result="notice",
+            execution_mode="immediate",
         ),
     }
 
@@ -294,6 +416,9 @@ class CommandDispatcher:
         projects: ProjectStore | None = None,
         agents: AgentStore | None = None,
         local_context_windows_loader: Callable[[], Mapping[str, Any]] | None = None,
+        trigger_service: Any | None = None,
+        reflection_service: Any | None = None,
+        storage: Any | None = None,
     ) -> None:
         self._chat_runs = chat_runs
         self._agent_resolver = agent_resolver
@@ -303,50 +428,75 @@ class CommandDispatcher:
         self._providers = providers
         self._projects = projects
         self._agents = agents
+        self._trigger_service = trigger_service
+        self._reflection_service = reflection_service
+        self._storage = storage
         # Live loader for the user-configured local-model window map, read at
-        # dispatch time so a settings change applies to the next /status.
+        # execution time so a settings change applies to the next /status.
         self._local_context_windows_loader = local_context_windows_loader
-        self._commands: dict[str, CommandHandler] = {
-            "agent": self._handle_agent,
-            "compact": self._handle_compact,
-            "handoff": self._handle_handoff,
-            "help": self._handle_help,
-            "learn": self._handle_learn,
-            "model": self._handle_model,
-            "new": self._handle_new,
-            "reflect": self._handle_reflect,
-            "rename": self._handle_rename,
-            "continue": self._handle_continue,
-            "status": self._handle_status,
-            "stop": self._handle_stop,
+        self._execution_commands: dict[str, CommandExecutionHandler] = {
+            "agent": self._execute_agent,
+            "compact": self._execute_compact,
+            "handoff": self._execute_handoff,
+            "help": self._execute_help,
+            "learn": self._execute_learn,
+            "model": self._execute_model,
+            "new": self._execute_new,
+            "reflect": self._execute_reflect,
+            "rename": self._execute_rename,
+            "continue": self._execute_continue,
+            "status": self._execute_status,
+            "stop": self._execute_stop,
         }
 
-    def dispatch(
-        self,
-        agent_id: str,
-        session_id: str,
-        message_text: str,
-        project_id: str | None = None,
-    ) -> DispatchResult:
-        """Dispatch one message as a built-in slash command when recognized.
-
-        ``project_id`` is the session's project (``None`` for an identity session).
-        It flows to the handlers so ``/status`` resolves a project agent through
-        the same seam the run path uses, instead of degrading to an empty reply.
-        """
-        matched = self._match_command(message_text)
+    def prepare(self, content: str | list[ContentBlock]) -> PreparedCommand | None:
+        """Recognize and parse one command-eligible Chat content value."""
+        if isinstance(content, str):
+            command_text = content
+        elif len(content) == 1 and isinstance(content[0], TextBlock):
+            command_text = content[0].text
+        else:
+            return None
+        matched = self._match_command(command_text)
         if matched is None:
-            return NotACommand()
+            return None
         spec, argument = matched
-        return self._commands[spec.name](agent_id, session_id, argument, project_id)
+        execution_mode = (
+            spec.argument_execution_mode
+            if argument is not None and spec.argument_execution_mode is not None
+            else spec.execution_mode
+        )
+        return PreparedCommand(
+            name=spec.name,
+            argument=argument,
+            execution_mode=execution_mode,
+            accepts_preferred_session_id=spec.accepts_preferred_session_id,
+        )
 
-    def recognizes(self, message_text: str) -> bool:
-        """Return whether dispatching this message would handle it as a command.
+    def unavailability(
+        self, prepared: PreparedCommand, reply_surface: ReplySurface
+    ) -> CommandUnavailability | None:
+        """Return a Chat-owned surface restriction before scheduling execution."""
+        spec = self.BUILT_IN_COMMANDS.get(prepared.name)
+        if spec is None:
+            raise ValueError(f"unknown Built-in Command: {prepared.name}")
+        if reply_surface.kind not in spec.unavailable_surfaces:
+            return None
+        return CommandUnavailability(command=f"/{prepared.name}", surface=reply_surface.kind)
 
-        Lets accessors gate command authorization before ``dispatch()`` runs handler
-        side effects (e.g. ``/stop`` cancelling a Run).
-        """
-        return self._match_command(message_text) is not None
+    async def execute(
+        self, prepared: PreparedCommand, context: CommandExecutionContext
+    ) -> CommandOutcome:
+        """Execute one prepared Built-in Command completely inside Chat core."""
+        unavailable = self.unavailability(prepared, context.reply_surface)
+        if unavailable is not None:
+            raise ValueError(
+                f"{unavailable.command} is unavailable on {unavailable.surface} surfaces"
+            )
+        handler = self._execution_commands.get(prepared.name)
+        if handler is None:
+            raise ValueError(f"unknown Built-in Command: {prepared.name}")
+        return await handler(context, prepared.argument)
 
     def _match_command(self, message_text: str) -> tuple[CommandSpec, str | None] | None:
         """Resolve a message to a command spec and its parsed argument.
@@ -354,8 +504,7 @@ class CommandDispatcher:
         ``none`` commands match only when nothing trails the token, so text after
         a no-argument command falls through as a normal message. ``optional`` and
         ``required`` commands take the entire remainder after the first token as
-        their argument (single source of truth for both ``dispatch`` and
-        ``recognizes``).
+        their argument through this single preparation source of truth.
         """
         stripped_text = message_text.strip()
         if not stripped_text.startswith("/"):
@@ -372,41 +521,493 @@ class CommandDispatcher:
             return spec, None
         return spec, (argument or None)
 
-    def _handle_compact(
-        self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
-    ) -> CommandAction:
-        return CommandAction(name="compact", argument=argument)
+    @staticmethod
+    def _notice(command: str, text: str) -> CommandOutcome:
+        return CommandOutcome(command=command, feedback=CommandFeedback(kind="notice", text=text))
 
-    def _handle_handoff(
-        self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
-    ) -> CommandAction:
-        return CommandAction(name="handoff", argument=argument)
+    async def _execute_compact(
+        self, context: CommandExecutionContext, argument: str | None
+    ) -> CommandOutcome:
+        trigger_service = _require_dependency(self._trigger_service, "TriggerService")
+        reply = await trigger_service.compact_session(
+            context.agent_id,
+            context.session_id,
+            argument,
+            project_id=context.project_id,
+        )
+        return self._notice("compact", reply)
 
-    def _handle_learn(
-        self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
-    ) -> CommandAction:
-        return CommandAction(name="learn", argument=argument)
+    async def _execute_handoff(
+        self, context: CommandExecutionContext, argument: str | None
+    ) -> CommandOutcome:
+        resolver = _require_dependency(self._agent_resolver, "AgentResolver")
+        sessions = _require_dependency(self._sessions, "ChatSessionManager")
+        storage = _require_dependency(self._storage, "StorageManager")
+        trigger_service = _require_dependency(self._trigger_service, "TriggerService")
+        parsed = parse_handoff_argument(argument)
+        try:
+            if parsed.target_agent_id is None:
+                target_agent_id, target_project_id = context.agent_id, context.project_id
+            else:
+                target_agent_id, target_project_id = parse_agent_address(parsed.target_agent_id)
+        except InvalidAgentAddressError:
+            return self._notice(
+                "handoff", f"Cannot handoff to invalid agent address: {parsed.target_agent_id}"
+            )
 
-    def _handle_reflect(
-        self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
-    ) -> CommandAction:
-        return CommandAction(name="reflect", argument=argument)
+        target_display = format_agent_address(target_agent_id, target_project_id)
+        if (
+            self._chat_runs.active_run(
+                agent_id=context.agent_id,
+                session_id=context.session_id,
+                project_id=context.project_id,
+            )
+            is not None
+        ):
+            return self._notice(
+                "handoff", "A handoff can be started after the current run finishes."
+            )
 
-    def _handle_agent(
-        self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
-    ) -> CommandHandled | CommandAction:
-        """Argument-dependent: no argument lists the directory, otherwise move.
+        if (target_agent_id, target_project_id) != (context.agent_id, context.project_id):
+            try:
+                resolver.resolve_agent(target_project_id, target_agent_id)
+            except AgentResolutionError:
+                return self._notice("handoff", f"Cannot handoff to unknown agent: {target_display}")
 
-        ``/agent`` (no argument) returns a transient, non-persisted directory card
-        — a real choice with no side effect. ``/agent <addr> [task]`` returns a
-        ``move_session`` action carrying the raw argument; the orchestrator owns
-        the parse, the guards, and the relocation, so the command layer stays a
-        thin trigger. This makes ``/agent`` the first built-in with an
-        argument-dependent output channel (transient card vs. action).
-        """
+        handoff_run = await trigger_service.trigger_run(
+            context.agent_id,
+            _build_handoff_prompt(
+                storage.read_prompt_fragment(HANDOFF_FRAGMENT_NAME), parsed.instruction
+            ),
+            session_id=context.session_id,
+            project_id=context.project_id,
+            internal=True,
+            reply_surface=context.reply_surface,
+        )
+        handoff_message = await handoff_run.wait()
+        handoff_text = _extract_text(handoff_message.content)
+        if not handoff_text:
+            return self._notice("handoff", "Handoff could not be generated.")
+
+        target_session = sessions.create(target_agent_id, project_id=target_project_id)
+        if target_project_id is None:
+            agents = _require_dependency(self._agents, "AgentStore")
+            agents.update(target_agent_id, current_session_id=target_session.id)
+        change = CommandResourceChange(kind="sessions", scope={"agent_id": target_agent_id})
+        context.report_change(change)
+        target_run = await trigger_service.trigger_run(
+            target_agent_id,
+            handoff_text,
+            session_id=target_session.id,
+            project_id=target_project_id,
+            internal=False,
+            reply_surface=context.reply_surface,
+        )
+        return CommandOutcome(
+            command="handoff",
+            feedback=CommandFeedback(
+                kind="notice",
+                text=f"Handoff sent to {target_display}, session {target_session.id}.",
+            ),
+            facts={"session_id": target_session.id, "agent_id": target_display},
+            navigation=CommandNavigation(
+                kind="offer_session",
+                agent_id=target_agent_id,
+                session_id=target_session.id,
+                project_id=target_project_id,
+            ),
+            runs=(CommandRun(role="follow_up", run=target_run),),
+            resource_changes=(change,),
+        )
+
+    async def _execute_learn(
+        self, context: CommandExecutionContext, argument: str | None
+    ) -> CommandOutcome:
+        resolver = _require_dependency(self._agent_resolver, "AgentResolver")
+        storage = _require_dependency(self._storage, "StorageManager")
+        trigger_service = _require_dependency(self._trigger_service, "TriggerService")
+        if (
+            self._chat_runs.active_run(
+                agent_id=context.agent_id,
+                session_id=context.session_id,
+                project_id=context.project_id,
+            )
+            is not None
+        ):
+            return self._notice("learn", "A skill can be authored after the current run finishes.")
+        agent = resolver.resolve_agent(context.project_id, context.agent_id)
+        if not getattr(agent, "workspace", ""):
+            return self._notice(
+                "learn", "Skill authoring needs an identity agent with its own skill home."
+            )
+        learn_run = await trigger_service.trigger_run(
+            context.agent_id,
+            _build_learn_prompt(storage.read_prompt_fragment(LEARN_FRAGMENT_NAME), argument),
+            session_id=context.session_id,
+            project_id=context.project_id,
+            internal=True,
+            reply_surface=context.reply_surface,
+        )
+        learn_message = await learn_run.wait()
+        summary = _extract_text(learn_message.content) or "Skill authoring run completed."
+        return self._notice("learn", summary)
+
+    async def _execute_reflect(
+        self, context: CommandExecutionContext, argument: str | None
+    ) -> CommandOutcome:
+        resolver = _require_dependency(self._agent_resolver, "AgentResolver")
+        reflection = _require_dependency(self._reflection_service, "ReflectionService")
+        if (
+            self._chat_runs.active_run(
+                agent_id=context.agent_id,
+                session_id=context.session_id,
+                project_id=context.project_id,
+            )
+            is not None
+        ):
+            return self._notice("reflect", "A reflection can run after the current run finishes.")
+        agent = resolver.resolve_agent(context.project_id, context.agent_id)
+        if not getattr(agent, "workspace", ""):
+            return self._notice(
+                "reflect", "Reflection needs an identity agent with its own memory and skill home."
+            )
+        focus = (argument or "").strip()
+        extra_instruction = (
+            f"The user asked you to focus this reflection on:\n{focus}" if focus else None
+        )
+        change = CommandResourceChange(kind="sessions", scope={"agent_id": context.agent_id})
+        result = await reflection.run_review(
+            context.agent_id,
+            context.session_id,
+            project_id=context.project_id,
+            extra_instruction=extra_instruction,
+            on_fork_created=lambda _fork_id: context.report_change(change),
+            reply_surface=context.reply_surface,
+        )
+        reflection.reset_counters(context.agent_id, context.session_id, context.project_id)
+        return CommandOutcome(
+            command="reflect",
+            feedback=CommandFeedback(kind="notice", text=result.summary or "Reflection completed."),
+            facts={"session_id": result.session_id, "agent_id": context.agent_id},
+            resource_changes=(change,),
+        )
+
+    async def _execute_agent(
+        self, context: CommandExecutionContext, argument: str | None
+    ) -> CommandOutcome:
         if argument is None:
-            return CommandHandled(reply=self._build_agent_directory(), output="transient")
-        return CommandAction(name="move_session", argument=argument)
+            return CommandOutcome(
+                command="agent",
+                feedback=CommandFeedback(kind="detail", text=self._build_agent_directory()),
+            )
+
+        resolver = _require_dependency(self._agent_resolver, "AgentResolver")
+        sessions = _require_dependency(self._sessions, "ChatSessionManager")
+        agents = _require_dependency(self._agents, "AgentStore")
+        parsed = parse_agent_argument(argument)
+        source_display = format_agent_address(context.agent_id, context.project_id)
+        try:
+            target_agent_id, target_project_id = parse_agent_address(parsed.address)
+        except InvalidAgentAddressError:
+            return self._notice("agent", f"Cannot move to invalid agent address: {parsed.address}")
+        target_display = format_agent_address(target_agent_id, target_project_id)
+        if (target_agent_id, target_project_id) == (context.agent_id, context.project_id):
+            return self._notice("agent", f"This session already belongs to {target_display}.")
+        if (
+            self._chat_runs.active_run(
+                agent_id=context.agent_id,
+                session_id=context.session_id,
+                project_id=context.project_id,
+            )
+            is not None
+        ):
+            return self._notice("agent", "This session can be moved once its current run finishes.")
+        if self._chat_runs.list_queued(
+            context.agent_id, context.session_id, project_id=context.project_id
+        ):
+            return self._notice("agent", "This session can be moved once its queued run finishes.")
+        try:
+            resolver.resolve_agent(target_project_id, target_agent_id)
+        except AgentResolutionError:
+            return self._notice("agent", f"Cannot move to unknown agent: {target_display}")
+
+        metadata = sessions.get_metadata(context.agent_id, context.session_id, context.project_id)
+        refusal = self._session_move_block_reason(metadata)
+        if refusal is not None:
+            return self._notice("agent", refusal)
+
+        await sessions.move(
+            context.agent_id,
+            context.session_id,
+            target_agent_id,
+            source_project_id=context.project_id,
+            target_project_id=target_project_id,
+            strip_meta_keys=SESSION_MOVE_STRIP_META_KEYS,
+        )
+        async with sessions.write_lock(target_agent_id, context.session_id, target_project_id):
+            destination = sessions.get(target_agent_id, context.session_id, target_project_id)
+            destination.append(
+                ChatMessage.agent_takeover(from_address=source_display, to_address=target_display)
+            )
+            destination.add_note(AGENT_TAKEOVER_NOTE.format(source=source_display))
+
+        if context.project_id is None:
+            agents.reset_current_after_session_removed(context.agent_id, context.session_id)
+        if target_project_id is None:
+            agents.update(target_agent_id, current_session_id=context.session_id)
+
+        changes = [
+            CommandResourceChange(kind="sessions", scope={"agent_id": context.agent_id}),
+            CommandResourceChange(kind="sessions", scope={"agent_id": target_agent_id}),
+        ]
+        if context.project_id is None or target_project_id is None:
+            changes.append(CommandResourceChange(kind="agents"))
+        for change in changes:
+            context.report_change(change)
+
+        runs: tuple[CommandRun, ...] = ()
+        if parsed.task is not None:
+            trigger_service = _require_dependency(self._trigger_service, "TriggerService")
+            task_run = await trigger_service.trigger_run(
+                target_agent_id,
+                parsed.task,
+                session_id=context.session_id,
+                project_id=target_project_id,
+                internal=False,
+                reply_surface=context.reply_surface,
+            )
+            runs = (CommandRun(role="follow_up", run=task_run),)
+        reply = (
+            f"Session moved to {target_display}; it is now running your task."
+            if runs
+            else f"Session moved to {target_display}; it is waiting."
+        )
+        return CommandOutcome(
+            command="agent",
+            feedback=CommandFeedback(kind="notice", text=reply),
+            facts={"session_id": context.session_id, "agent_id": target_display},
+            navigation=CommandNavigation(
+                kind="offer_session",
+                agent_id=target_agent_id,
+                session_id=context.session_id,
+                project_id=target_project_id,
+            ),
+            runs=runs,
+            resource_changes=tuple(changes),
+        )
+
+    @staticmethod
+    def _session_move_block_reason(metadata: Mapping[str, object]) -> str | None:
+        if metadata.get(CHANNEL_SOURCE_META_KEY):
+            return "A channel-bound session cannot be moved to another agent."
+        if metadata.get(SUBAGENT_SESSION_METADATA_FLAG) or metadata.get(
+            SUBAGENT_PARENT_METADATA_KEY
+        ):
+            return "A sub-agent session cannot be moved to another agent."
+        return None
+
+    async def _execute_model(
+        self, context: CommandExecutionContext, argument: str | None
+    ) -> CommandOutcome:
+        if argument is None:
+            return CommandOutcome(
+                command="model",
+                feedback=CommandFeedback(
+                    kind="detail",
+                    text=self._build_model_summary(context.agent_id, context.project_id),
+                ),
+            )
+        resolver = _require_dependency(self._agent_resolver, "AgentResolver")
+        raw = argument.strip()
+        is_reset = raw.lower() == MODEL_RESET_TOKEN
+        model = "" if is_reset else raw
+        if not is_reset:
+            resolver.require_model_configured(model)
+        if context.project_id is None:
+            agents = _require_dependency(self._agents, "AgentStore")
+            agents.update(context.agent_id, model=model)
+        elif is_reset:
+            projects = _require_dependency(self._projects, "ProjectStore")
+            projects.clear_override(context.project_id, context.agent_id, "model")
+        else:
+            projects = _require_dependency(self._projects, "ProjectStore")
+            projects.set_override(context.project_id, context.agent_id, "model", model)
+        return CommandOutcome(
+            command="model",
+            feedback=CommandFeedback(
+                kind="notice", text="Model reset." if is_reset else f"Model set to {model}."
+            ),
+            facts={"agent_id": context.agent_id, "model": model},
+        )
+
+    async def _execute_help(
+        self, context: CommandExecutionContext, argument: str | None
+    ) -> CommandOutcome:
+        lines = ["Built-in slash commands:"]
+        lines.extend(
+            f"/{spec.name} - {spec.description}"
+            for spec in sorted(self.BUILT_IN_COMMANDS.values(), key=lambda spec: spec.name)
+        )
+        lines.extend(
+            [
+                "",
+                "Skill shortcuts also start with slash names. "
+                "Use $skill-name to force a skill without sending a slash command.",
+            ]
+        )
+        return CommandOutcome(
+            command="help",
+            feedback=CommandFeedback(kind="detail", text="\n".join(lines)),
+        )
+
+    async def _execute_stop(
+        self, context: CommandExecutionContext, argument: str | None
+    ) -> CommandOutcome:
+        try:
+            self._chat_runs.cancel_by_session(
+                context.agent_id,
+                context.session_id,
+                project_id=context.project_id,
+                reason="user",
+            )
+        except RunNotFoundError:
+            return self._notice("stop", "No active run to cancel.")
+        return self._notice("stop", "Run cancelled.")
+
+    async def _execute_new(
+        self, context: CommandExecutionContext, argument: str | None
+    ) -> CommandOutcome:
+        resolver = _require_dependency(self._agent_resolver, "AgentResolver")
+        sessions = _require_dependency(self._sessions, "ChatSessionManager")
+        if (
+            self._chat_runs.active_run(
+                agent_id=context.agent_id,
+                session_id=context.session_id,
+                project_id=context.project_id,
+            )
+            is not None
+        ):
+            return self._notice(
+                "new", "A new session can be started after the current run finishes."
+            )
+        resolver.resolve_agent(context.project_id, context.agent_id)
+        session = sessions.create(
+            context.agent_id,
+            session_id=context.preferred_new_session_id,
+            project_id=context.project_id,
+        )
+        if context.project_id is None:
+            agents = _require_dependency(self._agents, "AgentStore")
+            agents.update(context.agent_id, current_session_id=session.id)
+        return CommandOutcome(
+            command="new",
+            feedback=CommandFeedback(kind="notice", text=f"New session started: {session.id}"),
+            facts={"session_id": session.id},
+            navigation=CommandNavigation(
+                kind="continue_in_session",
+                agent_id=context.agent_id,
+                session_id=session.id,
+                project_id=context.project_id,
+            ),
+            resource_changes=(
+                CommandResourceChange(kind="sessions", scope={"agent_id": context.agent_id}),
+            ),
+        )
+
+    async def _execute_rename(
+        self, context: CommandExecutionContext, argument: str | None
+    ) -> CommandOutcome:
+        sessions = _require_dependency(self._sessions, "ChatSessionManager")
+        stored_title = sessions.set_title(
+            context.agent_id,
+            context.session_id,
+            argument or "",
+            context.project_id,
+        )
+        reply = f"Session renamed to {stored_title}." if stored_title else "Session name cleared."
+        return CommandOutcome(
+            command="rename",
+            feedback=CommandFeedback(kind="notice", text=reply),
+            facts={"session_id": context.session_id, "title": stored_title},
+        )
+
+    async def _execute_continue(
+        self, context: CommandExecutionContext, argument: str | None
+    ) -> CommandOutcome:
+        trigger_service = _require_dependency(self._trigger_service, "TriggerService")
+        run = await trigger_service.continue_run(
+            context.agent_id,
+            context.session_id,
+            project_id=context.project_id,
+            reply_surface=context.reply_surface,
+        )
+        return CommandOutcome(command="continue", runs=(CommandRun(role="result", run=run),))
+
+    async def _execute_status(
+        self, context: CommandExecutionContext, argument: str | None
+    ) -> CommandOutcome:
+        agent: RuntimeAgent | None = None
+        messages: list[ChatMessage] = []
+        try:
+            if self._agent_resolver is not None:
+                agent = self._agent_resolver.resolve_agent(context.project_id, context.agent_id)
+        except Exception as error:
+            log = (
+                _LOGGER.warning
+                if _has_exception_name(error, "AgentResolutionError")
+                else _LOGGER.error
+            )
+            log(
+                "Failed to resolve agent %r while building /status reply",
+                context.agent_id,
+                exc_info=True,
+            )
+        try:
+            if self._sessions is not None:
+                messages = self._sessions.get(
+                    context.agent_id, context.session_id, context.project_id
+                ).load()
+        except Exception as error:
+            log = (
+                _LOGGER.warning if _has_exception_name(error, "ChatSessionError") else _LOGGER.error
+            )
+            log(
+                "Failed to load session %r for agent %r while building /status reply",
+                context.session_id,
+                context.agent_id,
+                exc_info=True,
+            )
+        model_details = resolve_status_model_details(
+            agent,
+            self._models,
+            self._providers,
+            local_context_windows=self._load_local_context_windows(),
+        )
+        activity = resolve_status_activity(
+            self._chat_runs,
+            context.agent_id,
+            context.session_id,
+            context.project_id,
+        )
+        text = build_status_reply(
+            agent,
+            messages,
+            model_details.context_window,
+            self._started_at,
+            model_details.display_name,
+            activity,
+            actual_thinking_effort=resolve_actual_thinking_effort(
+                agent.thinking_effort if agent is not None else None,
+                model_details.reasoning_levels,
+                model_details.reasoning_control,
+                model_details.reasoning_budget_max,
+            ),
+            project_label=resolve_status_project_label(self._projects, context.project_id),
+        )
+        return CommandOutcome(
+            command="status",
+            feedback=CommandFeedback(kind="detail", text=text),
+        )
 
     def _build_agent_directory(self) -> str:
         """List the move targets: personal agents plus every project's team.
@@ -445,26 +1046,6 @@ class CommandDispatcher:
                     for member in sorted(team, key=lambda member: member.agent_id)
                 )
         return "\n".join(lines)
-
-    def _handle_model(
-        self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
-    ) -> CommandHandled | CommandAction:
-        """Argument-dependent: no argument shows the current model, otherwise set it.
-
-        Bare ``/model`` returns a transient card naming the session's current model
-        and where it comes from (a per-agent local override, the project
-        configuration, or the agent's own configuration) — a read with no side
-        effect. ``/model <value>`` and ``/model reset`` return a ``set_model``
-        action carrying the raw text; the accessor layer owns validation,
-        identity-vs-project routing, and the persistent write, so the command stays
-        a thin trigger (mirroring ``/agent``).
-        """
-        if argument is None:
-            return CommandHandled(
-                reply=self._build_model_summary(agent_id, project_id),
-                output="transient",
-            )
-        return CommandAction(name="set_model", argument=argument)
 
     def _build_model_summary(self, agent_id: str, project_id: str | None) -> str:
         """Describe the session's current model and where it resolves from.
@@ -508,118 +1089,6 @@ class CommandDispatcher:
         if project_id is None:
             return _IDENTITY_MODEL_ORIGINS.get(source, _MODEL_ORIGIN_NOT_CONFIGURED)
         return _PROJECT_MODEL_ORIGINS.get(source, _MODEL_ORIGIN_NOT_CONFIGURED)
-
-    def _handle_help(
-        self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
-    ) -> CommandHandled:
-        lines = ["Built-in slash commands:"]
-        lines.extend(
-            f"/{spec.name} - {spec.description}"
-            for spec in sorted(self.BUILT_IN_COMMANDS.values(), key=lambda spec: spec.name)
-        )
-        lines.extend(
-            [
-                "",
-                "Skill shortcuts also start with slash names. "
-                "Use $skill-name to force a skill without sending a slash command.",
-            ]
-        )
-        return CommandHandled(reply="\n".join(lines), output="transient")
-
-    def _handle_stop(
-        self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
-    ) -> CommandHandled:
-        try:
-            self._chat_runs.cancel_by_session(
-                agent_id, session_id, project_id=project_id, reason="user"
-            )
-        except RunNotFoundError:
-            return CommandHandled(reply="No active run to cancel.", output="toast")
-        return CommandHandled(reply="Run cancelled.", output="toast")
-
-    def _handle_new(
-        self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
-    ) -> CommandAction:
-        return CommandAction(name="new_session")
-
-    def _handle_rename(
-        self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
-    ) -> CommandAction:
-        """Set or clear this session's title; the accessor owns the write.
-
-        Like ``/model``, a thin trigger: the raw argument (``None`` clears the
-        title) travels to the server handler, which writes through the single
-        titling seam and emits the session-list refresh. Keeping it an action,
-        not a direct ``CommandHandled``, is what lets the rename publish that
-        event — the dispatcher itself cannot.
-        """
-        return CommandAction(name="rename_session", argument=argument)
-
-    def _handle_continue(
-        self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
-    ) -> CommandAction:
-        return CommandAction(name="continue")
-
-    def _handle_status(
-        self, agent_id: str, session_id: str, argument: str | None, project_id: str | None
-    ) -> CommandHandled:
-        agent: RuntimeAgent | None = None
-        messages: list[ChatMessage] = []
-
-        try:
-            if self._agent_resolver is not None:
-                agent = self._agent_resolver.resolve_agent(project_id, agent_id)
-        except Exception as error:
-            log = (
-                _LOGGER.warning
-                if _has_exception_name(error, "AgentResolutionError")
-                else _LOGGER.error
-            )
-            log(
-                "Failed to resolve agent %r while building /status reply",
-                agent_id,
-                exc_info=True,
-            )
-            agent = None
-
-        try:
-            if self._sessions is not None:
-                messages = self._sessions.get(agent_id, session_id, project_id).load()
-        except Exception as error:
-            log = (
-                _LOGGER.warning if _has_exception_name(error, "ChatSessionError") else _LOGGER.error
-            )
-            log(
-                "Failed to load session %r for agent %r while building /status reply",
-                session_id,
-                agent_id,
-                exc_info=True,
-            )
-            messages = []
-
-        model_details = resolve_status_model_details(
-            agent,
-            self._models,
-            self._providers,
-            local_context_windows=self._load_local_context_windows(),
-        )
-        activity = resolve_status_activity(self._chat_runs, agent_id, session_id, project_id)
-        text = build_status_reply(
-            agent,
-            messages,
-            model_details.context_window,
-            self._started_at,
-            model_details.display_name,
-            activity,
-            actual_thinking_effort=resolve_actual_thinking_effort(
-                agent.thinking_effort if agent is not None else None,
-                model_details.reasoning_levels,
-                model_details.reasoning_control,
-                model_details.reasoning_budget_max,
-            ),
-            project_label=resolve_status_project_label(self._projects, project_id),
-        )
-        return CommandHandled(reply=text, output="transient")
 
     def _load_local_context_windows(self) -> Mapping[str, Any]:
         """Return the live local-model window map, empty when no loader is wired."""

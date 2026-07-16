@@ -11,7 +11,12 @@ import pytest
 
 import core.tools.status as status_tool_module
 from core.agents.agents import Agent
-from core.chat import ChatSessionError, CommandDispatcher, CommandHandled
+from core.chat import (
+    ChatSessionError,
+    CommandDispatcher,
+    CommandExecutionContext,
+    ReplySurface,
+)
 from core.chat.chat import ChatMessage
 from core.chat.commands import STATUS_PLACEHOLDER, build_status_text
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
@@ -366,9 +371,20 @@ def test_status_tool_matches_status_command_for_registry_display(tmp_path: Path)
         models=models,
         started_at=started_at,
     )
-    command_result = dispatcher.dispatch("coder", "session-one", "/status")
-    assert isinstance(command_result, CommandHandled)
-    assert command_result.reply is not None
+    prepared = dispatcher.prepare("/status")
+    assert prepared is not None
+    command_result = asyncio.run(
+        dispatcher.execute(
+            prepared,
+            CommandExecutionContext(
+                agent_id="coder",
+                session_id="session-one",
+                project_id=None,
+                reply_surface=ReplySurface.webui(),
+            ),
+        )
+    )
+    assert command_result.feedback is not None
 
     registry = ToolRegistry()
     chat_runs = ChatRunManager()
@@ -386,7 +402,7 @@ def test_status_tool_matches_status_command_for_registry_display(tmp_path: Path)
             if not line.startswith(("Session started:", "App uptime:", "Current time:"))
         ]
 
-    assert _without_live_time_lines(text) == _without_live_time_lines(command_result.reply)
+    assert _without_live_time_lines(text) == _without_live_time_lines(command_result.feedback.text)
     assert "Model display name: GPT-5.2 Registry" in text
 
 

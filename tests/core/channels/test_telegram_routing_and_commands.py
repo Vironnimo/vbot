@@ -20,10 +20,17 @@ from core.channels.telegram import (
     TelegramChannelAdapter,
 )
 from core.chat import MessageSender
-from core.chat.commands import CommandAction, CommandHandled
+from core.chat.commands import (
+    CommandFeedback,
+    CommandOutcome,
+    CommandRun,
+    CommandUnavailability,
+    PreparedCommand,
+)
 from core.chat.content_blocks import MediaBlock
 from core.runs import Run
 from core.sessions import ChatSessionManager
+from tests.core.channels.engine_test_support import make_new_only_dispatcher
 from tests.core.channels.telegram_test_support import (
     CHANNEL_REPLY_SURFACE,
     drain_chat_queue,
@@ -403,7 +410,12 @@ async def test_plain_text_command_is_dispatched_before_trigger_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
+    command_dispatcher = make_command_dispatcher(
+        result=CommandOutcome(
+            command="stop",
+            feedback=CommandFeedback(kind="notice", text="Run cancelled."),
+        )
+    )
     adapter, _chat_sessions, trigger_mock, bot = make_adapter(
         tmp_path,
         monkeypatch,
@@ -417,8 +429,11 @@ async def test_plain_text_command_is_dispatched_before_trigger_run(
     )
     await drain_chat_queue(adapter, 12345)
 
-    command_dispatcher.dispatch.assert_called_once_with(
-        "assistant", "ch-tg-assistant-12345", "/stop"
+    command_dispatcher.execute.assert_awaited_once()
+    context = command_dispatcher.execute.await_args.args[1]
+    assert (context.agent_id, context.session_id) == (
+        "assistant",
+        "ch-tg-assistant-12345",
     )
     trigger_mock.assert_not_awaited()
     bot.send_message.assert_awaited_once_with(chat_id=12345, text="Run cancelled.")
@@ -430,13 +445,16 @@ async def test_compact_command_action_replies_without_trigger_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    compact_mock = AsyncMock(return_value="Context compacted.")
-    command_dispatcher = make_command_dispatcher(result=CommandAction(name="compact"))
+    command_dispatcher = make_command_dispatcher(
+        result=CommandOutcome(
+            command="compact",
+            feedback=CommandFeedback(kind="notice", text="Context compacted."),
+        )
+    )
     adapter, _chat_sessions, trigger_mock, bot = make_adapter(
         tmp_path,
         monkeypatch,
         allowed_chat_ids=[12345],
-        compact_session=compact_mock,
         command_dispatcher=command_dispatcher,
     )
 
@@ -446,7 +464,7 @@ async def test_compact_command_action_replies_without_trigger_run(
     )
     await drain_chat_queue(adapter, 12345)
 
-    compact_mock.assert_awaited_once_with("assistant", "ch-tg-assistant-12345", None)
+    command_dispatcher.execute.assert_awaited_once()
     trigger_mock.assert_not_awaited()
     bot.send_message.assert_awaited_once_with(chat_id=12345, text="Context compacted.")
     await adapter.stop()
@@ -457,7 +475,7 @@ async def test_new_command_starts_fresh_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    command_dispatcher = make_command_dispatcher(result=CommandAction(name="new_session"))
+    command_dispatcher = make_new_only_dispatcher()
     adapter, chat_sessions, trigger_mock, bot = make_adapter(
         tmp_path,
         monkeypatch,
@@ -489,15 +507,17 @@ async def test_continue_command_action_continues_and_relays_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session_id = "ch-tg-assistant-12345"
-    continue_mock = AsyncMock(
-        return_value=make_completed_run(session_id=session_id, output_text="continued reply")
+    continued_run = make_completed_run(session_id=session_id, output_text="continued reply")
+    command_dispatcher = make_command_dispatcher(
+        result=CommandOutcome(
+            command="continue",
+            runs=(CommandRun(role="result", run=continued_run),),
+        )
     )
-    command_dispatcher = make_command_dispatcher(result=CommandAction(name="continue"))
     adapter, _chat_sessions, trigger_mock, bot = make_adapter(
         tmp_path,
         monkeypatch,
         allowed_chat_ids=[12345],
-        continue_run=continue_mock,
         command_dispatcher=command_dispatcher,
     )
 
@@ -507,21 +527,22 @@ async def test_continue_command_action_continues_and_relays_run(
     )
     await drain_chat_queue(adapter, 12345)
 
-    continue_mock.assert_awaited_once_with(
-        "assistant", session_id, reply_surface=CHANNEL_REPLY_SURFACE
-    )
+    command_dispatcher.execute.assert_awaited_once()
     trigger_mock.assert_not_awaited()
     bot.send_message.assert_awaited_once_with(chat_id=12345, text="continued reply")
     await adapter.stop()
 
 
 @pytest.mark.asyncio
-async def test_handoff_command_action_reports_channel_limitation(
+@pytest.mark.parametrize("message", ["/agent", "/agent planner"])
+async def test_agent_command_reports_permanent_channel_limitation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    message: str,
 ) -> None:
     command_dispatcher = make_command_dispatcher(
-        result=CommandAction(name="handoff", argument=None)
+        result=CommandOutcome(command="agent"),
+        unavailable=CommandUnavailability(command="/agent", surface="channel"),
     )
     adapter, _chat_sessions, trigger_mock, bot = make_adapter(
         tmp_path,
@@ -531,7 +552,7 @@ async def test_handoff_command_action_reports_channel_limitation(
     )
 
     await adapter._handle_inbound_message(
-        make_update(chat_id=12345, user_id=50, text="/handoff"),
+        make_update(chat_id=12345, user_id=50, text=message),
         SimpleNamespace(),
     )
     await drain_chat_queue(adapter, 12345)
@@ -539,8 +560,9 @@ async def test_handoff_command_action_reports_channel_limitation(
     trigger_mock.assert_not_awaited()
     bot.send_message.assert_awaited_once_with(
         chat_id=12345,
-        text="This command is not available from Telegram channels yet.",
+        text="The /agent command is not available through Telegram.",
     )
+    command_dispatcher.execute.assert_not_awaited()
     await adapter.stop()
 
 
@@ -752,23 +774,35 @@ async def test_compact_action_runs_in_worker_and_keeps_handler_unblocked(
     compact_started = asyncio.Event()
     release_compact = asyncio.Event()
 
-    async def slow_compact(
-        _agent_id: str, _session_id: str, _instruction: str | None = None
-    ) -> str:
-        compact_started.set()
-        await release_compact.wait()
-        return "Context compacted."
+    def prepare(text: str) -> PreparedCommand | None:
+        if text == "/compact":
+            return PreparedCommand(name="compact", argument=None, execution_mode="serialized")
+        if text == "/stop":
+            return PreparedCommand(name="stop", argument=None, execution_mode="immediate")
+        return None
 
-    command_dispatcher = make_command_dispatcher()
-    command_dispatcher.dispatch.side_effect = [
-        CommandAction(name="compact"),
-        CommandHandled(reply="Run cancelled."),
-    ]
+    async def execute(prepared: PreparedCommand, _context: Any) -> CommandOutcome:
+        if prepared.name == "compact":
+            compact_started.set()
+            await release_compact.wait()
+            return CommandOutcome(
+                command="compact",
+                feedback=CommandFeedback(kind="notice", text="Context compacted."),
+            )
+        return CommandOutcome(
+            command="stop",
+            feedback=CommandFeedback(kind="notice", text="Run cancelled."),
+        )
+
+    command_dispatcher = SimpleNamespace(
+        prepare=prepare,
+        unavailability=lambda _prepared, _surface: None,
+        execute=AsyncMock(side_effect=execute),
+    )
     adapter, _chat_sessions, trigger_mock, bot = make_adapter(
         tmp_path,
         monkeypatch,
         allowed_chat_ids=[12345],
-        compact_session=AsyncMock(side_effect=slow_compact),
         command_dispatcher=command_dispatcher,
     )
 
@@ -945,7 +979,12 @@ async def test_stop_command_is_eagerly_dispatched_while_chat_worker_is_blocked(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session_id = "ch-tg-assistant-12345"
-    command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
+    command_dispatcher = make_command_dispatcher(
+        result=CommandOutcome(
+            command="stop",
+            feedback=CommandFeedback(kind="notice", text="Run cancelled."),
+        )
+    )
     trigger_mock = AsyncMock(
         return_value=Run(run_id="run-active", agent_id="assistant", session_id=session_id)
     )
@@ -984,7 +1023,7 @@ async def test_stop_command_is_eagerly_dispatched_while_chat_worker_is_blocked(
 
     # Plain text never touches the dispatcher; the command dispatched eagerly while
     # the worker was still blocked relaying the first message's run.
-    command_dispatcher.dispatch.assert_called_once_with("assistant", session_id, "/stop")
+    command_dispatcher.execute.assert_awaited_once()
     assert trigger_mock.await_count == 1
     bot.send_message.assert_awaited_once_with(chat_id=12345, text="Run cancelled.")
 
@@ -1037,7 +1076,7 @@ async def test_non_command_text_still_queues_while_chat_worker_is_blocked(
     await asyncio.sleep(0)
 
     # Plain text is queued without any dispatcher involvement.
-    command_dispatcher.dispatch.assert_not_called()
+    command_dispatcher.execute.assert_not_awaited()
     assert trigger_mock.await_count == 1
 
     queue = adapter._engine._chat_queues.get("12345")

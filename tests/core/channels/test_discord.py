@@ -20,8 +20,7 @@ from core.channels.discord import (
     DiscordChannelAdapter,
     split_discord_message,
 )
-from core.chat import MessageSender, ReplySurface
-from core.chat.commands import NotACommand
+from core.chat import CommandUnavailability, MessageSender, PreparedCommand, ReplySurface
 from core.chat.content_blocks import MediaBlock, TextBlock
 from core.extensions import InteractionButton
 from core.runs import ASSISTANT_OUTPUT_EVENT, Run, WaitingWorkAdmission
@@ -132,6 +131,7 @@ class FakeAttachment:
 def make_config(
     *,
     allowed_chat_ids: list[int | str] | None = None,
+    owner_user_ids: list[int | str] | None = None,
     response_mode: str = "mention",
     observe_unaddressed: bool = False,
 ) -> ChannelConfig:
@@ -141,6 +141,7 @@ def make_config(
         agent_id="assistant",
         dm_scope="per_conversation",
         allowed_chat_ids=cast(Any, list(allowed_chat_ids or [])),
+        owner_user_ids=cast(Any, list(owner_user_ids or [])),
         token_env_var="DISCORD_BOT_TOKEN_DC_ASSISTANT",
         enabled=True,
         response_mode=response_mode,
@@ -152,8 +153,9 @@ def make_config(
 
 def make_command_dispatcher() -> SimpleNamespace:
     return SimpleNamespace(
-        dispatch=Mock(return_value=NotACommand()),
-        recognizes=Mock(side_effect=lambda text: text.strip().startswith("/")),
+        prepare=Mock(return_value=None),
+        unavailability=Mock(return_value=None),
+        execute=AsyncMock(),
     )
 
 
@@ -200,10 +202,12 @@ def make_adapter(
     *,
     target: FakeChannel,
     allowed_chat_ids: list[int | str] | None = None,
+    owner_user_ids: list[int | str] | None = None,
     response_mode: str = "mention",
     observe_unaddressed: bool = False,
     trigger_run: AsyncMock | None = None,
     attachment_store: AttachmentStore | None = None,
+    command_dispatcher: Any | None = None,
 ) -> tuple[DiscordChannelAdapter, ChatSessionManager, AsyncMock, FakeClient]:
     chat_sessions = ChatSessionManager(tmp_path)
     trigger_mock = trigger_run or AsyncMock()
@@ -224,6 +228,7 @@ def make_adapter(
     adapter = DiscordChannelAdapter(
         make_config(
             allowed_chat_ids=allowed_chat_ids,
+            owner_user_ids=owner_user_ids,
             response_mode=response_mode,
             observe_unaddressed=observe_unaddressed,
         ),
@@ -231,7 +236,7 @@ def make_adapter(
         cast(Any, chat_sessions),
         lambda _key: "test-token",
         attachment_store=attachment_store,
-        command_dispatcher=cast(Any, make_command_dispatcher()),
+        command_dispatcher=cast(Any, command_dispatcher or make_command_dispatcher()),
     )
     client = FakeClient([target])
     adapter._client = client
@@ -359,6 +364,45 @@ async def test_group_mention_triggers_shared_run_with_sender(tmp_path: Path) -> 
         reply_surface=CHANNEL_REPLY_SURFACE,
     )
     assert channel.sent[0]["content"] == "ok"
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message", ["/agent", "/agent planner"])
+async def test_agent_command_reports_exact_discord_unavailability(
+    tmp_path: Path, message: str
+) -> None:
+    channel = FakeChannel(100, guild=SimpleNamespace(id=1))
+    dispatcher = SimpleNamespace(
+        prepare=Mock(
+            return_value=PreparedCommand(
+                name="agent",
+                argument=None,
+                execution_mode="immediate",
+            )
+        ),
+        unavailability=Mock(
+            return_value=CommandUnavailability(command="/agent", surface="channel")
+        ),
+        execute=AsyncMock(),
+    )
+    adapter, _sessions, trigger_mock, _client = make_adapter(
+        tmp_path,
+        target=channel,
+        allowed_chat_ids=[100],
+        owner_user_ids=[50],
+        command_dispatcher=dispatcher,
+    )
+
+    await adapter._handle_inbound_message(
+        make_message(channel, message_id=201, author_id=50, content=message)
+    )
+
+    assert [payload["content"] for payload in channel.sent] == [
+        "The /agent command is not available through Discord."
+    ]
+    trigger_mock.assert_not_awaited()
+    dispatcher.execute.assert_not_awaited()
     await adapter.stop()
 
 

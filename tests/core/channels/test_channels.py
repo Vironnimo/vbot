@@ -27,7 +27,6 @@ from core.channels.adapter import DeniedChatLog, FileData, RouteFacts
 from core.channels.channels import _normalize_channel_id
 from core.channels.discord import DiscordChannelAdapter
 from core.channels.telegram import TelegramChannelAdapter
-from core.chat.commands import NotACommand
 from core.extensions import InteractionButton
 
 
@@ -54,7 +53,7 @@ def make_service(
         data_root=tmp_path,
         credential_resolver=lambda key: os.environ.get(key, ""),
         attachment_store=attachment_store,
-        command_dispatcher=cast(Any, SimpleNamespace(dispatch=lambda *_args: NotACommand())),
+        command_dispatcher=cast(Any, SimpleNamespace(prepare=lambda _content: None)),
     )
 
 

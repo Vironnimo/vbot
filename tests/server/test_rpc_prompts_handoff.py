@@ -10,9 +10,6 @@ from typing import Any
 import pytest
 
 from core.projects.resolver import ConfigAgent
-from server.rpc import (
-    chat_methods,
-)
 from server.rpc.methods import dispatch_rpc
 from tests.server.rpc_test_support import (
     StubAdapter,
@@ -228,11 +225,7 @@ async def test_chat_methods_handle_handoff_command_for_same_agent(
     state = make_state(tmp_path, StubAdapter())
     state.runtime.chat_sessions.create("coder", session_id="session-one")
     bridged_runs: list[Any] = []
-    monkeypatch.setattr(
-        chat_methods,
-        "_bridge_run_to_event_bus",
-        lambda _state, run: bridged_runs.append(run),
-    )
+    state.chat_runs.add_run_started_callback(bridged_runs.append)
 
     response = await dispatch_rpc(
         state,
@@ -256,12 +249,13 @@ async def test_chat_methods_handle_handoff_command_for_same_agent(
     assert isinstance(new_session_id, str)
     assert new_session_id != "session-one"
     assert state.runtime.agents.get("coder").current_session_id == new_session_id
-    # The injected run was started (and bridged) in the new session.
-    assert len(bridged_runs) == 1
-    assert bridged_runs[0].agent_id == "coder"
-    assert bridged_runs[0].session_id == new_session_id
+    # The process-wide Run-start seam observes both the internal writer and the
+    # receiving follow-up without command-specific server bridging.
+    target_runs = [run for run in bridged_runs if run.session_id == new_session_id]
+    assert len(target_runs) == 1
+    assert target_runs[0].agent_id == "coder"
     # Wait for the receiving run to write its user message and finish.
-    await bridged_runs[0].wait()
+    await target_runs[0].wait()
     new_session = state.runtime.chat_sessions.get("coder", new_session_id)
     new_history = new_session.load()
     user_messages = [message for message in new_history if message.role == "user"]
@@ -284,11 +278,7 @@ async def test_chat_methods_handle_handoff_command_for_other_agent(
     state.runtime.agents.create("reviewer", name="Reviewer")
     state.runtime.chat_sessions.create("coder", session_id="session-one")
     bridged_runs: list[Any] = []
-    monkeypatch.setattr(
-        chat_methods,
-        "_bridge_run_to_event_bus",
-        lambda _state, run: bridged_runs.append(run),
-    )
+    state.chat_runs.add_run_started_callback(bridged_runs.append)
 
     response = await dispatch_rpc(
         state,
@@ -309,10 +299,10 @@ async def test_chat_methods_handle_handoff_command_for_other_agent(
     assert result["data"]["agent_id"] == "reviewer"
     new_session_id = result["data"]["session_id"]
     assert state.runtime.agents.get("reviewer").current_session_id == new_session_id
-    assert len(bridged_runs) == 1
-    assert bridged_runs[0].agent_id == "reviewer"
-    assert bridged_runs[0].session_id == new_session_id
-    await bridged_runs[0].wait()
+    target_runs = [run for run in bridged_runs if run.session_id == new_session_id]
+    assert len(target_runs) == 1
+    assert target_runs[0].agent_id == "reviewer"
+    await target_runs[0].wait()
     new_session = state.runtime.chat_sessions.get("reviewer", new_session_id)
     new_history = new_session.load()
     user_messages = [message for message in new_history if message.role == "user"]
@@ -332,11 +322,7 @@ async def test_chat_methods_handle_handoff_command_with_agent_and_instruction(
     state.runtime.agents.create("reviewer", name="Reviewer")
     state.runtime.chat_sessions.create("coder", session_id="session-one")
     bridged_runs: list[Any] = []
-    monkeypatch.setattr(
-        chat_methods,
-        "_bridge_run_to_event_bus",
-        lambda _state, run: bridged_runs.append(run),
-    )
+    state.chat_runs.add_run_started_callback(bridged_runs.append)
 
     response = await dispatch_rpc(
         state,
@@ -355,7 +341,10 @@ async def test_chat_methods_handle_handoff_command_with_agent_and_instruction(
     # The agent: prefix still targets reviewer, and the trailing text rides along
     # as the handoff-writing instruction.
     assert result["data"]["agent_id"] == "reviewer"
-    await bridged_runs[0].wait()
+    target_session_id = result["data"]["session_id"]
+    target_runs = [run for run in bridged_runs if run.session_id == target_session_id]
+    assert len(target_runs) == 1
+    await target_runs[0].wait()
     # The handoff-writing run runs as an internal note on the source session, so
     # its prompt — with the woven instruction — is persisted there.
     source_history = state.runtime.chat_sessions.get("coder", "session-one").load()
@@ -364,7 +353,7 @@ async def test_chat_methods_handle_handoff_command_with_agent_and_instruction(
 
 
 def test_build_handoff_prompt_weaves_instruction_and_preserves_base() -> None:
-    from server.rpc.chat_methods import _build_handoff_prompt
+    from core.chat.commands import _build_handoff_prompt
 
     base = "Write a handoff for the next agent."
 

@@ -266,7 +266,7 @@ class DiscordChannelAdapter(ChannelAdapter):
             return False
         if self._config.response_mode != "mention" or self._config.observe_unaddressed:
             return False
-        if content is not None and self._command_dispatcher.recognizes(content):
+        if content is not None and self._command_dispatcher.prepare(content) is not None:
             return False
         return self._engine.should_respond(conversation, (content,))
 
