@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from tests.core.chat.chat_loop_support import build_chat_loop
+
 from .runs_test_support import (
     RUN_STARTED_EVENT,
     ActiveRunError,
     Any,
-    ChatLoop,
     ChatRunManager,
     ChatSessionManager,
     Path,
@@ -612,7 +613,7 @@ async def test_chat_loop_queue_run_uses_display_preview_for_busy_session(tmp_pat
         agent_id="coder", session_id=session_id, executor=active_execute, project_id=None
     )
 
-    item = await ChatLoop(runtime).queue_run(
+    item = await build_chat_loop(runtime).queue_run(
         "coder",
         "x" * 600,
         session_id=session_id,

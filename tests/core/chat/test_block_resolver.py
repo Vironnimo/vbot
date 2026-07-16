@@ -12,12 +12,13 @@ from unittest.mock import Mock
 import pytest
 
 from core.attachments import AttachmentStore
-from core.chat import ChatLoop, ChatMessage, ChatSession
+from core.chat import ChatMessage, ChatSession
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import MediaBlock
 from core.model_tasks import SpeechExecutionError
 from core.tools.file_state import FileReadState
 from core.tools.read import render_text_file
+from tests.core.chat.chat_loop_support import build_chat_loop
 
 TEXT_IMAGE = frozenset({"text", "image"})
 TEXT_ONLY = frozenset({"text"})
@@ -967,7 +968,7 @@ def test_chat_loop_resolves_historical_blocks_when_latest_user_turn_is_plain_tex
     )
     session.append(ChatMessage.user("latest plain text"))
     runtime: Any = _StubRuntime()
-    loop = ChatLoop(runtime, attachment_resolver=ContentBlockResolver(store))
+    loop = build_chat_loop(runtime, attachment_resolver=ContentBlockResolver(store))
 
     # Act
     request_messages = asyncio.run(loop._build_request_messages(_StubAgent(), session))
@@ -995,7 +996,7 @@ def test_chat_loop_skips_resolver_when_session_has_only_plain_text_user_messages
     session.append(ChatMessage.user("second"))
     resolver = Mock()
     runtime: Any = _StubRuntime()
-    loop = ChatLoop(runtime, attachment_resolver=resolver)
+    loop = build_chat_loop(runtime, attachment_resolver=resolver)
 
     # Act
     request_messages = asyncio.run(loop._build_request_messages(_StubAgent(), session))

@@ -21,9 +21,10 @@ from typing import Any
 
 import pytest
 
-from core.chat import ChatError, ChatLoop
+from core.chat import ChatError
 from core.projects.resolver import ConfigAgent
 from core.prompts import ProjectPromptContext
+from tests.core.chat.chat_loop_support import build_chat_loop
 from tests.core.chat.test_chat_loop import (
     StubAdapter,
     StubAgent,
@@ -84,7 +85,7 @@ async def test_project_session_puts_body_and_files_in_system_prompt(tmp_path: Pa
     )
     runtime.chat_sessions.create(AGENT_ID, session_id="s1", project_id=PROJECT_ID)
 
-    await ChatLoop(runtime).send(AGENT_ID, "Hi", session_id="s1", project_id=PROJECT_ID)
+    await build_chat_loop(runtime).send(AGENT_ID, "Hi", session_id="s1", project_id=PROJECT_ID)
 
     system = _system_message(adapter)
     assert "You are the orchestrator." in system
@@ -111,7 +112,7 @@ async def test_project_session_stamps_project_files_read_before_write(tmp_path: 
     )
     runtime.chat_sessions.create(AGENT_ID, session_id="s1", project_id=PROJECT_ID)
 
-    await ChatLoop(runtime).send(AGENT_ID, "Hi", session_id="s1", project_id=PROJECT_ID)
+    await build_chat_loop(runtime).send(AGENT_ID, "Hi", session_id="s1", project_id=PROJECT_ID)
 
     agents_md = (repo / "AGENTS.md").resolve()
     # Known read for this session; a different session has not seen it.
@@ -129,7 +130,7 @@ async def test_project_session_body_braces_handed_over_verbatim(tmp_path: Path) 
     runtime, adapter = _project_runtime(tmp_path, repo, [], body=body)
     runtime.chat_sessions.create(AGENT_ID, session_id="s1", project_id=PROJECT_ID)
 
-    await ChatLoop(runtime).send(AGENT_ID, "Hi", session_id="s1", project_id=PROJECT_ID)
+    await build_chat_loop(runtime).send(AGENT_ID, "Hi", session_id="s1", project_id=PROJECT_ID)
 
     _agent_id, agent_body, _context = runtime.system_prompts.build_calls[-1]
     assert agent_body == body
@@ -144,7 +145,7 @@ async def test_identity_session_passes_no_body_or_project(tmp_path: Path) -> Non
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.chat_sessions.create("coder", session_id="s1")
 
-    await ChatLoop(runtime).send("coder", "Hi", session_id="s1")
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="s1")
 
     agent_id, agent_body, project_context = runtime.system_prompts.build_calls[-1]
     assert agent_id == "coder"
@@ -165,7 +166,7 @@ async def test_visiting_injects_project_files_as_system_reminder(tmp_path: Path)
     session = runtime.chat_sessions.create("coder", session_id="s1")
     context = ProjectPromptContext.from_project(repo, ["AGENTS.md"])
 
-    loop = ChatLoop(runtime)
+    loop = build_chat_loop(runtime)
     injected = loop.inject_visiting_project_files(session, context, project_name="vBot")
     await loop.send("coder", "Hi", session_id="s1")
 
@@ -199,7 +200,7 @@ async def test_visiting_with_no_project_files_adds_no_reminder(tmp_path: Path) -
     session = runtime.chat_sessions.create("coder", session_id="s1")
     context = ProjectPromptContext.from_project(repo, [])
 
-    injected = ChatLoop(runtime).inject_visiting_project_files(
+    injected = build_chat_loop(runtime).inject_visiting_project_files(
         session, context, project_name="vBot"
     )
 
@@ -232,7 +233,7 @@ async def test_rooted_identity_agent_puts_project_files_in_system_prompt(tmp_pat
     )
     runtime.chat_sessions.create("coder", session_id="s1")
 
-    await ChatLoop(runtime).send("coder", "Hi", session_id="s1")
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="s1")
 
     system = _system_message(adapter)
     assert '<file name="AGENTS.md">\nTeam rules\n</file>' in system
@@ -269,7 +270,7 @@ async def test_rooted_identity_agent_resolves_skills_against_home_project(tmp_pa
     )
     runtime.chat_sessions.create("coder", session_id="s1")
 
-    await ChatLoop(runtime).send("coder", "Hi", session_id="s1")
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="s1")
 
     assert (PROJECT_ID, "coder") in runtime.skills_for_calls
     assert (None, "coder") not in runtime.skills_for_calls
@@ -286,7 +287,7 @@ async def test_project_run_resolves_skills_without_identity_agent_layer(tmp_path
     runtime, _adapter = _project_runtime(tmp_path, repo, [], body="Body.")
     runtime.chat_sessions.create(AGENT_ID, session_id="s1", project_id=PROJECT_ID)
 
-    await ChatLoop(runtime).send(AGENT_ID, "Hi", session_id="s1", project_id=PROJECT_ID)
+    await build_chat_loop(runtime).send(AGENT_ID, "Hi", session_id="s1", project_id=PROJECT_ID)
 
     assert (PROJECT_ID, None) in runtime.skills_for_calls
     assert all(identity_agent is None for _pid, identity_agent in runtime.skills_for_calls)
@@ -312,7 +313,7 @@ async def test_identity_agent_workspace_not_a_project_stays_unchanged(tmp_path: 
     )
     runtime.chat_sessions.create("coder", session_id="s1")
 
-    await ChatLoop(runtime).send("coder", "Hi", session_id="s1")
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="s1")
 
     _agent_id, agent_body, project_context = runtime.system_prompts.build_calls[-1]
     assert agent_body == ""
@@ -338,7 +339,7 @@ async def test_same_path_identity_agent_without_selection_has_no_project_context
     )
     runtime.chat_sessions.create("coder", session_id="s1")
 
-    await ChatLoop(runtime).send("coder", "Hi", session_id="s1")
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="s1")
 
     assert runtime.system_prompts.build_calls[-1][2] is None
     assert "Team rules" not in _system_message(adapter)
@@ -373,7 +374,7 @@ async def test_rooted_identity_missing_repository_fails_before_user_message(
     session = runtime.chat_sessions.create("coder", session_id="s1")
 
     with pytest.raises(ChatError, match="Project repository is unavailable"):
-        await ChatLoop(runtime).send("coder", "must not persist", session_id="s1")
+        await build_chat_loop(runtime).send("coder", "must not persist", session_id="s1")
 
     assert session.load() == []
 
@@ -396,6 +397,6 @@ async def test_rooted_identity_missing_project_fails_before_user_message(tmp_pat
     session = runtime.chat_sessions.create("coder", session_id="s1")
 
     with pytest.raises(KeyError, match="missing"):
-        await ChatLoop(runtime).send("coder", "must not persist", session_id="s1")
+        await build_chat_loop(runtime).send("coder", "must not persist", session_id="s1")
 
     assert session.load() == []

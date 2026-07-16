@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -14,8 +14,11 @@ import pytest
 
 from core.chat.messages import JsonObject, ToolCall
 from core.chat.tool_dispatch import (
-    _dispatch_tool_calls,
+    ToolDispatchContext,
     _resolve_tool_cwd,
+)
+from core.chat.tool_dispatch import (
+    _dispatch_tool_calls as _dispatch_resolved_tool_calls,
 )
 from core.extensions import Deny, ExtensionRegistry, Modify, Replace
 from core.runs import TOOL_CALL_STARTED_EVENT, Run, RunStatus
@@ -74,6 +77,43 @@ def _build_runtime_and_agent(tmp_path: Path, tools: ToolRegistry) -> tuple[Any, 
 def _decode_tool_result(message_content: object) -> JsonObject:
     assert isinstance(message_content, str)
     return cast(JsonObject, json.loads(message_content))
+
+
+async def _dispatch_tool_calls(
+    runtime: Any,
+    agent: Any,
+    tool_calls: list[ToolCall],
+    session: Any,
+    run: Run,
+    *,
+    nesting_depth: int,
+    project_cwd: Path | None = None,
+    project_id: str | None = None,
+    skill_project_id: str | None = None,
+    tool_restriction: Sequence[str] | None = None,
+    base_allowed_tools: Sequence[str] | None = None,
+    session_tool_grants: tuple[str, ...] = (),
+) -> tuple[list[Any], list[JsonObject]]:
+    """Adapt runtime-shaped fixtures to the production Run-local context."""
+    return await _dispatch_resolved_tool_calls(
+        ToolDispatchContext(
+            registry=runtime.tools,
+            extension_registry=runtime.extensions,
+            agent=agent,
+            session=session,
+            run=run,
+            nesting_depth=nesting_depth,
+            app_root=Path(runtime.system_prompts.app_dir),
+            data_root=Path(runtime.storage.data_dir),
+            project_cwd=project_cwd,
+            project_id=project_id,
+            skill_project_id=skill_project_id,
+            tool_restriction=tool_restriction,
+            base_allowed_tools=base_allowed_tools,
+            session_tool_grants=session_tool_grants,
+        ),
+        tool_calls,
+    )
 
 
 @pytest.mark.asyncio

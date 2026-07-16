@@ -103,10 +103,11 @@ class RuntimeServices(Protocol):
     """Service surface of a started runtime, as consumed by core modules.
 
     Mirrors the service accessors :class:`core.runtime.runtime.Runtime`
-    exposes after ``start()``. Modules that genuinely need the whole
-    runtime handle (chat loop, sub-agent coordination) type their
-    parameter with this protocol and access services directly — a missing
-    attribute is a wiring bug, not a silently disabled feature.
+    exposes after ``start()``. Modules that genuinely coordinate across the
+    whole Runtime (for example Sub-Agent coordination) type their parameter
+    with this protocol and access services directly. ChatLoop instead owns an
+    explicit dependency contract and a Run-local execution context. A missing
+    attribute here is a wiring bug, not a silently disabled feature.
     """
 
     @property

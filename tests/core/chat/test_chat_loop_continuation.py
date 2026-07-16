@@ -8,7 +8,6 @@ from typing import Any
 import pytest
 
 from core.chat import (
-    ChatLoop,
     ChatMessage,
     ChatSessionError,
     ReplySurface,
@@ -43,6 +42,7 @@ from tests.core.chat.chat_loop_support import (
     StubAgent,
     StubRuntime,
     TenToolsThenBlockingReasoningAdapter,
+    build_chat_loop,
     persisted_roles,
 )
 
@@ -56,7 +56,7 @@ async def test_start_run_requires_existing_session(tmp_path: Path) -> None:
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(Exception, match="session does not exist"):
-        await ChatLoop(runtime).start_run("coder", "Hi", session_id="missing-session")
+        await build_chat_loop(runtime).start_run("coder", "Hi", session_id="missing-session")
 
     assert adapter.requests == []
 
@@ -71,7 +71,7 @@ async def test_continue_run_uses_checkpoint_without_appending_duplicate_user_mes
         stream_responses=[NetworkError("offline") for _ in range(3)],
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=interrupted_adapter)
-    loop = ChatLoop(runtime, streaming=True)
+    loop = build_chat_loop(runtime, streaming=True)
 
     with pytest.raises(NetworkError):
         await loop.send("coder", "Hi", session_id="session-one")
@@ -79,7 +79,7 @@ async def test_continue_run_uses_checkpoint_without_appending_duplicate_user_mes
     adapter = StubAdapter([{"content": "Continued", "tool_calls": None}])
     runtime.adapter = adapter
 
-    run = await ChatLoop(runtime).continue_run("coder", "session-one")
+    run = await build_chat_loop(runtime).continue_run("coder", "session-one")
     assistant = await run.wait()
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
@@ -105,11 +105,11 @@ async def test_continue_run_appends_surface_before_synthetic_continue_instructio
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=interrupted_adapter)
     with pytest.raises(NetworkError):
-        await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
+        await build_chat_loop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
 
     adapter = StubAdapter([{"content": "Continued", "tool_calls": None}])
     runtime.adapter = adapter
-    run = await ChatLoop(runtime).continue_run(
+    run = await build_chat_loop(runtime).continue_run(
         "coder",
         "session-one",
         reply_surface=ReplySurface.webui(),
@@ -148,7 +148,7 @@ async def test_continue_run_raises_when_no_checkpoint_exists(
     runtime.chat_sessions.create("coder", session_id="session-one")
 
     with pytest.raises(ChatSessionError, match="no interrupted work"):
-        await ChatLoop(runtime).continue_run("coder", "session-one")
+        await build_chat_loop(runtime).continue_run("coder", "session-one")
 
     assert adapter.requests == []
 
@@ -162,11 +162,11 @@ async def test_continue_run_rejects_second_run_for_same_session(tmp_path: Path) 
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=interrupted_adapter)
     with pytest.raises(NetworkError):
-        await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
+        await build_chat_loop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
     adapter = BlockingStubAdapter()
     runtime.adapter = adapter
 
-    loop = ChatLoop(runtime)
+    loop = build_chat_loop(runtime)
     first_run = await loop.continue_run("coder", "session-one")
     await adapter.request_started.wait()
 
@@ -189,7 +189,7 @@ async def test_discard_continuation_clears_checkpoint(
         stream_responses=[NetworkError("offline") for _ in range(3)],
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    loop = ChatLoop(runtime, streaming=True)
+    loop = build_chat_loop(runtime, streaming=True)
     with pytest.raises(NetworkError):
         await loop.send("coder", "Hi", session_id="session-one")
 
@@ -219,7 +219,7 @@ async def test_content_block_request_is_serialized_in_continuation_journal(
     ]
 
     with pytest.raises(NetworkError):
-        await ChatLoop(runtime, streaming=True).send(
+        await build_chat_loop(runtime, streaming=True).send(
             "coder",
             content,
             session_id="session-one",
@@ -247,7 +247,7 @@ async def test_initial_session_validation_failure_creates_no_checkpoint(tmp_path
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(ChatSessionError):
-        await ChatLoop(runtime).start_run("coder", "work", session_id="missing-session")
+        await build_chat_loop(runtime).start_run("coder", "work", session_id="missing-session")
 
     sessions_dir = runtime.chat_sessions.sessions_dir("coder")
     assert not list(sessions_dir.glob("*.continuation.jsonl"))
@@ -261,9 +261,9 @@ async def test_internal_run_neither_consumes_nor_resolves_continuation(tmp_path:
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     tracker = ContinuationTracker(session, run_id="interrupted-run", request="visible work")
     await tracker.interrupt("network")
-    before = ChatLoop(runtime).continuation_summary("coder", "session-one")
+    before = build_chat_loop(runtime).continuation_summary("coder", "session-one")
 
-    run = await ChatLoop(runtime).start_run(
+    run = await build_chat_loop(runtime).start_run(
         "coder",
         "background note",
         session_id="session-one",
@@ -271,7 +271,7 @@ async def test_internal_run_neither_consumes_nor_resolves_continuation(tmp_path:
     )
     await run.wait()
 
-    after = ChatLoop(runtime).continuation_summary("coder", "session-one")
+    after = build_chat_loop(runtime).continuation_summary("coder", "session-one")
     assert after == before
     assert all(
         "continuation-checkpoint" not in str(message.get("content") or "")
@@ -296,7 +296,7 @@ async def test_cancel_then_immediate_queued_correction_receives_finalized_checkp
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=first_adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
-    loop = ChatLoop(runtime, streaming=True)
+    loop = build_chat_loop(runtime, streaming=True)
 
     first_run = await loop.start_run("coder", "Use the first folder", session_id="session-one")
     await first_adapter.stream_started.wait()
@@ -361,7 +361,7 @@ async def test_cancel_after_ten_tools_then_correction_reuses_canonical_results_o
         tools=tools,
     )
     runtime.chat_sessions.create("coder", session_id="session-one")
-    loop = ChatLoop(runtime, streaming=True)
+    loop = build_chat_loop(runtime, streaming=True)
 
     first_run = await loop.start_run("coder", "Inspect ten cities", session_id="session-one")
     await first_adapter.second_step_started.wait()
@@ -402,7 +402,7 @@ async def test_second_interrupted_continue_extends_same_checkpoint(tmp_path: Pat
         stream_responses=[NetworkError("offline") for _ in range(3)],
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=first_adapter)
-    loop = ChatLoop(runtime, streaming=True)
+    loop = build_chat_loop(runtime, streaming=True)
     with pytest.raises(NetworkError):
         await loop.send("coder", "Do the work", session_id="session-one")
     first_state = recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
@@ -451,7 +451,7 @@ async def test_continuation_reminder_is_single_and_provider_policy_neutral(
     tracker.record_stream_delta(reasoning="Readable plan")
     await tracker.interrupt("provider")
 
-    run = await ChatLoop(runtime).continue_run("coder", "session-one")
+    run = await build_chat_loop(runtime).continue_run("coder", "session-one")
     await run.wait()
 
     request_text = "\n".join(
@@ -469,11 +469,11 @@ async def test_start_run_rejects_second_run_for_same_session(tmp_path: Path) -> 
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
 
-    first_run = await ChatLoop(runtime).start_run("coder", "Hi", session_id="session-one")
+    first_run = await build_chat_loop(runtime).start_run("coder", "Hi", session_id="session-one")
     await adapter.request_started.wait()
 
     with pytest.raises(ActiveRunError, match="active run"):
-        await ChatLoop(runtime).start_run("coder", "Again", session_id="session-one")
+        await build_chat_loop(runtime).start_run("coder", "Again", session_id="session-one")
 
     first_run.request_cancel()
     adapter.release.set()
@@ -492,9 +492,11 @@ async def test_start_run_allows_parallel_different_sessions(tmp_path: Path) -> N
     runtime.chat_sessions.create("coder", session_id="session-one")
     runtime.chat_sessions.create("coder", session_id="session-two")
 
-    first_run = await ChatLoop(runtime).start_run("coder", "First", session_id="session-one")
+    first_run = await build_chat_loop(runtime).start_run("coder", "First", session_id="session-one")
     await first_adapter.request_started.wait()
-    second_run = await ChatLoop(runtime).start_run("coder", "Second", session_id="session-two")
+    second_run = await build_chat_loop(runtime).start_run(
+        "coder", "Second", session_id="session-two"
+    )
 
     second_assistant = await second_run.wait()
     first_run.request_cancel()
@@ -512,7 +514,7 @@ async def test_cancelled_run_ignores_late_assistant_output(tmp_path: Path) -> No
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
 
-    run = await ChatLoop(runtime).start_run("coder", "Hi", session_id="session-one")
+    run = await build_chat_loop(runtime).start_run("coder", "Hi", session_id="session-one")
     await adapter.request_started.wait()
     run.request_cancel()
     adapter.release.set()

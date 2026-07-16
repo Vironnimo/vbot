@@ -12,7 +12,7 @@ from typing import Any, cast
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
-from core.chat import ChatLoop, ChatSessionManager, CommandDispatcher
+from core.chat import ChatSessionManager, CommandDispatcher
 from core.models import Capabilities, Model, ReasoningCapabilities
 from core.models.query import ModelQuery
 from core.projects.resolver import AgentResolutionError
@@ -22,6 +22,7 @@ from core.skills.skills import SkillRegistry
 from core.tools import FileReadState, ToolContext, ToolRegistry, tool_success
 from server.app import create_app
 from server.rpc.methods import dispatch_rpc
+from tests.core.chat.chat_loop_support import build_chat_loop
 
 JsonObject = dict[str, Any]
 
@@ -386,8 +387,8 @@ class IntegrationRuntime:
         self.process_manager = IntegrationProcessManager()
         self.started = False
         self.stopped = False
-        self.chat_loop = ChatLoop(cast(Any, self))
-        self.streaming_chat_loop = ChatLoop(cast(Any, self), streaming=True)
+        self.chat_loop = build_chat_loop(cast(Any, self))
+        self.streaming_chat_loop = build_chat_loop(cast(Any, self), streaming=True)
         self.command_dispatcher = CommandDispatcher(self.chat_run_manager)
 
     @property
@@ -916,8 +917,8 @@ def _make_state(runtime: Any) -> Any:
         {
             "runtime": runtime,
             "chat_runs": chat_runs,
-            "chat_loop": ChatLoop(runtime),
-            "streaming_chat_loop": ChatLoop(runtime, streaming=True),
+            "chat_loop": build_chat_loop(runtime),
+            "streaming_chat_loop": build_chat_loop(runtime, streaming=True),
             "command_dispatcher": CommandDispatcher(chat_runs),
             "event_bus": None,
         },

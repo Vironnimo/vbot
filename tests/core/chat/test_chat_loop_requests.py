@@ -9,7 +9,6 @@ import pytest
 
 from core.chat import (
     INPUT_ORIGIN_SPEECH_TRANSCRIPTION,
-    ChatLoop,
     ChatMessage,
     MessageSender,
     ReplySurface,
@@ -29,6 +28,7 @@ from tests.core.chat.chat_loop_support import (
     StubAgent,
     StubPrompts,
     StubRuntime,
+    build_chat_loop,
     persisted_roles,
 )
 
@@ -41,7 +41,7 @@ async def test_send_appends_user_and_final_assistant_without_tools(tmp_path: Pat
     adapter = StubAdapter([{"content": "Hello", "reasoning": None, "tool_calls": None}])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    assistant = await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     session = runtime.chat_sessions.get("coder", "session-one")
     messages = session.load()
@@ -86,7 +86,7 @@ async def test_send_logs_run_start_and_end_lines(
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with caplog.at_level("INFO", logger="vbot.chat"):
-        await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+        await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
     log_messages = [record.getMessage() for record in caplog.records]
@@ -132,7 +132,7 @@ async def test_send_omits_empty_system_prompt(tmp_path: Path) -> None:
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.system_prompts = EmptySystemPrompts()
 
-    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     request_messages = adapter.requests[0]["messages"]
     assert [message["role"] for message in request_messages] == ["user"]
@@ -149,7 +149,7 @@ async def test_note_before_user_turn_is_embedded_as_synthetic_user_message(
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.add_note("Background job completed")
 
-    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     request_messages = adapter.requests[0]["messages"]
     assert [message["role"] for message in request_messages] == ["system", "user", "user"]
@@ -170,7 +170,7 @@ async def test_speech_transcription_origin_adds_system_reminder_before_user_turn
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
 
-    await ChatLoop(runtime).send(
+    await build_chat_loop(runtime).send(
         "coder",
         "helo wrld",
         session_id="session-one",
@@ -196,7 +196,7 @@ async def test_reply_surface_note_follows_speech_note_and_precedes_user_turn(
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
 
-    run = await ChatLoop(runtime).start_run(
+    run = await build_chat_loop(runtime).start_run(
         "coder",
         "helo wrld",
         session_id="session-one",
@@ -231,7 +231,7 @@ async def test_reply_surface_initial_repeat_and_switches_follow_execution_chrono
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
-    loop = ChatLoop(runtime)
+    loop = build_chat_loop(runtime)
     webui = ReplySurface.webui()
     telegram = ReplySurface.channel(
         platform="telegram",
@@ -279,7 +279,7 @@ async def test_first_same_surface_run_after_compaction_appends_one_fresh_note(
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
-    loop = ChatLoop(runtime)
+    loop = build_chat_loop(runtime)
     surface = ReplySurface.webui()
 
     first = await loop.start_run("coder", "first", session_id="session-one", reply_surface=surface)
@@ -318,7 +318,7 @@ async def test_internal_start_run_embeds_content_without_visible_user_message(
     runtime.chat_sessions.create("coder", session_id="session-one")
     content = "Sub-agent batch completed.\n\nResults:\n- worker/sub-session: Done"
 
-    run = await ChatLoop(runtime).start_run(
+    run = await build_chat_loop(runtime).start_run(
         "coder",
         content,
         session_id="session-one",
@@ -359,7 +359,7 @@ async def test_internal_interactive_run_places_surface_immediately_before_prompt
         channel_id="tg-main",
     )
 
-    run = await ChatLoop(runtime).start_run(
+    run = await build_chat_loop(runtime).start_run(
         "coder",
         prompt,
         session_id="session-one",
@@ -382,7 +382,7 @@ async def test_queued_cross_surface_run_decides_when_it_actually_starts(tmp_path
     adapter = BlockingStubAdapter()
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
-    loop = ChatLoop(runtime)
+    loop = build_chat_loop(runtime)
     channel_surface = ReplySurface.channel(
         platform="telegram",
         platform_display_name="Telegram",
@@ -428,7 +428,7 @@ async def test_start_run_persists_sender_and_renders_request_attribution(
     runtime.chat_sessions.create("coder", session_id="session-one")
     sender = MessageSender(id="50", display_name="Alice")
 
-    run = await ChatLoop(runtime).start_run(
+    run = await build_chat_loop(runtime).start_run(
         "coder",
         "Hi",
         session_id="session-one",
@@ -458,7 +458,7 @@ async def test_queue_run_persists_sender_on_user_message(tmp_path: Path) -> None
     runtime.chat_sessions.create("coder", session_id="session-one")
     sender = MessageSender(id="50", display_name="Alice")
 
-    queued_item = await ChatLoop(runtime).queue_run(
+    queued_item = await build_chat_loop(runtime).queue_run(
         "coder",
         "Hi",
         session_id="session-one",
@@ -484,7 +484,7 @@ async def test_multiple_consecutive_notes_are_embedded_as_one_synthetic_user_mes
     session.add_note("First background event")
     session.add_note("Second background event")
 
-    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     request_messages = adapter.requests[0]["messages"]
     assert [message["role"] for message in request_messages] == ["system", "user", "user"]
@@ -510,7 +510,7 @@ async def test_notes_and_visible_errors_are_embedded_as_system_reminders(
     session.append(ChatMessage.error("rate_limit", "Provider rate limited the previous run"))
     session.append(ChatMessage.error("auth_error", "Invalid provider credential"))
 
-    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     request_messages = adapter.requests[0]["messages"]
     request_text = "\n".join(message.get("content", "") or "" for message in request_messages)
@@ -546,7 +546,7 @@ async def test_note_added_between_tool_iterations_is_sent_on_next_request(
     tools.register("record_note", "Record note.", {"type": "object"}, record_note)
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
-    await ChatLoop(runtime).send("coder", "Run tool", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Run tool", session_id="session-one")
 
     second_request_messages = adapter.requests[1]["messages"]
     assert [message["role"] for message in second_request_messages] == [
@@ -589,7 +589,7 @@ async def test_note_added_during_tool_dispatch_is_persisted_after_tool_results(
     tools.register("record_note", "Record note.", {"type": "object"}, record_note)
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
-    await ChatLoop(runtime).send("coder", "Run tool", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Run tool", session_id="session-one")
 
     persisted_after_first_turn = runtime.chat_sessions.get("coder", "session-one").load()
     assert persisted_roles(persisted_after_first_turn) == [
@@ -601,7 +601,7 @@ async def test_note_added_during_tool_dispatch_is_persisted_after_tool_results(
     ]
     assert persisted_after_first_turn[3].content == "Tool finished background work"
 
-    await ChatLoop(runtime).send("coder", "Follow up", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Follow up", session_id="session-one")
 
     second_turn_request = adapter.requests[2]["messages"]
     assert [message["role"] for message in second_turn_request] == [
@@ -625,7 +625,7 @@ async def test_request_messages_without_notes_keep_existing_shape(tmp_path: Path
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     request_messages = adapter.requests[0]["messages"]
     assert [message["role"] for message in request_messages] == ["system", "user"]

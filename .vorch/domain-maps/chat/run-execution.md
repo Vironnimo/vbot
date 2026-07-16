@@ -4,7 +4,7 @@ Task-gated reference for Chat admission, provider/Tool progression, streaming re
 
 ## Entry points and admission
 
-`ChatLoop` exposes `send`, `start_run`, `queue_run`, `build_queue_update`, `continue_run`, `continuation_summary`, `discard_continuation`, and `compact_session`. `run_executor(content)` is the public seam handed to `ChatRunManager`; `child_loop(nesting_depth=...)` shares runtime services, attachment resolution, Compaction, reflection, and title notification for Sub-Agent execution. The server-facing paths require an existing Session; the legacy direct `send()` path may still create one when no `session_id` is supplied.
+`ChatLoop` exposes `send`, `start_run`, `queue_run`, `build_queue_update`, `continue_run`, `continuation_summary`, `discard_continuation`, and `compact_session`. `run_executor(content)` is the public seam handed to `ChatRunManager`; `child_loop(nesting_depth=...)` shares the explicit `ChatLoopDependencies`, attachment resolution, Compaction, reflection, and title notification for Sub-Agent execution. The server-facing paths require an existing Session; the legacy direct `send()` path may still create one when no `session_id` is supplied.
 
 `start_run` persists visible content as a user message and internal content as a note. `sender`, `input_origin`, `reply_surface`, `project_id`, and dispatch-only `tool_restriction` ride the admitted executor. `queue_run` validates the same prerequisites and captures immutable execution data so a queued item applies surface and working-Project decisions only when it starts. `build_queue_update` returns replacement data without mutating Queue state.
 
@@ -12,7 +12,9 @@ Session/address ownership and execution context are separate. `run.project_id` i
 
 ## Agentic progression and events
 
-The loop resolves the Agent, Model, exact Provider Connection, System Prompt, canonical history, allowed Tools, and attachment/request state before the first Provider call. Provider adapters yield normalized data only. Chat persists finalized Assistant/Tool/Error messages and emits provider-agnostic `RunEvent`s; opaque `reasoning_meta` never appears in visible events.
+At executor start the loop resolves one Run-local execution context: Agent, Session, working Project cwd/prompt inputs, Skill scope and pinned catalog, Continuation tracker/reminder, immutable Tool restriction, and a primary Model target containing the exact Provider Connection, adapter policies, and stream timeout. System Prompt, canonical history, Provider Tool definitions, and Session Tool grants then form the context's mutable request state before the first Provider call. Provider adapters yield normalized data only. Chat persists finalized Assistant/Tool/Error messages and emits provider-agnostic `RunEvent`s; opaque `reasoning_meta` never appears in visible events.
+
+Agentic progression and automatic Compaction receive the Run context plus the current Model target, not the Runtime service surface or a parallel list of Run fields. Tool dispatch receives a Tool-specific projection of the same context. Run-local fallback builds a replacement Model target while retaining the Session, Project, Skill, Tool-policy, Continuation, and request state already resolved for the Run.
 
 Streaming deltas (`assistant_output_delta`, `reasoning_delta`, `tool_call_delta`, `tool_call_stdout`, `tool_call_stderr`) are transient SSE events and never persisted. Stable events include Assistant output, Tool start/result, Compaction completion, Model fallback, error persistence, per-model-step Usage, and terminal Run lifecycle from the Runs domain. Tool failures use the stable Tool Result envelope with `ok=false`; there is no separate public `tool_call_failed` event.
 

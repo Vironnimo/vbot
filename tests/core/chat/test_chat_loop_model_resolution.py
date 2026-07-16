@@ -9,7 +9,6 @@ import pytest
 
 from core.chat import (
     ChatError,
-    ChatLoop,
 )
 from core.utils.errors import ProviderError
 from tests.core.chat.chat_loop_support import (
@@ -17,6 +16,7 @@ from tests.core.chat.chat_loop_support import (
     StubAgent,
     StubProviderCredentials,
     StubRuntime,
+    build_chat_loop,
     persisted_roles,
 )
 
@@ -30,7 +30,7 @@ async def test_provider_errors_propagate_after_user_message_is_persisted(tmp_pat
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(ProviderError, match="provider failed"):
-        await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+        await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     assert persisted_roles(messages) == ["user", "error"]
@@ -47,7 +47,7 @@ async def test_empty_agent_model_raises_chat_error_before_persisting(tmp_path: P
     )
 
     with pytest.raises(ChatError, match="no model set"):
-        await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+        await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     assert runtime.chat_sessions.list("coder") == []
 
@@ -62,7 +62,7 @@ async def test_chat_loop_uses_connection_from_model_suffix(tmp_path: Path) -> No
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     assert runtime.adapter_provider_id == "openai"
     assert runtime.adapter_connection_id == "openai:subscription"
@@ -83,7 +83,7 @@ async def test_chat_loop_provider_comes_from_model_with_connection_suffix(tmp_pa
         provider_ids={"openai", "openrouter"},
     )
 
-    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     assert runtime.adapter_provider_id == "openrouter"
     assert runtime.adapter_connection_id == "openrouter:api-key"
@@ -101,7 +101,7 @@ async def test_chat_loop_model_without_suffix_falls_back_to_first_usable(tmp_pat
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.provider_credentials = StubProviderCredentials({"openai:api-key"})
 
-    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     assert runtime.adapter_provider_id == "openai"
     assert runtime.adapter_connection_id == "openai:api-key"
@@ -122,7 +122,7 @@ async def test_chat_loop_model_without_suffix_prefers_first_usable_in_provider_o
         {"openai:subscription", "openai:api-key"}
     )
 
-    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     assert runtime.adapter_provider_id == "openai"
     assert runtime.adapter_connection_id == "openai:subscription"
@@ -194,7 +194,7 @@ async def test_missing_provider_raises_chat_error_before_adapter_request(tmp_pat
     )
 
     with pytest.raises(ChatError, match="provider not found: missing"):
-        await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+        await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     assert runtime.adapter_provider_id is None
     assert runtime.chat_sessions.list("coder") == []
@@ -209,7 +209,7 @@ async def test_dangling_model_suffix_raises_chat_error_before_adapter_request(
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(ChatError, match="connection suffix must not be empty"):
-        await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+        await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     assert runtime.adapter_provider_id is None
     assert runtime.chat_sessions.list("coder") == []

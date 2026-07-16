@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from core.chat import ChatMessage, ChatMessageValidationError
-from core.chat.chat import ChatLoop, _validate_assistant_message
+from core.chat.chat import _validate_assistant_message
 from core.projects import AgentResolutionError, ProjectStore
 from core.runs import RunCancelledError
 from core.tools import (
@@ -19,6 +19,7 @@ from core.tools import (
     register_write_tool,
     tool_success,
 )
+from tests.core.chat.chat_loop_support import build_chat_loop
 
 
 def test_validate_assistant_message_allows_reasoning_only() -> None:
@@ -96,7 +97,7 @@ async def test_cancel_during_tool_dispatch_persists_all_sibling_tool_results(
     # Act: start the run, then cancel it from a background task. The
     # cancel races with the in-flight tool dispatch; the persist loop
     # must persist all three sibling results before honoring the cancel.
-    run = await ChatLoop(runtime).start_run("coder", "Multi", session_id="session-one")
+    run = await build_chat_loop(runtime).start_run("coder", "Multi", session_id="session-one")
 
     async def fire_cancel_after_dispatch() -> None:
         # Yield briefly so the chat loop runs the tool dispatch first.
@@ -181,7 +182,7 @@ async def test_skill_catalog_is_pinned_for_the_session(tmp_path: Path) -> None:
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.skills = StubSkills([StubSkill("one", "One.", Path("a"))])
     runtime.chat_sessions.create("coder", session_id="s1")
-    loop = ChatLoop(runtime)
+    loop = build_chat_loop(runtime)
 
     await loop.send("coder", "hi", session_id="s1")
     pinned_after_first = dict(
@@ -224,7 +225,7 @@ async def test_new_session_pins_a_fresh_catalog(tmp_path: Path) -> None:
     runtime.skills = StubSkills([StubSkill("one", "One.", Path("a"))])
     runtime.chat_sessions.create("coder", session_id="s1")
     runtime.chat_sessions.create("coder", session_id="s2")
-    loop = ChatLoop(runtime)
+    loop = build_chat_loop(runtime)
 
     await loop.send("coder", "hi", session_id="s1")
     runtime.skills = StubSkills(
@@ -253,7 +254,7 @@ async def test_project_session_is_created_and_opened_under_project_anchor(
     runtime.projects.create("acme", "Acme", repo_dir)
 
     # Act: run a turn scoped to the project.
-    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one", project_id="acme")
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one", project_id="acme")
 
     # Assert: the session file was created AND read under the project anchor,
     # never under the global identity layout.
@@ -286,7 +287,7 @@ async def test_project_run_carries_project_id_and_dedups_per_session(tmp_path: P
     runtime.projects.create("acme", "Acme", repo_dir)
     runtime.chat_sessions.create("coder", session_id="session-one", project_id="acme")
 
-    loop = ChatLoop(runtime)
+    loop = build_chat_loop(runtime)
     project_run = await loop.start_run("coder", "Hi", session_id="session-one", project_id="acme")
     await adapter.request_started.wait()
 
@@ -345,7 +346,7 @@ async def test_project_session_tool_resolves_relative_path_against_project_cwd(
     runtime = _project_runtime(tmp_path, agent=agent, adapter=adapter, tools=tools)
     project = runtime.projects.create("acme", "Acme", repo_dir)
 
-    await ChatLoop(runtime).send(
+    await build_chat_loop(runtime).send(
         "coder", "Write a file", session_id="session-one", project_id="acme"
     )
 
@@ -384,7 +385,7 @@ async def test_identity_session_unchanged_path_and_workspace_cwd(tmp_path: Path)
     runtime = _project_runtime(tmp_path, agent=agent, adapter=adapter, tools=tools)
     runtime.projects.create("acme", "Acme", tmp_path / "repo-unused")
 
-    await ChatLoop(runtime).send("coder", "Write a file", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Write a file", session_id="session-one")
 
     identity_session = tmp_path / "agents" / "coder" / "sessions" / "session-one.jsonl"
     workspace_file = tmp_path / "agents" / "coder" / "workspace" / "out.txt"
@@ -421,7 +422,9 @@ async def test_project_run_threads_project_id_to_tool_context(tmp_path: Path) ->
     runtime = _project_runtime(tmp_path, agent=agent, adapter=adapter, tools=tools)
     runtime.projects.create("acme", "Acme", repo_dir)
 
-    await ChatLoop(runtime).send("coder", "Probe", session_id="session-one", project_id="acme")
+    await build_chat_loop(runtime).send(
+        "coder", "Probe", session_id="session-one", project_id="acme"
+    )
 
     assert seen == ["acme"]
 
@@ -451,7 +454,7 @@ async def test_identity_run_leaves_tool_context_project_id_none(tmp_path: Path) 
     )
     runtime = _project_runtime(tmp_path, agent=agent, adapter=adapter, tools=tools)
 
-    await ChatLoop(runtime).send("coder", "Probe", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Probe", session_id="session-one")
 
     assert seen == [None]
 
@@ -478,7 +481,9 @@ async def test_project_run_resolves_config_agent_through_resolver(tmp_path: Path
     )
     runtime.projects.create("acme", "Acme", repo_dir)
 
-    await ChatLoop(runtime).send("orchestrator", "Hi", session_id="session-one", project_id="acme")
+    await build_chat_loop(runtime).send(
+        "orchestrator", "Hi", session_id="session-one", project_id="acme"
+    )
 
     # The resolver was asked for the project agent, and its model reached the wire.
     assert ("acme", "orchestrator") in [
@@ -497,7 +502,7 @@ async def test_identity_run_resolves_store_agent_unchanged(tmp_path: Path) -> No
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
     runtime = _project_runtime(tmp_path, agent=agent, adapter=adapter, tools=ToolRegistry())
 
-    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     # Every resolve on this path is the identity branch (project_id=None); the
     # store agent's model reaches the wire unchanged. (send resolves in both
@@ -527,7 +532,9 @@ async def test_unresolvable_project_agent_raises_clear_error(tmp_path: Path) -> 
     runtime.projects.create("acme", "Acme", repo_dir)
 
     with pytest.raises(AgentResolutionError, match="not on project 'acme' team"):
-        await ChatLoop(runtime).send("coder", "Hi", session_id="session-one", project_id="acme")
+        await build_chat_loop(runtime).send(
+            "coder", "Hi", session_id="session-one", project_id="acme"
+        )
 
 
 @pytest.mark.asyncio
@@ -575,7 +582,7 @@ async def test_tool_restriction_denies_at_dispatch_without_changing_definitions(
     # Restricted run: only ``memory`` may dispatch; ``weather`` is denied.
     restricted_ran: list[str] = []
     restricted_runtime, restricted_adapter = build(restricted_ran, "restricted")
-    run = await ChatLoop(restricted_runtime).start_run(
+    run = await build_chat_loop(restricted_runtime).start_run(
         "coder",
         "Go",
         session_id="restricted",
@@ -593,7 +600,9 @@ async def test_tool_restriction_denies_at_dispatch_without_changing_definitions(
     # Unrestricted run: both tools dispatch, and the offered definitions match.
     unrestricted_ran: list[str] = []
     unrestricted_runtime, unrestricted_adapter = build(unrestricted_ran, "unrestricted")
-    run = await ChatLoop(unrestricted_runtime).start_run("coder", "Go", session_id="unrestricted")
+    run = await build_chat_loop(unrestricted_runtime).start_run(
+        "coder", "Go", session_id="unrestricted"
+    )
     await run.wait()
 
     assert sorted(unrestricted_ran) == ["memory", "weather"]
@@ -637,7 +646,7 @@ async def test_checkpoint_granted_history_stays_advertised_when_run_restricts_di
         )
     )
 
-    run = await ChatLoop(runtime).start_run(
+    run = await build_chat_loop(runtime).start_run(
         "coder",
         "Continue",
         session_id=session.id,

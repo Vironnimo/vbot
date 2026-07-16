@@ -10,7 +10,7 @@ from typing import Any, cast
 
 import pytest
 
-from core.chat import ChatLoop, ChatMessage
+from core.chat import ChatMessage
 from core.chat.content_blocks import MediaBlock
 from core.prompts import SkillPromptRegistry
 from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, ProviderAdapter
@@ -20,6 +20,7 @@ from core.skills.skills import SkillRegistry
 from core.tools import tool_success
 from core.tools.memory import MEMORY_TOOL_DESCRIPTION
 from core.utils.config import Config
+from tests.core.chat.chat_loop_support import build_chat_loop
 
 JsonObject = dict[str, Any]
 
@@ -114,7 +115,7 @@ async def test_agent_sends_message_and_persists_assistant_response(
             thinking_effort="high",
         )
 
-        assistant = await ChatLoop(runtime).send("coder", "Hello", session_id="session-one")
+        assistant = await build_chat_loop(runtime).send("coder", "Hello", session_id="session-one")
 
         messages = runtime.chat_sessions.get("coder", "session-one").load()
         assert assistant.content == "assistant response"
@@ -165,7 +166,9 @@ async def test_read_tool_success_persists_result_and_final_response_uses_content
         )
         Path(agent.workspace).joinpath("note.txt").write_text("file content", encoding="utf-8")
 
-        assistant = await ChatLoop(runtime).send("coder", "Read note", session_id="session-one")
+        assistant = await build_chat_loop(runtime).send(
+            "coder", "Read note", session_id="session-one"
+        )
 
         messages = runtime.chat_sessions.get("coder", "session-one").load()
         tool_message_content = messages[2].content
@@ -222,7 +225,9 @@ async def test_read_tool_missing_file_persists_failure_and_run_recovers(
             model="fake-provider/fake-model-v1",
         )
 
-        assistant = await ChatLoop(runtime).send("coder", "Read missing", session_id="session-one")
+        assistant = await build_chat_loop(runtime).send(
+            "coder", "Read missing", session_id="session-one"
+        )
 
         messages = runtime.chat_sessions.get("coder", "session-one").load()
         tool_message_content = messages[2].content
@@ -426,7 +431,7 @@ async def test_full_history_adapter_replays_prior_run_reasoning_in_next_run(
     runtime.start()
     try:
         runtime.agents.create("coder", "Coder Agent", model="fake-provider/fake-model-v1")
-        loop = ChatLoop(runtime)
+        loop = build_chat_loop(runtime)
 
         await loop.send("coder", "Q1", session_id="session-one")
         await loop.send("coder", "Q2", session_id="session-one")
@@ -468,7 +473,7 @@ async def test_full_history_adapter_strips_reasoning_after_model_switch(
     runtime.start()
     try:
         runtime.agents.create("coder", "Coder Agent", model="fake-provider/fake-model-v1")
-        loop = ChatLoop(runtime)
+        loop = build_chat_loop(runtime)
 
         await loop.send("coder", "Q1", session_id="session-one")
         runtime.agents.update("coder", model="fake-provider/fake-model-v2")
@@ -522,7 +527,7 @@ async def test_full_history_adapter_replays_reasoning_for_compaction_tail_turns(
             )
         )
 
-        await ChatLoop(runtime).send("coder", "Q3", session_id="session-one")
+        await build_chat_loop(runtime).send("coder", "Q3", session_id="session-one")
 
         request = adapter.requests[0].messages
         assert [message["role"] for message in request] == [

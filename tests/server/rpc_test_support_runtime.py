@@ -15,7 +15,6 @@ from typing import Any, TypeVar, cast
 
 from core.automation import ReflectionService, TriggerService
 from core.chat import (
-    ChatLoop,
     ChatMessage,
     ChatSessionManager,
     CommandDispatcher,
@@ -36,6 +35,7 @@ from core.tools import FileReadState, ToolRegistry
 from core.utils.errors import ConfigError
 from server.events import ServerEventBus
 from server.rpc import agent_methods
+from tests.core.chat.chat_loop_support import build_chat_loop
 from tests.server.rpc_test_support_common import (
     StubAgent,
     StubAgentResolver,
@@ -731,8 +731,8 @@ class StubRuntime:
         self.recall_reload_count = 0
         self.extension_reload_count = 0
         self.extension_disabled_changes: list[set[str]] = []
-        self.chat_loop = ChatLoop(cast(Any, self))
-        self.streaming_chat_loop = ChatLoop(cast(Any, self), streaming=True)
+        self.chat_loop = build_chat_loop(cast(Any, self))
+        self.streaming_chat_loop = build_chat_loop(cast(Any, self), streaming=True)
         self.command_dispatcher = CommandDispatcher(
             self.chat_run_manager,
             agent_resolver=cast(Any, self.agent_resolver),
@@ -887,8 +887,10 @@ def make_state(
     runtime: Any = StubRuntime(tmp_path, adapter)
     chat_runs = ChatRunManager()
     runtime.chat_runs = chat_runs
-    chat_loop = ChatLoop(runtime, compaction_service=compaction_service)
-    streaming_chat_loop = ChatLoop(runtime, streaming=True, compaction_service=compaction_service)
+    chat_loop = build_chat_loop(runtime, compaction_service=compaction_service)
+    streaming_chat_loop = build_chat_loop(
+        runtime, streaming=True, compaction_service=compaction_service
+    )
     runtime.streaming_chat_loop = streaming_chat_loop
     runtime.trigger_service = TriggerService(chat_loop, chat_runs, cast(Any, runtime))
     runtime.reflection = ReflectionService(cast(Any, runtime))

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.core.chat.chat_loop_support import build_chat_loop
+
 from .subagent_test_support import (
     BACKGROUND_TASK_SETTLE_TICKS,
     Any,
@@ -17,7 +19,6 @@ from .subagent_test_support import (
     _wait_for_subagent_result,
     asyncio,
     cast,
-    chat_api,
     make_context,
     make_runtime,
     pytest,
@@ -198,7 +199,7 @@ async def test_make_subagent_executor_inherits_live_run_loop_wiring() -> None:
     # Arrange
     resolver = object()
     compaction_service = object()
-    parent_loop = chat_api.ChatLoop(
+    parent_loop = build_chat_loop(
         cast(Any, SimpleNamespace()),
         streaming=True,
         attachment_resolver=cast(Any, resolver),

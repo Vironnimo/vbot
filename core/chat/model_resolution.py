@@ -2,16 +2,30 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from core.chat.errors import ChatError
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from core.models.models import ModelRegistry
     from core.providers.providers import ProviderRegistry
-    from core.runtime.interfaces import RuntimeServices
+    from core.runtime.interfaces import ProviderCredentialResolverProtocol
 
 _LOGGER = get_logger("chat")
+
+
+class ModelResolutionDependencies(Protocol):
+    """Narrow collaborators needed to resolve a Chat Model target."""
+
+    @property
+    def providers(self) -> ProviderRegistry: ...
+
+    @property
+    def models(self) -> ModelRegistry: ...
+
+    @property
+    def provider_credentials(self) -> ProviderCredentialResolverProtocol: ...
 
 
 def parse_bare_model(model: str) -> str:
@@ -51,7 +65,9 @@ def _split_agent_model(model: str) -> tuple[str, str]:
     return provider_id, model_id
 
 
-def _model_input_modalities(runtime: RuntimeServices, agent: Any) -> frozenset[str]:
+def _model_input_modalities(
+    dependencies: ModelResolutionDependencies, agent: Any
+) -> frozenset[str]:
     """Return the agent model's input modalities, empty when the model is unknown.
 
     Degrading to an empty set silently drops image/audio attachments, so the
@@ -61,7 +77,7 @@ def _model_input_modalities(runtime: RuntimeServices, agent: Any) -> frozenset[s
     """
     try:
         provider_id, model_id = _split_agent_model(agent.model)
-        model = runtime.models.get(provider_id, model_id)
+        model = dependencies.models.get(provider_id, model_id)
     except (ChatError, KeyError) as error:
         _LOGGER.warning(
             "Could not resolve input modalities for model %r; "
@@ -76,18 +92,22 @@ def _model_input_modalities(runtime: RuntimeServices, agent: Any) -> frozenset[s
     return frozenset(str(modality) for modality in modalities)
 
 
-def _resolve_agent_connection(runtime: RuntimeServices, agent: Any) -> tuple[str, str]:
+def _resolve_agent_connection(
+    dependencies: ModelResolutionDependencies, agent: Any
+) -> tuple[str, str]:
     model_provider_id, model_id, connection_suffix = parse_model_with_connection(agent.model)
     if connection_suffix:
         return model_provider_id, f"{model_provider_id}:{connection_suffix}"
 
-    allowed_connections = _model_connection_allowlist(runtime, model_provider_id, model_id)
+    allowed_connections = _model_connection_allowlist(dependencies, model_provider_id, model_id)
     return model_provider_id, _first_usable_connection_id(
-        runtime, model_provider_id, allowed_connections
+        dependencies, model_provider_id, allowed_connections
     )
 
 
-def _resolve_fallback(runtime: RuntimeServices, agent: Any) -> tuple[str, str, str] | None:
+def _resolve_fallback(
+    dependencies: ModelResolutionDependencies, agent: Any
+) -> tuple[str, str, str] | None:
     fallback_model = getattr(agent, "fallback_model", "")
     if not fallback_model:
         return None
@@ -108,9 +128,9 @@ def _resolve_fallback(runtime: RuntimeServices, agent: Any) -> tuple[str, str, s
 
     try:
         fallback_connection_id = _first_usable_connection_id(
-            runtime,
+            dependencies,
             fallback_provider_id,
-            _model_connection_allowlist(runtime, fallback_provider_id, fallback_model_id),
+            _model_connection_allowlist(dependencies, fallback_provider_id, fallback_model_id),
         )
     except ChatError:
         return None
@@ -119,7 +139,7 @@ def _resolve_fallback(runtime: RuntimeServices, agent: Any) -> tuple[str, str, s
 
 
 def _model_connection_allowlist(
-    runtime: RuntimeServices, provider_id: str, model_id: str
+    dependencies: ModelResolutionDependencies, provider_id: str, model_id: str
 ) -> tuple[str, ...]:
     """Return the model's connection allowlist, empty when the model is unknown.
 
@@ -129,14 +149,14 @@ def _model_connection_allowlist(
     ``_ensure_model_connection_supported``.
     """
     try:
-        model = runtime.models.get(provider_id, model_id)
+        model = dependencies.models.get(provider_id, model_id)
     except KeyError:
         return ()
     return tuple(model.connections)
 
 
 def _first_usable_connection_id(
-    runtime: RuntimeServices,
+    dependencies: ModelResolutionDependencies,
     provider_id: str,
     allowed_connections: tuple[str, ...] = (),
 ) -> str:
@@ -149,11 +169,11 @@ def _first_usable_connection_id(
     restriction.
     """
     try:
-        provider_config = runtime.providers.get(provider_id)
+        provider_config = dependencies.providers.get(provider_id)
     except KeyError as exc:
         raise ChatError(f"provider not found: {provider_id}") from exc
 
-    credential_resolver = runtime.provider_credentials
+    credential_resolver = dependencies.provider_credentials
     for connection in provider_config.connections:
         if allowed_connections and connection.id not in allowed_connections:
             continue

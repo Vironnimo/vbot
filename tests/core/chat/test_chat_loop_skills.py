@@ -9,7 +9,6 @@ from typing import Any, cast
 import pytest
 
 from core.chat import (
-    ChatLoop,
     ChatMessage,
 )
 from core.chat.messages import _notes_to_synthetic_user_message
@@ -22,6 +21,7 @@ from tests.core.chat.chat_loop_support import (
     StubSkill,
     StubSkills,
     _write_test_skill,
+    build_chat_loop,
     persisted_roles,
 )
 
@@ -41,7 +41,7 @@ async def test_slash_skill_trigger_activates_before_provider_request(tmp_path: P
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.skills = StubSkills([StubSkill("debugging", "Debug failures", skill_file)])
 
-    await ChatLoop(runtime).send("coder", "/debugging fix this", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "/debugging fix this", session_id="session-one")
 
     request_messages = adapter.requests[0]["messages"]
     # The skill content sits directly under the triggering user message — in
@@ -73,8 +73,8 @@ async def test_skill_context_persists_across_later_sends_without_visible_user_me
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.skills = StubSkills([StubSkill("debugging", "Debug failures", skill_file)])
 
-    await ChatLoop(runtime).send("coder", "/debugging fix this", session_id="session-one")
-    await ChatLoop(runtime).send("coder", "continue", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "/debugging fix this", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "continue", session_id="session-one")
 
     second_request_messages = adapter.requests[1]["messages"]
     # The activation note replays at its chronological position: right after the
@@ -113,7 +113,7 @@ async def test_inline_skill_trigger_preserves_original_message(tmp_path: Path) -
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.skills = StubSkills([StubSkill("debugging", "Debug failures", skill_file)])
 
-    await ChatLoop(runtime).send(
+    await build_chat_loop(runtime).send(
         "coder",
         "Please use $debugging on this issue",
         session_id="session-one",
@@ -148,7 +148,7 @@ def test_activated_skill_reinjected_ahead_of_compaction_summary(tmp_path: Path) 
         )
     )
 
-    request_messages = asyncio.run(ChatLoop(runtime)._build_request_messages(agent, session))
+    request_messages = asyncio.run(build_chat_loop(runtime)._build_request_messages(agent, session))
 
     contents = [message.get("content", "") or "" for message in request_messages]
     assert contents[1] == '<skill_content name="debugging">Steps</skill_content>'
@@ -180,7 +180,7 @@ def test_skill_carried_in_tail_not_duplicated_after_compaction(tmp_path: Path) -
         )
     )
 
-    request_messages = asyncio.run(ChatLoop(runtime)._build_request_messages(agent, session))
+    request_messages = asyncio.run(build_chat_loop(runtime)._build_request_messages(agent, session))
 
     contents = [message.get("content", "") or "" for message in request_messages]
     assert contents[1] == "<system-reminder>\nCompacted historical context.\n</system-reminder>"
@@ -209,7 +209,7 @@ async def test_skill_trigger_does_not_activate_when_allowed_skills_empty(
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.skills = StubSkills([StubSkill("debugging", "Debug failures", skill_file)])
 
-    await ChatLoop(runtime).send("coder", message, session_id="session-one")
+    await build_chat_loop(runtime).send("coder", message, session_id="session-one")
 
     request_messages = adapter.requests[0]["messages"]
     request_text = "\n".join(message.get("content", "") or "" for message in request_messages)
@@ -247,7 +247,7 @@ metadata:
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.skills = SkillRegistry.load(skills_dir, environment={})
 
-    await ChatLoop(runtime).send("coder", "/openai-helper help", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "/openai-helper help", session_id="session-one")
 
     request_messages = adapter.requests[0]["messages"]
     request_text = "\n".join(message.get("content", "") or "" for message in request_messages)
@@ -268,7 +268,7 @@ async def test_unknown_skill_trigger_adds_system_reminder(tmp_path: Path) -> Non
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    await ChatLoop(runtime).send("coder", "/missing do it", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "/missing do it", session_id="session-one")
 
     request_messages = adapter.requests[0]["messages"]
     assert request_messages[1]["content"] == "/missing do it"
@@ -288,7 +288,7 @@ async def test_unknown_skill_trigger_reminder_appears_once_in_first_request(
     adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    await ChatLoop(runtime).send("coder", "/missing do it", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "/missing do it", session_id="session-one")
 
     request_text = "\n".join(
         message.get("content", "") or "" for message in adapter.requests[0]["messages"]
@@ -301,7 +301,7 @@ def test_announce_newly_available_skills_seeds_then_announces_once(tmp_path: Pat
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
     runtime.chat_sessions.create("coder", session_id="s1")
     session = runtime.chat_sessions.get("coder", "s1")
-    loop = ChatLoop(runtime)
+    loop = build_chat_loop(runtime)
 
     def announce(skills: Any) -> None:
         loop._announce_newly_available_skills("coder", "s1", session, agent, skills, None)

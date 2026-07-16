@@ -15,10 +15,11 @@ from typing import Any
 
 import pytest
 
-from core.chat import ChatLoop, ToolCall
+from core.chat import ToolCall
 from core.chat.tool_dispatch import _project_containing_path, _visiting_candidate_paths
 from core.tools import JsonObject as ToolJsonObject
 from core.tools import ToolContext, ToolRegistry, tool_success
+from tests.core.chat.chat_loop_support import build_chat_loop
 from tests.core.chat.test_chat_loop import (
     StubAdapter,
     StubAgent,
@@ -158,7 +159,7 @@ async def test_file_tool_into_registered_project_injects_house_rules(tmp_path: P
     runtime = _visiting_runtime(tmp_path, repo, adapter)
     runtime.chat_sessions.create("coder", session_id="s1")
 
-    await ChatLoop(runtime).send("coder", "Look at the project", session_id="s1")
+    await build_chat_loop(runtime).send("coder", "Look at the project", session_id="s1")
 
     # The house-rules reach the model as a <system-reminder> on the next turn.
     reminders = "\n".join(_reminder_texts(adapter.requests[1]))
@@ -187,7 +188,7 @@ async def test_visiting_stamps_project_files_read_before_write(tmp_path: Path) -
     runtime = _visiting_runtime(tmp_path, repo, adapter)
     runtime.chat_sessions.create("coder", session_id="s1")
 
-    await ChatLoop(runtime).send("coder", "Look at the project", session_id="s1")
+    await build_chat_loop(runtime).send("coder", "Look at the project", session_id="s1")
 
     assert runtime.file_read_state.check_stale("s1", (repo / "AGENTS.md").resolve()) is None
 
@@ -225,7 +226,7 @@ async def test_visiting_reminder_lists_project_skills(tmp_path: Path) -> None:
     ]
     runtime.chat_sessions.create("coder", session_id="s1")
 
-    await ChatLoop(runtime).send("coder", "Look at the project", session_id="s1")
+    await build_chat_loop(runtime).send("coder", "Look at the project", session_id="s1")
 
     joined = "\n".join(_reminder_texts(adapter.requests[1]))
     assert "Skills from project 'vBot'" in joined
@@ -245,7 +246,7 @@ async def test_visiting_reminder_omits_skills_section_when_project_has_none(tmp_
     runtime = _visiting_runtime(tmp_path, repo, adapter)
     runtime.chat_sessions.create("coder", session_id="s1")
 
-    await ChatLoop(runtime).send("coder", "Look", session_id="s1")
+    await build_chat_loop(runtime).send("coder", "Look", session_id="s1")
 
     joined = "\n".join(_reminder_texts(adapter.requests[1]))
     assert "Team rules" in joined
@@ -269,7 +270,7 @@ async def test_house_rules_shown_once_per_session(tmp_path: Path) -> None:
     runtime = _visiting_runtime(tmp_path, repo, adapter)
     runtime.chat_sessions.create("coder", session_id="s1")
 
-    loop = ChatLoop(runtime)
+    loop = build_chat_loop(runtime)
     await loop.send("coder", "first", session_id="s1")
     await loop.send("coder", "second", session_id="s1")
 
@@ -291,7 +292,7 @@ async def test_file_tool_outside_any_project_injects_nothing(tmp_path: Path) -> 
     runtime = _visiting_runtime(tmp_path, repo, adapter)
     runtime.chat_sessions.create("coder", session_id="s1")
 
-    await ChatLoop(runtime).send("coder", "Read a scratch file", session_id="s1")
+    await build_chat_loop(runtime).send("coder", "Read a scratch file", session_id="s1")
 
     persisted = runtime.chat_sessions.get("coder", "s1").load()
     assert not any(m.role == "note" for m in persisted)
@@ -328,7 +329,7 @@ async def test_rooted_agent_own_project_not_reinjected_as_reminder(tmp_path: Pat
     )
     runtime.chat_sessions.create("coder", session_id="s1")
 
-    await ChatLoop(runtime).send("coder", "Look at my own repo", session_id="s1")
+    await build_chat_loop(runtime).send("coder", "Look at my own repo", session_id="s1")
 
     # The files are in the system prompt (rooted), and the visit trigger added no
     # reminder note or meta for the agent's own project.

@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     )
     from core.chat.chat import MAX_TOOL_ITERATIONS as MAX_TOOL_ITERATIONS
     from core.chat.chat import ChatLoop as ChatLoop
+    from core.chat.chat import ChatLoopDependencies as ChatLoopDependencies
     from core.chat.chat import ChatMessage as ChatMessage
     from core.chat.chat import InputOrigin as InputOrigin
     from core.chat.chat import MessageSender as MessageSender
@@ -44,6 +45,7 @@ _EXPORT_MODULES = {
     "AgentArgument": "core.chat.commands",
     "ChatError": "core.chat.errors",
     "ChatLoop": "core.chat.chat",
+    "ChatLoopDependencies": "core.chat.chat",
     "ChatMessage": "core.chat.chat",
     "ChatMessageValidationError": "core.chat.errors",
     "ChatSession": "core.sessions",

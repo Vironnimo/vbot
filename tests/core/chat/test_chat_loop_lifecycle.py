@@ -7,14 +7,12 @@ from typing import Any
 
 import pytest
 
-from core.chat import (
-    ChatLoop,
-)
 from tests.core.chat.chat_loop_support import (
     RecordingReflection,
     StubAdapter,
     StubAgent,
     StubRuntime,
+    build_chat_loop,
 )
 
 JsonObject = dict[str, Any]
@@ -32,7 +30,7 @@ async def test_run_end_notifies_reflection_service_on_success(tmp_path: Path) ->
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     reflection = RecordingReflection()
 
-    await ChatLoop(runtime, reflection_service=reflection).send(
+    await build_chat_loop(runtime, reflection_service=reflection).send(
         "coder", "Hi", session_id="session-one"
     )
 
@@ -58,7 +56,7 @@ async def test_run_end_notifies_reflection_with_internal_flag(tmp_path: Path) ->
     runtime.chat_sessions.create("coder", session_id="session-one")
     reflection = RecordingReflection()
 
-    run = await ChatLoop(runtime, reflection_service=reflection).start_run(
+    run = await build_chat_loop(runtime, reflection_service=reflection).start_run(
         "coder", "internal note", session_id="session-one", internal=True
     )
     await run.wait()
@@ -80,7 +78,7 @@ async def test_run_end_notification_failure_never_breaks_the_run(tmp_path: Path)
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     reflection = RecordingReflection(raise_on_notify=True)
 
-    assistant = await ChatLoop(runtime, reflection_service=reflection).send(
+    assistant = await build_chat_loop(runtime, reflection_service=reflection).send(
         "coder", "Hi", session_id="session-one"
     )
 
@@ -94,7 +92,7 @@ async def test_child_loop_shares_the_reflection_service(tmp_path: Path) -> None:
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     reflection = RecordingReflection()
 
-    parent = ChatLoop(runtime, reflection_service=reflection)
+    parent = build_chat_loop(runtime, reflection_service=reflection)
     child = parent.child_loop(nesting_depth=1)
 
     assert child._reflection_service is reflection
