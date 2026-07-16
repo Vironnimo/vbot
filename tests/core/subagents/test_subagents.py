@@ -462,6 +462,35 @@ async def test_malformed_qualified_subagent_address_fails_cleanly(
     assert result["error"]["code"] == "invalid_arguments"
 
 
+@pytest.mark.parametrize("tool_name", ["subagent", "subagent_result"])
+async def test_subagent_tools_reject_unknown_arguments(
+    tmp_path: Path,
+    tool_name: str,
+) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+    arguments: JsonObject = {"session_id": "child", "unexpected": True}
+    if tool_name == "subagent":
+        arguments["content"] = "spawn"
+
+    handler = _handle_subagent if tool_name == "subagent" else _handle_subagent_result
+    result = await handler(
+        context,
+        arguments,
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert result["ok"] is False
+    assert result["error"] == {
+        "code": "invalid_arguments",
+        "message": "Unknown argument(s): unexpected",
+    }
+    assert manager.started == []
+
+
 async def test_project_subagent_routes_into_existing_project_session(
     tmp_path: Path,
 ) -> None:

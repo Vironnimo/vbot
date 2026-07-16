@@ -142,6 +142,11 @@ async def _handle_subagent(
     runtime: RuntimeServices,
     batch_tracker: SubAgentBatchTracker,
 ) -> JsonObject:
+    unknown_arguments = set(arguments) - {"content", "agent_id", "background", "session_id"}
+    if unknown_arguments:
+        names = ", ".join(sorted(unknown_arguments))
+        return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
+
     content = arguments.get("content")
     if not isinstance(content, str) or not content.strip():
         return tool_failure(
@@ -394,6 +399,11 @@ async def _handle_subagent_result(
     runtime: RuntimeServices,
     batch_tracker: SubAgentBatchTracker,
 ) -> JsonObject:
+    unknown_arguments = set(arguments) - {"session_id", "agent_id", "run_id"}
+    if unknown_arguments:
+        names = ", ".join(sorted(unknown_arguments))
+        return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
+
     try:
         session_id = required_string(arguments.get("session_id"), field_name="session_id")
         agent_address = (
