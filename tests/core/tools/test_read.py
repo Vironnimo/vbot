@@ -12,6 +12,7 @@ from zipfile import ZipFile
 
 import pytest
 
+import core.tools.read as read_module
 import core.tools.read_extract as read_extract_module
 from core.attachments import AttachmentTooLargeError
 from core.model_tasks import SpeechError, SpeechTranscriptionResult
@@ -37,10 +38,25 @@ class _FakeRecord:
 class _FakeAttachmentStore:
     """Records ``store()`` calls; optionally raises to simulate rejection."""
 
-    def __init__(self, *, error: Exception | None = None, media_type: str = "image/png") -> None:
+    def __init__(
+        self,
+        *,
+        error: Exception | None = None,
+        media_type: str = "image/png",
+        max_size_bytes: int = 20_971_520,
+    ) -> None:
         self._error = error
         self._media_type = media_type
+        self.max_size_bytes = max_size_bytes
         self.stored: list[tuple[str, bytes]] = []
+
+    def ensure_within_limit(self, reported_size_bytes: int | None) -> None:
+        if isinstance(self._error, AttachmentTooLargeError):
+            raise self._error
+        if reported_size_bytes is not None and reported_size_bytes > self.max_size_bytes:
+            raise AttachmentTooLargeError(
+                f"Attachment size {reported_size_bytes} exceeds limit {self.max_size_bytes}"
+            )
 
     def store(self, filename: str, data: bytes) -> _FakeRecord:
         if self._error is not None:
@@ -89,12 +105,17 @@ _ReadHandler = Callable[[ToolContext, dict[str, Any]], Awaitable[dict[str, Any]]
 
 
 def make_handler(
-    store: Any = None, speech: Any = None, file_state: FileReadState | None = None
+    store: Any = None,
+    speech: Any = None,
+    file_state: FileReadState | None = None,
+    *,
+    speech_max_size_bytes: int = 20_971_520,
 ) -> _ReadHandler:
     handler = make_read_handler(
         store or _FakeAttachmentStore(),
         speech or _FakeSpeech(),
         file_state or FileReadState(),
+        speech_max_size_bytes=speech_max_size_bytes,
     )
     return cast(_ReadHandler, handler)
 
@@ -131,6 +152,7 @@ def test_register_read_tool_exposes_provider_schema_without_description_property
         attachment_store=_FakeAttachmentStore(),
         speech_service=_FakeSpeech(),
         file_state=FileReadState(),
+        speech_max_size_bytes=20_971_520,
     )
 
     tool = registry.get("read")
@@ -267,10 +289,10 @@ async def test_read_returns_failure_envelope_for_read_time_filesystem_error(
     target = workspace / "notes.txt"
     target.write_bytes(b"hello\n")
 
-    def raise_permission_error(self: Path) -> bytes:
+    def raise_permission_error(self: Path, *args: object, **kwargs: object) -> Any:
         raise PermissionError("access denied while reading")
 
-    monkeypatch.setattr(Path, "read_bytes", raise_permission_error)
+    monkeypatch.setattr(Path, "open", raise_permission_error)
 
     result = await make_handler()(make_context(workspace), {"path": "notes.txt"})
 
@@ -290,7 +312,7 @@ async def test_read_applies_line_offset_and_limit(tmp_path: Path) -> None:
     )
 
     data = assert_success_envelope(result)
-    assert data["content"] == "2|two\n3|three\n[Showing lines 2-3 of 4. Use offset=4 to continue.]"
+    assert data["content"] == "2|two\n3|three\n[Showing lines 2-3. Use offset=4 to continue.]"
 
 
 @pytest.mark.asyncio
@@ -474,7 +496,8 @@ async def test_read_default_limit_truncates_large_file(tmp_path: Path) -> None:
     data = assert_success_envelope(result)
     content = data["content"]
     assert isinstance(content, str)
-    assert "[Showing lines 1-2000 of 2001." in content
+    assert "[Showing lines 1-2000. Use offset=2001 to continue.]" in content
+    assert "of 2001" not in content
     assert "line2001" not in content
 
 
@@ -519,6 +542,22 @@ async def test_read_strips_utf8_bom(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_streaming_text_matches_byte_renderer_across_chunked_line_endings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    raw = b"\xef\xbb\xbf" + "alpha\r\nbeta\rgamma\u2028delta".encode()
+    workspace.joinpath("line-endings.txt").write_bytes(raw)
+    monkeypatch.setattr(read_module, "_TEXT_STREAM_CHUNK_CHARACTERS", 2)
+
+    result = await make_handler()(make_context(workspace), {"path": "line-endings.txt"})
+
+    data = assert_success_envelope(result)
+    assert data["content"] == read_module.render_text_file(raw)
+
+
+@pytest.mark.asyncio
 async def test_read_returns_binary_notice_for_nul_bytes(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -532,6 +571,36 @@ async def test_read_returns_binary_notice_for_nul_bytes(tmp_path: Path) -> None:
     assert isinstance(content, str)
     assert "Binary file" in content
     assert "data.bin" in content
+
+
+@pytest.mark.asyncio
+async def test_read_text_binary_and_video_paths_never_use_full_file_reader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("large.txt").write_text(
+        "first\n" + "x" * 200_000,
+        encoding="utf-8",
+    )
+    workspace.joinpath("data.bin").write_bytes(b"\x7fELF\x00payload")
+    workspace.joinpath("clip.mp4").write_bytes(b"\x00\x00\x00\x18ftypisommp4-data")
+
+    def unexpected_full_read(_resolved: Path, _max_bytes: int) -> bytes:
+        raise AssertionError("notice/text branch attempted a full-file read")
+
+    monkeypatch.setattr(read_module, "_read_file_bytes_with_limit", unexpected_full_read)
+    handler = make_handler()
+
+    text_result = await handler(make_context(workspace), {"path": "large.txt", "limit": 1})
+    binary_result = await handler(make_context(workspace), {"path": "data.bin"})
+    video_result = await handler(make_context(workspace), {"path": "clip.mp4"})
+
+    text_content = str(assert_success_envelope(text_result)["content"])
+    assert text_content.startswith("1|first")
+    assert text_content.endswith("[Showing lines 1-1. Use offset=2 to continue.]")
+    assert "Binary file" in str(assert_success_envelope(binary_result)["content"])
+    assert "Video: clip.mp4" in str(assert_success_envelope(video_result)["content"])
 
 
 @pytest.mark.asyncio
@@ -572,6 +641,22 @@ async def test_read_audio_maps_speech_error_to_failure(tmp_path: Path) -> None:
 
     error = assert_failure_envelope(result, "transcription_failed")
     assert "speech-to-text is not configured" in error["message"]
+
+
+@pytest.mark.asyncio
+async def test_read_audio_rejects_oversized_file_before_transcription(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("voice.mp3").write_bytes(b"ID3" + b"x" * 20)
+    speech = _FakeSpeech()
+
+    result = await make_handler(speech=speech, speech_max_size_bytes=8)(
+        make_context(workspace), {"path": "voice.mp3"}
+    )
+
+    error = assert_failure_envelope(result, "audio_too_large")
+    assert "exceeds limit 8" in error["message"]
+    assert speech.calls == []
 
 
 @pytest.mark.asyncio
@@ -618,12 +703,13 @@ async def test_read_image_maps_attachment_error_to_failure(tmp_path: Path) -> No
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     workspace.joinpath("diagram.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00")
-    store = _FakeAttachmentStore(error=AttachmentTooLargeError("Attachment size 9 exceeds limit 4"))
+    store = _FakeAttachmentStore(max_size_bytes=4)
 
     result = await make_handler(store=store)(make_context(workspace), {"path": "diagram.png"})
 
     error = assert_failure_envelope(result, "attachment_error")
     assert "exceeds limit" in error["message"]
+    assert store.stored == []
 
 
 @pytest.mark.asyncio
@@ -678,6 +764,11 @@ async def test_read_reports_document_extraction_limit(
     with ZipFile(target, "w") as archive:
         archive.writestr("word/document.xml", document_xml)
     monkeypatch.setattr(read_extract_module, "_MAX_DOCUMENT_EXTRACTED_BYTES", 128)
+
+    def unexpected_extract(_data: bytes, _kind: str) -> str:
+        raise AssertionError("oversized document was materialized before preflight")
+
+    monkeypatch.setattr(read_module, "extract_document_text", unexpected_extract)
 
     result = await make_handler()(make_context(workspace), {"path": "large.docx"})
 

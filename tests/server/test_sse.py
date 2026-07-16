@@ -42,6 +42,7 @@ def test_chat_stream_returns_sse_url_and_endpoint_replays_visible_timeline(tmp_p
         attachment_store=None,
         speech_service=None,
         file_state=FileReadState(),
+        speech_max_size_bytes=20_971_520,
     )
     runtime.agents.update(
         "coder",
@@ -225,6 +226,7 @@ def _stream_test_run(
         attachment_store=None,
         speech_service=None,
         file_state=FileReadState(),
+        speech_max_size_bytes=20_971_520,
     )
     runtime.agents.update(
         "coder",

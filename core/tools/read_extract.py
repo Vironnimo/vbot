@@ -97,6 +97,15 @@ def document_label(kind: str) -> str:
     return _DOCUMENT_LABELS.get(kind, "document")
 
 
+def ensure_document_input_size(size_bytes: int) -> int:
+    """Reject a document whose compressed/raw input already exceeds the budget."""
+    if size_bytes > _MAX_DOCUMENT_EXTRACTED_BYTES:
+        raise ExtractionLimitExceededError(
+            f"document exceeds the {_MAX_DOCUMENT_EXTRACTED_SIZE_LABEL} extraction limit"
+        )
+    return _MAX_DOCUMENT_EXTRACTED_BYTES
+
+
 def extract_document_text(data: bytes, kind: str) -> str:
     """Render document bytes of the given kind as plain text."""
     budget = _ExtractionBudget()
