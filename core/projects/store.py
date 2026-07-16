@@ -38,15 +38,14 @@ from core.projects.projects import (
     ProjectError,
     ProjectNotFoundError,
     build_project,
+    load_validated_project_json,
     project_from_dict,
     seed_default_auto_load,
 )
 from core.settings import (
     DEFAULT_PROJECT_SOURCE_FORMAT,
     PROJECT_ID_PATTERN,
-    SettingsValidationError,
     is_valid_agent_id,
-    load_validated_project_json,
 )
 from core.utils.atomic import atomic_write_text
 from core.utils.logging import get_logger
@@ -452,11 +451,7 @@ class ProjectStore:
         )
 
     def _read_project(self, config_path: Path) -> Project:
-        try:
-            data = load_validated_project_json(config_path)
-        except SettingsValidationError as error:
-            raise ProjectError(str(error)) from error
-
+        data = load_validated_project_json(config_path)
         project = project_from_dict(data)
         if project.project_id != config_path.parent.name:
             raise ProjectError(

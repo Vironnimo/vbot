@@ -9,14 +9,11 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 
+from core.channels import ALLOWED_CHANNEL_DM_SCOPES, ALLOWED_CHANNEL_PLATFORMS
 from core.memory import MEMORY_PROMPT_MODES
 from core.model_tasks import SUPPORTED_TASK_TYPES
 from core.providers.reasoning import THINKING_EFFORT_ORDER
-from core.settings import (
-    ALLOWED_CHANNEL_DM_SCOPES,
-    ALLOWED_CHANNEL_PLATFORMS,
-    PROJECT_SOURCE_FORMATS,
-)
+from core.settings import PROJECT_SOURCE_FORMATS
 from core.utils.config import DEFAULT_HOST
 
 SERVER_COMMANDS = ("start", "stop", "restart", "status")

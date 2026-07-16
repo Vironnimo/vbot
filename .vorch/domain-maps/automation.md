@@ -21,7 +21,7 @@ Programmatic Run triggering, time-based scheduling, and background self-improvem
 
 ## Conventions
 
-- `CronService` validates storage shape through `core/settings/validation.py` before constructing `CronJob` objects, then applies semantic validation in `core/automation/cron.py`. Invalid storage raises `CronStorageError`; bad job data or unsupported update fields raise `CronJobValidationError`.
+- `core.automation` exports `validate_cron_jobs_data`, `validate_cron_jobs_file`, and `load_validated_cron_jobs_json`; `CronService` runs this Automation-owned storage schema before constructing `CronJob` objects, then applies semantic validation in `core/automation/cron.py`. Invalid storage raises `CronStorageError`; bad job data or unsupported update fields raise `CronJobValidationError`.
 - `schedule_type` is `cron` or `once`. Cron jobs require `cron_expression` and clear `run_at`; once jobs require `run_at` and clear `cron_expression`.
 - `status` is `active`, `paused`, `completed`, or `failed`. Paused, completed, and failed jobs do not own scheduler tasks. `completed` cannot be re-enabled or paused; `failed` is a system-assigned terminal state for a once job that gave up after repeated fire failures (never set by callers) and *can* be re-enabled to retry once the cause is fixed.
 - `created_at` and `last_fired_at` are UTC timestamps with explicit offsets. `run_at` may be timezone-aware or naive; naive once-job times are interpreted in the job timezone, then the local timezone, then UTC as a final fallback.

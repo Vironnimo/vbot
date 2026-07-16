@@ -8,13 +8,27 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, tzinfo
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import croniter  # type: ignore[import-untyped]
 
-from core.settings import SettingsValidationError, load_validated_cron_jobs_json
+from core.config_validation import (
+    JsonConfigValidationError,
+    JsonDiagnostic,
+    JsonObject,
+    JsonValidationReport,
+    add_error,
+    error_diagnostic,
+    load_validated_json_file,
+    validate_allowed_string,
+    validate_json_file,
+    validate_non_empty_string,
+    validate_optional_string,
+    warn_unknown_keys,
+)
+from core.settings import is_valid_agent_id
 from core.utils.atomic import atomic_write_text
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
@@ -55,6 +69,7 @@ _MUTABLE_FIELDS = frozenset(
         "project_id",
     )
 )
+_CRON_JOB_FIELDS = _MUTABLE_FIELDS | {"created_at", "id", "last_fired_at"}
 
 _LOGGER = get_logger("automation.cron")
 
@@ -73,6 +88,86 @@ class CronJobValidationError(CronServiceError):
 
 class CronStorageError(CronServiceError):
     """Raised when cron storage cannot be read or written."""
+
+
+def validate_cron_jobs_file(jobs_path: str | Path) -> JsonValidationReport:
+    """Validate persisted ``cron/jobs.json`` without consuming it."""
+    return validate_json_file(jobs_path, validate_cron_jobs_data, missing_ok=True)
+
+
+def load_validated_cron_jobs_json(jobs_path: str | Path) -> list[JsonObject]:
+    """Load schema-valid Cron jobs, defaulting a missing file to an empty list."""
+    try:
+        return cast(
+            "list[JsonObject]",
+            load_validated_json_file(
+                jobs_path,
+                validate_cron_jobs_data,
+                missing_ok=True,
+                missing_default=[],
+            ),
+        )
+    except JsonConfigValidationError as error:
+        raise CronStorageError(str(error)) from error
+
+
+def validate_cron_jobs_data(data: Any) -> list[JsonDiagnostic]:
+    """Validate a decoded raw ``cron/jobs.json`` array."""
+    diagnostics: list[JsonDiagnostic] = []
+    if not isinstance(data, list):
+        return [error_diagnostic("$", f"Expected a JSON array, got {type(data).__name__}")]
+
+    for index, item in enumerate(data):
+        item_path = f"$[{index}]"
+        if not isinstance(item, dict):
+            add_error(diagnostics, item_path, "Expected a JSON object")
+            continue
+        warn_unknown_keys(diagnostics, item_path, item, _CRON_JOB_FIELDS, "cron job field")
+        validate_non_empty_string(diagnostics, f"{item_path}.id", item.get("id"), required=True)
+        _validate_cron_agent_id(diagnostics, f"{item_path}.agent_id", item.get("agent_id"))
+        validate_non_empty_string(
+            diagnostics, f"{item_path}.prompt", item.get("prompt"), required=True
+        )
+        validate_allowed_string(
+            diagnostics,
+            f"{item_path}.schedule_type",
+            item.get("schedule_type"),
+            _ALLOWED_SCHEDULE_TYPES,
+        )
+        validate_allowed_string(
+            diagnostics,
+            f"{item_path}.status",
+            item.get("status"),
+            _ALLOWED_STATUSES,
+        )
+        for field_name in (
+            "cron_expression",
+            "run_at",
+            "timezone",
+            "session_id",
+            "project_id",
+            "last_fired_at",
+        ):
+            validate_optional_string(
+                diagnostics,
+                f"{item_path}.{field_name}",
+                item.get(field_name),
+            )
+        validate_non_empty_string(
+            diagnostics, f"{item_path}.created_at", item.get("created_at"), required=True
+        )
+    return diagnostics
+
+
+def _validate_cron_agent_id(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
+    if not isinstance(value, str) or not value:
+        add_error(diagnostics, path, "must be a non-empty string")
+    elif not is_valid_agent_id(value):
+        add_error(
+            diagnostics,
+            path,
+            "must be 1-64 characters using only letters, numbers, hyphen, or underscore",
+        )
 
 
 @dataclass(slots=True)
@@ -330,11 +425,7 @@ class CronService:
     def _load_jobs(self) -> dict[str, CronJob]:
         """Load cron jobs from <data_root>/cron/jobs.json."""
         self._ensure_storage_exists()
-        try:
-            raw_payload = load_validated_cron_jobs_json(self._jobs_path)
-        except SettingsValidationError as error:
-            raise CronStorageError(str(error)) from error
-
+        raw_payload = load_validated_cron_jobs_json(self._jobs_path)
         jobs: dict[str, CronJob] = {}
         for item in raw_payload:
             job = CronJob.from_dict(item)

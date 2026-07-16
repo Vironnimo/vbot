@@ -10,6 +10,9 @@ from core.agents.agents import (
     AgentUpdateResult,
     InvalidAgentIdError,
     default_workspace_dir,
+    load_validated_agent_json,
+    validate_agent_data,
+    validate_agent_file,
 )
 
 __all__ = [
@@ -22,4 +25,7 @@ __all__ = [
     "AgentUpdateResult",
     "InvalidAgentIdError",
     "default_workspace_dir",
+    "load_validated_agent_json",
+    "validate_agent_data",
+    "validate_agent_file",
 ]

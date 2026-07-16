@@ -10,12 +10,25 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from core.attachments import AttachmentStore
 from core.channels.adapter import ChannelAdapter, DeniedChatFacts, FileData, RouteFacts
+from core.config_validation import (
+    JsonConfigValidationError,
+    JsonDiagnostic,
+    JsonObject,
+    JsonValidationReport,
+    add_error,
+    error_diagnostic,
+    load_validated_json_file,
+    validate_allowed_string,
+    validate_json_file,
+    validate_non_empty_string,
+    warn_unknown_keys,
+)
 from core.extensions import InteractionButton, InteractionEvent, InteractionResponder
-from core.settings import SettingsValidationError, load_validated_channel_json
+from core.settings import is_valid_agent_id
 from core.utils.atomic import atomic_write_text
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
@@ -30,10 +43,12 @@ _LOGGER = get_logger("channels")
 
 _CHANNEL_CONFIG_FILENAME = "channel.json"
 _DEFAULT_DM_SCOPE = "per_conversation"
-_ALLOWED_DM_SCOPES = frozenset(("per_conversation", "main", "per_peer", "per_account_channel_peer"))
+ALLOWED_CHANNEL_DM_SCOPES = frozenset(
+    ("per_conversation", "main", "per_peer", "per_account_channel_peer")
+)
 _DEFAULT_RESPONSE_MODE = "mention"
-_ALLOWED_RESPONSE_MODES = frozenset(("mention", "all"))
-_ALLOWED_PLATFORMS = frozenset(("discord", "telegram"))
+ALLOWED_CHANNEL_RESPONSE_MODES = frozenset(("mention", "all"))
+ALLOWED_CHANNEL_PLATFORMS = frozenset(("discord", "telegram"))
 _CHANNEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _ADAPTER_RESTART_INITIAL_DELAY_SECONDS = 1.0
 _ADAPTER_RESTART_MAX_DELAY_SECONDS = 30.0
@@ -55,6 +70,7 @@ _MUTABLE_FIELDS = frozenset(
         "observe_unaddressed",
     )
 )
+_CHANNEL_CONFIG_FIELDS = _MUTABLE_FIELDS | {"id"}
 
 
 class ChannelError(VBotError):
@@ -67,6 +83,106 @@ class ChannelNotFoundError(ChannelError):
 
 class ChannelConfigError(ChannelError):
     """Raised when channel config data is invalid."""
+
+
+def validate_channel_file(config_path: str | Path) -> JsonValidationReport:
+    """Validate one persisted ``channel.json`` without consuming it."""
+    return validate_json_file(config_path, validate_channel_data, missing_ok=False)
+
+
+def load_validated_channel_json(config_path: str | Path) -> JsonObject:
+    """Load one schema-valid ``channel.json`` mapping."""
+    try:
+        return cast(
+            "JsonObject",
+            load_validated_json_file(config_path, validate_channel_data, missing_ok=False),
+        )
+    except JsonConfigValidationError as error:
+        raise ChannelConfigError(str(error)) from error
+
+
+def validate_channel_data(data: Any) -> list[JsonDiagnostic]:
+    """Validate a decoded raw ``channel.json`` mapping."""
+    diagnostics: list[JsonDiagnostic] = []
+    if not isinstance(data, dict):
+        return [error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
+
+    warn_unknown_keys(diagnostics, "$", data, _CHANNEL_CONFIG_FIELDS, "channel field")
+    validate_non_empty_string(diagnostics, "$.id", data.get("id"), required=True)
+    validate_allowed_string(
+        diagnostics, "$.platform", data.get("platform"), ALLOWED_CHANNEL_PLATFORMS
+    )
+    _validate_channel_agent_id(diagnostics, "$.agent_id", data.get("agent_id"))
+    validate_allowed_string(
+        diagnostics,
+        "$.dm_scope",
+        data.get("dm_scope", _DEFAULT_DM_SCOPE),
+        ALLOWED_CHANNEL_DM_SCOPES,
+    )
+    _validate_platform_id_list(diagnostics, "$.allowed_chat_ids", data.get("allowed_chat_ids", []))
+    validate_non_empty_string(
+        diagnostics, "$.token_env_var", data.get("token_env_var"), required=True
+    )
+    if "enabled" in data and not isinstance(data["enabled"], bool):
+        add_error(diagnostics, "$.enabled", "must be a boolean")
+    if "observe_unaddressed" in data and not isinstance(data["observe_unaddressed"], bool):
+        add_error(diagnostics, "$.observe_unaddressed", "must be a boolean")
+    validate_allowed_string(
+        diagnostics,
+        "$.response_mode",
+        data.get("response_mode", _DEFAULT_RESPONSE_MODE),
+        ALLOWED_CHANNEL_RESPONSE_MODES,
+    )
+    _validate_regex_list(diagnostics, "$.mention_patterns", data.get("mention_patterns", []))
+    _validate_user_id_list(diagnostics, "$.owner_user_ids", data.get("owner_user_ids", []))
+    return diagnostics
+
+
+def _validate_channel_agent_id(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
+    if not isinstance(value, str) or not value:
+        add_error(diagnostics, path, "must be a non-empty string")
+    elif not is_valid_agent_id(value):
+        add_error(
+            diagnostics,
+            path,
+            "must be 1-64 characters using only letters, numbers, hyphen, or underscore",
+        )
+
+
+def _validate_platform_id_list(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
+    if not isinstance(value, list):
+        add_error(diagnostics, path, "must be a list of platform ids")
+        return
+    for index, item in enumerate(value):
+        if isinstance(item, bool) or not isinstance(item, (int, str)):
+            add_error(diagnostics, f"{path}[{index}]", "must be a string or integer id")
+        elif isinstance(item, str) and not item.strip():
+            add_error(diagnostics, f"{path}[{index}]", "must not be empty")
+
+
+def _validate_regex_list(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
+    if not isinstance(value, list):
+        add_error(diagnostics, path, "must be a list of regex strings")
+        return
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item.strip():
+            add_error(diagnostics, f"{path}[{index}]", "must be a non-empty string")
+            continue
+        try:
+            re.compile(item)
+        except re.error as error:
+            add_error(diagnostics, f"{path}[{index}]", f"must be a valid regex: {error}")
+
+
+def _validate_user_id_list(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
+    if not isinstance(value, list):
+        add_error(diagnostics, path, "must be a list of platform user ids")
+        return
+    for index, item in enumerate(value):
+        if isinstance(item, bool) or not isinstance(item, (int, str)):
+            add_error(diagnostics, f"{path}[{index}]", "must be a string or integer user id")
+        elif isinstance(item, str) and not item.strip():
+            add_error(diagnostics, f"{path}[{index}]", "must not be empty")
 
 
 @dataclass(slots=True)
@@ -130,16 +246,16 @@ class ChannelConfig:
                 "id must contain only letters, numbers, underscore, and hyphen"
             )
 
-        if not isinstance(self.platform, str) or self.platform not in _ALLOWED_PLATFORMS:
-            platforms = ", ".join(sorted(_ALLOWED_PLATFORMS))
+        if not isinstance(self.platform, str) or self.platform not in ALLOWED_CHANNEL_PLATFORMS:
+            platforms = ", ".join(sorted(ALLOWED_CHANNEL_PLATFORMS))
             raise ChannelConfigError(f"platform must be one of: {platforms}")
 
         if not isinstance(self.agent_id, str) or not self.agent_id.strip():
             raise ChannelConfigError("agent_id must be a non-empty string")
         self.agent_id = self.agent_id.strip()
 
-        if not isinstance(self.dm_scope, str) or self.dm_scope not in _ALLOWED_DM_SCOPES:
-            scopes = ", ".join(sorted(_ALLOWED_DM_SCOPES))
+        if not isinstance(self.dm_scope, str) or self.dm_scope not in ALLOWED_CHANNEL_DM_SCOPES:
+            scopes = ", ".join(sorted(ALLOWED_CHANNEL_DM_SCOPES))
             raise ChannelConfigError(f"dm_scope must be one of: {scopes}")
 
         if not isinstance(self.allowed_chat_ids, list):
@@ -165,9 +281,9 @@ class ChannelConfig:
             raise ChannelConfigError("observe_unaddressed must be a boolean")
 
         if not isinstance(self.response_mode, str) or self.response_mode not in (
-            _ALLOWED_RESPONSE_MODES
+            ALLOWED_CHANNEL_RESPONSE_MODES
         ):
-            modes = ", ".join(sorted(_ALLOWED_RESPONSE_MODES))
+            modes = ", ".join(sorted(ALLOWED_CHANNEL_RESPONSE_MODES))
             raise ChannelConfigError(f"response_mode must be one of: {modes}")
 
         if not isinstance(self.mention_patterns, list):
@@ -272,11 +388,7 @@ class ChannelStorage:
         return self._channels_dir / channel_id
 
     def _read_config(self, config_path: Path) -> ChannelConfig:
-        try:
-            payload = load_validated_channel_json(config_path)
-        except SettingsValidationError as error:
-            raise ChannelConfigError(str(error)) from error
-
+        payload = load_validated_channel_json(config_path)
         config = ChannelConfig.from_dict(payload)
         if config.id != config_path.parent.name:
             raise ChannelConfigError(

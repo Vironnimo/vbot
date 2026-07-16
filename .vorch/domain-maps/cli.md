@@ -43,7 +43,7 @@ Local command-line accessor for server lifecycle and RPC-backed management areas
 - `prompt list|update|reset|preview` maps to `prompt.list`, `prompt.update`, `prompt.reset`, and `prompt.preview`. `prompt update <fragment-name> (--content <text>|--file <path>)` may read one local source file, but storage writes still happen only through `prompt.update`; preview prints token metadata plus the rendered System Prompt text.
 - `log list|read` maps to `log.list` and `log.read`. The CLI must not read `<data_dir>/logs/` directly; `log read <daily-log-name>` prints parsed entries plus the returned cursor.
 - `config`, `config get <key>`, and `config set <key> <value>` call `settings.get_raw` or `settings.set_key` over RPC. `config set` coerces the CLI value to JSON-native data with `json.loads()` before falling back to a plain string; missing keys print available top-level keys and a close-match suggestion when possible.
-- `doctor settings [--data-dir]` and `doctor config [--data-dir]` run locally without a reachable server. They validate `settings.json` or the full user-editable JSON config bundle through `core/settings/validation.py`, report missing files as OK when defaults apply, and format diagnostics as severity, JSON path, and message for agent callers.
+- `doctor settings [--data-dir]` and `doctor config [--data-dir]` run locally without a reachable server. The first validates `settings.json` through Settings; the second asks Settings to discover the full bundle and delegate each file to its owning domain. Both report missing files as OK when defaults apply and format the shared diagnostics as severity, JSON path, and message for agent callers.
 
 ## Conventions
 

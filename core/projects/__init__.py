@@ -24,8 +24,11 @@ from core.projects.projects import (
     ProjectError,
     ProjectNotFoundError,
     build_project,
+    load_validated_project_json,
     project_from_dict,
     project_tool_configurability_reason,
+    validate_project_data,
+    validate_project_file,
 )
 from core.projects.resolver import (
     AgentResolutionError,
@@ -61,6 +64,7 @@ __all__ = [
     "cwd_exists",
     "cwd_identity_key",
     "format_agent_address",
+    "load_validated_project_json",
     "normalize_cwd",
     "parse_agent_address",
     "project_from_dict",
@@ -72,4 +76,6 @@ __all__ = [
     "runtime_agent_body",
     "slugify_agent_id",
     "slugify_project_id",
+    "validate_project_data",
+    "validate_project_file",
 ]
