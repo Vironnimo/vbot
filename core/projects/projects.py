@@ -9,19 +9,38 @@ auto-load files are optional. ``AGENTS.md`` (the tool-neutral project-instructio
 convention) is seeded as the first ``auto_load`` entry at creation, then a normal
 removable entry — vBot does not special-case it at render time.
 
-Field rules are enforced once by ``core.settings.validate_project_data`` at load
-time (the central validator), the same way Agents validate through the settings
-domain. This module owns the entity shape and the create-time field validation;
-the on-disk anchor lifecycle and CRUD live in ``core/projects/store.py``.
+This module owns the persisted schema and enforces it once at load time before
+constructing the entity. The on-disk anchor lifecycle and CRUD live in
+``core/projects/store.py``.
 """
 
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 
+from core.config_validation import (
+    JsonConfigValidationError,
+    JsonDiagnostic,
+    JsonObject,
+    JsonValidationReport,
+    add_error,
+    child_path,
+    error_diagnostic,
+    load_validated_json_file,
+    validate_json_file,
+    validate_non_empty_string,
+    validate_optional_allowed_string,
+    validate_optional_string,
+    validate_optional_string_list,
+    validate_required_fields,
+    validate_string,
+    warn_unknown_keys,
+)
 from core.projects.paths import normalize_cwd
 from core.settings import (
     DEFAULT_PROJECT_SOURCE_FORMAT,
@@ -31,6 +50,11 @@ from core.settings import (
     is_valid_project_id,
     validate_temperature,
     validate_thinking_effort,
+)
+from core.settings.validation import (
+    validate_optional_compaction_policy,
+    validate_temperature_diagnostic,
+    validate_thinking_effort_diagnostic,
 )
 
 DEFAULT_DEFAULT_AGENT = ""
@@ -85,6 +109,30 @@ OVERRIDE_FIELDS: frozenset[str] = frozenset(
     {"model", "temperature", "thinking_effort", "compaction_policy"}
 )
 
+_PROJECT_CONFIG_FIELDS = frozenset(
+    {
+        "allowed_tools",
+        "auto_load",
+        "created_at",
+        "cwd",
+        "default_agent",
+        "default_model",
+        "default_temperature",
+        "default_thinking_effort",
+        "display_name",
+        "overrides",
+        "project_id",
+        "skills_bundled_enabled",
+        "skills_global_enabled",
+        "skills_project_disabled",
+        "source_format",
+        "updated_at",
+    }
+)
+_REQUIRED_PROJECT_CONFIG_FIELDS = frozenset(
+    {"created_at", "cwd", "display_name", "project_id", "updated_at"}
+)
+
 # The tool-neutral project-instruction convention (the agents.md standard). Seeded
 # as the first ``auto_load`` entry when a project is created
 # (:func:`seed_default_auto_load`, used by ``ProjectStore.create``), then treated
@@ -123,6 +171,154 @@ class ProjectNotFoundError(ProjectError):
 
 class InvalidProjectIdError(ProjectError):
     """Raised when a project id is unsafe for filesystem use."""
+
+
+def validate_project_file(project_path: str | Path) -> JsonValidationReport:
+    """Validate one persisted ``project.json`` without consuming it."""
+    return validate_json_file(project_path, validate_project_data, missing_ok=False)
+
+
+def load_validated_project_json(project_path: str | Path) -> JsonObject:
+    """Load one schema-valid ``project.json`` mapping."""
+    try:
+        return cast(
+            "JsonObject",
+            load_validated_json_file(project_path, validate_project_data, missing_ok=False),
+        )
+    except JsonConfigValidationError as error:
+        raise ProjectError(str(error)) from error
+
+
+def validate_project_data(data: Any) -> list[JsonDiagnostic]:
+    """Validate a decoded raw ``project.json`` mapping."""
+    diagnostics: list[JsonDiagnostic] = []
+    if not isinstance(data, dict):
+        return [error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
+
+    warn_unknown_keys(diagnostics, "$", data, _PROJECT_CONFIG_FIELDS, "project field")
+    validate_required_fields(diagnostics, "$", data, _REQUIRED_PROJECT_CONFIG_FIELDS)
+    _validate_project_config_id(diagnostics, data.get("project_id"))
+    validate_non_empty_string(
+        diagnostics, "$.display_name", data.get("display_name"), required=True
+    )
+    # A moved repository remains a valid re-point candidate, so the file rule
+    # checks only that cwd is a non-empty path string, never that it exists.
+    validate_non_empty_string(diagnostics, "$.cwd", data.get("cwd"), required=True)
+    validate_optional_string(diagnostics, "$.default_agent", data.get("default_agent"))
+    validate_optional_string(diagnostics, "$.default_model", data.get("default_model"))
+    validate_temperature_diagnostic(
+        diagnostics, "$.default_temperature", data.get("default_temperature"), allow_none=True
+    )
+    validate_thinking_effort_diagnostic(
+        diagnostics,
+        "$.default_thinking_effort",
+        data.get("default_thinking_effort"),
+        allow_none=True,
+    )
+    validate_optional_allowed_string(
+        diagnostics,
+        "$.source_format",
+        data.get("source_format"),
+        frozenset(PROJECT_SOURCE_FORMATS),
+    )
+    _validate_auto_load_list(diagnostics, "$.auto_load", data.get("auto_load"))
+    validate_optional_string_list(diagnostics, "$.allowed_tools", data.get("allowed_tools"))
+    if isinstance(data.get("allowed_tools"), list):
+        for index, tool_name in enumerate(data["allowed_tools"]):
+            if tool_name == PROJECT_TOOL_ALLOWLIST_WILDCARD:
+                add_error(
+                    diagnostics,
+                    f"$.allowed_tools[{index}]",
+                    "the all-tools wildcard '*' is not allowed in a Project Tool Whitelist",
+                )
+    validate_optional_string_list(
+        diagnostics, "$.skills_bundled_enabled", data.get("skills_bundled_enabled")
+    )
+    validate_optional_string_list(
+        diagnostics, "$.skills_global_enabled", data.get("skills_global_enabled")
+    )
+    validate_optional_string_list(
+        diagnostics, "$.skills_project_disabled", data.get("skills_project_disabled")
+    )
+    _validate_override_schema(diagnostics, "$.overrides", data.get("overrides"))
+    validate_string(diagnostics, "$.created_at", data.get("created_at"), required=True)
+    validate_string(diagnostics, "$.updated_at", data.get("updated_at"), required=True)
+    return diagnostics
+
+
+def _validate_project_config_id(diagnostics: list[JsonDiagnostic], value: Any) -> None:
+    if not isinstance(value, str) or not value:
+        add_error(diagnostics, "$.project_id", "must be a non-empty string")
+    elif not is_valid_project_id(value):
+        add_error(
+            diagnostics,
+            "$.project_id",
+            "must be 1-64 characters using only letters, numbers, hyphen, or underscore",
+        )
+
+
+def _validate_auto_load_list(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, list):
+        add_error(diagnostics, path, "must be a list of strings")
+        return
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item.strip():
+            add_error(diagnostics, f"{path}[{index}]", "must be a non-empty string")
+
+
+def _validate_override_schema(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, Mapping):
+        add_error(diagnostics, path, "must be an object")
+        return
+    for agent_id, override in value.items():
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            add_error(diagnostics, path, "keys must be non-empty agent id strings")
+            continue
+        _validate_one_override_schema(diagnostics, child_path(path, agent_id), override)
+
+
+def _validate_one_override_schema(
+    diagnostics: list[JsonDiagnostic], path: str, override: Any
+) -> None:
+    if not isinstance(override, Mapping):
+        add_error(diagnostics, path, "must be an object")
+        return
+    for field_name in sorted(set(override) - OVERRIDE_FIELDS):
+        add_error(
+            diagnostics,
+            child_path(path, field_name),
+            f"unknown override field: {field_name}",
+        )
+    if not override:
+        add_error(diagnostics, path, "must set at least one field")
+    if "model" in override and (
+        not isinstance(override["model"], str) or not override["model"].strip()
+    ):
+        add_error(diagnostics, child_path(path, "model"), "must be a non-empty string")
+    if "temperature" in override:
+        validate_temperature_diagnostic(
+            diagnostics,
+            child_path(path, "temperature"),
+            override["temperature"],
+            allow_none=False,
+        )
+    if "thinking_effort" in override:
+        validate_thinking_effort_diagnostic(
+            diagnostics,
+            child_path(path, "thinking_effort"),
+            override["thinking_effort"],
+            allow_none=False,
+        )
+    if "compaction_policy" in override:
+        validate_optional_compaction_policy(
+            diagnostics,
+            override["compaction_policy"],
+            child_path(path, "compaction_policy"),
+        )
 
 
 @dataclass(frozen=True)
@@ -262,9 +458,9 @@ def build_project(
 
 
 def project_from_dict(data: dict[str, Any]) -> Project:
-    """Build a Project from a mapping already validated by the central validator.
+    """Build a Project from a mapping already validated by this domain.
 
-    ``core.settings.validate_project_data`` enforces the field rules at load
+    ``validate_project_data`` enforces the field rules at load
     time; this constructor only normalizes shapes (optional-field defaults,
     auto_load list copy), it does not re-validate.
     """
@@ -489,7 +685,7 @@ def _validate_override_thinking_effort(agent_id: str, value: Any) -> str:
 def _overrides_from_data(value: Any) -> dict[str, dict[str, Any]]:
     """Return the persisted override map from validated data, normalizing shapes.
 
-    Validation runs before this (central validator), so a malformed value is
+    The Projects-owned schema validator runs before this, so a malformed value is
     already rejected; this only copies each override object. A missing field defaults
     to an empty map.
     """

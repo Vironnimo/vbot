@@ -14,6 +14,23 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
+from core.config_validation import (
+    JsonConfigValidationError,
+    JsonDiagnostic,
+    JsonObject,
+    JsonValidationReport,
+    add_error,
+    error_diagnostic,
+    load_validated_json_file,
+    validate_json_file,
+    validate_non_empty_string,
+    validate_optional_allowed_string,
+    validate_optional_path_string,
+    validate_required_fields,
+    validate_string,
+    validate_string_list,
+    warn_unknown_keys,
+)
 from core.memory import (
     DEFAULT_MEMORY_PROMPT_MODE,
     MEMORY_PROMPT_MODES,
@@ -24,11 +41,15 @@ from core.sessions import ChatSessionManager
 from core.settings import (
     SettingsValidationError,
     is_valid_agent_id,
-    load_validated_agent_json,
     validate_temperature,
     validate_thinking_effort,
 )
 from core.settings.normalizers import normalize_compaction_policy
+from core.settings.validation import (
+    validate_optional_compaction_policy,
+    validate_temperature_diagnostic,
+    validate_thinking_effort_diagnostic,
+)
 from core.tools.availability import sanitize_configured_allowed_tools
 from core.utils.atomic import atomic_write_text
 
@@ -43,6 +64,41 @@ DEFAULT_ALLOWED_ITEMS = ("*",)
 # memory-off agent never gets them and deleting them does not resurrect them.
 WORKSPACE_TEMPLATE_FILES = ("SOUL.md",)
 WORKSPACE_IDENTITY_FILES = ("SOUL.md", "USER.md", "MEMORY.md")
+
+_AGENT_CONFIG_FIELDS = frozenset(
+    {
+        "allowed_skills",
+        "allowed_tools",
+        "compaction_policy",
+        "created_at",
+        "current_session_id",
+        "custom_system_prompt_enabled",
+        "fallback_model",
+        "id",
+        "memory_prompt_mode",
+        "model",
+        "name",
+        "root_project_id",
+        "temperature",
+        "thinking_effort",
+        "updated_at",
+        "workspace",
+    }
+)
+_REQUIRED_AGENT_CONFIG_FIELDS = frozenset(
+    {
+        "allowed_skills",
+        "allowed_tools",
+        "created_at",
+        "fallback_model",
+        "id",
+        "model",
+        "name",
+        "temperature",
+        "thinking_effort",
+        "updated_at",
+    }
+)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _DEFAULT_TEMPLATE_DIR = _PROJECT_ROOT / "resources" / "workspace-templates"
@@ -62,6 +118,85 @@ class AgentNotFoundError(AgentError):
 
 class InvalidAgentIdError(AgentError):
     """Raised when an agent ID is unsafe for filesystem use."""
+
+
+def validate_agent_file(agent_path: str | Path) -> JsonValidationReport:
+    """Validate one persisted ``agent.json`` without consuming it."""
+    return validate_json_file(agent_path, validate_agent_data, missing_ok=False)
+
+
+def load_validated_agent_json(agent_path: str | Path) -> JsonObject:
+    """Load one schema-valid ``agent.json`` mapping."""
+    try:
+        return cast(
+            "JsonObject",
+            load_validated_json_file(agent_path, validate_agent_data, missing_ok=False),
+        )
+    except JsonConfigValidationError as error:
+        raise AgentError(str(error)) from error
+
+
+def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
+    """Validate a decoded raw ``agent.json`` mapping."""
+    diagnostics: list[JsonDiagnostic] = []
+    if not isinstance(data, dict):
+        return [error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
+
+    warn_unknown_keys(diagnostics, "$", data, _AGENT_CONFIG_FIELDS, "agent field")
+    validate_required_fields(diagnostics, "$", data, _REQUIRED_AGENT_CONFIG_FIELDS)
+    _validate_agent_config_id(diagnostics, "$.id", data.get("id"))
+    validate_non_empty_string(diagnostics, "$.name", data.get("name"), required=True)
+    validate_string(diagnostics, "$.model", data.get("model"), required=True)
+    validate_string(diagnostics, "$.fallback_model", data.get("fallback_model"), required=True)
+    validate_optional_path_string(diagnostics, "$.workspace", data.get("workspace"))
+    validate_non_empty_string(
+        diagnostics,
+        "$.root_project_id",
+        data.get("root_project_id"),
+        required=False,
+    )
+    validate_temperature_diagnostic(
+        diagnostics, "$.temperature", data.get("temperature"), allow_none=True
+    )
+    validate_thinking_effort_diagnostic(
+        diagnostics,
+        "$.thinking_effort",
+        data.get("thinking_effort"),
+        allow_none=True,
+    )
+    validate_optional_allowed_string(
+        diagnostics,
+        "$.memory_prompt_mode",
+        data.get("memory_prompt_mode"),
+        frozenset(MEMORY_PROMPT_MODES),
+    )
+    validate_string_list(diagnostics, "$.allowed_tools", data.get("allowed_tools"))
+    validate_string_list(diagnostics, "$.allowed_skills", data.get("allowed_skills"))
+    if "custom_system_prompt_enabled" in data and not isinstance(
+        data["custom_system_prompt_enabled"], bool
+    ):
+        add_error(diagnostics, "$.custom_system_prompt_enabled", "must be a boolean")
+    validate_optional_compaction_policy(
+        diagnostics, data.get("compaction_policy"), "$.compaction_policy"
+    )
+    validate_string(diagnostics, "$.created_at", data.get("created_at"), required=True)
+    validate_string(diagnostics, "$.updated_at", data.get("updated_at"), required=True)
+    if "current_session_id" in data:
+        validate_string(
+            diagnostics, "$.current_session_id", data.get("current_session_id"), required=False
+        )
+    return diagnostics
+
+
+def _validate_agent_config_id(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
+    if not isinstance(value, str) or not value:
+        add_error(diagnostics, path, "must be a non-empty string")
+    elif not is_valid_agent_id(value):
+        add_error(
+            diagnostics,
+            path,
+            "must be 1-64 characters using only letters, numbers, hyphen, or underscore",
+        )
 
 
 def default_workspace_dir(data_dir: str | os.PathLike[str], agent_id: str) -> Path:
@@ -539,10 +674,7 @@ class AgentStore:
         return defaults
 
     def _load_raw_agent(self, agent_path: Path) -> Agent:
-        try:
-            data = load_validated_agent_json(agent_path)
-        except SettingsValidationError as exc:
-            raise AgentError(str(exc)) from exc
+        data = load_validated_agent_json(agent_path)
         workspace_missing = _is_missing_workspace(data.get("workspace"))
         agent = _agent_from_dict(data, default_workspace=self._default_workspace(data["id"]))
         self._seed_workspace(Path(agent.workspace))
@@ -557,10 +689,7 @@ class AgentStore:
         current-session normalization, so a caller can inspect a dangling current
         pointer before it would otherwise be silently replaced.
         """
-        try:
-            data = load_validated_agent_json(agent_path)
-        except SettingsValidationError as exc:
-            raise AgentError(str(exc)) from exc
+        data = load_validated_agent_json(agent_path)
         return _agent_from_dict(data, default_workspace=self._default_workspace(data["id"]))
 
     def _apply_defaults(self, agent: Agent, defaults: dict[str, Any]) -> Agent:
@@ -695,7 +824,7 @@ def _utc_now() -> str:
 def _agent_from_dict(data: dict[str, Any], *, default_workspace: str | Path | None = None) -> Agent:
     """Build an Agent from a mapping already validated by ``load_validated_agent_json``.
 
-    Field rules are enforced once by ``core.settings.validate_agent_data`` at load
+    Field rules are enforced once by this domain's ``validate_agent_data`` at load
     time; this constructor only normalizes shapes (workspace fallback, tool
     sanitization, optional-field defaults) without re-validating.
     """

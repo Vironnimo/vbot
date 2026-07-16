@@ -1,0 +1,376 @@
+"""Tests for Projects-owned ``project.json`` validation."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from core.projects import (
+    ProjectError,
+    load_validated_project_json,
+    validate_project_data,
+    validate_project_file,
+)
+from core.settings import is_valid_project_id
+
+
+def _valid_project_data() -> dict[str, object]:
+    return {
+        "project_id": "vbot",
+        "display_name": "vBot",
+        "cwd": "/srv/repos/vbot",
+        "default_agent": "orchestrator",
+        "default_model": "openai/gpt-5",
+        "auto_load": ["AGENTS.md", "PROJECT.md"],
+        "created_at": "2026-06-18T10:00:00Z",
+        "updated_at": "2026-06-18T10:00:00Z",
+    }
+
+
+def _diagnostics(data: object) -> list[tuple[str, str, str]]:
+    return [
+        (diagnostic.severity, diagnostic.path, diagnostic.message)
+        for diagnostic in validate_project_data(data)
+    ]
+
+
+def test_validate_project_data_accepts_full_valid_config() -> None:
+    assert validate_project_data(_valid_project_data()) == []
+
+
+def test_validate_project_data_accepts_minimal_project_just_a_cwd() -> None:
+    data = {
+        "project_id": "scratch",
+        "display_name": "Scratch",
+        "cwd": "/srv/repos/scratch",
+        "created_at": "2026-06-18T10:00:00Z",
+        "updated_at": "2026-06-18T10:00:00Z",
+    }
+
+    assert validate_project_data(data) == []
+
+
+def test_validate_project_data_accepts_empty_optional_pointers_and_auto_load() -> None:
+    data = _valid_project_data()
+    data["default_agent"] = ""
+    data["default_model"] = ""
+    data["auto_load"] = []
+
+    assert validate_project_data(data) == []
+
+
+def test_validate_project_data_rejects_non_object_root() -> None:
+    assert _diagnostics([1, 2, 3]) == [("error", "$", "Expected a JSON object, got list")]
+
+
+def test_validate_project_data_rejects_invalid_project_id() -> None:
+    data = _valid_project_data()
+    data["project_id"] = "bad/slug"
+
+    assert (
+        "error",
+        "$.project_id",
+        "must be 1-64 characters using only letters, numbers, hyphen, or underscore",
+    ) in _diagnostics(data)
+
+
+def test_validate_project_data_rejects_empty_display_name() -> None:
+    data = _valid_project_data()
+    data["display_name"] = "   "
+
+    assert ("error", "$.display_name", "must be a non-empty string") in _diagnostics(data)
+
+
+def test_validate_project_data_rejects_empty_cwd() -> None:
+    data = _valid_project_data()
+    data["cwd"] = ""
+
+    assert ("error", "$.cwd", "must be a non-empty string") in _diagnostics(data)
+
+
+def test_validate_project_data_rejects_non_string_default_pointer() -> None:
+    data = _valid_project_data()
+    data["default_agent"] = 7
+
+    assert ("error", "$.default_agent", "must be a string or null") in _diagnostics(data)
+
+
+def test_validate_project_data_accepts_default_temperature_and_thinking() -> None:
+    data = _valid_project_data()
+    data["default_temperature"] = 0.4
+    data["default_thinking_effort"] = "high"
+
+    assert validate_project_data(data) == []
+
+
+def test_validate_project_data_accepts_null_temperature_and_empty_thinking() -> None:
+    # null = no project default; "" = explicit provider default. Both are valid.
+    data = _valid_project_data()
+    data["default_temperature"] = None
+    data["default_thinking_effort"] = ""
+
+    assert validate_project_data(data) == []
+
+
+def test_validate_project_data_rejects_temperature_out_of_range() -> None:
+    data = _valid_project_data()
+    data["default_temperature"] = 3.0
+
+    error_paths = {path for severity, path, _ in _diagnostics(data) if severity == "error"}
+    assert "$.default_temperature" in error_paths
+
+
+def test_validate_project_data_rejects_unknown_thinking_effort() -> None:
+    data = _valid_project_data()
+    data["default_thinking_effort"] = "ultra"
+
+    error_paths = {path for severity, path, _ in _diagnostics(data) if severity == "error"}
+    assert "$.default_thinking_effort" in error_paths
+
+
+def test_validate_project_data_accepts_known_source_formats() -> None:
+    for source_format in ("opencode", "claude"):
+        data = _valid_project_data()
+        data["source_format"] = source_format
+
+        assert validate_project_data(data) == []
+
+
+def test_validate_project_data_rejects_unknown_source_format() -> None:
+    data = _valid_project_data()
+    data["source_format"] = "cursor"
+
+    assert _diagnostics(data) == [("error", "$.source_format", "must be one of: claude, opencode")]
+
+
+def test_validate_project_data_rejects_non_list_auto_load() -> None:
+    data = _valid_project_data()
+    data["auto_load"] = "AGENTS.md"
+
+    assert ("error", "$.auto_load", "must be a list of strings") in _diagnostics(data)
+
+
+def test_validate_project_data_rejects_empty_auto_load_entry() -> None:
+    data = _valid_project_data()
+    data["auto_load"] = ["AGENTS.md", "  "]
+
+    assert ("error", "$.auto_load[1]", "must be a non-empty string") in _diagnostics(data)
+
+
+def test_validate_project_data_accepts_whitelist_fields() -> None:
+    data = _valid_project_data()
+    data["allowed_tools"] = ["read", "grep"]
+    data["skills_bundled_enabled"] = ["frontend-design"]
+    data["skills_global_enabled"] = ["pdf"]
+    data["skills_project_disabled"] = ["debugging"]
+
+    assert validate_project_data(data) == []
+
+
+def test_validate_project_data_accepts_empty_allowed_tools() -> None:
+    # An empty Tool Whitelist (every tool off) is a valid value, not an error.
+    data = _valid_project_data()
+    data["allowed_tools"] = []
+
+    assert validate_project_data(data) == []
+
+
+def test_validate_project_data_rejects_tool_wildcard() -> None:
+    data = _valid_project_data()
+    data["allowed_tools"] = ["read", "*"]
+
+    assert (
+        "error",
+        "$.allowed_tools[1]",
+        "the all-tools wildcard '*' is not allowed in a Project Tool Whitelist",
+    ) in _diagnostics(data)
+
+
+def test_validate_project_data_accepts_unavailable_tool_name() -> None:
+    # Registry membership is runtime state. A disabled Extension must not make
+    # its persisted Project unloadable; project.show reports it non-fatally.
+    data = _valid_project_data()
+    data["allowed_tools"] = ["read", "disabled_extension_tool"]
+
+    assert validate_project_data(data) == []
+
+
+def test_validate_project_data_rejects_non_list_allowed_tools() -> None:
+    data = _valid_project_data()
+    data["allowed_tools"] = "read"
+
+    assert ("error", "$.allowed_tools", "must be a list of strings") in _diagnostics(data)
+
+
+def test_validate_project_data_rejects_empty_skill_entry() -> None:
+    data = _valid_project_data()
+    data["skills_bundled_enabled"] = ["frontend-design", "  "]
+
+    assert (
+        "error",
+        "$.skills_bundled_enabled[1]",
+        "must be a non-empty string",
+    ) in _diagnostics(data)
+
+
+def test_validate_project_data_rejects_empty_global_skill_entry() -> None:
+    data = _valid_project_data()
+    data["skills_global_enabled"] = ["pdf", "  "]
+
+    assert (
+        "error",
+        "$.skills_global_enabled[1]",
+        "must be a non-empty string",
+    ) in _diagnostics(data)
+
+
+def test_validate_project_data_accepts_overrides() -> None:
+    data = _valid_project_data()
+    data["overrides"] = {
+        "builder": {"model": "openai/gpt-5", "temperature": 0.4, "thinking_effort": "high"},
+        "planner": {"model": "anthropic/claude-sonnet-4"},
+    }
+
+    assert validate_project_data(data) == []
+
+
+def test_validate_project_data_accepts_override_temperature_zero_and_empty_thinking() -> None:
+    # 0.0 temperature (sampling floor) and "" thinking effort (provider default) are
+    # real values — both valid overridden fields.
+    data = _valid_project_data()
+    data["overrides"] = {"builder": {"temperature": 0.0, "thinking_effort": ""}}
+
+    assert validate_project_data(data) == []
+
+
+def test_validate_project_data_rejects_non_object_overrides() -> None:
+    data = _valid_project_data()
+    data["overrides"] = ["builder"]
+
+    assert ("error", "$.overrides", "must be an object") in _diagnostics(data)
+
+
+def test_validate_project_data_rejects_non_string_override_key() -> None:
+    data = _valid_project_data()
+    data["overrides"] = {"": {"model": "openai/gpt-5"}}
+
+    assert ("error", "$.overrides", "keys must be non-empty agent id strings") in _diagnostics(data)
+
+
+def test_validate_project_data_rejects_non_object_override_value() -> None:
+    data = _valid_project_data()
+    data["overrides"] = {"builder": "openai/gpt-5"}
+
+    assert ("error", "$.overrides.builder", "must be an object") in _diagnostics(data)
+
+
+def test_validate_project_data_rejects_empty_override_object() -> None:
+    data = _valid_project_data()
+    data["overrides"] = {"builder": {}}
+
+    assert ("error", "$.overrides.builder", "must set at least one field") in _diagnostics(data)
+
+
+def test_validate_project_data_rejects_unknown_override_field() -> None:
+    data = _valid_project_data()
+    data["overrides"] = {"builder": {"nope": "x"}}
+
+    assert ("error", "$.overrides.builder.nope", "unknown override field: nope") in _diagnostics(
+        data
+    )
+
+
+def test_validate_project_data_rejects_empty_override_model_value() -> None:
+    data = _valid_project_data()
+    data["overrides"] = {"builder": {"model": "  "}}
+
+    assert ("error", "$.overrides.builder.model", "must be a non-empty string") in _diagnostics(
+        data
+    )
+
+
+def test_validate_project_data_rejects_out_of_range_override_temperature() -> None:
+    data = _valid_project_data()
+    data["overrides"] = {"builder": {"temperature": 3.0}}
+
+    error_paths = {path for severity, path, _ in _diagnostics(data) if severity == "error"}
+    assert "$.overrides.builder.temperature" in error_paths
+
+
+def test_validate_project_data_rejects_unknown_override_thinking_effort() -> None:
+    data = _valid_project_data()
+    data["overrides"] = {"builder": {"thinking_effort": "ultra"}}
+
+    error_paths = {path for severity, path, _ in _diagnostics(data) if severity == "error"}
+    assert "$.overrides.builder.thinking_effort" in error_paths
+
+
+def test_validate_project_data_warns_on_unknown_field() -> None:
+    data = _valid_project_data()
+    data["team"] = ["builder"]
+
+    assert ("warning", "$.team", "unknown project field: team") in _diagnostics(data)
+
+
+def test_validate_project_data_reports_missing_required_fields() -> None:
+    paths = {path for _, path, _ in _diagnostics({"project_id": "vbot"})}
+
+    assert "$.display_name" in paths
+    assert "$.cwd" in paths
+    assert "$.created_at" in paths
+    assert "$.updated_at" in paths
+
+
+def test_validate_project_file_reports_missing_file(tmp_path: Path) -> None:
+    report = validate_project_file(tmp_path / "project.json")
+
+    assert report.exists is False
+    assert not report.ok
+
+
+def test_validate_project_file_accepts_valid_file(tmp_path: Path) -> None:
+    config_path = tmp_path / "project.json"
+    config_path.write_text(json.dumps(_valid_project_data()), encoding="utf-8")
+
+    report = validate_project_file(config_path)
+
+    assert report.ok
+    assert report.exists
+
+
+def test_load_validated_project_json_returns_mapping(tmp_path: Path) -> None:
+    config_path = tmp_path / "project.json"
+    config_path.write_text(json.dumps(_valid_project_data()), encoding="utf-8")
+
+    loaded = load_validated_project_json(config_path)
+
+    assert loaded["project_id"] == "vbot"
+    assert loaded["cwd"] == "/srv/repos/vbot"
+
+
+def test_load_validated_project_json_raises_on_invalid(tmp_path: Path) -> None:
+    config_path = tmp_path / "project.json"
+    config_path.write_text(json.dumps({"project_id": "x"}), encoding="utf-8")
+
+    with pytest.raises(ProjectError):
+        load_validated_project_json(config_path)
+
+
+@pytest.mark.parametrize("project_id", ["vbot", "a", "Project_1", "x-y_z", "0", "a" * 64])
+def test_is_valid_project_id_accepts_filesystem_safe_slugs(project_id: str) -> None:
+    assert is_valid_project_id(project_id) is True
+
+
+@pytest.mark.parametrize(
+    "project_id",
+    ["", ".hidden", "../escape", "with space", "slash/name", "_leading", "-leading", "a" * 65],
+)
+def test_is_valid_project_id_rejects_unsafe_values(project_id: str) -> None:
+    assert is_valid_project_id(project_id) is False
+
+
+def test_is_valid_project_id_rejects_non_string() -> None:
+    assert is_valid_project_id(123) is False
+    assert is_valid_project_id(None) is False

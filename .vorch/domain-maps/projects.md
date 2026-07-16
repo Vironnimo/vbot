@@ -4,7 +4,7 @@ The Projects domain turns a repository location into a persistent vBot execution
 
 ## Overview
 
-`core/projects/` owns the Project entity, its data-dir anchor, repository-format scanning, and the resolution of a Project Agent into effective runtime configuration. A Project points at a repository through `cwd`; vBot reads supported configuration from that repository but never writes Project metadata or Session state into it. The domain does not own central setting validation, Chat or Run lifecycle, the Session store, or the Tool and Skill implementations whose availability it constrains.
+`core/projects/` owns the Project entity, its persisted `project.json` schema and load gate, its data-dir anchor, repository-format scanning, and the resolution of a Project Agent into effective runtime configuration. A Project points at a repository through `cwd`; vBot reads supported configuration from that repository but never writes Project metadata or Session state into it. The domain consumes shared scalar rules from Settings but does not own Chat or Run lifecycle, the Session store, or the Tool and Skill implementations whose availability it constrains.
 
 ## Terms
 

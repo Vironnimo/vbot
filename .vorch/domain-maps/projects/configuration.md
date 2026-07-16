@@ -4,7 +4,7 @@ Read this reference when changing the persisted Project shape, Project Anchor li
 
 ## Persisted Project
 
-`core/projects/projects.py` defines the immutable `Project` value stored as `<data-dir>/projects/<project-id>/project.json`. `ProjectStore` rebuilds the value through `build_project()` on create and update, so normalization and validation stay on one path.
+`core/projects/projects.py` defines the immutable `Project` value and owns `validate_project_data`, `validate_project_file`, and `load_validated_project_json` for `<data-dir>/projects/<project-id>/project.json`. `ProjectStore` rebuilds the value through `build_project()` on create and update, so normalization and validation stay on one path.
 
 The persisted contract contains:
 
@@ -36,7 +36,7 @@ The repository at `cwd` remains outside the anchor and is never mutated. Changin
 
 `core/projects/store.py` owns persistence:
 
-- Creation rejects duplicate Project ids and duplicate normalized cwd identity keys, builds the Project through the shared validator, writes `project.json` atomically, and seeds the anchor instructions.
+- Creation rejects duplicate Project ids and duplicate normalized cwd identity keys, builds the Project through the Projects-owned validator, writes `project.json` atomically, and seeds the anchor instructions.
 - Updates preserve `project_id` and `created_at`, reject a cwd already owned by another Project, rebuild the complete value, and write atomically.
 - Listing is deterministic and skips corrupt Project files with a warning instead of failing the entire collection.
 - `set_override()` and `clear_override()` atomically rewrite one supported field. Clearing the last field removes the Agent's override object; clearing an absent value is a no-op.

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from core.channels import ChannelConfig, ChannelConfigError, ChannelNotFoundError
-from core.settings import (
+from core.channels import (
     ALLOWED_CHANNEL_DM_SCOPES,
     ALLOWED_CHANNEL_PLATFORMS,
     ALLOWED_CHANNEL_RESPONSE_MODES,
+    ChannelConfig,
+    ChannelConfigError,
+    ChannelNotFoundError,
 )
 from server.events import RESOURCE_KIND_CHANNELS
 from server.rpc.agent_refs import _agent_reference_lock
