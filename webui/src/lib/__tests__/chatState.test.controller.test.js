@@ -6,31 +6,38 @@ import {
   ensureSessionState,
 } from '../chatState.js';
 
-function setup(overrides = {}) {
+function setup({
+  operationOverrides = {},
+  isDisplayedSession = () => false,
+  shouldLoadCurrentHistory = () => true,
+} = {}) {
   const chatState = createChatState();
   const runStream = {
     applyConnectionSnapshot: vi.fn(),
+    attachRunStream: vi.fn(),
+    closeSubscriptionFor: vi.fn(),
     closeSubscriptions: vi.fn(),
+    closeSubscriptionsExcept: vi.fn(),
     handleServerEvents: vi.fn(),
+    subscribeToRun: vi.fn(),
   };
   const listQueue = vi.fn().mockResolvedValue({
     items: [{ id: 'queued-one', content: 'Next' }],
   });
-  const onQueueSyncError = vi.fn();
   const onRestartQueueDiscarded = vi.fn();
   const controller = createChatController({
     chatState,
     runStream,
-    listQueue,
-    onQueueSyncError,
+    operations: { listQueue, ...operationOverrides },
+    translate: (_key, fallback) => fallback,
+    isDisplayedSession,
+    shouldLoadCurrentHistory,
     onRestartQueueDiscarded,
-    ...overrides,
   });
   return {
     chatState,
     controller,
     listQueue,
-    onQueueSyncError,
     onRestartQueueDiscarded,
     runStream,
   };
@@ -123,8 +130,7 @@ describe('chat controller', () => {
   });
 
   it('reports Queue sync failures and closes subscriptions on destroy', async () => {
-    const { chatState, controller, listQueue, onQueueSyncError, runStream } =
-      setup();
+    const { chatState, controller, listQueue, runStream } = setup();
     const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
     const error = new Error('offline');
     listQueue.mockRejectedValueOnce(error);
@@ -132,7 +138,95 @@ describe('chat controller', () => {
     await controller.syncSessionQueue(sessionState);
     controller.destroy();
 
-    expect(onQueueSyncError).toHaveBeenCalledWith(error);
+    expect(chatState.actionError).toContain('offline');
     expect(runStream.closeSubscriptions).toHaveBeenCalledOnce();
+  });
+
+  it('loads the roster, current history, Run truth, and Queue as one lifecycle', async () => {
+    const loadChatHistory = vi.fn().mockResolvedValue({
+      active_run: null,
+      has_more: false,
+      messages: [{ id: 'message-one', role: 'user', content: 'Hello' }],
+    });
+    const listAgents = vi.fn().mockResolvedValue({
+      agents: [
+        {
+          id: 'alpha',
+          name: 'Alpha',
+          current_session_id: 'session-one',
+        },
+      ],
+    });
+    const { chatState, controller, listQueue, runStream } = setup({
+      isDisplayedSession: (agentId, sessionId) =>
+        agentId === 'alpha' && sessionId === 'session-one',
+      operationOverrides: { listAgents, loadChatHistory },
+    });
+
+    await controller.loadAgents();
+
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    expect(chatState.selectedAgentId).toBe('alpha');
+    expect(sessionState.messages).toMatchObject([
+      { id: 'message-one', content: 'Hello' },
+    ]);
+    expect(listQueue).toHaveBeenCalledWith('alpha', 'session-one');
+    expect(runStream.attachRunStream).toHaveBeenCalledWith(sessionState, null);
+    expect(chatState.loadingHistory).toBe(false);
+  });
+
+  it('normalizes command suggestions inside the controller', async () => {
+    const listChatCommands = vi.fn().mockResolvedValue({
+      items: [
+        { name: '/HELP', type: 'command', description: 'Show help' },
+        { name: 'review', type: 'skill', description: 'Review code' },
+      ],
+    });
+    const { chatState, controller } = setup({
+      operationOverrides: { listChatCommands },
+    });
+
+    await controller.loadCommands('alpha');
+
+    expect(listChatCommands).toHaveBeenCalledWith({ agent_id: 'alpha' });
+    expect(chatState.availableSkills).toMatchObject([
+      { name: 'help', type: 'command' },
+      { name: 'review', type: 'skill' },
+    ]);
+  });
+
+  it('reconciles queued and started send outcomes into Session state', async () => {
+    const startChatRun = vi
+      .fn()
+      .mockResolvedValueOnce({
+        queued: true,
+        item: { id: 'queued-two', content: 'Later' },
+      })
+      .mockResolvedValueOnce({
+        run_id: 'run-one',
+        sse_url: '/events/run-one',
+      });
+    const { chatState, controller, runStream } = setup({
+      operationOverrides: { startChatRun },
+    });
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+
+    expect(await controller.sendMessage(sessionState, 'Later')).toMatchObject({
+      kind: 'queued',
+    });
+    expect(sessionState.queue).toMatchObject([
+      { id: 'queued-two', content: 'Later' },
+    ]);
+
+    expect(await controller.sendMessage(sessionState, 'Now')).toMatchObject({
+      kind: 'started',
+      runId: 'run-one',
+    });
+    expect(sessionState.currentRun?.runId).toBe('run-one');
+    expect(runStream.subscribeToRun).toHaveBeenCalledWith(
+      sessionState,
+      '/events/run-one',
+      { afterSequence: 0 },
+    );
   });
 });

@@ -1,4 +1,5 @@
 import { normalizeCompactionPolicy } from './compactionPolicy.js';
+import { SURFACE_FORM, shouldApplyReloadNow } from './resourceInvalidation.js';
 import {
   addProject as requestAddProject,
   clearOverride as requestClearOverride,
@@ -16,6 +17,87 @@ import {
 
 const PROJECT_AUTO_SAVE_DEBOUNCE_MS = 800;
 const PROJECT_DETECT_DEBOUNCE_MS = 500;
+const PROJECT_BUSY_CODE = 'project_busy';
+const PROJECT_IN_USE_CODE = 'project_in_use';
+
+const emptyScanSkills = () => ({ project: [], bundled: [], global: [] });
+
+export function createProjectAddForm() {
+  return {
+    cwd: '',
+    display_name: '',
+    source_format: 'opencode',
+    include_claude_md: false,
+  };
+}
+
+export function createProjectEditForm(project = null) {
+  return {
+    display_name: project?.display_name ?? '',
+    default_agent: project?.default_agent ?? '',
+    default_model: project?.default_model ?? '',
+    source_format: project?.source_format ?? 'opencode',
+    default_temperature:
+      typeof project?.default_temperature === 'number'
+        ? String(project.default_temperature)
+        : '',
+    default_thinking_effort:
+      project?.default_thinking_effort === null ||
+      project?.default_thinking_effort === undefined
+        ? PROJECT_THINKING_EFFORT_NO_DEFAULT
+        : project.default_thinking_effort,
+    auto_load: [...(project?.auto_load ?? [])],
+    allowed_tools: [...(project?.allowed_tools ?? [])],
+    skills_bundled_enabled: [...(project?.skills_bundled_enabled ?? [])],
+    skills_global_enabled: [...(project?.skills_global_enabled ?? [])],
+    skills_project_disabled: [...(project?.skills_project_disabled ?? [])],
+  };
+}
+
+export function createProjectsState({ selectedProjectId = '' } = {}) {
+  return {
+    projects: [],
+    loadingProjects: false,
+    listError: '',
+    statusMessage: '',
+    availableModels: [],
+    availableConnections: [],
+    modelDropdownOpenCount: 0,
+    pendingModelCatalogs: null,
+    lastModelsRefreshToken: null,
+    globalAgentDefaults: {},
+    globalCompactionPolicy: null,
+    isAddOpen: false,
+    addForm: createProjectAddForm(),
+    addingProject: false,
+    addError: '',
+    addDetect: null,
+    selectedProjectId,
+    editForm: createProjectEditForm(),
+    editSaving: false,
+    editError: '',
+    autoLoadDraft: '',
+    activeTeam: [],
+    activeReport: null,
+    activeScanSkills: emptyScanSkills(),
+    scanLoading: false,
+    scanRefreshRequested: false,
+    removingProjectId: '',
+    removeConfirmProject: null,
+    copyRootedAgentIdentityFiles: false,
+    expandedMembers: {},
+    overrideDrafts: {},
+    overrideBusyKey: '',
+    toolCatalog: [],
+    defaultProjectTools: [],
+    rePointProject: null,
+    rePointCwd: '',
+    rePointing: false,
+    rePointError: '',
+    showAllModels: false,
+    showAllOverrideModels: {},
+  };
+}
 
 function defaultProjectOperations() {
   return {
@@ -34,13 +116,18 @@ function defaultProjectOperations() {
   };
 }
 
-// Project management is one asynchronous surface: it owns stale-response
-// rejection, detect/auto-save timing, catalogs, scans, and every mutation. The
-// Svelte View keeps only presentation drafts and applies completed results.
+// Own Project management end-to-end. The Svelte view renders this state and
+// forwards user intents; it does not know RPC ordering, stale-response rules,
+// mutation reconciliation, catalog swap timing, or error ownership.
 export function createProjectsController({
+  state = createProjectsState(),
   operations = defaultProjectOperations(),
   autoSaveDelayMs = PROJECT_AUTO_SAVE_DEBOUNCE_MS,
   detectDelayMs = PROJECT_DETECT_DEBOUNCE_MS,
+  translate = (_key, fallback, values = {}) =>
+    String(fallback).replace(/\{(\w+)\}/g, (_match, key) => values[key] ?? ''),
+  onProjectSelected = () => {},
+  onToast = () => {},
 } = {}) {
   let active = true;
   let listRequestId = 0;
@@ -48,39 +135,151 @@ export function createProjectsController({
   let autoSaveTimer = null;
   let detectTimer = null;
 
+  function errorText(error) {
+    if (typeof error?.message === 'string' && error.message.trim()) {
+      return error.message.trim();
+    }
+    if (typeof error === 'string' && error.trim()) {
+      return error.trim();
+    }
+    return translate('common.unknown', 'Unknown');
+  }
+
+  function selectedProject() {
+    return (
+      state.projects.find(
+        (project) => project.project_id === state.selectedProjectId,
+      ) ?? null
+    );
+  }
+
+  function pendingChanges() {
+    const project = selectedProject();
+    if (!project) {
+      return {};
+    }
+    return buildManageProjectPayload(
+      {
+        display_name: state.editForm.display_name,
+        default_agent: state.editForm.default_agent,
+        default_model: state.editForm.default_model,
+        default_temperature: state.editForm.default_temperature,
+        default_thinking_effort: state.editForm.default_thinking_effort,
+        auto_load: state.editForm.auto_load,
+        allowed_tools: state.editForm.allowed_tools,
+        skills_bundled_enabled: state.editForm.skills_bundled_enabled,
+        skills_global_enabled: state.editForm.skills_global_enabled,
+        skills_project_disabled: state.editForm.skills_project_disabled,
+      },
+      project,
+    );
+  }
+
+  function resetSelectionState(project = null) {
+    state.editForm = createProjectEditForm(project);
+    state.autoLoadDraft = '';
+    state.editError = '';
+    state.activeTeam = [];
+    state.activeReport = null;
+    state.activeScanSkills = emptyScanSkills();
+    state.expandedMembers = {};
+    state.overrideDrafts = {};
+    state.overrideBusyKey = '';
+  }
+
+  function seedOverrideDrafts({ replace = false } = {}) {
+    const next = replace ? {} : { ...state.overrideDrafts };
+    for (const member of state.activeTeam) {
+      if (!next[member.agent_id]) {
+        next[member.agent_id] = seedTeamOverrideDraft(member);
+      }
+    }
+    state.overrideDrafts = next;
+  }
+
+  function applyScan(scan, { replaceDrafts = false } = {}) {
+    state.activeTeam = projectTeam(scan);
+    state.activeReport = normalizeScanReport(scan?.report);
+    state.activeScanSkills = normalizeScanSkills(scan);
+    seedOverrideDrafts({ replace: replaceDrafts });
+  }
+
+  function clearSelectedProject() {
+    invalidateScan();
+    state.scanLoading = false;
+    state.selectedProjectId = '';
+    onProjectSelected('');
+    resetSelectionState();
+  }
+
+  function selectProject(projectId, scan = null) {
+    invalidateScan();
+    const project =
+      state.projects.find((item) => item.project_id === projectId) ?? null;
+    state.selectedProjectId = projectId;
+    onProjectSelected(projectId);
+    resetSelectionState(project);
+    if (scan) {
+      state.scanLoading = false;
+      applyScan(scan);
+      return;
+    }
+    void loadScan(projectId);
+  }
+
   async function loadProjects() {
     const requestId = ++listRequestId;
+    state.loadingProjects = true;
+    state.listError = '';
     try {
       const result = await operations.listProjects();
       if (!active || requestId !== listRequestId) {
-        return { requestId, stale: true, projects: [] };
+        return false;
       }
-      return {
-        requestId,
-        stale: false,
-        projects: normalizeProjects(result?.projects),
-      };
+      state.projects = normalizeProjects(result?.projects);
+      const preferredProject = state.projects.find(
+        (project) => project.project_id === state.selectedProjectId,
+      );
+      const projectToOpen = preferredProject ?? state.projects[0] ?? null;
+      if (projectToOpen) {
+        selectProject(projectToOpen.project_id);
+      } else {
+        clearSelectedProject();
+      }
+      return true;
     } catch (error) {
       if (!active || requestId !== listRequestId) {
-        return { requestId, stale: true, projects: [] };
+        return false;
       }
-      return { error, requestId, stale: false, projects: [] };
+      state.listError = `${translate('projects.loadError', 'Projects could not be loaded.')} ${errorText(error)}`;
+      return false;
+    } finally {
+      if (active && requestId === listRequestId) {
+        state.loadingProjects = false;
+      }
     }
   }
 
   async function loadScan(projectId) {
     const requestId = ++scanRequestId;
+    state.scanLoading = true;
     try {
       const result = await operations.showProject(projectId);
       if (!active || requestId !== scanRequestId) {
-        return { requestId, stale: true, scan: null };
+        return false;
       }
-      return { requestId, stale: false, scan: result?.scan ?? null };
+      applyScan(result?.scan ?? null);
+      return true;
     } catch (error) {
       if (!active || requestId !== scanRequestId) {
-        return { requestId, stale: true, scan: null };
+        return false;
       }
-      return { error, requestId, stale: false, scan: null };
+      state.editError = `${translate('projects.loadError', 'Projects could not be loaded.')} ${errorText(error)}`;
+      return false;
+    } finally {
+      if (active && requestId === scanRequestId) {
+        state.scanLoading = false;
+      }
     }
   }
 
@@ -88,11 +287,31 @@ export function createProjectsController({
     scanRequestId += 1;
   }
 
-  async function loadGlobalSettings() {
-    return operations.getSettings();
+  async function loadGlobalDefaults() {
+    try {
+      const result = await operations.getSettings();
+      if (!active) {
+        return;
+      }
+      const defaults = result?.defaults?.agent;
+      state.globalAgentDefaults =
+        defaults && typeof defaults === 'object' ? defaults : {};
+      state.globalCompactionPolicy = result?.compaction ?? null;
+    } catch {
+      if (active) {
+        state.globalAgentDefaults = {};
+        state.globalCompactionPolicy = null;
+      }
+    }
   }
 
-  async function loadCatalogs() {
+  function applyModelCatalogs(catalogs) {
+    state.availableModels = catalogs.models;
+    state.availableConnections = catalogs.connections;
+    state.pendingModelCatalogs = null;
+  }
+
+  async function fetchCatalogs() {
     const [modelsResult, connectionsResult, toolsResult] =
       await Promise.allSettled([
         operations.listModels(),
@@ -128,6 +347,54 @@ export function createProjectsController({
           ? toolsResult.value.default_project_tools
           : [],
     };
+  }
+
+  async function loadCatalogs({ reload = false } = {}) {
+    const catalogs = await fetchCatalogs();
+    if (catalogs.stale) {
+      return;
+    }
+    state.toolCatalog = catalogs.tools;
+    state.defaultProjectTools = catalogs.defaultProjectTools;
+    if (!catalogs.modelCatalogsAvailable) {
+      return;
+    }
+    if (
+      !reload ||
+      shouldApplyReloadNow(SURFACE_FORM, {
+        dropdownOpen: state.modelDropdownOpenCount > 0,
+      })
+    ) {
+      applyModelCatalogs(catalogs);
+    } else {
+      state.pendingModelCatalogs = catalogs;
+    }
+  }
+
+  function trackModelDropdownOpen(open) {
+    state.modelDropdownOpenCount = Math.max(
+      0,
+      state.modelDropdownOpenCount + (open ? 1 : -1),
+    );
+    if (state.modelDropdownOpenCount === 0 && state.pendingModelCatalogs) {
+      applyModelCatalogs(state.pendingModelCatalogs);
+    }
+  }
+
+  function updateModelsRefreshToken(token) {
+    if (state.lastModelsRefreshToken === null) {
+      state.lastModelsRefreshToken = token;
+      return;
+    }
+    if (token !== state.lastModelsRefreshToken) {
+      state.lastModelsRefreshToken = token;
+      void loadCatalogs({ reload: true });
+    }
+  }
+
+  async function initialize(preferredProjectId = '') {
+    state.selectedProjectId = preferredProjectId;
+    await Promise.all([loadCatalogs(), loadGlobalDefaults(), loadProjects()]);
   }
 
   function clearAutoSave() {
@@ -176,6 +443,432 @@ export function createProjectsController({
     }, detectDelayMs);
   }
 
+  function openAdd() {
+    state.addForm = createProjectAddForm();
+    state.addError = '';
+    state.addDetect = null;
+    state.isAddOpen = true;
+  }
+
+  function closeAdd() {
+    if (state.addingProject) {
+      return;
+    }
+    state.isAddOpen = false;
+    state.addError = '';
+    clearDetect();
+  }
+
+  function updateAddField(field, value) {
+    state.addForm[field] = value;
+    state.addError = '';
+    if (field !== 'cwd') {
+      return;
+    }
+    scheduleDetect(value, (result, detectedCwd) => {
+      if (!state.isAddOpen || state.addForm.cwd.trim() !== detectedCwd) {
+        return;
+      }
+      state.addDetect = result;
+    });
+  }
+
+  async function submitAdd() {
+    if (state.addForm.cwd.trim().length === 0) {
+      state.addError = translate(
+        'projects.add.missingCwd',
+        'Enter a repository path to add a project.',
+      );
+      return;
+    }
+    state.addingProject = true;
+    state.addError = '';
+    state.statusMessage = '';
+    try {
+      const formats = state.addDetect ? presentFormats(state.addDetect) : [];
+      const payload = buildAddProjectPayload({
+        cwd: state.addForm.cwd,
+        display_name: state.addForm.display_name,
+        source_format: formats.length > 1 ? state.addForm.source_format : '',
+        auto_load:
+          state.addDetect &&
+          shouldSuggestClaudeMd(state.addDetect) &&
+          state.addForm.include_claude_md
+            ? ['CLAUDE.md']
+            : [],
+      });
+      const result = await operations.addProject(payload);
+      if (!active) {
+        return;
+      }
+      const project = normalizeProject(result?.project);
+      state.statusMessage = translate('projects.add.success', 'Project added.');
+      state.isAddOpen = false;
+      state.addForm = createProjectAddForm();
+      state.addDetect = null;
+      await loadProjects();
+      if (active) {
+        selectProject(project.project_id, result?.scan);
+      }
+    } catch (error) {
+      if (active) {
+        state.addError = `${translate('projects.add.error', 'Project could not be added.')} ${errorText(error)}`;
+      }
+    } finally {
+      if (active) {
+        state.addingProject = false;
+      }
+    }
+  }
+
+  async function refreshScan() {
+    if (!state.selectedProjectId || state.scanLoading) {
+      return;
+    }
+    state.scanRefreshRequested = true;
+    await loadScan(state.selectedProjectId);
+    if (active) {
+      state.scanRefreshRequested = false;
+    }
+  }
+
+  function updateEditField(field, value) {
+    state.editForm[field] = value;
+    state.editError = '';
+  }
+
+  function updateListField(field, name, enabled) {
+    state.editForm[field] = setListMembership(
+      state.editForm[field],
+      name,
+      enabled,
+    );
+    state.editError = '';
+  }
+
+  function replaceListField(field, values) {
+    state.editForm[field] = [...values];
+    state.editError = '';
+  }
+
+  async function saveSelectedProject({ manual = false } = {}) {
+    const project = selectedProject();
+    if (!project || state.editSaving) {
+      return;
+    }
+    const changes = pendingChanges();
+    if (!hasManageChanges(changes)) {
+      if (manual) {
+        onToast({
+          title: translate('common.alreadySaved', 'Already saved'),
+          variant: 'success',
+        });
+      }
+      return;
+    }
+    clearAutoSave();
+    state.editSaving = true;
+    state.editError = '';
+    state.statusMessage = '';
+    try {
+      const result = await operations.setProject(project.project_id, changes);
+      if (!active) {
+        return;
+      }
+      await loadProjects();
+      if (!active) {
+        return;
+      }
+      state.editForm = createProjectEditForm(normalizeProject(result?.project));
+      applyScan(result?.scan);
+      onToast({
+        title: translate('projects.manage.saveSuccess', 'Project updated.'),
+        variant: 'success',
+      });
+    } catch (error) {
+      if (active) {
+        state.editError = `${translate('projects.manage.saveError', 'Project changes could not be saved.')} ${errorText(error)}`;
+      }
+    } finally {
+      if (active) {
+        state.editSaving = false;
+      }
+    }
+  }
+
+  function overrideDraft(agentId) {
+    return (
+      state.overrideDrafts[agentId] ?? {
+        model: '',
+        temperature: '',
+        thinking_effort: '',
+        compaction_policy: null,
+      }
+    );
+  }
+
+  function updateOverrideDraft(agentId, field, value) {
+    state.overrideDrafts = {
+      ...state.overrideDrafts,
+      [agentId]: { ...overrideDraft(agentId), [field]: value },
+    };
+    state.editError = '';
+  }
+
+  function overrideKey(agentId, field) {
+    return `${agentId}:${field}`;
+  }
+
+  function isOverrideBusy(agentId, field) {
+    return state.overrideBusyKey === overrideKey(agentId, field);
+  }
+
+  function overrideValueForField(agentId, field) {
+    const draft = overrideDraft(agentId);
+    if (field === 'model') {
+      return draft.model.trim();
+    }
+    if (field === 'temperature') {
+      return normalizeOverrideTemperature(draft.temperature);
+    }
+    if (field === 'compaction_policy') {
+      return draft.compaction_policy;
+    }
+    return draft.thinking_effort;
+  }
+
+  function canSetOverride(agentId, field) {
+    if (state.overrideBusyKey) {
+      return false;
+    }
+    const draft = overrideDraft(agentId);
+    if (field === 'model') {
+      return typeof draft.model === 'string' && draft.model.trim().length > 0;
+    }
+    if (field === 'temperature') {
+      return normalizeOverrideTemperature(draft.temperature) !== null;
+    }
+    if (field === 'compaction_policy') {
+      return draft.compaction_policy !== null;
+    }
+    return typeof draft.thinking_effort === 'string';
+  }
+
+  async function setMemberOverride(agentId, field) {
+    const project = selectedProject();
+    if (!project || state.overrideBusyKey || !canSetOverride(agentId, field)) {
+      return;
+    }
+    state.overrideBusyKey = overrideKey(agentId, field);
+    state.editError = '';
+    try {
+      const result = await operations.setOverride(
+        project.project_id,
+        agentId,
+        field,
+        overrideValueForField(agentId, field),
+      );
+      if (!active) {
+        return;
+      }
+      applyScan(result?.scan, { replaceDrafts: true });
+      onToast({
+        title: translate('projects.team.overrideSaved', 'Override saved.'),
+        variant: 'success',
+      });
+    } catch (error) {
+      if (active) {
+        onToast({
+          title: `${translate('projects.team.overrideError', 'The override could not be saved.')} ${errorText(error)}`,
+          variant: 'error',
+          sticky: true,
+        });
+      }
+    } finally {
+      if (active) {
+        state.overrideBusyKey = '';
+      }
+    }
+  }
+
+  async function clearMemberOverride(agentId, field) {
+    const project = selectedProject();
+    if (!project || state.overrideBusyKey) {
+      return;
+    }
+    state.overrideBusyKey = overrideKey(agentId, field);
+    state.editError = '';
+    try {
+      const result = await operations.clearOverride(
+        project.project_id,
+        agentId,
+        field,
+      );
+      if (!active) {
+        return;
+      }
+      applyScan(result?.scan, { replaceDrafts: true });
+      onToast({
+        title: translate('projects.team.overrideCleared', 'Override cleared.'),
+        variant: 'success',
+      });
+    } catch (error) {
+      if (active) {
+        onToast({
+          title: `${translate('projects.team.overrideClearError', 'The override could not be cleared.')} ${errorText(error)}`,
+          variant: 'error',
+          sticky: true,
+        });
+      }
+    } finally {
+      if (active) {
+        state.overrideBusyKey = '';
+      }
+    }
+  }
+
+  function openRemove(project) {
+    state.removeConfirmProject = project;
+    state.copyRootedAgentIdentityFiles = false;
+  }
+
+  function cancelRemove() {
+    state.removeConfirmProject = null;
+  }
+
+  function removeErrorText(error) {
+    if (error?.code === PROJECT_BUSY_CODE) {
+      return translate(
+        'projects.remove.busy',
+        'This project has an active or queued run and cannot be removed right now.',
+      );
+    }
+    if (error?.code === PROJECT_IN_USE_CODE) {
+      return translate(
+        'projects.remove.inUse',
+        'A cron job points at one of this project’s agents, so it cannot be removed. Remove or retarget the cron job first.',
+      );
+    }
+    return `${translate('projects.remove.error', 'Project could not be removed.')} ${errorText(error)}`;
+  }
+
+  async function confirmRemove() {
+    const project = state.removeConfirmProject;
+    state.removeConfirmProject = null;
+    if (!project) {
+      return;
+    }
+    state.removingProjectId = project.project_id;
+    state.statusMessage = '';
+    state.listError = '';
+    state.editError = '';
+    try {
+      const result = await operations.removeProject(
+        project.project_id,
+        state.copyRootedAgentIdentityFiles,
+      );
+      if (!active) {
+        return;
+      }
+      if (state.selectedProjectId === project.project_id) {
+        state.selectedProjectId = '';
+        state.activeTeam = [];
+        state.activeReport = null;
+        state.activeScanSkills = emptyScanSkills();
+      }
+      const affectedCount = Array.isArray(result?.affected_agent_ids)
+        ? result.affected_agent_ids.length
+        : 0;
+      const copyState = state.copyRootedAgentIdentityFiles
+        ? translate('projects.remove.filesCopied', 'were copied')
+        : translate('projects.remove.filesNotCopied', 'were not copied');
+      state.statusMessage =
+        affectedCount === 1
+          ? translate(
+              'projects.remove.successOneAgent',
+              'Project removed. 1 Agent was reset; identity files {copyState}.',
+              { copyState },
+            )
+          : translate(
+              'projects.remove.successManyAgents',
+              'Project removed. {count} Agents were reset; identity files {copyState}.',
+              { count: affectedCount, copyState },
+            );
+      await loadProjects();
+    } catch (error) {
+      if (!active) {
+        return;
+      }
+      const message = removeErrorText(error);
+      if (state.selectedProjectId === project.project_id) {
+        state.editError = message;
+      } else {
+        state.listError = message;
+      }
+    } finally {
+      if (active) {
+        state.removingProjectId = '';
+      }
+    }
+  }
+
+  function openRePoint(project) {
+    state.rePointProject = project;
+    state.rePointCwd = '';
+    state.rePointError = '';
+  }
+
+  function closeRePoint() {
+    if (state.rePointing) {
+      return;
+    }
+    state.rePointProject = null;
+    state.rePointError = '';
+  }
+
+  async function submitRePoint() {
+    if (!state.rePointProject) {
+      return;
+    }
+    if (state.rePointCwd.trim().length === 0) {
+      state.rePointError = translate(
+        'projects.rePoint.missingCwd',
+        'Enter the new repository path.',
+      );
+      return;
+    }
+    state.rePointing = true;
+    state.rePointError = '';
+    state.statusMessage = '';
+    try {
+      const projectId = state.rePointProject.project_id;
+      const result = await operations.setProject(
+        projectId,
+        buildRePointPayload(state.rePointCwd),
+      );
+      if (!active) {
+        return;
+      }
+      state.statusMessage = translate(
+        'projects.rePoint.success',
+        'Project re-pointed.',
+      );
+      state.rePointProject = null;
+      await loadProjects();
+      if (active && state.selectedProjectId === projectId) {
+        selectProject(projectId, result?.scan);
+      }
+    } catch (error) {
+      if (active) {
+        state.rePointError = `${translate('projects.rePoint.error', 'The project could not be re-pointed.')} ${errorText(error)}`;
+      }
+    } finally {
+      if (active) {
+        state.rePointing = false;
+      }
+    }
+  }
+
   function destroy() {
     active = false;
     listRequestId += 1;
@@ -185,31 +878,44 @@ export function createProjectsController({
   }
 
   return {
-    addProject: (payload) => operations.addProject(payload),
+    applyScan,
+    cancelRemove,
+    canSetOverride,
     clearAutoSave,
     clearDetect,
-    clearOverride: (projectId, agentId, field) =>
-      operations.clearOverride(projectId, agentId, field),
+    clearMemberOverride,
+    clearSelectedProject,
+    closeAdd,
+    closeRePoint,
+    confirmRemove,
     destroy,
     invalidateScan,
-    isCurrentProjectsRequest: (requestId) =>
-      active && requestId === listRequestId,
-    isCurrentScanRequest: (requestId) => active && requestId === scanRequestId,
-    isActive: () => active,
+    initialize,
+    isOverrideBusy,
     loadCatalogs,
-    loadGlobalSettings,
     loadProjects,
     loadScan,
-    removeProject: (projectId, copyIdentityFiles) =>
-      operations.removeProject(projectId, copyIdentityFiles),
-    repointProject: (projectId, cwd) =>
-      operations.setProject(projectId, buildRePointPayload(cwd)),
-    saveProject: (projectId, changes) =>
-      operations.setProject(projectId, changes),
+    openAdd,
+    openRemove,
+    openRePoint,
+    overrideDraft,
+    pendingChanges,
+    refreshScan,
+    replaceListField,
     scheduleAutoSave,
-    scheduleDetect,
-    setOverride: (projectId, agentId, field, value) =>
-      operations.setOverride(projectId, agentId, field, value),
+    saveSelectedProject,
+    selectProject,
+    selectedProject,
+    setMemberOverride,
+    state,
+    submitAdd,
+    submitRePoint,
+    trackModelDropdownOpen,
+    updateAddField,
+    updateEditField,
+    updateListField,
+    updateModelsRefreshToken,
+    updateOverrideDraft,
   };
 }
 

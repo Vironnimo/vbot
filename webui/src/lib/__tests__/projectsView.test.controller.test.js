@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createProjectsController } from '../projectsView.js';
+import {
+  createProjectsController,
+  createProjectsState,
+} from '../projectsView.js';
 
 function deferred() {
   let resolve;
@@ -43,9 +46,12 @@ describe('Projects controller', () => {
         .fn()
         .mockReturnValueOnce(older.promise)
         .mockReturnValueOnce(newer.promise),
+      showProject: vi.fn().mockResolvedValue({ scan: null }),
     });
+    const state = createProjectsState();
     const controller = createProjectsController({
       operations: projectOperations,
+      state,
     });
 
     const olderLoad = controller.loadProjects();
@@ -59,13 +65,13 @@ describe('Projects controller', () => {
         },
       ],
     });
-    expect(await newerLoad).toMatchObject({
-      stale: false,
-      projects: [{ project_id: 'new-project' }],
-    });
+    expect(await newerLoad).toBe(true);
+    expect(state.projects).toMatchObject([{ project_id: 'new-project' }]);
+    expect(state.selectedProjectId).toBe('new-project');
 
     older.resolve({ projects: [] });
-    expect(await olderLoad).toMatchObject({ stale: true, projects: [] });
+    expect(await olderLoad).toBe(false);
+    expect(state.projects).toMatchObject([{ project_id: 'new-project' }]);
   });
 
   it('debounces path detection and normalizes the winning result', async () => {
@@ -75,17 +81,20 @@ describe('Projects controller', () => {
     });
     const controller = createProjectsController({
       operations: operations({ detectProject }),
+      state: createProjectsState(),
       detectDelayMs: 20,
     });
-    const onResult = vi.fn();
+    controller.state.isAddOpen = true;
 
-    controller.scheduleDetect('C:/old', onResult);
-    controller.scheduleDetect('C:/new', onResult);
+    controller.updateAddField('cwd', 'C:/old');
+    controller.updateAddField('cwd', 'C:/new');
     await vi.advanceTimersByTimeAsync(20);
 
     expect(detectProject).toHaveBeenCalledOnce();
     expect(detectProject).toHaveBeenCalledWith('C:/new');
-    expect(onResult).toHaveBeenCalledWith(expect.any(Object), 'C:/new');
+    expect(controller.state.addDetect).toMatchObject({
+      formats: { opencode: { agents: 2, skills: 1 } },
+    });
   });
 
   it('owns auto-save timing and cancels pending work when destroyed', async () => {
@@ -109,17 +118,42 @@ describe('Projects controller', () => {
     expect(secondSave).toHaveBeenCalledOnce();
   });
 
-  it('exposes overrides and re-pointing without leaking transport details', async () => {
+  it('owns overrides and re-pointing without leaking transport details', async () => {
     const setOverride = vi.fn().mockResolvedValue({ scan: {} });
     const clearOverride = vi.fn().mockResolvedValue({ scan: {} });
-    const setProject = vi.fn().mockResolvedValue({ project: {} });
+    const setProject = vi.fn().mockResolvedValue({
+      project: {
+        project_id: 'project-one',
+        display_name: 'Project one',
+        cwd: 'C:/repo',
+      },
+      scan: {},
+    });
+    const state = createProjectsState({ selectedProjectId: 'project-one' });
+    state.projects = [
+      {
+        project_id: 'project-one',
+        display_name: 'Project one',
+        cwd: 'C:/old',
+      },
+    ];
     const controller = createProjectsController({
-      operations: operations({ clearOverride, setOverride, setProject }),
+      operations: operations({
+        clearOverride,
+        listProjects: vi.fn().mockResolvedValue({ projects: state.projects }),
+        setOverride,
+        setProject,
+        showProject: vi.fn().mockResolvedValue({ scan: {} }),
+      }),
+      state,
     });
 
-    await controller.setOverride('project-one', 'builder', 'model', 'gpt');
-    await controller.clearOverride('project-one', 'builder', 'model');
-    await controller.repointProject('project-one', ' C:/repo ');
+    controller.updateOverrideDraft('builder', 'model', 'gpt');
+    await controller.setMemberOverride('builder', 'model');
+    await controller.clearMemberOverride('builder', 'model');
+    controller.openRePoint(state.projects[0]);
+    state.rePointCwd = ' C:/repo ';
+    await controller.submitRePoint();
 
     expect(setOverride).toHaveBeenCalledWith(
       'project-one',

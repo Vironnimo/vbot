@@ -2,24 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
 
-  import {
-    cancelRun,
-    cancelToolCall,
-    continueRun,
-    createSession,
-    discardContinuation,
-    listAgents,
-    listChatCommands,
-    listFiles,
-    listQueue,
-    listSessions,
-    loadChatHistory,
-    removeFromQueue,
-    showProject,
-    startChatRun,
-    subscribeRunEvents,
-    updateQueueItem,
-  } from '$lib/api.js';
+  import { subscribeRunEvents } from '$lib/api.js';
   import {
     mergeBoundedEntries,
     replaceActiveSubAgentStatuses,
@@ -41,7 +24,6 @@
   import { tooltip } from '$lib/tooltip.js';
   import { createChatRunStream } from '../lib/chatRunStream.js';
   import {
-    addServerQueuedMessage,
     canCreateNewSession,
     createChatController,
     createChatState,
@@ -50,19 +32,11 @@
     formatAgentAddress,
     isProjectSelected,
     isRunActive,
-    loadHistory,
-    markSessionError,
     pickProjectAgentSessionId,
-    prependHistory,
-    removeQueuedMessage,
-    resetStaleRun,
     resolveAgentAddressing,
-    resolveMoveActionFromResponse,
     selectAgent,
     selectedAgent,
     setAgents,
-    startRun,
-    updateQueuedMessageContent,
     visibleTimelineItemsForRender,
   } from '../lib/chatState.js';
   import {
@@ -128,13 +102,7 @@
   } = $props();
 
   const chatState = $state(createChatState());
-  let loadingHistory = $state(false);
   let creatingSession = $state(false);
-  let cancellingRun = $state(false);
-  let historyError = $state('');
-  let actionError = $state('');
-  let continuationActionPending = $state('');
-  let availableSkills = $state([]);
   // Chat-local bottom toast for transient command replies and lifecycle notices.
   // Error notices stay in the top stack.
   let chatToast = $state('');
@@ -158,8 +126,6 @@
   // Bottom command toast auto-dismiss. Kept as a single constant so the
   // dwell time can be tuned in one place.
   const CHAT_TOAST_TIMEOUT_MS = 5000;
-  const HISTORY_INITIAL_LIMIT = 100;
-  const HISTORY_OLDER_LIMIT = 50;
   const SUBAGENT_RESULT_HISTORY_LIMIT = 20;
   // Both caches grow per run/spawn for the lifetime of the tab (handoff3
   // B10), so they are LRU-capped. Statuses are tiny strings — a generous cap
@@ -256,7 +222,7 @@
       return;
     }
     try {
-      const listed = await listSessions(childAddress);
+      const listed = await chatController.listSessions(childAddress);
       // A newer navigation may have superseded this child view mid-flight.
       if (displayedSessionKey() !== displayKey) {
         return;
@@ -292,7 +258,7 @@
   // true for same-agent drawer selections, which must offer a return path too.
   let sessionOverrideActive = $derived(Boolean(viewingSessionId));
   let newSessionBlocked = $derived(!canCreateNewSession(activeSessionState));
-  let composerDisabled = $derived(!activeAgent || loadingHistory);
+  let composerDisabled = $derived(!activeAgent || chatState.loadingHistory);
   // A model-less identity agent on its current session cannot run; surface an
   // actionable notice instead of failing the send at the provider. Scoped to
   // the identity current path — a project config agent resolves a model through
@@ -704,85 +670,8 @@
     ];
   };
 
-  const normalizedBuiltInCommandName = (value) => {
-    if (typeof value !== 'string') {
-      return '';
-    }
-
-    return value.trim().replace(/^\/+/, '').toLowerCase();
-  };
-
-  const isCompactCommand = (content) => {
-    if (typeof content !== 'string') {
-      return false;
-    }
-
-    const trimmed = content.trim();
-    if (!trimmed.startsWith('/')) {
-      return false;
-    }
-
-    // Compare only the first token so `/compact <instruction>` is recognized,
-    // not just the bare `/compact`. Without this, the history reload that
-    // surfaces the new compaction separator is skipped for the argument form.
-    const firstToken = trimmed.split(/\s+/)[0];
-    return normalizedBuiltInCommandName(firstToken) === 'compact';
-  };
-
-  // Extract a session-switch target from a handled command response.
-  // `/new` returns `{ data: { command: "new", session_id } }` and stays on the
-  // current agent. `/handoff` returns `{ data: { command: "handoff", session_id,
-  // agent_id } }` and may target a different agent — that is the cross-agent
-  // switch path. Returns `{ sessionId, agentId }` when the response names a new
-  // session, otherwise null.
-  const commandSwitchFromResponse = (response) => {
-    const data = response?.data;
-    if (!data || typeof data.session_id !== 'string') {
-      return null;
-    }
-    const sessionId = data.session_id.trim();
-    if (!sessionId) {
-      return null;
-    }
-    if (data.command === 'new' || data.command === 'handoff') {
-      const targetAgentId =
-        typeof data.agent_id === 'string' ? data.agent_id.trim() : '';
-      return { sessionId, targetAgentId };
-    }
-    return null;
-  };
-
-  const loadCommands = async (agentAddress) => {
-    try {
-      // Pass the active agent address so the server returns that agent's effective
-      // skills (project-scoped when it is a project agent); omit it for the global
-      // list when no agent is active yet.
-      const params = agentAddress ? { agent_id: agentAddress } : {};
-      const result = await listChatCommands(params);
-      const items = Array.isArray(result?.items) ? result.items : [];
-      availableSkills = items
-        .filter(
-          (item) => typeof item?.name === 'string' && item.name.length > 0,
-        )
-        .map((item) => ({
-          name:
-            item.type === 'command'
-              ? normalizedBuiltInCommandName(item.name)
-              : item.name,
-          description: item.description ?? '',
-          type: item.type,
-          // Trigger/presentation metadata for commands (skills omit these):
-          // `argument` drives immediate-run vs insert; `output` is read off the
-          // command response envelope, not here, but is kept for completeness.
-          argument: item.argument,
-          output: item.output,
-        }))
-        .filter((item) => item.name.length > 0);
-    } catch (error) {
-      actionError = `${t('chat.skillsLoadError', 'Command and skill suggestions could not be loaded.')} ${error.message}`;
-      availableSkills = [];
-    }
-  };
+  const loadCommands = (agentAddress) =>
+    chatController.loadCommands(agentAddress);
 
   // Sub-agent status self-heal lookup. When a sub-agent tool row's dot shows
   // "running" but no live status has been recorded in `subAgentRunStatuses`,
@@ -860,7 +749,7 @@
     try {
       // The RPC needs the full `child@projekt` address for a project child
       // (trap 2); the projection keys below stay bare like the descriptors.
-      const history = await loadChatHistory({
+      const history = await chatController.loadHistoryPage({
         agent_id: qualifiedChildAgentAddress(agentId),
         session_id: sessionId,
         limit: SUBAGENT_STATUS_VERIFICATION_HISTORY_LIMIT,
@@ -967,7 +856,7 @@
     sessionId,
     queueItemId,
   ) => {
-    const result = await listQueue(
+    const result = await chatController.listQueueItems(
       qualifiedChildAgentAddress(agentId),
       sessionId,
     );
@@ -991,46 +880,9 @@
     return 'completed';
   }
 
-  const loadAgents = async (options = {}) => {
-    chatState.loadingAgents = true;
-    chatState.agentsError = null;
-    try {
-      const result = await listAgents();
-      // Prefer the live in-component selection over the captured option: a
-      // navigation restore may have re-aimed the selection while agent.list
-      // was in flight, and the roster refresh must not undo it.
-      const preferredAgentId =
-        chatState.selectedAgentId || options.preferredAgentId;
-      if (preferredAgentId) {
-        selectAgent(chatState, preferredAgentId);
-      }
-      const selectedAgentId = setAgents(chatState, result.agents ?? []);
-      onAgentsChanged?.(chatState.agents);
-      if (selectedAgentId) {
-        onAgentSelected?.(selectedAgentId);
-      }
-      // Reload current-session history only while the display actually follows
-      // the identity current pointer. With a session override (past session or
-      // sub-agent view) or an active project agent displayed, a roster refresh
-      // must not steal the displayed session's SSE stream or lock the composer
-      // for an invisible load.
-      if (selectedAgentId && !viewingSessionId && !projectAgentActive) {
-        await loadCurrentHistory();
-      }
-    } catch (error) {
-      chatState.agentsError = error.message;
-    } finally {
-      chatState.loadingAgents = false;
-    }
-  };
+  const loadAgents = (options = {}) => chatController.loadAgents(options);
 
-  const loadCurrentHistory = async () => {
-    const agent = selectedAgent(chatState);
-    if (!agent?.current_session_id) {
-      return;
-    }
-    await loadHistoryForSession(agent.id, agent.current_session_id);
-  };
+  const loadCurrentHistory = () => chatController.loadCurrentHistory();
 
   // Load a session's history by its outside agent spelling (bare id for an
   // identity session, `agent@projekt` for a project-agent session) — one path
@@ -1039,77 +891,13 @@
   // Stale-response discipline: the displayed session can change while
   // `chat.history` is in flight (rapid switching, fast Back/Forward). After
   // every await, per-session state may always be written (each response lands
-  // in its own session state), but global UI state (`loadingHistory`,
-  // `historyError`) and the SSE stream attach belong to the DISPLAYED session
+  // in its own session state), but global UI state (`chatState.loadingHistory`,
+  // `chatState.historyError`) and the SSE stream attach belong to the DISPLAYED session
   // only — a stale response must not re-open a subscription the newer
   // navigation just closed, unlock the composer early, or banner-error a
   // healthy session.
-  const loadHistoryForSession = async (agentId, sessionId) => {
-    const sessionState = ensureSessionState(chatState, agentId, sessionId);
-    const isDisplayed = () => displayedSessionKey() === sessionState.key;
-    // A load for a session that is not displayed at start (a background
-    // refresh racing a navigation) must not lock the composer or close the
-    // displayed session's subscriptions — and must never own the global
-    // loading flag, or an invisible load would leave it stuck on.
-    const startedDisplayed = isDisplayed();
-    if (startedDisplayed) {
-      loadingHistory = true;
-      historyError = '';
-      runStream.closeSubscriptionsExcept(sessionState.key);
-    }
-    // Snapshot the run id we are about to ask the server about so the
-    // reconcile step below can distinguish a *stale* run (terminal event was
-    // missed, SSE gave up, bus buffer rolled, or the server restarted and
-    // the run is gone) from a *genuinely new* run that started between
-    // request and response — losing the latter would clobber state that
-    // the next WS `run_started` is about to re-establish. See plan
-    // `run-lifecycle-truth.md` Phase 2.1 "ChatView reconcile".
-    const staleRunId = sessionState.currentRun?.runId ?? '';
-    try {
-      const history = await loadChatHistory({
-        agent_id: agentId,
-        session_id: sessionId,
-        limit: HISTORY_INITIAL_LIMIT,
-      });
-      loadHistory(sessionState, history.messages ?? [], {
-        hasMore: history.has_more === true,
-        sessionUsage: history.session_usage,
-        continuation: history.continuation ?? null,
-      });
-      // History is the durable source of truth for which run is active. If
-      // it says "no active run" but the local state still claims a run is
-      // running *with the same run id we had before the request*, that run
-      // is dead — reset the live state and drop the SSE subscription so
-      // `canCreateNewSession(...)` unblocks and the timeline falls back to
-      // the just-loaded history. The `staleRunId === currentRun.runId`
-      // guard prevents a race where a new run legitimately started
-      // between request and response (a WS `run_started` will reassert
-      // running state for the new run).
-      if (
-        !history.active_run &&
-        isRunActive(sessionState) &&
-        sessionState.currentRun?.runId === staleRunId
-      ) {
-        resetStaleRun(sessionState);
-        runStream.closeSubscriptionFor(sessionState.key);
-      }
-      if (isDisplayed()) {
-        runStream.attachRunStream(sessionState, history.active_run);
-      }
-      await chatController.syncSessionQueue(sessionState);
-    } catch (error) {
-      if (isDisplayed()) {
-        historyError = error.message;
-      }
-      markSessionError(sessionState, error);
-    } finally {
-      // Only the call that set the flag while still owning the display clears
-      // it; a superseded (stale) call leaves the newer navigation's flag alone.
-      if (startedDisplayed && isDisplayed()) {
-        loadingHistory = false;
-      }
-    }
-  };
+  const loadHistoryForSession = (agentId, sessionId) =>
+    chatController.loadHistoryForSession(agentId, sessionId);
 
   // Background sub-agent spawns only return a "running" descriptor, so once the
   // child run finishes the timeline asks for its final output here. We fetch the
@@ -1128,7 +916,7 @@
     try {
       // Project children are fetched with the full address (trap 2); the cache
       // key stays the caller-provided bare-keyed one.
-      const history = await loadChatHistory({
+      const history = await chatController.loadHistoryPage({
         agent_id: qualifiedChildAgentAddress(agentId),
         session_id: sessionId,
         limit: SUBAGENT_RESULT_HISTORY_LIMIT,
@@ -1148,52 +936,8 @@
     }
   };
 
-  const loadOlderHistory = async () => {
-    const sessionState = activeSessionState;
-    if (
-      !sessionState ||
-      !sessionState.agentId ||
-      !sessionState.hasOlderHistory ||
-      sessionState.loadingOlderHistory ||
-      sessionState.messages.length === 0
-    ) {
-      return false;
-    }
-
-    const before = oldestLoadedMessageId(sessionState);
-    if (!before) {
-      sessionState.hasOlderHistory = false;
-      return false;
-    }
-
-    sessionState.loadingOlderHistory = true;
-    actionError = '';
-    try {
-      const history = await loadChatHistory({
-        agent_id: sessionState.agentId,
-        session_id: sessionState.sessionId,
-        limit: HISTORY_OLDER_LIMIT,
-        before,
-      });
-      prependHistory(sessionState, history.messages ?? [], {
-        hasMore: history.has_more === true,
-      });
-      return true;
-    } catch (error) {
-      actionError = `${t('chat.historyOlderLoadError', 'Older chat history could not be loaded.')} ${error.message}`;
-      return false;
-    } finally {
-      sessionState.loadingOlderHistory = false;
-    }
-  };
-
-  function oldestLoadedMessageId(sessionState) {
-    return (
-      (sessionState.messages ?? []).find(
-        (message) => typeof message?.id === 'string' && message.id.length > 0,
-      )?.id ?? ''
-    );
-  }
+  const loadOlderHistory = () =>
+    chatController.loadOlderHistory(activeSessionState);
 
   // Tear the second bar down: back to the identity-only chat (Personal).
   const clearProjectContext = () => {
@@ -1225,7 +969,7 @@
     projectScanError = '';
     selectedProjectAgentId = '';
     try {
-      const result = await showProject(projectId);
+      const result = await chatController.loadProject(projectId);
       // A newer selection may have superseded this one mid-flight.
       if (selectedProjectId !== projectId) {
         return;
@@ -1296,18 +1040,18 @@
   // the FULL address (`agent@projekt`) — trap 2.
   const ensureProjectAgentSession = async (addressing) => {
     const { agentAddress } = addressing;
-    actionError = '';
+    chatState.actionError = '';
     try {
       let sessionId = projectAgentSessions[agentAddress] ?? '';
       if (!sessionId) {
-        const listed = await listSessions(agentAddress);
+        const listed = await chatController.listSessions(agentAddress);
         // A newer project/agent selection may have superseded this one.
         if (currentProjectAgentAddress() !== agentAddress) {
           return;
         }
         sessionId = pickProjectAgentSessionId(listed?.sessions);
         if (!sessionId) {
-          const created = await createSession({
+          const created = await chatController.createSession({
             agent_id: agentAddress,
           });
           if (currentProjectAgentAddress() !== agentAddress) {
@@ -1328,7 +1072,7 @@
       if (currentProjectAgentAddress() !== agentAddress) {
         return;
       }
-      actionError = `${t('chat.project.sessionError', 'The project agent session could not be opened.')} ${error.message}`;
+      chatState.actionError = `${t('chat.project.sessionError', 'The project agent session could not be opened.')} ${error.message}`;
     }
   };
 
@@ -1583,7 +1327,7 @@
   };
 
   const handleReturnToCurrentSession = async () => {
-    if (!sessionOverrideActive || loadingHistory) {
+    if (!sessionOverrideActive || chatState.loadingHistory) {
       return;
     }
 
@@ -1640,15 +1384,15 @@
     }
     clearSessionOverride();
     creatingSession = true;
-    actionError = '';
+    chatState.actionError = '';
     try {
-      const session = await createSession({
+      const session = await chatController.createSession({
         agent_id: agent.id,
         make_current: true,
       });
       await switchToCurrentSession(agent.id, session.session_id);
     } catch (error) {
-      actionError = `${t('chat.sessionCreateError', 'New session could not be created.')} ${error.message}`;
+      chatState.actionError = `${t('chat.sessionCreateError', 'New session could not be created.')} ${error.message}`;
     } finally {
       creatingSession = false;
     }
@@ -1663,9 +1407,11 @@
       return;
     }
     creatingSession = true;
-    actionError = '';
+    chatState.actionError = '';
     try {
-      const created = await createSession({ agent_id: agentAddress });
+      const created = await chatController.createSession({
+        agent_id: agentAddress,
+      });
       const sessionId = created?.session_id ?? '';
       if (!sessionId || currentProjectAgentAddress() !== agentAddress) {
         return;
@@ -1676,7 +1422,7 @@
       };
       await loadHistoryForSession(agentAddress, sessionId);
     } catch (error) {
-      actionError = `${t('chat.sessionCreateError', 'New session could not be created.')} ${error.message}`;
+      chatState.actionError = `${t('chat.sessionCreateError', 'New session could not be created.')} ${error.message}`;
     } finally {
       creatingSession = false;
     }
@@ -1774,7 +1520,7 @@
     loadingProjectTeam = true;
     projectScanError = '';
     try {
-      const result = await showProject(projectId);
+      const result = await chatController.loadProject(projectId);
       projectTeam = normalizeProjectTeam(result?.scan);
       projectReport = normalizeScanReport(result?.scan?.report);
     } catch (error) {
@@ -1818,11 +1564,11 @@
     if (!sessionState?.agentId) {
       return { files: [], truncated: false };
     }
-    return await listFiles(sessionState.agentId);
+    return await chatController.listFiles(sessionState.agentId);
   };
 
   const handleTranscriptionError = (message) => {
-    actionError = message;
+    chatState.actionError = message;
   };
 
   // Reload history for whichever session is active, keyed by its stored
@@ -1837,122 +1583,49 @@
   };
 
   const sendStream = async (agent, sessionState, content, options = {}) => {
-    actionError = '';
-    const retainedContinuation = sessionState.continuation;
-    sessionState.continuation = null;
-    // `sessionState.agentId` already carries the right outside spelling: a bare
-    // id for an identity agent (byte-identical to today), the full
-    // `agent@projekt` address for a project agent. `chat.stream` parses an
-    // agent address, so this is exactly what it needs (RPC-contract trap 2).
-    const isProjectAgentSend = projectAgentActive;
-    try {
-      const params = {
-        agent_id: sessionState.agentId,
-        session_id: sessionState.sessionId,
-        content,
-      };
-      if (options.inputOrigin) {
-        params.input_origin = options.inputOrigin;
+    const outcome = await chatController.sendMessage(
+      sessionState,
+      content,
+      options,
+    );
+    if (outcome.kind === 'move') {
+      await moveSessionToAgent(outcome.move);
+    } else if (outcome.kind === 'switch') {
+      const targetAgentId = outcome.sessionSwitch.targetAgentId || agent.id;
+      if (targetAgentId !== chatState.selectedAgentId) {
+        selectAgent(chatState, targetAgentId);
+        onAgentSelected?.(targetAgentId);
       }
-      if (
-        Array.isArray(options.fileMentions) &&
-        options.fileMentions.length > 0
-      ) {
-        params.file_mentions = options.fileMentions;
+      await switchToCurrentSession(
+        targetAgentId,
+        outcome.sessionSwitch.sessionId,
+      );
+    } else if (outcome.kind === 'transient') {
+      appendTransientCard(outcome.reply);
+    } else if (outcome.kind === 'toast') {
+      showChatToast(outcome.reply);
+      if (outcome.reloadHistory) {
+        await reloadActiveSessionHistory(sessionState);
       }
-      const run = await startChatRun(params);
-      if (run?.command_handled) {
-        // `/agent` MOVES this session (same id) to another agent. Unlike
-        // /new and /handoff (identity-only), a move can target either world
-        // and can be issued from either world, so it is handled before — and
-        // independently of — the identity-only switch path.
-        const moveAction = resolveMoveActionFromResponse(run);
-        if (moveAction) {
-          await moveSessionToAgent(moveAction);
-          return true;
-        }
-        const commandSwitch = commandSwitchFromResponse(run);
-        if (commandSwitch && !isProjectAgentSend) {
-          // `action` channel: a session switch (/new, /handoff). When the switch
-          // targets a different agent than the one currently selected, update the
-          // agent-selection state first so the shared selection flow observes the
-          // new agent before the session switch lands. `switchToCurrentSession`
-          // then updates the target agent's `current_session_id` and loads it.
-          // This is an identity-only path (project config agents have no
-          // store-backed current-session pointer to switch).
-          const targetAgentId = commandSwitch.targetAgentId || agent.id;
-          if (targetAgentId !== chatState.selectedAgentId) {
-            selectAgent(chatState, targetAgentId);
-            onAgentSelected?.(targetAgentId);
-          }
-          await switchToCurrentSession(targetAgentId, commandSwitch.sessionId);
-        } else if (run.output === 'transient') {
-          // `transient` channel: a non-persisted card in the chat stream.
-          appendTransientCard(run.reply);
-        } else {
-          // `toast` channel (default): a chat-local bottom confirmation. /compact
-          // additionally reloads history so the new checkpoint is shown.
-          showChatToast(run.reply);
-          if (isCompactCommand(content)) {
-            await reloadActiveSessionHistory(sessionState);
-          }
-        }
-        return true;
-      }
-
-      if (run?.queued === true) {
-        addServerQueuedMessage(sessionState, run.item);
-        return true;
-      }
-
-      startRun(sessionState, run);
-      submittedTurnScrollRunId = run.run_id ?? '';
+    } else if (outcome.kind === 'started') {
+      submittedTurnScrollRunId = outcome.runId;
       submittedTurnScrollKey += 1;
-      runStream.subscribeToRun(sessionState, run.sse_url, {
-        afterSequence: 0,
-      });
-      return true;
-    } catch (error) {
-      sessionState.continuation = retainedContinuation;
-      actionError = `${t('chat.sendError', 'Message could not be sent.')} ${error.message}`;
-      markSessionError(sessionState, error);
-      return false;
     }
+    return outcome.kind !== 'failed' && outcome.kind !== 'ignored';
   };
 
   const handleCancelRun = async () => {
-    const sessionState = activeSessionState;
-    const runId = sessionState?.currentRun?.runId;
-    if (!runId) {
-      return;
-    }
-    cancellingRun = true;
-    actionError = '';
-    try {
-      await cancelRun(runId, { reason: 'user' });
-    } catch (error) {
-      actionError = `${t('chat.cancelError', 'Run could not be cancelled.')} ${error.message}`;
-    } finally {
-      cancellingRun = false;
-    }
+    await chatController.cancelActiveRun(activeSessionState);
   };
 
   // Per-tool-call cancel: cancel the bash without aborting the owning run.
   const handleCancelToolCall = async ({ runId, toolCallId } = {}) => {
     const agent = activeAgent;
-    if (!runId || !toolCallId) {
-      return;
-    }
-    actionError = '';
-    try {
-      await cancelToolCall({
-        agentId: agent?.id ?? '',
-        runId,
-        toolCallId,
-      });
-    } catch (error) {
-      actionError = `${t('chat.cancelError', 'Run could not be cancelled.')} ${error.message}`;
-    }
+    await chatController.cancelTool({
+      agentId: agent?.id ?? '',
+      runId,
+      toolCallId,
+    });
   };
 
   // Per-sub-agent cancel: a running child is itself a Run, so route through
@@ -1972,17 +1645,17 @@
       return;
     }
 
-    actionError = '';
+    chatState.actionError = '';
     try {
       if (plan.kind === 'run') {
-        await cancelRun(plan.runId, { reason: 'user' });
+        await chatController.cancelRunById(plan.runId, { reason: 'user' });
         return;
       }
       try {
         // `chat.queue_remove` parses an agent address (trap 2): qualify the
         // descriptor's bare agent_id with the displayed project — a project
         // run's child is queued under the same project anchor.
-        await removeFromQueue(
+        await chatController.removeQueueItem(
           qualifiedChildAgentAddress(plan.agentId),
           plan.sessionId,
           plan.queueItemId,
@@ -1999,7 +1672,7 @@
         await cancelSubAgentActiveRun(plan.agentId, plan.sessionId);
       }
     } catch (error) {
-      actionError = `${t('chat.cancelError', 'Run could not be cancelled.')} ${error.message}`;
+      chatState.actionError = `${t('chat.cancelError', 'Run could not be cancelled.')} ${error.message}`;
     }
   };
 
@@ -2009,7 +1682,7 @@
   // cancel that run, or, when the child is already terminal, force a fresh
   // verification so the stale "running" dot settles to the durable state.
   const cancelSubAgentActiveRun = async (agentId, sessionId) => {
-    const history = await loadChatHistory({
+    const history = await chatController.loadHistoryPage({
       agent_id: qualifiedChildAgentAddress(agentId),
       session_id: sessionId,
       limit: SUBAGENT_CANCEL_LOOKUP_HISTORY_LIMIT,
@@ -2019,7 +1692,7 @@
         ? history.active_run.run_id.trim()
         : '';
     if (activeRunId) {
-      await cancelRun(activeRunId, { reason: 'user' });
+      await chatController.cancelRunById(activeRunId, { reason: 'user' });
       // The run-id-less row reads the session key; write it immediately so
       // the dot settles without waiting for the bridged run_cancelled event.
       applySubAgentRunStatusUpdates({
@@ -2032,46 +1705,15 @@
   };
 
   const handleContinue = async () => {
-    const agent = activeAgent;
     const sessionState = activeSessionState;
-    if (!agent || !sessionState || isRunActive(sessionState)) {
+    if (!activeAgent) {
       return;
     }
-    actionError = '';
-    continuationActionPending = 'continue';
-    sessionState.continuation = null;
-    try {
-      const run = await continueRun(
-        sessionState.agentId,
-        sessionState.sessionId,
-      );
-      startRun(sessionState, run);
-      runStream.subscribeToRun(sessionState, run.sse_url, {
-        afterSequence: 0,
-      });
-    } catch (error) {
-      actionError = `${t('chat.continueError', 'Continue failed.')} ${error.message}`;
-      await reloadActiveSessionHistory(sessionState);
-    } finally {
-      continuationActionPending = '';
-    }
+    await chatController.continueSession(sessionState);
   };
 
   const handleDiscardContinuation = async () => {
-    const sessionState = activeSessionState;
-    if (!sessionState || isRunActive(sessionState)) {
-      return;
-    }
-    actionError = '';
-    continuationActionPending = 'discard';
-    try {
-      await discardContinuation(sessionState.agentId, sessionState.sessionId);
-      sessionState.continuation = null;
-    } catch (error) {
-      actionError = `${t('chat.discardContinuationError', 'Discard failed.')} ${error.message}`;
-    } finally {
-      continuationActionPending = '';
-    }
+    await chatController.discardSessionContinuation(activeSessionState);
   };
 
   // Exposed for tests and for the run-component verification wiring
@@ -2095,51 +1737,20 @@
 
   const handleRemoveQueuedMessage = async (queuedMessageId) => {
     const sessionState = activeSessionState;
-    const agent = activeAgent;
-    if (!sessionState || !agent) {
-      return;
-    }
-
-    actionError = '';
-    try {
-      // `chat.queue_remove` parses an agent address (trap 2): the session's
-      // stored `agentId` is already the right spelling for both worlds.
-      await removeFromQueue(
-        sessionState.agentId,
-        sessionState.sessionId,
-        queuedMessageId,
-      );
-      removeQueuedMessage(sessionState, queuedMessageId);
-    } catch (error) {
-      actionError = `${t('queue.removeError', 'Queued message could not be removed.')} ${error.message}`;
-    }
+    await chatController.removeQueued(sessionState, queuedMessageId);
   };
 
   const handleEditQueuedMessage = async (queuedMessageId, newContent) => {
     const sessionState = activeSessionState;
-    const agent = activeAgent;
-    if (!sessionState || !agent) {
+    if (!sessionState || !activeAgent) {
       return;
     }
-
-    actionError = '';
-    try {
-      // `chat.queue_update` parses an agent address (trap 2): the session's
-      // stored `agentId` is already the right spelling for both worlds.
-      // The edit replaces the queued content wholesale, so @-mentions in the
-      // edited text are re-collected against a fresh file list and the server
-      // re-snapshots them at edit time.
-      await updateQueueItem(
-        sessionState.agentId,
-        sessionState.sessionId,
-        queuedMessageId,
-        newContent,
-        { fileMentions: await collectQueueEditFileMentions(newContent) },
-      );
-      updateQueuedMessageContent(sessionState, queuedMessageId, newContent);
-    } catch (error) {
-      actionError = `${t('queue.editError', 'Queued message could not be edited.')} ${error.message}`;
-    }
+    await chatController.updateQueued(
+      sessionState,
+      queuedMessageId,
+      newContent,
+      await collectQueueEditFileMentions(newContent),
+    );
   };
 
   const collectQueueEditFileMentions = async (text) => {
@@ -2168,17 +1779,18 @@
       chatController.syncSessionQueue(sessionState),
     isDisplayedSession,
     setActionError: (message) => {
-      actionError = message;
+      chatState.actionError = message;
     },
     updateSubAgentRunStatuses: applySubAgentRunStatusUpdates,
   });
   chatController = createChatController({
     chatState,
     runStream,
-    listQueue,
-    onQueueSyncError: (error) => {
-      actionError = `${t('queue.syncError', 'Queued messages could not be synced.')} ${error.message}`;
-    },
+    translate: t,
+    isDisplayedSession,
+    shouldLoadCurrentHistory: () => !viewingSessionId && !projectAgentActive,
+    onAgentsChanged: (agents) => onAgentsChanged?.(agents),
+    onAgentSelected: (agentId) => onAgentSelected?.(agentId),
     onRestartQueueDiscarded: (count) => {
       showChatToast(
         count === 1
@@ -2297,25 +1909,25 @@
         />
       {/if}
       <div class="chat-view__surface">
-        {#if loadingHistory || historyError || actionError || activeSessionState?.error}
+        {#if chatState.loadingHistory || chatState.historyError || chatState.actionError || activeSessionState?.error}
           <div class="chat-view__notice-stack" aria-live="polite">
             <div class="chat-view__measure chat-view__notice-inner">
-              {#if loadingHistory}
+              {#if chatState.loadingHistory}
                 <Banner variant="neutral">
                   {t('loading.history', 'Loading chat history…')}
                 </Banner>
               {/if}
-              {#if historyError}
+              {#if chatState.historyError}
                 <Banner variant="error">
                   {t(
                     'chat.historyLoadError',
                     'Chat history could not be loaded.',
                   )}
-                  {historyError}
+                  {chatState.historyError}
                 </Banner>
               {/if}
-              {#if actionError}
-                <Banner variant="error">{actionError}</Banner>
+              {#if chatState.actionError}
+                <Banner variant="error">{chatState.actionError}</Banner>
               {/if}
               {#if activeSessionState?.error}
                 <Banner variant="error">
@@ -2330,7 +1942,7 @@
           <ChatTimeline
             sessionState={activeSessionState}
             agentName={activeAgent.name}
-            {loadingHistory}
+            loadingHistory={chatState.loadingHistory}
             {transientCards}
             {submittedTurnScrollKey}
             {submittedTurnScrollRunId}
@@ -2383,7 +1995,7 @@
               <Button
                 variant="secondary"
                 class="chat-view__subagent-session-return"
-                disabled={loadingHistory}
+                disabled={chatState.loadingHistory}
                 onClick={handleReturnToCurrentSession}
               >
                 {subAgentSessionActive && subAgentParentTarget
@@ -2421,8 +2033,8 @@
                 {#if activeContinuation.can_continue}
                   <Button
                     variant="primary"
-                    disabled={Boolean(continuationActionPending)}
-                    loading={continuationActionPending === 'continue'}
+                    disabled={Boolean(chatState.continuationActionPending)}
+                    loading={chatState.continuationActionPending === 'continue'}
                     onClick={handleContinue}
                   >
                     {t('chat.continuation.continue', 'Continue')}
@@ -2430,8 +2042,8 @@
                 {/if}
                 <Button
                   variant="secondary"
-                  disabled={Boolean(continuationActionPending)}
-                  loading={continuationActionPending === 'discard'}
+                  disabled={Boolean(chatState.continuationActionPending)}
+                  loading={chatState.continuationActionPending === 'discard'}
                   onClick={handleDiscardContinuation}
                 >
                   {t('chat.continuation.discard', 'Discard')}
@@ -2485,10 +2097,10 @@
             <ChatComposer
               disabled={composerDisabled}
               isRunning={isRunActive(activeSessionState)}
-              cancelling={cancellingRun}
+              cancelling={chatState.cancellingRun}
               draftKey={composerDraftKey}
               historyKey={composerHistoryKey}
-              {availableSkills}
+              availableSkills={chatState.availableSkills}
               onSendMessage={handleSendMessage}
               onCancelRun={handleCancelRun}
               onTranscriptionError={handleTranscriptionError}
