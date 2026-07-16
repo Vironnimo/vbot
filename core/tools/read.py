@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from core.tools.read_extract import (
     ExtractionLimitExceededError,
     detect_extractable_document,
     document_label,
+    ensure_document_input_size,
     extract_document_text,
 )
 from core.tools.tools import (
@@ -36,6 +38,9 @@ _UTF8_BOM_BYTES = b"\xef\xbb\xbf"
 # A NUL byte within this leading window marks a file as binary (the classic
 # heuristic): text — even non-UTF-8 text shown with replacement chars — has none.
 _BINARY_DETECTION_BYTES = 8192
+_FILE_PROBE_BYTES = 64 * 1024
+_TEXT_STREAM_CHUNK_CHARACTERS = 64 * 1024
+_LINE_BREAK_PATTERN = re.compile(r"\r\n|[\n\v\f\x1c-\x1e\x85\u2028\u2029\r]")
 
 READ_TOOL_NAME = "read"
 READ_TOOL_DESCRIPTION = (
@@ -78,6 +83,14 @@ class _ReadPosition:
     character: int = 1
 
 
+class _FileInputTooLargeError(Exception):
+    """Raised when a bounded full-file consumer reaches its input ceiling."""
+
+    def __init__(self, max_bytes: int) -> None:
+        self.max_bytes = max_bytes
+        super().__init__(f"file exceeds input limit {max_bytes}")
+
+
 def _truncate_utf8(text: str, max_bytes: int) -> str:
     if max_bytes <= 0:
         return ""
@@ -108,17 +121,20 @@ def _fit_lines_within_byte_limit(lines: list[str], max_bytes: int) -> tuple[str,
 def _build_read_hint(
     shown_start: int,
     shown_end: int,
-    total_lines: int,
+    total_lines: int | None,
     *,
     byte_limited: bool,
     continuation_offset: str | None = None,
 ) -> str:
-    message = f"[Showing lines {shown_start}-{shown_end} of {total_lines}."
+    message = f"[Showing lines {shown_start}-{shown_end}"
+    if total_lines is not None:
+        message += f" of {total_lines}"
+    message += "."
     if byte_limited:
         message += " Output truncated at 50 KB."
     if continuation_offset is not None:
         message += f" Use offset={continuation_offset} to continue."
-    elif shown_end < total_lines:
+    elif total_lines is None or shown_end < total_lines:
         message += f" Use offset={shown_end + 1} to continue."
     return message + "]"
 
@@ -224,11 +240,32 @@ def _render_text(
         _add_line_numbers(selected_lines, start_line, start_character) if number else selected_lines
     )
     output = "".join(rendered_lines)
-    output_bytes = output.encode("utf-8")
-    byte_limited = len(output_bytes) > MAX_FILE_BYTES
+    byte_limited = len(output.encode("utf-8")) > MAX_FILE_BYTES
 
     if not (line_limited or byte_limited):
         return output
+
+    return _finalize_limited_text(
+        rendered_lines,
+        start_line=start_line,
+        start_character=start_character,
+        total_lines=total_lines,
+        byte_limited=byte_limited,
+        number=number,
+    )
+
+
+def _finalize_limited_text(
+    rendered_lines: list[str],
+    *,
+    start_line: int,
+    start_character: int,
+    total_lines: int | None,
+    byte_limited: bool,
+    number: bool,
+) -> str:
+    """Fit rendered lines and append a continuation hint."""
+    output = "".join(rendered_lines)
 
     shown_line_count = len(rendered_lines)
     continuation_offset: str | None = None
@@ -236,7 +273,9 @@ def _render_text(
         long_first_line = len(rendered_lines[0].encode("utf-8")) > MAX_FILE_BYTES
         provisional_count = max(1, min(len(rendered_lines), shown_line_count))
         while True:
-            provisional_end = min(total_lines, start_line + provisional_count - 1)
+            provisional_end = start_line + provisional_count - 1
+            if total_lines is not None:
+                provisional_end = min(total_lines, provisional_end)
             possible_continuation = (
                 f"{start_line}:{start_character + MAX_FILE_BYTES}" if long_first_line else None
             )
@@ -265,7 +304,9 @@ def _render_text(
     if shown_line_count == 0 and output:
         shown_line_count = 1
     shown_start = start_line
-    shown_end = min(total_lines, shown_start + max(shown_line_count, 0) - 1)
+    shown_end = shown_start + max(shown_line_count, 0) - 1
+    if total_lines is not None:
+        shown_end = min(total_lines, shown_end)
     hint = _build_read_hint(
         shown_start,
         shown_end,
@@ -277,8 +318,202 @@ def _render_text(
     return output + ("\n\n" if output and not output.endswith("\n") else "") + hint
 
 
+def _split_stream_fragments(
+    text: str, *, final: bool = False
+) -> tuple[list[tuple[str, bool]], str]:
+    """Split a bounded decoded chunk into line fragments without retaining a long line."""
+    held_carriage_return = ""
+    if not final and text.endswith("\r"):
+        text = text[:-1]
+        held_carriage_return = "\r"
+
+    fragments: list[tuple[str, bool]] = []
+    start = 0
+    for match in _LINE_BREAK_PATTERN.finditer(text):
+        fragments.append((text[start : match.end()], True))
+        start = match.end()
+    if start < len(text):
+        fragments.append((text[start:], False))
+    return fragments, held_carriage_return
+
+
+def _render_text_path(resolved: Path, arguments: JsonObject) -> str:
+    """Render a local text file with bounded memory and early truncation."""
+    position = _parse_read_position(arguments.get("offset"))
+    max_lines = (
+        optional_int(arguments.get("limit"), field_name="limit", minimum=1) or DEFAULT_LINE_LIMIT
+    )
+    rendered_lines: list[str] = []
+    rendered_bytes = 0
+    source_line = 1
+    source_character = 1
+    completed_source_lines = 0
+    current_source_line_has_content = False
+    target_line_seen = False
+    target_character_reached = False
+    character_offset_beyond_end = False
+    current_selected_line_started = False
+    selected_lines_completed = 0
+    selected_window_complete = False
+    line_limited = False
+    byte_limited = False
+    held_carriage_return = ""
+    first_chunk = True
+
+    def append_bounded(text: str) -> bool:
+        nonlocal rendered_bytes
+        if not text:
+            return True
+        remaining_bytes = MAX_FILE_BYTES + 1 - rendered_bytes
+        if remaining_bytes <= 0:
+            return False
+        kept = _truncate_utf8(text, remaining_bytes)
+        rendered_lines[-1] += kept
+        rendered_bytes += len(kept.encode("utf-8"))
+        return kept == text
+
+    def process_fragment(fragment: str, *, ends_line: bool) -> bool:
+        nonlocal byte_limited
+        nonlocal character_offset_beyond_end
+        nonlocal completed_source_lines
+        nonlocal current_source_line_has_content
+        nonlocal current_selected_line_started
+        nonlocal line_limited
+        nonlocal selected_lines_completed
+        nonlocal selected_window_complete
+        nonlocal source_character
+        nonlocal source_line
+        nonlocal target_character_reached
+        nonlocal target_line_seen
+
+        if not fragment:
+            return True
+        if selected_window_complete:
+            line_limited = True
+            return False
+
+        current_source_line_has_content = True
+        if source_line == position.line:
+            target_line_seen = True
+
+        selected_fragment = ""
+        if source_line >= position.line:
+            required_character = position.character if source_line == position.line else 1
+            skip_characters = max(required_character - source_character, 0)
+            if skip_characters < len(fragment):
+                selected_fragment = fragment[skip_characters:]
+                if source_line == position.line:
+                    target_character_reached = True
+                if not current_selected_line_started:
+                    current_selected_line_started = True
+                    rendered_lines.append(_line_gutter(source_line, required_character))
+                if not append_bounded(selected_fragment) or rendered_bytes > MAX_FILE_BYTES:
+                    byte_limited = True
+                    return False
+
+        source_character += len(fragment)
+        if not ends_line:
+            return True
+
+        if source_line == position.line and not target_character_reached:
+            character_offset_beyond_end = True
+            return False
+        if source_line >= position.line and current_selected_line_started:
+            selected_lines_completed += 1
+            if selected_lines_completed >= max_lines:
+                selected_window_complete = True
+        completed_source_lines += 1
+        source_line += 1
+        source_character = 1
+        current_source_line_has_content = False
+        current_selected_line_started = False
+        return True
+
+    with resolved.open("r", encoding="utf-8", errors="replace", newline="") as handle:
+        while not (line_limited or byte_limited or character_offset_beyond_end):
+            chunk = handle.read(_TEXT_STREAM_CHUNK_CHARACTERS)
+            if not chunk:
+                break
+            if first_chunk:
+                first_chunk = False
+                if chunk.startswith("\ufeff"):
+                    chunk = chunk[1:]
+                    if not chunk:
+                        continue
+            fragments, held_carriage_return = _split_stream_fragments(held_carriage_return + chunk)
+            for fragment, ends_line in fragments:
+                if not process_fragment(fragment, ends_line=ends_line):
+                    break
+
+        if (
+            not (line_limited or byte_limited or character_offset_beyond_end)
+            and held_carriage_return
+        ):
+            process_fragment(held_carriage_return, ends_line=True)
+
+    if character_offset_beyond_end or (target_line_seen and not target_character_reached):
+        return (
+            f"[Character offset {position.character} is beyond end of line {position.line}. "
+            "Nothing to show.]"
+        )
+
+    reached_eof = not (line_limited or byte_limited or character_offset_beyond_end)
+    total_lines = (
+        completed_source_lines + (1 if current_source_line_has_content else 0)
+        if reached_eof
+        else None
+    )
+    if total_lines == 0:
+        return ""
+    if not target_line_seen:
+        return (
+            f"[Offset {position.line} is beyond end of file ({total_lines or 0} lines). "
+            "Nothing to show.]"
+        )
+
+    output = "".join(rendered_lines)
+    if not (line_limited or byte_limited):
+        return output
+    return _finalize_limited_text(
+        rendered_lines,
+        start_line=position.line,
+        start_character=position.character,
+        total_lines=None,
+        byte_limited=byte_limited,
+        number=True,
+    )
+
+
+def _read_file_bytes_with_limit(resolved: Path, max_bytes: int) -> bytes:
+    """Read at most one byte beyond a full-file consumer's input ceiling."""
+    with resolved.open("rb") as handle:
+        raw = handle.read(max_bytes + 1)
+    if len(raw) > max_bytes:
+        raise _FileInputTooLargeError(max_bytes)
+    return raw
+
+
+def _attachment_input_limit(attachment_store: Any, file_size: int) -> int:
+    """Run the AttachmentStore preflight and return a bounded read ceiling."""
+    ensure_within_limit = getattr(attachment_store, "ensure_within_limit", None)
+    if callable(ensure_within_limit):
+        ensure_within_limit(file_size)
+    configured_limit = getattr(attachment_store, "max_size_bytes", None)
+    if (
+        isinstance(configured_limit, int)
+        and not isinstance(configured_limit, bool)
+        and configured_limit > 0
+    ):
+        return configured_limit
+    return max(file_size, 1)
+
+
 def make_read_handler(
-    attachment_store: Any, speech_service: Any, file_state: FileReadState
+    attachment_store: Any,
+    speech_service: Any,
+    file_state: FileReadState,
+    *,
+    speech_max_size_bytes: int,
 ) -> ToolHandler:
     """Create a read handler bound to the attachment store and speech service.
 
@@ -288,6 +523,13 @@ def make_read_handler(
     each read so the write/edit guard can detect unread or externally-changed
     files (see ``file_state.py``).
     """
+
+    if (
+        not isinstance(speech_max_size_bytes, int)
+        or isinstance(speech_max_size_bytes, bool)
+        or speech_max_size_bytes <= 0
+    ):
+        raise ValueError("speech_max_size_bytes must be a positive integer")
 
     async def read_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         path_argument = arguments.get("path")
@@ -315,14 +557,42 @@ def make_read_handler(
         file_state.record_read(context.session_id, resolved)
 
         try:
-            raw = resolved.read_bytes()
+            file_size = resolved.stat().st_size
+            with resolved.open("rb") as handle:
+                probe = handle.read(_FILE_PROBE_BYTES)
         except OSError as error:
             return tool_failure("file_read_error", f"failed to read file: {resolved}: {error}")
 
-        media_type = sniff_media_type(raw, resolved.name)
+        media_type = sniff_media_type(probe, resolved.name)
         if media_type.startswith("image/"):
+            try:
+                input_limit = _attachment_input_limit(attachment_store, file_size)
+                raw = _read_file_bytes_with_limit(resolved, input_limit)
+            except AttachmentError as error:
+                return tool_failure("attachment_error", str(error))
+            except _FileInputTooLargeError as error:
+                return tool_failure(
+                    "attachment_error",
+                    f"Attachment size exceeds limit {error.max_bytes}",
+                )
+            except OSError as error:
+                return tool_failure("file_read_error", f"failed to read file: {resolved}: {error}")
             return _read_image(attachment_store, resolved, raw, media_type)
         if media_type.startswith("audio/"):
+            if file_size > speech_max_size_bytes:
+                return tool_failure(
+                    "audio_too_large",
+                    f"Audio size {file_size} exceeds limit {speech_max_size_bytes}",
+                )
+            try:
+                raw = _read_file_bytes_with_limit(resolved, speech_max_size_bytes)
+            except _FileInputTooLargeError:
+                return tool_failure(
+                    "audio_too_large",
+                    f"Audio size exceeds limit {speech_max_size_bytes}",
+                )
+            except OSError as error:
+                return tool_failure("file_read_error", f"failed to read file: {resolved}: {error}")
             return await _read_audio(speech_service, resolved, raw, media_type)
         if media_type.startswith("video/"):
             return _read_video(resolved, media_type)
@@ -331,28 +601,33 @@ def make_read_handler(
         # ipynb is JSON that would dump as unreadable raw text.
         kind = detect_extractable_document(resolved.name, media_type)
         if kind is not None:
+            try:
+                input_limit = ensure_document_input_size(file_size)
+                raw = _read_file_bytes_with_limit(resolved, input_limit)
+            except (ExtractionLimitExceededError, _FileInputTooLargeError) as error:
+                if isinstance(error, _FileInputTooLargeError):
+                    try:
+                        ensure_document_input_size(error.max_bytes + 1)
+                    except ExtractionLimitExceededError as limit_error:
+                        error = limit_error
+                return tool_failure("document_too_large", str(error))
+            except OSError as error:
+                return tool_failure("file_read_error", f"failed to read file: {resolved}: {error}")
             extracted = _read_extracted_document(resolved.name, raw, kind, arguments)
             if extracted is not None:
                 return extracted
-        if _looks_binary(raw):
+            del raw
+        if _looks_binary(probe):
             return _read_binary_notice(resolved)
-        return _read_text(raw, arguments)
+        try:
+            content = _render_text_path(resolved, arguments)
+        except ValueError as error:
+            return tool_failure("invalid_arguments", str(error))
+        except OSError as error:
+            return tool_failure("file_read_error", f"failed to read file: {resolved}: {error}")
+        return tool_success({"content": content})
 
     return read_handler
-
-
-def _read_text(raw: bytes, arguments: JsonObject) -> JsonObject:
-    """Return the text-rendering envelope for non-media (text/unknown) files."""
-    try:
-        content = render_text_file(
-            raw,
-            offset=arguments.get("offset"),
-            limit=arguments.get("limit"),
-        )
-    except ValueError as error:
-        return tool_failure("invalid_arguments", str(error))
-
-    return tool_success({"content": content})
 
 
 def _read_extracted_document(
@@ -497,13 +772,19 @@ def register_read_tool(
     attachment_store: Any,
     speech_service: Any,
     file_state: FileReadState,
+    speech_max_size_bytes: int,
 ) -> None:
     """Register the read tool with a vBot tool registry."""
     registry.register(
         READ_TOOL_NAME,
         READ_TOOL_DESCRIPTION,
         READ_TOOL_PARAMETERS,
-        make_read_handler(attachment_store, speech_service, file_state),
+        make_read_handler(
+            attachment_store,
+            speech_service,
+            file_state,
+            speech_max_size_bytes=speech_max_size_bytes,
+        ),
         display=ToolDisplay(summary_fields=("path",)),
     )
 

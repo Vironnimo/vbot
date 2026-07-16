@@ -499,6 +499,7 @@ class Runtime:
             attachment_store=self._attachment_store,
             speech_service=self._speech,
             file_state=self._file_state,
+            speech_max_size_bytes=self._speech_upload_max_size_bytes,
         )
         register_edit_tool(self._tools, file_state=self._file_state)
         register_glob_tool(self._tools)

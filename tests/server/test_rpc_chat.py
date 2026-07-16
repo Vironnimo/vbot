@@ -915,6 +915,7 @@ async def test_chat_send_collected_timeline_includes_read_tool_result_envelope(
         attachment_store=None,
         speech_service=None,
         file_state=FileReadState(),
+        speech_max_size_bytes=20_971_520,
     )
     state.runtime.agents.update("coder", workspace=str(tmp_path / "workspace"))
     workspace = Path(state.runtime.agents.get("coder").workspace)
