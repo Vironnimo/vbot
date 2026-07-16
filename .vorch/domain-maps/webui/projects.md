@@ -1,6 +1,6 @@
 # WebUI Projects
 
-Read this reference only for the WebUI Projects management view, Project discovery/editing, scans, Team rows, or Project-level overrides. Backend Project storage, scanning, and resolution contracts live in `projects.md` and its task-gated references.
+Read this reference only for the WebUI Projects management view, Project discovery/editing, scans, Team rows, or Project-level overrides. Enter the backend through `projects.md`; use `projects/configuration.md` for mutations and overrides, `projects/scanning.md` for discovery/findings, and `projects/resolution.md` for effective runtime values.
 
 ## Ownership and selection
 
@@ -19,9 +19,9 @@ The view submits user intent through the Project wrappers in `api.js`. It can no
 ## Scan and Team projection
 
 - Project scan/rescan is server work. The UI renders normalized findings, discovered Skills/Agents, source-format information, and actions returned by the Project domain.
-- Team rows are an effective-settings projection. Each field preserves provenance: explicit Project override, Agent value, Project default, or global default.
+- Team rows project effective settings. Model, temperature, and thinking effort preserve provenance (`override`, Agent value, Project default, global default, or null); compaction policy is currently a direct persisted override and has no `effective_config` provenance object.
 - Editing a Team field either sets an explicit override or clears it to restore inheritance. The frontend must not replace inherited values with copied explicit values merely because that is what the row currently displays.
-- Temperature and thinking-effort drafts preserve the distinction between no override and an explicit value. Normalization happens at the payload boundary.
+- Temperature, thinking-effort, and compaction-policy drafts preserve the distinction between no override and an explicit value. Normalization happens at the payload boundary.
 - Tool and Skill controls use the shared catalogs but apply Project policy. Catalog membership, allowed lists, and effective runtime availability are related projections, not interchangeable state.
 
 ## Refresh and error behavior
