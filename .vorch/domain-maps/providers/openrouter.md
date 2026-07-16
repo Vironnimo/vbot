@@ -12,7 +12,7 @@ OpenAI-compatible provider with OpenRouter-specific reasoning and multi-modality
 
 ## Reasoning
 
-- Reasoning is resolved through the shared `resolve_reasoning_intent(...)` (see `providers.md` → "Reasoning is one policy, many renders") and rendered by `_render_openrouter_reasoning`. The effort snaps against the model's feed ladder or the `OPENROUTER_REASONING_EFFORTS` floor (`none`/`minimal`/`low`/`medium`/`high`/`xhigh`; vBot `max` → `xhigh`).
+- Reasoning is resolved through the shared `resolve_reasoning_intent(...)` (see `providers/request-policy.md` → Reasoning intent) and rendered by `_render_openrouter_reasoning`. The effort snaps against the model's feed ladder or the `OPENROUTER_REASONING_EFFORTS` floor (`none`/`minimal`/`low`/`medium`/`high`/`xhigh`; vBot `max` → `xhigh`).
   - **effort** *and* **budget** → `reasoning: {effort}` + `include_reasoning: true`. OpenRouter maps effort→budget internally, so a `budget`-control model deliberately sends an effort here, **never** a token budget (the adapter needs no `budget_max`).
   - **on** (an `on_off`-control model) → `reasoning: {enabled: true}` + `include_reasoning: true`.
   - **off** → the byte-identical `reasoning: {effort: "none"}` for an effort-spelled-off wire (a `levels`/unknown control whose ladder has a `none` rung), else the documented toggle off-shape `reasoning: {enabled: false}` for an `on_off` model. The exact `on_off` off-shape is **not live-verified** (no OpenRouter probe in this environment — see FLAGGED.md).

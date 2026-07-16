@@ -50,9 +50,7 @@ Endpoint selection uses sanitized model metadata first:
 
 ## Usage Probe (`copilot_internal/user`)
 
-The Copilot usage fetcher in `core/providers/usage.py` (see `providers.md` → Provider
-Usage Probe). **Blind, best-effort** — implemented from openclaw's verified field names,
-not yet live-verified (no Copilot login in this environment):
+The Copilot usage fetcher in `core/providers/usage.py` (see `providers/usage.md`). **Blind, best-effort** — implemented from openclaw's verified field names, not yet live-verified (no Copilot login in this environment):
 
 - `GET https://api.github.com/copilot_internal/user` — GitHub's host, NOT the Copilot
   API host. Authenticates with `Authorization: token <github_oauth_token>` (the GitHub

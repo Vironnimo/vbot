@@ -26,12 +26,12 @@ MiniMax is wired as an OpenAI-compatible chat-completions provider with provider
 - `MiniMax-M3` normalizes with a 1,000,000 token context window, text/image/video input metadata, tools, `stream_options`, `reasoning_split`, and MiniMax `thinking`.
 - Unknown MiniMax model ids fall back to generic OpenAI-compatible normalization instead of being dropped.
 - Known MiniMax entries carry an output ceiling (`max_output_tokens`) set to MiniMax's **recommended** allowance, not its hard max: M2.x = 65,536, M3 = 131,072 (`MINIMAX_M2_RECOMMENDED_MAX_OUTPUT` / `MINIMAX_M3_RECOMMENDED_MAX_OUTPUT`). MiniMax publishes both a recommended and a hard-max value per model (M2.x hard max 204,800 — which equals the context window; M3 hard max 524,288); vBot pins the recommended value because the M2.x hard max equals the context window, so defaulting the output allowance to it would collide with any non-trivial prompt and 400. A caller can still request more explicitly (up to the hard max). Source: https://platform.minimax.io/docs/api-reference/text-chat-openai.
-- Runtime effect: the shared OpenAI-compatible base defaults request `max_tokens` to this ceiling when the caller sends no explicit output limit (see `providers.md` → "Output allowance defaults to the model's catalog ceiling"), so a MiniMax turn is no longer capped at the flat 8,192 `minimax.json` config default — reasoning models truncated there because the split thinking trace counts toward the same allowance.
+- Runtime effect: the shared OpenAI-compatible base defaults request `max_tokens` to this ceiling when the caller sends no explicit output limit (see `providers/request-policy.md` → Request limits and context), so a MiniMax turn is no longer capped at the flat 8,192 `minimax.json` config default — reasoning models truncated there because the split thinking trace counts toward the same allowance.
 
 ## Reasoning
 
 - MiniMax's OpenAI-compatible API does not use OpenAI-style `reasoning_effort`. `MiniMaxAdapter` strips generic OpenAI reasoning payload keys before applying MiniMax controls.
-- For `MiniMax-M3`, the shared `resolve_reasoning_intent(...)` (see `providers.md` → "Reasoning is one policy, many renders") classifies the selection, then `_render_minimax_m3_thinking` maps it onto MiniMax's binary toggle: an active effort (incl. a degraded `budget`/`on` intent — M3 has no native token budget) → `thinking: {type: adaptive}`, `none`/off → `thinking: {type: disabled}`, no effort selected → reason-by-default (no `thinking` key).
+- For `MiniMax-M3`, the shared `resolve_reasoning_intent(...)` (see `providers/request-policy.md` → Reasoning intent) classifies the selection, then `_render_minimax_m3_thinking` maps it onto MiniMax's binary toggle: an active effort (incl. a degraded `budget`/`on` intent — M3 has no native token budget) → `thinking: {type: adaptive}`, `none`/off → `thinking: {type: disabled}`, no effort selected → reason-by-default (no `thinking` key).
 - For M2.x models the adapter suppresses `thinking` (those models reason by default).
 - The adapter defaults `reasoning_split: true` whenever reasoning is active (M2.x always; M3 unless thinking is disabled), so the thinking trace is returned separately as `reasoning_details` instead of inline `<think>…</think>` in `content`. A caller-set `reasoning_split` is left alone; catalog reasoning-unsupported strips it. This is the capture half of the replay policy below — `reasoning_details` is what gets persisted in `reasoning_meta` and replayed.
 - Non-streaming responses with `reasoning_details` expose their text as visible `reasoning` while preserving the original details in `reasoning_meta`.
@@ -39,9 +39,7 @@ MiniMax is wired as an OpenAI-compatible chat-completions provider with provider
 
 ## Usage Probe (`token_plan/remains`)
 
-The MiniMax usage fetcher in `core/providers/usage.py` (see `providers.md` → Provider
-Usage Probe). **Blind, best-effort** — implemented from openclaw's verified field names,
-not yet live-verified (no credentials in this environment):
+The MiniMax usage fetcher in `core/providers/usage.py` (see `providers/usage.md`). **Blind, best-effort** — implemented from openclaw's verified field names, not yet live-verified (no credentials in this environment):
 
 - `GET <connection.base_url>/token_plan/remains` (base_url `https://api.minimaxi.com/v1`),
   `Authorization: Bearer <api key>`.

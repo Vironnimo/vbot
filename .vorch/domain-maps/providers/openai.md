@@ -53,7 +53,7 @@ Used when `connection_mode` is `None` or `chat_completions`. Delegates to `OpenA
 - Polling posts JSON `{"device_auth_id": ..., "user_code": ...}` to the matching `/token` device-auth endpoint. HTTP 403 and 404 are treated as `authorization_pending` for this provider.
 - Successful polling returns an authorization code and PKCE verifier; vBot exchanges them at `https://auth.openai.com/oauth/token` with `grant_type=authorization_code` and `redirect_uri=https://auth.openai.com/deviceauth/callback`.
 - Refresh uses the OAuth `refresh_token` grant against the same token endpoint. Refreshed tokens keep a replacement refresh token when OpenAI sends one and preserve the existing token otherwise.
-- The OAuth token file path is `<data_dir>/oauth/openai-subscription.json` for the `default` account and `openai-subscription--<account>.json` for additional named accounts (see `providers.md` → Accounts).
+- The OAuth token file path is `<data_dir>/oauth/openai-subscription.json` for the `default` Account and `openai-subscription--<account>.json` for additional named Accounts (see `providers/connections.md` → Identity and Accounts).
 
 ## ChatGPT Account Header
 
@@ -123,7 +123,7 @@ A carrier chat model drives an `image_generation` tool call; the backend forces 
 
 ## Usage Probe (`/wham/usage`)
 
-The subscription usage fetcher in `core/providers/usage.py` (see `providers.md` → Provider Usage Probe). Live-verified against the real endpoint 2026-06-16 (HTTP 200):
+The subscription usage fetcher in `core/providers/usage.py` (see `providers/usage.md`). Live-verified against the real endpoint 2026-06-16 (HTTP 200):
 
 - `GET <connection.base_url>/wham/usage` (base_url `https://chatgpt.com/backend-api`).
 - Headers mirror the Codex runtime path: `Authorization: Bearer <oauth token>`, `chatgpt-account-id: <id>` (from the JWT via `extract_chatgpt_account_id`, falling back to token-store `extra.chatgpt_account_id`), plus `CODEX_EXTRA_HEADERS` (`OpenAI-Beta`, `originator`). A missing account id → snapshot error "Reconnect required".

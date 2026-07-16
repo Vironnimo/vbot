@@ -46,7 +46,7 @@ The live `/models` listing is authoritative and rich — each entry carries `max
 
 ## Reasoning
 
-- Reasoning is resolved through the shared `resolve_reasoning_intent(...)` (see `providers.md` → "Reasoning is one policy, many renders") and rendered onto Anthropic's `thinking` shape. `_apply_reasoning` snaps against the model's feed ladder or `ANTHROPIC_EFFORT_FLOOR` (every active effort, so the effort path is byte-identical), then `_render_reasoning` materializes the intent:
+- Reasoning is resolved through the shared `resolve_reasoning_intent(...)` (see `providers/request-policy.md` → Reasoning intent) and rendered onto Anthropic's `thinking` shape. `_apply_reasoning` snaps against the model's feed ladder or `ANTHROPIC_EFFORT_FLOOR` (every active effort, so the effort path is byte-identical), then `_render_reasoning` materializes the intent:
   - **effort** → `thinking: {type: adaptive, display: summarized}` plus `output_config.effort` for efforts above `minimal`.
   - **budget** (a `budget`-control Claude) → native `thinking: {type: enabled, budget_tokens: N}`, where `N` is the effort→budget mapping scaled by `budget_max` when seeded (else the absolute fallback ladder), clamped strictly under `max_tokens`.
   - **on** → enabled with the floor budget; skipped with a `warn` when even the floor cannot fit `max_tokens`.
