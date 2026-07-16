@@ -25,6 +25,7 @@ from core.projects.projects import (
     ProjectNotFoundError,
     build_project,
     project_from_dict,
+    project_tool_configurability_reason,
 )
 from core.projects.resolver import (
     AgentResolutionError,
@@ -63,6 +64,7 @@ __all__ = [
     "normalize_cwd",
     "parse_agent_address",
     "project_from_dict",
+    "project_tool_configurability_reason",
     "project_sessions_dir",
     "resolve_prompt_project",
     "resolve_skill_scope",

@@ -8,6 +8,7 @@ from typing import Any
 from core.chat import CommandDispatcher
 from core.chat.file_mentions import list_mention_files, resolve_mention_root
 from core.projects import (
+    project_tool_configurability_reason,
     resolve_prompt_project,
     resolve_skill_scope,
     resolve_working_project_id,
@@ -42,9 +43,18 @@ def _list_tools(state: Any, params: JsonObject) -> JsonObject:
     # uses it as the "reset to defaults" target and to mark default-on tools, so the
     # base list stays a single server-side constant rather than a duplicated literal.
     return {
-        "tools": [_tool_response(tool) for tool in tools],
+        "tools": [_project_annotated_tool_response(tool) for tool in tools],
         "default_project_tools": list(PROJECT_DEFAULT_ALLOWED_TOOLS),
     }
+
+
+def _project_annotated_tool_response(tool: Any) -> JsonObject:
+    """Project the generic Tool plus server-owned Project configurability policy."""
+    response = _tool_response(tool)
+    reason = project_tool_configurability_reason(tool.name)
+    response["project_configurable"] = reason is None
+    response["project_configurability_reason"] = reason
+    return response
 
 
 def _list_skills(state: Any, params: JsonObject) -> JsonObject:

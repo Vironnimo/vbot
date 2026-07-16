@@ -49,6 +49,8 @@ async def test_tool_list_returns_all_registered_tools_with_name_and_description(
                     "ready": True,
                     "readiness_hint": None,
                     "extension": None,
+                    "project_configurable": True,
+                    "project_configurability_reason": None,
                 },
                 {
                     "name": "z_tool",
@@ -56,6 +58,8 @@ async def test_tool_list_returns_all_registered_tools_with_name_and_description(
                     "ready": True,
                     "readiness_hint": None,
                     "extension": None,
+                    "project_configurable": True,
+                    "project_configurability_reason": None,
                 },
             ],
             "default_project_tools": list(PROJECT_DEFAULT_ALLOWED_TOOLS),

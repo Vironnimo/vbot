@@ -73,7 +73,7 @@ Project configuration reuses canonical owners:
 - Temperature and thinking effort → the validators exported by `core/settings/`.
 - Compaction policy → `core/settings/normalizers.py`.
 - Identifier safety and addresses → `core/projects/paths.py` and `core/projects/address.py`.
-- Project Tool Whitelist membership → the live `ToolRegistry` catalog at the RPC/scan-preview boundary; raw file validation rejects the wildcard but deliberately does not require runtime registry membership.
+- Project Tool Whitelist membership → the live `ToolRegistry` catalog at the RPC/scan-preview boundary. `core.projects.project_tool_configurability_reason()` owns the exceptions and their machine-readable reasons; `tool.list` projects `project_configurable` plus `project_configurability_reason` so accessors never mirror Tool-name policy. Raw file validation rejects the wildcard but deliberately does not require runtime registry membership.
 
 When adding a persisted field, decide whether it is a Project default, a capability ceiling, or a per-Agent override; update serialization, Store rebuild/update paths, RPC validation, WebUI state, resolver consumption, tests, and this reference together.
 

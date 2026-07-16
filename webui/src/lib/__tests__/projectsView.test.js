@@ -689,20 +689,20 @@ describe('normalizeScanReport', () => {
 });
 
 describe('buildToolToggleList', () => {
-  it('marks catalog tools enabled when in the whitelist and drops memory and skill_manage', () => {
+  it('uses server-owned Project configurability metadata instead of tool names', () => {
     const rows = buildToolToggleList({
       catalog: [
         { name: 'read' },
         { name: 'edit' },
-        { name: 'memory' },
+        { name: 'memory', project_configurable: false },
         { name: 'skill' },
-        { name: 'skill_manage' },
+        { name: 'server_policy_tool', project_configurable: false },
       ],
       allowedTools: ['read', 'skill'],
     });
 
-    // memory (runtime-derived) and skill_manage (identity-only) are excluded; skill
-    // stays an ordinary, toggleable project tool. Each row carries the readiness
+    // The browser knows only the metadata contract: even an arbitrary future policy
+    // tool is excluded without adding its name here. Each row carries the readiness
     // fields (defaulting to ready) so a not-ready tool renders the shared notice.
     expect(rows).toEqual([
       {
