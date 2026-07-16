@@ -194,6 +194,12 @@ class ChatSession:
                         f"invalid continuation {kind} at line {line_number}"
                     ) from exc
                 if not isinstance(data, dict):
+                    if _is_unterminated_line(line_bytes):
+                        self._truncate_continuation_tail(
+                            byte_offset=line_start_offset,
+                            line_number=line_number,
+                        )
+                        break
                     raise ChatSessionError(
                         f"continuation record at line {line_number} must be an object"
                     )
@@ -352,6 +358,14 @@ class ChatSession:
                         )
                         break
                     raise ChatSessionError(f"invalid JSON at line {line_number}") from exc
+                except ChatSessionError:
+                    if _is_unterminated_line(line_bytes):
+                        self._truncate_partial_tail(
+                            byte_offset=line_start_offset,
+                            line_number=line_number,
+                        )
+                        break
+                    raise
         return messages
 
     def delete(self) -> None:
