@@ -200,6 +200,10 @@ class AgentResolutionError(ValueError):
     """
 
 
+class ModelConfigurationError(ValueError):
+    """A Model reference cannot run with this instance's configured routes."""
+
+
 # Structural protocols for the runtime dependencies, declared locally so the
 # resolver never imports core.runtime (cycle risk). Each mirrors exactly the
 # slice of the real service the resolver uses.
@@ -212,6 +216,9 @@ class ConnectionRestrictedModel(Protocol):
     (``core.models.Model.allows_connection``): an empty allowlist permits every
     connection, a non-empty one restricts the model to the listed connection ids.
     """
+
+    @property
+    def connections(self) -> tuple[str, ...]: ...
 
     def allows_connection(self, connection_id: str) -> bool: ...
 
@@ -334,6 +341,46 @@ class ModelConfigurationChecker:
         if connection_suffix:
             return self._pinned_connection_usable(provider_id, catalog_model, connection_suffix)
         return self._has_usable_allowed_connection(provider_id, catalog_model)
+
+    def require_configured(self, model: str) -> None:
+        """Require *model* to be runnable and retain precise Connection failures."""
+        parsed = _parse_provider_model(model)
+        if parsed is None:
+            raise self._unusable_error(model)
+        provider_id, model_id, connection_suffix = parsed
+
+        try:
+            provider_config = self._providers.get(provider_id)
+            catalog_model = self._models.get(provider_id, model_id)
+        except KeyError as error:
+            raise self._unusable_error(model) from error
+
+        if connection_suffix:
+            connection_local_id = connection_suffix.partition(":")[0]
+            if not catalog_model.allows_connection(connection_local_id):
+                allowed = ", ".join(catalog_model.connections)
+                raise ModelConfigurationError(
+                    f"model {provider_id}/{model_id} is not available on connection "
+                    f"'{connection_local_id}' (allowed connections: {allowed})"
+                )
+            connections = getattr(provider_config, "connections", [])
+            if all(connection.id != connection_local_id for connection in connections):
+                raise self._unusable_error(model)
+            if not self._provider_credentials.is_usable(
+                provider_id, f"{provider_id}:{connection_suffix}"
+            ):
+                raise self._unusable_error(model)
+            return
+
+        if not self._has_usable_allowed_connection(provider_id, catalog_model):
+            raise self._unusable_error(model)
+
+    @staticmethod
+    def _unusable_error(model: str) -> ModelConfigurationError:
+        return ModelConfigurationError(
+            f"model {model!r} is not usable in this instance "
+            "(unknown provider/model or no usable credential on an allowed connection)"
+        )
 
     def _has_usable_allowed_connection(
         self, provider_id: str, catalog_model: ConnectionRestrictedModel
@@ -642,6 +689,10 @@ class AgentResolver:
         configured.
         """
         return self._model_checker.is_configured(model)
+
+    def require_model_configured(self, model: str) -> None:
+        """Raise with the shared Model-usability reason when *model* cannot run."""
+        self._model_checker.require_configured(model)
 
     def _project_team(self, project: Project) -> list[ScannedAgent]:
         cached = self._team_cache.get(project.project_id)

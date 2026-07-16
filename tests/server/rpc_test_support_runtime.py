@@ -13,7 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, TypeVar, cast
 
-from core.automation import TriggerService
+from core.automation import ReflectionService, TriggerService
 from core.chat import (
     ChatLoop,
     ChatMessage,
@@ -738,6 +738,9 @@ class StubRuntime:
             agent_resolver=cast(Any, self.agent_resolver),
             sessions=self.chat_sessions,
             models=cast(Any, self._models),
+            projects=cast(Any, self.projects),
+            agents=cast(Any, self.agents),
+            storage=cast(Any, self.storage),
         )
 
     @property
@@ -888,6 +891,7 @@ def make_state(
     streaming_chat_loop = ChatLoop(runtime, streaming=True, compaction_service=compaction_service)
     runtime.streaming_chat_loop = streaming_chat_loop
     runtime.trigger_service = TriggerService(chat_loop, chat_runs, cast(Any, runtime))
+    runtime.reflection = ReflectionService(cast(Any, runtime))
     return SimpleNamespace(
         runtime=runtime,
         chat_runs=chat_runs,
@@ -898,6 +902,11 @@ def make_state(
             agent_resolver=cast(Any, runtime.agent_resolver),
             sessions=runtime.chat_sessions,
             models=cast(Any, runtime.models),
+            projects=cast(Any, runtime.projects),
+            agents=cast(Any, runtime.agents),
+            trigger_service=runtime.trigger_service,
+            reflection_service=runtime.reflection,
+            storage=cast(Any, runtime.storage),
         ),
         event_bus=ServerEventBus(),
         agent_delete_lock=asyncio.Lock(),

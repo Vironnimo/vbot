@@ -9,7 +9,6 @@ from .engine_test_support import (
     AsyncMock,
     AttachmentTooLargeError,
     AttachmentTypeNotAllowedError,
-    CommandHandled,
     ContentBlock,
     FakeTransport,
     MediaBlock,
@@ -18,6 +17,7 @@ from .engine_test_support import (
     Path,
     SimpleNamespace,
     TextBlock,
+    command_outcome,
     drain,
     engine_module,
     make_command_dispatcher,
@@ -31,7 +31,7 @@ from .engine_test_support import (
 @pytest.mark.asyncio
 async def test_block_content_skips_command_dispatch_and_triggers_run(tmp_path: Path) -> None:
     trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
-    command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
+    command_dispatcher = make_command_dispatcher(result=command_outcome("stop", "Run cancelled."))
     engine, _sessions, _trigger, transport = make_engine(
         tmp_path, trigger_run=trigger_mock, command_dispatcher=command_dispatcher
     )
@@ -44,7 +44,7 @@ async def test_block_content_skips_command_dispatch_and_triggers_run(tmp_path: P
 
     await engine._process_queued_message(queued)
 
-    command_dispatcher.dispatch.assert_not_called()
+    command_dispatcher.execute.assert_not_awaited()
     trigger_mock.assert_awaited_once_with(
         "assistant",
         content,

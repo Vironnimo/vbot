@@ -185,19 +185,7 @@ def _reject_unsupported(params: JsonObject, allowed: AbstractSet[str], method: s
 
 
 def _ensure_model_connection_supported(models: Any, label: str, model_string: str) -> None:
-    """Reject a saved model whose pinned connection its allowlist forbids.
-
-    Mirrors the task-target expansion rule (``Model.allows_connection``): a model
-    with a non-empty connection allowlist may only run on the listed connection
-    ids of its provider. This is the save-time guard behind the WebUI dropdown
-    filter — it also catches model strings that never pass through the UI
-    (imports, hand-edited config).
-
-    Nothing is flagged when there is nothing to check: an empty value, no pinned
-    connection (the runtime then picks a usable one), a malformed model string
-    (surfaced elsewhere at run time), or a model absent from the catalog (e.g. a
-    custom id). ``models`` is the runtime model registry (``runtime.models``).
-    """
+    """Reject a saved Model whose pinned Connection its allowlist forbids."""
     if not model_string:
         return
     try:
@@ -221,24 +209,3 @@ def _ensure_model_connection_supported(models: Any, label: str, model_string: st
         f"params.{label}: model {provider_id}/{model_id} is not available on "
         f"connection '{connection_id}' (allowed connections: {allowed})",
     )
-
-
-def _ensure_model_usable(state: Any, model: str) -> None:
-    """Reject a model value that is not actually usable in this instance.
-
-    Two gates, both surfaced as ``invalid_request`` and shared by the ``/model``
-    command's set-time validation and ``project.set_override``'s model check so the
-    accepted-model rule can never drift: a pinned ``::connection`` suffix must be
-    allowed by the model's connection allowlist (checked first — its message names
-    the forbidden connection), and the model must be configured here (provider
-    registered, in catalog, a usable credential on an allowed connection — the
-    resolver's public ``is_model_configured`` seam, the same rule behind the scan's
-    ``BAD_MODEL`` finding, which itself re-checks the allowlist).
-    """
-    _ensure_model_connection_supported(state.runtime.models, "model", model)
-    if not state.runtime.agent_resolver.is_model_configured(model):
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"model {model!r} is not usable in this instance "
-            "(unknown provider/model or no usable credential on an allowed connection)",
-        )

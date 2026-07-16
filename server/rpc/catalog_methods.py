@@ -20,6 +20,11 @@ from server.rpc.payloads import _invalid_skill_response, _skill_response, _tool_
 from server.rpc.validation import _reject_unsupported, _required_agent_address
 
 JsonObject = dict[str, Any]
+_COMMAND_CATALOG_OUTPUT = {
+    "notice": "toast",
+    "detail": "transient",
+    "state_change": "action",
+}
 
 
 def _list_tools(state: Any, params: JsonObject) -> JsonObject:
@@ -69,10 +74,10 @@ def _list_commands(state: Any, params: JsonObject) -> JsonObject:
                 "name": spec.name,
                 "description": spec.description,
                 "type": "command",
-                # Argument mode and output channel let the frontend derive trigger
-                # and presentation behavior without per-command special cases.
+                # The public presentation hint is projected from Chat's neutral
+                # result category; the catalog never drives command execution.
                 "argument": spec.argument,
-                "output": spec.output,
+                "output": _COMMAND_CATALOG_OUTPUT[spec.catalog_result],
             }
             for spec in sorted(
                 CommandDispatcher.BUILT_IN_COMMANDS.values(), key=lambda spec: spec.name

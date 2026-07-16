@@ -19,7 +19,7 @@ from core.channels.telegram import (
     TelegramChannelAdapter,
 )
 from core.chat import ReplySurface
-from core.chat.commands import NotACommand
+from core.chat.commands import CommandOutcome, CommandUnavailability, PreparedCommand
 from core.runs import ASSISTANT_OUTPUT_EVENT, Run, WaitingWorkAdmission
 from core.sessions import ChatSessionManager
 
@@ -191,13 +191,30 @@ def make_failed_run(*, session_id: str, message: str) -> Run:
     return run
 
 
-def make_command_dispatcher(*, result: object | None = None) -> SimpleNamespace:
-    dispatch_result = NotACommand() if result is None else result
+def make_command_dispatcher(
+    *,
+    result: CommandOutcome | None = None,
+    argument: str | None = None,
+    execution_mode: str | None = None,
+    unavailable: CommandUnavailability | None = None,
+) -> SimpleNamespace:
+    prepared = (
+        PreparedCommand(
+            name=result.command,
+            argument=argument,
+            execution_mode=cast(
+                Any,
+                execution_mode
+                or ("immediate" if result.command in {"help", "status", "stop"} else "serialized"),
+            ),
+        )
+        if result is not None
+        else None
+    )
     return SimpleNamespace(
-        dispatch=Mock(return_value=dispatch_result),
-        # Mirrors the real dispatcher closely enough for adapter tests: slash-prefixed
-        # text counts as a recognized command.
-        recognizes=Mock(side_effect=lambda text: text.strip().startswith("/")),
+        prepare=Mock(side_effect=lambda text: prepared if text.strip().startswith("/") else None),
+        unavailability=Mock(return_value=unavailable),
+        execute=AsyncMock(return_value=result),
     )
 
 
@@ -246,6 +263,8 @@ def make_adapter(
         release_waiting_work=Mock(return_value=True),
     )
     resolved_command_dispatcher = command_dispatcher or make_command_dispatcher()
+    if hasattr(resolved_command_dispatcher, "chat_sessions"):
+        resolved_command_dispatcher.chat_sessions = chat_sessions
 
     adapter = TelegramChannelAdapter(
         make_config(

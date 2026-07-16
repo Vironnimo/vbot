@@ -7,13 +7,15 @@ from .engine_test_support import (
     SESSION_ID,
     AsyncMock,
     ChatRunManager,
-    CommandAction,
-    CommandHandled,
-    Mock,
+    CommandNavigation,
+    CommandOutcome,
+    CommandRun,
+    CommandUnavailability,
     Path,
     ReplyPlanFacts,
     Run,
     asyncio,
+    command_outcome,
     drain,
     engine_module,
     logging,
@@ -28,7 +30,7 @@ from .engine_test_support import (
 
 @pytest.mark.asyncio
 async def test_handled_command_replies_before_trigger(tmp_path: Path) -> None:
-    command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
+    command_dispatcher = make_command_dispatcher(result=command_outcome("stop", "Run cancelled."))
     engine, _sessions, trigger_mock, transport = make_engine(
         tmp_path, command_dispatcher=command_dispatcher
     )
@@ -36,7 +38,9 @@ async def test_handled_command_replies_before_trigger(tmp_path: Path) -> None:
     await engine.handle_inbound_text(make_conversation(), "/stop")
     await drain(engine, 12345)
 
-    command_dispatcher.dispatch.assert_called_once_with("assistant", SESSION_ID, "/stop")
+    command_dispatcher.execute.assert_awaited_once()
+    context = command_dispatcher.execute.await_args.args[1]
+    assert (context.agent_id, context.session_id) == ("assistant", SESSION_ID)
     trigger_mock.assert_not_awaited()
     assert transport.sent == [("12345", "Run cancelled.")]
     await engine.stop()
@@ -44,16 +48,17 @@ async def test_handled_command_replies_before_trigger(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_compact_command_action_replies_in_worker(tmp_path: Path) -> None:
-    compact_mock = AsyncMock(return_value="Context compacted.")
-    command_dispatcher = make_command_dispatcher(result=CommandAction(name="compact"))
+    command_dispatcher = make_command_dispatcher(
+        result=command_outcome("compact", "Context compacted.")
+    )
     engine, _sessions, trigger_mock, transport = make_engine(
-        tmp_path, compact_session=compact_mock, command_dispatcher=command_dispatcher
+        tmp_path, command_dispatcher=command_dispatcher
     )
 
     await engine.handle_inbound_text(make_conversation(), "/compact")
     await drain(engine, 12345)
 
-    compact_mock.assert_awaited_once_with("assistant", SESSION_ID, None)
+    command_dispatcher.execute.assert_awaited_once()
     trigger_mock.assert_not_awaited()
     assert transport.sent == [("12345", "Context compacted.")]
     await engine.stop()
@@ -61,18 +66,96 @@ async def test_compact_command_action_replies_in_worker(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_compact_command_action_forwards_instruction(tmp_path: Path) -> None:
-    compact_mock = AsyncMock(return_value="Context compacted.")
     command_dispatcher = make_command_dispatcher(
-        result=CommandAction(name="compact", argument="keep the API design")
+        result=command_outcome("compact", "Context compacted."),
+        argument="keep the API design",
     )
     engine, _sessions, _trigger, transport = make_engine(
-        tmp_path, compact_session=compact_mock, command_dispatcher=command_dispatcher
+        tmp_path, command_dispatcher=command_dispatcher
     )
 
     await engine.handle_inbound_text(make_conversation(), "/compact keep the API design")
     await drain(engine, 12345)
 
-    compact_mock.assert_awaited_once_with("assistant", SESSION_ID, "keep the API design")
+    prepared = command_dispatcher.execute.await_args.args[0]
+    assert prepared.argument == "keep the API design"
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("message", "command", "argument"),
+    [
+        ("/learn the deploy steps", "learn", "the deploy steps"),
+        ("/reflect", "reflect", None),
+        ("/model openai/gpt-5", "model", "openai/gpt-5"),
+        ("/rename Release planning", "rename", "Release planning"),
+        ("/handoff agent:reviewer", "handoff", "agent:reviewer"),
+    ],
+)
+async def test_unified_stateful_commands_execute_through_chat_core(
+    tmp_path: Path,
+    message: str,
+    command: str,
+    argument: str | None,
+) -> None:
+    dispatcher = make_command_dispatcher(
+        result=command_outcome(command, f"{command} complete"),
+        argument=argument,
+    )
+    engine, _sessions, trigger_mock, transport = make_engine(
+        tmp_path, command_dispatcher=dispatcher
+    )
+
+    await engine.handle_inbound_text(make_conversation(), message)
+    await drain(engine, 12345)
+
+    dispatcher.execute.assert_awaited_once()
+    prepared, context = dispatcher.execute.await_args.args
+    assert (prepared.name, prepared.argument) == (command, argument)
+    assert context.reply_surface == CHANNEL_REPLY_SURFACE
+    assert transport.sent == [("12345", f"{command} complete")]
+    trigger_mock.assert_not_awaited()
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_handoff_follow_up_is_one_shot_and_keeps_channel_anchor(tmp_path: Path) -> None:
+    follow_up = make_completed_run(session_id="review-session", output_text="review reply")
+    dispatcher = make_command_dispatcher(
+        result=CommandOutcome(
+            command="handoff",
+            navigation=CommandNavigation(
+                kind="offer_session",
+                agent_id="reviewer",
+                session_id="review-session",
+            ),
+            runs=(CommandRun(role="follow_up", run=follow_up),),
+        ),
+        argument="agent:reviewer",
+    )
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="source reply"))
+    engine, chat_sessions, _trigger, transport = make_engine(
+        tmp_path,
+        trigger_run=trigger_mock,
+        command_dispatcher=dispatcher,
+    )
+
+    await engine.handle_inbound_text(make_conversation(), "/handoff agent:reviewer")
+    await drain(engine, 12345)
+    await engine.handle_inbound_text(make_conversation(), "later message")
+    await drain(engine, 12345)
+
+    assert transport.sent_texts == ["review reply", "source reply"]
+    assert engine._config.agent_id == "assistant"
+    assert (
+        chat_sessions.get_metadata("assistant", SESSION_ID).get(
+            engine_module.ACTIVE_SESSION_METADATA_KEY
+        )
+        is None
+    )
+    assert trigger_mock.await_args is not None
+    assert trigger_mock.await_args.args[:3] == ("assistant", "later message", SESSION_ID)
     await engine.stop()
 
 
@@ -140,7 +223,7 @@ async def test_message_enqueued_behind_pending_new_routes_to_new_session(tmp_pat
 
 @pytest.mark.asyncio
 async def test_new_session_tags_fresh_session_with_metadata_but_no_reminder(tmp_path: Path) -> None:
-    command_dispatcher = make_command_dispatcher(result=CommandAction(name="new_session"))
+    command_dispatcher = make_new_only_dispatcher()
     engine, chat_sessions, _trigger, _transport = make_engine(
         tmp_path, command_dispatcher=command_dispatcher
     )
@@ -173,17 +256,20 @@ async def test_new_session_tags_fresh_session_with_metadata_but_no_reminder(tmp_
 
 @pytest.mark.asyncio
 async def test_new_session_command_refused_while_run_active(tmp_path: Path) -> None:
-    command_dispatcher = make_command_dispatcher(result=CommandAction(name="new_session"))
+    command_dispatcher = make_command_dispatcher(
+        result=command_outcome(
+            "new", "A new session can be started after the current run finishes."
+        )
+    )
     engine, chat_sessions, trigger_mock, transport = make_engine(
         tmp_path,
         command_dispatcher=command_dispatcher,
-        has_active_run=Mock(return_value=True),
     )
 
     await engine.handle_inbound_text(make_conversation(), "/new")
     await drain(engine, 12345)
 
-    assert transport.sent_texts == [engine_module._NEW_SESSION_BUSY_REPLY]
+    assert transport.sent_texts == ["A new session can be started after the current run finishes."]
     trigger_mock.assert_not_awaited()
     # No new session and no pointer: the anchor is unchanged.
     metadata = chat_sessions.get_metadata("assistant", SESSION_ID)
@@ -219,39 +305,45 @@ async def test_new_session_in_one_chat_leaves_other_chat_untouched(tmp_path: Pat
 
 @pytest.mark.asyncio
 async def test_continue_command_action_relays_continued_run(tmp_path: Path) -> None:
-    continue_mock = AsyncMock(return_value=make_completed_run(output_text="continued reply"))
-    command_dispatcher = make_command_dispatcher(result=CommandAction(name="continue"))
+    continued_run = make_completed_run(output_text="continued reply")
+    command_dispatcher = make_command_dispatcher(
+        result=CommandOutcome(
+            command="continue",
+            runs=(CommandRun(role="result", run=continued_run),),
+        )
+    )
     engine, _sessions, trigger_mock, transport = make_engine(
-        tmp_path, continue_run=continue_mock, command_dispatcher=command_dispatcher
+        tmp_path, command_dispatcher=command_dispatcher
     )
 
     await engine.handle_inbound_text(make_conversation(), "/continue")
     await drain(engine, 12345)
 
-    continue_mock.assert_awaited_once_with(
-        "assistant", SESSION_ID, reply_surface=CHANNEL_REPLY_SURFACE
-    )
+    command_dispatcher.execute.assert_awaited_once()
     trigger_mock.assert_not_awaited()
     assert transport.sent == [("12345", "continued reply")]
     await engine.stop()
 
 
 @pytest.mark.asyncio
-async def test_unsupported_command_action_reports_channel_limitation(tmp_path: Path) -> None:
+@pytest.mark.parametrize("message", ["/agent", "/agent planner"])
+async def test_agent_command_reports_permanent_channel_limitation(
+    tmp_path: Path, message: str
+) -> None:
     command_dispatcher = make_command_dispatcher(
-        result=CommandAction(name="handoff", argument=None)
+        result=command_outcome("agent", "unused"),
+        unavailable=CommandUnavailability(command="/agent", surface="channel"),
     )
     engine, _sessions, trigger_mock, transport = make_engine(
         tmp_path, command_dispatcher=command_dispatcher
     )
 
-    await engine.handle_inbound_text(make_conversation(), "/handoff")
+    await engine.handle_inbound_text(make_conversation(), message)
     await drain(engine, 12345)
 
     trigger_mock.assert_not_awaited()
-    assert transport.sent == [
-        ("12345", "This command is not available from Telegram channels yet.")
-    ]
+    assert transport.sent == [("12345", "The /agent command is not available through Telegram.")]
+    command_dispatcher.execute.assert_not_awaited()
     await engine.stop()
 
 
@@ -260,10 +352,10 @@ async def test_compact_action_failure_is_logged_and_replies_generically(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    compact_mock = AsyncMock(side_effect=RuntimeError("compact failed"))
-    command_dispatcher = make_command_dispatcher(result=CommandAction(name="compact"))
+    command_dispatcher = make_command_dispatcher(result=command_outcome("compact", "unused"))
+    command_dispatcher.execute.side_effect = RuntimeError("compact failed")
     engine, _sessions, _trigger, transport = make_engine(
-        tmp_path, compact_session=compact_mock, command_dispatcher=command_dispatcher
+        tmp_path, command_dispatcher=command_dispatcher
     )
     caplog.set_level(logging.ERROR, logger="vbot.channels.engine")
 
@@ -271,9 +363,9 @@ async def test_compact_action_failure_is_logged_and_replies_generically(
     await drain(engine, 12345)
 
     assert transport.sent_texts == [engine_module._FAILED_REPLY]
-    records = [r for r in caplog.records if r.message.startswith("Channel command action failed")]
+    records = [r for r in caplog.records if r.message.startswith("Channel command failed")]
     assert len(records) == 1
-    assert "action=compact" in records[0].message
+    assert "command=compact" in records[0].message
     assert records[0].exc_info is not None
     await engine.stop()
 
@@ -283,7 +375,7 @@ async def test_stop_command_eagerly_dispatched_while_worker_is_blocked(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
+    command_dispatcher = make_command_dispatcher(result=command_outcome("stop", "Run cancelled."))
     trigger_mock = AsyncMock(
         return_value=Run(run_id="run-active", agent_id="assistant", session_id=SESSION_ID)
     )
@@ -308,7 +400,7 @@ async def test_stop_command_eagerly_dispatched_while_worker_is_blocked(
 
     # Plain text never touches the dispatcher; the command dispatched eagerly while
     # the worker was still blocked relaying the first message's run.
-    command_dispatcher.dispatch.assert_called_once_with("assistant", SESSION_ID, "/stop")
+    command_dispatcher.execute.assert_awaited_once()
     assert trigger_mock.await_count == 1
     assert transport.sent == [("12345", "Run cancelled.")]
 
@@ -323,7 +415,7 @@ async def test_stop_command_bypasses_full_waiting_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     waiting_work_manager = ChatRunManager(waiting_work_limit=1)
-    command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
+    command_dispatcher = make_command_dispatcher(result=command_outcome("stop", "Run cancelled."))
     trigger_mock = AsyncMock(
         return_value=Run(run_id="run-active", agent_id="assistant", session_id=SESSION_ID)
     )
@@ -347,7 +439,7 @@ async def test_stop_command_bypasses_full_waiting_limit(
     await engine.handle_inbound_text(make_conversation(), "queued")
     await engine.handle_inbound_text(make_conversation(), "/stop")
 
-    command_dispatcher.dispatch.assert_called_once_with("assistant", SESSION_ID, "/stop")
+    command_dispatcher.execute.assert_awaited_once()
     assert transport.sent_texts == ["Run cancelled."]
     release_relay.set()
     await drain(engine, 12345)

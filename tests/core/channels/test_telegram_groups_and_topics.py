@@ -16,7 +16,7 @@ from core.channels.adapter import (
 from core.channels.telegram import (
     TELEGRAM_MESSAGE_LIMIT,
 )
-from core.chat.commands import CommandHandled
+from core.chat.commands import CommandFeedback, CommandOutcome
 from tests.core.channels.telegram_test_support import (
     drain_chat_queue,
     install_fake_telegram_media,
@@ -63,7 +63,12 @@ async def test_dm_command_with_own_bot_suffix_is_dispatched_stripped(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    command_dispatcher = make_command_dispatcher(result=CommandHandled(reply="Run cancelled."))
+    command_dispatcher = make_command_dispatcher(
+        result=CommandOutcome(
+            command="stop",
+            feedback=CommandFeedback(kind="notice", text="Run cancelled."),
+        )
+    )
     adapter, _chat_sessions, trigger_mock, bot = make_adapter(
         tmp_path,
         monkeypatch,
@@ -79,8 +84,11 @@ async def test_dm_command_with_own_bot_suffix_is_dispatched_stripped(
     )
     await drain_chat_queue(adapter, 12345)
 
-    command_dispatcher.dispatch.assert_called_once_with(
-        "assistant", "ch-tg-assistant-12345", "/stop"
+    command_dispatcher.execute.assert_awaited_once()
+    context = command_dispatcher.execute.await_args.args[1]
+    assert (context.agent_id, context.session_id) == (
+        "assistant",
+        "ch-tg-assistant-12345",
     )
     trigger_mock.assert_not_awaited()
     bot.send_message.assert_awaited_once_with(chat_id=12345, text="Run cancelled.")
@@ -113,7 +121,8 @@ async def test_command_addressed_to_other_bot_is_not_stripped(
     )
     await drain_chat_queue(adapter, 12345)
 
-    command_dispatcher.dispatch.assert_called_once_with("assistant", session_id, "/stop@OtherBot")
+    command_dispatcher.prepare.assert_called_once_with("/stop@OtherBot")
+    command_dispatcher.execute.assert_not_awaited()
     await adapter.stop()
 
 

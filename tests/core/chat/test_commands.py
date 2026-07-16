@@ -11,10 +11,11 @@ import pytest
 from core.agents.agents import Agent
 from core.chat import (
     ChatMessage,
-    CommandAction,
     CommandDispatcher,
-    CommandHandled,
-    NotACommand,
+    CommandExecutionContext,
+    CommandOutcome,
+    PreparedCommand,
+    ReplySurface,
 )
 from core.chat.commands import (
     STATUS_PLACEHOLDER,
@@ -32,6 +33,50 @@ from core.projects import AgentResolver, ProjectStore
 from core.providers.providers import ProviderConfig
 from core.runs import ChatRunManager, Run, RunCancelledError
 from core.sessions import ChatSessionManager
+
+
+def _prepared(dispatcher: CommandDispatcher, message: str) -> PreparedCommand:
+    prepared = dispatcher.prepare(message)
+    assert prepared is not None
+    return prepared
+
+
+async def _execute(
+    dispatcher: CommandDispatcher,
+    message: str,
+    *,
+    agent_id: str = "coder",
+    session_id: str = "session-one",
+    project_id: str | None = None,
+) -> CommandOutcome:
+    return await dispatcher.execute(
+        _prepared(dispatcher, message),
+        CommandExecutionContext(
+            agent_id=agent_id,
+            session_id=session_id,
+            project_id=project_id,
+            reply_surface=ReplySurface.webui(),
+        ),
+    )
+
+
+def _execute_sync(
+    dispatcher: CommandDispatcher,
+    message: str,
+    *,
+    agent_id: str = "coder",
+    session_id: str = "session-one",
+    project_id: str | None = None,
+) -> CommandOutcome:
+    return asyncio.run(
+        _execute(
+            dispatcher,
+            message,
+            agent_id=agent_id,
+            session_id=session_id,
+            project_id=project_id,
+        )
+    )
 
 
 def _make_agent(
@@ -242,10 +287,10 @@ async def test_dispatch_stop_with_active_run_returns_cancelled_reply() -> None:
     await started.wait()
 
     dispatcher = CommandDispatcher(manager)
-    result = dispatcher.dispatch("coder", "session-one", " /STOP ")
+    result = await _execute(dispatcher, " /STOP ")
 
-    assert isinstance(result, CommandHandled)
-    assert result.reply == "Run cancelled."
+    assert result.feedback is not None
+    assert result.feedback.text == "Run cancelled."
     assert run.cancel_requested is True
     assert run.cancel_reason == "user"
 
@@ -257,26 +302,22 @@ async def test_dispatch_stop_with_active_run_returns_cancelled_reply() -> None:
 def test_dispatch_stop_with_no_active_run_returns_not_found_reply() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/stop")
+    result = _execute_sync(dispatcher, "/stop")
 
-    assert isinstance(result, CommandHandled)
-    assert result.reply == "No active run to cancel."
+    assert result.feedback is not None
+    assert result.feedback.text == "No active run to cancel."
 
 
 def test_dispatch_unknown_command_returns_not_a_command() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/bogus")
-
-    assert isinstance(result, NotACommand)
+    assert dispatcher.prepare("/bogus") is None
 
 
 def test_dispatch_non_command_message_returns_not_a_command() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "hello")
-
-    assert isinstance(result, NotACommand)
+    assert dispatcher.prepare("hello") is None
 
 
 def test_built_in_commands_include_current_catalog() -> None:
@@ -296,10 +337,10 @@ def test_built_in_commands_include_current_catalog() -> None:
     }
 
 
-def test_built_in_commands_declare_argument_and_output_metadata() -> None:
+def test_built_in_commands_declare_argument_and_result_metadata() -> None:
     specs = CommandDispatcher.BUILT_IN_COMMANDS
     argument_modes = {name: spec.argument for name, spec in specs.items()}
-    output_channels = {name: spec.output for name, spec in specs.items()}
+    result_kinds = {name: spec.catalog_result for name, spec in specs.items()}
 
     assert argument_modes == {
         "agent": "optional",
@@ -315,103 +356,102 @@ def test_built_in_commands_declare_argument_and_output_metadata() -> None:
         "status": "none",
         "stop": "none",
     }
-    assert output_channels == {
-        "agent": "action",
-        "compact": "toast",
-        "handoff": "action",
-        "help": "transient",
-        "learn": "action",
-        "model": "action",
-        "new": "action",
-        "reflect": "action",
-        "rename": "toast",
-        "continue": "action",
-        "status": "transient",
-        "stop": "toast",
+    assert result_kinds == {
+        "agent": "state_change",
+        "compact": "notice",
+        "handoff": "state_change",
+        "help": "detail",
+        "learn": "state_change",
+        "model": "state_change",
+        "new": "state_change",
+        "reflect": "state_change",
+        "rename": "notice",
+        "continue": "state_change",
+        "status": "detail",
+        "stop": "notice",
     }
 
 
 def test_dispatch_status_marks_transient_output() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/status")
+    result = _execute_sync(dispatcher, "/status")
 
-    assert isinstance(result, CommandHandled)
-    assert result.output == "transient"
+    assert result.feedback is not None
+    assert result.feedback.kind == "detail"
 
 
 def test_dispatch_help_marks_transient_output() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/help")
+    result = _execute_sync(dispatcher, "/help")
 
-    assert isinstance(result, CommandHandled)
-    assert result.output == "transient"
+    assert result.feedback is not None
+    assert result.feedback.kind == "detail"
 
 
 def test_dispatch_stop_marks_toast_output() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/stop")
+    result = _execute_sync(dispatcher, "/stop")
 
-    assert isinstance(result, CommandHandled)
-    assert result.output == "toast"
+    assert result.feedback is not None
+    assert result.feedback.kind == "notice"
 
 
 def test_dispatch_handoff_without_argument_returns_action() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/handoff")
+    result = _prepared(dispatcher, "/handoff")
 
-    assert result == CommandAction(name="handoff", argument=None)
+    assert (result.name, result.argument, result.execution_mode) == ("handoff", None, "serialized")
 
 
 def test_dispatch_learn_without_argument_returns_action() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/learn")
+    result = _prepared(dispatcher, "/learn")
 
-    assert result == CommandAction(name="learn", argument=None)
+    assert (result.name, result.argument, result.execution_mode) == ("learn", None, "serialized")
 
 
 def test_dispatch_learn_takes_full_remainder_as_argument() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/learn the deploy steps we just did")
+    result = _prepared(dispatcher, "/learn the deploy steps we just did")
 
-    assert result == CommandAction(name="learn", argument="the deploy steps we just did")
+    assert (result.name, result.argument) == ("learn", "the deploy steps we just did")
 
 
 def test_dispatch_reflect_without_argument_returns_action() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/reflect")
+    result = _prepared(dispatcher, "/reflect")
 
-    assert result == CommandAction(name="reflect", argument=None)
+    assert (result.name, result.argument, result.execution_mode) == ("reflect", None, "serialized")
 
 
 def test_dispatch_reflect_takes_full_remainder_as_argument() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/reflect focus on the memory side")
+    result = _prepared(dispatcher, "/reflect focus on the memory side")
 
-    assert result == CommandAction(name="reflect", argument="focus on the memory side")
+    assert (result.name, result.argument) == ("reflect", "focus on the memory side")
 
 
 def test_dispatch_handoff_with_agent_id_returns_action() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/handoff coder")
+    result = _prepared(dispatcher, "/handoff coder")
 
-    assert result == CommandAction(name="handoff", argument="coder")
+    assert (result.name, result.argument) == ("handoff", "coder")
 
 
 def test_dispatch_handoff_preserves_agent_id_case() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/handoff MyAgent")
+    result = _prepared(dispatcher, "/handoff MyAgent")
 
-    assert isinstance(result, CommandAction)
     assert result.name == "handoff"
     assert result.argument == "MyAgent"
 
@@ -419,17 +459,17 @@ def test_dispatch_handoff_preserves_agent_id_case() -> None:
 def test_dispatch_handoff_tolerates_surrounding_whitespace() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "  /handoff coder  ")
+    result = _prepared(dispatcher, "  /handoff coder  ")
 
-    assert result == CommandAction(name="handoff", argument="coder")
+    assert (result.name, result.argument) == ("handoff", "coder")
 
 
 def test_dispatch_handoff_takes_full_remainder_as_argument() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/handoff agent:main do not forget")
+    result = _prepared(dispatcher, "/handoff agent:main do not forget")
 
-    assert result == CommandAction(name="handoff", argument="agent:main do not forget")
+    assert (result.name, result.argument) == ("handoff", "agent:main do not forget")
 
 
 def test_dispatch_agent_without_argument_lists_personal_and_team_directory() -> None:
@@ -440,12 +480,12 @@ def test_dispatch_agent_without_argument_lists_personal_and_team_directory() -> 
         agents=cast(Any, _StubAgentStore(["assistant", "coder"])),
     )
 
-    result = dispatcher.dispatch("assistant", "session-one", "/agent")
+    result = _execute_sync(dispatcher, "/agent", agent_id="assistant")
 
-    assert isinstance(result, CommandHandled)
-    assert result.output == "transient"
-    assert result.data is None  # a transient card, never persisted and not an action
-    reply = result.reply or ""
+    assert result.feedback is not None
+    assert result.feedback.kind == "detail"
+    assert not result.facts
+    reply = result.feedback.text
     assert "assistant" in reply
     assert "coder" in reply
     # Team agents are shown project-qualified, teaching the address the move expects.
@@ -456,34 +496,61 @@ def test_dispatch_agent_without_argument_lists_personal_and_team_directory() -> 
 def test_dispatch_agent_with_address_returns_move_action() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/agent planner")
+    result = _prepared(dispatcher, "/agent planner")
 
-    assert result == CommandAction(name="move_session", argument="planner")
+    assert (result.name, result.argument, result.execution_mode) == (
+        "agent",
+        "planner",
+        "serialized",
+    )
 
 
 def test_dispatch_agent_keeps_task_in_raw_argument() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/agent builder@vbot ship the fix")
+    result = _prepared(dispatcher, "/agent builder@vbot ship the fix")
 
-    assert result == CommandAction(name="move_session", argument="builder@vbot ship the fix")
+    assert (result.name, result.argument) == ("agent", "builder@vbot ship the fix")
+
+
+@pytest.mark.parametrize("message", ["/agent", "/agent planner"])
+def test_agent_is_unavailable_on_every_channel_form(message: str) -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+    prepared = _prepared(dispatcher, message)
+
+    unavailable = dispatcher.unavailability(
+        prepared,
+        ReplySurface.channel(
+            platform="telegram",
+            platform_display_name="Telegram",
+            channel_id="tg-assistant",
+        ),
+    )
+
+    assert unavailable is not None
+    assert unavailable.command == "/agent"
+    assert dispatcher.unavailability(prepared, ReplySurface.webui()) is None
 
 
 def test_dispatch_model_with_value_returns_set_model_action() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/model openai/gpt-5")
+    result = _prepared(dispatcher, "/model openai/gpt-5")
 
-    assert result == CommandAction(name="set_model", argument="openai/gpt-5")
+    assert (result.name, result.argument, result.execution_mode) == (
+        "model",
+        "openai/gpt-5",
+        "serialized",
+    )
 
 
 def test_dispatch_model_reset_returns_set_model_action() -> None:
     # The reset token is passed through verbatim; the accessor layer interprets it.
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/model reset")
+    result = _prepared(dispatcher, "/model reset")
 
-    assert result == CommandAction(name="set_model", argument="reset")
+    assert (result.name, result.argument) == ("model", "reset")
 
 
 def test_dispatch_model_without_argument_shows_identity_source() -> None:
@@ -492,12 +559,12 @@ def test_dispatch_model_without_argument_shows_identity_source() -> None:
         agent_resolver=cast(AgentResolver, _StubResolver(_make_agent(), model_source="agent")),
     )
 
-    result = dispatcher.dispatch("coder", "session-one", "/model")
+    result = _execute_sync(dispatcher, "/model")
 
-    assert isinstance(result, CommandHandled)
-    assert result.output == "transient"
-    assert result.data is None  # a transient card, never persisted and not an action
-    reply = result.reply or ""
+    assert result.feedback is not None
+    assert result.feedback.kind == "detail"
+    assert not result.facts
+    reply = result.feedback.text
     assert "openai/gpt-5.2" in reply
     assert "agent configuration" in reply
 
@@ -527,9 +594,9 @@ def _model_reply(
         if project_id is not None
         else None,
     )
-    result = dispatcher.dispatch("coder", "session-one", "/model", project_id)
-    assert isinstance(result, CommandHandled)
-    return result.reply or ""
+    result = _execute_sync(dispatcher, "/model", project_id=project_id)
+    assert result.feedback is not None
+    return result.feedback.text
 
 
 def test_dispatch_model_identity_global_default_origin() -> None:
@@ -588,12 +655,12 @@ def test_dispatch_model_without_services_degrades_to_placeholder() -> None:
     # A minimally constructed dispatcher (no resolver/projects) must not crash.
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/model")
+    result = _execute_sync(dispatcher, "/model")
 
-    assert isinstance(result, CommandHandled)
-    assert result.output == "transient"
-    assert STATUS_PLACEHOLDER in (result.reply or "")
-    assert "not configured" in (result.reply or "")
+    assert result.feedback is not None
+    assert result.feedback.kind == "detail"
+    assert STATUS_PLACEHOLDER in result.feedback.text
+    assert "not configured" in result.feedback.text
 
 
 def test_parse_agent_argument_splits_first_token_as_address() -> None:
@@ -651,61 +718,59 @@ def test_parse_handoff_argument_colon_in_free_text_does_not_capture_target() -> 
 def test_dispatch_compact_with_instruction_returns_action_with_argument() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/compact keep the API design")
+    result = _prepared(dispatcher, "/compact keep the API design")
 
-    assert result == CommandAction(name="compact", argument="keep the API design")
+    assert (result.name, result.argument) == ("compact", "keep the API design")
 
 
 def test_dispatch_compact_without_instruction_returns_action_without_argument() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/compact")
+    result = _prepared(dispatcher, "/compact")
 
-    assert result == CommandAction(name="compact", argument=None)
+    assert (result.name, result.argument) == ("compact", None)
 
 
 def test_dispatch_no_argument_command_with_trailing_text_is_not_a_command() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/status now")
-
-    assert isinstance(result, NotACommand)
+    assert dispatcher.prepare("/status now") is None
 
 
 @pytest.mark.parametrize(
-    ("message", "action_name"),
+    ("message", "command_name"),
     [
         ("/compact", "compact"),
-        ("/new", "new_session"),
-        ("/rename", "rename_session"),
+        ("/new", "new"),
+        ("/rename", "rename"),
         ("/continue", "continue"),
     ],
 )
-def test_dispatch_accessor_commands_return_actions(message: str, action_name: str) -> None:
+def test_prepare_serialized_commands(message: str, command_name: str) -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", message)
+    result = _prepared(dispatcher, message)
 
-    assert isinstance(result, CommandAction)
-    assert result.name == action_name
+    assert result.name == command_name
+    assert result.execution_mode == "serialized"
 
 
 def test_dispatch_rename_with_value_threads_title_argument() -> None:
     # The raw title travels verbatim; the accessor owns normalization and the write.
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/rename Release planning")
+    result = _prepared(dispatcher, "/rename Release planning")
 
-    assert result == CommandAction(name="rename_session", argument="Release planning")
+    assert (result.name, result.argument) == ("rename", "Release planning")
 
 
 def test_dispatch_rename_without_argument_clears_via_none() -> None:
     # No argument is the clear signal: it reaches the accessor as ``None``.
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/rename")
+    result = _prepared(dispatcher, "/rename")
 
-    assert result == CommandAction(name="rename_session", argument=None)
+    assert (result.name, result.argument) == ("rename", None)
 
 
 @pytest.mark.parametrize(
@@ -724,10 +789,10 @@ def test_dispatch_rename_without_argument_clears_via_none() -> None:
         ("hello", False),
     ],
 )
-def test_recognizes_matches_dispatch_recognition(message: str, expected: bool) -> None:
+def test_prepare_recognizes_the_command_catalog(message: str, expected: bool) -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    assert dispatcher.recognizes(message) is expected
+    assert (dispatcher.prepare(message) is not None) is expected
 
 
 @pytest.mark.asyncio
@@ -748,7 +813,7 @@ async def test_recognizes_does_not_execute_command_side_effects() -> None:
     await started.wait()
 
     dispatcher = CommandDispatcher(manager)
-    recognized = dispatcher.recognizes("/stop")
+    recognized = dispatcher.prepare("/stop") is not None
 
     assert recognized is True
     assert run.cancel_requested is False
@@ -760,31 +825,31 @@ async def test_recognizes_does_not_execute_command_side_effects() -> None:
 def test_dispatch_help_returns_current_command_list() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/help")
+    result = _execute_sync(dispatcher, "/help")
 
-    assert isinstance(result, CommandHandled)
-    assert result.reply is not None
-    assert "/compact - Compact the current session's context immediately." in result.reply
-    assert "/continue - Continue the interrupted work retained for this session." in result.reply
-    assert "/retry" not in result.reply
-    assert "$skill-name" in result.reply
+    assert result.feedback is not None
+    reply = result.feedback.text
+    assert "/compact - Compact the current session's context immediately." in reply
+    assert "/continue - Continue the interrupted work retained for this session." in reply
+    assert "/retry" not in reply
+    assert "$skill-name" in reply
 
 
 def test_dispatch_status_with_no_deps_returns_degraded_reply() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 
-    result = dispatcher.dispatch("coder", "session-one", "/status")
+    result = _execute_sync(dispatcher, "/status")
 
-    assert isinstance(result, CommandHandled)
-    assert result.reply is not None
-    assert result.reply != ""
-    assert f"Agent: {STATUS_PLACEHOLDER}" in result.reply
-    assert "Activity: idle" in result.reply
-    assert f"Run created at: {STATUS_PLACEHOLDER}" in result.reply
-    assert f"Run updated at: {STATUS_PLACEHOLDER}" in result.reply
-    assert f"Last request cache: {STATUS_PLACEHOLDER}" in result.reply
-    assert f"Session cache: {STATUS_PLACEHOLDER}" in result.reply
-    assert "Current time:" in result.reply
+    assert result.feedback is not None
+    reply = result.feedback.text
+    assert reply != ""
+    assert f"Agent: {STATUS_PLACEHOLDER}" in reply
+    assert "Activity: idle" in reply
+    assert f"Run created at: {STATUS_PLACEHOLDER}" in reply
+    assert f"Run updated at: {STATUS_PLACEHOLDER}" in reply
+    assert f"Last request cache: {STATUS_PLACEHOLDER}" in reply
+    assert f"Session cache: {STATUS_PLACEHOLDER}" in reply
+    assert "Current time:" in reply
 
 
 def test_dispatch_status_with_full_deps_returns_reply_with_expected_fields() -> None:
@@ -811,19 +876,19 @@ def test_dispatch_status_with_full_deps_returns_reply_with_expected_fields() -> 
         started_at=datetime(2026, 5, 18, 9, 0, tzinfo=UTC),
     )
 
-    result = dispatcher.dispatch("coder", "session-one", "/status")
+    result = _execute_sync(dispatcher, "/status")
 
-    assert isinstance(result, CommandHandled)
-    assert result.reply is not None
-    assert "Agent: Coder (openai/gpt-5.2)" in result.reply
-    assert "Model display name: GPT-5.2" in result.reply
-    assert "Activity: idle" in result.reply
-    assert f"Run created at: {STATUS_PLACEHOLDER}" in result.reply
-    assert f"Run updated at: {STATUS_PLACEHOLDER}" in result.reply
-    assert "Context usage: 1234 / 200000" in result.reply
-    assert "Last request cache: read 800 / 1234 (64.8% hit), write 100" in result.reply
-    assert "Session cache: read 800 / 1234 (64.8% hit), write 100, turns 1" in result.reply
-    assert "Current time:" in result.reply
+    assert result.feedback is not None
+    reply = result.feedback.text
+    assert "Agent: Coder (openai/gpt-5.2)" in reply
+    assert "Model display name: GPT-5.2" in reply
+    assert "Activity: idle" in reply
+    assert f"Run created at: {STATUS_PLACEHOLDER}" in reply
+    assert f"Run updated at: {STATUS_PLACEHOLDER}" in reply
+    assert "Context usage: 1234 / 200000" in reply
+    assert "Last request cache: read 800 / 1234 (64.8% hit), write 100" in reply
+    assert "Session cache: read 800 / 1234 (64.8% hit), write 100, turns 1" in reply
+    assert "Current time:" in reply
 
 
 @pytest.mark.asyncio
@@ -848,16 +913,15 @@ async def test_dispatch_status_reports_active_run_timestamps() -> None:
         models=cast(ModelRegistry, _StubModels(_make_model())),
     )
 
-    result = dispatcher.dispatch("coder", "session-one", "/status")
+    result = await _execute(dispatcher, "/status")
     expected_updated_at = run.updated_at
     release.set()
     await run.wait()
 
-    assert isinstance(result, CommandHandled)
-    assert result.reply is not None
-    assert "Activity: running" in result.reply
-    assert f"Run created at: {run.created_at}" in result.reply
-    assert f"Run updated at: {expected_updated_at}" in result.reply
+    assert result.feedback is not None
+    assert "Activity: running" in result.feedback.text
+    assert f"Run created at: {run.created_at}" in result.feedback.text
+    assert f"Run updated at: {expected_updated_at}" in result.feedback.text
 
 
 def test_dispatch_status_strips_pinned_suffix_before_registry_lookup() -> None:
@@ -876,11 +940,10 @@ def test_dispatch_status_strips_pinned_suffix_before_registry_lookup() -> None:
         started_at=datetime(2026, 5, 18, 9, 0, tzinfo=UTC),
     )
 
-    result = dispatcher.dispatch("coder", "session-one", "/status")
+    result = _execute_sync(dispatcher, "/status")
 
-    assert isinstance(result, CommandHandled)
-    assert result.reply is not None
-    assert "Model display name: GPT-5.2 Registry" in result.reply
+    assert result.feedback is not None
+    assert "Model display name: GPT-5.2 Registry" in result.feedback.text
     assert models.calls == [("openai", "gpt-5.2")]
 
 
@@ -897,15 +960,14 @@ def test_dispatch_status_in_project_session_resolves_config_agent() -> None:
         started_at=datetime(2026, 5, 18, 9, 0, tzinfo=UTC),
     )
 
-    result = dispatcher.dispatch("builder", "session-one", "/status", "vbot")
+    result = _execute_sync(dispatcher, "/status", agent_id="builder", project_id="vbot")
 
-    assert isinstance(result, CommandHandled)
-    assert result.reply is not None
+    assert result.feedback is not None
     # The project session resolves through the run-path seam instead of degrading
     # to an empty reply, and the resolver sees the session's project id.
     assert resolver.calls == [("vbot", "builder")]
-    assert "Agent: Coder (openai/gpt-5.2)" in result.reply
-    assert "Project: vBot (vbot)" in result.reply
+    assert "Agent: Coder (openai/gpt-5.2)" in result.feedback.text
+    assert "Project: vBot (vbot)" in result.feedback.text
 
 
 def test_dispatch_status_identity_session_shows_project_placeholder() -> None:
@@ -918,12 +980,11 @@ def test_dispatch_status_identity_session_shows_project_placeholder() -> None:
         projects=cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot"))),
     )
 
-    result = dispatcher.dispatch("coder", "session-one", "/status")
+    result = _execute_sync(dispatcher, "/status")
 
-    assert isinstance(result, CommandHandled)
-    assert result.reply is not None
+    assert result.feedback is not None
     assert resolver.calls == [(None, "coder")]
-    assert f"Project: {STATUS_PLACEHOLDER}" in result.reply
+    assert f"Project: {STATUS_PLACEHOLDER}" in result.feedback.text
 
 
 def test_resolve_status_project_label_renders_name_and_id() -> None:

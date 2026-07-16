@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -417,14 +416,7 @@ async def test_chat_methods_handle_continue_command_as_run_response(
         captured["reply_surface"] = reply_surface
         return run
 
-    if streaming:
-        monkeypatch.setattr(
-            chat_methods,
-            "_streaming_chat_loop",
-            lambda _state: SimpleNamespace(continue_run=fake_continue_run),
-        )
-    else:
-        monkeypatch.setattr(state.chat_loop, "continue_run", fake_continue_run)
+    monkeypatch.setattr(state.runtime.trigger_service, "continue_run", fake_continue_run)
     monkeypatch.setattr(chat_methods, "_bridge_run_to_event_bus", lambda _state, _run: None)
 
     response = await dispatch_rpc(

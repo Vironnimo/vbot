@@ -51,7 +51,7 @@ The repository at `cwd` remains outside the anchor and is never mutated. Changin
 - `project.add` validates that `cwd` exists, detects a source format when none is supplied, persists the Project, and returns the Project with its scan result.
 - `project.show` reloads Skills, invalidates relevant caches, rescans the repository, and returns current Project plus scan information.
 - `project.set` updates persisted fields. Changing `cwd` or `source_format` invalidates discovery/resolution caches because Team membership may change.
-- Override mutation requires the target Agent to be on the current Project Team. Model uses the shared usable-model check; temperature and thinking effort use canonical scalar validators; compaction policy uses the Settings normalizer. `OVERRIDE_FIELDS` in `core/projects/projects.py` is the authoritative supported-field set.
+- Override mutation requires the target Agent to be on the current Project Team. A Model value calls `AgentResolver.require_model_configured`, the same raising domain seam used by Chat `/model`; RPC maps `ModelConfigurationError` to `invalid_request`. Temperature and thinking effort use canonical scalar validators; compaction policy uses the Settings normalizer. `OVERRIDE_FIELDS` in `core/projects/projects.py` is the authoritative supported-field set.
 - Successful mutations publish the relevant `resource_changed` events so connected clients refresh Projects and Agents.
 
 ## Removal Coordination
@@ -68,7 +68,7 @@ Do not move these product-level guards into a low-level filesystem helper or cal
 
 Project configuration reuses canonical owners:
 
-- Project-tier model usability → `ModelConfigurationChecker` in `core/projects/resolver.py`, consuming the Models and Providers contracts.
+- Model usability → `ModelConfigurationChecker` in `core/projects/resolver.py`, consuming Models, Providers, and credential usability. `is_configured` remains the fallback/scan query; `require_configured` is the mutation guard and preserves a precise diagnostic when a known Model is pinned to a forbidden Connection.
 - Temperature and thinking effort → the validators exported by `core/settings/`.
 - Compaction policy → `core/settings/normalizers.py`.
 - Identifier safety and addresses → `core/projects/paths.py` and `core/projects/address.py`.

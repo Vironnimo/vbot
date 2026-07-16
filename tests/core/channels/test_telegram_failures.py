@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from core.chat.commands import CommandAction
+from core.chat.commands import CommandFeedback, CommandOutcome
 from tests.core.channels.telegram_test_support import (
     drain_chat_queue,
     make_adapter,
@@ -88,13 +88,17 @@ async def test_compact_command_exception_is_logged_with_context(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    compact_mock = AsyncMock(side_effect=RuntimeError("compact failed"))
-    command_dispatcher = make_command_dispatcher(result=CommandAction(name="compact"))
+    command_dispatcher = make_command_dispatcher(
+        result=CommandOutcome(
+            command="compact",
+            feedback=CommandFeedback(kind="notice", text="unused"),
+        )
+    )
+    command_dispatcher.execute.side_effect = RuntimeError("compact failed")
     adapter, _chat_sessions, trigger_mock, bot = make_adapter(
         tmp_path,
         monkeypatch,
         allowed_chat_ids=[12345],
-        compact_session=compact_mock,
         command_dispatcher=command_dispatcher,
     )
     caplog.set_level(logging.ERROR, logger="vbot.channels.engine")
@@ -110,13 +114,11 @@ async def test_compact_command_exception_is_logged_with_context(
     sent_text = bot.send_message.await_args.kwargs["text"]
     assert "compact failed" not in sent_text
     log_records = [
-        record
-        for record in caplog.records
-        if record.message.startswith("Channel command action failed")
+        record for record in caplog.records if record.message.startswith("Channel command failed")
     ]
     assert len(log_records) == 1
     assert log_records[0].exc_info is not None
-    assert "action=compact" in log_records[0].message
+    assert "command=compact" in log_records[0].message
     assert "ch-tg-assistant-12345" in log_records[0].message
     await adapter.stop()
 
@@ -127,13 +129,17 @@ async def test_continue_command_exception_is_logged_with_context(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    continue_mock = AsyncMock(side_effect=RuntimeError("continue failed"))
-    command_dispatcher = make_command_dispatcher(result=CommandAction(name="continue"))
+    command_dispatcher = make_command_dispatcher(
+        result=CommandOutcome(
+            command="continue",
+            feedback=CommandFeedback(kind="notice", text="unused"),
+        )
+    )
+    command_dispatcher.execute.side_effect = RuntimeError("continue failed")
     adapter, _chat_sessions, trigger_mock, bot = make_adapter(
         tmp_path,
         monkeypatch,
         allowed_chat_ids=[12345],
-        continue_run=continue_mock,
         command_dispatcher=command_dispatcher,
     )
     caplog.set_level(logging.ERROR, logger="vbot.channels.engine")
@@ -149,12 +155,10 @@ async def test_continue_command_exception_is_logged_with_context(
     sent_text = bot.send_message.await_args.kwargs["text"]
     assert "continue failed" not in sent_text
     log_records = [
-        record
-        for record in caplog.records
-        if record.message.startswith("Channel command action failed")
+        record for record in caplog.records if record.message.startswith("Channel command failed")
     ]
     assert len(log_records) == 1
     assert log_records[0].exc_info is not None
-    assert "action=continue" in log_records[0].message
+    assert "command=continue" in log_records[0].message
     assert "ch-tg-assistant-12345" in log_records[0].message
     await adapter.stop()

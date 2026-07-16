@@ -587,17 +587,6 @@ class Runtime:
             self._recall_backend_name,
         )
         self._chat_run_manager = ChatRunManager()
-        self._command_dispatcher = CommandDispatcher(
-            self._chat_run_manager,
-            agent_resolver=self._agent_resolver,
-            sessions=self._chat_sessions,
-            models=self._models,
-            started_at=self._started_at,
-            providers=self._providers,
-            projects=self._projects,
-            agents=self._agents,
-            local_context_windows_loader=self.local_context_windows,
-        )
         self.chat_runs = self._chat_run_manager
         if self._attachment_store is None:
             raise RuntimeError("Attachment store not available")
@@ -629,6 +618,20 @@ class Runtime:
             self._chat_run_manager,
             self,
             trigger_chat_loop=self._streaming_chat_loop,
+        )
+        self._command_dispatcher = CommandDispatcher(
+            self._chat_run_manager,
+            agent_resolver=self._agent_resolver,
+            sessions=self._chat_sessions,
+            models=self._models,
+            started_at=self._started_at,
+            providers=self._providers,
+            projects=self._projects,
+            agents=self._agents,
+            local_context_windows_loader=self.local_context_windows,
+            trigger_service=self._trigger_service,
+            reflection_service=self._reflection_service,
+            storage=self._storage,
         )
         self._channel_service = ChannelService(
             self._trigger_service,

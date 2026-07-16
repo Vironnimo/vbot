@@ -8,6 +8,7 @@ from core.chat import ChatError, ChatSessionError
 from core.model_tasks import TaskModelError
 from core.projects import (
     AgentResolutionError,
+    ModelConfigurationError,
     ProjectAlreadyExistsError,
     ProjectError,
     ProjectNotFoundError,
@@ -21,6 +22,7 @@ from server.rpc.errors import (
     RPC_ERROR_CHANNEL_CONFIG,
     RPC_ERROR_CHANNEL_NOT_FOUND,
     RPC_ERROR_DOMAIN,
+    RPC_ERROR_INVALID_REQUEST,
     RPC_ERROR_PROJECT_ALREADY_EXISTS,
     RPC_ERROR_PROJECT_NOT_FOUND,
     RPC_ERROR_RUN_NOT_FOUND,
@@ -48,6 +50,8 @@ def _map_expected_error(error: Exception) -> RpcError:
         return RpcError(RPC_ERROR_PROJECT_NOT_FOUND, str(error))
     if isinstance(error, ProjectAlreadyExistsError):
         return RpcError(RPC_ERROR_PROJECT_ALREADY_EXISTS, str(error))
+    if isinstance(error, ModelConfigurationError):
+        return RpcError(RPC_ERROR_INVALID_REQUEST, str(error))
     if isinstance(error, ProjectError):
         return RpcError(RPC_ERROR_DOMAIN, str(error))
     if isinstance(
