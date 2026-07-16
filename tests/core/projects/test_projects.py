@@ -73,6 +73,11 @@ def test_build_project_rejects_non_string_allowed_tool(tmp_path: Path) -> None:
         build_project("vbot", "vBot", tmp_path, allowed_tools=["read", 7])  # type: ignore[list-item]
 
 
+def test_build_project_rejects_tool_wildcard(tmp_path: Path) -> None:
+    with pytest.raises(ProjectError, match="wildcard"):
+        build_project("vbot", "vBot", tmp_path, allowed_tools=["read", "*"])
+
+
 def test_build_project_rejects_non_list_skills_bundled(tmp_path: Path) -> None:
     with pytest.raises(ProjectError):
         build_project("vbot", "vBot", tmp_path, skills_bundled_enabled="frontend")  # type: ignore[arg-type]

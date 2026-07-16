@@ -229,6 +229,7 @@ export const FINDING_TYPE_SLUG_COLLISION = 'slug_collision';
 export const FINDING_TYPE_UNSLUGIFIABLE_NAME = 'unslugifiable_name';
 export const FINDING_TYPE_BAD_MODEL = 'bad_model';
 export const FINDING_TYPE_ORPHAN = 'orphan';
+export const FINDING_TYPE_UNAVAILABLE_TOOL = 'unavailable_tool';
 
 // Stable display order for grouped findings, so the report always lists the
 // same finding kinds in the same order regardless of server ordering.
@@ -237,6 +238,7 @@ const FINDING_TYPES = Object.freeze([
   FINDING_TYPE_UNSLUGIFIABLE_NAME,
   FINDING_TYPE_BAD_MODEL,
   FINDING_TYPE_ORPHAN,
+  FINDING_TYPE_UNAVAILABLE_TOOL,
 ]);
 
 // The mutable fields a manage form can change through project.set. cwd is
@@ -458,6 +460,28 @@ export function buildToolToggleList({ catalog = [], allowedTools = [] } = {}) {
       ready: isObject ? tool.ready !== false : true,
       readiness_hint: isObject ? (tool.readiness_hint ?? null) : null,
       extension: isObject ? (tool.extension ?? null) : null,
+    });
+  }
+
+  // Keep persisted entries that disappeared from the live catalog visible and
+  // removable. This is common when an Extension is temporarily disabled: the
+  // backend deliberately preserves the permission, reports it as unavailable,
+  // and only rejects *new* unknown grants. A stale row therefore stays on and
+  // gets the shared not-ready treatment until the tool returns or the user turns
+  // it off. Project-excluded names are included only through this recovery path;
+  // they can never be newly selected from the catalog.
+  for (const name of enabled) {
+    if (byName.has(name)) {
+      continue;
+    }
+    byName.set(name, {
+      name,
+      description: '',
+      enabled: true,
+      ready: false,
+      readiness_hint: null,
+      extension: null,
+      registered: false,
     });
   }
   return Array.from(byName.values()).sort((left, right) =>

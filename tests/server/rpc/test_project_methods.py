@@ -106,6 +106,17 @@ class _FakeCredentials:
         return self.has_credentials(provider_id, connection_id)
 
 
+class _FakeTools:
+    """Minimal live Tool Registry catalog for Project whitelist tests."""
+
+    def __init__(self, names: set[str]) -> None:
+        self.names = names
+
+    def list_tools(self, *, include_session_scoped: bool = True) -> list[SimpleNamespace]:
+        del include_session_scoped
+        return [SimpleNamespace(name=name) for name in sorted(self.names)]
+
+
 def _openai_configured() -> ModelConfigurationChecker:
     return ModelConfigurationChecker(
         _FakeModels({("openai", "gpt-5.2"), ("openai", "gpt-mini")}),
@@ -178,6 +189,15 @@ def _make_state(tmp_path: Path, *, cron_jobs: list | None = None) -> SimpleNames
         # ``::connection`` suffix (never in these tests), but expose it so a plain
         # model override never trips an AttributeError.
         models=_FakeModels({("openai", "gpt-5.2"), ("openai", "gpt-mini")}),
+        # Mirrors tool.list's registered normal catalog. ``memory`` and
+        # ``skill_manage`` are registered but intentionally not Project-eligible.
+        tools=_FakeTools(
+            {
+                *PROJECT_DEFAULT_ALLOWED_TOOLS,
+                "memory",
+                "skill_manage",
+            }
+        ),
     )
     return SimpleNamespace(runtime=runtime, chat_runs=chat_runs)
 
@@ -606,6 +626,97 @@ def test_set_rejects_non_string_tool_entry(tmp_path: Path) -> None:
         _set_project(state, {"project_id": "vbot", "allowed_tools": ["read", 7]})
 
     assert exc_info.value.code == "invalid_request"
+
+
+def test_set_rejects_tool_wildcard(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    _add_project(state, {"cwd": str(_make_repo(tmp_path, "vbot")), "display_name": "vBot"})
+
+    with pytest.raises(RpcError, match="wildcard") as exc_info:
+        _set_project(state, {"project_id": "vbot", "allowed_tools": ["read", "*"]})
+
+    assert exc_info.value.code == "invalid_request"
+
+
+def test_set_rejects_new_unregistered_project_tool(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    _add_project(state, {"cwd": str(_make_repo(tmp_path, "vbot")), "display_name": "vBot"})
+
+    with pytest.raises(RpcError, match="not currently registered") as exc_info:
+        _set_project(
+            state,
+            {"project_id": "vbot", "allowed_tools": ["read", "missing_extension_tool"]},
+        )
+
+    assert exc_info.value.code == "invalid_request"
+
+
+def test_set_rejects_registered_but_project_excluded_tool(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    _add_project(state, {"cwd": str(_make_repo(tmp_path, "vbot")), "display_name": "vBot"})
+
+    with pytest.raises(RpcError, match="memory") as exc_info:
+        _set_project(state, {"project_id": "vbot", "allowed_tools": ["read", "memory"]})
+
+    assert exc_info.value.code == "invalid_request"
+
+
+def test_set_accepts_registered_extension_tool(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    state.runtime.tools.names.add("extension_tool")
+    _add_project(state, {"cwd": str(_make_repo(tmp_path, "vbot")), "display_name": "vBot"})
+
+    result = _set_project(
+        state,
+        {"project_id": "vbot", "allowed_tools": ["read", "extension_tool"]},
+    )
+
+    assert result["project"]["allowed_tools"] == ["read", "extension_tool"]
+
+
+def test_set_preserves_existing_unavailable_tool_while_editing_known_tools(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    _add_project(state, {"cwd": str(_make_repo(tmp_path, "vbot")), "display_name": "vBot"})
+    state.runtime.projects.update("vbot", allowed_tools=["read", "disabled_extension_tool"])
+
+    result = _set_project(
+        state,
+        {
+            "project_id": "vbot",
+            "allowed_tools": ["read", "grep", "disabled_extension_tool"],
+        },
+    )
+
+    assert result["project"]["allowed_tools"] == [
+        "read",
+        "grep",
+        "disabled_extension_tool",
+    ]
+
+
+def test_show_reports_persisted_unavailable_tool_without_rejecting_project(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    _add_project(state, {"cwd": str(_make_repo(tmp_path, "vbot")), "display_name": "vBot"})
+    state.runtime.projects.update("vbot", allowed_tools=["read", "disabled_extension_tool"])
+
+    result = _show_project(state, {"project_id": "vbot"})
+
+    assert result["project"]["allowed_tools"] == ["read", "disabled_extension_tool"]
+    assert result["scan"]["report"] == {
+        "clean": False,
+        "findings": [
+            {
+                "type": "unavailable_tool",
+                "detail": (
+                    "Tool Whitelist entry 'disabled_extension_tool' is not a currently "
+                    "registered Project tool. It remains stored but grants no access "
+                    "unless the tool becomes available again."
+                ),
+                "agent_id": "",
+                "source_path": None,
+            }
+        ],
+    }
 
 
 def test_scan_preview_includes_project_skill_pool(tmp_path: Path) -> None:

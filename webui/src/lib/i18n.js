@@ -510,6 +510,8 @@ export const englishCatalog = Object.freeze({
   'projects.manage.resetDefaults': 'Reset to defaults',
   'projects.manage.toggleTool': 'Toggle tool {name}',
   'projects.manage.toolsEmpty': 'No tools available',
+  'projects.manage.unavailableToolHint':
+    'This stored Tool Whitelist entry is not currently registered for Projects. Turn it off to remove the permission, or leave it on so the permission returns with the Tool.',
   'projects.manage.allowedSkills': 'Skill whitelist',
   'projects.manage.allowedSkillsHelp':
     'Project skills are active by default; bundled and global skills are opt-in.',
@@ -594,6 +596,7 @@ export const englishCatalog = Object.freeze({
   'projects.report.group.unslugifiable_name': 'Unusable agent names',
   'projects.report.group.bad_model': 'Unconfigured models',
   'projects.report.group.orphan': 'Orphaned pointers',
+  'projects.report.group.unavailable_tool': 'Unavailable tools',
   'projects.report.finding.agent': 'Agent {agentId}',
   'projects.report.finding.source': 'Source: {source}',
   'projects.rePoint.title': 'Repository not found',

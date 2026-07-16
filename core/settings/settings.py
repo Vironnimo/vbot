@@ -43,6 +43,12 @@ PROJECT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 # core.projects imports from core.settings.
 PROJECT_SOURCE_FORMATS: tuple[str, ...] = ("opencode", "claude")
 DEFAULT_PROJECT_SOURCE_FORMAT = "opencode"
+# Tool allowlists generally use ``*`` as the all-tools wildcard, but a Project
+# Tool Whitelist is a security ceiling assembled from explicit tool names. Keep
+# the spelling in the low-level settings contract so both raw ``project.json``
+# validation and the Project entity reject the same forbidden value without an
+# import cycle through ``core.tools``.
+PROJECT_TOOL_ALLOWLIST_WILDCARD = "*"
 MIN_TEMPERATURE = 0.0
 MAX_TEMPERATURE = 2.0
 # Appearance chat-width preference (the WebUI chat reading-column width). The

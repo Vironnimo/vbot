@@ -178,6 +178,26 @@ def test_validate_project_data_accepts_empty_allowed_tools() -> None:
     assert validate_project_data(data) == []
 
 
+def test_validate_project_data_rejects_tool_wildcard() -> None:
+    data = _valid_project_data()
+    data["allowed_tools"] = ["read", "*"]
+
+    assert (
+        "error",
+        "$.allowed_tools[1]",
+        "the all-tools wildcard '*' is not allowed in a Project Tool Whitelist",
+    ) in _diagnostics(data)
+
+
+def test_validate_project_data_accepts_unavailable_tool_name() -> None:
+    # Registry membership is runtime state. A disabled Extension must not make
+    # its persisted Project unloadable; project.show reports it non-fatally.
+    data = _valid_project_data()
+    data["allowed_tools"] = ["read", "disabled_extension_tool"]
+
+    assert validate_project_data(data) == []
+
+
 def test_validate_project_data_rejects_non_list_allowed_tools() -> None:
     data = _valid_project_data()
     data["allowed_tools"] = "read"

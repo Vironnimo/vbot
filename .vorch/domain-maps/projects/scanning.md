@@ -36,6 +36,7 @@ Team construction and scan reporting are deterministic. Candidates are ordered b
 - `SLUG_COLLISION`: multiple source files normalize to the same Agent id.
 - `UNSLUGIFIABLE_NAME`: a source name cannot produce a valid Agent id.
 - `ORPHAN`: persisted per-Agent state references an Agent no longer present in the selected repository source.
+- `UNAVAILABLE_TOOL`: a persisted Project Tool Whitelist entry is not currently a registered Project tool. `server/rpc/project_methods.py` appends this runtime-owned finding through `ScanReport.with_tool_findings`; the repository scanner does not consult the Tool Registry, and the permission remains stored so a disabled Extension can regain it.
 
 Do not silently resolve collisions according to filesystem enumeration order. Preserve stable detector/file ordering and expose findings so callers can explain why a candidate was excluded or degraded.
 
