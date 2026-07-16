@@ -11,7 +11,6 @@ import pytest
 
 from core.chat import (
     ChatError,
-    ChatLoop,
     ChatMessage,
 )
 from core.chat.messages import HISTORY_COMPACTION_GUIDANCE
@@ -39,6 +38,7 @@ from tests.core.chat.chat_loop_support import (
     StubModels,
     StubRuntime,
     StubStorage,
+    build_chat_loop,
     persisted_roles,
 )
 
@@ -72,7 +72,7 @@ async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Pa
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
-    assistant = await ChatLoop(runtime).send("coder", "Weather?", session_id="session-one")
+    assistant = await build_chat_loop(runtime).send("coder", "Weather?", session_id="session-one")
 
     persisted = [
         message.to_dict() for message in runtime.chat_sessions.get("coder", "session-one").load()
@@ -228,7 +228,7 @@ async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
     register_history_tool(runtime.tools, runtime.chat_sessions)
     compaction_service = SingleCheckpointCompactionService()
 
-    assistant = await ChatLoop(
+    assistant = await build_chat_loop(
         runtime,
         compaction_service=cast(Any, compaction_service),
     ).send("coder", "Weather?", session_id="session-one")
@@ -279,7 +279,7 @@ async def test_disallowed_tool_call_is_blocked_and_persisted_before_error(tmp_pa
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
-    await ChatLoop(runtime).send("coder", "Weather?", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Weather?", session_id="session-one")
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     assert persisted_roles(messages) == ["user", "assistant", "tool", "assistant"]
@@ -325,7 +325,9 @@ async def test_registered_search_tools_execute_and_persist_envelopes(
     register_grep_tool(tools)
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
-    assistant = await ChatLoop(runtime).send("coder", "Search files", session_id="session-one")
+    assistant = await build_chat_loop(runtime).send(
+        "coder", "Search files", session_id="session-one"
+    )
 
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
@@ -379,7 +381,7 @@ async def test_registered_search_tools_respect_agent_allowlist(tmp_path: Path) -
     register_grep_tool(tools)
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
-    await ChatLoop(runtime).send("coder", "Search files", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Search files", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
@@ -427,7 +429,7 @@ async def test_same_turn_tool_calls_run_concurrently_and_persist_in_call_order(
     tools.register("slow", "Slow tool.", {"type": "object"}, slow_handler)
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
-    assistant = await ChatLoop(runtime).send("coder", "Run tools", session_id="session-one")
+    assistant = await build_chat_loop(runtime).send("coder", "Run tools", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
@@ -484,7 +486,7 @@ async def test_same_tool_sibling_calls_run_in_parallel(tmp_path: Path) -> None:
     tools.register("same", "Same tool.", {"type": "object"}, same_handler)
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
-    await ChatLoop(runtime).send("coder", "Run tools", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Run tools", session_id="session-one")
 
     assert max_active_count == 2
 
@@ -509,7 +511,7 @@ async def test_tool_handler_exception_continues_with_failure_envelope(tmp_path: 
     tools.register("explode", "Explode.", {"type": "object"}, failing_handler)
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
-    assistant = await ChatLoop(runtime).send("coder", "Run tool", session_id="session-one")
+    assistant = await build_chat_loop(runtime).send("coder", "Run tool", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
@@ -553,7 +555,9 @@ async def test_tool_non_envelope_result_is_failure_envelope(tmp_path: Path) -> N
         tools=tools,
     )
 
-    assistant = await ChatLoop(runtime).send("coder", "Run invalid", session_id="session-one")
+    assistant = await build_chat_loop(runtime).send(
+        "coder", "Run invalid", session_id="session-one"
+    )
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     failure = tool_failure(
@@ -596,7 +600,7 @@ async def test_max_tool_iteration_stop_raises_chat_error(tmp_path: Path) -> None
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
     with pytest.raises(ChatError, match="maximum tool iterations"):
-        await ChatLoop(runtime, max_tool_iterations=0).send(
+        await build_chat_loop(runtime, max_tool_iterations=0).send(
             "coder",
             "Weather?",
             session_id="session-one",
@@ -648,7 +652,7 @@ async def test_tool_iteration_limit_is_scoped_to_current_run(tmp_path: Path) -> 
         lambda _context, _arguments: tool_success({"ok": True}),
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
-    chat_loop = ChatLoop(runtime, max_tool_iterations=2)
+    chat_loop = build_chat_loop(runtime, max_tool_iterations=2)
 
     first = await chat_loop.send("coder", "Weather batch one", session_id="session-one")
     second = await chat_loop.send("coder", "Weather batch two", session_id="session-one")

@@ -8,6 +8,7 @@ import re
 import time
 from collections.abc import Callable, Sequence
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -43,7 +44,6 @@ from core.tools.skill import load_skill_content
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from core.runtime.interfaces import RuntimeServices
     from core.skills.skills import SkillRegistry
 
 _LOGGER = get_logger("chat")
@@ -62,6 +62,26 @@ SKILL_INLINE_TRIGGER_PATTERN = re.compile(rf"\$({SKILL_NAME_CHARSET_FRAGMENT})")
 _VISITING_PATH_TOOLS = frozenset(
     {READ_TOOL_NAME, WRITE_TOOL_NAME, EDIT_TOOL_NAME, GREP_TOOL_NAME, GLOB_TOOL_NAME}
 )
+
+
+@dataclass(frozen=True)
+class ToolDispatchContext:
+    """Run-local Tool execution inputs resolved by the Chat loop."""
+
+    registry: ToolRegistry
+    extension_registry: ExtensionRegistry | None
+    agent: Any
+    session: ChatSession
+    run: Run
+    nesting_depth: int
+    app_root: Path
+    data_root: Path
+    project_cwd: Path | None = None
+    project_id: str | None = None
+    skill_project_id: str | None = None
+    tool_restriction: Sequence[str] | None = None
+    base_allowed_tools: Sequence[str] | None = None
+    session_tool_grants: Sequence[str] = ()
 
 
 def _visiting_candidate_paths(tool_calls: Sequence[ToolCall]) -> list[Path]:
@@ -301,29 +321,21 @@ class _EmittingToolRegistry(ToolRegistry):
 
 
 async def _dispatch_tool_calls(
-    runtime: RuntimeServices,
-    agent: Any,
+    context: ToolDispatchContext,
     tool_calls: list[ToolCall],
-    session: ChatSession,
-    run: Run,
-    *,
-    nesting_depth: int,
-    project_cwd: Path | None = None,
-    project_id: str | None = None,
-    skill_project_id: str | None = None,
-    tool_restriction: Sequence[str] | None = None,
-    base_allowed_tools: Sequence[str] | None = None,
-    session_tool_grants: Sequence[str] = (),
 ) -> tuple[list[ChatMessage], list[JsonObject]]:
+    run = context.run
+    session = context.session
+    agent = context.agent
     run.raise_if_cancelled()
     emitting_registry = _EmittingToolRegistry(
-        runtime.tools,
+        context.registry,
         run,
-        runtime.extensions,
+        context.extension_registry,
         note_hook=session.add_note,
     )
     executor = ToolExecutor(emitting_registry)
-    workspace = _agent_workspace(agent, Path(runtime.storage.data_dir))
+    workspace = _agent_workspace(agent, context.data_root)
     results = await executor.execute_many(
         [
             ScheduledToolCall(
@@ -338,22 +350,22 @@ async def _dispatch_tool_calls(
             session_id=run.session_id,
             run_id=run.id,
             workspace=workspace,
-            app_root=Path(runtime.system_prompts.app_dir),
-            data_root=Path(runtime.storage.data_dir),
-            cwd=_resolve_tool_cwd(project_cwd, workspace),
+            app_root=context.app_root,
+            data_root=context.data_root,
+            cwd=_resolve_tool_cwd(context.project_cwd, workspace),
             # The owning run's project rides onto every ToolContext so the
             # subagent tool can inherit it; None keeps the identity path.
-            project_id=project_id,
+            project_id=context.project_id,
             # The run's effective skill project (rooted-aware) so the skill tool
             # resolves the same pool the run's catalog advertises.
-            skill_project_id=skill_project_id,
+            skill_project_id=context.skill_project_id,
             allowed_tools=_dispatch_allowed_tools(
                 agent,
-                runtime.tools,
-                tool_restriction,
-                base_allowed_tools=base_allowed_tools,
+                context.registry,
+                context.tool_restriction,
+                base_allowed_tools=context.base_allowed_tools,
             ),
-            session_tool_grants=session_tool_grants,
+            session_tool_grants=context.session_tool_grants,
             allowed_skills=getattr(agent, "allowed_skills", ["*"]),
             emit_hook=lambda event_type, payload: _emit_tool_context_event(
                 run,
@@ -367,7 +379,7 @@ async def _dispatch_tool_calls(
             tool_call_cancel_check=lambda tool_call_id: run.tool_call_cancelled(tool_call_id),
             note_hook=session.add_note,
             skill_activation_hook=session.register_skill_activation,
-            nesting_depth=nesting_depth,
+            nesting_depth=context.nesting_depth,
         ),
     )
     tool_messages: list[ChatMessage] = []

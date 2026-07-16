@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
@@ -130,6 +130,7 @@ from core.chat.streaming import (
     _is_model_fallback_trigger as _is_model_fallback_trigger,
 )
 from core.chat.tool_dispatch import (
+    ToolDispatchContext,
     _activate_triggered_skills,
     _dispatch_tool_calls,
     _project_containing_path,
@@ -167,8 +168,20 @@ from core.utils.logging import get_logger
 if TYPE_CHECKING:
     from core.chat.block_resolver import ContentBlockResolver
     from core.compaction import CompactionService, CompactionSettings
-    from core.runtime.interfaces import RuntimeServices
-    from core.skills.skills import SkillRegistry
+    from core.extensions import ExtensionRegistry
+    from core.models.models import ModelRegistry
+    from core.projects import AgentResolver, ProjectStore
+    from core.prompts import SystemPromptManager
+    from core.providers.adapter import ProviderAdapter
+    from core.providers.providers import ProviderRegistry
+    from core.runs import ChatRunManager
+    from core.runtime.interfaces import ProviderCredentialResolverProtocol
+    from core.sessions import ChatSessionManager
+    from core.skills.skills import SkillMetadata, SkillRegistry
+    from core.storage import StorageManager
+    from core.tools.file_state import FileReadState
+    from core.tools.process_manager import ProcessManager
+    from core.tools.tools import ToolRegistry
 
 _LOGGER = get_logger("chat")
 
@@ -192,6 +205,84 @@ class _RequestState:
     tools: list[JsonObject]
     allowed_tool_names: tuple[str, ...]
     session_tool_grants: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ChatLoopDependencies:
+    """Explicit collaborators required by the Chat domain.
+
+    Runtime owns construction of this contract. Chat owns its shape, so adding a
+    Runtime service does not silently make that service available inside the
+    Agentic Loop. Callbacks keep intentionally live reload seams and the
+    bootstrap-late System Prompt manager explicit without reopening Runtime.
+    """
+
+    agent_resolver: AgentResolver
+    projects: ProjectStore
+    providers: ProviderRegistry
+    models: ModelRegistry
+    provider_credentials: ProviderCredentialResolverProtocol
+    sessions: ChatSessionManager
+    run_manager: ChatRunManager
+    tools: ToolRegistry
+    process_manager: ProcessManager
+    file_read_state: FileReadState
+    storage: StorageManager
+    get_extension_registry: Callable[[], ExtensionRegistry | None]
+    get_system_prompts: Callable[[], SystemPromptManager]
+    get_adapter: Callable[[str, str], ProviderAdapter]
+    resolve_skills: Callable[[str | None, str | None], SkillRegistry]
+    list_project_skills: Callable[[str], list[SkillMetadata]]
+    get_local_context_windows: Callable[[], Mapping[str, Any]]
+
+
+@dataclass(frozen=True)
+class _RunRequest:
+    """Immutable input captured by one admitted Run executor."""
+
+    content: str | list[ContentBlock] | None
+    internal: bool = False
+    explicit_continue: bool = False
+    input_origin: InputOrigin | None = None
+    sender: MessageSender | None = None
+    reply_surface: ReplySurface | None = None
+    tool_restriction: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True)
+class _ModelTarget:
+    """One resolved Provider target used for Model steps in a Run."""
+
+    provider_id: str
+    connection_id: str
+    model_id: str
+    adapter: ProviderAdapter
+    replay_policy: ReasoningReplayPolicy
+    wire_media_types: frozenset[str]
+    chunk_timeout_seconds: float | None
+
+
+@dataclass
+class _RunExecutionContext:
+    """Resolved, Run-local state shared by progression, Tools, and Compaction."""
+
+    run: Run
+    request: _RunRequest
+    session: ChatSession
+    agent: Any
+    primary_target: _ModelTarget
+    project_id: str | None
+    project_cwd: Path | None
+    project_prompt_context: ProjectPromptContext | None
+    skill_project_id: str | None
+    skill_registry: SkillRegistry
+    skill_catalog: PinnedSkillCatalog
+    prior_continuation: ContinuationState | None
+    continuation_tracker: ContinuationTracker | None
+    continuation_reminder: str | None
+    request_state: _RequestState | None = None
+    visiting_projects: list[Any] | None = None
+    visited_projects_this_run: set[str] = field(default_factory=set)
 
 
 # Skill names the session has already surfaced to the model: the pinned catalog at
@@ -350,7 +441,7 @@ class ChatLoop:
 
     def __init__(
         self,
-        runtime: RuntimeServices,
+        dependencies: ChatLoopDependencies,
         *,
         max_tool_iterations: int = MAX_TOOL_ITERATIONS,
         streaming: bool = False,
@@ -361,7 +452,7 @@ class ChatLoop:
     ) -> None:
         if max_tool_iterations < 0:
             raise ChatError("max tool iterations must not be negative")
-        self._runtime = runtime
+        self._dependencies = dependencies
         self._max_tool_iterations = max_tool_iterations
         self._streaming = streaming
         self._attachment_resolver = attachment_resolver
@@ -378,7 +469,7 @@ class ChatLoop:
         differs.
         """
         child = ChatLoop(
-            self._runtime,
+            self._dependencies,
             max_tool_iterations=self._max_tool_iterations,
             streaming=self._streaming,
             attachment_resolver=self._attachment_resolver,
@@ -404,7 +495,8 @@ class ChatLoop:
         project anchor, tool cwd = repo). The public way for other domains
         (sub-agents) to hand the run manager an executor.
         """
-        return lambda run: self._execute_run(run, content, reply_surface=reply_surface)
+        request = _RunRequest(content=content, reply_surface=reply_surface)
+        return lambda run: self._execute_run(run, request)
 
     async def send(
         self,
@@ -486,25 +578,25 @@ class ChatLoop:
         ``project_id`` scopes the session/run to a project anchor; ``None`` keeps
         today's identity behavior.
         """
-        agent = self._runtime.agent_resolver.resolve_agent(project_id, agent_id)
+        agent = self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
         working_project_id = resolve_working_project_id(project_id, agent)
-        provider_id, _connection_id = _resolve_agent_connection(self._runtime, agent)
-        _ensure_provider_exists(self._runtime.providers, provider_id)
+        provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
+        _ensure_provider_exists(self._dependencies.providers, provider_id)
         session = self._get_session(
             agent_id, session_id, create_missing=False, project_id=project_id
         )
-        manager = self._runtime.chat_run_manager
+        manager = self._dependencies.run_manager
+        request = _RunRequest(
+            content=content,
+            internal=internal,
+            input_origin=input_origin,
+            sender=sender,
+            reply_surface=reply_surface,
+        )
         return await manager.enqueue(
             agent_id=agent_id,
             session_id=session.id,
-            executor=lambda run: self._execute_run(
-                run,
-                content,
-                internal=internal,
-                input_origin=input_origin,
-                sender=sender,
-                reply_surface=reply_surface,
-            ),
+            executor=lambda run: self._execute_run(run, request),
             display_content=_display_content_preview(content),
             internal=internal,
             project_id=project_id,
@@ -522,9 +614,9 @@ class ChatLoop:
         project_id: str | None = None,
     ) -> tuple[str, RunExecutor, str]:
         """Build replacement data for a queued run without mutating queue state."""
-        agent = self._runtime.agent_resolver.resolve_agent(project_id, agent_id)
-        provider_id, _connection_id = _resolve_agent_connection(self._runtime, agent)
-        _ensure_provider_exists(self._runtime.providers, provider_id)
+        agent = self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
+        provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
+        _ensure_provider_exists(self._dependencies.providers, provider_id)
         session = self._get_session(
             agent_id, session_id, create_missing=False, project_id=project_id
         )
@@ -532,9 +624,11 @@ class ChatLoop:
             session.id,
             lambda run: self._execute_run(
                 run,
-                content,
-                input_origin=input_origin,
-                reply_surface=reply_surface,
+                _RunRequest(
+                    content=content,
+                    input_origin=input_origin,
+                    reply_surface=reply_surface,
+                ),
             ),
             _display_content_preview(content),
         )
@@ -551,7 +645,7 @@ class ChatLoop:
         session = self._get_session(
             agent_id, session_id, create_missing=False, project_id=project_id
         )
-        active = self._runtime.chat_run_manager.active_run(
+        active = self._dependencies.run_manager.active_run(
             agent_id=agent_id,
             session_id=session_id,
             project_id=project_id,
@@ -567,17 +661,19 @@ class ChatLoop:
             raise ChatSessionError("no interrupted work is available to continue")
         if summary["can_continue"] is not True:
             raise ChatSessionError("cancelled work requires a new user message to continue")
-        manager = self._runtime.chat_run_manager
-        agent = self._runtime.agent_resolver.resolve_agent(project_id, agent_id)
+        manager = self._dependencies.run_manager
+        agent = self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
         working_project_id = resolve_working_project_id(project_id, agent)
         return await manager.start(
             agent_id=agent_id,
             session_id=session.id,
             executor=lambda run: self._execute_run(
                 run,
-                content=None,
-                explicit_continue=True,
-                reply_surface=reply_surface,
+                _RunRequest(
+                    content=None,
+                    explicit_continue=True,
+                    reply_surface=reply_surface,
+                ),
             ),
             project_id=project_id,
             working_project_id=working_project_id,
@@ -590,7 +686,7 @@ class ChatLoop:
         session = self._get_session(
             agent_id, session_id, create_missing=False, project_id=project_id
         )
-        active = self._runtime.chat_run_manager.active_run(
+        active = self._dependencies.run_manager.active_run(
             agent_id=agent_id,
             session_id=session_id,
             project_id=project_id,
@@ -606,7 +702,7 @@ class ChatLoop:
     ) -> None:
         """Explicitly abandon one unresolved checkpoint."""
         if (
-            self._runtime.chat_run_manager.active_run(
+            self._dependencies.run_manager.active_run(
                 agent_id=agent_id,
                 session_id=session_id,
                 project_id=project_id,
@@ -640,7 +736,7 @@ class ChatLoop:
         if self._compaction_service is None:
             return "Compaction is not available."
 
-        manager = self._runtime.chat_run_manager
+        manager = self._dependencies.run_manager
         if (
             manager.active_run(agent_id=agent_id, session_id=session_id, project_id=project_id)
             is not None
@@ -651,7 +747,7 @@ class ChatLoop:
         # chat compacts its project session and the project agent, an identity chat
         # (``project_id=None``) the identity session — both through the one
         # resolver/session seam.
-        agent = self._runtime.agent_resolver.resolve_agent(project_id, agent_id)
+        agent = self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
         working_project_id = resolve_working_project_id(project_id, agent)
         session = self._get_session(
             agent_id, session_id, create_missing=False, project_id=project_id
@@ -665,8 +761,8 @@ class ChatLoop:
         summary_adapter: Any | None = None
         try:
             self._resolve_project_cwd(working_project_id)
-            provider_id, connection_id = _resolve_agent_connection(self._runtime, agent)
-            adapter = self._runtime.get_adapter(provider_id, connection_id)
+            provider_id, connection_id = _resolve_agent_connection(self._dependencies, agent)
+            adapter = self._dependencies.get_adapter(provider_id, connection_id)
             _model_provider_id, model_id = _split_agent_model(agent.model)
             summary_adapter, summary_model_id = self._resolve_summary_adapter(
                 agent,
@@ -674,7 +770,7 @@ class ChatLoop:
                 model_id,
                 settings,
             )
-            prompt_project = resolve_prompt_project(self._runtime.projects, working_project_id)
+            prompt_project = resolve_prompt_project(self._dependencies.projects, working_project_id)
             prompt_context = (
                 ProjectPromptContext.from_project(prompt_project.cwd, prompt_project.auto_load)
                 if prompt_project is not None
@@ -683,7 +779,7 @@ class ChatLoop:
             skill_project_id, identity_agent_id = resolve_skill_scope(
                 project_id, prompt_project, agent_id
             )
-            skill_registry = self._runtime.skills_for(skill_project_id, identity_agent_id)
+            skill_registry = self._dependencies.resolve_skills(skill_project_id, identity_agent_id)
             request_state = await self._build_request_state(
                 agent,
                 session,
@@ -701,7 +797,7 @@ class ChatLoop:
                 agent=agent,
                 summary_adapter=summary_adapter,
                 summary_model_id=summary_model_id,
-                storage=self._runtime.storage,
+                storage=self._dependencies.storage,
                 settings=settings,
                 instruction=instruction,
                 request_messages=request_state.messages,
@@ -739,26 +835,26 @@ class ChatLoop:
         project_id: str | None = None,
         tool_restriction: Sequence[str] | None = None,
     ) -> Run:
-        agent = self._runtime.agent_resolver.resolve_agent(project_id, agent_id)
+        agent = self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
         working_project_id = resolve_working_project_id(project_id, agent)
-        provider_id, _connection_id = _resolve_agent_connection(self._runtime, agent)
-        _ensure_provider_exists(self._runtime.providers, provider_id)
+        provider_id, _connection_id = _resolve_agent_connection(self._dependencies, agent)
+        _ensure_provider_exists(self._dependencies.providers, provider_id)
         session = self._get_session(
             agent_id, session_id, create_missing=create_missing, project_id=project_id
         )
-        manager = self._runtime.chat_run_manager
+        manager = self._dependencies.run_manager
+        request = _RunRequest(
+            content=content,
+            internal=internal,
+            input_origin=input_origin,
+            sender=sender,
+            reply_surface=reply_surface,
+            tool_restriction=(tuple(tool_restriction) if tool_restriction is not None else None),
+        )
         return await manager.start(
             agent_id=agent_id,
             session_id=session.id,
-            executor=lambda run: self._execute_run(
-                run,
-                content,
-                internal=internal,
-                input_origin=input_origin,
-                sender=sender,
-                reply_surface=reply_surface,
-                tool_restriction=tool_restriction,
-            ),
+            executor=lambda run: self._execute_run(run, request),
             project_id=project_id,
             working_project_id=working_project_id,
         )
@@ -766,17 +862,10 @@ class ChatLoop:
     async def _execute_run(
         self,
         run: Run,
-        content: str | list[ContentBlock] | None = None,
-        *,
-        internal: bool = False,
-        explicit_continue: bool = False,
-        input_origin: InputOrigin | None = None,
-        sender: MessageSender | None = None,
-        reply_surface: ReplySurface | None = None,
-        tool_restriction: Sequence[str] | None = None,
+        request: _RunRequest,
     ) -> ChatMessage:
         project_id = run.project_id
-        session = self._runtime.chat_sessions.get(
+        session = self._dependencies.sessions.get(
             run.agent_id,
             run.session_id,
             project_id,
@@ -784,9 +873,9 @@ class ChatLoop:
         prior_continuation: ContinuationState | None = None
         continuation_reminder: str | None = None
         continuation_tracker: ContinuationTracker | None = None
-        if not internal:
+        if not request.internal:
             prior_continuation = recover_continuation(session, active_run_id=run.id)
-            if explicit_continue and prior_continuation is None:
+            if request.explicit_continue and prior_continuation is None:
                 raise ChatSessionError("no interrupted work is available to continue")
             if prior_continuation is not None and not prior_continuation.active:
                 continuation_reminder = render_continuation_reminder(
@@ -796,24 +885,19 @@ class ChatLoop:
             continuation_tracker = ContinuationTracker(
                 session,
                 run_id=run.id,
-                request=_serialize_continuation_request(content),
+                request=_serialize_continuation_request(request.content),
                 prior_state=prior_continuation,
             )
         try:
-            return await self._execute_run_impl(
+            context = self._create_run_execution_context(
                 run,
-                content,
-                internal=internal,
-                explicit_continue=explicit_continue,
-                input_origin=input_origin,
-                sender=sender,
-                reply_surface=reply_surface,
-                tool_restriction=tool_restriction,
+                request,
                 session=session,
                 prior_continuation=prior_continuation,
                 continuation_reminder=continuation_reminder,
                 continuation_tracker=continuation_tracker,
             )
+            return await self._execute_run_impl(context)
         except BaseException as exc:
             if continuation_tracker is not None and not continuation_tracker.closed:
                 cause: ContinuationCause = (
@@ -826,76 +910,96 @@ class ChatLoop:
                 )
             raise
 
-    async def _execute_run_impl(
+    def _create_run_execution_context(
         self,
         run: Run,
-        content: str | list[ContentBlock] | None = None,
+        request: _RunRequest,
         *,
-        internal: bool = False,
-        explicit_continue: bool = False,
-        input_origin: InputOrigin | None = None,
-        sender: MessageSender | None = None,
-        reply_surface: ReplySurface | None = None,
-        tool_restriction: Sequence[str] | None = None,
         session: ChatSession,
         prior_continuation: ContinuationState | None,
         continuation_reminder: str | None,
         continuation_tracker: ContinuationTracker | None,
-    ) -> ChatMessage:
-        # The run's project anchor lives on the Run (``run.project_id``), set by
-        # the run manager at creation, not on a closure: the session anchor, tool
-        # cwd, and the resolved agent profile all derive from it here. An identity
-        # run carries ``run.project_id is None`` and behaves byte-identically.
+    ) -> _RunExecutionContext:
+        """Resolve all stable execution inputs once at the Run boundary."""
         project_id = run.project_id
         working_project_id = run.working_project_id
-        agent = self._runtime.agent_resolver.resolve_agent(project_id, run.agent_id)
+        agent = self._dependencies.agent_resolver.resolve_agent(project_id, run.agent_id)
+        provider_id, connection_id = _resolve_agent_connection(self._dependencies, agent)
+        _ensure_provider_exists(self._dependencies.providers, provider_id)
         _model_provider_id, model_id = _split_agent_model(agent.model)
-        provider_id, connection_id = _resolve_agent_connection(self._runtime, agent)
-        _ensure_provider_exists(self._runtime.providers, provider_id)
-        adapter = self._runtime.get_adapter(provider_id, connection_id)
-        run.add_cancel_callback(lambda: _close_adapter(adapter))
-        process_manager = self._runtime.process_manager
-        run.add_cancel_callback(lambda: process_manager.cancel_scope(run.id))
+        target = self._create_model_target(provider_id, connection_id, model_id)
+        run.add_cancel_callback(lambda: _close_adapter(target.adapter))
+        run.add_cancel_callback(lambda: self._dependencies.process_manager.cancel_scope(run.id))
         project_cwd = self._resolve_project_cwd(working_project_id)
-        # System-prompt inputs. The config-agent body is verbatim (empty for an
-        # identity agent). The project files come from the run's prompt-project: a
-        # project-born session uses its own project; an identity session uses the
-        # Project captured from the Agent's explicit selection, else
-        # there is none and both inputs collapse — an ordinary identity prompt is
-        # byte-identical to today.
-        agent_body = runtime_agent_body(agent)
-        prompt_project = resolve_prompt_project(self._runtime.projects, working_project_id)
+        prompt_project = resolve_prompt_project(self._dependencies.projects, working_project_id)
         project_prompt_context = (
             ProjectPromptContext.from_project(prompt_project.cwd, prompt_project.auto_load)
             if prompt_project is not None
             else None
         )
-        # A rooted identity session already carries its project's files in the
-        # system prompt, so the visit trigger must not re-inject them as a reminder
-        # when the agent opens its own repo by absolute path. A project-born session
-        # has no visit path at all (``project_id`` is set, the visit block is skipped).
         rooted_project_id = (
             prompt_project.project_id if project_id is None and prompt_project is not None else None
         )
-        # The agent- and project-scoped skill registry (agent's own skills first,
-        # then project, then bundled) for every skill consumer in this run: triggers,
-        # the prompt skills block, and the provider skill-tool gate. The scope comes
-        # from the shared policy (``resolve_skill_scope``, also used by the prompt
-        # preview and ``$``-autocomplete): the run's own project or, for a rooted
-        # identity agent, its home project — and the private-skill layer for
-        # identity runs only. A plain identity run with no agent-own skills is
-        # byte-identical to before.
         skill_project_id, identity_agent_id = resolve_skill_scope(
             project_id, prompt_project, run.agent_id
         )
-        skill_registry = self._runtime.skills_for(skill_project_id, identity_agent_id)
-        # The catalog block and skill-tool presence are pinned per session on the
-        # first build, so a skill written mid-session never shifts this session's
-        # prompt prefix (the cache invariant). Triggers and skill activation below
-        # still use the live ``skill_registry``.
+        skill_registry = self._dependencies.resolve_skills(skill_project_id, identity_agent_id)
         skill_catalog = self._pinned_skill_catalog(
-            run.agent_id, run.session_id, agent, skill_registry, project_id
+            run.agent_id,
+            run.session_id,
+            agent,
+            skill_registry,
+            project_id,
         )
+        return _RunExecutionContext(
+            run=run,
+            request=request,
+            session=session,
+            agent=agent,
+            primary_target=target,
+            project_id=project_id,
+            project_cwd=project_cwd,
+            project_prompt_context=project_prompt_context,
+            skill_project_id=skill_project_id,
+            skill_registry=skill_registry,
+            skill_catalog=skill_catalog,
+            prior_continuation=prior_continuation,
+            continuation_tracker=continuation_tracker,
+            continuation_reminder=continuation_reminder,
+            visited_projects_this_run=(
+                {rooted_project_id} if rooted_project_id is not None else set()
+            ),
+        )
+
+    def _create_model_target(
+        self,
+        provider_id: str,
+        connection_id: str,
+        model_id: str,
+    ) -> _ModelTarget:
+        adapter = self._dependencies.get_adapter(provider_id, connection_id)
+        return _ModelTarget(
+            provider_id=provider_id,
+            connection_id=connection_id,
+            model_id=model_id,
+            adapter=adapter,
+            replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
+            wire_media_types=_resolve_wire_media_support(adapter, model_id),
+            chunk_timeout_seconds=self._resolve_chunk_timeout(provider_id, connection_id),
+        )
+
+    async def _execute_run_impl(
+        self,
+        context: _RunExecutionContext,
+    ) -> ChatMessage:
+        run = context.run
+        request = context.request
+        session = context.session
+        agent = context.agent
+        target = context.primary_target
+        project_id = context.project_id
+        internal = request.internal
+        explicit_continue = request.explicit_continue
         run_timing_started_at = datetime.now(UTC)
         run_timing_started_perf = time.perf_counter()
         _run_succeeded = True
@@ -914,12 +1018,12 @@ class ChatLoop:
             run.agent_id,
             run.session_id,
             agent.model,
-            connection_id,
+            target.connection_id,
             start_line_extras,
         )
 
         try:
-            extension_registry = self._runtime.extensions
+            extension_registry = self._dependencies.get_extension_registry()
             if extension_registry is not None:
                 extension_ctx = HookContext(
                     session_id=run.session_id,
@@ -935,24 +1039,29 @@ class ChatLoop:
 
             run.raise_if_cancelled()
             self._announce_newly_available_skills(
-                run.agent_id, run.session_id, session, agent, skill_registry, project_id
+                run.agent_id,
+                run.session_id,
+                session,
+                agent,
+                context.skill_registry,
+                project_id,
             )
-            async with self._runtime.chat_sessions.write_lock(
+            async with self._dependencies.sessions.write_lock(
                 run.agent_id, run.session_id, project_id
             ):
                 if explicit_continue:
-                    _append_reply_surface_note(session, reply_surface)
+                    _append_reply_surface_note(session, request.reply_surface)
                 elif internal:
-                    if not isinstance(content, str):
+                    if not isinstance(request.content, str):
                         raise ChatError("internal runs require string content")
-                    _append_reply_surface_note(session, reply_surface)
-                    session.add_note(content)
+                    _append_reply_surface_note(session, request.reply_surface)
+                    session.add_note(request.content)
                 else:
-                    if content is None:
+                    if request.content is None:
                         raise ChatError("content is required for non-retry runs")
-                    _append_input_origin_note(session, input_origin)
-                    _append_reply_surface_note(session, reply_surface)
-                    user_message = ChatMessage.user(content, sender=sender)
+                    _append_input_origin_note(session, request.input_origin)
+                    _append_reply_surface_note(session, request.reply_surface)
+                    user_message = ChatMessage.user(request.content, sender=request.sender)
                     session.append(user_message)
                     _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
             if not explicit_continue and not internal:
@@ -962,74 +1071,64 @@ class ChatLoop:
                         session_id=run.session_id,
                         project_id=project_id,
                         agent=agent,
-                        content=cast(str | list[ContentBlock], content),
+                        content=cast(str | list[ContentBlock], request.content),
                         run_id=run.id,
                     )
-                if isinstance(content, str):
-                    _activate_triggered_skills(agent, session, content, skill_registry)
+                if isinstance(request.content, str):
+                    _activate_triggered_skills(
+                        agent,
+                        session,
+                        request.content,
+                        context.skill_registry,
+                    )
             run.raise_if_cancelled()
-            request_state = await self._build_request_state(
+            context.request_state = await self._build_request_state(
                 agent,
                 session,
-                replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
-                wire_media_types=_resolve_wire_media_support(adapter, model_id),
-                agent_body=agent_body,
-                project_context=project_prompt_context,
-                skill_registry=skill_registry,
-                skill_catalog=skill_catalog,
+                replay_policy=target.replay_policy,
+                wire_media_types=target.wire_media_types,
+                agent_body=runtime_agent_body(agent),
+                project_context=context.project_prompt_context,
+                skill_registry=context.skill_registry,
+                skill_catalog=context.skill_catalog,
             )
-            messages = request_state.messages
-            if continuation_reminder is not None:
-                assert prior_continuation is not None
-                continuation_reminder = render_continuation_reminder(
-                    prior_continuation,
+            if context.continuation_reminder is not None:
+                assert context.prior_continuation is not None
+                context.continuation_reminder = render_continuation_reminder(
+                    context.prior_continuation,
                     context_window=self._resolve_context_window(agent),
                 )
-                messages = inject_continuation_reminder(
-                    messages,
-                    continuation_reminder,
-                    explicit_continue=explicit_continue,
+                context.request_state = _RequestState(
+                    inject_continuation_reminder(
+                        context.request_state.messages,
+                        context.continuation_reminder,
+                        explicit_continue=explicit_continue,
+                    ),
+                    context.request_state.tools,
+                    context.request_state.allowed_tool_names,
+                    context.request_state.session_tool_grants,
                 )
-            tools = request_state.tools
 
             try:
-                completed_assistant = await self._send_until_final(
-                    agent,
-                    adapter,
-                    model_id,
-                    session,
-                    messages,
-                    tools,
-                    run,
-                    provider_id=provider_id,
-                    connection_id=connection_id,
-                    project_id=project_id,
-                    project_cwd=project_cwd,
-                    rooted_project_id=rooted_project_id,
-                    tool_restriction=tool_restriction,
-                    base_allowed_tools=request_state.allowed_tool_names,
-                    session_tool_grants=request_state.session_tool_grants,
-                    continuation_tracker=continuation_tracker,
-                    continuation_reminder=continuation_reminder,
-                    explicit_continue=explicit_continue,
-                )
+                completed_assistant = await self._send_until_final(context, target)
                 return completed_assistant
             except ProviderError as primary_exc:
                 if _is_model_fallback_trigger(primary_exc):
-                    fallback = _resolve_fallback(self._runtime, agent)
+                    fallback = _resolve_fallback(self._dependencies, agent)
                     if fallback is not None:
                         fallback_model_str, fb_provider_id, fb_connection_id = fallback
                         _, fallback_model_id = _split_agent_model(fallback_model_str)
                         try:
-                            fallback_adapter = self._runtime.get_adapter(
+                            fallback_target = self._create_model_target(
                                 fb_provider_id,
                                 fb_connection_id,
+                                fallback_model_id,
                             )
                         except (ConfigError, VBotError) as construction_exc:
                             _run_succeeded = False
                             _persist_run_error(run, session, construction_exc)
                             raise
-                        run.add_cancel_callback(lambda: _close_adapter(fallback_adapter))
+                        run.add_cancel_callback(lambda: _close_adapter(fallback_target.adapter))
                         _LOGGER.info(
                             "Model fallback activated (run=%s from=%s to=%s)",
                             run.id,
@@ -1047,27 +1146,11 @@ class ChatLoop:
                         # The reused messages list may carry current-turn
                         # reasoning/reasoning_meta from the primary provider;
                         # stale meta must never reach the fallback provider.
-                        _strip_assistant_reasoning_fields(messages)
+                        assert context.request_state is not None
+                        _strip_assistant_reasoning_fields(context.request_state.messages)
                         try:
                             completed_assistant = await self._send_until_final(
-                                agent,
-                                fallback_adapter,
-                                fallback_model_id,
-                                session,
-                                messages,
-                                tools,
-                                run,
-                                provider_id=fb_provider_id,
-                                connection_id=fb_connection_id,
-                                project_id=project_id,
-                                project_cwd=project_cwd,
-                                rooted_project_id=rooted_project_id,
-                                tool_restriction=tool_restriction,
-                                base_allowed_tools=request_state.allowed_tool_names,
-                                session_tool_grants=request_state.session_tool_grants,
-                                continuation_tracker=continuation_tracker,
-                                continuation_reminder=continuation_reminder,
-                                explicit_continue=explicit_continue,
+                                context, fallback_target
                             )
                             return completed_assistant
                         except (ProviderError, ChatError, ConfigError, VBotError) as fallback_exc:
@@ -1076,7 +1159,7 @@ class ChatLoop:
                             _persist_run_error(run, session, fallback_exc)
                             raise fallback_exc
                         finally:
-                            await _close_adapter(fallback_adapter)
+                            await _close_adapter(fallback_target.adapter)
 
                 _run_succeeded = False
                 run_error = primary_exc
@@ -1126,13 +1209,13 @@ class ChatLoop:
                     timing=run_timing,
                 )
             )
-            if continuation_tracker is not None:
+            if context.continuation_tracker is not None:
                 if (
                     outcome == "success"
                     and completed_assistant is not None
                     and not completed_assistant.interrupted
                 ):
-                    await continuation_tracker.resolve()
+                    await context.continuation_tracker.resolve()
                     continuation_summary = None
                 else:
                     if outcome == "cancelled":
@@ -1141,10 +1224,10 @@ class ChatLoop:
                         )
                     else:
                         cause = (
-                            continuation_tracker.interruption_cause
+                            context.continuation_tracker.interruption_cause
                             or normalize_interruption_cause(run_error)
                         )
-                    continuation_summary = await continuation_tracker.interrupt(cause)
+                    continuation_summary = await context.continuation_tracker.interrupt(cause)
                 if continuation_summary is not None:
                     run.terminal_payload_extras["continuation"] = continuation_summary
             # Session usage totals ride every terminal event so accessors can
@@ -1159,7 +1242,7 @@ class ChatLoop:
                     "Failed to aggregate session usage for run %s", run.id, exc_info=True
                 )
 
-            extension_registry = self._runtime.extensions
+            extension_registry = self._dependencies.get_extension_registry()
             if extension_registry is not None:
                 extension_ctx = HookContext(
                     session_id=run.session_id,
@@ -1186,7 +1269,7 @@ class ChatLoop:
                         "Reflection run-end notification failed (run=%s)", run.id, exc_info=True
                     )
 
-            await _close_adapter(adapter)
+            await _close_adapter(target.adapter)
 
     def _get_session(
         self,
@@ -1196,7 +1279,7 @@ class ChatLoop:
         create_missing: bool,
         project_id: str | None = None,
     ) -> ChatSession:
-        session_manager = self._runtime.chat_sessions
+        session_manager = self._dependencies.sessions
         if session_id is None:
             if not create_missing:
                 raise ChatSessionError("session id is required")
@@ -1212,29 +1295,10 @@ class ChatLoop:
         """Resolve a working Project cwd, failing closed when unavailable."""
         if project_id is None:
             return None
-        cwd = Path(self._runtime.projects.get(project_id).cwd)
+        cwd = Path(self._dependencies.projects.get(project_id).cwd)
         if not cwd.is_dir():
             raise ChatError(f"Project repository is unavailable: {cwd}")
         return cwd
-
-    def _resolve_project_prompt_context(
-        self, project_id: str | None
-    ) -> ProjectPromptContext | None:
-        """Build the prompt-time project context for this run, or ``None``.
-
-        Resolves through the shared rooting policy (:func:`resolve_prompt_project`):
-        a project session uses its own project, an identity session uses the
-        explicitly captured working Project, and any
-        other identity run yields ``None`` → the ``{project_files}`` placeholder
-        collapses and the prompt is unchanged. When present it carries the repo cwd
-        + the project's auto-load list (AGENTS.md is the seeded first entry, not
-        special-cased). Used by the compaction rebuild so a rooted agent keeps its
-        project files across a mid-run compaction.
-        """
-        project = resolve_prompt_project(self._runtime.projects, project_id)
-        if project is None:
-            return None
-        return ProjectPromptContext.from_project(project.cwd, project.auto_load)
 
     def _pinned_skill_catalog(
         self,
@@ -1255,13 +1319,15 @@ class ChatLoop:
         the catalog is frozen. A new session pins a fresh snapshot, so it sees the
         new skill.
         """
-        metadata = self._runtime.chat_sessions.get_metadata(agent_id, session_id, project_id)
+        metadata = self._dependencies.sessions.get_metadata(agent_id, session_id, project_id)
         pinned = metadata.get(PINNED_SKILL_CATALOG_META_KEY)
         if isinstance(pinned, dict) and isinstance(pinned.get("catalog_text"), str):
             return PinnedSkillCatalog(catalog_text=pinned["catalog_text"])
-        snapshot = self._runtime.system_prompts.render_skill_catalog(agent, skill_registry)
+        snapshot = self._dependencies.get_system_prompts().render_skill_catalog(
+            agent, skill_registry
+        )
         metadata[PINNED_SKILL_CATALOG_META_KEY] = {"catalog_text": snapshot.catalog_text}
-        self._runtime.chat_sessions.set_metadata(agent_id, session_id, metadata, project_id)
+        self._dependencies.sessions.set_metadata(agent_id, session_id, metadata, project_id)
         return snapshot
 
     def _announce_newly_available_skills(
@@ -1293,11 +1359,11 @@ class ChatLoop:
         allowed_skills = getattr(agent, "allowed_skills", None)
         allowed = ["*"] if allowed_skills is None else allowed_skills
         available = {skill.name: skill.description for skill in filter_allowed(allowed)}
-        metadata = self._runtime.chat_sessions.get_metadata(agent_id, session_id, project_id)
+        metadata = self._dependencies.sessions.get_metadata(agent_id, session_id, project_id)
         seen = metadata.get(SEEN_SKILLS_META_KEY)
         if not isinstance(seen, list):
             metadata[SEEN_SKILLS_META_KEY] = sorted(available)
-            self._runtime.chat_sessions.set_metadata(agent_id, session_id, metadata, project_id)
+            self._dependencies.sessions.set_metadata(agent_id, session_id, metadata, project_id)
             return
         new_names = sorted(set(available) - set(seen))
         if not new_names:
@@ -1306,7 +1372,7 @@ class ChatLoop:
         lines.extend(f"- {name}: {available[name]}" for name in new_names)
         session.add_note(SKILL_AVAILABLE_NOTE_PREFIX + "\n".join(lines))
         metadata[SEEN_SKILLS_META_KEY] = sorted(set(seen) | set(new_names))
-        self._runtime.chat_sessions.set_metadata(agent_id, session_id, metadata, project_id)
+        self._dependencies.sessions.set_metadata(agent_id, session_id, metadata, project_id)
 
     def _stamp_prompt_files_read(self, session_id: str, paths: list[Path]) -> None:
         """Register auto-injected prompt files as read-before-write for a session.
@@ -1322,7 +1388,7 @@ class ChatLoop:
         """
         if not paths:
             return
-        file_state = self._runtime.file_read_state
+        file_state = self._dependencies.file_read_state
         for path in paths:
             file_state.record_read(session_id, path)
 
@@ -1354,13 +1420,13 @@ class ChatLoop:
         file tools reach into a registered project's repo.
         """
         read_paths: list[Path] = []
-        rendered_files = self._runtime.system_prompts.render_project_files(
+        rendered_files = self._dependencies.get_system_prompts().render_project_files(
             project_context, on_read=read_paths.append
         )
         # Files inlined into the visiting reminder are auto-shown to the agent, so
         # stamp them as read — same treatment as a project-born session's prompt files.
         self._stamp_prompt_files_read(session.id, read_paths)
-        rendered_skills = self._runtime.system_prompts.render_visiting_project_skills(
+        rendered_skills = self._dependencies.get_system_prompts().render_visiting_project_skills(
             project_name, project_skills
         )
         sections = [section for section in (rendered_files, rendered_skills) if section.strip()]
@@ -1409,7 +1475,7 @@ class ChatLoop:
             # First time this run reaches the project: consult the durable session
             # meta so the rules are not re-shown on a later run for the same visit.
             if metadata is None:
-                metadata = self._runtime.chat_sessions.get_metadata(run.agent_id, run.session_id)
+                metadata = self._dependencies.sessions.get_metadata(run.agent_id, run.session_id)
                 raw_visited = metadata.get(VISITED_PROJECTS_META_KEY)
                 visited_persisted = set(raw_visited) if isinstance(raw_visited, list) else set()
             visited_this_run.add(project.project_id)
@@ -1419,14 +1485,14 @@ class ChatLoop:
                 session,
                 ProjectPromptContext.from_project(project.cwd, project.auto_load),
                 project_name=project.display_name,
-                project_skills=self._runtime.project_own_skills(project.project_id),
+                project_skills=self._dependencies.list_project_skills(project.project_id),
             )
             visited_persisted.add(project.project_id)
             changed = True
 
         if changed and metadata is not None:
             metadata[VISITED_PROJECTS_META_KEY] = sorted(visited_persisted)
-            self._runtime.chat_sessions.set_metadata(run.agent_id, run.session_id, metadata)
+            self._dependencies.sessions.set_metadata(run.agent_id, run.session_id, metadata)
 
     async def _build_request_messages(
         self,
@@ -1472,7 +1538,8 @@ class ChatLoop:
         # skills block renders from, so a mid-session skill write never shifts it.
         session_messages = session.load()
         session_tool_grants = (HISTORY_TOOL_NAME,) if history_available(session_messages) else ()
-        tools = self._runtime.system_prompts.provider_tool_definitions(
+        system_prompts = self._dependencies.get_system_prompts()
+        tools = system_prompts.provider_tool_definitions(
             agent,
             session_tool_grants=session_tool_grants,
         )
@@ -1482,7 +1549,7 @@ class ChatLoop:
             if isinstance(definition.get("name"), str)
         )
         prompt_read_paths: list[Path] = []
-        system_prompt = self._runtime.system_prompts.build_system_prompt(
+        system_prompt = system_prompts.build_system_prompt(
             agent,
             agent_body=agent_body,
             project_context=project_context,
@@ -1554,7 +1621,7 @@ class ChatLoop:
             await self._attachment_resolver.resolve_messages(
                 request_messages,
                 current_user_message_id=current_user_message.id,
-                input_modalities=_model_input_modalities(self._runtime, agent),
+                input_modalities=_model_input_modalities(self._dependencies, agent),
                 wire_media_types=wire_media_types,
             ),
             tools,
@@ -1564,57 +1631,31 @@ class ChatLoop:
 
     async def _send_until_final(
         self,
-        agent: Any,
-        adapter: Any,
-        model_id: str,
-        session: ChatSession,
-        messages: list[JsonObject],
-        tools: list[JsonObject],
-        run: Run,
-        provider_id: str,
-        connection_id: str,
-        project_id: str | None = None,
-        project_cwd: Path | None = None,
-        rooted_project_id: str | None = None,
-        tool_restriction: Sequence[str] | None = None,
-        base_allowed_tools: Sequence[str] = (),
-        session_tool_grants: Sequence[str] = (),
-        continuation_tracker: ContinuationTracker | None = None,
-        continuation_reminder: str | None = None,
-        explicit_continue: bool = False,
+        context: _RunExecutionContext,
+        target: _ModelTarget,
     ) -> ChatMessage:
-        replay_policy = _resolve_reasoning_replay_policy(adapter, model_id)
-        wire_media_types = _resolve_wire_media_support(adapter, model_id)
-        chunk_timeout_seconds = self._resolve_chunk_timeout(provider_id, connection_id)
+        if context.request_state is None:
+            raise AssertionError("Run request state must be built before Model progression")
+        run = context.run
+        session = context.session
+        agent = context.agent
+        project_id = context.project_id
+        state = context.request_state
+        messages = state.messages
+        tools = state.tools
+        replay_policy = target.replay_policy
         session_usage = run.terminal_payload_extras.get("session_usage")
         if not isinstance(session_usage, dict):
             session_usage = aggregate_session_usage(session.load())
             run.terminal_payload_extras["session_usage"] = session_usage
-        # Effective skill project: the run's own, or a rooted identity agent's home
-        # project. Threaded onto tool contexts and the compaction rebuild so the
-        # ``skill`` tool and a post-compaction catalog resolve the same skill pool.
-        skill_project_id = project_id if project_id is not None else rooted_project_id
         tool_iteration_count = 0
         iteration_number = 1
-        # Project-visit detection (identity sessions only — a project-born session
-        # already has the files in its system prompt). The registered-project list
-        # is resolved lazily on the first tool batch that targets an absolute path
-        # and cached for the run, so an ordinary identity run never touches the
-        # project store and a busy visiting one scans it at most once.
-        visiting_projects: list[Any] | None = None
-        # A rooted identity agent's own project files are already in the system
-        # prompt, so seed it as "already visited" — the visit trigger then skips
-        # re-injecting them as a reminder, while other projects it reaches into
-        # still trigger normally.
-        visited_projects_this_run: set[str] = (
-            {rooted_project_id} if rooted_project_id is not None else set()
-        )
         for _ in range(self._max_tool_iterations + 1):
             run.raise_if_cancelled()
             pending_notes = session.drain_pending_notes()
             if pending_notes:
                 messages.extend(_notes_to_request_messages(pending_notes))
-            extension_registry = self._runtime.extensions
+            extension_registry = self._dependencies.get_extension_registry()
             messages_for_request = [dict(message) for message in messages]
             if extension_registry is not None:
                 extension_ctx = HookContext(
@@ -1628,15 +1669,15 @@ class ChatLoop:
                     messages=messages_for_request,
                 )
 
-            if hasattr(adapter, "set_debug_context"):
-                adapter.set_debug_context(
+            if hasattr(target.adapter, "set_debug_context"):
+                target.adapter.set_debug_context(
                     DebugContext(
                         run_id=run.id,
                         agent_id=run.agent_id,
                         session_id=run.session_id,
-                        provider_id=provider_id,
-                        connection_id=connection_id,
-                        model_id=model_id,
+                        provider_id=target.provider_id,
+                        connection_id=target.connection_id,
+                        model_id=target.model_id,
                         streaming=self._streaming,
                         iteration_number=iteration_number,
                     )
@@ -1646,19 +1687,19 @@ class ChatLoop:
                 "Model step %d requested (run=%s model=%s messages=%d)",
                 iteration_number,
                 run.id,
-                model_id,
+                target.model_id,
                 len(messages_for_request),
             )
             step_started_perf = time.perf_counter()
             assistant_message = await self._send_assistant_request(
                 agent,
-                adapter,
-                model_id,
+                target.adapter,
+                target.model_id,
                 messages_for_request,
                 tools,
                 run,
-                chunk_timeout_seconds=chunk_timeout_seconds,
-                continuation_tracker=continuation_tracker,
+                chunk_timeout_seconds=target.chunk_timeout_seconds,
+                continuation_tracker=context.continuation_tracker,
             )
             # A user cancel after visible streamed output returns the preserved
             # partial as an interrupted turn — it must reach the persist block
@@ -1685,7 +1726,7 @@ class ChatLoop:
             # message through its tool results so a writer on another accessor
             # (a channel observed note, session.link_channel) cannot land between
             # them and break the tool-cycle ordering invariant.
-            async with self._runtime.chat_sessions.write_lock(
+            async with self._dependencies.sessions.write_lock(
                 run.agent_id, run.session_id, project_id
             ):
                 session.append(assistant_message)
@@ -1700,8 +1741,8 @@ class ChatLoop:
                     },
                     allow_after_cancel=preserve_cancelled_partial,
                 )
-                if continuation_tracker is not None:
-                    continuation_tracker.record_assistant_boundary(
+                if context.continuation_tracker is not None:
+                    context.continuation_tracker.record_assistant_boundary(
                         message_id=assistant_message.id,
                         reasoning=assistant_message.reasoning,
                         content=(
@@ -1727,27 +1768,15 @@ class ChatLoop:
                         return assistant_message
                     if self._compaction_service is not None:
                         await self._maybe_auto_compact_state(
-                            agent,
-                            adapter,
-                            model_id,
-                            session,
-                            messages,
+                            context,
+                            target,
                             usage=assistant_message.usage,
-                            run=run,
-                            project_id=project_id,
-                            skill_project_id=skill_project_id,
-                            tools=tools,
-                            base_allowed_tools=base_allowed_tools,
-                            session_tool_grants=session_tool_grants,
                             continuation_request_messages=[
                                 *messages_for_request,
                                 _assistant_continuation_dict(
                                     assistant_message, replay_policy=replay_policy
                                 ),
                             ],
-                            continuation_tracker=continuation_tracker,
-                            continuation_reminder=continuation_reminder,
-                            explicit_continue=explicit_continue,
                         )
                     return assistant_message
 
@@ -1758,34 +1787,45 @@ class ChatLoop:
 
                 session.begin_defer_notes()
                 try:
-                    if continuation_tracker is not None:
-                        continuation_tracker.record_tool_starts(assistant_message.tool_calls)
+                    if context.continuation_tracker is not None:
+                        context.continuation_tracker.record_tool_starts(
+                            assistant_message.tool_calls
+                        )
                     tool_messages, media_injections = await _dispatch_tool_calls(
-                        self._runtime,
-                        agent,
+                        ToolDispatchContext(
+                            registry=self._dependencies.tools,
+                            extension_registry=self._dependencies.get_extension_registry(),
+                            agent=agent,
+                            session=session,
+                            run=run,
+                            nesting_depth=self._nesting_depth,
+                            app_root=Path(self._dependencies.get_system_prompts().app_dir),
+                            data_root=Path(self._dependencies.storage.data_dir),
+                            project_cwd=context.project_cwd,
+                            project_id=project_id,
+                            skill_project_id=context.skill_project_id,
+                            tool_restriction=context.request.tool_restriction,
+                            base_allowed_tools=state.allowed_tool_names,
+                            session_tool_grants=state.session_tool_grants,
+                        ),
                         assistant_message.tool_calls,
-                        session,
-                        run,
-                        nesting_depth=self._nesting_depth,
-                        project_cwd=project_cwd,
-                        project_id=project_id,
-                        skill_project_id=skill_project_id,
-                        tool_restriction=tool_restriction,
-                        base_allowed_tools=base_allowed_tools,
-                        session_tool_grants=session_tool_grants,
                     )
                     for tool_message in tool_messages:
                         session.append(tool_message)
                         messages.append(_message_to_request_dict(tool_message))
-                    if continuation_tracker is not None:
-                        continuation_tracker.record_tool_results(tool_messages)
+                    if context.continuation_tracker is not None:
+                        context.continuation_tracker.record_tool_results(tool_messages)
                     # A tool may ask to show media (e.g. read on an image): inject it
                     # as a synthetic current-turn user message after the tool results
                     # so the tool-cycle invariant (results before any non-tool message)
                     # is preserved.
                     for injection in media_injections:
                         await self._inject_read_media(
-                            agent, session, messages, injection, wire_media_types
+                            agent,
+                            session,
+                            messages,
+                            injection,
+                            target.wire_media_types,
                         )
                     # A file tool that just reached into a registered project's
                     # repo makes this a visit: inject that project's house-rules as
@@ -1796,15 +1836,15 @@ class ChatLoop:
                     if project_id is None:
                         candidate_paths = _visiting_candidate_paths(assistant_message.tool_calls)
                         if candidate_paths:
-                            if visiting_projects is None:
-                                visiting_projects = self._runtime.projects.list()
-                            if visiting_projects:
+                            if context.visiting_projects is None:
+                                context.visiting_projects = self._dependencies.projects.list()
+                            if context.visiting_projects:
                                 self._inject_visiting_projects(
                                     session,
                                     run,
                                     candidate_paths,
-                                    visiting_projects,
-                                    visited_projects_this_run,
+                                    context.visiting_projects,
+                                    context.visited_projects_this_run,
                                 )
                     # Honored only after every sibling tool result is persisted, so
                     # this cooperative stop never itself dangles the assistant turn.
@@ -1820,26 +1860,14 @@ class ChatLoop:
 
             if self._compaction_service is not None:
                 compacted_state = await self._maybe_auto_compact_state(
-                    agent,
-                    adapter,
-                    model_id,
-                    session,
-                    messages,
+                    context,
+                    target,
                     usage=None,
-                    run=run,
-                    project_id=project_id,
-                    skill_project_id=skill_project_id,
-                    tools=tools,
-                    base_allowed_tools=base_allowed_tools,
-                    session_tool_grants=session_tool_grants,
-                    continuation_tracker=continuation_tracker,
-                    continuation_reminder=continuation_reminder,
-                    explicit_continue=explicit_continue,
                 )
+                context.request_state = compacted_state
+                state = compacted_state
                 messages = compacted_state.messages
                 tools = compacted_state.tools
-                base_allowed_tools = compacted_state.allowed_tool_names
-                session_tool_grants = compacted_state.session_tool_grants
 
         raise ToolIterationLimitError("maximum tool iterations exceeded")
 
@@ -1872,7 +1900,7 @@ class ChatLoop:
         user_message = ChatMessage.user([media_block])
         session.append(user_message)
 
-        input_modalities = _model_input_modalities(self._runtime, agent)
+        input_modalities = _model_input_modalities(self._dependencies, agent)
         vision_unavailable = media_type.startswith("image/") and "image" not in input_modalities
         if self._attachment_resolver is None or vision_unavailable:
             messages.append(_read_media_text_note(filename, media_type))
@@ -1886,73 +1914,23 @@ class ChatLoop:
         )
         messages.append(resolved[0])
 
-    async def _maybe_auto_compact(
-        self,
-        agent: Any,
-        adapter: Any,
-        model_id: str,
-        session: ChatSession,
-        messages: list[JsonObject],
-        usage: JsonObject | None,
-        *,
-        run: Run,
-        project_id: str | None = None,
-        skill_project_id: str | None = None,
-        tools: list[JsonObject] | None = None,
-        base_allowed_tools: Sequence[str] = (),
-        session_tool_grants: Sequence[str] = (),
-        continuation_request_messages: list[JsonObject] | None = None,
-        continuation_tracker: ContinuationTracker | None = None,
-        continuation_reminder: str | None = None,
-        explicit_continue: bool = False,
-    ) -> list[JsonObject]:
-        state = await self._maybe_auto_compact_state(
-            agent,
-            adapter,
-            model_id,
-            session,
-            messages,
-            usage,
-            run=run,
-            project_id=project_id,
-            skill_project_id=skill_project_id,
-            tools=tools,
-            base_allowed_tools=base_allowed_tools,
-            session_tool_grants=session_tool_grants,
-            continuation_request_messages=continuation_request_messages,
-            continuation_tracker=continuation_tracker,
-            continuation_reminder=continuation_reminder,
-            explicit_continue=explicit_continue,
-        )
-        return state.messages
-
     async def _maybe_auto_compact_state(
         self,
-        agent: Any,
-        adapter: Any,
-        model_id: str,
-        session: ChatSession,
-        messages: list[JsonObject],
+        context: _RunExecutionContext,
+        target: _ModelTarget,
         usage: JsonObject | None,
         *,
-        run: Run,
-        project_id: str | None = None,
-        skill_project_id: str | None = None,
-        tools: list[JsonObject] | None = None,
-        base_allowed_tools: Sequence[str] = (),
-        session_tool_grants: Sequence[str] = (),
         continuation_request_messages: list[JsonObject] | None = None,
-        continuation_tracker: ContinuationTracker | None = None,
-        continuation_reminder: str | None = None,
-        explicit_continue: bool = False,
     ) -> _RequestState:
         """Auto-compact when configured token thresholds are exceeded."""
-        current_state = _RequestState(
-            messages,
-            list(tools or ()),
-            tuple(base_allowed_tools),
-            tuple(session_tool_grants),
-        )
+        if context.request_state is None:
+            raise AssertionError("Run request state must exist before Compaction")
+        current_state = context.request_state
+        run = context.run
+        agent = context.agent
+        session = context.session
+        messages = current_state.messages
+        tools = current_state.tools
         if self._compaction_service is None:
             return current_state
 
@@ -2009,22 +1987,22 @@ class ChatLoop:
         )
         summary_adapter, summary_model_id = self._resolve_summary_adapter(
             agent,
-            adapter,
-            model_id,
+            target.adapter,
+            target.model_id,
             settings,
         )
-        close_summary_adapter = summary_adapter is not adapter
+        close_summary_adapter = summary_adapter is not target.adapter
         try:
             checkpoint = await self._compaction_service.compact(
                 session.load(),
                 agent=agent,
                 summary_adapter=summary_adapter,
                 summary_model_id=summary_model_id,
-                storage=self._runtime.storage,
+                storage=self._dependencies.storage,
                 settings=settings,
                 request_messages=continuation_request_messages or messages,
-                active_adapter=adapter,
-                active_model_id=model_id,
+                active_adapter=target.adapter,
+                active_model_id=target.model_id,
                 active_tools=tools,
             )
         except Exception:
@@ -2043,8 +2021,8 @@ class ChatLoop:
         )
         checkpoint = finalize_checkpoint_history_guidance(checkpoint, ordinal=ordinal)
         session.append(checkpoint)
-        if continuation_tracker is not None:
-            continuation_tracker.record_compaction_boundary()
+        if context.continuation_tracker is not None:
+            context.continuation_tracker.record_compaction_boundary()
         persisted_ordinal = checkpoint_ordinal(session.load(), checkpoint.id)
         run.emit(
             COMPACTION_COMPLETED_EVENT,
@@ -2057,36 +2035,35 @@ class ChatLoop:
         )
         # Identity runs only, exactly like the run-start resolution: a config
         # agent's slug must not resolve a same-named identity agent's private home.
-        compaction_skill_registry = self._runtime.skills_for(
-            skill_project_id, run.agent_id if run.project_id is None else None
+        compaction_skill_registry = self._dependencies.resolve_skills(
+            context.skill_project_id,
+            run.agent_id if run.project_id is None else None,
         )
         rebuilt_state = await self._build_request_state(
             agent,
             session,
-            replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
-            wire_media_types=_resolve_wire_media_support(adapter, model_id),
+            replay_policy=target.replay_policy,
+            wire_media_types=target.wire_media_types,
             agent_body=runtime_agent_body(agent),
-            project_context=self._resolve_project_prompt_context(run.working_project_id),
+            project_context=context.project_prompt_context,
             skill_registry=compaction_skill_registry,
             # Reuse the session's pinned snapshot so the rebuilt prompt's catalog is
             # byte-identical across the compaction checkpoint.
-            skill_catalog=self._pinned_skill_catalog(
-                run.agent_id, run.session_id, agent, compaction_skill_registry, project_id
-            ),
+            skill_catalog=context.skill_catalog,
         )
         rebuilt_messages = rebuilt_state.messages
-        if continuation_reminder is not None:
-            if continuation_tracker is not None:
+        if context.continuation_reminder is not None:
+            if context.continuation_tracker is not None:
                 active_continuation = fold_continuation_records(session.load_continuation_records())
                 if active_continuation is not None:
-                    continuation_reminder = render_continuation_reminder(
+                    context.continuation_reminder = render_continuation_reminder(
                         active_continuation,
                         context_window=self._resolve_context_window(agent),
                     )
             rebuilt_messages = inject_continuation_reminder(
                 rebuilt_messages,
-                continuation_reminder,
-                explicit_continue=explicit_continue,
+                context.continuation_reminder,
+                explicit_continue=context.request.explicit_continue,
             )
         _LOGGER.info(
             "Auto-compaction completed (run=%s session=%s estimated_tokens_after=%d)",
@@ -2115,7 +2092,7 @@ class ChatLoop:
         from core.compaction import COMPACTION_POLICY_META_KEY, CompactionSettings
         from core.settings.normalizers import normalize_compaction_policy
 
-        metadata = self._runtime.chat_sessions.get_metadata(agent_id, session_id, project_id)
+        metadata = self._dependencies.sessions.get_metadata(agent_id, session_id, project_id)
         session_policy = metadata.get(COMPACTION_POLICY_META_KEY)
         agent_policy = getattr(agent, "compaction_policy", None)
         raw_settings = normalize_compaction_policy(
@@ -2123,7 +2100,7 @@ class ChatLoop:
             if isinstance(session_policy, dict)
             else agent_policy
             if isinstance(agent_policy, dict)
-            else self._runtime.storage.load_compaction_settings(),
+            else self._dependencies.storage.load_compaction_settings(),
             use_defaults=True,
         )
         trigger = raw_settings["trigger"]
@@ -2158,7 +2135,7 @@ class ChatLoop:
             return None
 
         try:
-            model_entry = self._runtime.models.get(provider_id, resolved_model_id)
+            model_entry = self._dependencies.models.get(provider_id, resolved_model_id)
         except (KeyError, AttributeError):
             return None
 
@@ -2170,7 +2147,7 @@ class ChatLoop:
             # Live read through the runtime's single source of truth (no reload
             # hook, StorageError-tolerant), so a settings change applies to the
             # next request without re-implementing the storage read here.
-            local_context_windows=self._runtime.local_context_windows(),
+            local_context_windows=self._dependencies.get_local_context_windows(),
         )
 
     def _lookup_provider_config(self, provider_id: str) -> Any:
@@ -2181,7 +2158,7 @@ class ChatLoop:
         and falls back to the global floor.
         """
         try:
-            return self._runtime.providers.get(provider_id)
+            return self._dependencies.providers.get(provider_id)
         except (KeyError, AttributeError):
             return None
 
@@ -2207,11 +2184,11 @@ class ChatLoop:
                 connection_id = f"{provider_id}:{connection_suffix}"
             else:
                 connection_id = _first_usable_connection_id(
-                    self._runtime,
+                    self._dependencies,
                     provider_id,
-                    _model_connection_allowlist(self._runtime, provider_id, summary_model_id),
+                    _model_connection_allowlist(self._dependencies, provider_id, summary_model_id),
                 )
-            summary_adapter = self._runtime.get_adapter(provider_id, connection_id)
+            summary_adapter = self._dependencies.get_adapter(provider_id, connection_id)
         except (ChatError, ConfigError, VBotError, KeyError):
             _LOGGER.warning(
                 "Invalid compaction summary model %r; using active run model instead.",
@@ -2462,7 +2439,7 @@ class ChatLoop:
         (treated as "not local", so the stall guard stays on).
         """
         try:
-            provider_config = self._runtime.providers.get(provider_id)
+            provider_config = self._dependencies.providers.get(provider_id)
         except (KeyError, AttributeError):
             return None
         local_id = _connection_local_id(provider_id, connection_id)

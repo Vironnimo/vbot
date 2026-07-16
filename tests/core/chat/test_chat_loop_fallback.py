@@ -7,9 +7,6 @@ from typing import Any
 
 import pytest
 
-from core.chat import (
-    ChatLoop,
-)
 from core.providers.errors import (
     ProviderAuthError,
     ProviderRateLimitError,
@@ -29,6 +26,7 @@ from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
     StubRuntime,
+    build_chat_loop,
     persisted_roles,
 )
 
@@ -41,7 +39,7 @@ async def test_send_closes_adapter_when_aclose_exists(tmp_path: Path) -> None:
     adapter = ClosingStubAdapter([{"content": "Hello", "tool_calls": None}])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     assert adapter.closed is True
 
@@ -53,7 +51,7 @@ async def test_send_closes_adapter_after_provider_error(tmp_path: Path) -> None:
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(ProviderError, match="provider failed"):
-        await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+        await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     assert adapter.closed is True
 
@@ -65,7 +63,7 @@ async def test_provider_rate_limit_error_is_persisted_and_run_fails(tmp_path: Pa
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(ProviderRateLimitError, match="too many requests"):
-        await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+        await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
@@ -104,7 +102,7 @@ async def test_fallback_model_activates_on_retryable_error(tmp_path: Path) -> No
         provider_ids={"openai", "anthropic"},
     )
 
-    assistant = await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
@@ -144,7 +142,7 @@ async def test_fallback_adapter_construction_failure(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ConfigError, match="bad credential"):
-        await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+        await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
@@ -181,8 +179,8 @@ async def test_next_turn_reuses_primary_model(tmp_path: Path) -> None:
         provider_ids={"openai", "anthropic"},
     )
 
-    first_assistant = await ChatLoop(runtime).send("coder", "turn 1", session_id="s1")
-    second_assistant = await ChatLoop(runtime).send("coder", "turn 2", session_id="s1")
+    first_assistant = await build_chat_loop(runtime).send("coder", "turn 1", session_id="s1")
+    second_assistant = await build_chat_loop(runtime).send("coder", "turn 2", session_id="s1")
 
     fallback_event_count = sum(
         1
@@ -219,7 +217,7 @@ async def test_fallback_not_triggered_on_non_retryable_error(tmp_path: Path) -> 
     )
 
     with pytest.raises(ProviderAuthError, match="invalid credential"):
-        await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+        await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
@@ -236,7 +234,7 @@ async def test_fallback_not_triggered_when_fallback_model_empty(tmp_path: Path) 
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(ProviderRateLimitError, match="primary rate limited"):
-        await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+        await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
@@ -282,7 +280,7 @@ async def test_fallback_stays_active_for_rest_of_run(tmp_path: Path) -> None:
         tools=tools,
     )
 
-    assistant = await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     assert assistant.content == "Done"
     assert len(primary_adapter.requests) == 1
@@ -330,7 +328,7 @@ async def test_fallback_request_strips_primary_provider_reasoning_meta(tmp_path:
         tools=tools,
     )
 
-    assistant = await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     assert assistant.content == "Done"
     # The primary's own tool-continuation request still round-trips its meta.
@@ -375,7 +373,7 @@ async def test_fallback_failure_persists_fallback_error(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ProviderRateLimitError, match="fallback rate limited"):
-        await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+        await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()

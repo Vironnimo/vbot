@@ -10,7 +10,6 @@ from typing import Any
 import pytest
 
 from core.chat import (
-    ChatLoop,
     ChatMessage,
 )
 from core.runs import ChatRunManager
@@ -19,6 +18,7 @@ from server.rpc import (
     payloads,
 )
 from server.rpc.methods import dispatch_rpc
+from tests.core.chat.chat_loop_support import build_chat_loop
 from tests.server.rpc_test_support import (
     JsonObject,
     StubAdapter,
@@ -102,7 +102,7 @@ async def test_agent_crud_events_not_published_without_event_bus(tmp_path: Path)
     state = SimpleNamespace(
         runtime=runtime,
         chat_runs=chat_runs,
-        chat_loop=ChatLoop(runtime),
+        chat_loop=build_chat_loop(runtime),
         agent_delete_lock=asyncio.Lock(),
     )
     # No event_bus attribute — should not crash

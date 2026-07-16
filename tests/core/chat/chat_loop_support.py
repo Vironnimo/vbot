@@ -10,6 +10,8 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from core.chat import (
+    ChatLoop,
+    ChatLoopDependencies,
     ChatMessage,
     ChatSessionManager,
 )
@@ -26,6 +28,33 @@ from core.tools import (
 from core.tools.file_state import FileReadState
 
 JsonObject = dict[str, Any]
+
+
+def build_chat_loop(runtime: Any, **kwargs: Any) -> ChatLoop:
+    """Construct ChatLoop from a runtime-shaped test double."""
+    missing = SimpleNamespace()
+    dependencies = ChatLoopDependencies(
+        agent_resolver=cast(Any, getattr(runtime, "agent_resolver", missing)),
+        projects=cast(Any, getattr(runtime, "projects", missing)),
+        providers=cast(Any, getattr(runtime, "providers", missing)),
+        models=cast(Any, getattr(runtime, "models", missing)),
+        provider_credentials=cast(Any, getattr(runtime, "provider_credentials", missing)),
+        sessions=cast(Any, getattr(runtime, "chat_sessions", missing)),
+        run_manager=cast(Any, getattr(runtime, "chat_run_manager", missing)),
+        tools=cast(Any, getattr(runtime, "tools", missing)),
+        process_manager=cast(Any, getattr(runtime, "process_manager", missing)),
+        file_read_state=cast(Any, getattr(runtime, "file_read_state", missing)),
+        storage=cast(Any, getattr(runtime, "storage", missing)),
+        get_extension_registry=lambda: getattr(runtime, "extensions", None),
+        get_system_prompts=lambda: runtime.system_prompts,
+        get_adapter=lambda provider_id, connection_id: runtime.get_adapter(
+            provider_id, connection_id
+        ),
+        resolve_skills=lambda project_id, agent_id: runtime.skills_for(project_id, agent_id),
+        list_project_skills=lambda project_id: runtime.project_own_skills(project_id),
+        get_local_context_windows=lambda: runtime.local_context_windows(),
+    )
+    return ChatLoop(dependencies, **kwargs)
 
 
 def persisted_roles(messages: list[ChatMessage]) -> list[str]:

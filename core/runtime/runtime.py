@@ -22,7 +22,7 @@ from core.agents.agents import AgentStore
 from core.attachments import AttachmentStore
 from core.automation import CronService, ReflectionService, TriggerService
 from core.channels import ChannelService
-from core.chat import ChatLoop, CommandDispatcher
+from core.chat import ChatLoop, ChatLoopDependencies, CommandDispatcher
 from core.chat.block_resolver import ContentBlockResolver
 from core.compaction import CompactionService
 from core.debug import DebugTraceStore, ProviderDebugRecorder
@@ -598,8 +598,38 @@ class Runtime:
         # loops is safe — the loops only need its notify hook.
         self._reflection_service = ReflectionService(self)
         self._session_title_service = SessionTitleService(self)
+        assert self._agent_resolver is not None
+        assert self._projects is not None
+        assert self._providers is not None
+        assert self._models is not None
+        assert self._provider_credentials is not None
+        assert self._chat_sessions is not None
+        assert self._chat_run_manager is not None
+        assert self._tools is not None
+        assert self._process_manager is not None
+        assert self._file_state is not None
+        assert self._storage is not None
+        chat_dependencies = ChatLoopDependencies(
+            agent_resolver=self._agent_resolver,
+            projects=self._projects,
+            providers=self._providers,
+            models=self._models,
+            provider_credentials=self._provider_credentials,
+            sessions=self._chat_sessions,
+            run_manager=self._chat_run_manager,
+            tools=self._tools,
+            process_manager=self._process_manager,
+            file_read_state=self._file_state,
+            storage=self._storage,
+            get_extension_registry=lambda: self.extensions,
+            get_system_prompts=lambda: self.system_prompts,
+            get_adapter=self.get_adapter,
+            resolve_skills=self.skills_for,
+            list_project_skills=self.project_own_skills,
+            get_local_context_windows=self.local_context_windows,
+        )
         self._chat_loop = ChatLoop(
-            self,
+            chat_dependencies,
             streaming=False,
             attachment_resolver=resolver,
             compaction_service=compaction_service,
@@ -607,7 +637,7 @@ class Runtime:
             session_title_service=self._session_title_service,
         )
         self._streaming_chat_loop = ChatLoop(
-            self,
+            chat_dependencies,
             streaming=True,
             attachment_resolver=resolver,
             compaction_service=compaction_service,

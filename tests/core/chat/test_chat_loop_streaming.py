@@ -8,9 +8,6 @@ from typing import Any
 
 import pytest
 
-from core.chat import (
-    ChatLoop,
-)
 from core.chat.continuation import (
     recover_continuation,
 )
@@ -37,6 +34,7 @@ from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
     StubRuntime,
+    build_chat_loop,
     persisted_dict_roles,
     persisted_roles,
 )
@@ -63,7 +61,7 @@ async def test_streaming_mode_emits_deltas_then_final_authoritative_message(
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    assistant = await ChatLoop(runtime, streaming=True).send(
+    assistant = await build_chat_loop(runtime, streaming=True).send(
         "coder",
         "Hi",
         session_id="session-one",
@@ -133,7 +131,7 @@ async def test_streaming_mode_persists_only_final_messages_and_continues_tool_lo
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
-    assistant = await ChatLoop(runtime, streaming=True).send(
+    assistant = await build_chat_loop(runtime, streaming=True).send(
         "coder",
         "Weather?",
         session_id="session-one",
@@ -209,7 +207,7 @@ async def test_streaming_mode_malformed_tool_arguments_persist_provider_error(
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    loop = ChatLoop(runtime, streaming=True)
+    loop = build_chat_loop(runtime, streaming=True)
     with pytest.raises(StreamingDeltaError, match="malformed or incomplete arguments"):
         await loop.send("coder", "Build it", session_id="session-one")
 
@@ -247,7 +245,7 @@ async def test_streaming_mode_missing_finish_delta_preserves_visible_partial(
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    assistant = await ChatLoop(runtime, streaming=True).send(
+    assistant = await build_chat_loop(runtime, streaming=True).send(
         "coder", "Hi", session_id="session-one"
     )
 
@@ -288,7 +286,7 @@ async def test_streaming_transport_error_after_finish_keeps_completed_answer(
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    assistant = await ChatLoop(runtime, streaming=True).send(
+    assistant = await build_chat_loop(runtime, streaming=True).send(
         "coder", "Hi", session_id="session-one"
     )
 
@@ -335,7 +333,7 @@ async def test_streaming_tool_finish_survives_late_transport_error(tmp_path: Pat
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
-    assistant = await ChatLoop(runtime, streaming=True).send(
+    assistant = await build_chat_loop(runtime, streaming=True).send(
         "coder", "Weather?", session_id="session-one"
     )
 

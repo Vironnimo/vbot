@@ -7,9 +7,6 @@ from typing import Any
 
 import pytest
 
-from core.chat import (
-    ChatLoop,
-)
 from core.tools import (
     ToolRegistry,
     tool_success,
@@ -19,6 +16,7 @@ from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
     StubRuntime,
+    build_chat_loop,
 )
 
 JsonObject = dict[str, Any]
@@ -41,7 +39,7 @@ async def test_non_streaming_response_with_usage_produces_assistant_with_usage(
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    assistant = await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     assert assistant.usage == {"input_tokens": 150, "output_tokens": 12}
     session = runtime.chat_sessions.get("coder", "session-one")
@@ -77,7 +75,7 @@ async def test_run_completed_payload_carries_whole_session_usage_totals(
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
     completed = [event for event in run.events if event.type == "run_completed"]
@@ -110,7 +108,7 @@ async def test_streaming_response_with_usage_delta_produces_assistant_with_usage
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    assistant = await ChatLoop(runtime, streaming=True).send(
+    assistant = await build_chat_loop(runtime, streaming=True).send(
         "coder", "Hi", session_id="session-one"
     )
 
@@ -136,7 +134,7 @@ async def test_response_without_usage_applies_estimation(
     adapter = StubAdapter([{"content": "Hello world", "reasoning": None, "tool_calls": None}])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    assistant = await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     assert assistant.usage is not None
     assert assistant.usage["estimated"] is True
@@ -164,7 +162,7 @@ async def test_estimation_computes_from_request_message_contents(
     adapter = StubAdapter([{"content": "Hello world", "reasoning": None, "tool_calls": None}])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    assistant = await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     # Reconstruct expected estimation from the actual request messages
     request_messages = adapter.requests[0]["messages"]
@@ -196,7 +194,7 @@ async def test_provider_usage_preserved_without_estimated_flag(
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    assistant = await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     assert assistant.usage == {"input_tokens": 150, "output_tokens": 12}
     assert "estimated" not in assistant.usage
@@ -223,7 +221,7 @@ async def test_streaming_without_usage_applies_estimation(
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    assistant = await ChatLoop(runtime, streaming=True).send(
+    assistant = await build_chat_loop(runtime, streaming=True).send(
         "coder", "Hi", session_id="session-one"
     )
 
@@ -264,7 +262,7 @@ async def test_estimation_with_tool_calls_in_history(
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
-    assistant = await ChatLoop(runtime).send("coder", "Weather?", session_id="session-one")
+    assistant = await build_chat_loop(runtime).send("coder", "Weather?", session_id="session-one")
 
     assert assistant.content == "Sunny"
     assert assistant.usage is not None

@@ -9,7 +9,6 @@ from typing import Any
 import pytest
 
 from core.chat import (
-    ChatLoop,
     ChatMessage,
 )
 from core.chat.continuation import (
@@ -40,6 +39,7 @@ from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
     StubRuntime,
+    build_chat_loop,
     persisted_roles,
 )
 
@@ -56,7 +56,7 @@ async def test_streaming_mode_falls_back_before_usable_streamed_output(tmp_path:
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    assistant = await ChatLoop(runtime, streaming=True).send(
+    assistant = await build_chat_loop(runtime, streaming=True).send(
         "coder",
         "Hi",
         session_id="session-one",
@@ -85,7 +85,7 @@ async def test_streaming_mode_does_not_fallback_on_generic_provider_error(tmp_pa
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(ProviderError, match="provider failed"):
-        await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
+        await build_chat_loop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
@@ -113,7 +113,7 @@ async def test_streaming_mode_preserves_partial_instead_of_fallback_after_visibl
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    assistant = await ChatLoop(runtime, streaming=True).send(
+    assistant = await build_chat_loop(runtime, streaming=True).send(
         "coder", "Hi", session_id="session-one"
     )
 
@@ -147,7 +147,7 @@ async def test_streaming_mode_chunk_timeout_preserves_partial_after_visible_outp
     adapter = StalledStreamingStubAdapter([])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    assistant = await ChatLoop(runtime, streaming=True).send(
+    assistant = await build_chat_loop(runtime, streaming=True).send(
         "coder", "Hi", session_id="session-one"
     )
 
@@ -179,7 +179,9 @@ async def test_streaming_mode_cancellation_closes_adapter_and_preserves_visible_
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
 
-    run = await ChatLoop(runtime, streaming=True).start_run("coder", "Hi", session_id="session-one")
+    run = await build_chat_loop(runtime, streaming=True).start_run(
+        "coder", "Hi", session_id="session-one"
+    )
     await adapter.stream_started.wait()
     run.request_cancel(reason="user")
     await asyncio.sleep(0)
@@ -215,7 +217,7 @@ async def test_streaming_cancellation_with_reasoning_retains_continuation(
     adapter = MidStreamCancelledStubAdapter([])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    loop = ChatLoop(runtime, streaming=True)
+    loop = build_chat_loop(runtime, streaming=True)
     with pytest.raises(RunCancelledError):
         await loop.send("coder", "Hi", session_id="session-one")
 
@@ -243,7 +245,7 @@ async def test_streaming_network_error_with_reasoning_retains_continuation(
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    loop = ChatLoop(runtime, streaming=True)
+    loop = build_chat_loop(runtime, streaming=True)
     with pytest.raises(NetworkError, match="offline"):
         await loop.send("coder", "Hi", session_id="session-one")
 
@@ -272,7 +274,7 @@ async def test_streaming_network_error_after_visible_content_preserves_partial(
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    assistant = await ChatLoop(runtime, streaming=True).send(
+    assistant = await build_chat_loop(runtime, streaming=True).send(
         "coder", "Hi", session_id="session-one"
     )
 
@@ -309,7 +311,7 @@ async def test_streaming_mode_restarts_after_transient_drop_before_visible_outpu
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    assistant = await ChatLoop(runtime, streaming=True).send(
+    assistant = await build_chat_loop(runtime, streaming=True).send(
         "coder",
         "Hi",
         session_id="session-one",
@@ -338,7 +340,7 @@ async def test_streaming_mode_does_not_restart_after_visible_delta(tmp_path: Pat
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    assistant = await ChatLoop(runtime, streaming=True).send(
+    assistant = await build_chat_loop(runtime, streaming=True).send(
         "coder", "Hi", session_id="session-one"
     )
 
@@ -368,7 +370,7 @@ async def test_streaming_mode_restart_exhaustion_persists_error(tmp_path: Path) 
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     with pytest.raises(NetworkError, match="drop 3"):
-        await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
+        await build_chat_loop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
 
     run = next(iter(runtime.chat_runs._runs.values()))
     messages = runtime.chat_sessions.get("coder", "session-one").load()
@@ -402,7 +404,7 @@ async def test_streaming_mode_restarts_after_chunk_stall_before_visible_output(
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    assistant = await ChatLoop(runtime, streaming=True).send(
+    assistant = await build_chat_loop(runtime, streaming=True).send(
         "coder",
         "Hi",
         session_id="session-one",
@@ -433,7 +435,7 @@ async def test_streaming_mode_does_not_restart_after_chunk_stall_with_visible_ou
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    assistant = await ChatLoop(runtime, streaming=True).send(
+    assistant = await build_chat_loop(runtime, streaming=True).send(
         "coder", "Hi", session_id="session-one"
     )
 
@@ -486,7 +488,7 @@ async def test_streaming_interrupted_partial_discards_in_flight_tool_call(
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
-    assistant = await ChatLoop(runtime, streaming=True).send(
+    assistant = await build_chat_loop(runtime, streaming=True).send(
         "coder", "Weather?", session_id="session-one"
     )
 
@@ -518,7 +520,7 @@ async def test_interrupted_turn_partial_text_replays_into_next_request(tmp_path:
         )
     )
 
-    await ChatLoop(runtime).send("coder", "continue", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "continue", session_id="session-one")
 
     request_messages = adapter.requests[0]["messages"]
     assistant_entries = [m for m in request_messages if m["role"] == "assistant"]
@@ -543,7 +545,7 @@ async def test_local_provider_stream_not_aborted_by_chunk_stall(
         provider_base_url="http://localhost:11434/v1",
     )
 
-    assistant = await ChatLoop(runtime, streaming=True).send(
+    assistant = await build_chat_loop(runtime, streaming=True).send(
         "coder", "Hi", session_id="session-one"
     )
 
@@ -572,7 +574,7 @@ async def test_remote_provider_stream_aborted_by_chunk_stall(
         provider_base_url="https://api.openai.com/v1",
     )
 
-    assistant = await ChatLoop(runtime, streaming=True).send(
+    assistant = await build_chat_loop(runtime, streaming=True).send(
         "coder", "Hi", session_id="session-one"
     )
 
@@ -593,7 +595,9 @@ async def test_user_cancel_after_visible_stream_preserves_partial_and_stays_canc
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
 
-    run = await ChatLoop(runtime, streaming=True).start_run("coder", "Hi", session_id="session-one")
+    run = await build_chat_loop(runtime, streaming=True).start_run(
+        "coder", "Hi", session_id="session-one"
+    )
     await adapter.stream_started.wait()
     run.request_cancel(reason="user")
     await asyncio.sleep(0)
@@ -621,7 +625,9 @@ async def test_user_cancel_without_visible_output_retains_checkpoint_without_con
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.chat_sessions.create("coder", session_id="session-one")
 
-    run = await ChatLoop(runtime, streaming=True).start_run("coder", "Hi", session_id="session-one")
+    run = await build_chat_loop(runtime, streaming=True).start_run(
+        "coder", "Hi", session_id="session-one"
+    )
     await adapter.stream_started.wait()
     run.request_cancel(reason="user")
     await asyncio.sleep(0)

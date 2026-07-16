@@ -16,12 +16,13 @@ from typing import Any, cast
 
 import pytest
 
-from core.chat import ChatLoop, ChatSessionManager
+from core.chat import ChatSessionManager
 from core.debug.recorder import DebugContext
 from core.runs import ChatRunManager
 from core.skills.skills import SkillRegistry
 from core.tools import ToolRegistry, tool_success
 from core.tools.file_state import FileReadState
+from tests.core.chat.chat_loop_support import build_chat_loop
 from tests.core.chat.test_chat_loop import StubModels, StubProjects
 
 JsonObject = dict[str, Any]
@@ -301,7 +302,7 @@ async def test_debug_context_is_set_before_send(tmp_path: Path) -> None:
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     assert len(adapter.debug_contexts) == 1
 
@@ -321,7 +322,7 @@ async def test_debug_context_is_set_before_stream(tmp_path: Path) -> None:
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
+    await build_chat_loop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
 
     assert len(adapter.debug_contexts) == 1
     assert len(adapter.stream_requests) == 1
@@ -343,7 +344,7 @@ async def test_debug_context_includes_correct_run_agent_session_ids(
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     ctx = adapter.debug_contexts[0]
     assert ctx.agent_id == "coder"
@@ -363,7 +364,7 @@ async def test_debug_context_includes_provider_and_connection_ids(
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     ctx = adapter.debug_contexts[0]
     assert ctx.provider_id == "openai"
@@ -379,7 +380,7 @@ async def test_debug_context_includes_model_id(tmp_path: Path) -> None:
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     ctx = adapter.debug_contexts[0]
     assert ctx.model_id == "gpt-5.2"
@@ -401,7 +402,7 @@ async def test_debug_context_streaming_false_for_non_streaming_loop(
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     ctx = adapter.debug_contexts[0]
     assert ctx.streaming is False
@@ -424,7 +425,7 @@ async def test_debug_context_streaming_true_for_streaming_loop(
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    await ChatLoop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
+    await build_chat_loop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
 
     ctx = adapter.debug_contexts[0]
     assert ctx.streaming is True
@@ -444,7 +445,7 @@ async def test_debug_context_iteration_starts_at_one(tmp_path: Path) -> None:
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     ctx = adapter.debug_contexts[0]
     assert ctx.iteration_number == 1
@@ -479,7 +480,7 @@ async def test_debug_context_iteration_increments_across_tool_calls(
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
-    await ChatLoop(runtime).send("coder", "echo twice", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "echo twice", session_id="session-one")
 
     assert len(adapter.debug_contexts) == 3
     assert adapter.debug_contexts[0].iteration_number == 1
@@ -507,7 +508,7 @@ async def test_no_debug_context_for_adapters_without_set_debug_context(
     runtime: Any = BaseStubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
     # Should not raise.
-    assistant = await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
     assert assistant.content == "Hello"
     assert len(adapter.requests) == 1
 
@@ -534,7 +535,7 @@ async def test_no_debug_context_for_streaming_without_set_debug_context(
     )
     runtime: Any = BaseStubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    assistant = await ChatLoop(runtime, streaming=True).send(
+    assistant = await build_chat_loop(runtime, streaming=True).send(
         "coder", "Hi", session_id="session-one"
     )
     assert assistant.content == "Hello"
@@ -589,7 +590,7 @@ async def test_fallback_adapter_receives_debug_context(tmp_path: Path) -> None:
     runtime.providers = StubProviders({"openai", "anthropic"})
     runtime.provider_credentials = StubProviderCredentials({"openai:api-key", "anthropic:api-key"})
 
-    assistant = await ChatLoop(runtime).send("coder", "Hi", session_id="session-one")
+    assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     assert assistant.content == "Recovered"
     assert len(fallback_adapter.debug_contexts) == 1

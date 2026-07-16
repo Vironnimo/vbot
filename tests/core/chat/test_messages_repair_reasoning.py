@@ -1,5 +1,7 @@
 """Dangling tool-result repair and reasoning replay shaping tests."""
 
+from tests.core.chat.chat_loop_support import build_chat_loop
+
 from .messages_test_support import (
     ERROR_KIND_PROVIDER_ERROR,
     FIXED_TIMESTAMP,
@@ -137,7 +139,6 @@ class TestRepairDanglingToolCalls:
 
     def test_compaction_tail_path_gets_same_repair(self, tmp_path) -> None:
         # Arrange: tail of a compacted session contains a dangling assistant turn.
-        from core.chat.chat import ChatLoop
         from tests.core.chat.test_chat_loop import StubAdapter, StubAgent, StubRuntime
 
         agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
@@ -164,7 +165,9 @@ class TestRepairDanglingToolCalls:
 
         # Act: build the compacted request history through the same path the
         # chat loop uses (which calls _embed_notes_into_request internally).
-        request_messages = asyncio.run(ChatLoop(runtime)._build_request_messages(agent, session))
+        request_messages = asyncio.run(
+            build_chat_loop(runtime)._build_request_messages(agent, session)
+        )
 
         # Assert: dangling tool call is answered with a synthesized failure.
         tool_entries = [entry for entry in request_messages if entry.get("role") == "tool"]
@@ -175,7 +178,6 @@ class TestRepairDanglingToolCalls:
         assert envelope == _synthesized_failure_envelope()
 
     def test_compaction_build_uses_self_contained_projection(self, tmp_path) -> None:
-        from core.chat.chat import ChatLoop
         from core.chat.messages import COMPACTION_SUMMARY_NOTE_PREFIX
         from tests.core.chat.test_chat_loop import StubAdapter, StubAgent, StubRuntime
 
@@ -196,7 +198,9 @@ class TestRepairDanglingToolCalls:
         )
         session.append(ChatMessage.user("Fresh question", timestamp=FIXED_TIMESTAMP))
 
-        request_messages = asyncio.run(ChatLoop(runtime)._build_request_messages(agent, session))
+        request_messages = asyncio.run(
+            build_chat_loop(runtime)._build_request_messages(agent, session)
+        )
 
         summary_entries = [
             entry
@@ -272,7 +276,6 @@ class TestRepairDanglingToolCalls:
         # Arrange: a session with a dangling assistant turn in JSONL, then run
         # the build path. The synthesized entries must show up in the request
         # payload but not in the session file the next time we load it.
-        from core.chat.chat import ChatLoop
         from tests.core.chat.test_chat_loop import StubAdapter, StubAgent, StubRuntime
 
         agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
@@ -292,7 +295,9 @@ class TestRepairDanglingToolCalls:
         jsonl_before = session.path.read_text(encoding="utf-8")
 
         # Act: run the build path that synthesizes the missing tool result.
-        request_messages = asyncio.run(ChatLoop(runtime)._build_request_messages(agent, session))
+        request_messages = asyncio.run(
+            build_chat_loop(runtime)._build_request_messages(agent, session)
+        )
         jsonl_after = session.path.read_text(encoding="utf-8")
 
         # Assert: the request payload now contains a synthesized tool entry.

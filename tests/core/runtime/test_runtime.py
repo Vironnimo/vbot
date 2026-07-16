@@ -14,7 +14,6 @@ import pytest
 
 from core.agents.agents import AgentStore
 from core.channels import ChannelService
-from core.chat.chat import ChatLoop
 from core.prompts import LayoutEntry, SystemPromptManager
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.providers import ProviderRegistry
@@ -29,6 +28,7 @@ from core.tools.file_state import FileReadState
 from core.tools.process_manager import ProcessManager
 from core.tools.tools import ToolRegistry
 from core.utils.config import Config
+from tests.core.chat.chat_loop_support import build_chat_loop
 
 CANONICAL_BUILTIN_TOOLS = [
     "bash",
@@ -726,7 +726,7 @@ async def test_chat_run_cancellation_calls_runtime_process_manager(tmp_path: Pat
     process_manager = _RecordingProcessManager()
     runtime: Any = _ChatRuntimeStub(tmp_path, adapter, process_manager)
     runtime.chat_sessions.create("agent-one", session_id="session-one")
-    chat_loop = ChatLoop(runtime)
+    chat_loop = build_chat_loop(runtime)
 
     run = await chat_loop.start_run("agent-one", "hello", session_id="session-one")
     await adapter.request_started.wait()

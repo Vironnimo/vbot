@@ -8,7 +8,6 @@ from typing import Any, cast
 import pytest
 
 from core.chat import (
-    ChatLoop,
     ChatMessage,
 )
 from core.chat.messages import HISTORY_COMPACTION_GUIDANCE
@@ -27,6 +26,7 @@ from tests.core.chat.chat_loop_support import (
     StubModels,
     StubRuntime,
     StubStorage,
+    build_chat_loop,
     persisted_roles,
 )
 
@@ -54,7 +54,7 @@ async def test_fresh_follow_up_omits_old_reasoning_and_reasoning_meta_from_reque
         )
     )
 
-    await ChatLoop(runtime).send("coder", "Follow up", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Follow up", session_id="session-one")
 
     assistant_history = adapter.requests[0]["messages"][2]
     persisted = [message.to_dict() for message in session.load()]
@@ -89,7 +89,7 @@ async def test_fresh_follow_up_skips_reasoning_only_assistant_history_message(
         )
     )
 
-    await ChatLoop(runtime).send("coder", "Follow up", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Follow up", session_id="session-one")
 
     request_messages = adapter.requests[0]["messages"]
     persisted = session.load()
@@ -134,7 +134,7 @@ async def test_full_history_policy_replays_same_model_reasoning_across_runs(
         )
     )
 
-    await ChatLoop(runtime).send("coder", "Q3", session_id="session-one")
+    await build_chat_loop(runtime).send("coder", "Q3", session_id="session-one")
 
     request = adapter.requests[0]["messages"]
     assert [message["role"] for message in request] == [
@@ -186,7 +186,7 @@ async def test_none_policy_strips_reasoning_from_live_tool_continuation(
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
-    assistant = await ChatLoop(runtime).send("coder", "Weather?", session_id="session-one")
+    assistant = await build_chat_loop(runtime).send("coder", "Weather?", session_id="session-one")
 
     # The live tool-continuation entry never carries reasoning fields.
     continuation = adapter.requests[1]["messages"]
@@ -298,7 +298,7 @@ async def test_auto_compaction_preserves_reasoning_for_all_current_run_turns(
     )
     compaction_service = SecondCycleCompactionService()
 
-    assistant = await ChatLoop(
+    assistant = await build_chat_loop(
         runtime,
         compaction_service=cast(Any, compaction_service),
     ).send("coder", "Weather?", session_id="session-one")
