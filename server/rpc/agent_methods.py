@@ -13,6 +13,7 @@ from core.projects import (
     parse_agent_address,
 )
 from core.prompts import load_bundled_default_layout
+from core.runs import RunAdmissionBlockedError
 from core.sessions import (
     FORK_SOURCE_META_KEY,
     SESSION_FORK_ALWAYS_STRIP_META_KEYS,
@@ -159,21 +160,26 @@ async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
             ]
             if not remaining_agents:
                 raise RpcError(RPC_ERROR_LAST_AGENT, "cannot delete the last agent")
-            # Identity scope only: identity runs always carry ``project_id=None``,
-            # and a same-named project team agent's activity must not block
-            # deleting this unrelated identity agent.
-            if _state_chat_runs(state).has_activity_for_agent(agent_id, project_id=None):
+            try:
+                # Identity scope only: a same-named Project Team agent remains
+                # independent. The guard makes the idle check and the following
+                # archive one atomic boundary against every Run ingress path.
+                async with _state_chat_runs(state).agent_admission_guard(agent_id, project_id=None):
+                    references = _agent_reference_ids(state, agent_id)
+                    if references:
+                        raise RpcError(
+                            RPC_ERROR_AGENT_IN_USE,
+                            (
+                                "cannot delete agent referenced by "
+                                f"{', '.join(references)}: {agent_id}"
+                            ),
+                        )
+                    state.runtime.agents.delete(agent_id)
+            except RunAdmissionBlockedError as exc:
                 raise RpcError(
                     RPC_ERROR_AGENT_BUSY,
                     f"cannot delete agent with active or queued runs: {agent_id}",
-                )
-            references = _agent_reference_ids(state, agent_id)
-            if references:
-                raise RpcError(
-                    RPC_ERROR_AGENT_IN_USE,
-                    f"cannot delete agent referenced by {', '.join(references)}: {agent_id}",
-                )
-            state.runtime.agents.delete(agent_id)
+                ) from exc
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     result = {
@@ -233,24 +239,31 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
         # One resolver seam validates both agent sources, exactly like
         # session.create, so an unknown agent fails before any file work.
         state.runtime.agent_resolver.resolve_agent(project_id, agent_id)
-        if _state_chat_runs(state).has_activity_for_session(
-            agent_id, session_id, project_id=project_id
-        ):
+        chat_sessions = state.runtime.chat_sessions
+        try:
+            async with _state_chat_runs(state).session_admission_guard(
+                (project_id, agent_id, session_id)
+            ):
+                # Existence check under the guard: concurrent deletes cannot both
+                # cross the storage boundary, and a missing Session still maps to
+                # the ordinary domain error.
+                chat_sessions.get(agent_id, session_id, project_id)
+                # An identity agent tracks a current-session pointer; note when we
+                # are deleting it so the re-aim is broadcast below.
+                if project_id is None:
+                    deleting_current = (
+                        state.runtime.agents.get(agent_id).current_session_id == session_id
+                    )
+                await chat_sessions.archive(agent_id, session_id, project_id)
+                next_session_id = _resolve_post_delete_landing(
+                    state, agent_id, session_id, project_id
+                )
+                await state.runtime.remove_session_from_recall(agent_id, session_id, project_id)
+        except RunAdmissionBlockedError as exc:
             raise RpcError(
                 RPC_ERROR_SESSION_BUSY,
                 f"cannot delete session with an active or queued run: {session_id}",
-            )
-        chat_sessions = state.runtime.chat_sessions
-        # Existence check first: a missing session raises ChatSessionError, which
-        # maps to a domain error (mirrors session.rename / link_channel).
-        chat_sessions.get(agent_id, session_id, project_id)
-        # An identity agent tracks a current-session pointer; note when we are
-        # deleting it so the re-aim is broadcast as an agent-config change below.
-        if project_id is None:
-            deleting_current = state.runtime.agents.get(agent_id).current_session_id == session_id
-        await chat_sessions.archive(agent_id, session_id, project_id)
-        next_session_id = _resolve_post_delete_landing(state, agent_id, session_id, project_id)
-        await state.runtime.remove_session_from_recall(agent_id, session_id, project_id)
+            ) from exc
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     # Same emit point as session.create/rename: other windows on this agent

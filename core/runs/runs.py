@@ -8,8 +8,8 @@ import logging
 import time
 import uuid
 from collections import deque
-from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
-from contextlib import aclosing
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine
+from contextlib import aclosing, asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -71,6 +71,10 @@ class RunError(VBotError):
 
 class ActiveRunError(RunError):
     """Raised when a session already has an active run."""
+
+
+class RunAdmissionBlockedError(ActiveRunError):
+    """Raised when Run activity and a lifecycle admission guard conflict."""
 
 
 class RunNotFoundError(RunError):
@@ -419,6 +423,9 @@ class ChatRunManager:
         self._lock = asyncio.Lock()
         self._active_by_session: dict[SessionKey, Run] = {}
         self._queues: dict[SessionKey, deque[QueuedRunItem]] = {}
+        self._guarded_sessions: set[SessionKey] = set()
+        self._guarded_agents: set[tuple[str | None, str]] = set()
+        self._guarded_projects: set[str] = set()
         self._waiting_work_admissions: dict[str, WaitingWorkAdmission] = {}
         self._runs: dict[str, Run] = {}
         self._run_started_callbacks: list[Callable[[Run], None]] = []
@@ -491,6 +498,88 @@ class ChatRunManager:
 
         return remove_callback
 
+    @asynccontextmanager
+    async def session_admission_guard(self, *session_keys: SessionKey) -> AsyncIterator[None]:
+        """Hold one atomic no-Run boundary across a Session transition.
+
+        Every supplied Session must be idle when the guard is acquired. While
+        held, both immediate starts and queued admission are rejected. Supplying
+        source and destination keys together protects an Agent Takeover through
+        the destination divider/note writes as one transition.
+        """
+        guarded_sessions = frozenset(session_keys)
+        if not guarded_sessions:
+            raise ValueError("session admission guard requires at least one session")
+
+        async with self._lock:
+            if any(
+                self._has_activity_for_session_locked(session_key)
+                or self._run_admission_is_guarded_locked(session_key, working_project_id=None)
+                for session_key in guarded_sessions
+            ):
+                raise RunAdmissionBlockedError(
+                    "session transition conflicts with active, queued, or guarded work"
+                )
+            self._guarded_sessions.update(guarded_sessions)
+        try:
+            yield
+        finally:
+            await asyncio.shield(self._release_session_admission_guard(guarded_sessions))
+
+    @asynccontextmanager
+    async def agent_admission_guard(
+        self, agent_id: str, *, project_id: str | None
+    ) -> AsyncIterator[None]:
+        """Hold one atomic no-Run boundary across an Agent removal."""
+        agent_key = (project_id, agent_id)
+        async with self._lock:
+            conflicts_with_guard = (
+                agent_key in self._guarded_agents
+                or any(
+                    guarded_project_id == project_id and guarded_agent_id == agent_id
+                    for guarded_project_id, guarded_agent_id, _session_id in self._guarded_sessions
+                )
+                or (project_id is not None and project_id in self._guarded_projects)
+            )
+            if conflicts_with_guard or self._has_activity_for_agent_locked(agent_key):
+                raise RunAdmissionBlockedError(
+                    "agent removal conflicts with active, queued, or guarded work"
+                )
+            self._guarded_agents.add(agent_key)
+        try:
+            yield
+        finally:
+            await asyncio.shield(self._release_agent_admission_guard(agent_key))
+
+    @asynccontextmanager
+    async def project_admission_guard(self, project_id: str) -> AsyncIterator[None]:
+        """Hold one atomic no-Run boundary across a Project removal.
+
+        The boundary covers both Project-owned Sessions and Identity-Agent work
+        whose internal working Project is the removed Project.
+        """
+        async with self._lock:
+            conflicts_with_guard = (
+                project_id in self._guarded_projects
+                or any(
+                    guarded_project_id == project_id
+                    for guarded_project_id, _agent_id, _session_id in self._guarded_sessions
+                )
+                or any(
+                    guarded_project_id == project_id
+                    for guarded_project_id, _agent_id in self._guarded_agents
+                )
+            )
+            if conflicts_with_guard or self._has_activity_for_project_locked(project_id):
+                raise RunAdmissionBlockedError(
+                    "project removal conflicts with active, queued, or guarded work"
+                )
+            self._guarded_projects.add(project_id)
+        try:
+            yield
+        finally:
+            await asyncio.shield(self._release_project_admission_guard(project_id))
+
     async def start(
         self,
         *,
@@ -508,6 +597,7 @@ class ChatRunManager:
         """
         session_key = (project_id, agent_id, session_id)
         async with self._lock:
+            self._ensure_run_admission_allowed_locked(session_key, working_project_id)
             active_run = self._active_by_session.get(session_key)
             if active_run is not None and active_run.status == RunStatus.RUNNING:
                 raise ActiveRunError(f"session already has an active run: {session_id}")
@@ -556,6 +646,11 @@ class ChatRunManager:
         item.future.add_done_callback(remove_abandoned_item)
 
         async with self._lock:
+            try:
+                self._ensure_run_admission_allowed_locked(session_key, working_project_id)
+            except RunAdmissionBlockedError:
+                item.future.cancel()
+                raise
             active_run = self._active_by_session.get(session_key)
             if active_run is None or active_run.status != RunStatus.RUNNING:
                 self._consume_waiting_work_admission(waiting_work_admission)
@@ -713,24 +808,67 @@ class ChatRunManager:
         apart: an active run of identity ``builder`` must not block removing an
         unrelated project whose team also has a ``builder``, and vice versa.
         """
-        for (
-            active_project_id,
-            active_agent_id,
-            _session_id,
-        ), run in self._active_by_session.items():
-            if (
-                active_project_id == project_id
-                and active_agent_id == agent_id
-                and run.status == RunStatus.RUNNING
-            ):
-                return True
+        return self._has_activity_for_agent_locked((project_id, agent_id))
+
+    def has_activity_for_working_project(self, project_id: str) -> bool:
+        """Return whether active or queued work depends on one Project."""
+        return self._has_activity_for_working_project_locked(project_id)
+
+    def has_activity_for_session(
+        self, agent_id: str, session_id: str, *, project_id: str | None
+    ) -> bool:
+        """Return a snapshot of whether one Session owns active or queued work.
+
+        The session-scoped counterpart to :meth:`has_activity_for_agent`, keyed
+        on the exact ``(project_id, agent_id, session_id)`` triple both the
+        active-run and the queue maps use. Destructive lifecycle workflows use
+        :meth:`session_admission_guard` instead because this snapshot alone
+        cannot prevent a new Run from entering after the check.
+        """
+        return self._has_activity_for_session_locked((project_id, agent_id, session_id))
+
+    def _ensure_run_admission_allowed_locked(
+        self, session_key: SessionKey, working_project_id: str | None
+    ) -> None:
+        if self._run_admission_is_guarded_locked(session_key, working_project_id):
+            raise RunAdmissionBlockedError(
+                "run admission is blocked while its Session, Agent, or Project is transitioning"
+            )
+
+    def _run_admission_is_guarded_locked(
+        self, session_key: SessionKey, working_project_id: str | None
+    ) -> bool:
+        project_id, agent_id, _session_id = session_key
+        return (
+            session_key in self._guarded_sessions
+            or (project_id, agent_id) in self._guarded_agents
+            or (project_id is not None and project_id in self._guarded_projects)
+            or (working_project_id is not None and working_project_id in self._guarded_projects)
+        )
+
+    def _has_activity_for_session_locked(self, session_key: SessionKey) -> bool:
+        active_run = self._active_by_session.get(session_key)
+        if active_run is not None and active_run.status == RunStatus.RUNNING:
+            return True
+        return bool(self._queues.get(session_key))
+
+    def _has_activity_for_agent_locked(self, agent_key: tuple[str | None, str]) -> bool:
+        project_id, agent_id = agent_key
+        if any(
+            active_project_id == project_id
+            and active_agent_id == agent_id
+            and run.status == RunStatus.RUNNING
+            for (active_project_id, active_agent_id, _session_id), run in (
+                self._active_by_session.items()
+            )
+        ):
+            return True
         return any(
             queued_project_id == project_id and queued_agent_id == agent_id and bool(queue)
             for (queued_project_id, queued_agent_id, _session_id), queue in self._queues.items()
         )
 
-    def has_activity_for_working_project(self, project_id: str) -> bool:
-        """Return whether active or queued work depends on one Project."""
+    def _has_activity_for_working_project_locked(self, project_id: str) -> bool:
         if any(
             run.status == RunStatus.RUNNING and run.working_project_id == project_id
             for run in self._active_by_session.values()
@@ -742,23 +880,34 @@ class ChatRunManager:
             for item in queue
         )
 
-    def has_activity_for_session(
-        self, agent_id: str, session_id: str, *, project_id: str | None
-    ) -> bool:
-        """Return whether one session owns a running run or any queued run item.
-
-        The session-scoped counterpart to :meth:`has_activity_for_agent`, keyed
-        on the exact ``(project_id, agent_id, session_id)`` triple both the
-        active-run and the queue maps use, so it answers "is this one session
-        busy?" without scanning the agent's other sessions. Session deletion
-        calls it to refuse removing a session with work in flight, the way agent
-        deletion uses the per-agent check.
-        """
-        session_key: SessionKey = (project_id, agent_id, session_id)
-        active_run = self._active_by_session.get(session_key)
-        if active_run is not None and active_run.status == RunStatus.RUNNING:
+    def _has_activity_for_project_locked(self, project_id: str) -> bool:
+        if self._has_activity_for_working_project_locked(project_id):
             return True
-        return bool(self._queues.get(session_key))
+        if any(
+            active_project_id == project_id and run.status == RunStatus.RUNNING
+            for (active_project_id, _agent_id, _session_id), run in (
+                self._active_by_session.items()
+            )
+        ):
+            return True
+        return any(
+            queued_project_id == project_id and bool(queue)
+            for (queued_project_id, _agent_id, _session_id), queue in self._queues.items()
+        )
+
+    async def _release_session_admission_guard(
+        self, guarded_sessions: frozenset[SessionKey]
+    ) -> None:
+        async with self._lock:
+            self._guarded_sessions.difference_update(guarded_sessions)
+
+    async def _release_agent_admission_guard(self, agent_key: tuple[str | None, str]) -> None:
+        async with self._lock:
+            self._guarded_agents.remove(agent_key)
+
+    async def _release_project_admission_guard(self, project_id: str) -> None:
+        async with self._lock:
+            self._guarded_projects.remove(project_id)
 
     async def _execute(
         self,

@@ -31,7 +31,7 @@ from core.chat import (
 )
 from core.chat.content_blocks import FileMentionBlock, TextBlock
 from core.projects import AgentResolutionError, ModelConfigurationError, format_agent_address
-from core.runs import ActiveRunError
+from core.runs import ActiveRunError, ChatRunManager, RunAdmissionBlockedError
 from core.sessions import SESSION_FORK_ALWAYS_STRIP_META_KEYS, SESSION_MOVE_STRIP_META_KEYS
 from core.tools.file_state import FileReadState
 from server.events import ServerEventBus
@@ -1101,6 +1101,8 @@ class _FakeMoveSessions:
         self._metadata = metadata or {}
         self.move_calls: list[dict[str, Any]] = []
         self.destination = _FakeMovedSession()
+        self.move_started: asyncio.Event | None = None
+        self.move_release: asyncio.Event | None = None
 
     async def move(
         self,
@@ -1122,6 +1124,10 @@ class _FakeMoveSessions:
                 "strip_meta_keys": set(strip_meta_keys),
             }
         )
+        if self.move_started is not None:
+            self.move_started.set()
+        if self.move_release is not None:
+            await self.move_release.wait()
         return self.destination
 
     def get_metadata(self, agent_id: str, session_id: str, project_id: str | None = None) -> dict:
@@ -1151,15 +1157,37 @@ class _FakeMoveAgents:
 
 
 class _FakeMoveRuns:
-    def __init__(self, active: Any = None, queued: list[Any] | None = None) -> None:
+    def __init__(
+        self,
+        active: Any = None,
+        queued: list[Any] | None = None,
+        *,
+        guard_blocked: bool = False,
+    ) -> None:
         self._active = active
         self._queued = queued or []
+        self._guard_blocked = guard_blocked
+        self.guarded_sessions: list[tuple[tuple[str | None, str, str], ...]] = []
 
     def active_run(self, *, agent_id: str, session_id: str, project_id: str | None) -> Any:
         return self._active
 
     def list_queued(self, agent_id: str, session_id: str, *, project_id: str | None) -> list[Any]:
         return list(self._queued)
+
+    def session_admission_guard(self, *session_keys: tuple[str | None, str, str]) -> Any:
+        self.guarded_sessions.append(session_keys)
+        if self._guard_blocked:
+            return _FakeBlockedAdmissionGuard()
+        return _FakeWriteLock()
+
+
+class _FakeBlockedAdmissionGuard:
+    async def __aenter__(self) -> None:
+        raise RunAdmissionBlockedError("guarded")
+
+    async def __aexit__(self, *args: Any) -> None:
+        return None
 
 
 class _ConfigurableResolver:
@@ -1180,6 +1208,7 @@ def _make_move_state(
     active: Any = None,
     queued: list[Any] | None = None,
     resolver_error: Exception | None = None,
+    guard_blocked: bool = False,
 ) -> SimpleNamespace:
     sessions = _FakeMoveSessions(metadata)
     agents = _FakeMoveAgents()
@@ -1200,7 +1229,7 @@ def _make_move_state(
         chat_loop=task_loop,
         streaming_chat_loop=task_loop,
         runtime=runtime,
-        chat_runs=_FakeMoveRuns(active, queued),
+        chat_runs=_FakeMoveRuns(active, queued, guard_blocked=guard_blocked),
         event_bus=ServerEventBus(),
         command_dispatcher=_NoCommandDispatcher(),
     )
@@ -1317,6 +1346,49 @@ async def test_move_refused_while_run_queued() -> None:
     assert result.feedback is not None
     assert "queued run" in result.feedback.text
     assert state._sessions.move_calls == []
+
+
+@pytest.mark.asyncio
+async def test_move_refused_when_admission_guard_wins_after_idle_check() -> None:
+    state = _make_move_state(guard_blocked=True)
+
+    result = await _execute_core_command(state, "/agent planner", project_id=None)
+
+    assert result.feedback is not None
+    assert "source and destination are idle" in result.feedback.text
+    assert state._sessions.move_calls == []
+
+
+@pytest.mark.asyncio
+async def test_move_guard_rejects_source_and_destination_runs_during_storage_wait() -> None:
+    state = _make_move_state()
+    state.chat_runs = ChatRunManager()
+    state._sessions.move_started = asyncio.Event()
+    state._sessions.move_release = asyncio.Event()
+
+    move_task = asyncio.create_task(
+        _execute_core_command(state, "/agent planner@vbot", project_id=None)
+    )
+    await asyncio.wait_for(state._sessions.move_started.wait(), timeout=1)
+
+    with pytest.raises(RunAdmissionBlockedError):
+        await state.chat_runs.start(
+            agent_id="builder",
+            session_id="s1",
+            executor=lambda _run: asyncio.sleep(0),
+            project_id=None,
+        )
+    with pytest.raises(RunAdmissionBlockedError):
+        await state.chat_runs.start(
+            agent_id="planner",
+            session_id="s1",
+            executor=lambda _run: asyncio.sleep(0),
+            project_id="vbot",
+        )
+
+    state._sessions.move_release.set()
+    result = await asyncio.wait_for(move_task, timeout=1)
+    assert result.facts == {"session_id": "s1", "agent_id": "planner@vbot"}
 
 
 @pytest.mark.asyncio

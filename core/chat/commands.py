@@ -25,7 +25,7 @@ from core.providers.reasoning import (
     REASONING_INTENT_ON,
     resolve_reasoning_intent,
 )
-from core.runs import ChatRunManager, Run, RunNotFoundError
+from core.runs import ChatRunManager, Run, RunAdmissionBlockedError, RunNotFoundError
 from core.sessions import SESSION_MOVE_STRIP_META_KEYS
 from core.utils.logging import get_logger
 
@@ -731,30 +731,48 @@ class CommandDispatcher:
         except AgentResolutionError:
             return self._notice("agent", f"Cannot move to unknown agent: {target_display}")
 
-        metadata = sessions.get_metadata(context.agent_id, context.session_id, context.project_id)
-        refusal = self._session_move_block_reason(metadata)
-        if refusal is not None:
-            return self._notice("agent", refusal)
+        source_session_key = (context.project_id, context.agent_id, context.session_id)
+        target_session_key = (target_project_id, target_agent_id, context.session_id)
+        try:
+            async with self._chat_runs.session_admission_guard(
+                source_session_key, target_session_key
+            ):
+                metadata = sessions.get_metadata(
+                    context.agent_id, context.session_id, context.project_id
+                )
+                refusal = self._session_move_block_reason(metadata)
+                if refusal is not None:
+                    return self._notice("agent", refusal)
 
-        await sessions.move(
-            context.agent_id,
-            context.session_id,
-            target_agent_id,
-            source_project_id=context.project_id,
-            target_project_id=target_project_id,
-            strip_meta_keys=SESSION_MOVE_STRIP_META_KEYS,
-        )
-        async with sessions.write_lock(target_agent_id, context.session_id, target_project_id):
-            destination = sessions.get(target_agent_id, context.session_id, target_project_id)
-            destination.append(
-                ChatMessage.agent_takeover(from_address=source_display, to_address=target_display)
+                await sessions.move(
+                    context.agent_id,
+                    context.session_id,
+                    target_agent_id,
+                    source_project_id=context.project_id,
+                    target_project_id=target_project_id,
+                    strip_meta_keys=SESSION_MOVE_STRIP_META_KEYS,
+                )
+                async with sessions.write_lock(
+                    target_agent_id, context.session_id, target_project_id
+                ):
+                    destination = sessions.get(
+                        target_agent_id, context.session_id, target_project_id
+                    )
+                    destination.append(
+                        ChatMessage.agent_takeover(
+                            from_address=source_display, to_address=target_display
+                        )
+                    )
+                    destination.add_note(AGENT_TAKEOVER_NOTE.format(source=source_display))
+
+                if context.project_id is None:
+                    agents.reset_current_after_session_removed(context.agent_id, context.session_id)
+                if target_project_id is None:
+                    agents.update(target_agent_id, current_session_id=context.session_id)
+        except RunAdmissionBlockedError:
+            return self._notice(
+                "agent", "This session can be moved once its source and destination are idle."
             )
-            destination.add_note(AGENT_TAKEOVER_NOTE.format(source=source_display))
-
-        if context.project_id is None:
-            agents.reset_current_after_session_removed(context.agent_id, context.session_id)
-        if target_project_id is None:
-            agents.update(target_agent_id, current_session_id=context.session_id)
 
         changes = [
             CommandResourceChange(kind="sessions", scope={"agent_id": context.agent_id}),
