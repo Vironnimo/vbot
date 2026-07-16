@@ -43,6 +43,7 @@ export const RUN_EVENT_TYPES = [
   'subagent_session_started',
   RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
   'assistant_output',
+  'model_step_usage',
   'run_completed',
   'run_cancelled',
   'run_failed',

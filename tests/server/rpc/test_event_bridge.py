@@ -16,8 +16,10 @@ from typing import Any, cast
 import pytest
 
 from core.runs import (
+    COMPACTION_COMPLETED_EVENT,
     MODEL_STEP_USAGE_EVENT,
     RUN_COMPLETED_EVENT,
+    RUN_FAILED_EVENT,
     RUN_STARTED_EVENT,
     TOOL_CALL_STDERR_EVENT,
     TOOL_CALL_STDOUT_EVENT,
@@ -149,6 +151,21 @@ def test_server_event_omits_session_usage_when_absent() -> None:
     assert "session_usage" not in summary["payload"]
 
 
+def test_server_event_forwards_failed_run_error() -> None:
+    event = RunEvent(
+        sequence=9,
+        run_id="run-1",
+        agent_id="builder",
+        session_id="sess-uuid",
+        type=RUN_FAILED_EVENT,
+        payload={"status": "failed", "error": "Provider request failed"},
+    )
+
+    summary = _server_event_from_run_event(event)
+
+    assert summary["payload"]["error"] == "Provider request failed"
+
+
 def test_server_event_forwards_model_step_usage_as_run_output() -> None:
     usage = {"input_tokens": 1200, "output_tokens": 45}
     session_usage = {
@@ -173,6 +190,29 @@ def test_server_event_forwards_model_step_usage_as_run_output() -> None:
         "usage": usage,
         "session_usage": session_usage,
     }
+
+
+def test_server_event_forwards_compaction_checkpoint_as_run_output() -> None:
+    checkpoint = {"id": "checkpoint-one", "summary": "Earlier work"}
+    message = {"id": "message-one", "role": "compaction_checkpoint"}
+    event = RunEvent(
+        sequence=8,
+        run_id="run-1",
+        agent_id="builder",
+        session_id="sess-uuid",
+        type=COMPACTION_COMPLETED_EVENT,
+        payload={
+            "message": message,
+            "checkpoint": checkpoint,
+            "checkpoint_id": "checkpoint-one",
+            "history_available": True,
+        },
+    )
+
+    summary = _server_event_from_run_event(event)
+
+    assert summary["type"] == "run_output"
+    assert summary["payload"]["output"] == event.payload
 
 
 def test_server_event_forwards_public_continuation_on_terminal_events() -> None:

@@ -23,6 +23,7 @@ export function connect(state, handlers = {}) {
   _cleanup(state);
 
   const afterSequence = state.lastSequence;
+  const resumeEpoch = state.epoch;
   const connection = subscribeServerEvents(
     {
       onOpen: () => {
@@ -38,10 +39,18 @@ export function connect(state, handlers = {}) {
       },
       onEvent: (event) => {
         if (event.type === 'connection_ready') {
-          state.epoch = event.epoch ?? '';
-          state.lastSequence = Number.isFinite(event.last_sequence)
-            ? event.last_sequence
-            : 0;
+          const nextEpoch = event.epoch ?? '';
+          const isReplayResume =
+            afterSequence > 0 &&
+            typeof nextEpoch === 'string' &&
+            nextEpoch.length > 0 &&
+            nextEpoch === resumeEpoch;
+          state.epoch = nextEpoch;
+          if (!isReplayResume) {
+            state.lastSequence = Number.isFinite(event.last_sequence)
+              ? event.last_sequence
+              : 0;
+          }
           handlers.onEvent?.(event);
           return;
         }

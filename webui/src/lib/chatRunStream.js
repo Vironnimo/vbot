@@ -8,7 +8,9 @@ import {
   ensureSessionState,
   formatAgentAddress,
   highestContiguousRunEventSequence,
+  isRunActive,
   removeQueuedMessage,
+  resetStaleRun,
   startRun,
 } from './chatState.js';
 
@@ -438,6 +440,9 @@ export function createChatRunStream({
     if (payload.timing) {
       runPayload.timing = payload.timing;
     }
+    if (typeof payload.error === 'string') {
+      runPayload.error = payload.error;
+    }
 
     return {
       type: runEventType,
@@ -532,11 +537,26 @@ export function createChatRunStream({
   }
 
   function applyConnectionSnapshot(snapshot) {
-    const activeRuns = Array.isArray(snapshot?.active_runs)
-      ? snapshot.active_runs
-      : [];
-    if (activeRuns.length === 0) {
+    if (!Array.isArray(snapshot?.active_runs)) {
       return;
+    }
+    const activeRuns = snapshot.active_runs;
+    const activeRunIds = new Set(
+      activeRuns
+        .map((activeRun) => activeRun?.run_id)
+        .filter((runId) => typeof runId === 'string' && runId.length > 0),
+    );
+
+    for (const sessionState of Object.values(chatState.sessions)) {
+      const currentRunId = sessionState.currentRun?.runId;
+      if (
+        isRunActive(sessionState) &&
+        currentRunId &&
+        !activeRunIds.has(currentRunId)
+      ) {
+        resetStaleRun(sessionState);
+        closeSubscriptionFor(sessionState.key);
+      }
     }
 
     const subAgentUpdates = {};

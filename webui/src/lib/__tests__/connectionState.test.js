@@ -402,7 +402,7 @@ describe('connection_ready handling', () => {
     });
   });
 
-  it('same-epoch hello does not block a later event from reaching the handler and bumping lastSequence (resume path unchanged)', () => {
+  it('same-epoch hello does not acknowledge replay events before they arrive', () => {
     state.epoch = 'shared-epoch';
     state.lastSequence = 42;
 
@@ -414,30 +414,36 @@ describe('connection_ready handling', () => {
     });
     latestSocket.emit('open', {});
 
-    // Same-epoch hello: epoch is confirmed, last_sequence is informational.
-    // The hello frame must not stop the immediately-following event from being
-    // delivered to the handler or from updating lastSequence.
+    // Same-epoch hello: the high-water mark includes replay events 43..50 that
+    // have not reached this client yet, so it must not advance the cursor.
     latestSocket.emit('message', {
       data: JSON.stringify({
         type: 'connection_ready',
         epoch: 'shared-epoch',
-        last_sequence: 0,
+        last_sequence: 50,
         active_runs: [],
       }),
     });
 
     expect(state.epoch).toBe('shared-epoch');
-    expect(state.lastSequence).toBe(0);
+    expect(state.lastSequence).toBe(42);
 
     latestSocket.emit('message', {
-      data: JSON.stringify({ type: 'agent.created', sequence: 7 }),
+      data: JSON.stringify({ type: 'agent.created', sequence: 43 }),
     });
 
-    expect(state.lastSequence).toBe(7);
+    expect(state.lastSequence).toBe(43);
     expect(onEvent).toHaveBeenLastCalledWith({
       type: 'agent.created',
-      sequence: 7,
+      sequence: 43,
     });
+
+    // If this replay connection drops now, resume after the last event that
+    // actually arrived, not the hello's unacknowledged high-water mark.
+    latestSocket.emit('close', {});
+    vi.advanceTimersByTime(2000);
+    expect(latestSocket.url).toContain('after_sequence=43');
+    expect(latestSocket.url).not.toContain('after_sequence=50');
   });
 
   it('treats a missing last_sequence on connection_ready as 0 and still updates epoch', () => {
