@@ -565,6 +565,34 @@ def test_default_runner_disables_git_prompt(tmp_path: Path) -> None:
     assert result.stdout == "0"
 
 
+def test_default_runner_prefers_utf8_output(tmp_path: Path) -> None:
+    result = _default_runner(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.buffer.write('Łódź'.encode('utf-8'))",
+        ],
+        tmp_path,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "Łódź"
+
+
+def test_default_runner_preserves_undecodable_output(tmp_path: Path) -> None:
+    result = _default_runner(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.buffer.write(bytes([0x81]) + b'tail')",
+        ],
+        tmp_path,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == r"\x81tail"
+
+
 def test_default_runner_times_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("cli.update_management._COMMAND_TIMEOUT_SECONDS", 0.2)
 

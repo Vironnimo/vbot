@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
 from cli.autostart_management import (
     CommandRun,
+    _default_runner,
     autostart_status,
     disable_autostart,
     enable_autostart,
@@ -32,6 +34,26 @@ def _ok(stdout: str = "") -> CommandRun:
 
 def _err(stderr: str = "Access is denied") -> CommandRun:
     return CommandRun(returncode=1, stdout="", stderr=stderr)
+
+
+def test_default_runner_decodes_utf8_and_preserves_invalid_bytes() -> None:
+    utf8_result = _default_runner(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.buffer.write('Łódź'.encode('utf-8'))",
+        ]
+    )
+    invalid_result = _default_runner(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.stderr.buffer.write(bytes([0x81]) + b'tail')",
+        ]
+    )
+
+    assert utf8_result.stdout == "Łódź"
+    assert invalid_result.stderr == r"\x81tail"
 
 
 class ScriptedRunner:

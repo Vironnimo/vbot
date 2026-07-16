@@ -31,6 +31,7 @@ from cli.server_management import (
     DEFAULT_SERVICE_NAME,
     CommandResult,
     ServerInstance,
+    decode_command_output,
     restart_server,
     start_server,
     stop_server,
@@ -401,7 +402,6 @@ def _default_runner(command: list[str], cwd: Path) -> CommandRun:
             command,
             cwd=str(cwd),
             capture_output=True,
-            text=True,
             timeout=_COMMAND_TIMEOUT_SECONDS,
             env=environment,
         )
@@ -413,8 +413,8 @@ def _default_runner(command: list[str], cwd: Path) -> CommandRun:
         )
     return CommandRun(
         returncode=completed.returncode,
-        stdout=(completed.stdout or "").strip(),
-        stderr=(completed.stderr or "").strip(),
+        stdout=decode_command_output(completed.stdout).strip(),
+        stderr=decode_command_output(completed.stderr).strip(),
     )
 
 
