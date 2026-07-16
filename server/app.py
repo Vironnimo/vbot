@@ -297,27 +297,27 @@ def create_app(
         # windows still see it; the floor is read before the hello send, so
         # events arriving during that send are not skipped (no replay gap).
         client_entry = _register_ws_client(websocket)
-        # Read last_sequence *before* sending the hello frame so any events
-        # published during the await are still in the retained deque and get
-        # replayed by the subsequent subscribe.
-        last_sequence_at_hello = _bus_last_sequence(event_bus)
-        active_runs = _active_runs_snapshot(websocket.app.state)
-        hello_frame: JsonObject = {
-            "type": "connection_ready",
-            "epoch": _bus_epoch(event_bus),
-            "last_sequence": last_sequence_at_hello,
-            "active_runs": active_runs,
-        }
-        await websocket.send_json(hello_frame)
-        if (
-            hello_frame["epoch"]
-            and client_epoch == hello_frame["epoch"]
-            and client_after_sequence > 0
-        ):
-            subscribe_after_sequence = client_after_sequence
-        else:
-            subscribe_after_sequence = last_sequence_at_hello
         try:
+            # Read last_sequence *before* sending the hello frame so any events
+            # published during the await are still in the retained deque and get
+            # replayed by the subsequent subscribe.
+            last_sequence_at_hello = _bus_last_sequence(event_bus)
+            active_runs = _active_runs_snapshot(websocket.app.state)
+            hello_frame: JsonObject = {
+                "type": "connection_ready",
+                "epoch": _bus_epoch(event_bus),
+                "last_sequence": last_sequence_at_hello,
+                "active_runs": active_runs,
+            }
+            await websocket.send_json(hello_frame)
+            if (
+                hello_frame["epoch"]
+                and client_epoch == hello_frame["epoch"]
+                and client_after_sequence > 0
+            ):
+                subscribe_after_sequence = client_after_sequence
+            else:
+                subscribe_after_sequence = last_sequence_at_hello
             async for event in event_bus.subscribe(after_sequence=subscribe_after_sequence):
                 await websocket.send_json(event)
         except WebSocketDisconnect:
