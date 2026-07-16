@@ -238,16 +238,17 @@ async def bash_handler(
         yield_after,
     )
 
-    if timeout_task is not None:
-        timeout_task.cancel()
-
     if context.was_cancelled_by_user():
+        if timeout_task is not None:
+            timeout_task.cancel()
         return tool_failure(USER_CANCELLED_FAILURE_CODE, USER_CANCELLED_FAILURE_MESSAGE)
 
     if result["data"] is not None and result["data"].get("status") == "running":
         # At depth the foreground command outran yield_after but a sub-agent cannot
         # background it: kill the process and fail instead of spawning a watcher.
         if _background_blocked_at_depth(context):
+            if timeout_task is not None:
+                timeout_task.cancel()
             await process_manager.kill(session_id, context.agent_id)
             suffix = await _failure_output_suffix(process_manager, context, session_id)
             return tool_failure(
@@ -262,6 +263,9 @@ async def bash_handler(
             trigger_service,
         )
         return result
+
+    if timeout_task is not None:
+        timeout_task.cancel()
 
     if timeout_state["timed_out"] and _timed_out_process_killed(
         process_manager, context, session_id
