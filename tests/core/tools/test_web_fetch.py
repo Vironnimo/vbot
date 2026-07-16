@@ -1084,6 +1084,28 @@ async def test_fetch_with_retry_pins_validated_ip(monkeypatch: pytest.MonkeyPatc
     assert result.status_code == 200
 
 
+@pytest.mark.asyncio
+async def test_fetch_with_retry_brackets_ipv6_resolve_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    url = "https://example.com/page"
+
+    async def validate_ipv6_target(_scheme: str, host: str | None, _port: int) -> tuple[str, str]:
+        assert host == "example.com"
+        return "example.com", "2606:2800:220:1:248:1893:25c8:1946"
+
+    monkeypatch.setattr(web_fetch_module, "_validate_public_target", validate_ipv6_target)
+    install_http_get(monkeypatch, lambda _url: make_result(status_code=200, text="ok", url=url))
+
+    resolve_map: dict[tuple[str, int], str] = {}
+    async with web_fetch_module._make_session() as session:
+        await web_fetch_module._fetch_with_retry(session, url, resolve_map)
+
+        assert session.curl_options[CurlOpt.RESOLVE] == [
+            "example.com:443:[2606:2800:220:1:248:1893:25c8:1946]"
+        ]
+
+
 def test_extract_content_strips_scripts_and_styles() -> None:
     html = """
     <html>
