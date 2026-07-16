@@ -123,6 +123,8 @@ Do NOT install packages speculatively. Only request what the current task requir
 
 If a section referenced from `.vorch/PROJECT.md` doesn't exist yet, skip it and proceed with what you have.
 
-When working on a domain, read its domain map from `.vorch/domain-maps/`. Your task will list which maps to read — treat that as a starting point, not a ceiling. Read others if you need them.
+When working on a domain, start with its root map at `.vorch/domain-maps/<domain>.md`; root maps are the always-read routing and safety layer. Treat the task's `read:` list as a starting point, not a ceiling, and read additional root maps when ownership or contracts cross domains.
+
+After reading a root map, inspect its `## References` and load only the exact supplementary files whose trigger matches the current task. Never preload a domain's supplementary folder. A supplementary file adds task-specific depth, never replaces its root, and is deliberately absent from the Domain Maps index in `.vorch/PROJECT.md`.
 
 Terminology has two homes: core, cross-cutting terms live in `.vorch/GLOSSARY.md`; a domain's own terms live in a `## Terms` section inside its map. So a domain map is also where that domain's vocabulary is defined — reading the map gives you both the domain and its words.
