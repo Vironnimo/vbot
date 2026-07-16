@@ -105,6 +105,14 @@ class TestOptionalNumber:
         with pytest.raises(ToolArgumentError, match="t must be a number"):
             optional_number(value, field_name="t")
 
+    @pytest.mark.parametrize(
+        "value",
+        [float("nan"), float("inf"), float("-inf"), "nan", "Infinity", "-Infinity"],
+    )
+    def test_rejects_non_finite_numbers(self, value: object) -> None:
+        with pytest.raises(ToolArgumentError, match="t must be a finite number"):
+            optional_number(value, field_name="t")
+
     def test_inclusive_minimum(self) -> None:
         assert optional_number(0, field_name="t", minimum=0) == 0.0
         with pytest.raises(ToolArgumentError, match="t must be >= 0"):

@@ -17,6 +17,7 @@ from core.tools.tools import (
 )
 
 IMAGE_GENERATION_TOOL_NAME = "image_generation"
+_IMAGE_GENERATION_ARGUMENTS = frozenset({"prompt", "source_images", "aspect_ratio", "resolution"})
 IMAGE_GENERATION_TOOL_DESCRIPTION = (
     "Generate new images or edit local source images using the configured image "
     "generation model. Local source files are uploaded to the configured external "
@@ -136,6 +137,11 @@ def make_image_generation_handler(image_service: Any):
     """Create an image generation tool handler bound to the runtime image service."""
 
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        unknown_arguments = set(arguments) - _IMAGE_GENERATION_ARGUMENTS
+        if unknown_arguments:
+            names = ", ".join(sorted(unknown_arguments))
+            return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
+
         prompt = arguments.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
             return tool_failure("invalid_arguments", "prompt must be a non-empty string")

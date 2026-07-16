@@ -60,6 +60,21 @@ async def test_image_generation_tool_rejects_empty_prompt(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_image_generation_tool_rejects_unknown_arguments(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    register_image_generation_tool(registry, _ImageService(tmp_path / "unused.png"))
+
+    result = await registry.dispatch(
+        _make_context(tmp_path),
+        {"prompt": "a red fox", "unexpected": True},
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
+    assert "unexpected" in result["error"]["message"]
+
+
+@pytest.mark.asyncio
 async def test_image_generation_tool_forwards_per_call_knobs(tmp_path: Path) -> None:
     service = _ImageService(tmp_path / "artifact-1.png")
     registry = ToolRegistry()

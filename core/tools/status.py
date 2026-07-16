@@ -78,6 +78,11 @@ def make_status_handler(
             return {}
 
     def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        unknown_arguments = set(arguments) - {"agent_id", "session_id"}
+        if unknown_arguments:
+            names = ", ".join(sorted(unknown_arguments))
+            return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
+
         try:
             requested_agent_id = optional_string(arguments.get("agent_id"), field_name="agent_id")
             requested_session_id = optional_string(
