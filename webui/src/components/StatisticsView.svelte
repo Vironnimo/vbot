@@ -288,18 +288,20 @@
         )}
       </p>
     </div>
-    <div class="stats-view__header-actions">
-      {#if report?.generated_at}
-        <span class="stats-view__generated">
-          {t('statistics.generatedAt', 'Generated {time}', {
-            time: formatDateTime(report.generated_at, locale),
-          })}
-        </span>
-      {/if}
-      <Button variant="secondary" onClick={loadReport}>
-        {t('common.refresh', 'Refresh')}
-      </Button>
-    </div>
+    {#if activeSubView !== 'limits'}
+      <div class="stats-view__header-actions">
+        {#if report?.generated_at}
+          <span class="stats-view__generated">
+            {t('statistics.generatedAt', 'Generated {time}', {
+              time: formatDateTime(report.generated_at, locale),
+            })}
+          </span>
+        {/if}
+        <Button variant="secondary" onClick={loadReport}>
+          {t('common.refresh', 'Refresh')}
+        </Button>
+      </div>
+    {/if}
   </header>
 
   {#if errorMessage}
