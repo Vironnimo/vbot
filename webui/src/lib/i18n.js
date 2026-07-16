@@ -243,6 +243,10 @@ export const englishCatalog = Object.freeze({
   'queue.editError': 'Queued message could not be edited.',
   'queue.removeError': 'Queued message could not be removed.',
   'queue.syncError': 'Queued messages could not be synced.',
+  'queue.restartDiscardedOne':
+    '1 queued message was discarded because the server restarted.',
+  'queue.restartDiscardedMany':
+    '{count} queued messages were discarded because the server restarted.',
 
   'cancel.cancelling': 'Cancelling run…',
 

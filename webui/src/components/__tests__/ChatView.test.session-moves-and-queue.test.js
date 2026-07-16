@@ -908,4 +908,79 @@ describe('ChatView', () => {
     ]);
     expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
   });
+
+  it('explains when a server restart discards a locally shown queued message', async () => {
+    const { createChatViewConnectionSnapshotHarness } =
+      await import('./chatViewConnectionSnapshotHarness.svelte.js');
+    const harness = createChatViewConnectionSnapshotHarness();
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        streamHandler: ({ content }) => {
+          if (content === 'Start before restart') {
+            return {
+              run_id: 'run-before-restart',
+              sse_url: '/api/runs/run-before-restart/events',
+              status: 'running',
+              events: [],
+            };
+          }
+          if (content === 'Queue before restart') {
+            return {
+              queued: true,
+              item: {
+                id: 'queued-before-restart',
+                content: 'Queue before restart',
+                created_at: '2026-07-16T12:00:00+00:00',
+              },
+            };
+          }
+          throw new Error(`Unexpected stream content: ${content}`);
+        },
+      }),
+    );
+
+    chatViewTest.mount({
+      target: document.body,
+      props: {
+        get connectionSnapshot() {
+          return harness.connectionSnapshot;
+        },
+      },
+    });
+    flushSync();
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    sendComposerMessage('Start before restart');
+    await waitForCondition(() => Boolean(findCancelRunButton()), 100);
+    sendComposerMessage('Queue before restart');
+    await waitForCondition(
+      () =>
+        document.body
+          .querySelector('.queued-messages__content')
+          ?.textContent?.includes('Queue before restart'),
+      100,
+    );
+
+    harness.setConnectionSnapshot({
+      type: 'connection_ready',
+      epoch: 'epoch-after-restart',
+      replay_status: 'epoch_changed',
+      active_runs: [],
+      queues: [],
+    });
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        document.body
+          .querySelector('.chat-view__command-toast')
+          ?.textContent?.trim() ===
+        '1 queued message was discarded because the server restarted.',
+      100,
+    );
+    expect(document.body.querySelector('.queued-messages__content')).toBeNull();
+  });
 });

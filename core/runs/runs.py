@@ -710,6 +710,12 @@ class ChatRunManager:
         """Return queued items for one session in FIFO order."""
         return list(self._queues.get((project_id, agent_id, session_id), ()))
 
+    def all_queued(self) -> list[tuple[SessionKey, QueuedRunItem]]:
+        """Return a fresh snapshot of queued items across every session."""
+        return [
+            (session_key, item) for session_key, queue in self._queues.items() for item in queue
+        ]
+
     def remove_queued(
         self, agent_id: str, session_id: str, item_id: str, *, project_id: str | None
     ) -> bool:

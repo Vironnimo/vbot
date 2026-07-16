@@ -45,6 +45,7 @@ export function createChatController({
   runStream,
   listQueue,
   onQueueSyncError = () => {},
+  onRestartQueueDiscarded = () => {},
 }) {
   let handledConnectionSnapshot = null;
   let handledQueueInvalidation = null;
@@ -69,6 +70,41 @@ export function createChatController({
       return false;
     }
     handledConnectionSnapshot = snapshot;
+    if (Array.isArray(snapshot.queues)) {
+      const queueItemsBySession = new Map();
+      for (const queueScope of snapshot.queues) {
+        if (
+          typeof queueScope?.agent_id !== 'string' ||
+          typeof queueScope?.session_id !== 'string'
+        ) {
+          continue;
+        }
+        queueItemsBySession.set(
+          sessionKey(
+            formatAgentAddress(queueScope.agent_id, queueScope.project_id),
+            queueScope.session_id,
+          ),
+          Array.isArray(queueScope.items) ? queueScope.items : [],
+        );
+      }
+
+      let discardedCount = 0;
+      for (const sessionState of Object.values(chatState.sessions)) {
+        const serverItems = queueItemsBySession.get(sessionState.key) ?? [];
+        if (snapshot.replay_status === 'epoch_changed') {
+          const serverItemIds = new Set(
+            serverItems.map((item) => item?.id).filter(Boolean),
+          );
+          discardedCount += sessionState.queue.filter(
+            (item) => item?.id && !serverItemIds.has(item.id),
+          ).length;
+        }
+        syncQueueFromServer(sessionState, serverItems);
+      }
+      if (discardedCount > 0) {
+        onRestartQueueDiscarded(discardedCount);
+      }
+    }
     runStream.applyConnectionSnapshot(snapshot);
     return true;
   }

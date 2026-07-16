@@ -17,9 +17,9 @@ Domain controllers still own their data. The app shell may request a refresh or 
 
 ## Server connection and events
 
-- `subscribeServerEvents()` opens the app-wide WebSocket. A `connection_ready` payload establishes the server epoch and replay position; reconnect logic distinguishes a transport interruption from a server restart.
+- `subscribeServerEvents()` opens the app-wide WebSocket. A `connection_ready` payload establishes the server epoch, replay position, and replay completeness; reconnect logic distinguishes a fresh connection, complete resume, replay gap, and server restart.
 - Reconnect uses bounded backoff and exposes connection state to the shell. A short interruption is tolerated before the offline notice is shown so transient browser/network churn does not flash disruptive UI.
-- `connection_ready` replaces the WebSocket epoch and replay cursor, so a restarted server can resume at sequence 1 without the browser dropping valid events. Its `active_runs` snapshot is forwarded to Chat for Run reconciliation; it is not a generic replacement for every domain controller's data.
+- `connection_ready.replay_status` is `fresh`, `resumed`, `gap`, or `epoch_changed`. A complete resume keeps the client's acknowledged cursor until replayed events arrive; a gap or epoch change adopts the hello high-water mark and invalidates every resource-backed projection through its existing owner. The authoritative `active_runs` and public `queues` snapshots are forwarded to Chat for immediate Run and Queue reconciliation.
 - Recovery after a confirmed offline notice increments `serverRecoveryGeneration`, remounting the active main surface so its normal load path refreshes server-backed state. A reconnect that completes inside the notice grace period does not force that remount.
 - WebSocket Run events are lifecycle summaries used for global awareness and recovery. Per-Run output, reasoning, tool-call, and log deltas arrive through the Run SSE subscription owned by Chat.
 - Presence is server-owned. `clients.list` supplies the Settings projection; the WebSocket only signals when that projection should refresh.

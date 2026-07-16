@@ -102,6 +102,49 @@ describe('App controller', () => {
     expect(actions.onReloadAgents).toHaveBeenCalledOnce();
   });
 
+  it.each(['gap', 'epoch_changed'])(
+    'fully invalidates resource-backed projections after replay status %s',
+    async (replayStatus) => {
+      const { actions, controller, state } = setup();
+
+      await controller.handleServerEvent({
+        type: 'connection_ready',
+        replay_status: replayStatus,
+        active_runs: [],
+        queues: [],
+      });
+
+      expect(state.modelsRefreshToken).toBe(1);
+      expect(state.projectsRefreshToken).toBe(1);
+      expect(state.sessionsRefreshToken).toBe(1);
+      expect(state.clientsRefreshToken).toBe(1);
+      expect(state.channelsRefreshToken).toBe(1);
+      expect(state.debugTracesRefreshToken).toBe(1);
+      expect(actions.onLoadProjects).toHaveBeenCalledOnce();
+      expect(actions.onReloadAgents).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('does not reload all resources after a complete replay resume', async () => {
+    const { actions, controller, state } = setup();
+
+    await controller.handleServerEvent({
+      type: 'connection_ready',
+      replay_status: 'resumed',
+      active_runs: [],
+      queues: [],
+    });
+
+    expect(state.modelsRefreshToken).toBe(0);
+    expect(state.projectsRefreshToken).toBe(0);
+    expect(state.sessionsRefreshToken).toBe(0);
+    expect(state.clientsRefreshToken).toBe(0);
+    expect(state.channelsRefreshToken).toBe(0);
+    expect(state.debugTracesRefreshToken).toBe(0);
+    expect(actions.onLoadProjects).not.toHaveBeenCalled();
+    expect(actions.onReloadAgents).not.toHaveBeenCalled();
+  });
+
   it('owns delayed offline and restored connection notices', async () => {
     vi.useFakeTimers();
     const { actions, controller, state } = setup();

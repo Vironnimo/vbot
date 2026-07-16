@@ -196,6 +196,54 @@ async def test_enqueue_when_session_is_busy_queues_and_drains_after_completion()
     assert await queued_run.wait() == "queued"
 
 
+async def test_all_queued_returns_fresh_cross_session_snapshot_in_fifo_order() -> None:
+    manager = ChatRunManager()
+    release = asyncio.Event()
+
+    async def execute(_run: Run) -> str:
+        await release.wait()
+        return "done"
+
+    identity_run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=execute, project_id=None
+    )
+    project_run = await manager.start(
+        agent_id="writer", session_id="session-two", executor=execute, project_id="project-a"
+    )
+    identity_item = await manager.enqueue(
+        agent_id="coder",
+        session_id="session-one",
+        executor=execute,
+        display_content="identity",
+        project_id=None,
+    )
+    project_item = await manager.enqueue(
+        agent_id="writer",
+        session_id="session-two",
+        executor=execute,
+        display_content="internal",
+        internal=True,
+        project_id="project-a",
+    )
+
+    snapshot = manager.all_queued()
+    assert snapshot == [
+        ((None, "coder", "session-one"), identity_item),
+        (("project-a", "writer", "session-two"), project_item),
+    ]
+    snapshot.clear()
+    assert manager.all_queued() == [
+        ((None, "coder", "session-one"), identity_item),
+        (("project-a", "writer", "session-two"), project_item),
+    ]
+
+    release.set()
+    assert await identity_run.wait() == "done"
+    assert await project_run.wait() == "done"
+    assert await (await identity_item.future).wait() == "done"
+    assert await (await project_item.future).wait() == "done"
+
+
 async def test_enqueue_when_session_is_busy_logs_queue_line(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

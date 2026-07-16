@@ -446,6 +446,48 @@ describe('connection_ready handling', () => {
     expect(latestSocket.url).not.toContain('after_sequence=50');
   });
 
+  it('preserves the client cursor when replay_status confirms a complete resume', () => {
+    state.epoch = 'shared-epoch';
+    state.lastSequence = 42;
+
+    connect(state, {
+      _WebSocket: MockWebSocket,
+      _baseUrl: 'http://localhost:8420/',
+    });
+    latestSocket.emit('open', {});
+    latestSocket.emit('message', {
+      data: JSON.stringify({
+        type: 'connection_ready',
+        epoch: 'shared-epoch',
+        last_sequence: 50,
+        replay_status: 'resumed',
+      }),
+    });
+
+    expect(state.lastSequence).toBe(42);
+  });
+
+  it('accepts the hello high-water mark when replay_status reports a gap', () => {
+    state.epoch = 'shared-epoch';
+    state.lastSequence = 42;
+
+    connect(state, {
+      _WebSocket: MockWebSocket,
+      _baseUrl: 'http://localhost:8420/',
+    });
+    latestSocket.emit('open', {});
+    latestSocket.emit('message', {
+      data: JSON.stringify({
+        type: 'connection_ready',
+        epoch: 'shared-epoch',
+        last_sequence: 50,
+        replay_status: 'gap',
+      }),
+    });
+
+    expect(state.lastSequence).toBe(50);
+  });
+
   it('treats a missing last_sequence on connection_ready as 0 and still updates epoch', () => {
     state.lastSequence = 99;
 

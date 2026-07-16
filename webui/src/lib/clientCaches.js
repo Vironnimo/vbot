@@ -49,6 +49,30 @@ export function mergeBoundedEntries(entries, updates, maxEntries) {
   return { entries: merged, evictedKeys };
 }
 
+// A connection snapshot is authoritative only for active sub-agent statuses.
+// Remove locally projected running/queued run and session entries before
+// merging its active set, while preserving terminal results, durations, tool
+// names, and Queue-to-Run mappings used by historical rows.
+export function replaceActiveSubAgentStatuses(entries, updates, maxEntries) {
+  const retainedEntries = {};
+  const removedKeys = [];
+  for (const [key, value] of Object.entries(entries ?? {})) {
+    const isActiveStatusKey =
+      (key.startsWith('run:') || key.startsWith('session:')) &&
+      (value === 'running' || value === 'queued');
+    if (isActiveStatusKey) {
+      removedKeys.push(key);
+      continue;
+    }
+    retainedEntries[key] = value;
+  }
+  const merged = mergeBoundedEntries(retainedEntries, updates, maxEntries);
+  return {
+    entries: merged.entries,
+    evictedKeys: [...removedKeys, ...merged.evictedKeys],
+  };
+}
+
 // Map evicted sub-agent status keys back to the verification-guard keys
 // ChatView uses (`run:<run_id>` → `<run_id>`, `session:<agent>::<session>` →
 // `<agent>::<session>`). Releasing those guards lets a still-rendered row

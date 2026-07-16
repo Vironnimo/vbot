@@ -34,7 +34,17 @@ function makeStreamHarness({
     syncSessionQueue,
     isDisplayedSession,
     setActionError,
-    updateSubAgentRunStatuses: (updates) => {
+    updateSubAgentRunStatuses: (updates, { replaceActive = false } = {}) => {
+      if (replaceActive) {
+        for (const [key, value] of Object.entries(subAgentRunStatuses)) {
+          if (
+            (key.startsWith('run:') || key.startsWith('session:')) &&
+            (value === 'running' || value === 'queued')
+          ) {
+            delete subAgentRunStatuses[key];
+          }
+        }
+      }
       Object.assign(subAgentRunStatuses, updates);
     },
   });
@@ -240,6 +250,32 @@ describe('createChatRunStream().applyConnectionSnapshot()', () => {
     expect(sessionState.status).toBe(CHAT_STATUS_IDLE);
     expect(sessionState.currentRun).toBeNull();
     expect(subscriptions[0].close).toHaveBeenCalledOnce();
+  });
+
+  it('replaces stale active sub-agent statuses while preserving terminal metadata', () => {
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: DISPLAYED_AGENT_ID,
+      displayedSessionId: DISPLAYED_SESSION_ID,
+    });
+    Object.assign(harness.subAgentRunStatuses, {
+      'run:stale-run': 'running',
+      'session:child::stale-session': 'queued',
+      'run:completed-run': 'completed',
+      'runDuration:completed-run': 1250,
+      'queueRun:queue-one': 'completed-run',
+    });
+
+    harness.stream.applyConnectionSnapshot({
+      type: 'connection_ready',
+      active_runs: [],
+    });
+
+    expect(harness.subAgentRunStatuses).toEqual({
+      'run:completed-run': 'completed',
+      'runDuration:completed-run': 1250,
+      'queueRun:queue-one': 'completed-run',
+    });
   });
 
   it('preserves the server failure message when WebSocket is the terminal-event backstop', () => {

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createBoundedKeySet,
   mergeBoundedEntries,
+  replaceActiveSubAgentStatuses,
   subAgentGuardKeysForEvictedStatuses,
 } from '../clientCaches.js';
 
@@ -102,5 +103,33 @@ describe('subAgentGuardKeysForEvictedStatuses', () => {
     ]);
 
     expect(guardKeys).toEqual([]);
+  });
+});
+
+describe('replaceActiveSubAgentStatuses', () => {
+  it('removes stale active statuses and preserves terminal metadata', () => {
+    const { entries, evictedKeys } = replaceActiveSubAgentStatuses(
+      {
+        'run:old': 'running',
+        'session:child::old': 'queued',
+        'run:done': 'completed',
+        'runDuration:done': 500,
+        'queueRun:item': 'done',
+      },
+      {
+        'run:current': 'running',
+        'session:child::current': 'running',
+      },
+      20,
+    );
+
+    expect(entries).toEqual({
+      'run:done': 'completed',
+      'runDuration:done': 500,
+      'queueRun:item': 'done',
+      'run:current': 'running',
+      'session:child::current': 'running',
+    });
+    expect(evictedKeys).toEqual(['run:old', 'session:child::old']);
   });
 });
