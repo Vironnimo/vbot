@@ -42,7 +42,16 @@ jobs:
         run: python scripts/quality-frontend.py
 
   install-linux:
-    runs-on: ubuntu-latest
+    name: install-linux (${{ matrix.architecture }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x64
+            runner: ubuntu-latest
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
