@@ -15,6 +15,7 @@ from core.settings import SettingsValidationError, load_validated_settings_json
 from core.utils.errors import ConfigError
 
 _WORKTREE_FILE = Path(__file__).resolve().parent.parent.parent / ".vbot-worktree"
+_WORKTREE_CWD_ONLY_KEY = "cwd_only"
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8420
@@ -23,8 +24,12 @@ DEFAULT_PORT = 8420
 PORT_SETTING_KEYS = ("server_port", "SERVER_PORT", "port", "PORT")
 
 
-def _read_worktree_data_dir(worktree_file: Path | None = None) -> Path | None:
-    """Read ``data_dir`` from a worktree marker file when available."""
+def _read_worktree_data_dir(
+    worktree_file: Path | None = None,
+    *,
+    allow_cwd_only: bool = True,
+) -> Path | None:
+    """Read ``data_dir`` from an applicable worktree marker when available."""
 
     candidate = _WORKTREE_FILE if worktree_file is None else worktree_file
     path = Path(candidate)
@@ -37,6 +42,8 @@ def _read_worktree_data_dir(worktree_file: Path | None = None) -> Path | None:
         return None
 
     if not isinstance(data, dict):
+        return None
+    if data.get(_WORKTREE_CWD_ONLY_KEY) is True and not allow_cwd_only:
         return None
 
     raw_data_dir = data.get("data_dir")
@@ -62,11 +69,13 @@ def _resolve_default_data_dir() -> Path:
     if isinstance(val, str) and val:
         return Path(val).expanduser()
 
-    result = _read_worktree_data_dir(_find_worktree_file_from_cwd())
-    if result is not None:
-        return result
+    cwd_worktree_file = _find_worktree_file_from_cwd()
+    if cwd_worktree_file is not None:
+        result = _read_worktree_data_dir(cwd_worktree_file)
+        if result is not None:
+            return result
 
-    result = _read_worktree_data_dir()
+    result = _read_worktree_data_dir(allow_cwd_only=False)
     if result is not None:
         return result
 
