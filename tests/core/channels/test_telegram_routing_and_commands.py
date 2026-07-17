@@ -731,19 +731,19 @@ async def test_message_handlers_ignore_edited_messages_and_channel_posts(
         contact=telegram.Contact(phone_number="+491234", first_name="Max")
     )
     poll_message = make_real_message(
-        poll=telegram.Poll(
-            id="p1",
-            question="Lunch?",
-            options=[
-                telegram.PollOption.de_json(
-                    {"text": "Yes", "voter_count": 0, "persistent_id": "yes"}, None
-                )
-            ],
-            total_voter_count=0,
-            is_closed=False,
-            is_anonymous=True,
-            type="regular",
-            allows_multiple_answers=False,
+        poll=telegram.Poll.de_json(
+            {
+                "id": "p1",
+                "question": "Lunch?",
+                "options": [{"text": "Yes", "voter_count": 0, "persistent_id": "yes"}],
+                "total_voter_count": 0,
+                "is_closed": False,
+                "is_anonymous": True,
+                "type": "regular",
+                "allows_multiple_answers": False,
+                "allows_revoting": False,
+            },
+            None,
         )
     )
     for update_id, structured in (
