@@ -95,6 +95,16 @@ describe('SystemPromptView', () => {
     expect(
       document.querySelector('.sp-blocklist-toolbar.view-toolbar--split'),
     ).toBeTruthy();
+    const guide = document.querySelector('.sp-blocklist-guide');
+    expect(guide).toBeTruthy();
+    expect(guide.getAttribute('aria-labelledby')).toBe(
+      'sp-blocklist-guide-title',
+    );
+    expect(guide.querySelector('h3')?.textContent).toContain(
+      'These blocks become the System Prompt.',
+    );
+    expect(guide.textContent).toContain('Blocks are read from top to bottom.');
+    expect(guide.textContent).toContain('Default applies to every Agent.');
   });
 
   it('renders an editable textarea for text blocks but not for data blocks', async () => {
@@ -925,7 +935,12 @@ describe('SystemPromptView', () => {
       'systemPrompt.fragmentEditor.resetConfirm',
       'systemPrompt.fragmentEditor.resetAgentConfirm',
       'systemPrompt.fragmentEditor.resetConfirmTitle',
-      'systemPrompt.blockList.intro',
+      'systemPrompt.blockList.guide.label',
+      'systemPrompt.blockList.guide.title',
+      'systemPrompt.blockList.guide.assemblyLabel',
+      'systemPrompt.blockList.guide.assembly',
+      'systemPrompt.blockList.guide.scopeLabel',
+      'systemPrompt.blockList.guide.scope',
       'systemPrompt.blockList.newBlock',
       'systemPrompt.blockList.newBlockPrompt',
       'systemPrompt.blockList.invalidSlug',

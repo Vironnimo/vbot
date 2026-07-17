@@ -1025,12 +1025,46 @@
           {t('common.loading', 'Loading…')}
         </Banner>
       {:else}
-        <p class="sp-blocklist-hint">
-          {t(
-            'systemPrompt.blockList.intro',
-            'Reorder, toggle, and edit the blocks that build the system prompt. The Default scope applies to every agent; an agent gets its own scope here once “Custom system prompt” is enabled in the Agents tab.',
-          )}
-        </p>
+        <section
+          class="sp-blocklist-guide"
+          aria-labelledby="sp-blocklist-guide-title"
+        >
+          <div class="sp-blocklist-guide__intro">
+            <span class="sp-blocklist-guide__eyebrow">
+              {t('systemPrompt.blockList.guide.label', 'How it works')}
+            </span>
+            <h3 id="sp-blocklist-guide-title">
+              {t(
+                'systemPrompt.blockList.guide.title',
+                'These blocks become the System Prompt.',
+              )}
+            </h3>
+          </div>
+          <div class="sp-blocklist-guide__details">
+            <p>
+              <strong>
+                {t('systemPrompt.blockList.guide.assemblyLabel', 'Assembly')}
+              </strong>
+              <span>
+                {t(
+                  'systemPrompt.blockList.guide.assembly',
+                  'Blocks are read from top to bottom. Drag to reorder them, use the switches to include or exclude them, and edit their content directly.',
+                )}
+              </span>
+            </p>
+            <p>
+              <strong>
+                {t('systemPrompt.blockList.guide.scopeLabel', 'Scope')}
+              </strong>
+              <span>
+                {t(
+                  'systemPrompt.blockList.guide.scope',
+                  'Default applies to every Agent. Enable “Custom system prompt” in Agents to create an Agent-specific scope here.',
+                )}
+              </span>
+            </p>
+          </div>
+        </section>
 
         <ul class="sp-blocks" role="list">
           {#each blocks as block, index (block.id)}
@@ -1445,10 +1479,70 @@
     overflow-y: auto;
   }
 
-  .sp-blocklist-hint {
+  .sp-blocklist-guide {
+    display: grid;
+    grid-template-columns: minmax(220px, 0.8fr) minmax(0, 2fr);
+    align-items: center;
+    gap: 18px 28px;
+    padding: 16px 20px 16px 18px;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--r-md);
+    background: var(--surface);
+  }
+
+  .sp-blocklist-guide__intro {
+    min-width: 0;
+  }
+
+  .sp-blocklist-guide__eyebrow {
+    display: block;
+    margin-bottom: 7px;
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-xs);
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+
+  .sp-blocklist-guide h3 {
     margin: 0;
+    color: var(--text-hi);
+    font-size: var(--fs-heading-sm);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.35;
+  }
+
+  .sp-blocklist-guide__details {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 22px;
+    min-width: 0;
+  }
+
+  .sp-blocklist-guide__details p {
+    display: flex;
+    min-width: 0;
+    margin: 0;
+    padding-left: 16px;
+    border-left: 1px solid var(--border-2);
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .sp-blocklist-guide__details strong {
+    color: var(--text-hi);
+    font-size: var(--fs-body-sm);
+    font-weight: 600;
+    line-height: 1.3;
+  }
+
+  .sp-blocklist-guide__details span {
     color: var(--text-med);
-    font-size: 12.5px;
+    font-size: var(--fs-body-sm);
     line-height: 1.5;
   }
 
@@ -1768,6 +1862,12 @@
     white-space: nowrap;
   }
 
+  @media (max-width: 1000px) {
+    .sp-blocklist-guide {
+      grid-template-columns: 1fr;
+    }
+  }
+
   @media (max-width: 640px) {
     .sp-block-row {
       flex-wrap: wrap;
@@ -1781,6 +1881,16 @@
     .sp-blocklist-toolbar {
       align-items: stretch;
       flex-direction: column;
+    }
+
+    .sp-blocklist-guide {
+      gap: 16px;
+      padding: 15px 16px 16px 14px;
+    }
+
+    .sp-blocklist-guide__details {
+      grid-template-columns: 1fr;
+      gap: 14px;
     }
 
     .sp-preview-header {

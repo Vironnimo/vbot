@@ -668,8 +668,15 @@ export const englishCatalog = Object.freeze({
   'systemPrompt.error.previewFailed': 'Failed to load preview',
   'systemPrompt.error.copyFailed': 'Failed to copy',
   'systemPrompt.error.layoutFailed': 'Failed to save layout',
-  'systemPrompt.blockList.intro':
-    'Reorder, toggle, and edit the blocks that build the system prompt. The Default scope applies to every agent; an agent gets its own scope here once “Custom system prompt” is enabled in the Agents tab.',
+  'systemPrompt.blockList.guide.label': 'How it works',
+  'systemPrompt.blockList.guide.title':
+    'These blocks become the System Prompt.',
+  'systemPrompt.blockList.guide.assemblyLabel': 'Assembly',
+  'systemPrompt.blockList.guide.assembly':
+    'Blocks are read from top to bottom. Drag to reorder them, use the switches to include or exclude them, and edit their content directly.',
+  'systemPrompt.blockList.guide.scopeLabel': 'Scope',
+  'systemPrompt.blockList.guide.scope':
+    'Default applies to every Agent. Enable “Custom system prompt” in Agents to create an Agent-specific scope here.',
   'systemPrompt.blockList.newBlock': 'New block',
   'systemPrompt.blockList.newBlockPrompt':
     'Name for the new block (letters, digits, “-” or “_”):',
