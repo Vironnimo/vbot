@@ -21,7 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
-dependencies = ["httpx", "curl_cffi>=0.7,<1", "pyyaml", "croniter", "tzdata", "tzlocal>=5,<6", "beautifulsoup4", "pypdf>=4,<6", "sqlite-vec>=0.1.9,<0.2", "pathspec>=1.1"]
+dependencies = ["httpx", "idna>=3,<4", "curl_cffi>=0.7,<1", "pyyaml", "croniter", "tzdata", "tzlocal>=5,<6", "beautifulsoup4", "pypdf>=4,<6", "sqlite-vec>=0.1.9,<0.2", "pathspec>=1.1"]
 
 [project.scripts]
 vbot = "cli.main:main"
