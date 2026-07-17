@@ -127,6 +127,26 @@ export async function listMicrophones() {
   }
 }
 
+/** Enumerate curated and imported Desktop-local wakeword models. */
+export async function listWakewordModels() {
+  try {
+    const models = await callBridge('listWakewordModels');
+    return Array.isArray(models) ? models : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Validate and install one user-selected ONNX wakeword model. */
+export async function importWakewordModel(filename, contentBase64) {
+  return callBridge('importWakewordModel', filename, contentBase64);
+}
+
+/** Permanently remove one inactive imported wakeword model. */
+export async function deleteWakewordModel(modelId) {
+  return callBridge('deleteWakewordModel', modelId);
+}
+
 /** Retry the enabled worker after an actionable error. */
 export async function retryWakeword() {
   return callBridge('retryWakeword');

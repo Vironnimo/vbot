@@ -13,7 +13,7 @@ describe('createVoiceSettingsState', () => {
   it('returns defaults', () => {
     const state = createVoiceSettingsState();
     expect(state.enabled).toBe(false);
-    expect(state.engine).toBe('openwakeword');
+    expect(state.model_id).toBe('builtin/hey_jarvis');
     expect(state.sensitivity).toBe(0.5);
     expect(state.liveState).toBe('off');
   });
@@ -32,7 +32,7 @@ describe('applyWakewordStatus', () => {
       enabled: true,
       state: 'listening',
       sensitivity: 0.8,
-      engine: 'openwakeword',
+      model_id: 'builtin/hey_mycroft',
       target_agent_id: 'agent-1',
       session_behavior: 'new',
     };
@@ -41,6 +41,7 @@ describe('applyWakewordStatus', () => {
     expect(hydrated.enabled).toBe(true);
     expect(hydrated.liveState).toBe('listening');
     expect(hydrated.sensitivity).toBe(0.8);
+    expect(hydrated.model_id).toBe('builtin/hey_mycroft');
     expect(hydrated.target_agent_id).toBe('agent-1');
     expect(hydrated.session_behavior).toBe('new');
   });

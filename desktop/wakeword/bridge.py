@@ -14,6 +14,9 @@ methods). The connection methods delegate to the injected
 
 from __future__ import annotations
 
+import base64
+import binascii
+import logging
 import threading
 from collections import deque
 from collections.abc import Callable
@@ -21,9 +24,22 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from desktop.settings import read_wakeword_settings, write_wakeword_settings
+from desktop.wakeword.engine import (
+    DEFAULT_WAKEWORD_MODEL_ID,
+    DEFAULT_WAKEWORD_SENSITIVITY,
+    MAX_CUSTOM_WAKEWORD_MODEL_BYTES,
+    MAX_WAKEWORD_SENSITIVITY,
+    MIN_WAKEWORD_SENSITIVITY,
+    WakewordModelCatalog,
+    WakewordModelError,
+)
 
 if TYPE_CHECKING:
     from desktop.connection import DesktopProbeResult, ServerEntry
+
+logger = logging.getLogger("vbot.desktop.wakeword.bridge")
+
+_MAX_CUSTOM_WAKEWORD_MODEL_BASE64_CHARS = 4 * ((MAX_CUSTOM_WAKEWORD_MODEL_BYTES + 2) // 3)
 
 
 class ConnectionDelegate(Protocol):
@@ -83,10 +99,7 @@ _VALID_STATES = frozenset(
 _KNOWN_WAKEWORD_KEYS = frozenset(
     [
         "enabled",
-        "engine",
         "microphone",
-        "sensitivity",
-        "wake_phrase",
     ]
 )
 
@@ -111,6 +124,7 @@ class DesktopBridge:
         server_url: str = "",
         mock: bool = False,
         mode: str = "real",
+        model_catalog: Any = None,
     ) -> None:
         self._settings_path = settings_path
         self._worker = worker
@@ -124,12 +138,18 @@ class DesktopBridge:
         # the separate unavailable mode and never simulate Voice activity.
         self._mock = bool(mock)
         self._mode = "mock" if self._mock and mode == "real" else mode
+        self._model_catalog = (
+            model_catalog if model_catalog is not None else WakewordModelCatalog(settings_path)
+        )
         self._state = _WAKEWORD_STATE_OFF
         self._error_code: str | None = None
         self._active_microphone: dict[str, Any] | None = None
         self._event_sequence = 0
         self._events: deque[dict[str, Any]] = deque(maxlen=_WAKEWORD_EVENT_HISTORY_LIMIT)
         self._lock = threading.Lock()
+        # Import validation can load a full ONNX model. Serialize catalog I/O
+        # separately so status polling and worker state never wait on it.
+        self._model_lock = threading.Lock()
         # Server-selection calls mutate shared on-disk state and navigate the
         # single window; a dedicated lock serializes them across pywebview
         # threads without coupling to the wakeword config lock (a different
@@ -156,12 +176,12 @@ class DesktopBridge:
         return {
             "enabled": config.get("enabled", False),
             "state": state,
-            "engine": config.get("engine", "openwakeword"),
+            "engine": "openwakeword",
             "microphone": config.get("microphone"),
-            "sensitivity": config.get("sensitivity", 0.5),
+            "sensitivity": config.get("sensitivity", DEFAULT_WAKEWORD_SENSITIVITY),
+            "model_id": config.get("model_id", DEFAULT_WAKEWORD_MODEL_ID),
             "target_agent_id": config.get("target_agent_id"),
             "session_behavior": config.get("session_behavior", "active"),
-            "wake_phrase": config.get("wake_phrase", "hey_jarvis"),
             "error_code": error_code,
             "active_microphone": active_microphone,
             "events": events,
@@ -176,6 +196,43 @@ class DesktopBridge:
         from desktop.wakeword.worker import list_microphones
 
         return list_microphones()
+
+    def listWakewordModels(self) -> list[dict[str, Any]]:  # noqa: N802
+        """Return curated built-ins and Desktop-local imported models."""
+        with self._model_lock:
+            return [model.to_dict() for model in self._model_catalog.list_models()]
+
+    def importWakewordModel(self, filename: str, content_base64: str) -> dict[str, Any]:  # noqa: N802
+        """Validate and persist one base64-encoded ONNX wakeword model."""
+        if not isinstance(content_base64, str):
+            raise WakewordModelError("Wakeword model content must be base64 text")
+        if len(content_base64) > _MAX_CUSTOM_WAKEWORD_MODEL_BASE64_CHARS:
+            raise WakewordModelError("Wakeword model exceeds the import size limit")
+        try:
+            content = base64.b64decode(content_base64, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise WakewordModelError("Wakeword model content is not valid base64") from exc
+        with self._model_lock:
+            descriptor = self._model_catalog.import_model(filename, content)
+        return descriptor.to_dict()
+
+    def deleteWakewordModel(self, model_id: str) -> dict[str, bool]:  # noqa: N802
+        """Permanently remove an inactive imported wakeword model."""
+        if not isinstance(model_id, str) or not model_id.strip():
+            raise WakewordModelError("Wakeword model id must be a non-empty string")
+        model_id = model_id.strip()
+        with self._lock:
+            current = read_wakeword_settings(self._settings_path)
+            if current.get("model_id", DEFAULT_WAKEWORD_MODEL_ID) == model_id:
+                raise WakewordModelError("The active wakeword model cannot be removed")
+            with self._model_lock:
+                self._model_catalog.delete_model(model_id)
+            sensitivities = current.get("model_sensitivities")
+            if isinstance(sensitivities, dict) and model_id in sensitivities:
+                del sensitivities[model_id]
+                current["model_sensitivities"] = sensitivities
+                write_wakeword_settings(current, self._settings_path)
+        return {"deleted": True}
 
     # -- Actions from WebUI --------------------------------------------------
 
@@ -203,6 +260,24 @@ class DesktopBridge:
                 if key in config:
                     current[key] = _validated_config_value(key, config[key])
                     changed = True
+            if "model_id" in config:
+                model_id = config["model_id"]
+                if not isinstance(model_id, str) or not model_id.strip():
+                    raise WakewordModelError("Wakeword model id must be a non-empty string")
+                model_id = model_id.strip()
+                with self._model_lock:
+                    self._model_catalog.resolve(model_id)
+                current["model_id"] = model_id
+                changed = True
+            if "sensitivity" in config:
+                sensitivity = _validated_config_value("sensitivity", config["sensitivity"])
+                model_id = current.get("model_id", DEFAULT_WAKEWORD_MODEL_ID)
+                sensitivities = current.get("model_sensitivities")
+                if not isinstance(sensitivities, dict):
+                    sensitivities = {}
+                sensitivities[model_id] = sensitivity
+                current["model_sensitivities"] = sensitivities
+                changed = True
             profile_changes = {
                 key: _validated_config_value(key, config[key])
                 for key in _SERVER_PROFILE_KEYS
@@ -351,7 +426,16 @@ class DesktopBridge:
 
     def _start_worker(self) -> None:
         if self._worker is None and self._worker_factory is not None:
-            self._worker = self._worker_factory(self)
+            try:
+                self._worker = self._worker_factory(self)
+            except WakewordModelError as exc:
+                logger.warning("Wakeword model is unavailable: %s", exc)
+                self.publish_state(_WAKEWORD_STATE_ERROR, exc.error_code)
+                return
+            except Exception:
+                logger.warning("Failed to create wakeword worker", exc_info=True)
+                self.publish_state(_WAKEWORD_STATE_ERROR, "engine_start_failed")
+                return
         if self._worker is None:
             self.publish_state(_WAKEWORD_STATE_ERROR)
             return
@@ -366,8 +450,32 @@ class DesktopBridge:
         with self._lock:
             return self._worker_config_locked()
 
+    def resolve_wakeword_model_target(self) -> str:
+        """Return the active model's built-in name or private imported path."""
+        with self._lock:
+            config = self._worker_config_locked()
+            with self._model_lock:
+                descriptor = self._model_catalog.resolve(config["model_id"])
+            return descriptor.target
+
     def _worker_config_locked(self) -> dict[str, Any]:
         config = read_wakeword_settings(self._settings_path)
+        model_id = config.get("model_id", DEFAULT_WAKEWORD_MODEL_ID)
+        if not isinstance(model_id, str) or not model_id:
+            model_id = DEFAULT_WAKEWORD_MODEL_ID
+        sensitivities = config.get("model_sensitivities")
+        sensitivity = (
+            sensitivities.get(model_id, DEFAULT_WAKEWORD_SENSITIVITY)
+            if isinstance(sensitivities, dict)
+            else DEFAULT_WAKEWORD_SENSITIVITY
+        )
+        if isinstance(sensitivity, bool) or not isinstance(sensitivity, (int, float)):
+            sensitivity = DEFAULT_WAKEWORD_SENSITIVITY
+        config["model_id"] = model_id
+        config["sensitivity"] = max(
+            MIN_WAKEWORD_SENSITIVITY,
+            min(MAX_WAKEWORD_SENSITIVITY, float(sensitivity)),
+        )
         profiles = config.get("server_profiles")
         profile = profiles.get(self._server_url, {}) if isinstance(profiles, dict) else {}
         if not isinstance(profile, dict):
@@ -416,8 +524,11 @@ def _validated_config_value(key: str, value: Any) -> Any:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError("Voice sensitivity must be a number between 0 and 1")
         numeric = float(value)
-        if not 0.0 <= numeric <= 1.0:
-            raise ValueError("Voice sensitivity must be between 0 and 1")
+        if not MIN_WAKEWORD_SENSITIVITY <= numeric <= MAX_WAKEWORD_SENSITIVITY:
+            raise ValueError(
+                f"Voice sensitivity must be between {MIN_WAKEWORD_SENSITIVITY} "
+                f"and {MAX_WAKEWORD_SENSITIVITY}"
+            )
         return numeric
     if key == "microphone":
         if value is None or (isinstance(value, int) and not isinstance(value, bool) and value >= 0):
@@ -435,6 +546,4 @@ def _validated_config_value(key: str, value: Any) -> Any:
         raise ValueError("Voice session behavior must be 'active' or 'new'")
     if key == "enabled":
         return bool(value)
-    if key in {"engine", "wake_phrase"} and isinstance(value, str) and value.strip():
-        return value.strip()
     raise ValueError(f"Invalid Voice setting: {key}")

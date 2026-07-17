@@ -52,10 +52,12 @@ _SETTINGS_LOCKS: dict[str, threading.RLock] = {}
 
 DEFAULT_WAKEWORD_SETTINGS: dict[str, Any] = {
     "enabled": False,
-    "engine": "openwakeword",
     "microphone": None,
-    "sensitivity": 0.5,
-    "wake_phrase": "hey_jarvis",
+    "model_id": "builtin/hey_jarvis",
+    # Sensitivity is calibrated per model. The bridge exposes the selected
+    # model's value as a flat runtime field while this map preserves tuning
+    # when the user switches between installed models.
+    "model_sensitivities": {},
     # Agent/session routing is server-specific. A Desktop can switch between
     # unrelated vBot servers, where the same bare agent id may name a different
     # identity. Keeping the target beside the server URL prevents commands from

@@ -2,7 +2,7 @@
   import { onDestroy } from 'svelte';
   import Dropdown from './Dropdown.svelte';
   import Button from './ui/Button.svelte';
-  import TextField from './ui/TextField.svelte';
+  import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import Toggle from './ui/Toggle.svelte';
   import { t } from '$lib/i18n.js';
   import {
@@ -10,6 +10,9 @@
     setWakewordEnabled,
     setWakewordConfig,
     listMicrophones,
+    listWakewordModels,
+    importWakewordModel,
+    deleteWakewordModel,
     onWakewordStatusChange,
     retryWakeword,
     isDesktop,
@@ -41,8 +44,12 @@
   let loaded = $state(false);
   let cleanupStatusPoll = null;
   let microphones = $state([]);
+  let wakewordModels = $state([]);
   let saveState = $state('idle');
   let saveChain = Promise.resolve();
+  let modelFileInput = $state();
+  let modelActionState = $state('idle');
+  let deleteConfirmModel = $state(null);
 
   let agentOptions = $derived(
     agents.map((agent) => ({
@@ -71,6 +78,20 @@
       ? String(voiceState.microphone)
       : '',
   );
+  let wakewordModelOptions = $derived(
+    wakewordModels.map((model) => ({
+      value: model.id,
+      label: model.label,
+      secondaryLabel:
+        model.source === 'built_in'
+          ? t('settings.voice.modelBuiltIn', 'Built-in')
+          : t('settings.voice.modelImported', 'Imported ONNX'),
+    })),
+  );
+  let selectedWakewordModel = $derived(
+    wakewordModels.find((model) => model.id === voiceState.model_id) ?? null,
+  );
+  let modelActionBusy = $derived(modelActionState !== 'idle');
 
   let liveStateLabel = $derived(liveStateText(voiceState.liveState));
   let liveStateDotClass = $derived(liveStateDotColor(voiceState.liveState));
@@ -108,6 +129,14 @@
       engine_start_failed: t(
         'settings.voice.error.engine',
         'The on-device wakeword model could not start. Restart the Desktop app and try again.',
+      ),
+      wakeword_model_unavailable: t(
+        'settings.voice.error.modelUnavailable',
+        'The selected wakeword model is no longer available. Choose another model or import it again.',
+      ),
+      wakeword_model_invalid: t(
+        'settings.voice.error.modelInvalid',
+        'The wakeword model is not a compatible openWakeWord ONNX model.',
       ),
       microphone_unavailable: t(
         'settings.voice.error.microphone',
@@ -177,12 +206,12 @@
 
   async function loadStatus() {
     try {
-      const [status, availableMicrophones] = await Promise.all([
-        getWakewordStatus(),
-        listMicrophones(),
-      ]);
+      const [status, availableMicrophones, availableModels] = await Promise.all(
+        [getWakewordStatus(), listMicrophones(), listWakewordModels()],
+      );
       voiceState = applyWakewordStatus(voiceState, status);
       microphones = availableMicrophones;
+      wakewordModels = availableModels;
       lastSaved = snapshotVoiceSettings(voiceState);
     } catch {
       // Bridge not available; keep defaults
@@ -257,6 +286,105 @@
       microphone: Number.isInteger(parsed) ? parsed : null,
     };
     void saveConfig();
+  }
+
+  async function handleWakewordModelChange(value) {
+    if (!value || value === voiceState.model_id) return;
+    voiceState = { ...voiceState, model_id: value };
+    await saveConfig();
+    if (saveState !== 'saved') return;
+    await refreshEditableStatus();
+  }
+
+  function chooseWakewordModelFile() {
+    modelFileInput?.click();
+  }
+
+  async function handleWakewordModelFile(event) {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+
+    modelActionState = 'importing';
+    try {
+      await saveChain;
+      const contentBase64 = await readFileAsBase64(file);
+      const imported = await importWakewordModel(file.name, contentBase64);
+      await setWakewordConfig({ model_id: imported.id });
+      wakewordModels = await listWakewordModels();
+      await refreshEditableStatus();
+      onToast({
+        title: t(
+          'settings.voice.importSuccess',
+          'Wakeword model imported and selected.',
+        ),
+        variant: 'success',
+      });
+    } catch (error) {
+      onToast({
+        title: t('errors.generic', 'Something went wrong. Try again.'),
+        message: error?.message || '',
+        variant: 'error',
+      });
+    } finally {
+      modelActionState = 'idle';
+    }
+  }
+
+  async function refreshEditableStatus() {
+    const status = await getWakewordStatus();
+    voiceState = applyWakewordStatus(voiceState, status);
+    lastSaved = snapshotVoiceSettings(voiceState);
+  }
+
+  async function confirmDeleteWakewordModel() {
+    const model = deleteConfirmModel;
+    deleteConfirmModel = null;
+    if (!model?.removable) return;
+
+    modelActionState = 'deleting';
+    try {
+      await saveChain;
+      await setWakewordConfig({ model_id: 'builtin/hey_jarvis' });
+      await deleteWakewordModel(model.id);
+      wakewordModels = await listWakewordModels();
+      await refreshEditableStatus();
+      onToast({
+        title: t('settings.voice.deleteSuccess', 'Wakeword model removed.'),
+        variant: 'success',
+      });
+    } catch (error) {
+      wakewordModels = await listWakewordModels();
+      await refreshEditableStatus();
+      onToast({
+        title: t('errors.generic', 'Something went wrong. Try again.'),
+        message: error?.message || '',
+        variant: 'error',
+      });
+    } finally {
+      modelActionState = 'idle';
+    }
+  }
+
+  function readFileAsBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = String(reader.result || '');
+        const separator = result.indexOf(',');
+        if (separator < 0) {
+          reject(new Error('The wakeword model could not be read.'));
+          return;
+        }
+        resolve(result.slice(separator + 1));
+      };
+      reader.onerror = () =>
+        reject(
+          reader.error || new Error('The wakeword model could not be read.'),
+        );
+      reader.readAsDataURL(file);
+    });
   }
 
   function handleSensitivityInput(event) {
@@ -374,7 +502,58 @@
       </div>
     {/if}
 
-    <!-- Sensitivity slider -->
+    <!-- Active wakeword model and local model management -->
+    <div class="s-row">
+      <div class="s-row-info">
+        <div class="s-row-label">
+          {t('settings.voice.model', 'Wakeword model')}
+        </div>
+        <div class="s-row-desc">
+          {t(
+            'settings.voice.modelDescription',
+            'Exactly one model listens at a time. Import finished custom ONNX models trained outside vBot.',
+          )}
+        </div>
+      </div>
+      <div class="s-row-control voice-model-control">
+        <Dropdown
+          value={voiceState.model_id}
+          options={wakewordModelOptions}
+          ariaLabel={t('settings.voice.model', 'Wakeword model')}
+          triggerClass="voice-model-dropdown"
+          onValueChange={handleWakewordModelChange}
+          disabled={!loaded || modelActionBusy || wakewordModels.length === 0}
+        />
+        <div class="voice-model-actions">
+          <input
+            bind:this={modelFileInput}
+            class="voice-model-file"
+            type="file"
+            accept=".onnx,application/octet-stream"
+            onchange={handleWakewordModelFile}
+          />
+          <Button
+            variant="secondary"
+            loading={modelActionState === 'importing'}
+            disabled={!loaded || modelActionBusy}
+            onClick={chooseWakewordModelFile}
+          >
+            {t('settings.voice.importModel', 'Import ONNX model')}
+          </Button>
+          {#if selectedWakewordModel?.removable}
+            <Button
+              variant="tertiary"
+              disabled={!loaded || modelActionBusy}
+              onClick={() => (deleteConfirmModel = selectedWakewordModel)}
+            >
+              {t('settings.voice.removeModel', 'Remove imported model')}
+            </Button>
+          {/if}
+        </div>
+      </div>
+    </div>
+
+    <!-- Sensitivity is stored independently for each model -->
     <div class="s-row">
       <div class="s-row-info">
         <div class="s-row-label">
@@ -392,8 +571,8 @@
           <input
             id="voice-sensitivity"
             type="range"
-            min="0"
-            max="1"
+            min="0.05"
+            max="0.95"
             step="0.05"
             value={voiceState.sensitivity}
             oninput={handleSensitivityInput}
@@ -452,18 +631,6 @@
       </div>
     </div>
 
-    <!-- Engine (read-only) -->
-    <div class="s-row">
-      <div class="s-row-info">
-        <div class="s-row-label">
-          {t('settings.voice.engine', 'Engine')}
-        </div>
-      </div>
-      <div class="s-row-control s-row-control--input">
-        <TextField readonly value={voiceState.engine} />
-      </div>
-    </div>
-
     <!-- Microphone picker -->
     <div class="s-row">
       <div class="s-row-info">
@@ -480,18 +647,6 @@
           onValueChange={handleMicrophoneChange}
           disabled={!loaded || microphones.length === 0}
         />
-      </div>
-    </div>
-
-    <!-- Wake phrase (read-only) -->
-    <div class="s-row">
-      <div class="s-row-info">
-        <div class="s-row-label">
-          {t('settings.voice.wakePhrase', 'Wake phrase')}
-        </div>
-      </div>
-      <div class="s-row-control s-row-control--input">
-        <TextField readonly value={voiceState.wake_phrase} />
       </div>
     </div>
 
@@ -520,6 +675,20 @@
     </div>
   {/if}
 </div>
+
+{#if deleteConfirmModel}
+  <ConfirmDialog
+    title={t('settings.voice.deleteConfirmTitle', 'Remove wakeword model')}
+    body={t(
+      'settings.voice.deleteConfirm',
+      'Remove “{name}” permanently from this Desktop? The ONNX file stored by vBot will be deleted.',
+      { name: deleteConfirmModel.label },
+    )}
+    confirmLabel={t('common.delete', 'Delete')}
+    onConfirm={confirmDeleteWakewordModel}
+    onCancel={() => (deleteConfirmModel = null)}
+  />
+{/if}
 
 <style>
   .voice-settings {
@@ -620,8 +789,26 @@
   }
 
   .voice-microphone-control,
+  .voice-model-control,
+  .voice-settings :global(.voice-model-dropdown.dropdown),
   .voice-settings :global(.voice-microphone-dropdown.dropdown) {
     min-width: 300px;
+  }
+
+  .voice-model-control {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .voice-model-actions {
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .voice-model-file {
+    display: none;
   }
 
   /* Privacy note */

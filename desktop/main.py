@@ -362,7 +362,7 @@ def _create_wakeword_bridge(
             return UnavailableWakewordWorker(bridge=bridge)
         wakeword_config = bridge.worker_config()
         engine = OpenWakeWordEngine(
-            wake_phrase=wakeword_config.get("wake_phrase", "hey_jarvis"),
+            model_target=bridge.resolve_wakeword_model_target(),
             sensitivity=wakeword_config.get("sensitivity", 0.5),
         )
         # Read the current server URL off the bridge (not a captured constant) so

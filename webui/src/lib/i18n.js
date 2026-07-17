@@ -1241,7 +1241,18 @@ export const englishCatalog = Object.freeze({
   'settings.voice.title': 'Voice',
   'settings.voice.subtitle': 'Wakeword detection and voice command settings.',
   'settings.voice.enabled': 'Wakeword listening',
-  'settings.voice.engine': 'Engine',
+  'settings.voice.model': 'Wakeword model',
+  'settings.voice.modelDescription':
+    'Exactly one model listens at a time. Import finished custom ONNX models trained outside vBot.',
+  'settings.voice.modelBuiltIn': 'Built-in',
+  'settings.voice.modelImported': 'Imported ONNX',
+  'settings.voice.importModel': 'Import ONNX model',
+  'settings.voice.removeModel': 'Remove imported model',
+  'settings.voice.importSuccess': 'Wakeword model imported and selected.',
+  'settings.voice.deleteConfirmTitle': 'Remove wakeword model',
+  'settings.voice.deleteConfirm':
+    'Remove “{name}” permanently from this Desktop? The ONNX file stored by vBot will be deleted.',
+  'settings.voice.deleteSuccess': 'Wakeword model removed.',
   'settings.voice.microphone': 'Microphone',
   'settings.voice.sensitivity': 'Sensitivity',
   'settings.voice.targetAgent': 'Personal Agent',
@@ -1250,7 +1261,6 @@ export const englishCatalog = Object.freeze({
   'settings.voice.sessionBehavior': 'Session',
   'settings.voice.sessionBehaviorActive': 'Use active session',
   'settings.voice.sessionBehaviorNew': 'New session each time',
-  'settings.voice.wakePhrase': 'Wake phrase',
   'settings.voice.state': 'Status',
   'settings.voice.privacyNote':
     'While listening is enabled, microphone audio is analyzed continuously on this device. Nothing is saved or sent before the wake phrase matches; the following command recording is sent to your configured vBot speech backend for transcription.',

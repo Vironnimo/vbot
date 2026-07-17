@@ -280,8 +280,8 @@ def test_read_wakeword_settings_merges_with_defaults(tmp_path: Path) -> None:
     config = desktop_settings.read_wakeword_settings(settings_file)
 
     assert config["enabled"] is True
-    assert config["engine"] == desktop_settings.DEFAULT_WAKEWORD_SETTINGS["engine"]
-    assert config["wake_phrase"] == desktop_settings.DEFAULT_WAKEWORD_SETTINGS["wake_phrase"]
+    assert config["model_id"] == desktop_settings.DEFAULT_WAKEWORD_SETTINGS["model_id"]
+    assert config["model_sensitivities"] == {}
 
 
 def test_read_wakeword_settings_falls_back_for_missing_wakeword_key(tmp_path: Path) -> None:
@@ -328,12 +328,15 @@ def test_write_wakeword_settings_preserves_servers_and_last_used(tmp_path: Path)
 
     wakeword_config = {
         "enabled": True,
-        "engine": "openwakeword",
         "microphone": None,
-        "sensitivity": 0.8,
-        "target_agent_id": "test-agent",
-        "session_behavior": "new",
-        "wake_phrase": "hey_jarvis",
+        "model_id": "builtin/hey_mycroft",
+        "model_sensitivities": {"builtin/hey_mycroft": 0.8},
+        "server_profiles": {
+            "http://127.0.0.1:8420": {
+                "target_agent_id": "test-agent",
+                "session_behavior": "new",
+            }
+        },
     }
     desktop_settings.write_wakeword_settings(wakeword_config, settings_file)
 
