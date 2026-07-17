@@ -1,0 +1,11 @@
+node_modules/
+artifacts/
+.data/
+.resources/
+.playwright-cli/
+.explore-data/
+.recheck-data/
+.fake-provider.log
+.fake-provider.pid
+*-exploration.png
+agent-scope.yml
