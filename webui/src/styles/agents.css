@@ -16,49 +16,17 @@
   overflow: hidden;
 }
 
-.agents-view .agent-list-scroll {
-  padding: 4px 0;
-}
-
 .agents-view .agent-item {
   display: flex;
-  width: 100%;
   align-items: stretch;
-  border: 0;
   color: inherit;
-  background: transparent;
   text-align: left;
-  transition: background 100ms ease;
-}
-
-.agents-view .agent-item:hover,
-.agents-view .agent-item:focus-visible {
-  background: var(--surface-2);
-}
-
-.agents-view .agent-item:focus-visible {
-  outline: 1px solid var(--accent-40);
-  outline-offset: -1px;
-}
-
-.agents-view .agent-item.active {
-  background: var(--accent-dim);
-}
-
-.agents-view .agent-bar {
-  width: 2px;
-  flex-shrink: 0;
-  background: transparent;
-}
-
-.agents-view .agent-item.active .agent-bar {
-  background: var(--accent);
 }
 
 .agents-view .agent-item-inner {
   min-width: 0;
   flex: 1;
-  padding: 7px 12px 7px 10px;
+  padding: 7px 10px;
 }
 
 .agents-view .agent-item-name {

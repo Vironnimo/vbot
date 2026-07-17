@@ -2,6 +2,7 @@
   import Button from '../ui/Button.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import { t } from '$lib/i18n.js';
+  import { modelShortName } from '$lib/modelSelection.js';
 
   let {
     agents = [],
@@ -28,7 +29,7 @@
     </Button>
   </div>
 
-  <div class="agent-list-scroll secondary-pane__scroll">
+  <div class="agent-list-scroll secondary-pane__scroll secondary-list">
     {#if isLoading}
       <p class="agents-view__list-state">
         {t('agents.loading', 'Loading agents…')}
@@ -53,15 +54,16 @@
       {#each agents as agent (agent.id)}
         <button
           class:active={agent.id === selectedAgentId}
-          class="agent-item"
+          class="agent-item secondary-list__item"
           type="button"
           onclick={() => onSelect(agent.id)}
         >
-          <div class="agent-bar"></div>
           <div class="agent-item-inner">
             <div class="agent-item-name">{agent.name || agent.id}</div>
             <div class="agent-item-sub">
-              {agent.model || agent.id || t('common.unknown', 'Unknown')}
+              {modelShortName(agent.model) ||
+                agent.id ||
+                t('common.unknown', 'Unknown')}
             </div>
           </div>
         </button>
