@@ -124,6 +124,11 @@ async def test_subagent_tool_returns_queued_without_waiting_for_busy_session_sta
         "queue_item_id": "queued-item-1",
         "status": "queued",
         "activity_file": activity_file,
+        "activity_note": (
+            "Current Sub-Agent activity is available at "
+            f"{activity_file}. Read this file if the Sub-Agent's status or progress becomes "
+            "relevant."
+        ),
     }
     manager.remove_queued("parent", "waiting-sub-session", "queued-item-1", project_id=None)
     for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
@@ -284,6 +289,7 @@ async def test_subagent_result_reports_queued_session(tmp_path: Path) -> None:
     assert spawn_result["ok"] is True
     assert result["ok"] is True
     activity_file = spawn_result["data"]["activity_file"]
+    assert "activity_note" not in result["data"]
     assert result["data"] == {
         "agent_id": "parent",
         "session_id": "queued-result-sub-session",

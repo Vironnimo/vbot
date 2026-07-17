@@ -62,6 +62,10 @@ SUBAGENT_SESSION_METADATA_FLAG = "is_subagent_session"
 SUBAGENT_PARENT_METADATA_KEY = "subagent_parent"
 USER_CANCEL_REASON = "user"
 SUBAGENT_USER_CANCEL_MESSAGE = "Cancelled by the user"
+SUBAGENT_ACTIVITY_NOTE_TEMPLATE = (
+    "Current Sub-Agent activity is available at {path}. Read this file if the Sub-Agent's "
+    "status or progress becomes relevant."
+)
 
 # Cascade policy switch: when True, a parent Run cancellation cascades to every
 # sub-agent child including background ones (legacy behaviour). When False,
@@ -304,15 +308,18 @@ async def _handle_subagent(
                     )
                     activity_handed_off = activity is not None
                     return tool_success(
-                        _with_target_project(
-                            {
-                                "agent_id": target_agent_id,
-                                "session_id": session.id,
-                                "queue_item_id": item.item_id,
-                                "status": SUBAGENT_STATUS_QUEUED,
-                                "activity_file": activity_file,
-                            },
-                            target_project_id,
+                        _with_activity_note(
+                            _with_target_project(
+                                {
+                                    "agent_id": target_agent_id,
+                                    "session_id": session.id,
+                                    "queue_item_id": item.item_id,
+                                    "status": SUBAGENT_STATUS_QUEUED,
+                                    "activity_file": activity_file,
+                                },
+                                target_project_id,
+                            ),
+                            activity_file,
                         )
                     )
                 sub_run = queued_run
@@ -368,15 +375,18 @@ async def _handle_subagent(
         if background:
             _track_subagent_completion(batch_tracker, parent_key, sub_run, activity_file)
             return tool_success(
-                _with_target_project(
-                    {
-                        "agent_id": target_agent_id,
-                        "session_id": session.id,
-                        "run_id": sub_run.id,
-                        "status": RunStatus.RUNNING.value,
-                        "activity_file": activity_file,
-                    },
-                    target_project_id,
+                _with_activity_note(
+                    _with_target_project(
+                        {
+                            "agent_id": target_agent_id,
+                            "session_id": session.id,
+                            "run_id": sub_run.id,
+                            "status": RunStatus.RUNNING.value,
+                            "activity_file": activity_file,
+                        },
+                        target_project_id,
+                    ),
+                    activity_file,
                 )
             )
 
@@ -419,7 +429,7 @@ async def _handle_subagent(
         batch_tracker.on_sub_agent_complete(parent_key, sub_run.id, result)
         if forced_foreground:
             result = {**result, "spawn_note": FORCED_FOREGROUND_NOTE}
-        return tool_success(result)
+        return tool_success(_with_activity_note(result, activity_file))
     finally:
         if activity is not None and not activity_handed_off:
             activity.finish_unstarted()
@@ -1032,6 +1042,12 @@ def _activity_file(activity: SubAgentActivity | None) -> str | None:
     if activity is None:
         return None
     return str(activity.path.resolve())
+
+
+def _with_activity_note(data: JsonObject, activity_file: str | None) -> JsonObject:
+    if activity_file is not None:
+        data["activity_note"] = SUBAGENT_ACTIVITY_NOTE_TEMPLATE.format(path=activity_file)
+    return data
 
 
 def _run_matches_target(

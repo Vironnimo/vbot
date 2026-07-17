@@ -43,6 +43,8 @@ async def test_register_subagent_tools_registers_both_public_tools() -> None:
         SUBAGENT_TOOL_NAME,
         SUBAGENT_RESULT_TOOL_NAME,
     ]
+    assert "activity_file" not in registry.get(SUBAGENT_TOOL_NAME).description
+    assert "activity_file" not in registry.get(SUBAGENT_RESULT_TOOL_NAME).description
 
 
 async def test_subagent_tool_enforces_depth_limit(tmp_path: Path) -> None:
@@ -328,6 +330,7 @@ async def test_activity_allocation_failure_does_not_block_subagent_run(
 
     assert result["ok"] is True
     assert result["data"]["activity_file"] is None
+    assert "activity_note" not in result["data"]
     manager.started[0][3].mark_completed(ChatMessage.assistant(model="test", content="done"))
     await asyncio.sleep(0)
 

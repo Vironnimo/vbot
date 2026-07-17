@@ -189,6 +189,11 @@ async def test_subagent_tool_top_level_background_keeps_running_descriptor(
     assert result["ok"] is True
     assert result["data"]["status"] == "running"
     assert "spawn_note" not in result["data"]
+    activity_file = result["data"]["activity_file"]
+    assert result["data"]["activity_note"] == (
+        "Current Sub-Agent activity is available at "
+        f"{activity_file}. Read this file if the Sub-Agent's status or progress becomes relevant."
+    )
     # Settle the background completion tracker task before the loop closes.
     sub_run = manager.started[0][3]
     sub_run.mark_completed(ChatMessage.assistant(model="openai/gpt-5.2", content="done"))
@@ -345,6 +350,11 @@ async def test_subagent_tool_foreground_waits_for_full_result(tmp_path: Path) ->
     assert result["data"]["status"] == "completed"
     assert result["data"]["result"] == "finished"
     assert result["data"]["usage"] == {"input_tokens": 1, "output_tokens": 2}
+    activity_file = result["data"]["activity_file"]
+    assert result["data"]["activity_note"] == (
+        "Current Sub-Agent activity is available at "
+        f"{activity_file}. Read this file if the Sub-Agent's status or progress becomes relevant."
+    )
     for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
         await asyncio.sleep(0)
     assert trigger_service.calls == []
