@@ -340,7 +340,10 @@ else
     "$VBOT_PATH" doctor settings --data-dir "$DATA_DIR"
 fi
 
-PYTHON_EXECUTABLE="$($PYTHON -c 'import sys; print(sys.executable)')"
+# Preserve the selected environment entry point. Some symlink-based venvs
+# report the base binary through sys.executable even though pip installs into
+# the venv, which would make a later uninstall target the wrong environment.
+PYTHON_EXECUTABLE="$(command -v "$PYTHON")"
 step "Recording installation shape: ${INSTALL_SHAPE}"
 (cd "$PROJECT_ROOT" && "$PYTHON" -m cli.install_state write \
     --root "$PROJECT_ROOT" \

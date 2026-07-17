@@ -91,3 +91,4 @@ jobs:
           if (Test-Path .vbot-install.json) { throw 'installation manifest was not removed' }
           & .tmp/install-venv/Scripts/python.exe -m pip show vbot
           if ($LASTEXITCODE -eq 0) { throw 'vbot is still installed' }
+          exit 0

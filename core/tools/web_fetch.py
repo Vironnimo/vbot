@@ -286,10 +286,10 @@ def _strip_noise(root: BeautifulSoup | Tag) -> None:
             if _is_live(tag):
                 tag.decompose()
 
-    for tag in list(root.find_all(attrs={"hidden": True})):
+    for tag in list(root.select("[hidden]")):
         if _is_live(tag):
             tag.decompose()
-    for tag in list(root.find_all(attrs={"aria-hidden": "true"})):
+    for tag in list(root.select('[aria-hidden="true"]')):
         if _is_live(tag):
             tag.decompose()
 
@@ -770,7 +770,7 @@ async def _resolve_host_addresses(host: str, port: int) -> list[IpAddress]:
         if family not in {socket.AF_INET, socket.AF_INET6}:
             continue
 
-        address_text = socket_address[0].split("%", 1)[0]
+        address_text = str(socket_address[0]).split("%", 1)[0]
         try:
             address = ipaddress.ip_address(address_text)
         except ValueError:

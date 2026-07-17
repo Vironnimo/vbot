@@ -176,7 +176,7 @@ class ProcessManager:
         process_env["PYTHONIOENCODING"] = "utf-8"
 
         if os.name == "nt":
-            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+            creationflags = cast(Any, subprocess).CREATE_NEW_PROCESS_GROUP
             start_new_session = False
         else:
             creationflags = 0
