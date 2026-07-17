@@ -74,7 +74,7 @@ def test_create_writes_agent_json_sessions_and_workspace(store: AgentStore) -> N
     assert data["name"] == "Coder Agent"
     assert data["model"] == ""
     assert data["fallback_model"] == ""
-    assert data["workspace"] == str((store.data_dir / "agents" / "coder" / "workspace").resolve())
+    assert data["workspace"] == "agents/coder/workspace"
     assert data["root_project_id"] is None
     assert data["temperature"] is None
     assert data["thinking_effort"] is None
@@ -130,6 +130,39 @@ def test_create_with_custom_values_persists_schema(store: AgentStore, tmp_path: 
     assert agent.memory_prompt_mode == "agent"
     assert agent.custom_system_prompt_enabled is True
     assert (custom_workspace / "SOUL.md").exists()
+    agent_path = store.data_dir / "agents" / "researcher_1" / "agent.json"
+    data = json.loads(agent_path.read_text(encoding="utf-8"))
+    assert data["workspace"] == str(custom_workspace.resolve())
+
+
+def test_create_persists_workspace_inside_data_dir_relative(store: AgentStore) -> None:
+    workspace = store.data_dir / "shared-workspaces" / "researcher"
+
+    agent = store.create("researcher", "Researcher", workspace=workspace)
+
+    assert agent.workspace == str(workspace.resolve())
+    agent_path = store.data_dir / "agents" / "researcher" / "agent.json"
+    data = json.loads(agent_path.read_text(encoding="utf-8"))
+    assert data["workspace"] == "shared-workspaces/researcher"
+
+
+def test_relative_default_workspace_follows_moved_data_dir(
+    tmp_path: Path,
+    template_dir: Path,
+) -> None:
+    original_data_dir = tmp_path / "original-data"
+    original_store = AgentStore(original_data_dir, template_dir=template_dir)
+    original = original_store.create("coder", "Coder")
+    Path(original.workspace, "MEMORY.md").write_text("portable memory", encoding="utf-8")
+    moved_data_dir = tmp_path / "moved-data"
+
+    shutil.move(str(original_data_dir), str(moved_data_dir))
+    moved_store = AgentStore(moved_data_dir, template_dir=template_dir)
+    loaded = moved_store.get("coder")
+
+    expected_workspace = moved_data_dir / "agents" / "coder" / "workspace"
+    assert loaded.workspace == str(expected_workspace.resolve())
+    assert Path(loaded.workspace, "MEMORY.md").read_text(encoding="utf-8") == "portable memory"
 
 
 def test_create_removes_runtime_derived_memory_tool_from_allowed_tools(
@@ -372,7 +405,7 @@ def test_workspace_copy_rolls_back_destination_when_agent_write_fails(
     agent_json = json.loads(
         (store.data_dir / "agents" / "coder" / "agent.json").read_text(encoding="utf-8")
     )
-    assert agent_json["workspace"] == agent.workspace
+    assert agent_json["workspace"] == "agents/coder/workspace"
 
 
 @pytest.mark.parametrize(
@@ -503,7 +536,7 @@ def test_temperature_and_thinking_effort_none_round_trip_as_json_null(
     agent_path = store.data_dir / "agents" / "coder_nulls" / "agent.json"
 
     data = json.loads(agent_path.read_text(encoding="utf-8"))
-    restored = agents_module._agent_from_dict(data)
+    restored = agents_module._agent_from_dict(data, data_dir=store.data_dir)
 
     assert data["temperature"] is None
     assert data["thinking_effort"] is None
@@ -756,7 +789,7 @@ def test_agent_without_workspace_is_normalized_to_default_workspace(store: Agent
     assert workspace_path.is_dir()
     assert (workspace_path / "SOUL.md").exists()
     normalized_data = json.loads(agent_path.read_text(encoding="utf-8"))
-    assert normalized_data["workspace"] == str(workspace_path.resolve())
+    assert normalized_data["workspace"] == "agents/missing_workspace/workspace"
 
 
 def test_agent_without_custom_prompt_toggle_uses_default_false(store: AgentStore) -> None:

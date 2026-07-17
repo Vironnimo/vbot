@@ -106,7 +106,7 @@ python scripts/worktree.py create <task-name>
 python scripts/worktree.py list
 python scripts/worktree.py delete <task-name> [--force]
 ```
-`create` prints the worktree `path`, assigned `port`, data dir, and URL. `delete --force` discards uncommitted worktree changes. If worktree commands fail or behave unexpectedly, read `scripts/README-worktree.md`.
+`create` prints the worktree `path`, assigned `port`, data dir, and URL. The primary development checkout reserves `8421`, so generated worktrees start at `8422`. `delete --force` discards uncommitted worktree changes. If worktree commands fail or behave unexpectedly, read `scripts/README-worktree.md`.
 
 **Dependency groups:** `server`, `cli`, `desktop`, `dev`. Core dependencies plus each group's extras are declared in `pyproject.toml`; the WebUI's are in `webui/package.json`. See those files for exact packages and versions.
 
@@ -116,6 +116,7 @@ python server/main.py                 # Server foreground
 python cli/main.py server start       # Server background (managed)
 python desktop/main.py                # Desktop shell
 ```
+The primary development checkout uses its git-ignored `.vbot-worktree` marker with `cwd_only: true` to select `~/.vbot-dev`; that data directory's `settings.json` selects port `8421`. Normal relative server and CLI commands launched from this checkout therefore target the development instance automatically, while an editable installed CLI invoked outside the checkout ignores this cwd-only marker and keeps the product defaults `~/.vbot` and `8420`. Do not point development commands at that installed instance. Managed task worktrees use their own `~/.vbot-<name>` data directories and ports beginning at `8422`.
 
 **Build frontend:**
 ```bash
@@ -124,7 +125,7 @@ cd webui && npm ci && npm run build   # Svelte → static JS/CSS
 
 **Releasing:** When the user wants to release a new version, read `.vorch/workflows/release-workflow.md`.
 
-**Data directory:** `~/.vbot` — created on first run. Holds `.env` and `settings.json` (see Configuration above) plus all runtime data: attachments, logs, sessions, the recall index, cron jobs, per-process shell logs, and prompt overrides. Per-subdirectory layout lives in the relevant domain maps.
+**Product data directory:** `~/.vbot` — created on first run when no explicit data directory, environment override, or checkout marker applies. Holds `.env` and `settings.json` (see Configuration above) plus all runtime data: attachments, logs, sessions, the recall index, cron jobs, per-process shell logs, and prompt overrides. Per-subdirectory layout lives in the relevant domain maps.
 
 ## Testing
 

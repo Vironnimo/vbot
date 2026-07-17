@@ -256,7 +256,7 @@ class AgentStore:
         template_dir: str | Path | None = None,
         defaults_provider: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
-        self._data_dir = Path(data_dir)
+        self._data_dir = Path(data_dir).expanduser().resolve()
         self._template_dir = (
             Path(template_dir) if template_dir is not None else _DEFAULT_TEMPLATE_DIR
         )
@@ -308,10 +308,9 @@ class AgentStore:
             else None
         )
         now = _utc_now()
-        workspace_path = (
-            _validate_workspace(workspace)
-            if workspace is not None
-            else self._default_workspace(agent_id)
+        workspace_path = _resolve_workspace(
+            workspace if workspace is not None else self._default_workspace(agent_id),
+            data_dir=self._data_dir,
         )
 
         agent_dir.mkdir(parents=True)
@@ -448,7 +447,9 @@ class AgentStore:
                 allow_empty=field_name in {"model", "fallback_model"},
             )
         if "workspace" in changes:
-            changes["workspace"] = str(_validate_workspace(changes["workspace"]).resolve())
+            changes["workspace"] = str(
+                _resolve_workspace(changes["workspace"], data_dir=self._data_dir)
+            )
             if changes["workspace"] == agent.workspace:
                 if copy_workspace_identity_files:
                     raise AgentError("copy_workspace_identity_files requires a changed workspace")
@@ -661,9 +662,12 @@ class AgentStore:
 
     def _write_agent(self, agent: Agent) -> None:
         agent_path = self._agent_path(agent.id)
-        atomic_write_text(
-            agent_path, json.dumps(asdict(agent), ensure_ascii=False, indent=2) + "\n"
+        persisted = asdict(agent)
+        persisted["workspace"] = _workspace_for_storage(
+            agent.workspace,
+            data_dir=self._data_dir,
         )
+        atomic_write_text(agent_path, json.dumps(persisted, ensure_ascii=False, indent=2) + "\n")
 
     def _agent_defaults(self) -> dict[str, Any]:
         if self._defaults_provider is None:
@@ -677,7 +681,11 @@ class AgentStore:
     def _load_raw_agent(self, agent_path: Path) -> Agent:
         data = load_validated_agent_json(agent_path)
         workspace_missing = _is_missing_workspace(data.get("workspace"))
-        agent = _agent_from_dict(data, default_workspace=self._default_workspace(data["id"]))
+        agent = _agent_from_dict(
+            data,
+            data_dir=self._data_dir,
+            default_workspace=self._default_workspace(data["id"]),
+        )
         self._seed_workspace(Path(agent.workspace))
         if workspace_missing:
             self._write_agent(agent)
@@ -691,7 +699,11 @@ class AgentStore:
         pointer before it would otherwise be silently replaced.
         """
         data = load_validated_agent_json(agent_path)
-        return _agent_from_dict(data, default_workspace=self._default_workspace(data["id"]))
+        return _agent_from_dict(
+            data,
+            data_dir=self._data_dir,
+            default_workspace=self._default_workspace(data["id"]),
+        )
 
     def _apply_defaults(self, agent: Agent, defaults: dict[str, Any]) -> Agent:
         changes: dict[str, Any] = {}
@@ -810,6 +822,22 @@ def _validate_workspace(workspace: str | Path) -> Path:
     return Path(workspace)
 
 
+def _resolve_workspace(workspace: str | Path, *, data_dir: str | Path) -> Path:
+    workspace_path = _validate_workspace(workspace).expanduser()
+    if not workspace_path.is_absolute():
+        workspace_path = Path(data_dir) / workspace_path
+    return workspace_path.resolve()
+
+
+def _workspace_for_storage(workspace: str | Path, *, data_dir: str | Path) -> str:
+    data_root = Path(data_dir).expanduser().resolve()
+    workspace_path = _resolve_workspace(workspace, data_dir=data_root)
+    try:
+        return workspace_path.relative_to(data_root).as_posix()
+    except ValueError:
+        return str(workspace_path)
+
+
 def _validate_root_project_id(project_id: Any) -> str | None:
     if project_id is None:
         return None
@@ -822,7 +850,12 @@ def _utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
-def _agent_from_dict(data: dict[str, Any], *, default_workspace: str | Path | None = None) -> Agent:
+def _agent_from_dict(
+    data: dict[str, Any],
+    *,
+    data_dir: str | Path,
+    default_workspace: str | Path | None = None,
+) -> Agent:
     """Build an Agent from a mapping already validated by ``load_validated_agent_json``.
 
     Field rules are enforced once by this domain's ``validate_agent_data`` at load
@@ -835,7 +868,13 @@ def _agent_from_dict(data: dict[str, Any], *, default_workspace: str | Path | No
         name=data["name"],
         model=data["model"],
         fallback_model=data["fallback_model"],
-        workspace=str(_workspace_from_data(data.get("workspace"), default_workspace)),
+        workspace=str(
+            _workspace_from_data(
+                data.get("workspace"),
+                data_dir=data_dir,
+                default_workspace=default_workspace,
+            )
+        ),
         root_project_id=data.get("root_project_id"),
         temperature=None if temperature is None else float(temperature),
         thinking_effort=data.get("thinking_effort"),
@@ -858,12 +897,17 @@ def _agent_from_dict(data: dict[str, Any], *, default_workspace: str | Path | No
     )
 
 
-def _workspace_from_data(workspace: Any, default_workspace: str | Path | None) -> Path:
+def _workspace_from_data(
+    workspace: Any,
+    *,
+    data_dir: str | Path,
+    default_workspace: str | Path | None,
+) -> Path:
     if _is_missing_workspace(workspace):
         if default_workspace is None:
             raise AgentError("workspace must be a path string")
         return Path(default_workspace).resolve()
-    return _validate_workspace(workspace)
+    return _resolve_workspace(workspace, data_dir=data_dir)
 
 
 def _is_missing_workspace(workspace: Any) -> bool:

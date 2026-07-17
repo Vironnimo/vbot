@@ -44,8 +44,8 @@ def _resolve_project_root() -> Path:
 
 PROJECT_ROOT = _resolve_project_root()
 
-MAIN_PORT = 8420
-FIRST_WORKTREE_PORT = 8421
+MAIN_DEV_PORT = 8421
+FIRST_WORKTREE_PORT = 8422
 WORKTREES_DIR = PROJECT_ROOT / ".worktrees"
 DATA_DIR_TEMPLATE_DIR = PROJECT_ROOT / ".data-dir-base"
 WORKTREE_FILE_NAME = ".vbot-worktree"
@@ -53,6 +53,7 @@ DATA_DIR_KEY = "data_dir"
 MANAGED_BRANCH_KEY = "managed_branch"
 SERVER_PORT_KEY = "server_port"
 MAIN_AGENT_ID = "main"
+MAIN_AGENT_WORKSPACE = f"agents/{MAIN_AGENT_ID}/workspace"
 UNKNOWN_VALUE = "unknown"
 VALID_WORKTREE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 TRASH_DIR_PREFIX = ".trash-"
@@ -104,11 +105,6 @@ def _main_agent_config_path(data_dir: Path) -> Path:
     return data_dir / "agents" / MAIN_AGENT_ID / "agent.json"
 
 
-def _main_agent_workspace_path(data_dir: Path) -> Path:
-    """Return the dedicated workspace path for the main agent."""
-    return data_dir / "agents" / MAIN_AGENT_ID / "workspace"
-
-
 def seed_data_dir(data_dir: Path) -> None:
     """Copy the default data-dir template and rewrite main-agent workspace."""
     if not DATA_DIR_TEMPLATE_DIR.is_dir():
@@ -121,7 +117,7 @@ def seed_data_dir(data_dir: Path) -> None:
     if not isinstance(agent_config, dict):
         raise ValueError("main agent config must be a JSON object")
 
-    agent_config["workspace"] = str(_main_agent_workspace_path(data_dir))
+    agent_config["workspace"] = MAIN_AGENT_WORKSPACE
     agent_config_path.write_text(f"{json.dumps(agent_config, indent=2)}\n", encoding="utf-8")
 
 
@@ -318,7 +314,7 @@ def find_free_port(worktrees_dir: Path, start: int = FIRST_WORKTREE_PORT) -> int
     used_ports = scan_used_ports(worktrees_dir)
     candidate = start
 
-    while candidate == MAIN_PORT or candidate in used_ports or is_port_bound(candidate):
+    while candidate == MAIN_DEV_PORT or candidate in used_ports or is_port_bound(candidate):
         candidate += 1
 
     return candidate

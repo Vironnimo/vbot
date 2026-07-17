@@ -22,15 +22,13 @@ For each created worktree it does all of the following:
 - creates a Git worktree under `.worktrees/<name>`
 - creates a dedicated data directory at `~/.vbot-<name>`
 - copies the default contents from `.data-dir-base/` into that data directory
-- rewrites `agents/main/agent.json` so the main agent points at that data dir's `agents/main/workspace`
+- rewrites `agents/main/agent.json` with the data-dir-relative Workspace `agents/main/workspace`
 - writes `settings.json` in that data directory with a dedicated `server_port`
 - writes a `.vbot-worktree` marker into the worktree root
 - installs frontend dependencies in `webui/`
 - builds the frontend once during creation
 
-The goal is that once you are inside the worktree, normal commands like
-`python cli/main.py server start` or `python scripts/test-env.py start` use the
-worktree's own data dir and port automatically.
+The goal is that once you are inside the worktree, normal commands like `python cli/main.py server start` or `python scripts/test-env.py start` use the worktree's own data dir and port automatically.
 
 ## Basic model
 
@@ -47,16 +45,15 @@ For a worktree named `feature-a`, the expected layout is:
 ~/.vbot-feature-a/
 ```
 
-The main checkout remains independent and normally keeps using:
+The primary development checkout remains independent and uses:
 
 ```text
 repo root          -> current branch, usually main
-~/.vbot            -> main data dir
-8420               -> main server port
+~/.vbot-dev        -> primary development data dir
+8421               -> primary development server port
 ```
 
-The first generated worktree port starts at `8421`. Additional worktrees get the
-next free port.
+The separately installed application retains the product defaults `~/.vbot` and `8420`. The first generated worktree port starts at `8422`; additional worktrees get the next free port.
 
 ## Normal workflow
 
@@ -219,22 +216,23 @@ It stores at least the worktree data dir:
 }
 ```
 
+The primary checkout's local marker additionally sets `"cwd_only": true`. That scope makes the marker apply when a command is launched from the checkout itself, but not merely because an editable installation imports code from that checkout. Script-generated task-worktree markers omit the field so their module-root fallback continues to work from the installed `vbot` entrypoint.
+
 `Config()` uses the following precedence for the default data dir:
 
 1. `VBOT_DATA_DIR`
 2. `.vbot-worktree` in the current working directory
-3. repository-root `.vbot-worktree` resolved from the module path
+3. repository-root `.vbot-worktree` resolved from the module path, unless it sets `cwd_only: true`
 4. `~/.vbot`
 
-That means the worktree behavior depends on where the process is launched from.
+That means the worktree behavior depends on where the process is launched from. The primary checkout carries a git-ignored cwd-only `.vbot-worktree` marker selecting `~/.vbot-dev`; its `settings.json` selects port `8421`. Outside that checkout, a parameterless installed CLI falls through to `~/.vbot` and port `8420`.
 
 If you are inside `.worktrees/my-task`, normal relative entrypoints should use:
 
 - `~/.vbot-my-task`
 - that worktree's assigned `server_port`
 
-If you launch a command from the main checkout, it should use the main instance
-instead.
+If you launch a command from the main checkout, it uses the primary development instance at `~/.vbot-dev:8421`, not the separately installed application at `~/.vbot:8420`.
 
 ## What a fresh agent or shell must know
 

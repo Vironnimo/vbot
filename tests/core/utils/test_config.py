@@ -83,6 +83,42 @@ def test_cwd_worktree_file_used_when_module_file_path_missing(
     assert _find_worktree_file_from_cwd() == marker
 
 
+def test_cwd_only_worktree_file_applies_from_its_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("VBOT_DATA_DIR", raising=False)
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    marker = checkout / ".vbot-worktree"
+    marker.write_text(
+        json.dumps({"data_dir": str(tmp_path / "dev-data"), "cwd_only": True}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("core.utils.config._WORKTREE_FILE", marker)
+    monkeypatch.chdir(checkout)
+
+    assert _resolve_default_data_dir() == tmp_path / "dev-data"
+
+
+def test_cwd_only_module_worktree_file_does_not_redirect_installed_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("VBOT_DATA_DIR", raising=False)
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    marker = checkout / ".vbot-worktree"
+    marker.write_text(
+        json.dumps({"data_dir": str(tmp_path / "dev-data"), "cwd_only": True}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("core.utils.config._WORKTREE_FILE", marker)
+    outside_checkout = tmp_path / "outside"
+    outside_checkout.mkdir()
+    monkeypatch.chdir(outside_checkout)
+
+    assert _resolve_default_data_dir() == Path.home() / ".vbot"
+
+
 def test_explicit_data_dir_arg_wins_over_worktree_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

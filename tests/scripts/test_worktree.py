@@ -94,6 +94,17 @@ def test_scan_used_ports_tolerates_non_object_marker_and_settings_json(tmp_path)
     assert ports == {8455}
 
 
+def test_find_free_port_starts_after_main_dev_port(tmp_path, monkeypatch):
+    module = _load_worktree_module()
+    monkeypatch.setattr(module, "scan_used_ports", lambda _worktrees_dir: set())
+    monkeypatch.setattr(module, "is_port_bound", lambda _port: False)
+
+    assert module.MAIN_DEV_PORT == 8421
+    assert module.FIRST_WORKTREE_PORT == 8422
+    assert module.find_free_port(tmp_path) == 8422
+    assert module.find_free_port(tmp_path, start=8421) == 8422
+
+
 def test_run_command_defaults_to_project_root(monkeypatch):
     module = _load_worktree_module()
     calls = []
@@ -158,7 +169,7 @@ def test_cmd_create_runs_npm_install_then_build(tmp_path, monkeypatch):
 
     monkeypatch.setattr(module, "WORKTREES_DIR", worktrees_dir)
     monkeypatch.setattr(module, "DATA_DIR_TEMPLATE_DIR", _write_data_dir_template(tmp_path))
-    monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8421)
+    monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8422)
     monkeypatch.setattr(module.shutil, "which", lambda _name: "npm")
     monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
 
@@ -198,7 +209,7 @@ def test_cmd_create_reports_branch_in_output(
 
     monkeypatch.setattr(module, "WORKTREES_DIR", worktrees_dir)
     monkeypatch.setattr(module, "DATA_DIR_TEMPLATE_DIR", _write_data_dir_template(tmp_path))
-    monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8421)
+    monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8422)
     monkeypatch.setattr(module.shutil, "which", lambda _name: "npm")
     monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
 
@@ -245,7 +256,7 @@ def test_cmd_create_seeds_data_dir_and_rewrites_main_agent_workspace(tmp_path, m
 
     monkeypatch.setattr(module, "WORKTREES_DIR", worktrees_dir)
     monkeypatch.setattr(module, "DATA_DIR_TEMPLATE_DIR", template_dir)
-    monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8421)
+    monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8422)
     monkeypatch.setattr(module.shutil, "which", lambda _name: "npm")
     monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
 
@@ -262,7 +273,7 @@ def test_cmd_create_seeds_data_dir_and_rewrites_main_agent_workspace(tmp_path, m
     assert (data_dir / ".env").read_text(encoding="utf-8") == "TEMPLATE=1\n"
     assert json.loads((data_dir / "settings.json").read_text(encoding="utf-8")) == {
         "from_template": True,
-        "server_port": 8421,
+        "server_port": 8422,
     }
     assert json.loads(
         (data_dir / "agents" / "main" / "agent.json").read_text(encoding="utf-8")
@@ -270,7 +281,7 @@ def test_cmd_create_seeds_data_dir_and_rewrites_main_agent_workspace(tmp_path, m
         "id": "main",
         "name": "Main",
         "model": "template-model",
-        "workspace": str(data_dir / "agents" / "main" / "workspace"),
+        "workspace": "agents/main/workspace",
     }
     assert (data_dir / "agents" / "main" / "workspace" / "USER.md").read_text(encoding="utf-8") == (
         "template workspace\n"
@@ -290,7 +301,7 @@ def test_cmd_create_cleans_up_worktree_data_dir_and_branch_after_build_failure(
 
     monkeypatch.setattr(module, "WORKTREES_DIR", worktrees_dir)
     monkeypatch.setattr(module, "DATA_DIR_TEMPLATE_DIR", _write_data_dir_template(tmp_path))
-    monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8421)
+    monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8422)
     monkeypatch.setattr(module.shutil, "which", lambda _name: "npm")
     monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
 
@@ -335,7 +346,7 @@ def test_cmd_create_preserves_preexisting_data_dir_after_build_failure(tmp_path,
 
     monkeypatch.setattr(module, "WORKTREES_DIR", worktrees_dir)
     monkeypatch.setattr(module, "DATA_DIR_TEMPLATE_DIR", _write_data_dir_template(tmp_path))
-    monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8421)
+    monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8422)
     monkeypatch.setattr(module.shutil, "which", lambda _name: "npm")
     monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
 
