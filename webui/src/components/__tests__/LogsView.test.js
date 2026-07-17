@@ -81,6 +81,12 @@ describe('LogsView', () => {
     expect(document.body.textContent).toContain('Ready');
     expect(simpleTriggerLabel('logs-file')).toContain('2026-05-11');
     expect(buttonByText('Refresh')).toBeNull();
+    expect(document.querySelector('.logs-view.view-frame')).toBeTruthy();
+    expect(document.querySelector('.logs-view .view-header')).toBeTruthy();
+    const toolbar = document.querySelector('.logs-view .view-toolbar--stack');
+    expect(toolbar).toBeTruthy();
+    expect(toolbar.querySelector('.logs-view__filters')).toBeTruthy();
+    expect(toolbar.querySelector('.logs-view__summary')).toBeTruthy();
   });
 
   it('offers Retry only when the log catalog fails to load', async () => {

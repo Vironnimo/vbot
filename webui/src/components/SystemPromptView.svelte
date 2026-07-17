@@ -969,13 +969,27 @@
 
 <section class="sp-view view active" aria-labelledby="sp-title">
   <div class="sp-layout">
-    <div class="sp-scroll">
-      <div class="sp-header">
-        <h2 id="sp-title" class="sp-title">
-          {t('systemPrompt.title', 'System Prompt')}
-        </h2>
+    <div class="sp-scroll view-frame">
+      <header class="sp-header view-header">
+        <div class="view-header__intro">
+          <p class="sp-eyebrow view-header__eyebrow">
+            {t('systemPrompt.eyebrow', 'Prompt assembly')}
+          </p>
+          <h2 id="sp-title" class="sp-title view-header__title">
+            {t('systemPrompt.title', 'System Prompt')}
+          </h2>
+          <p class="sp-subtitle view-header__subtitle">
+            {t(
+              'systemPrompt.subtitle',
+              'Inspect, order, and preview the blocks that compose every agent’s system prompt.',
+            )}
+          </p>
+        </div>
+      </header>
+
+      <div class="sp-blocklist-toolbar view-toolbar view-toolbar--split">
         <div class="sp-scope-control">
-          <span class="sp-scope-label" id="sp-scope-label">
+          <span class="sp-scope-label view-toolbar__label" id="sp-scope-label">
             {t('systemPrompt.scope.label', 'Prompt scope')}
           </span>
           <Dropdown
@@ -987,21 +1001,8 @@
             onValueChange={(value) => selectScope(value)}
           />
         </div>
-      </div>
-
-      {#if isLoadingData}
-        <Banner variant="neutral">
-          {t('common.loading', 'Loading…')}
-        </Banner>
-      {:else}
-        <div class="sp-blocklist-toolbar">
-          <span class="sp-blocklist-hint">
-            {t(
-              'systemPrompt.blockList.intro',
-              'Reorder, toggle, and edit the blocks that build the system prompt. The Default scope applies to every agent; an agent gets its own scope here once “Custom system prompt” is enabled in the Agents tab.',
-            )}
-          </span>
-          <div class="sp-blocklist-toolbar-actions">
+        {#if !isLoadingData}
+          <div class="sp-blocklist-toolbar-actions view-toolbar__actions">
             <Button
               variant="secondary"
               class="sp-btn-sm"
@@ -1016,7 +1017,20 @@
               )}
             </Button>
           </div>
-        </div>
+        {/if}
+      </div>
+
+      {#if isLoadingData}
+        <Banner variant="neutral">
+          {t('common.loading', 'Loading…')}
+        </Banner>
+      {:else}
+        <p class="sp-blocklist-hint">
+          {t(
+            'systemPrompt.blockList.intro',
+            'Reorder, toggle, and edit the blocks that build the system prompt. The Default scope applies to every agent; an agent gets its own scope here once “Custom system prompt” is enabled in the Agents tab.',
+          )}
+        </p>
 
         <ul class="sp-blocks" role="list">
           {#each blocks as block, index (block.id)}
@@ -1389,10 +1403,8 @@
     min-height: 0;
     flex: 1;
     flex-direction: column;
-    gap: 24px;
     overflow-y: auto;
     overscroll-behavior: contain;
-    padding: 26px 30px;
     scrollbar-gutter: stable;
   }
 
@@ -1404,38 +1416,11 @@
     margin-inline: auto;
   }
 
-  .sp-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    flex-shrink: 0;
-    flex-wrap: wrap;
-  }
-
-  .sp-title {
-    color: var(--text-hi);
-    font-size: 22px;
-    font-weight: 600;
-    letter-spacing: -0.03em;
-    line-height: 1.2;
-    margin: 0;
-  }
-
   .sp-scope-control {
     display: flex;
     align-items: center;
     gap: 8px;
     min-width: 0;
-  }
-
-  .sp-scope-label {
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    letter-spacing: 0.05em;
-    line-height: 1;
-    text-transform: uppercase;
   }
 
   /* The scope and preview-agent pickers use the shared Dropdown primitive; only
@@ -1460,15 +1445,8 @@
     overflow-y: auto;
   }
 
-  .sp-blocklist-toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
-
   .sp-blocklist-hint {
+    margin: 0;
     color: var(--text-med);
     font-size: 12.5px;
     line-height: 1.5;
@@ -1476,6 +1454,7 @@
 
   .sp-blocklist-toolbar-actions {
     display: flex;
+    flex-wrap: wrap;
     gap: 6px;
     flex-shrink: 0;
   }
@@ -1790,17 +1769,17 @@
   }
 
   @media (max-width: 640px) {
-    .sp-scroll {
-      padding: 18px 16px;
-    }
-
     .sp-block-row {
       flex-wrap: wrap;
     }
 
-    .sp-header,
     .sp-scope-control {
       align-items: flex-start;
+      flex-direction: column;
+    }
+
+    .sp-blocklist-toolbar {
+      align-items: stretch;
       flex-direction: column;
     }
 

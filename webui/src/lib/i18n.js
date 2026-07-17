@@ -634,6 +634,9 @@ export const englishCatalog = Object.freeze({
   'projects.rePoint.success': 'Project re-pointed.',
 
   'systemPrompt.title': 'System Prompt',
+  'systemPrompt.eyebrow': 'Prompt assembly',
+  'systemPrompt.subtitle':
+    'Inspect, order, and preview the blocks that compose every agent’s system prompt.',
   'systemPrompt.scope.label': 'Prompt scope',
   'systemPrompt.scope.default': 'Default',
   'systemPrompt.fragmentEditor.save': 'Save',

@@ -272,36 +272,22 @@
   }
 </script>
 
-<section class="stats-view" aria-labelledby="stats-title">
-  <header class="stats-view__header">
-    <div>
-      <p class="stats-view__eyebrow">
+<section class="stats-view view-frame" aria-labelledby="stats-title">
+  <header class="stats-view__header view-header">
+    <div class="view-header__intro">
+      <p class="stats-view__eyebrow view-header__eyebrow">
         {t('statistics.eyebrow', 'Usage & activity')}
       </p>
-      <h2 id="stats-title" class="stats-view__title">
+      <h2 id="stats-title" class="stats-view__title view-header__title">
         {t('statistics.title', 'Statistics')}
       </h2>
-      <p class="stats-view__subtitle">
+      <p class="stats-view__subtitle view-header__subtitle">
         {t(
           'statistics.subtitle',
           'Aggregated on demand from your session history — no extra data is stored.',
         )}
       </p>
     </div>
-    {#if activeSubView !== 'limits'}
-      <div class="stats-view__header-actions">
-        {#if report?.generated_at}
-          <span class="stats-view__generated">
-            {t('statistics.generatedAt', 'Generated {time}', {
-              time: formatDateTime(report.generated_at, locale),
-            })}
-          </span>
-        {/if}
-        <Button variant="secondary" onClick={loadReport}>
-          {t('common.refresh', 'Refresh')}
-        </Button>
-      </div>
-    {/if}
   </header>
 
   {#if errorMessage}
@@ -318,13 +304,30 @@
       {t('statistics.loading', 'Loading statistics…')}
     </p>
   {:else if report}
-    <TabList
-      items={statisticsTabs}
-      value={activeSubView}
-      ariaLabel={t('statistics.title', 'Statistics')}
-      idPrefix="statistics-subviews"
-      onChange={(value) => (activeSubView = value)}
-    />
+    <div class="stats-view__subnav view-toolbar view-toolbar--tabs">
+      <TabList
+        class="view-toolbar__tabs"
+        items={statisticsTabs}
+        value={activeSubView}
+        ariaLabel={t('statistics.title', 'Statistics')}
+        idPrefix="statistics-subviews"
+        onChange={(value) => (activeSubView = value)}
+      />
+      {#if activeSubView !== 'limits'}
+        <div class="stats-view__header-actions view-toolbar__actions">
+          {#if report?.generated_at}
+            <span class="stats-view__generated view-toolbar__meta">
+              {t('statistics.generatedAt', 'Generated {time}', {
+                time: formatDateTime(report.generated_at, locale),
+              })}
+            </span>
+          {/if}
+          <Button variant="secondary" onClick={loadReport}>
+            {t('common.refresh', 'Refresh')}
+          </Button>
+        </div>
+      {/if}
+    </div>
 
     <div
       role="tabpanel"
@@ -1411,8 +1414,6 @@
   .stats-view {
     display: flex;
     flex-direction: column;
-    gap: var(--space-md, 14px);
-    padding: 20px 28px 40px;
     overflow-y: auto;
     height: 100%;
     color: var(--text-hi);
@@ -1425,42 +1426,6 @@
     width: 100%;
     max-width: var(--content-max-wide);
     margin-inline: auto;
-  }
-  .stats-view__header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 16px;
-  }
-  .stats-view__eyebrow {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    letter-spacing: 0.07em;
-    text-transform: uppercase;
-    color: var(--text-lo);
-    margin: 0 0 4px;
-  }
-  .stats-view__title {
-    font-size: 20px;
-    font-weight: 600;
-    letter-spacing: -0.02em;
-    margin: 0;
-  }
-  .stats-view__subtitle {
-    color: var(--text-med);
-    font-size: 12.5px;
-    margin: 4px 0 0;
-    max-width: 60ch;
-  }
-  .stats-view__header-actions {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-  .stats-view__generated {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    color: var(--text-lo);
   }
   .stats-view__placeholder,
   .stats-note {

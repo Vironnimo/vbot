@@ -253,16 +253,16 @@
   }
 </script>
 
-<section class="debug-view" aria-labelledby="debug-title">
-  <header class="debug-view__header">
-    <div>
-      <p class="debug-view__eyebrow">
+<section class="debug-view view-frame" aria-labelledby="debug-title">
+  <header class="debug-view__header view-header">
+    <div class="view-header__intro">
+      <p class="debug-view__eyebrow view-header__eyebrow">
         {t('debug.eyebrow', 'Provider wire traces')}
       </p>
-      <h2 id="debug-title" class="debug-view__title">
+      <h2 id="debug-title" class="debug-view__title view-header__title">
         {t('debug.title', 'Debug')}
       </h2>
-      <p class="debug-view__subtitle">
+      <p class="debug-view__subtitle view-header__subtitle">
         {t(
           'debug.subtitle',
           'Inspect captured provider requests and responses, and probe model endpoints.',
@@ -271,7 +271,7 @@
     </div>
   </header>
 
-  <div class="debug-view__status-bar">
+  <div class="debug-view__status-bar view-toolbar view-toolbar--split">
     <div class="debug-view__status-info">
       <Badge variant="neutral">
         {t('debug.statusCount', '{count} / {limit} traces', {
@@ -283,7 +283,7 @@
 
     <div class="debug-view__status-controls">
       <label class="debug-view__limit-field">
-        <span class="debug-view__limit-label">
+        <span class="debug-view__limit-label view-toolbar__label">
           {t('debug.traceLimit', 'Trace limit')}
         </span>
         <input
@@ -397,56 +397,8 @@
     min-height: 0;
     flex: 1;
     flex-direction: column;
-    gap: 14px;
     overflow: hidden;
-    padding: 24px 28px 28px;
     background: var(--bg);
-  }
-
-  .debug-view__header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
-  }
-
-  .debug-view__eyebrow {
-    margin: 0 0 6px;
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    font-weight: 500;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-
-  .debug-view__title {
-    margin: 0;
-    color: var(--text-hi);
-    font-size: 20px;
-    font-weight: 600;
-    letter-spacing: -0.02em;
-    line-height: 1.2;
-  }
-
-  .debug-view__subtitle {
-    max-width: 720px;
-    margin: 6px 0 0;
-    color: var(--text-med);
-    font-size: 12.5px;
-    line-height: 1.5;
-  }
-
-  .debug-view__status-bar {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 10px 14px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    background: var(--surface);
   }
 
   .debug-view__status-info {
@@ -466,15 +418,6 @@
     display: flex;
     align-items: center;
     gap: 6px;
-  }
-
-  .debug-view__limit-label {
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    font-weight: 500;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
   }
 
   .debug-view__limit-input {
@@ -545,11 +488,7 @@
     }
   }
 
-  @media (max-width: 860px) {
-    .debug-view {
-      padding: 20px;
-    }
-
+  @media (max-width: 640px) {
     .debug-view__status-bar {
       align-items: stretch;
       flex-direction: column;

@@ -360,6 +360,16 @@ describe('StatisticsView', () => {
     // "Open run groups" lives on the Runs & errors tab now, not the overview.
     expect(document.body.textContent).not.toContain('Open run');
     expect(document.body.textContent).toContain('main');
+    expect(document.querySelector('.stats-view.view-frame')).toBeTruthy();
+    expect(document.querySelector('.stats-view .view-header')).toBeTruthy();
+    expect(
+      document.querySelector(
+        '.stats-view .view-toolbar--tabs [role="tablist"]',
+      ),
+    ).toBeTruthy();
+    expect(
+      document.querySelector('.stats-view .view-toolbar__actions'),
+    ).toBeTruthy();
   });
 
   it('switches to the usage sub-view and badges estimated tokens', async () => {

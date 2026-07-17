@@ -89,6 +89,12 @@ describe('SystemPromptView', () => {
     expect(document.body.textContent).toContain(
       'Included only while the bash tool is active.',
     );
+    expect(document.querySelector('.sp-scroll.view-frame')).toBeTruthy();
+    expect(document.querySelector('.sp-header.view-header')).toBeTruthy();
+    expect(document.body.textContent).toContain('Prompt assembly');
+    expect(
+      document.querySelector('.sp-blocklist-toolbar.view-toolbar--split'),
+    ).toBeTruthy();
   });
 
   it('renders an editable textarea for text blocks but not for data blocks', async () => {
