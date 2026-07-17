@@ -734,7 +734,11 @@ async def test_message_handlers_ignore_edited_messages_and_channel_posts(
         poll=telegram.Poll(
             id="p1",
             question="Lunch?",
-            options=[telegram.PollOption(text="Yes", voter_count=0)],
+            options=[
+                telegram.PollOption.de_json(
+                    {"text": "Yes", "voter_count": 0, "persistent_id": "yes"}, None
+                )
+            ],
             total_voter_count=0,
             is_closed=False,
             is_anonymous=True,
