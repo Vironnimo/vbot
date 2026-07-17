@@ -179,3 +179,10 @@ def test_windows_bootstrap_rejects_dev_with_version_before_install(tmp_path: Pat
     assert result.returncode != 0
     assert "cannot be combined" in (result.stderr + result.stdout)
     assert not install_dir.exists()
+
+
+def test_windows_bootstrap_forwards_installer_options_through_powershell() -> None:
+    script = (PROJECT_ROOT / "scripts" / "bootstrap.ps1").read_text(encoding="utf-8")
+
+    assert "-File $installer @installerArgList" in script
+    assert "& $installer @installerArgList" not in script
