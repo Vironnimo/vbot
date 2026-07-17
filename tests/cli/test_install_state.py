@@ -93,6 +93,32 @@ def test_build_install_state_records_exact_groups_and_digest(
     assert len(state.dependency_digest) == 64
 
 
+def test_build_install_state_preserves_symlinked_environment_interpreter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base_python = tmp_path / "base" / "python3"
+    base_python.parent.mkdir()
+    base_python.write_text("", encoding="utf-8")
+    environment_python = tmp_path / "venv" / "bin" / "python3"
+    environment_python.parent.mkdir(parents=True)
+    try:
+        environment_python.symlink_to(base_python)
+    except (NotImplementedError, OSError):
+        pytest.skip("symlink creation not permitted on this host")
+    monkeypatch.setattr("cli.install_state.detect_source_track", lambda _root: "dev")
+    monkeypatch.setattr("cli.install_state.git_revision", lambda _root: "revision")
+
+    state = build_install_state(
+        tmp_path,
+        install_shape="server",
+        dependency_groups=("server", "cli"),
+        python_executable=str(environment_python),
+    )
+
+    assert state.python_executable == str(environment_python.absolute())
+    assert Path(state.python_executable).resolve() == base_python
+
+
 def test_infer_legacy_desktop_client_when_server_stack_is_absent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

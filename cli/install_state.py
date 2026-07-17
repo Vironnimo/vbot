@@ -114,7 +114,7 @@ def build_install_state(
             "schema_version": INSTALL_STATE_SCHEMA_VERSION,
             "install_shape": install_shape,
             "dependency_groups": list(dependency_groups),
-            "python_executable": str(Path(python_executable).expanduser().resolve()),
+            "python_executable": _absolute_path_preserving_symlinks(python_executable),
             "source_track": track,
             "applied_revision": revision,
             "dependency_digest": file_digest(root / "pyproject.toml"),
@@ -158,7 +158,7 @@ def infer_legacy_install_state(root: Path, *, track: str, revision: str) -> Inst
         schema_version=INSTALL_STATE_SCHEMA_VERSION,
         install_shape=shape,
         dependency_groups=groups,
-        python_executable=str(Path(sys.executable).resolve()),
+        python_executable=_absolute_path_preserving_symlinks(sys.executable),
         source_track=track,
         applied_revision=revision,
         dependency_digest=file_digest(root / "pyproject.toml"),
@@ -187,6 +187,12 @@ def file_digest(path: Path) -> str:
         return hashlib.sha256(path.read_bytes()).hexdigest()
     except OSError:
         return ""
+
+
+def _absolute_path_preserving_symlinks(path: str) -> str:
+    """Keep a venv entry point distinct from the base interpreter it links to."""
+
+    return os.path.abspath(os.path.expanduser(path))
 
 
 def _module_installed(name: str) -> bool:
