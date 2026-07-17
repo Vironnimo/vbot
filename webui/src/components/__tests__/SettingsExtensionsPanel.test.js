@@ -169,6 +169,55 @@ describe('SettingsExtensionsPanel', () => {
     expect(document.body.textContent).toContain('Waiting for: Token');
   });
 
+  it('submits a secret field through its form', async () => {
+    const result = {
+      extensions: [
+        {
+          ...extensionsResult().extensions[0],
+          name: 'homeassistant',
+          settings_schema: [
+            {
+              key: 'token',
+              type: 'secret',
+              label: 'Token',
+              env_key: 'HASS_TOKEN',
+              set: false,
+            },
+          ],
+        },
+      ],
+    };
+    rpcMock.mockImplementation((method) => {
+      if (method === 'extensions.list') {
+        return Promise.resolve(result);
+      }
+      return Promise.resolve({});
+    });
+
+    mountedComponent = mount(SettingsExtensionsPanel, {
+      target: document.body,
+    });
+    flushSync();
+    await flushAsync();
+
+    const input = document.body.querySelector('input[type="password"]');
+    const form = input?.closest('form');
+    expect(form).toBeTruthy();
+
+    input.value = 'new-token';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    form.dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    );
+    await flushAsync();
+
+    expect(rpcMock).toHaveBeenCalledWith('extensions.set_secret', {
+      name: 'homeassistant',
+      key: 'token',
+      value: 'new-token',
+    });
+  });
+
   it('disables an extension live without showing a restart notice', async () => {
     // Disabling applies live, and the panel never surfaces a restart notice.
     rpcMock.mockImplementation((method) => {

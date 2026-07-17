@@ -311,7 +311,7 @@ svg {
   padding: 9px 10px;
   border: 0;
   border-radius: var(--r-md);
-  color: var(--text-lo);
+  color: var(--text-med);
   background: transparent;
   font-family: var(--font-ui);
   font-size: 13.5px;
@@ -1474,7 +1474,7 @@ textarea::placeholder {
 }
 
 .section-label,
-.pane-title,
+.secondary-pane__title,
 .detail-group-title,
 .tl-section-label {
   color: var(--text-lo);
@@ -1484,6 +1484,39 @@ textarea::placeholder {
   letter-spacing: 0.07em;
   line-height: 1;
   text-transform: uppercase;
+}
+
+/* Shared Secondary bar contract. Settings defines the visual reference; the
+   master lists reuse its width, depth, divider, title hierarchy, and scroll
+   behavior while keeping their feature-specific list content. */
+.secondary-pane {
+  display: flex;
+  min-height: 0;
+  width: var(--secondary-sidebar-width);
+  min-width: var(--secondary-sidebar-width);
+  flex-shrink: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  background: var(--secondary-surface);
+}
+
+.secondary-pane__header {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.secondary-pane__scroll {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .modal-footer {
@@ -2565,26 +2598,43 @@ kbd {
 
   .app-shell__sidebar,
   .sidebar {
+    display: grid;
     width: 100%;
     min-width: 0;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto;
     border-right: 0;
     border-bottom: 1px solid var(--border);
   }
 
   .app-shell__brand,
   .sidebar-logo {
+    grid-column: 1;
+    grid-row: 1;
     padding: 12px 14px;
   }
 
   .app-shell__navigation,
   .nav {
+    min-width: 0;
     flex-direction: row;
     flex-wrap: nowrap;
+    grid-column: 1 / -1;
+    grid-row: 2;
     gap: 4px;
     overflow-x: auto;
     overscroll-behavior-x: contain;
     padding: 8px 10px;
+    scroll-padding-inline: 10px;
     scrollbar-width: none;
+  }
+
+  .app-shell__footer {
+    grid-column: 2;
+    grid-row: 1;
+    border-top: 0;
+    border-left: 1px solid var(--border);
+    padding: 12px 14px;
   }
 
   .app-shell__navigation::-webkit-scrollbar,
@@ -2605,9 +2655,17 @@ kbd {
 
   .app-shell__nav-item,
   .nav-item {
+    width: auto;
     flex: 0 0 auto;
     min-height: 40px;
     white-space: nowrap;
+  }
+
+  .secondary-pane {
+    width: 100%;
+    min-width: 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
   }
 
   /* Touch targets: buttons, dropdown triggers, and composer controls all reach

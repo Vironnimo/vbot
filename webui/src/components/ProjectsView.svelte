@@ -613,9 +613,12 @@
   aria-labelledby="projects-list-title"
 >
   <div class="projects-layout">
-    <aside class="project-list-pane" aria-labelledby="projects-list-title">
-      <div class="pane-header">
-        <span id="projects-list-title" class="pane-title">
+    <aside
+      class="project-list-pane secondary-pane"
+      aria-labelledby="projects-list-title"
+    >
+      <div class="pane-header secondary-pane__header">
+        <span id="projects-list-title" class="secondary-pane__title">
           {t('projects.title', 'Projects')}
         </span>
         <div class="pane-header-actions">
@@ -632,7 +635,7 @@
         </div>
       </div>
 
-      <div class="project-list-scroll">
+      <div class="project-list-scroll secondary-pane__scroll">
         {#if projectsState.listError}
           <Banner variant="error" role="alert">
             {projectsState.listError}

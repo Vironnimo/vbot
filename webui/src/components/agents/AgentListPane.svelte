@@ -12,9 +12,12 @@
   } = $props();
 </script>
 
-<aside class="agent-list-pane" aria-labelledby="agents-list-title">
-  <div class="pane-header">
-    <span id="agents-list-title" class="pane-title">
+<aside
+  class="agent-list-pane secondary-pane"
+  aria-labelledby="agents-list-title"
+>
+  <div class="pane-header secondary-pane__header">
+    <span id="agents-list-title" class="secondary-pane__title">
       {t('agents.title', 'Agents')}
     </span>
     <Button variant="primary" onClick={onCreate}>
@@ -25,7 +28,7 @@
     </Button>
   </div>
 
-  <div class="agent-list-scroll">
+  <div class="agent-list-scroll secondary-pane__scroll">
     {#if isLoading}
       <p class="agents-view__list-state">
         {t('agents.loading', 'Loading agents…')}
