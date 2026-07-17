@@ -88,6 +88,7 @@ async def test_subagent_result_falls_back_to_jsonl_when_run_is_missing(tmp_path:
         "status": "completed",
         "result": "final answer",
         "usage": {"input_tokens": 3, "output_tokens": 5},
+        "activity_file": None,
     }
 
 
@@ -175,6 +176,7 @@ async def test_subagent_result_without_run_id_resolves_live_run_from_tracker(
         "status": "completed",
         "result": "live answer",
         "usage": {"input_tokens": 13, "output_tokens": 17},
+        "activity_file": None,
     }
 
 
@@ -300,6 +302,7 @@ async def test_subagent_result_falls_back_to_jsonl_when_live_run_has_no_output(
         "status": "completed",
         "result": "jsonl answer",
         "usage": {"input_tokens": 7, "output_tokens": 11},
+        "activity_file": None,
     }
 
 

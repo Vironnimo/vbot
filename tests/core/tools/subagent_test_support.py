@@ -15,6 +15,7 @@ from core.agents import AgentNotFoundError
 from core.chat import ChatMessage, ChatSessionManager
 from core.projects import AgentResolutionError
 from core.runs import ActiveRunError, Run, RunNotFoundError
+from core.storage import TemporaryFileManager
 from core.subagents.subagents import (
     SubAgentBatchTracker,
     SubAgentCoordinator,
@@ -121,8 +122,9 @@ class RecordingTriggerService:
 
 
 class FakeStorage:
-    def __init__(self, settings: JsonObject | None = None) -> None:
-        self.data_dir = Path("data")
+    def __init__(self, data_dir: Path, settings: JsonObject | None = None) -> None:
+        self.data_dir = data_dir
+        self.temporary_files = TemporaryFileManager(data_dir)
         self._settings = settings or {}
 
     def load_subagent_settings(self) -> JsonObject:
@@ -341,6 +343,6 @@ def make_runtime(
         agent_resolver=FakeAgentResolver(agents),
         chat_sessions=ChatSessionManager(tmp_path),
         chat_run_manager=manager,
-        storage=FakeStorage(settings),
+        storage=FakeStorage(tmp_path, settings),
         streaming_chat_loop=FakeChatLoop(None, streaming=True),
     )

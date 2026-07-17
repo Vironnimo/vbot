@@ -22,12 +22,12 @@ Bootstrap entry point. Wires services and manages start/stop lifecycle.
 Idempotent — a second call logs at debug and preserves the existing service instances. It runs these boot phases in order:
 
 1. Create the `vbot.core` logger, log `Runtime startup initiated`, and record `started_at` (UTC).
-2. Build `StorageManager`, `ensure_directories()`, load `settings.json`, and read the `attachment_max_size_bytes` / `speech_upload_max_size_bytes` size limits (positive-int validated, else default with a warning).
+2. Build `StorageManager`, `ensure_directories()`, start its `TemporaryFileManager` (immediate expired-file sweep plus periodic cleanup when an event loop exists), load `settings.json`, and read the `attachment_max_size_bytes` / `speech_upload_max_size_bytes` size limits (positive-int validated, else default with a warning).
 3. Instantiate the runtime-owned `AttachmentStore` (`<data_dir>/attachments/`, sized by `attachment_max_size_bytes`); read `<data_dir>/.env` as a fallback credential snapshot **without** mutating `os.environ`. (Prompt fragments are no longer seeded into the data dir at startup — bundled resources are read live; see `storage.md`.)
 4. Load provider + model registries; instantiate the OAuth `TokenStore` and the central `ProviderCredentialResolver` (process environment takes precedence over the data-dir fallback; wired with the live settings enabled-overrides loader so connection enable/disable applies without a restart).
 5. Create `TaskModelService`, then `SpeechService` (STT/TTS + artifacts) and `ImageService` (image generation).
 6. Wire `AgentStore` with `defaults_provider=lambda: storage.load_defaults().get("agent", {})` so resolved Agent reads always use the latest persisted defaults without rewriting agent files.
-7. Create `ProcessManager`; start its sweeper only when startup happens inside a running asyncio loop.
+7. Create `ProcessManager` with Storage's shared temporary-file manager for complete Bash output; start its in-memory Session sweeper only when startup happens inside a running asyncio loop.
 8. Create `ToolRegistry` + `MemoryService`, then register built-in tools: `read`, `edit`, `glob`, `grep`, `write`, `memory`, `web_fetch`, `web_search` (with a settings resolver so it reads the current `settings.web_search` provider at call time), `process`, `text_to_speech`, `image_generation`. (Home Assistant is no longer a built-in — it ships as a bundled extension whose four tools `apply_tools` registers in step 9.)
 9. Load the `SkillRegistry` (`<data_dir>/skills`, bundled `resources/skills`, configured `skill_directories`) and register the `skill` tool; build the `SkillAuthoringService` (bundled skills root protected) and register the `skill_manage` write tool; load the `ExtensionRegistry` (`<data_dir>/extensions` + configured `extension_directories` + the fixed bundled root `resources/extensions` scanned last, with `config_provider=self._live_extension_config` and `credential_resolver=self.resolve_environment_credential`), then `apply_tools(self._tools)` registers every loaded extension's tools into the same `ToolRegistry` — this is where the bundled Home Assistant extension's four tools land (see `.vorch/domain-maps/extensions/homeassistant.md`). `skill`/`skill_manage` are ordinary allow-list tools (not internal); `skill_manage` is identity-only, enforced both at dispatch (`effective_agent_allowed_tools`) and via the prompt layer's visibility pass.
 10. Create `ChatSessionManager`, immediately register the built-in Session-scoped `history` Tool against it, then create Project/Agent resolution and ensure the bootstrap Agent exists (this happens before channels start — see Gotchas). Registering `history` before extension tools preserves built-in name ownership on collisions.
@@ -39,8 +39,8 @@ Idempotent — a second call logs at debug and preserves the existing service in
 
 ### Shutdown
 
-- `stop()` — logs `Runtime stopped` if a logger exists, stops `ChannelService` / `CronService` / `ProcessManager` synchronously, clears all service references (including `token_store`), and closes the log manager. Safe to call before `start()`.
-- `aclose()` — async variant of `stop()`: same sequence but `await`s the channel / cron / process-manager async cleanup. Accessors running inside an event loop should prefer `aclose()` over `stop()`.
+- `stop()` — logs `Runtime stopped` if a logger exists, stops `ChannelService` / `CronService` / `ProcessManager`, then stops the shared temporary-file sweeper, clears all service references (including `token_store`), and closes the log manager. Safe to call before `start()`.
+- `aclose()` — async variant of `stop()`: same producer-before-temporary-files sequence but `await`s the channel / cron / process-manager cleanup before the temporary-file manager. Accessors running inside an event loop should prefer `aclose()` over `stop()`.
 
 ### Service properties
 
@@ -51,7 +51,7 @@ All service properties raise `RuntimeError` before `start()` and after `stop()`,
 - `providers` / `models` — provider and model registries.
 - `provider_credentials` — central provider credential resolver; also exposed through `has_provider_credentials(provider_id)` and `get_provider_credentials(provider_id)`. `resolve_environment_credential(key)` resolves a single environment credential with the same precedence (process env first, then data-dir `.env` fallback) — `web_search` uses it, and it is the `credential_resolver` handed to the `ExtensionRegistry` so extensions (e.g. bundled Home Assistant) read their secrets live.
 - `token_store` — OAuth token persistence service rooted at `<data_dir>/oauth/`.
-- `storage` — `StorageManager` for data-dir/settings/prompt fragments.
+- `storage` — `StorageManager` for data-dir/settings/prompt fragments and the internal shared temporary-file lifecycle exposed as `storage.temporary_files`.
 - `attachment_store` — runtime-owned `AttachmentStore` rooted at `<data_dir>/attachments/`.
 - `speech_upload_max_size_bytes` — max accepted uploaded-audio size for transcription (`settings.json` `speech_upload_max_size_bytes`).
 - `agents` — `AgentStore` for agent CRUD/workspaces, wired to `settings.json` `defaults.agent`.

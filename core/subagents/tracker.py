@@ -27,6 +27,7 @@ class _SubAgentEntry:
     session_id: str
     run_id: str | None
     project_id: str | None = None
+    activity_file: str | None = None
     queue_item_id: str | None = None
     complete: bool = False
     fetched: bool = False
@@ -59,6 +60,7 @@ class SubAgentBatchTracker:
         sub_session_id: str,
         sub_run_id: str,
         project_id: str | None = None,
+        activity_file: str | None = None,
     ) -> None:
         """Register one spawned sub-agent run under a parent run batch."""
         batch = self._batches.setdefault(parent_key, _SubAgentBatch(entries={}))
@@ -67,6 +69,7 @@ class SubAgentBatchTracker:
             project_id=project_id,
             session_id=sub_session_id,
             run_id=sub_run_id,
+            activity_file=activity_file,
         )
 
     def reserve_slot(
@@ -104,6 +107,7 @@ class SubAgentBatchTracker:
         sub_session_id: str,
         sub_run_id: str,
         project_id: str | None = None,
+        activity_file: str | None = None,
     ) -> None:
         """Convert one reserved slot into a live sub-agent run entry."""
         batch = self._batches.setdefault(parent_key, _SubAgentBatch(entries={}))
@@ -114,6 +118,7 @@ class SubAgentBatchTracker:
             project_id=project_id,
             session_id=sub_session_id,
             run_id=sub_run_id,
+            activity_file=activity_file,
         )
 
     def register_queued(
@@ -123,6 +128,7 @@ class SubAgentBatchTracker:
         sub_session_id: str,
         queue_item_id: str,
         project_id: str | None = None,
+        activity_file: str | None = None,
     ) -> None:
         """Convert one reserved slot into a queued sub-agent run entry."""
         batch = self._batches.setdefault(parent_key, _SubAgentBatch(entries={}))
@@ -134,6 +140,7 @@ class SubAgentBatchTracker:
             session_id=sub_session_id,
             run_id=None,
             queue_item_id=queue_item_id,
+            activity_file=activity_file,
         )
 
     def mark_started(
@@ -312,6 +319,28 @@ class SubAgentBatchTracker:
                 return entry.run_id
         return None
 
+    def activity_file_for_session(
+        self,
+        parent_key: ParentKey,
+        sub_session_id: str,
+        *,
+        sub_run_id: str | None = None,
+        sub_agent_id: str | None = None,
+        project_id: str | None = None,
+    ) -> str | None:
+        """Return the matching queued or live entry's activity-file path."""
+        batch = self._batches.get(parent_key)
+        if batch is None:
+            return None
+        for entry in reversed(list(batch.entries.values())):
+            if (
+                entry.session_id == sub_session_id
+                and (sub_run_id is None or entry.run_id == sub_run_id)
+                and _entry_matches_target(entry, sub_agent_id, project_id)
+            ):
+                return entry.activity_file
+        return None
+
     def spawn_count(self, parent_key: ParentKey) -> int:
         """Return the number of sub-agents spawned by the parent run."""
         batch = self._batches.get(parent_key)
@@ -369,6 +398,8 @@ def _batch_completion_message(entries: list[_SubAgentEntry]) -> str:
         lines.append("")
         address = format_agent_address(entry.agent_id, entry.project_id)
         lines.append(f"### {address} (session {entry.session_id}) — {_entry_status(entry)}")
+        if entry.activity_file is not None:
+            lines.append(f"Activity file: {entry.activity_file}")
         lines.append(_entry_result_text(entry))
     return "\n".join(lines)
 

@@ -23,6 +23,7 @@ from core.runs import (
     RunNotFoundError,
     RunStatus,
 )
+from core.subagents.activity import SubAgentActivity
 from core.subagents.tracker import (
     _LOGGER as _LOGGER,
 )
@@ -200,6 +201,8 @@ async def _handle_subagent(
         )
 
     slot_registered = False
+    activity: SubAgentActivity | None = None
+    activity_handed_off = False
     try:
         if context.is_cancelled():
             return tool_failure("run_cancelled", "Parent run was cancelled before sub-agent spawn")
@@ -216,6 +219,12 @@ async def _handle_subagent(
             except ChatSessionError:
                 return tool_failure("session_not_found", f"session does not exist: {session_id}")
 
+        activity = SubAgentActivity.create(
+            runtime.storage.temporary_files,
+            agent_id=target_agent_id,
+            session_id=session.id,
+        )
+        activity_file = _activity_file(activity)
         _mark_subagent_session(runtime, target_agent_id, target_project_id, session.id, context)
         await _emit_subagent_session_started(
             context,
@@ -223,6 +232,7 @@ async def _handle_subagent(
             target_project_id,
             session.id,
             status=RunStatus.RUNNING.value,
+            activity_file=activity_file,
         )
 
         try:
@@ -251,6 +261,8 @@ async def _handle_subagent(
                 project_id=target_project_id,
                 working_project_id=resolve_working_project_id(target_project_id, target_agent),
             )
+            if activity is not None:
+                activity.mark_queued()
             await _emit_subagent_session_started(
                 context,
                 target_agent_id,
@@ -258,6 +270,7 @@ async def _handle_subagent(
                 session.id,
                 queue_item_id=item.item_id,
                 status=SUBAGENT_STATUS_QUEUED,
+                activity_file=activity_file,
             )
             if background:
                 queued_run = _started_run_from_queue_item(item)
@@ -268,6 +281,7 @@ async def _handle_subagent(
                         session.id,
                         item.item_id,
                         target_project_id,
+                        activity_file,
                     )
                     slot_registered = True
                     if _should_register_parent_cascade(background=True):
@@ -281,7 +295,14 @@ async def _handle_subagent(
                             batch_tracker=batch_tracker,
                             parent_key=parent_key,
                         )
-                    _track_queued_subagent_completion(batch_tracker, parent_key, item)
+                    _track_queued_subagent_completion(
+                        batch_tracker,
+                        parent_key,
+                        item,
+                        activity,
+                        activity_file,
+                    )
+                    activity_handed_off = activity is not None
                     return tool_success(
                         _with_target_project(
                             {
@@ -289,6 +310,7 @@ async def _handle_subagent(
                                 "session_id": session.id,
                                 "queue_item_id": item.item_id,
                                 "status": SUBAGENT_STATUS_QUEUED,
+                                "activity_file": activity_file,
                             },
                             target_project_id,
                         )
@@ -313,6 +335,9 @@ async def _handle_subagent(
                     )
                     raise
 
+        if activity is not None:
+            activity.attach(sub_run)
+            activity_handed_off = True
         await _emit_subagent_session_started(
             context,
             target_agent_id,
@@ -320,9 +345,15 @@ async def _handle_subagent(
             session.id,
             run_id=sub_run.id,
             status=RunStatus.RUNNING.value,
+            activity_file=activity_file,
         )
         batch_tracker.register_reserved(
-            parent_key, target_agent_id, session.id, sub_run.id, target_project_id
+            parent_key,
+            target_agent_id,
+            session.id,
+            sub_run.id,
+            target_project_id,
+            activity_file,
         )
         slot_registered = True
         if _should_register_parent_cascade(background=background):
@@ -335,7 +366,7 @@ async def _handle_subagent(
             )
 
         if background:
-            _track_subagent_completion(batch_tracker, parent_key, sub_run)
+            _track_subagent_completion(batch_tracker, parent_key, sub_run, activity_file)
             return tool_success(
                 _with_target_project(
                     {
@@ -343,6 +374,7 @@ async def _handle_subagent(
                         "session_id": session.id,
                         "run_id": sub_run.id,
                         "status": RunStatus.RUNNING.value,
+                        "activity_file": activity_file,
                     },
                     target_project_id,
                 )
@@ -351,7 +383,7 @@ async def _handle_subagent(
         timeout_seconds = settings["subagent_timeout_minutes"] * SECONDS_PER_MINUTE
         try:
             result = await asyncio.wait_for(
-                _wait_for_subagent_result(sub_run), timeout=timeout_seconds
+                _wait_for_subagent_result(sub_run, activity_file), timeout=timeout_seconds
             )
         except TimeoutError:
             sub_run.request_cancel()
@@ -362,6 +394,7 @@ async def _handle_subagent(
                 sub_run,
                 status=RunStatus.FAILED.value,
                 message=timeout_message,
+                activity_file=activity_file,
             )
             batch_tracker.mark_fetched(
                 parent_key,
@@ -388,6 +421,8 @@ async def _handle_subagent(
             result = {**result, "spawn_note": FORCED_FOREGROUND_NOTE}
         return tool_success(result)
     finally:
+        if activity is not None and not activity_handed_off:
+            activity.finish_unstarted()
         if not slot_registered:
             batch_tracker.release_slot(parent_key)
 
@@ -431,6 +466,14 @@ async def _handle_subagent_result(
         if queued_entry is not None:
             return tool_success(_queued_result_dict(queued_entry))
 
+    activity_file = batch_tracker.activity_file_for_session(
+        parent_key,
+        session_id,
+        sub_run_id=resolved_run_id,
+        sub_agent_id=agent_id,
+        project_id=target_project_id,
+    )
+
     batch_tracker.mark_fetched(
         parent_key,
         session_id,
@@ -449,6 +492,7 @@ async def _handle_subagent_result(
                 session_id,
                 run_id=resolved_run_id,
                 project_id=target_project_id,
+                activity_file=activity_file,
             )
         else:
             if not _run_matches_target(run, agent_id, session_id, target_project_id):
@@ -456,7 +500,7 @@ async def _handle_subagent_result(
                     "run_not_found",
                     f"run does not belong to target sub-agent session: {resolved_run_id}",
                 )
-            result = await _wait_for_subagent_result(run)
+            result = await _wait_for_subagent_result(run, activity_file)
             if _should_poll_session_result(result):
                 session_result = await _poll_result_from_session(
                     runtime,
@@ -464,12 +508,18 @@ async def _handle_subagent_result(
                     session_id,
                     run_id=resolved_run_id,
                     project_id=target_project_id,
+                    activity_file=activity_file,
                 )
                 if _session_result_has_output(session_result) or not result.get("result"):
                     result = session_result
     else:
         result = await _poll_result_from_session(
-            runtime, agent_id, session_id, run_id=None, project_id=target_project_id
+            runtime,
+            agent_id,
+            session_id,
+            run_id=None,
+            project_id=target_project_id,
+            activity_file=activity_file,
         )
 
     return tool_success(result)
@@ -515,9 +565,10 @@ def _track_subagent_completion(
     batch_tracker: SubAgentBatchTracker,
     parent_key: ParentKey,
     run: Run,
+    activity_file: str | None,
 ) -> None:
     async def complete_when_terminal() -> None:
-        result = await _wait_for_subagent_result(run)
+        result = await _wait_for_subagent_result(run, activity_file)
         batch_tracker.on_sub_agent_complete(parent_key, run.id, result)
 
     task = asyncio.create_task(complete_when_terminal())
@@ -534,16 +585,27 @@ def _track_queued_subagent_completion(
     batch_tracker: SubAgentBatchTracker,
     parent_key: ParentKey,
     item: Any,
+    activity: SubAgentActivity | None,
+    activity_file: str | None,
 ) -> None:
     async def complete_when_started_and_terminal() -> None:
         try:
             run = await item.future
         except asyncio.CancelledError:
+            if activity is not None:
+                activity.finish_unstarted()
             batch_tracker.remove_queued(parent_key, item.item_id)
             return
+        except Exception:
+            if activity is not None:
+                activity.finish_unstarted("failed before start")
+            batch_tracker.remove_queued(parent_key, item.item_id)
+            raise
+        if activity is not None:
+            activity.attach(run)
         if not batch_tracker.mark_started(parent_key, item.item_id, run.id):
             return
-        result = await _wait_for_subagent_result(run)
+        result = await _wait_for_subagent_result(run, activity_file)
         batch_tracker.on_sub_agent_complete(parent_key, run.id, result)
 
     task = asyncio.create_task(complete_when_started_and_terminal())
@@ -556,18 +618,31 @@ def _track_queued_subagent_completion(
     )
 
 
-async def _wait_for_subagent_result(run: Run) -> JsonObject:
+async def _wait_for_subagent_result(
+    run: Run,
+    activity_file: str | None = None,
+) -> JsonObject:
     try:
         result = await run.wait()
     except RunCancelledError:
-        return _cancelled_result_dict(run)
+        return _cancelled_result_dict(run, activity_file)
     except Exception as error:
-        return _result_dict(run, status=RunStatus.FAILED.value, message=str(error))
+        return _result_dict(
+            run,
+            status=RunStatus.FAILED.value,
+            message=str(error),
+            activity_file=activity_file,
+        )
 
-    return _result_dict(run, status=run.status.value, message=result)
+    return _result_dict(
+        run,
+        status=run.status.value,
+        message=result,
+        activity_file=activity_file,
+    )
 
 
-def _cancelled_result_dict(run: Run) -> JsonObject:
+def _cancelled_result_dict(run: Run, activity_file: str | None = None) -> JsonObject:
     """Build the result dict for a cancelled child run, threading the cancel reason."""
     if run.cancel_reason == USER_CANCEL_REASON:
         return _result_dict(
@@ -575,8 +650,14 @@ def _cancelled_result_dict(run: Run) -> JsonObject:
             status=RunStatus.CANCELLED.value,
             message=SUBAGENT_USER_CANCEL_MESSAGE,
             cancelled_by_user=True,
+            activity_file=activity_file,
         )
-    return _result_dict(run, status=RunStatus.CANCELLED.value, message=None)
+    return _result_dict(
+        run,
+        status=RunStatus.CANCELLED.value,
+        message=None,
+        activity_file=activity_file,
+    )
 
 
 def _result_from_session(
@@ -585,6 +666,7 @@ def _result_from_session(
     session_id: str,
     run_id: str | None,
     project_id: str | None = None,
+    activity_file: str | None = None,
 ) -> JsonObject:
     try:
         # Read the child session under its target project anchor;
@@ -600,6 +682,7 @@ def _result_from_session(
                 "status": RunStatus.FAILED.value,
                 "result": None,
                 "usage": None,
+                "activity_file": activity_file,
                 "note": str(error),
             },
             project_id,
@@ -615,6 +698,7 @@ def _result_from_session(
                 "status": RunStatus.FAILED.value,
                 "result": None,
                 "usage": None,
+                "activity_file": activity_file,
                 "note": "No assistant output found in sub-agent session.",
             },
             project_id,
@@ -628,6 +712,7 @@ def _result_from_session(
             "status": RunStatus.COMPLETED.value,
             "result": assistant.content,
             "usage": assistant.usage,
+            "activity_file": activity_file,
         },
         project_id,
     )
@@ -640,16 +725,31 @@ async def _poll_result_from_session(
     run_id: str | None,
     *,
     project_id: str | None = None,
+    activity_file: str | None = None,
     attempts: int = SESSION_RESULT_RETRY_ATTEMPTS,
     delay_seconds: float = SESSION_RESULT_RETRY_DELAY_SECONDS,
 ) -> JsonObject:
     bounded_attempts = max(1, attempts)
-    result = _result_from_session(runtime, agent_id, session_id, run_id, project_id)
+    result = _result_from_session(
+        runtime,
+        agent_id,
+        session_id,
+        run_id,
+        project_id,
+        activity_file,
+    )
     for _ in range(1, bounded_attempts):
         if _session_result_has_output(result):
             return result
         await asyncio.sleep(delay_seconds)
-        result = _result_from_session(runtime, agent_id, session_id, run_id, project_id)
+        result = _result_from_session(
+            runtime,
+            agent_id,
+            session_id,
+            run_id,
+            project_id,
+            activity_file,
+        )
     return result
 
 
@@ -659,6 +759,7 @@ def _result_dict(
     status: str,
     message: Any,
     cancelled_by_user: bool = False,
+    activity_file: str | None = None,
 ) -> JsonObject:
     content: str | None
     usage: JsonObject | None
@@ -681,6 +782,7 @@ def _result_dict(
             "status": status,
             "result": content,
             "usage": usage,
+            "activity_file": activity_file,
         },
         run.project_id,
     )
@@ -701,6 +803,7 @@ def _queued_result_dict(entry: _SubAgentEntry) -> JsonObject:
             "status": SUBAGENT_STATUS_QUEUED,
             "result": None,
             "usage": None,
+            "activity_file": entry.activity_file,
         },
         entry.project_id,
     )
@@ -797,12 +900,14 @@ async def _emit_subagent_session_started(
     *,
     run_id: str | None = None,
     queue_item_id: str | None = None,
+    activity_file: str | None = None,
     status: str,
 ) -> None:
     data: JsonObject = {
         "agent_id": sub_agent_id,
         "session_id": sub_session_id,
         "status": status,
+        "activity_file": activity_file,
     }
     if sub_project_id is not None:
         data["project_id"] = sub_project_id
@@ -921,6 +1026,12 @@ def _with_target_project(data: JsonObject, project_id: str | None) -> JsonObject
     if project_id is not None:
         data["project_id"] = project_id
     return data
+
+
+def _activity_file(activity: SubAgentActivity | None) -> str | None:
+    if activity is None:
+        return None
+    return str(activity.path.resolve())
 
 
 def _run_matches_target(

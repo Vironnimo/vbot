@@ -46,6 +46,7 @@ from core.settings.normalizers import (
 from core.storage.errors import StorageError
 from core.storage.prompt_blocks import PromptBlockStore
 from core.storage.prompt_fragments import PromptFragmentStore
+from core.storage.temp_files import TemporaryFileManager
 from core.utils.atomic import atomic_write_text
 from core.utils.config import build_environment_snapshot, read_env_file
 
@@ -93,6 +94,7 @@ PHASE_TWO_DIRECTORIES = (
     "recall",
     "speech",
     "skills",
+    "temp",
     "logs",
 )
 
@@ -117,6 +119,7 @@ class StorageManager:
         self.data_dir = self._resolve_data_dir(data_dir, config).expanduser()
         self.resources_dir = self._resolve_resources_dir(resources_dir)
         self._settings_lock = RLock()
+        self.temporary_files = TemporaryFileManager(self.data_dir)
         self._prompt_fragments = PromptFragmentStore(
             data_dir=self.data_dir,
             resources_dir=self.resources_dir,

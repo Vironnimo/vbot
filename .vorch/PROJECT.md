@@ -59,7 +59,7 @@ Each domain has a **domain map** in `.vorch/domain-maps/`, named after its modul
 | `.vorch/domain-maps/projects.md` | `core/projects/` | Project boundary, anchor and ceiling invariants, and task-gated configuration, scanning, and resolution references |
 | `.vorch/domain-maps/subagents.md` | `core/subagents/` | Sub-agent coordinator, in-memory batch tracking, parent-child run linkage |
 | `.vorch/domain-maps/tools.md` | `core/tools/` | Tool domain overview and index to tool-specific maps |
-| `.vorch/domain-maps/storage.md` | `core/storage/` | Data-directory setup, settings persistence, prompt fragments |
+| `.vorch/domain-maps/storage.md` | `core/storage/` | Data-directory setup, temporary-file lifecycle, settings/prompt persistence |
 | `.vorch/domain-maps/skills.md` | `core/skills/` | Skill loading/validation, agent/project/global/bundled scopes, the validated authoring write core + write-scope boundary, origin-grouped session-pinned catalog |
 | `.vorch/domain-maps/automation.md` | `core/automation/` | Programmatic run triggering and in-memory queue semantics |
 | `.vorch/domain-maps/channels.md` | `core/channels/` | Channel configs, adapter lifecycle, shared conversation engine, metadata, outbound send; index to channel-specific maps |
@@ -125,7 +125,7 @@ cd webui && npm ci && npm run build   # Svelte → static JS/CSS
 
 **Releasing:** When the user wants to release a new version, read `.vorch/workflows/release-workflow.md`.
 
-**Product data directory:** `~/.vbot` — created on first run when no explicit data directory, environment override, or checkout marker applies. Holds `.env` and `settings.json` (see Configuration above) plus all runtime data: attachments, logs, sessions, the recall index, cron jobs, per-process shell logs, and prompt overrides. Per-subdirectory layout lives in the relevant domain maps.
+**Product data directory:** `~/.vbot` — created on first run when no explicit data directory, environment override, or checkout marker applies. Holds `.env` and `settings.json` (see Configuration above) plus all runtime data: durable attachments/logs/Sessions/recall/Cron/prompt overrides and retained temporary Bash output/Sub-Agent activity under `temp/`. Per-subdirectory layout and retention ownership live in the relevant domain maps.
 
 ## Testing
 
