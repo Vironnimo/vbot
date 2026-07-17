@@ -1,11 +1,9 @@
 name: E2E
 
 # The suite is intentionally observational while the WebUI is changing. It is
-# manually runnable and executes weekly, but does not gate pushes or releases.
+# only run by explicit manual dispatch and does not gate pushes or releases.
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "23 3 * * 1"
 
 permissions:
   contents: read
