@@ -1,0 +1,141 @@
+name: Release Smoke
+
+# Exercises the public distribution path without publishing or mutating a
+# release. The release workflow calls this after publication, and maintainers
+# can dispatch it again for any existing release tag.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Existing release tag to install and verify
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to install and verify (for example, v0.1.10)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - name: Validate released tag and WebUI asset
+        run: |
+          python - <<'PY'
+          import os
+          import re
+
+          tag = os.environ["RELEASE_TAG"]
+          if re.fullmatch(r"v\d+\.\d+\.\d+", tag) is None:
+              raise SystemExit(f"Release tag must be vX.Y.Z, got {tag!r}")
+          PY
+          test "$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '[.assets[].name] | index("webui-dist.tar.gz") != null')" = "true"
+
+  linux:
+    name: linux (${{ matrix.architecture }})
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x64
+            runner: ubuntu-latest
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      SMOKE_PORT: "18420"
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install, start, probe, and uninstall the public release
+        run: |
+          install_dir="${RUNNER_TEMP}/vbot-release"
+          data_dir="${RUNNER_TEMP}/vbot-data"
+          bootstrap="${RUNNER_TEMP}/bootstrap.sh"
+          curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/scripts/bootstrap.sh" -o "$bootstrap"
+          bash "$bootstrap" --dir "$install_dir" --version "$RELEASE_TAG" -- --no-autostart --data-dir "$data_dir" --port "$SMOKE_PORT"
+
+          test "$(git -C "$install_dir" describe --tags --exact-match)" = "$RELEASE_TAG"
+          "$install_dir/.venv/bin/python" - "$install_dir/pyproject.toml" "$RELEASE_TAG" <<'PY'
+          import sys
+          import tomllib
+          from pathlib import Path
+
+          version = tomllib.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["project"]["version"]
+          if f"v{version}" != sys.argv[2]:
+              raise SystemExit(f"Installed version {version!r} does not match tag {sys.argv[2]!r}")
+          PY
+
+          "$install_dir/.venv/bin/vbot" server start --host 127.0.0.1 --port "$SMOKE_PORT" --data-dir "$data_dir"
+          curl -fsSL "http://127.0.0.1:${SMOKE_PORT}/health" | python -c 'import json, sys; assert json.load(sys.stdin) == {"status": "ok"}'
+          test -s "$install_dir/webui/dist/index.html"
+          curl -fsSL "http://127.0.0.1:${SMOKE_PORT}/" -o "${RUNNER_TEMP}/webui-index.html"
+          test -s "${RUNNER_TEMP}/webui-index.html"
+
+          bash "$install_dir/scripts/uninstall.sh"
+          test ! -e "$install_dir"
+          test -d "$data_dir"
+
+  windows:
+    needs: validate
+    runs-on: windows-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      SMOKE_PORT: "18420"
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install, start, probe, and uninstall the public release
+        shell: pwsh
+        run: |
+          $installDir = Join-Path $env:RUNNER_TEMP "vbot-release"
+          $dataDir = Join-Path $env:RUNNER_TEMP "vbot-data"
+          $bootstrap = Join-Path $env:RUNNER_TEMP "bootstrap.ps1"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/$env:GITHUB_REPOSITORY/$env:GITHUB_SHA/scripts/bootstrap.ps1" -OutFile $bootstrap
+          $installerArgs = @("-NoAutostart", "-DataDir", $dataDir, "-Port", $env:SMOKE_PORT)
+          & $bootstrap -InstallDir $installDir -Version $env:RELEASE_TAG -InstallerArgs $installerArgs
+
+          $checkedOutTag = (& git -C $installDir describe --tags --exact-match).Trim()
+          if ($checkedOutTag -ne $env:RELEASE_TAG) { throw "Installed tag '$checkedOutTag' does not match '$env:RELEASE_TAG'" }
+          $venvPython = Join-Path $installDir ".venv\Scripts\python.exe"
+          $versionCheck = @'
+          import sys
+          import tomllib
+          from pathlib import Path
+
+          version = tomllib.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["project"]["version"]
+          if f"v{version}" != sys.argv[2]:
+              raise SystemExit(f"Installed version {version!r} does not match tag {sys.argv[2]!r}")
+          '@
+          & $venvPython -c $versionCheck (Join-Path $installDir "pyproject.toml") $env:RELEASE_TAG
+          if ($LASTEXITCODE -ne 0) { throw "Installed version validation failed" }
+
+          $vbot = Join-Path $installDir ".venv\Scripts\vbot.exe"
+          & $vbot server start --host 127.0.0.1 --port $env:SMOKE_PORT --data-dir $dataDir
+          if ($LASTEXITCODE -ne 0) { throw "Server start failed" }
+          $health = Invoke-RestMethod -Uri "http://127.0.0.1:$env:SMOKE_PORT/health"
+          if ($health.status -ne "ok") { throw "Health probe returned an unexpected response" }
+          $builtIndex = Join-Path $installDir "webui\dist\index.html"
+          if (-not (Test-Path -LiteralPath $builtIndex -PathType Leaf)) { throw "Installed WebUI is missing" }
+          $webui = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:SMOKE_PORT/"
+          if ($webui.StatusCode -ne 200 -or [string]::IsNullOrWhiteSpace($webui.Content)) { throw "WebUI probe failed" }
+
+          $uninstaller = Join-Path $installDir "scripts\uninstall.ps1"
+          Set-Location $env:RUNNER_TEMP
+          & $uninstaller
+          if (Test-Path -LiteralPath $installDir) { throw "Bootstrap install directory still exists after uninstall" }
+          if (-not (Test-Path -LiteralPath $dataDir -PathType Container)) { throw "Uninstall removed the data directory" }

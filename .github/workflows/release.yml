@@ -85,3 +85,9 @@ jobs:
           --title "${RELEASE_TAG}"
           --generate-notes
           webui-dist.tar.gz
+
+  smoke:
+    needs: publish
+    uses: ./.github/workflows/release-smoke.yml
+    with:
+      tag: v${{ inputs.version }}
