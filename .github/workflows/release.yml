@@ -1,21 +1,60 @@
 name: Release
 
-# Builds the WebUI on a published release and attaches it as a prebuilt asset,
-# so end-user installs and `vbot update` can fetch ready-to-serve assets without
-# needing Node on the target machine. Source-only repo: webui/dist stays untracked.
+# Runs the complete CI workflow before creating the tag and published release.
+# The WebUI asset is attached during creation so an installable release is never
+# publicly visible without its prebuilt frontend. Source-only repo: webui/dist
+# stays untracked.
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: SemVer version without the leading v (for example, 0.1.10)
+        required: true
+        type: string
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-v${{ inputs.version }}
+  cancel-in-progress: false
+
 jobs:
-  build-webui:
+  quality:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: quality
     runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_TAG: v${{ inputs.version }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+
+      - name: Validate release metadata
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          import tomllib
+          from pathlib import Path
+
+          version = os.environ["RELEASE_VERSION"]
+          if re.fullmatch(r"\d+\.\d+\.\d+", version) is None:
+              raise SystemExit(f"Release version must be SemVer X.Y.Z, got {version!r}")
+
+          project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
+          if project["version"] != version:
+              raise SystemExit(
+                  f"Release version {version!r} does not match pyproject.toml {project['version']!r}"
+              )
+          PY
+          if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "Tag ${RELEASE_TAG} already exists" >&2
+            exit 1
+          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@v5
@@ -37,7 +76,12 @@ jobs:
           test -f webui/dist/index.html
           tar -czf webui-dist.tar.gz -C webui dist
 
-      - name: Attach prebuilt WebUI to release
+      - name: Publish release with prebuilt WebUI
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" webui-dist.tar.gz --clobber
+        run: >-
+          gh release create "${RELEASE_TAG}"
+          --target "${GITHUB_SHA}"
+          --title "${RELEASE_TAG}"
+          --generate-notes
+          webui-dist.tar.gz
