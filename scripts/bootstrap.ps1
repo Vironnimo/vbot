@@ -316,7 +316,19 @@ if ($InstallerArgs) {
 }
 
 Write-Step "Running installer: install.ps1 $($installerArgList -join ' ')"
-& $installer @installerArgList
+$powerShellExecutable = if ($PSVersionTable.PSEdition -eq "Core") {
+    Join-Path $PSHOME "pwsh.exe"
+}
+else {
+    Join-Path $PSHOME "powershell.exe"
+}
+# Array splatting into another PowerShell script binds entries positionally, so
+# option names such as -SkipPathUpdate can become values for unrelated parameters.
+# A child PowerShell process parses the forwarded tokens as real named arguments.
+& $powerShellExecutable -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $installer @installerArgList
+if ($LASTEXITCODE -ne 0) {
+    throw "The vBot installer failed with exit code $LASTEXITCODE."
+}
 
 Add-VbotShim -InstallDir $InstallDir -VenvDir $venvDir
 
