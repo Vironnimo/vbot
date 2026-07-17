@@ -115,11 +115,15 @@ async def test_subagent_tool_returns_queued_without_waiting_for_busy_session_sta
     assert task.done() is True
     result = await task
     assert result["ok"] is True
+    activity_file = result["data"]["activity_file"]
+    assert isinstance(activity_file, str)
+    assert Path(activity_file).exists()
     assert result["data"] == {
         "agent_id": "parent",
         "session_id": "waiting-sub-session",
         "queue_item_id": "queued-item-1",
         "status": "queued",
+        "activity_file": activity_file,
     }
     manager.remove_queued("parent", "waiting-sub-session", "queued-item-1", project_id=None)
     for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
@@ -279,6 +283,7 @@ async def test_subagent_result_reports_queued_session(tmp_path: Path) -> None:
     # Assert
     assert spawn_result["ok"] is True
     assert result["ok"] is True
+    activity_file = spawn_result["data"]["activity_file"]
     assert result["data"] == {
         "agent_id": "parent",
         "session_id": "queued-result-sub-session",
@@ -287,6 +292,7 @@ async def test_subagent_result_reports_queued_session(tmp_path: Path) -> None:
         "status": "queued",
         "result": None,
         "usage": None,
+        "activity_file": activity_file,
     }
     manager.remove_queued("parent", "queued-result-sub-session", "queued-item-1", project_id=None)
     for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
@@ -334,6 +340,7 @@ async def test_qualified_subagent_queue_and_result_keep_target_project(
     assert spawn_result["data"]["project_id"] == "vbot"
     assert manager.enqueued[0]["project_id"] == "vbot"
     assert result["ok"] is True
+    activity_file = spawn_result["data"]["activity_file"]
     assert result["data"] == {
         "agent_id": "worker",
         "project_id": "vbot",
@@ -343,6 +350,7 @@ async def test_qualified_subagent_queue_and_result_keep_target_project(
         "status": "queued",
         "result": None,
         "usage": None,
+        "activity_file": activity_file,
     }
     manager.remove_queued(
         "worker",

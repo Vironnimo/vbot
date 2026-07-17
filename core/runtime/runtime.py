@@ -438,6 +438,7 @@ class Runtime:
         if storage is None:
             raise RuntimeError("Storage service not available")
         self._storage.ensure_directories()
+        self._storage.temporary_files.start()
         settings = self._storage.load_settings()
         attachment_max_size_bytes = self._positive_size_setting(
             settings,
@@ -480,7 +481,7 @@ class Runtime:
             defaults_provider=lambda: storage.load_defaults().get("agent", {}),
         )
         self._process_manager = ProcessManager(
-            spool_dir=self._storage.data_dir / "processes",
+            temporary_files=self._storage.temporary_files,
         )
         self._start_process_manager()
         self._tools = ToolRegistry()
@@ -752,6 +753,8 @@ class Runtime:
             self._cron_service.stop()
         if self._process_manager is not None:
             self._process_manager.stop()
+        if self._storage is not None:
+            self._storage.temporary_files.stop()
 
         self._clear_service_references()
         self._log_manager.close()
@@ -770,6 +773,8 @@ class Runtime:
             await self._cron_service.aclose()
         if self._process_manager is not None:
             await self._process_manager.aclose()
+        if self._storage is not None:
+            await self._storage.temporary_files.aclose()
 
         self._clear_service_references()
         self._log_manager.close()

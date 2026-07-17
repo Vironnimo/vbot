@@ -202,6 +202,9 @@ async def test_subagent_tool_emits_session_started_before_foreground_result(
     assert manager.started
     session_id = manager.started[0][1]
     run = manager.started[0][3]
+    activity_file = emitted_events[0][1]["data"]["activity_file"]
+    assert isinstance(activity_file, str)
+    assert Path(activity_file).exists()
     assert emitted_events[:2] == [
         (
             subagent_module.SUBAGENT_SESSION_STARTED_EVENT,
@@ -211,6 +214,7 @@ async def test_subagent_tool_emits_session_started_before_foreground_result(
                     "agent_id": "parent",
                     "session_id": session_id,
                     "status": "running",
+                    "activity_file": activity_file,
                 },
             },
         ),
@@ -223,6 +227,7 @@ async def test_subagent_tool_emits_session_started_before_foreground_result(
                     "session_id": session_id,
                     "run_id": run.id,
                     "status": "running",
+                    "activity_file": activity_file,
                 },
             },
         ),
@@ -268,6 +273,63 @@ async def test_subagent_tool_routes_into_existing_session_when_session_id_provid
     assert metadata["platform"] == "telegram"
     assert metadata["is_subagent_session"] is True
     assert metadata["subagent_parent"]["session_id"] == context.session_id
+
+
+async def test_reused_session_gets_a_distinct_activity_file_per_run(tmp_path: Path) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+    runtime.chat_sessions.create(context.agent_id, session_id="existing-sub-session")
+
+    first = await _handle_subagent(
+        context,
+        {"content": "first", "session_id": "existing-sub-session"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+    second = await _handle_subagent(
+        context,
+        {"content": "second", "session_id": "existing-sub-session"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    first_path = Path(first["data"]["activity_file"])
+    second_path = Path(second["data"]["activity_file"])
+    assert first_path != second_path
+    assert first_path.exists()
+    assert second_path.exists()
+    for record in manager.started:
+        record[3].mark_completed(ChatMessage.assistant(model="test", content="done"))
+    await asyncio.sleep(0)
+
+
+async def test_activity_allocation_failure_does_not_block_subagent_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+
+    def fail_create(_category: str, _suffix: str) -> object:
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(runtime.storage.temporary_files, "create", fail_create)
+
+    result = await _handle_subagent(
+        context,
+        {"content": "spawn"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["activity_file"] is None
+    manager.started[0][3].mark_completed(ChatMessage.assistant(model="test", content="done"))
+    await asyncio.sleep(0)
 
 
 async def test_subagent_tool_rejects_nonexistent_session_id(tmp_path: Path) -> None:

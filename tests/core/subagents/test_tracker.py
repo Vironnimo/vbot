@@ -111,6 +111,24 @@ async def test_batch_completion_message_marks_user_cancelled_entry_in_note() -> 
     assert "Cancelled by the user" in message
 
 
+async def test_batch_completion_message_includes_activity_file_when_available() -> None:
+    trigger_service = RecordingTriggerService()
+    tracker = SubAgentBatchTracker(trigger_service)
+    parent_key = ("parent", "parent-session", "parent-run")
+    tracker.register(
+        parent_key,
+        "worker",
+        "session-one",
+        "run-one",
+        activity_file="C:/data/temp/subagents/run-one.md",
+    )
+
+    tracker.on_sub_agent_complete(parent_key, "run-one", {"result": "done"})
+    await asyncio.sleep(0)
+
+    assert "Activity file: C:/data/temp/subagents/run-one.md" in trigger_service.calls[0][1]
+
+
 async def test_batch_completion_message_keeps_generic_cancellation_wording() -> None:
     # Arrange
     trigger_service = RecordingTriggerService()

@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, TextIO, cast
 
+from core.storage.temp_files import TemporaryFileLease, TemporaryFileManager
 from core.utils.ansi import strip_ansi
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
@@ -25,9 +26,6 @@ _LOGGER = get_logger("tools.process_manager")
 
 PROCESS_BUFFER_CAP_BYTES = 500 * 1024
 FINISHED_SESSION_TTL = timedelta(minutes=30)
-# Log files outlive their in-memory sessions on purpose: a tool result may
-# reference the file long after the 30-minute session TTL swept the session.
-PROCESS_LOG_FILE_TTL = timedelta(hours=24)
 SWEEP_INTERVAL_SECONDS = 60.0
 INPUT_IDLE_SECONDS = 15.0
 SUBMIT_BYTES = b"\r\n" if os.name == "nt" else b"\n"
@@ -90,6 +88,7 @@ class ProcessSession:
     log_file: Path | None = None
     log_handle: TextIO | None = field(default=None, repr=False)
     log_decoder: codecs.IncrementalDecoder | None = field(default=None, repr=False)
+    log_lease: TemporaryFileLease | None = field(default=None, repr=False)
     output_chunks: list[OutputChunk] = field(default_factory=list)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     output_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
@@ -107,8 +106,7 @@ class ProcessManager:
         buffer_cap_bytes: int = PROCESS_BUFFER_CAP_BYTES,
         finished_session_ttl: timedelta = FINISHED_SESSION_TTL,
         sweep_interval_seconds: float = SWEEP_INTERVAL_SECONDS,
-        spool_dir: Path | None = None,
-        log_file_ttl: timedelta = PROCESS_LOG_FILE_TTL,
+        temporary_files: TemporaryFileManager | None = None,
     ) -> None:
         if buffer_cap_bytes < 1:
             raise ValueError("Process buffer cap must be at least 1 byte")
@@ -118,8 +116,7 @@ class ProcessManager:
         self._buffer_cap_bytes = buffer_cap_bytes
         self._finished_session_ttl = finished_session_ttl
         self._sweep_interval_seconds = sweep_interval_seconds
-        self._spool_dir = spool_dir
-        self._log_file_ttl = log_file_ttl
+        self._temporary_files = temporary_files
         self._sessions: dict[str, ProcessSession] = {}
         self._sweeper_task: asyncio.Task[None] | None = None
 
@@ -394,7 +391,6 @@ class ProcessManager:
         ]
         for session_id in expired_ids:
             self._sessions.pop(session_id, None)
-        self._sweep_log_files()
 
     def _open_log_file(self, session: ProcessSession) -> None:
         """Attach an incremental spool file so the full output survives buffer caps.
@@ -404,15 +400,17 @@ class ProcessManager:
         tool result can point the model at. Spooling is best-effort: on any I/O
         error the session simply runs without a log file.
         """
-        if self._spool_dir is None:
+        if self._temporary_files is None:
             return
 
+        lease: TemporaryFileLease | None = None
         try:
-            self._spool_dir.mkdir(parents=True, exist_ok=True)
-            log_file = self._spool_dir / f"{session.session_id}.log"
+            lease = self._temporary_files.create("bash", ".log")
             # newline="" keeps the process's own line endings byte-faithful.
-            session.log_handle = log_file.open("w", encoding="utf-8", newline="")
+            session.log_handle = lease.path.open("w", encoding="utf-8", newline="")
         except OSError as error:
+            if lease is not None:
+                lease.finish()
             _LOGGER.warning(
                 "Process log file unavailable for session=%s: %s",
                 session.session_id,
@@ -420,7 +418,8 @@ class ProcessManager:
             )
             return
 
-        session.log_file = log_file
+        session.log_file = lease.path
+        session.log_lease = lease
         # Chunks can split multi-byte UTF-8 characters; an incremental decoder
         # carries the partial bytes over to the next chunk instead of replacing.
         session.log_decoder = codecs.getincrementaldecoder("utf-8")("replace")
@@ -445,35 +444,18 @@ class ProcessManager:
             session.log_file = None
 
     def _close_log_file(self, session: ProcessSession) -> None:
-        if session.log_handle is None:
-            return
-
-        with contextlib.suppress(OSError):
-            if session.log_decoder is not None:
-                remainder = strip_ansi(session.log_decoder.decode(b"", final=True))
-                if remainder:
-                    session.log_handle.write(remainder)
-            session.log_handle.close()
+        if session.log_handle is not None:
+            with contextlib.suppress(OSError):
+                if session.log_decoder is not None:
+                    remainder = strip_ansi(session.log_decoder.decode(b"", final=True))
+                    if remainder:
+                        session.log_handle.write(remainder)
+                session.log_handle.close()
         session.log_handle = None
         session.log_decoder = None
-
-    def _sweep_log_files(self) -> None:
-        """Delete spool files past the log TTL, sparing active sessions' files."""
-        if self._spool_dir is None or not self._spool_dir.is_dir():
-            return
-
-        active_stems = {
-            session_id
-            for session_id, session in self._sessions.items()
-            if session.status == "running"
-        }
-        cutoff_epoch = (_utc_now() - self._log_file_ttl).timestamp()
-        for log_file in self._spool_dir.glob("*.log"):
-            if log_file.stem in active_stems:
-                continue
-            with contextlib.suppress(OSError):
-                if log_file.stat().st_mtime < cutoff_epoch:
-                    log_file.unlink()
+        if session.log_lease is not None:
+            session.log_lease.finish()
+            session.log_lease = None
 
     async def _poll_once(self, session: ProcessSession) -> dict[str, object]:
         async with session.lock:
@@ -783,7 +765,6 @@ __all__ = [
     "FINISHED_SESSION_TTL",
     "INPUT_IDLE_SECONDS",
     "PROCESS_BUFFER_CAP_BYTES",
-    "PROCESS_LOG_FILE_TTL",
     "ProcessManager",
     "ProcessManagerError",
     "ProcessSession",

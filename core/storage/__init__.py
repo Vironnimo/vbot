@@ -9,6 +9,13 @@ from core.storage.storage import (
     ConfigProtocol,
     StorageManager,
 )
+from core.storage.temp_files import (
+    TEMPORARY_FILE_RETENTION,
+    TEMPORARY_FILE_ROOT,
+    TEMPORARY_FILE_SWEEP_INTERVAL_SECONDS,
+    TemporaryFileLease,
+    TemporaryFileManager,
+)
 
 __all__ = [
     "BLOCK_NAMESPACES",
@@ -19,4 +26,9 @@ __all__ = [
     "PromptBlockStore",
     "StorageError",
     "StorageManager",
+    "TEMPORARY_FILE_RETENTION",
+    "TEMPORARY_FILE_ROOT",
+    "TEMPORARY_FILE_SWEEP_INTERVAL_SECONDS",
+    "TemporaryFileLease",
+    "TemporaryFileManager",
 ]

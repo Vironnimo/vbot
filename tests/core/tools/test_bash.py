@@ -13,6 +13,7 @@ import pytest
 import pytest_asyncio
 
 import core.tools.bash as bash_module
+from core.storage import TemporaryFileManager
 from core.tools.bash import (
     BASH_TOOL_PARAMETERS,
     _resolve_workdir,
@@ -1226,7 +1227,7 @@ async def test_user_cancel_kill_failure_is_logged(
 def make_spool_manager(tmp_path: Path) -> ProcessManager:
     return ProcessManager(
         sweep_interval_seconds=3600,
-        spool_dir=tmp_path / "processes",
+        temporary_files=TemporaryFileManager(tmp_path),
     )
 
 

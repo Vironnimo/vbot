@@ -633,19 +633,23 @@ def test_runtime_stop_clears_phase_two_services(config: Config):
 
 @pytest.mark.asyncio
 async def test_runtime_starts_and_stops_process_manager_sweeper(config: Config) -> None:
-    """Runtime owns the ProcessManager lifecycle when an event loop is running."""
+    """Runtime owns process and temporary-file cleanup on the running loop."""
     logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
 
     runtime.start()
     process_manager = runtime.process_manager
+    temporary_files = runtime.storage.temporary_files
 
     assert process_manager._sweeper_task is not None
     assert not process_manager._sweeper_task.done()
+    assert temporary_files._sweeper_task is not None
+    assert not temporary_files._sweeper_task.done()
 
     runtime.stop()
 
     assert process_manager._sweeper_task is None
+    assert temporary_files._sweeper_task is None
 
 
 @pytest.mark.asyncio
@@ -654,6 +658,7 @@ async def test_runtime_aclose_reaps_process_sessions(config: Config) -> None:
     runtime = Runtime(config)
     runtime.start()
     process_manager = runtime.process_manager
+    temporary_files = runtime.storage.temporary_files
     session_id = await process_manager.spawn(
         "run-one",
         "agent-one",
@@ -668,6 +673,7 @@ async def test_runtime_aclose_reaps_process_sessions(config: Config) -> None:
     assert session.status == "killed"
     assert session.proc.returncode is not None
     assert session.wait_task is not None and session.wait_task.done()
+    assert temporary_files._sweeper_task is None
     with pytest.raises(RuntimeError, match="not started"):
         _ = runtime.process_manager
 

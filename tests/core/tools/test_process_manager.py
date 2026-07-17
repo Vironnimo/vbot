@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import subprocess
 import sys
 import time
@@ -16,6 +15,7 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
+from core.storage import TemporaryFileManager
 from core.tools.process_manager import (
     PROCESS_BUFFER_CAP_BYTES,
     ProcessManager,
@@ -719,7 +719,7 @@ async def test_log_file_holds_complete_output_beyond_buffer_cap(tmp_path: Path) 
     manager = ProcessManager(
         buffer_cap_bytes=64,
         sweep_interval_seconds=3600,
-        spool_dir=tmp_path / "processes",
+        temporary_files=TemporaryFileManager(tmp_path),
     )
     try:
         session_id = await manager.spawn(
@@ -734,7 +734,7 @@ async def test_log_file_holds_complete_output_beyond_buffer_cap(tmp_path: Path) 
         session = manager.get_session(session_id, AGENT_A)
         assert session.truncated is True
         assert session.log_file is not None
-        assert session.log_file.parent == tmp_path / "processes"
+        assert session.log_file.parent == tmp_path / "temp" / "bash"
 
         content = session.log_file.read_text(encoding="utf-8")
         assert "start-marker" in content
@@ -744,7 +744,7 @@ async def test_log_file_holds_complete_output_beyond_buffer_cap(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
-async def test_no_spool_dir_means_no_log_file(manager: ProcessManager) -> None:
+async def test_no_temporary_file_manager_means_no_log_file(manager: ProcessManager) -> None:
     session_id = await manager.spawn(
         SCOPE_A, AGENT_A, [sys.executable, "-c", "print('hi')"], env=None, cwd=None
     )
@@ -755,7 +755,10 @@ async def test_no_spool_dir_means_no_log_file(manager: ProcessManager) -> None:
 
 @pytest.mark.asyncio
 async def test_log_file_is_stripped_of_ansi_escape_sequences(tmp_path: Path) -> None:
-    manager = ProcessManager(sweep_interval_seconds=3600, spool_dir=tmp_path / "processes")
+    manager = ProcessManager(
+        sweep_interval_seconds=3600,
+        temporary_files=TemporaryFileManager(tmp_path),
+    )
     try:
         script = "import sys; esc = chr(27); sys.stdout.write(f'{esc}[31mred{esc}[0m done\n')"
         session_id = await manager.spawn(
@@ -773,20 +776,13 @@ async def test_log_file_is_stripped_of_ansi_escape_sequences(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_log_file_sweep_removes_expired_files_but_spares_running(tmp_path: Path) -> None:
-    spool_dir = tmp_path / "processes"
-    manager = ProcessManager(
-        sweep_interval_seconds=3600,
-        spool_dir=spool_dir,
-        log_file_ttl=timedelta(seconds=1),
+async def test_log_lease_finishes_only_after_process_is_terminal(tmp_path: Path) -> None:
+    temporary_files = TemporaryFileManager(
+        tmp_path,
+        retention={"bash": timedelta(milliseconds=1)},
     )
+    manager = ProcessManager(sweep_interval_seconds=3600, temporary_files=temporary_files)
     try:
-        spool_dir.mkdir(parents=True, exist_ok=True)
-        stale_file = spool_dir / "stale-session.log"
-        stale_file.write_text("old output", encoding="utf-8")
-        expired_epoch = time.time() - 3600
-        os.utime(stale_file, (expired_epoch, expired_epoch))
-
         session_id = await manager.spawn(
             SCOPE_A,
             AGENT_A,
@@ -794,14 +790,16 @@ async def test_log_file_sweep_removes_expired_files_but_spares_running(tmp_path:
             env=None,
             cwd=None,
         )
-        running_file = spool_dir / f"{session_id}.log"
-        os.utime(running_file, (expired_epoch, expired_epoch))
+        session = manager.get_session(session_id, AGENT_A)
+        assert session.log_file is not None
+        time.sleep(0.01)
 
-        await manager.sweep_finished()
-
-        assert not stale_file.exists()
-        assert running_file.exists(), "an active session's log file must survive the sweep"
+        temporary_files.sweep()
+        assert session.log_file.exists(), "an active process log must survive cleanup"
 
         await manager.kill(session_id, AGENT_A)
+        time.sleep(0.01)
+        temporary_files.sweep()
+        assert not session.log_file.exists()
     finally:
         await manager.aclose()

@@ -16,7 +16,8 @@ SUBAGENT_TOOL_DESCRIPTION = (
     "the result. After a background spawn, end your turn instead of polling: when "
     "every sub-agent in the batch finishes, their complete final outputs are "
     "delivered to you automatically. Only check on a running sub-agent before then "
-    "if the user explicitly asks for its status. When you are yourself a sub-agent, "
+    "if the user explicitly asks for its status; the returned activity_file is the "
+    "live Assistant/Tool activity surface for that Run. When you are yourself a sub-agent, "
     "spawns always run in the foreground regardless of this setting; to run several "
     "in parallel, make all subagent calls in a single turn."
 )
@@ -25,7 +26,8 @@ SUBAGENT_RESULT_TOOL_DESCRIPTION = (
     "retrieved. For a project target, pass the same agent@project address used "
     "to spawn it. You normally do not need this: completed background batches are "
     "delivered to you automatically. Use it only when the user explicitly asks to "
-    "check a sub-agent's status or result before the batch finishes."
+    "check a sub-agent's status or result before the batch finishes. The result's "
+    "activity_file points to that Run's temporary live activity transcript when available."
 )
 
 SUBAGENT_TOOL_PARAMETERS: JsonObject = {
