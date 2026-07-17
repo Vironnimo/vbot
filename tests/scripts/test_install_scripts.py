@@ -140,15 +140,31 @@ def test_powershell_lifecycle_scripts_parse() -> None:
 def test_windows_install_manifest_function_is_defined_before_main_flow() -> None:
     script = (PROJECT_ROOT / "scripts" / "install.ps1").read_text(encoding="utf-8")
 
-    assert script.index("function Write-InstallManifest") < script.index(
-        "Write-InstallManifest -Python"
-    )
+    assert script.index("function Write-InstallManifest") < script.rindex("Write-InstallManifest")
 
 
 def test_linux_install_manifest_records_selected_environment_interpreter() -> None:
     script = (PROJECT_ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
 
     assert 'PYTHON_EXECUTABLE="$(command -v "$PYTHON")"' in script
+
+
+@pytest.mark.parametrize("script_name", ["install.sh", "install.ps1"])
+def test_server_install_manifest_records_lifecycle_target(script_name: str) -> None:
+    script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+
+    assert "server-host" in script
+    assert "server-port" in script
+    assert "server-data-directory" in script
+
+
+@pytest.mark.parametrize("script_name", ["uninstall.sh", "uninstall.ps1"])
+def test_bootstrap_uninstaller_uses_recorded_lifecycle_target(script_name: str) -> None:
+    script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+
+    assert "server_host" in script
+    assert "server_port" in script
+    assert "server_data_directory" in script
 
 
 def test_windows_bootstrap_rejects_dev_with_version_before_install(tmp_path: Path) -> None:
