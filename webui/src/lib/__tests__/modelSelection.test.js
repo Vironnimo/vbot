@@ -6,6 +6,7 @@ import {
   filterModelSelectOptions,
   modelFilterFooterLabel,
   modelSelectionValue,
+  modelShortName,
   modelSuitability,
   parseModelSelectionValue,
   selectModelValue,
@@ -294,6 +295,15 @@ describe('model selection value round-trip', () => {
     expect(
       modelSelectionValue(selection.model, selection.connectionLocalId),
     ).toBe('openai/gpt-5.2::api-key:work');
+  });
+
+  it('reduces a stored model address to its final model segment', () => {
+    expect(modelShortName('openai/gpt-5.5::subscription')).toBe('gpt-5.5');
+    expect(
+      modelShortName('openrouter/poolside/laguna-xs.2:free::api-key:work'),
+    ).toBe('laguna-xs.2:free');
+    expect(modelShortName('custom-model')).toBe('custom-model');
+    expect(modelShortName('')).toBe('');
   });
 });
 

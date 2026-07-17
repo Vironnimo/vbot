@@ -182,6 +182,24 @@ describe('AgentsView', () => {
     expect(textInputValue(1)).toBe('Alpha');
   });
 
+  it('shows only the model name in the inset agent list row', async () => {
+    rpcMock.mockImplementation(createAgentsRpcMock());
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('id: alpha'),
+      100,
+    );
+
+    const agentItem = document.body.querySelector('button.agent-item');
+    expect(agentItem.classList.contains('secondary-list__item')).toBe(true);
+    expect(agentItem.querySelector('.agent-item-sub').textContent.trim()).toBe(
+      'gpt-5.2',
+    );
+  });
+
   it('keeps existing agent selection after cancelling Add modal', async () => {
     rpcMock.mockImplementation(
       createAgentsRpcMock({

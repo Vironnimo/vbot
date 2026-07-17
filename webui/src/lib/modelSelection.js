@@ -271,6 +271,14 @@ export function parseModelSelectionValue(selectedValue) {
   };
 }
 
+export function modelShortName(modelValue) {
+  const value = typeof modelValue === 'string' ? modelValue.trim() : '';
+  const { model } = parseModelSelectionValue(value);
+  const segments = model.split('/').filter(Boolean);
+
+  return segments.at(-1) ?? '';
+}
+
 function connectionModelOptions(
   model,
   connection,

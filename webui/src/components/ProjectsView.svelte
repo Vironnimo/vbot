@@ -635,7 +635,7 @@
         </div>
       </div>
 
-      <div class="project-list-scroll secondary-pane__scroll">
+      <div class="project-list-scroll secondary-pane__scroll secondary-list">
         {#if projectsState.listError}
           <Banner variant="error" role="alert">
             {projectsState.listError}
@@ -663,13 +663,12 @@
           {#each projectsState.projects as project (project.project_id)}
             <button
               type="button"
-              class="project-item"
+              class="project-item secondary-list__item"
               class:active={project.project_id ===
                 projectsState.selectedProjectId}
               data-testid={`project-toggle-${project.project_id}`}
               onclick={() => selectProject(project.project_id)}
             >
-              <span class="project-bar"></span>
               <span class="project-item-inner">
                 <span class="project-item-head">
                   <span class="project-item-name">

@@ -156,6 +156,16 @@ describe('ProjectsView', () => {
       document.querySelector('[data-testid="project-panel-alpha"]'),
     );
     expect(onProjectSelected).toHaveBeenLastCalledWith('alpha');
+    expect(
+      document
+        .querySelector('[data-testid="project-toggle-alpha"]')
+        .classList.contains('secondary-list__item'),
+    ).toBe(true);
+    expect(
+      document
+        .querySelector('.project-list-scroll')
+        .classList.contains('secondary-list'),
+    ).toBe(true);
   });
 
   it('adds a project from the modal and reviews its team and report', async () => {

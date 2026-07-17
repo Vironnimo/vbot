@@ -1519,6 +1519,40 @@ textarea::placeholder {
   scrollbar-gutter: stable;
 }
 
+/* Inset master-list rows follow the Settings index geometry: the selection
+   surface stays clear of the pane edges, with a flush accent rail and a soft
+   radius only on the free right edge. Feature styles own the row contents. */
+.secondary-list {
+  padding: 4px 12px;
+  scrollbar-gutter: auto;
+}
+
+.secondary-list__item {
+  width: 100%;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  background: transparent;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.secondary-list__item:hover,
+.secondary-list__item:focus-visible {
+  background: var(--surface-2);
+}
+
+.secondary-list__item:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--accent-40);
+  outline: none;
+}
+
+.secondary-list__item.active {
+  border-left-color: var(--accent);
+  background: var(--accent-dim);
+}
+
 /* View chrome: the shared vertical rhythm above each view's feature content.
    Views retain their own data layout; these classes own only the frame,
    identity header, and local navigation/control surface. */
