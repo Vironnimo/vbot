@@ -342,7 +342,12 @@ describe('i18n t()', () => {
       'systemPrompt.fragmentEditor.modifiedHint',
       'systemPrompt.fragmentEditor.resetConfirm',
       'systemPrompt.fragmentEditor.resetAgentConfirm',
-      'systemPrompt.blockList.intro',
+      'systemPrompt.blockList.guide.label',
+      'systemPrompt.blockList.guide.title',
+      'systemPrompt.blockList.guide.assemblyLabel',
+      'systemPrompt.blockList.guide.assembly',
+      'systemPrompt.blockList.guide.scopeLabel',
+      'systemPrompt.blockList.guide.scope',
       'systemPrompt.blockList.newBlockPrompt',
       'systemPrompt.blockList.invalidSlug',
       'systemPrompt.blockList.dataBadge',
@@ -369,8 +374,12 @@ describe('i18n t()', () => {
     expect(t('systemPrompt.preview.tokenCount', undefined, { count: 42 })).toBe(
       '~42 tokens',
     );
-    // The reworded intro now explains where an agent scope comes from.
-    expect(t('systemPrompt.blockList.intro')).toContain('Custom system prompt');
+    expect(t('systemPrompt.blockList.guide.assembly')).toContain(
+      'top to bottom',
+    );
+    expect(t('systemPrompt.blockList.guide.scope')).toContain(
+      'Custom system prompt',
+    );
     // Reset confirms speak of "block", never the retired "fragment" term.
     expect(t('systemPrompt.fragmentEditor.resetConfirm')).toBe(
       'Reset this block to its default? This cannot be undone.',
