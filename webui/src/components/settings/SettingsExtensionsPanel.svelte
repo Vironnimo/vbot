@@ -642,7 +642,17 @@
                           setFormValue(extension.name, field.key, next)}
                       />
                     {:else if field.type === 'secret'}
-                      <div class="s-ext-secret">
+                      <form
+                        class="s-ext-secret"
+                        onsubmit={(event) => {
+                          event.preventDefault();
+                          saveSecret(
+                            extension,
+                            field,
+                            secretDrafts[extension.name]?.[field.key] ?? '',
+                          );
+                        }}
+                      >
                         <StatusChip variant={field.set ? 'success' : 'warn'}>
                           {field.set
                             ? t('settings.extensions.secretSet', 'Set')
@@ -671,15 +681,10 @@
                         <div class="s-ext-secret-actions">
                           <Button
                             variant="primary"
+                            type="submit"
                             disabled={rowBusy ||
                               !(
                                 secretDrafts[extension.name]?.[field.key] ?? ''
-                              )}
-                            onClick={() =>
-                              saveSecret(
-                                extension,
-                                field,
-                                secretDrafts[extension.name]?.[field.key] ?? '',
                               )}
                           >
                             {secretSaving
@@ -694,7 +699,7 @@
                             {t('settings.extensions.secretClear', 'Clear')}
                           </Button>
                         </div>
-                      </div>
+                      </form>
                     {:else}
                       <TextField
                         id={formField.controlId}

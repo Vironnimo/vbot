@@ -20,6 +20,7 @@
   import SettingsWebSearchPanel from './settings/SettingsWebSearchPanel.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
+  import Dropdown from './Dropdown.svelte';
   import EmptyState from './ui/EmptyState.svelte';
   import { getSettings } from '$lib/api.js';
   import { init, t } from '$lib/i18n.js';
@@ -281,6 +282,15 @@
 
   let panels = $derived(groups.flatMap((group) => group.sections));
   let panelById = $derived(new Map(panels.map((panel) => [panel.id, panel])));
+  let mobileSectionOptions = $derived(
+    groups.flatMap((group) =>
+      group.sections.map((panel) => ({
+        value: panel.id,
+        label: panel.label(),
+        secondaryLabel: group.label(),
+      })),
+    ),
+  );
 
   let settings = $state(null);
   let loading = $state(true);
@@ -574,10 +584,12 @@
   aria-label={t('settings.title', 'Settings')}
 >
   <nav
-    class="settings-nav"
+    class="settings-nav secondary-pane"
     aria-label={t('settings.sections', 'Settings sections')}
   >
-    <div class="settings-nav-title">{t('settings.title', 'Settings')}</div>
+    <div class="settings-nav-title secondary-pane__title">
+      {t('settings.title', 'Settings')}
+    </div>
     <div class="settings-search">
       <svg
         class="settings-search-icon"
@@ -608,23 +620,40 @@
         })}
       {/if}
     </div>
-    {#each groups as group (group.id)}
-      <div class="settings-nav-group">{group.label()}</div>
-      {#each group.sections as panel (panel.id)}
-        <button
-          class:snav-item--active={panel.id === activeSectionId}
-          class:snav-item--dimmed={searchActive &&
-            hiddenSectionIds.has(panel.id)}
-          class="snav-item"
-          type="button"
-          aria-current={panel.id === activeSectionId ? 'true' : undefined}
-          aria-label={t(panel.labelKey, panel.labelFallback)}
-          onclick={() => scrollToSection(panel.id)}
-        >
-          {panel.label()}
-        </button>
+
+    <div class="settings-desktop-index">
+      {#each groups as group (group.id)}
+        <div class="settings-nav-group">{group.label()}</div>
+        {#each group.sections as panel (panel.id)}
+          <button
+            class:snav-item--active={panel.id === activeSectionId}
+            class:snav-item--dimmed={searchActive &&
+              hiddenSectionIds.has(panel.id)}
+            class="snav-item"
+            type="button"
+            aria-current={panel.id === activeSectionId ? 'true' : undefined}
+            aria-label={t(panel.labelKey, panel.labelFallback)}
+            onclick={() => scrollToSection(panel.id)}
+          >
+            {panel.label()}
+          </button>
+        {/each}
       {/each}
-    {/each}
+    </div>
+
+    <div class="settings-mobile-section-picker">
+      <span class="settings-mobile-section-label">
+        {t('settings.sections', 'Settings sections')}
+      </span>
+      <Dropdown
+        id="settings-mobile-section"
+        value={activeSectionId}
+        options={mobileSectionOptions}
+        ariaLabel={t('settings.sections', 'Settings sections')}
+        triggerClass="settings-mobile-section-dropdown"
+        onValueChange={scrollToSection}
+      />
+    </div>
   </nav>
 
   <div

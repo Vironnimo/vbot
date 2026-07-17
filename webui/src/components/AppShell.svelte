@@ -18,6 +18,9 @@
     children,
   } = $props();
 
+  const MOBILE_NAV_MEDIA_QUERY = '(max-width: 640px)';
+  let navigationElement = $state(null);
+
   const handleSelectView = (viewId) => {
     if (onSelectView) {
       onSelectView(viewId);
@@ -73,6 +76,34 @@
   );
 
   const serverRestored = $derived(serverNoticeState === 'restored');
+
+  // A direct mobile deep-link can activate an item outside the initially
+  // visible part of the horizontal navigation. Reveal it after Svelte has
+  // updated aria-current, without moving the page on wider layouts.
+  $effect(() => {
+    void activeViewId;
+    if (!navigationElement) {
+      return undefined;
+    }
+
+    const frame = requestAnimationFrame(() => {
+      if (
+        typeof window.matchMedia !== 'function' ||
+        !window.matchMedia(MOBILE_NAV_MEDIA_QUERY).matches
+      ) {
+        return;
+      }
+
+      const activeItem = navigationElement.querySelector(
+        '[aria-current="page"]',
+      );
+      if (typeof activeItem?.scrollIntoView === 'function') {
+        activeItem.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      }
+    });
+
+    return () => cancelAnimationFrame(frame);
+  });
 </script>
 
 <div
@@ -95,6 +126,7 @@
     </div>
 
     <nav
+      bind:this={navigationElement}
       class="app-shell__navigation"
       aria-label={t('navigation.sections', 'Sections')}
     >

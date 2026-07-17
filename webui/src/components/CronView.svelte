@@ -659,9 +659,12 @@
 
 <section class="cron-view view active" aria-labelledby="cron-list-title">
   <div class="cron-layout">
-    <aside class="cron-list-pane" aria-labelledby="cron-list-title">
-      <div class="pane-header">
-        <span id="cron-list-title" class="pane-title">
+    <aside
+      class="cron-list-pane secondary-pane"
+      aria-labelledby="cron-list-title"
+    >
+      <div class="pane-header secondary-pane__header">
+        <span id="cron-list-title" class="secondary-pane__title">
           {t('cron.title', 'Scheduled Runs')}
         </span>
         <div class="pane-header-actions">
@@ -674,7 +677,7 @@
         </div>
       </div>
 
-      <div class="cron-list-scroll">
+      <div class="cron-list-scroll secondary-pane__scroll">
         {#if viewState.agentsError}
           <div class="cron-load-error">
             <Banner variant="error" role="alert">

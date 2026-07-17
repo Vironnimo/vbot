@@ -61,6 +61,9 @@ describe('SettingsView', () => {
     expect(root?.firstElementChild?.classList.contains('settings-nav')).toBe(
       true,
     );
+    expect(root?.firstElementChild?.classList.contains('secondary-pane')).toBe(
+      true,
+    );
     expect(root?.lastElementChild?.classList.contains('settings-content')).toBe(
       true,
     );
@@ -87,6 +90,42 @@ describe('SettingsView', () => {
       /show[_ -]?token[_ -]?counts/i,
     );
     expect(document.body.textContent).not.toMatch(/token count/i);
+  });
+
+  it('uses the compact section picker to navigate the mobile Settings document', async () => {
+    rpcMock.mockResolvedValue(createSettingsPayload());
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    try {
+      mountedComponent = mount(SettingsView, { target: document.body });
+      flushSync();
+      await waitForText('Add provider');
+
+      const picker = document.querySelector('#settings-mobile-section');
+      expect(picker).not.toBeNull();
+      expect(picker.textContent).toContain('Providers');
+
+      picker.click();
+      flushSync();
+
+      const appearanceOption = Array.from(
+        document.body.querySelectorAll('.dropdown-option'),
+      ).find((option) => option.textContent.includes('Appearance'));
+      expect(appearanceOption).toBeTruthy();
+
+      appearanceOption.click();
+      flushSync();
+
+      expect(picker.textContent).toContain('Appearance');
+      expect(scrollIntoView).toHaveBeenCalledWith({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    } finally {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    }
   });
 
   it('adds, removes, and saves skill directories', async () => {
