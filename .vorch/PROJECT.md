@@ -150,9 +150,11 @@ Frontend script works the same way.
 
 ## Live Testing
 
-Live testing means starting the running app and verifying behavior via CLI, API, and browser — not writing unit or integration tests (that is the Builder's job with pytest/Vitest). The Tester agent owns live testing.
+Live testing exercises the running application rather than writing pytest or Vitest tests.
 
-All project-specific live testing instructions — startup, health check, browser strategy, which features need API credentials, shutdown — live in **`.vorch/TESTER.md`**. The Tester agent reads this file on every session.
+- Before live testing the WebUI in a browser, read `.vorch/workflows/web-test-workflow.md` in full.
+- Before live testing the CLI, read `.vorch/workflows/cli-test-workflow.md` in full.
+- Read both when the task explicitly spans both accessors.
 
 ## Context
 
