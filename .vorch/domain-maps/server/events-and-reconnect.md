@@ -36,7 +36,7 @@ Streaming deltas (`assistant_output_delta`, `reasoning_delta`, `tool_call_delta`
 
 ## `resource_changed`
 
-`publish_resource_changed(state, kind, scope=None)` is the single generic invalidation seam. Payload is `{kind, scope?}` and contains no resource data; consumers re-fetch through normal RPC. It no-ops when no bus exists (CLI/runtime stubs) and rejects unknown kinds. Current allowed kinds are `models`, `queue`, `sessions`, `agents`, `providers`, `clients`, `channels`, `debug_traces`, and `projects`.
+`publish_resource_changed(state, kind, scope=None)` is the single generic invalidation seam. Payload is `{kind, scope?}` and contains no resource data; consumers re-fetch through normal RPC. It no-ops when no bus exists (CLI/runtime stubs) and rejects unknown kinds. Current allowed kinds are `models`, `queue`, `sessions`, `agents`, `providers`, `clients`, `channels`, `debug_traces`, `projects`, and `cron`.
 
 Emission belongs to the server mutation edge, never `core/`. Representative ownership:
 
@@ -44,6 +44,7 @@ Emission belongs to the server mutation edge, never `core/`. Representative owne
 - Session create/rename/delete and title-change callbacks → scoped `sessions`; deleting an Identity Agent's current Session also invalidates `agents` because its current pointer changes.
 - RPC Queue mutations and the queued branches of `chat.send`/`chat.stream` → scoped `queue`. Core-origin enqueues intentionally do not publish this browser invalidation.
 - Channel mutations → `channels`; `/ws` presence lifecycle → `clients`; terminal Run bridge and Debug mutations → `debug_traces`.
+- `CronService.add_changed_callback` is bridged in `server/app.py` → `cron`, covering RPC/Tool mutations and scheduler-owned status/health transitions without importing the server bus into core.
 
 The exact emitters remain source-of-truth in `server/rpc/*_methods.py`, `server/rpc/event_bridge.py`, and `server/app.py`. A new consumer normally requires one allowed kind, one mutation-edge emit, and one client reload path rather than a new event family.
 

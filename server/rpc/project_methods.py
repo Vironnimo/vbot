@@ -30,6 +30,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from core.automation.cron import TERMINAL_CRON_JOB_STATUSES
 from core.projects import (
     Project,
     cwd_exists,
@@ -474,7 +475,10 @@ def _cron_targets_project_agent(job: Any, project_id: str) -> bool:
     equals this project's id. A bare job (``project_id=None``) targets an identity
     agent, never a Project agent, even when the ids collide by name.
     """
-    return bool(job.project_id == project_id)
+    return bool(
+        job.project_id == project_id
+        and getattr(job, "status", "active") not in TERMINAL_CRON_JOB_STATUSES
+    )
 
 
 def _scan_preview(state: Any, project: Project) -> JsonObject:

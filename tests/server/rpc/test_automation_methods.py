@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 from unittest.mock import Mock
-from zoneinfo import ZoneInfoNotFoundError
 
 import pytest
 
-from core.automation.cron import CronServiceError
+from core.automation.cron import CronJobValidationError, CronServiceError
 from server.rpc.methods import dispatch_rpc
 
 
@@ -86,8 +84,7 @@ async def test_cron_create_parses_project_qualified_target() -> None:
 
     assert response == {"ok": True, "result": {"id": "job-123"}}
     # The address form is split once at the edge: agent_id + project_id, never an
-    # "@" string in agent_id. The resolver validates the project target.
-    state.runtime.agent_resolver.resolve_agent.assert_called_once_with("vbot", "builder")
+    # "@" string in agent_id. CronService owns target validation.
     cron_service.create_job.assert_called_once_with(
         agent_id="builder",
         prompt="Run status check",
@@ -101,24 +98,7 @@ async def test_cron_create_parses_project_qualified_target() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cron_list_happy_path_includes_server_side_next_fire_at(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class FrozenDateTime(datetime):
-        @classmethod
-        def now(cls, tz: Any = None) -> FrozenDateTime:
-            base = cls(2026, 5, 14, 10, 0, 0, tzinfo=UTC)
-            if tz is None:
-                return base
-            return cast(FrozenDateTime, base.astimezone(tz))
-
-    monkeypatch.setattr("server.rpc.automation_methods.datetime", FrozenDateTime)
-
-    def missing_zoneinfo(_timezone_name: str) -> Any:
-        raise ZoneInfoNotFoundError("timezone data unavailable")
-
-    monkeypatch.setattr("server.rpc.automation_methods.ZoneInfo", missing_zoneinfo)
-
+async def test_cron_list_happy_path_includes_canonical_service_projection() -> None:
     job = SimpleNamespace(
         id="job-1",
         agent_id="builder",
@@ -131,10 +111,19 @@ async def test_cron_list_happy_path_includes_server_side_next_fire_at(
         session_id="session-1",
         status="active",
         last_fired_at="2026-05-14T09:55:00+00:00",
+        last_attempt_at="2026-05-14T09:55:00+00:00",
+        last_completed_at="2026-05-14T09:56:00+00:00",
+        last_run_id="run-1",
+        last_outcome="success",
+        last_error=None,
+        consecutive_failures=0,
         created_at="2026-05-14T09:00:00+00:00",
     )
     cron_service = Mock()
     cron_service.list_jobs.return_value = [job]
+    cron_service.system_timezone_name.return_value = "Europe/Berlin"
+    cron_service.effective_timezone_name.return_value = "UTC"
+    cron_service.next_fire_at.return_value = "2026-05-14T10:05:00+00:00"
     state = _state_with_cron_service(cron_service)
 
     response = await dispatch_rpc(state, {"method": "cron.list", "params": {}})
@@ -156,10 +145,18 @@ async def test_cron_list_happy_path_includes_server_side_next_fire_at(
                     "session_id": "session-1",
                     "status": "active",
                     "last_fired_at": "2026-05-14T09:55:00+00:00",
+                    "last_attempt_at": "2026-05-14T09:55:00+00:00",
+                    "last_completed_at": "2026-05-14T09:56:00+00:00",
+                    "last_run_id": "run-1",
+                    "last_outcome": "success",
+                    "last_error": None,
+                    "consecutive_failures": 0,
+                    "effective_timezone": "UTC",
                     "next_fire_at": "2026-05-14T10:05:00+00:00",
                     "created_at": "2026-05-14T09:00:00+00:00",
                 }
-            ]
+            ],
+            "system_timezone": "Europe/Berlin",
         },
     }
     cron_service.list_jobs.assert_called_once_with()
@@ -191,7 +188,7 @@ async def test_cron_update_happy_path() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cron_update_validates_agent_when_agent_id_is_present() -> None:
+async def test_cron_update_parses_agent_address_when_agent_id_is_present() -> None:
     cron_service = Mock()
     state = _state_with_cron_service(cron_service)
 
@@ -207,7 +204,6 @@ async def test_cron_update_validates_agent_when_agent_id_is_present() -> None:
     )
 
     assert response == {"ok": True, "result": {"ok": True}}
-    state.runtime.agent_resolver.resolve_agent.assert_called_once_with(None, "main")
     cron_service.update_job.assert_called_once_with("job-1", agent_id="main", project_id=None)
 
 
@@ -319,8 +315,10 @@ async def test_cron_create_wraps_expected_domain_errors() -> None:
 @pytest.mark.asyncio
 async def test_cron_create_rejects_unknown_agent() -> None:
     cron_service = Mock()
+    cron_service.create_job.side_effect = CronJobValidationError(
+        "Cron target does not exist: missing"
+    )
     state = _state_with_cron_service(cron_service)
-    state.runtime.agent_resolver.resolve_agent.side_effect = KeyError("missing")
 
     response = await dispatch_rpc(
         state,
@@ -337,16 +335,18 @@ async def test_cron_create_rejects_unknown_agent() -> None:
 
     assert response == {
         "ok": False,
-        "error": {"code": "domain_error", "message": "Unknown cron target: missing"},
+        "error": {"code": "domain_error", "message": "Cron target does not exist: missing"},
     }
-    cron_service.create_job.assert_not_called()
+    cron_service.create_job.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_cron_create_rejects_unknown_project_target() -> None:
     cron_service = Mock()
+    cron_service.create_job.side_effect = CronJobValidationError(
+        "Cron target does not exist: ghost@vbot"
+    )
     state = _state_with_cron_service(cron_service)
-    state.runtime.agent_resolver.resolve_agent.side_effect = KeyError("not on team")
 
     response = await dispatch_rpc(
         state,
@@ -363,6 +363,9 @@ async def test_cron_create_rejects_unknown_project_target() -> None:
 
     assert response == {
         "ok": False,
-        "error": {"code": "domain_error", "message": "Unknown cron target: ghost@vbot"},
+        "error": {
+            "code": "domain_error",
+            "message": "Cron target does not exist: ghost@vbot",
+        },
     }
-    cron_service.create_job.assert_not_called()
+    cron_service.create_job.assert_called_once()

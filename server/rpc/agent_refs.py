@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.automation.cron import TERMINAL_CRON_JOB_STATUSES
+
 
 class _NoopAsyncContext:
     async def __aenter__(self) -> None:
@@ -38,7 +40,11 @@ def _agent_reference_ids(state: Any, agent_id: str) -> list[str]:
         references.extend(
             f"cron:{job.id}"
             for job in cron_service.list_jobs()
-            if job.agent_id == agent_id and job.project_id is None
+            if (
+                job.agent_id == agent_id
+                and job.project_id is None
+                and getattr(job, "status", "active") not in TERMINAL_CRON_JOB_STATUSES
+            )
         )
 
     return sorted(references)

@@ -29,10 +29,9 @@ def make_queued_item(run: Run | None = None) -> SimpleNamespace:
 
 async def test_trigger_run_creates_new_session_and_starts_run_immediately() -> None:
     # Arrange
-    session = SimpleNamespace(id="new-session")
-    runtime = SimpleNamespace(chat_sessions=SimpleNamespace(create=Mock(return_value=session)))
+    runtime = SimpleNamespace(chat_sessions=SimpleNamespace(create=Mock()))
     chat_loop = SimpleNamespace(
-        start_run=AsyncMock(return_value=make_run("run-one", "coder", session.id))
+        start_run_in_new_session=AsyncMock(return_value=make_run("run-one", "coder", "new-session"))
     )
     chat_run_manager = Mock()
     trigger_service = TriggerService(
@@ -43,11 +42,10 @@ async def test_trigger_run_creates_new_session_and_starts_run_immediately() -> N
     run = await trigger_service.trigger_run("coder", "Start automated work")
 
     # Assert
-    runtime.chat_sessions.create.assert_called_once_with("coder", project_id=None)
-    chat_loop.start_run.assert_awaited_once_with(
+    runtime.chat_sessions.create.assert_not_called()
+    chat_loop.start_run_in_new_session.assert_awaited_once_with(
         "coder",
         "Start automated work",
-        session_id="new-session",
         sender=None,
         reply_surface=None,
         project_id=None,
@@ -57,10 +55,11 @@ async def test_trigger_run_creates_new_session_and_starts_run_immediately() -> N
 
 async def test_trigger_run_scopes_new_session_and_run_to_project() -> None:
     # Arrange
-    session = SimpleNamespace(id="proj-session")
-    runtime = SimpleNamespace(chat_sessions=SimpleNamespace(create=Mock(return_value=session)))
+    runtime = SimpleNamespace(chat_sessions=SimpleNamespace(create=Mock()))
     chat_loop = SimpleNamespace(
-        start_run=AsyncMock(return_value=make_run("run-one", "builder", session.id))
+        start_run_in_new_session=AsyncMock(
+            return_value=make_run("run-one", "builder", "proj-session")
+        )
     )
     trigger_service = TriggerService(cast(Any, chat_loop), cast(Any, Mock()), cast(Any, runtime))
 
@@ -69,11 +68,10 @@ async def test_trigger_run_scopes_new_session_and_run_to_project() -> None:
 
     # Assert: the auto-session is created under the project anchor and the run is
     # project-scoped (cwd = repo, project files in the prompt downstream).
-    runtime.chat_sessions.create.assert_called_once_with("builder", project_id="vbot")
-    chat_loop.start_run.assert_awaited_once_with(
+    runtime.chat_sessions.create.assert_not_called()
+    chat_loop.start_run_in_new_session.assert_awaited_once_with(
         "builder",
         "Run project work",
-        session_id="proj-session",
         sender=None,
         reply_surface=None,
         project_id="vbot",

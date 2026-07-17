@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
+from core.automation.cron import CronService
 from core.chat import ChatLoop
 from core.runs import ChatRunManager, RunStatus
 from core.runtime import Runtime
@@ -23,6 +25,7 @@ from server.app import (
     _connection_replay_status,
     _parse_query_string,
     _queues_snapshot,
+    _register_cron_change_bridge,
     _register_run_event_bridge,
     _register_session_title_bridge,
     _shutdown_local_catalog_refresh,
@@ -285,6 +288,29 @@ def test_session_title_bridge_publishes_sessions_invalidation(tmp_path: Path) ->
         "kind": "sessions",
         "scope": {"agent_id": "coder"},
     }
+
+
+def test_cron_change_bridge_publishes_scheduler_invalidation(tmp_path: Path) -> None:
+    cron_service = CronService(cast(Any, SimpleNamespace()), tmp_path)
+    state = SimpleNamespace(
+        runtime=SimpleNamespace(cron_service=cron_service),
+        event_bus=ServerEventBus(),
+    )
+    unsubscribe = _register_cron_change_bridge(state)
+
+    try:
+        cron_service.create_job(
+            agent_id="coder",
+            prompt="Scheduled work",
+            schedule_type="cron",
+            cron_expression="0 9 * * *",
+        )
+    finally:
+        if callable(unsubscribe):
+            unsubscribe()
+
+    assert state.event_bus.events[-1]["type"] == "resource_changed"
+    assert state.event_bus.events[-1]["payload"] == {"kind": "cron"}
 
 
 async def _wait_for_events(event_bus: ServerEventBus, count: int) -> None:

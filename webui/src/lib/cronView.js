@@ -77,18 +77,10 @@ export function describeCronExpression(expression) {
 }
 
 export const CRON_STATUS_ACTIVE = 'active';
-const CRON_STATUS_PAUSED = 'paused';
-const CRON_STATUS_COMPLETED = 'completed';
-const CRON_STATUS_FAILED = 'failed';
-
-// A successfully fired once job (`completed`) drops off the list, but a job
-// that gave up after repeated failures (`failed`) stays visible so the user
-// sees that it never ran instead of it silently disappearing.
-const VISIBLE_JOB_STATUSES = new Set([
-  CRON_STATUS_ACTIVE,
-  CRON_STATUS_PAUSED,
-  CRON_STATUS_FAILED,
-]);
+export const CRON_STATUS_PAUSED = 'paused';
+export const CRON_STATUS_COMPLETED = 'completed';
+export const CRON_STATUS_FAILED = 'failed';
+export const CRON_STATUS_MISSED = 'missed';
 
 export function createCronViewState() {
   return {
@@ -96,10 +88,13 @@ export function createCronViewState() {
     jobs: [],
     loadingAgents: false,
     loadingJobs: false,
+    agentsError: '',
+    jobsError: '',
+    systemTimezone: 'UTC',
   };
 }
 
-export function createCronFormValues(job = null) {
+export function createCronFormValues(job = null, systemTimezone = 'UTC') {
   if (!job) {
     return {
       id: '',
@@ -108,7 +103,7 @@ export function createCronFormValues(job = null) {
       schedule_type: CRON_SCHEDULE_TYPE_CRON,
       cron_expression: '',
       run_at: '',
-      timezone: '',
+      timezone: systemTimezone,
       session_id: '',
       original_run_at: '',
       original_timezone: '',
@@ -123,8 +118,12 @@ export function createCronFormValues(job = null) {
     prompt: normalized.prompt,
     schedule_type: normalized.schedule_type,
     cron_expression: normalized.cron_expression ?? '',
-    run_at: toDateTimeLocalInput(normalized.run_at),
-    timezone: normalized.timezone ?? '',
+    run_at: toDateTimeLocalInput(
+      normalized.run_at,
+      normalized.effective_timezone ?? systemTimezone,
+    ),
+    timezone:
+      normalized.timezone ?? normalized.effective_timezone ?? systemTimezone,
     session_id: normalized.session_id ?? '',
     original_run_at: normalized.run_at ?? '',
     original_timezone: normalized.timezone ?? '',
@@ -143,6 +142,7 @@ export function applyAgentListResponse(state, result) {
 }
 
 export function applyCronListResponse(state, result) {
+  state.systemTimezone = optionalText(result?.system_timezone) ?? 'UTC';
   state.jobs = normalizeCronJobs(result?.jobs);
   return state.jobs;
 }
@@ -153,9 +153,32 @@ function normalizeCronJobs(jobs) {
 }
 
 export function visibleCronJobs(jobs) {
-  return normalizeCronJobs(jobs).filter((job) =>
-    VISIBLE_JOB_STATUSES.has(job.status),
-  );
+  return normalizeCronJobs(jobs);
+}
+
+export function cronFormFingerprint(formValues) {
+  const values = formValues ?? {};
+  return JSON.stringify({
+    agent_id: asText(values.agent_id),
+    prompt: asText(values.prompt),
+    schedule_type: normalizeScheduleType(values.schedule_type),
+    cron_expression: asText(values.cron_expression),
+    run_at: asText(values.run_at),
+    timezone: asText(values.timezone),
+    session_id: asText(values.session_id),
+  });
+}
+
+export function cronTimezoneOptions(systemTimezone = 'UTC') {
+  let names = [];
+  try {
+    names = Intl.supportedValuesOf('timeZone');
+  } catch {
+    names = ['UTC', systemTimezone];
+  }
+  return [...new Set(['UTC', systemTimezone, ...names])]
+    .filter(Boolean)
+    .map((timezone) => ({ value: timezone, label: timezone }));
 }
 
 export function buildCreateCronPayload(formValues) {
@@ -215,7 +238,11 @@ function resolveOnceRunAtValue(formValues) {
 
   if (
     originalRunAt !== null &&
-    runAt === toDateTimeLocalInput(originalRunAt) &&
+    runAt ===
+      toDateTimeLocalInput(
+        originalRunAt,
+        timezone ?? originalTimezone ?? 'UTC',
+      ) &&
     timezone === originalTimezone
   ) {
     return originalRunAt;
@@ -229,7 +256,13 @@ function normalizeCronJob(job) {
   const cronExpression = optionalText(job?.cron_expression);
   const runAt = optionalText(job?.run_at);
   const lastFiredAt = optionalText(job?.last_fired_at);
+  const lastAttemptAt = optionalText(job?.last_attempt_at);
+  const lastCompletedAt = optionalText(job?.last_completed_at);
   const nextFireAt = optionalText(job?.next_fire_at);
+  const effectiveTimezone =
+    optionalText(job?.effective_timezone) ??
+    optionalText(job?.timezone) ??
+    'UTC';
 
   return {
     id: asText(job?.id),
@@ -244,30 +277,50 @@ function normalizeCronJob(job) {
     cron_expression: cronExpression,
     run_at: runAt,
     timezone: optionalText(job?.timezone),
+    effective_timezone: effectiveTimezone,
     session_id: optionalText(job?.session_id),
     status: normalizeStatus(job?.status),
     last_fired_at: lastFiredAt,
+    last_attempt_at: lastAttemptAt,
+    last_completed_at: lastCompletedAt,
+    last_run_id: optionalText(job?.last_run_id),
+    last_outcome: optionalText(job?.last_outcome),
+    last_error: optionalText(job?.last_error),
+    consecutive_failures: Number.isInteger(job?.consecutive_failures)
+      ? job.consecutive_failures
+      : 0,
     next_fire_at: nextFireAt,
     created_at: optionalText(job?.created_at),
     schedule_description: deriveScheduleDescription(
       scheduleType,
       cronExpression,
       runAt,
+      effectiveTimezone,
     ),
-    last_fired_at_display: formatTimestamp(lastFiredAt),
-    next_fire_at_display: formatTimestamp(nextFireAt),
+    last_attempt_at_display: formatTimestamp(lastAttemptAt, effectiveTimezone),
+    last_fired_at_display: formatTimestamp(lastFiredAt, effectiveTimezone),
+    last_completed_at_display: formatTimestamp(
+      lastCompletedAt,
+      effectiveTimezone,
+    ),
+    next_fire_at_display: formatTimestamp(nextFireAt, effectiveTimezone),
   };
 }
 
-function deriveScheduleDescription(scheduleType, cronExpression, runAt) {
+function deriveScheduleDescription(
+  scheduleType,
+  cronExpression,
+  runAt,
+  effectiveTimezone,
+) {
   if (scheduleType === CRON_SCHEDULE_TYPE_CRON) {
     return cronExpression ?? '';
   }
 
-  return formatTimestamp(runAt);
+  return formatTimestamp(runAt, effectiveTimezone);
 }
 
-function toDateTimeLocalInput(value) {
+export function toDateTimeLocalInput(value, timezone = 'UTC') {
   if (!value) {
     return '';
   }
@@ -277,16 +330,25 @@ function toDateTimeLocalInput(value) {
     return '';
   }
 
-  const year = String(parsed.getFullYear()).padStart(4, '0');
-  const month = String(parsed.getMonth() + 1).padStart(2, '0');
-  const day = String(parsed.getDate()).padStart(2, '0');
-  const hours = String(parsed.getHours()).padStart(2, '0');
-  const minutes = String(parsed.getMinutes()).padStart(2, '0');
-
-  return `${year}-${month}-${day}T${hours}:${minutes}`;
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(parsed);
+    const part = (type) =>
+      parts.find((entry) => entry.type === type)?.value ?? '';
+    return `${part('year')}-${part('month')}-${part('day')}T${part('hour')}:${part('minute')}`;
+  } catch {
+    return '';
+  }
 }
 
-function formatTimestamp(value) {
+export function formatTimestamp(value, timezone = 'UTC', locale = 'en-GB') {
   if (!value) {
     return '';
   }
@@ -296,8 +358,20 @@ function formatTimestamp(value) {
     return '';
   }
 
-  const iso = parsed.toISOString();
-  return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
+  try {
+    return new Intl.DateTimeFormat(locale, {
+      timeZone: timezone,
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+      timeZoneName: 'short',
+    }).format(parsed);
+  } catch {
+    return '';
+  }
 }
 
 // The readable + savable target of a cron job. `cron.list` returns `target`
@@ -339,7 +413,8 @@ function normalizeStatus(value) {
   if (
     value === CRON_STATUS_PAUSED ||
     value === CRON_STATUS_COMPLETED ||
-    value === CRON_STATUS_FAILED
+    value === CRON_STATUS_FAILED ||
+    value === CRON_STATUS_MISSED
   ) {
     return value;
   }

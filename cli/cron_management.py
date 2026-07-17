@@ -112,6 +112,7 @@ def _format_job_row(job: object) -> str:
     status = _string_or_default(job.get("status"), "?")
     schedule = _format_schedule(job)
     next_fire_at = _string_or_default(job.get("next_fire_at"), "-")
+    last_outcome = _string_or_default(job.get("last_outcome"), "-")
     prompt = _prompt_preview(job.get("prompt"))
     return (
         f"- id={job_id}"
@@ -119,6 +120,7 @@ def _format_job_row(job: object) -> str:
         f" status={status}"
         f" schedule={schedule}"
         f" next_fire_at={next_fire_at}"
+        f" last_outcome={last_outcome}"
         f" prompt={prompt}"
     )
 

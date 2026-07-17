@@ -2,13 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, tzinfo
-from typing import Any, cast
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from typing import Any
 
-from croniter import croniter  # type: ignore[import-untyped]
-
-from core.automation.cron import CronJobValidationError
 from core.projects import format_agent_address
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
@@ -23,24 +18,7 @@ from server.rpc.validation import (
 
 JsonObject = dict[str, Any]
 CRON_SCHEDULE_TYPES = frozenset(("cron", "once"))
-CRON_JOB_STATUSES = frozenset(("active", "paused", "completed"))
-
-
-def _validate_cron_target_exists(state: Any, agent_id: str, project_id: str | None) -> None:
-    """Validate the cron target through the same resolver every run path uses.
-
-    A project-qualified target (``agent@projekt``) is validated against its
-    project's Team; a bare target stays an identity-agent lookup. ``None``
-    resolver means a minimal runtime (tests) that skips reference validation.
-    """
-    resolver = getattr(state.runtime, "agent_resolver", None)
-    if resolver is None:
-        return
-    try:
-        resolver.resolve_agent(project_id, agent_id)
-    except Exception as error:
-        target = format_agent_address(agent_id, project_id)
-        raise CronJobValidationError(f"Unknown cron target: {target}") from error
+CRON_JOB_STATUSES = frozenset(("active", "paused"))
 
 
 async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
@@ -90,7 +68,6 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
 
     try:
         async with _agent_reference_lock(state):
-            _validate_cron_target_exists(state, agent_id, project_id)
             job = state.runtime.cron_service.create_job(
                 agent_id=agent_id,
                 prompt=prompt,
@@ -114,7 +91,11 @@ def _cron_list(state: Any, params: JsonObject) -> JsonObject:
         jobs = state.runtime.cron_service.list_jobs()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return {"jobs": [_cron_job_response(job) for job in jobs]}
+    cron_service = state.runtime.cron_service
+    return {
+        "jobs": [_cron_job_response(cron_service, job) for job in jobs],
+        "system_timezone": cron_service.system_timezone_name(),
+    }
 
 
 async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
@@ -172,7 +153,6 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
     if "agent_id" in updates:
         try:
             async with _agent_reference_lock(state):
-                _validate_cron_target_exists(state, updates["agent_id"], updates["project_id"])
                 state.runtime.cron_service.update_job(job_id, **updates)
         except Exception as exc:
             raise _map_expected_error(exc) from exc
@@ -218,7 +198,7 @@ def _cron_disable(state: Any, params: JsonObject) -> JsonObject:
     return {"ok": True}
 
 
-def _cron_job_response(job: Any) -> JsonObject:
+def _cron_job_response(cron_service: Any, job: Any) -> JsonObject:
     return {
         "id": job.id,
         "agent_id": job.agent_id,
@@ -234,40 +214,16 @@ def _cron_job_response(job: Any) -> JsonObject:
         "session_id": job.session_id,
         "status": job.status,
         "last_fired_at": job.last_fired_at,
-        "next_fire_at": _cron_next_fire_at(job),
+        "last_attempt_at": job.last_attempt_at,
+        "last_completed_at": job.last_completed_at,
+        "last_run_id": job.last_run_id,
+        "last_outcome": job.last_outcome,
+        "last_error": job.last_error,
+        "consecutive_failures": job.consecutive_failures,
+        "effective_timezone": cron_service.effective_timezone_name(job),
+        "next_fire_at": cron_service.next_fire_at(job),
         "created_at": job.created_at,
     }
-
-
-def _cron_next_fire_at(job: Any) -> str | None:
-    if job.schedule_type != "cron" or job.status != "active" or job.cron_expression is None:
-        return None
-
-    try:
-        timezone = _resolve_cron_timezone(job.timezone)
-        now_local = datetime.now(timezone)
-        next_fire_local = cast(
-            datetime,
-            croniter(job.cron_expression, now_local).get_next(datetime),
-        )
-        if next_fire_local.tzinfo is None:
-            next_fire_local = next_fire_local.replace(tzinfo=timezone)
-        return next_fire_local.astimezone(UTC).isoformat()
-    except (ValueError, ZoneInfoNotFoundError):
-        return None
-
-
-def _resolve_cron_timezone(timezone_name: str | None) -> tzinfo:
-    if timezone_name:
-        normalized_timezone = timezone_name.strip()
-        if normalized_timezone.upper() == "UTC":
-            return UTC
-        return ZoneInfo(normalized_timezone)
-
-    local_timezone = datetime.now().astimezone().tzinfo
-    if local_timezone is not None:
-        return local_timezone
-    return UTC
 
 
 def method_handlers() -> dict[str, RpcMethodHandler]:

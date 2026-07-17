@@ -240,6 +240,7 @@
   let queueInvalidation = $derived(appControllerState.queueInvalidation);
   let clientsRefreshToken = $derived(appControllerState.clientsRefreshToken);
   let channelsRefreshToken = $derived(appControllerState.channelsRefreshToken);
+  let cronRefreshToken = $derived(appControllerState.cronRefreshToken);
   let debugTracesRefreshToken = $derived(
     appControllerState.debugTracesRefreshToken,
   );
@@ -869,7 +870,12 @@
         {projectsRefreshToken}
       />
     {:else if activeViewId === 'cron'}
-      <CronView onToast={showToast} />
+      <CronView
+        onToast={showToast}
+        {cronRefreshToken}
+        {agentsRefreshToken}
+        {projectsRefreshToken}
+      />
     {:else if activeViewId === 'system-prompt'}
       <SystemPromptView
         onToast={showToast}

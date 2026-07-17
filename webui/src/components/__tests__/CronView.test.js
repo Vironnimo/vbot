@@ -77,7 +77,7 @@ describe('CronView', () => {
     return mountedComponent;
   }
 
-  it('lists active, paused, and failed jobs while filtering completed jobs', async () => {
+  it('lists active, paused, failed, completed, and missed job history', async () => {
     listCronJobsMock.mockResolvedValue({
       jobs: [
         cronJob({
@@ -97,8 +97,14 @@ describe('CronView', () => {
         }),
         cronJob({
           id: 'job-completed',
-          prompt: 'Completed and hidden',
+          prompt: 'Completed history',
           status: 'completed',
+        }),
+        cronJob({
+          id: 'job-missed',
+          prompt: 'Missed history',
+          status: 'missed',
+          last_outcome: 'missed',
         }),
       ],
     });
@@ -109,8 +115,7 @@ describe('CronView', () => {
       document.querySelector('[data-testid="cron-item-job-active"]'),
     );
 
-    // A failed once job stays visible (labelled Failed) so the user sees it
-    // never ran; a successful completed fire is hidden from the list.
+    // Terminal jobs remain visible and deletable as execution history.
     expect(
       document.querySelector('[data-testid="cron-item-job-active"]'),
     ).toBeTruthy();
@@ -122,8 +127,12 @@ describe('CronView', () => {
     ).toBeTruthy();
     expect(
       document.querySelector('[data-testid="cron-item-job-completed"]'),
-    ).toBeFalsy();
+    ).toBeTruthy();
+    expect(
+      document.querySelector('[data-testid="cron-item-job-missed"]'),
+    ).toBeTruthy();
     expect(document.body.textContent).toContain('Failed');
+    expect(document.body.textContent).toContain('Missed');
   });
 
   it('auto-selects the first job so its detail form renders on load', async () => {
@@ -227,6 +236,7 @@ describe('CronView', () => {
       prompt: 'Prepare morning digest',
       schedule_type: 'cron',
       cron_expression: '0 6 * * *',
+      timezone: 'UTC',
     });
   });
 
@@ -282,7 +292,7 @@ describe('CronView', () => {
       prompt: 'Prepare updated digest',
       schedule_type: 'cron',
       cron_expression: '0 6 * * *',
-      timezone: null,
+      timezone: 'UTC',
       session_id: null,
     });
   });
@@ -315,7 +325,7 @@ describe('CronView', () => {
     expect(inputById('cron-job-expression').value).toBe('0 * * * *');
   });
 
-  it('keeps once run_at and session_id when saving an unchanged edit', async () => {
+  it('keeps once run_at and session_id when saving another field', async () => {
     const storedRunAt = '2026-05-14T10:00:00+00:00';
 
     listCronJobsMock.mockResolvedValue({
@@ -338,18 +348,100 @@ describe('CronView', () => {
     const runAtInput = inputById('cron-job-run-at');
     expect(runAtInput.value.length).toBeGreaterThan(0);
 
+    inputById('cron-job-prompt').value = 'Updated once prompt';
+    inputById('cron-job-prompt').dispatchEvent(
+      new Event('input', { bubbles: true }),
+    );
+    flushSync();
     buttonByText('Save').click();
 
     await waitForCondition(() => updateCronJobMock.mock.calls.length === 1);
     expect(updateCronJobMock).toHaveBeenCalledWith({
       id: 'job-once',
       agent_id: 'agent-alpha',
-      prompt: 'Default cron prompt',
+      prompt: 'Updated once prompt',
       schedule_type: 'once',
       run_at: storedRunAt,
       timezone: 'UTC',
       session_id: 'session-preserve',
     });
+  });
+
+  it('does not reset unsaved edits when the selected row is clicked again', async () => {
+    listCronJobsMock.mockResolvedValue({
+      jobs: [cronJob({ id: 'job-editing' })],
+    });
+    mountView();
+    await waitForCondition(() => document.getElementById('cron-job-prompt'));
+
+    inputById('cron-job-prompt').value = 'Unsaved draft';
+    inputById('cron-job-prompt').dispatchEvent(
+      new Event('input', { bubbles: true }),
+    );
+    flushSync();
+    buttonByTestId('cron-item-job-editing').click();
+    flushSync();
+
+    expect(inputById('cron-job-prompt').value).toBe('Unsaved draft');
+    expect(document.body.querySelector('.modal-footer')).toBeNull();
+  });
+
+  it('asks before switching away from unsaved edits', async () => {
+    listCronJobsMock.mockResolvedValue({
+      jobs: [cronJob({ id: 'job-one' }), cronJob({ id: 'job-two' })],
+    });
+    mountView();
+    await waitForCondition(() => document.getElementById('cron-job-prompt'));
+
+    inputById('cron-job-prompt').value = 'Unsaved draft';
+    inputById('cron-job-prompt').dispatchEvent(
+      new Event('input', { bubbles: true }),
+    );
+    flushSync();
+    buttonByTestId('cron-item-job-two').click();
+    flushSync();
+
+    expect(document.body.textContent).toContain('Discard unsaved changes?');
+    confirmDialog('Cancel');
+    flushSync();
+    expect(inputById('cron-job-prompt').value).toBe('Unsaved draft');
+  });
+
+  it('shows a contextual retry state when cron.list fails', async () => {
+    listCronJobsMock.mockRejectedValue(new Error('server unavailable'));
+    mountView();
+
+    await waitForCondition(() => document.body.textContent.includes('Retry'));
+
+    expect(document.body.textContent).toContain('server unavailable');
+    expect(document.body.textContent).not.toContain('No scheduled jobs');
+  });
+
+  it('shows execution health and disables toggling terminal history', async () => {
+    listCronJobsMock.mockResolvedValue({
+      jobs: [
+        cronJob({
+          id: 'job-completed',
+          status: 'completed',
+          last_outcome: 'success',
+          last_error: 'Outcome recovered after restart',
+        }),
+      ],
+    });
+    mountView();
+
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="cron-delete-job-completed"]'),
+    );
+
+    expect(document.body.textContent).toContain('Succeeded');
+    expect(document.body.textContent).toContain('run-default');
+    expect(document.body.textContent).toContain(
+      'Outcome recovered after restart',
+    );
+    expect(
+      document.querySelector('[data-testid="cron-toggle-job-completed"]'),
+    ).toBeNull();
   });
 
   it('calls cron.delete helper after confirming the dialog', async () => {
@@ -443,6 +535,13 @@ function cronJob(overrides = {}) {
     session_id: null,
     status: 'active',
     last_fired_at: '2026-05-14T10:00:00+00:00',
+    last_attempt_at: '2026-05-14T10:00:00+00:00',
+    last_completed_at: '2026-05-14T10:05:00+00:00',
+    last_run_id: 'run-default',
+    last_outcome: 'success',
+    last_error: null,
+    consecutive_failures: 0,
+    effective_timezone: 'UTC',
     next_fire_at: '2026-05-14T10:30:00+00:00',
     created_at: '2026-05-14T09:00:00+00:00',
     ...overrides,

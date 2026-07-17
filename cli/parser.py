@@ -22,7 +22,7 @@ THINKING_EFFORTS = ("", *THINKING_EFFORT_ORDER)
 # Argparse choices need a deterministic order; the canonical sets are unordered.
 CHANNEL_PLATFORMS = tuple(sorted(ALLOWED_CHANNEL_PLATFORMS))
 CHANNEL_DM_SCOPES = tuple(sorted(ALLOWED_CHANNEL_DM_SCOPES))
-CRON_STATUSES = ("active", "paused", "completed")
+CRON_STATUSES = ("active", "paused")
 STATISTICS_SECTIONS = ("overview", "usage", "runs", "errors", "tools", "skills")
 TASK_TYPES = tuple(sorted(SUPPORTED_TASK_TYPES))
 AREA_HELP = {
@@ -986,7 +986,10 @@ def _add_cron_schedule_arguments(group: argparse._MutuallyExclusiveGroup) -> Non
     group.add_argument(
         "--cron",
         metavar="<cron-expression>",
-        help='Recurring schedule as a cron expression, for example "0 9 * * *"',
+        help=(
+            "Recurring schedule as exactly five cron fields (minimum one minute), for example "
+            '"0 9 * * *"'
+        ),
     )
     group.add_argument(
         "--at",
@@ -1004,7 +1007,7 @@ def _add_cron_optional_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--session",
         metavar="<session-id>",
-        help="Run in this fixed session instead of a job-managed session",
+        help="Run in this existing Session; omit to create a fresh Session for every fire",
     )
 
 
