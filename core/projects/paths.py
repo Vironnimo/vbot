@@ -36,6 +36,7 @@ MAX_AGENT_ID_LENGTH = 64
 _SLUG_SEPARATOR = "-"
 _SLUG_INVALID_PATTERN = re.compile(r"[^a-z0-9_-]+")
 _SLUG_EDGE_PATTERN = re.compile(r"^[-_]+|[-_]+$")
+_CWD_CASE_INSENSITIVE = os.name == "nt"
 
 
 def normalize_cwd(cwd: str | os.PathLike[str]) -> Path:
@@ -64,7 +65,7 @@ def cwd_identity_key(cwd: str | os.PathLike[str]) -> str:
     resolved = str(normalize_cwd(cwd))
     # realpath already stripped a trailing separator and collapsed `.`/`..`;
     # fold case on Windows only.
-    if os.name == "nt":
+    if _CWD_CASE_INSENSITIVE:
         return resolved.casefold()
     return resolved
 

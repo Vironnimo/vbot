@@ -60,16 +60,16 @@ def test_cwd_identity_key_resolves_symlink(tmp_path: Path) -> None:
 
 def test_cwd_identity_key_case_folds_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     # Windows filesystem is case-insensitive: two casings name the same repo.
-    monkeypatch.setattr(paths_module.os, "name", "nt")
-    monkeypatch.setattr(paths_module.os.path, "realpath", lambda value: str(value), raising=True)
+    monkeypatch.setattr(paths_module, "_CWD_CASE_INSENSITIVE", True)
+    monkeypatch.setattr(paths_module, "normalize_cwd", lambda value: Path(str(value)))
 
     assert cwd_identity_key("C:/Repos/VBot") == cwd_identity_key("c:/repos/vbot")
 
 
 def test_cwd_identity_key_case_sensitive_on_posix(monkeypatch: pytest.MonkeyPatch) -> None:
     # POSIX filesystem is case-sensitive: /srv/A and /srv/a are distinct repos.
-    monkeypatch.setattr(paths_module.os, "name", "posix")
-    monkeypatch.setattr(paths_module.os.path, "realpath", lambda value: str(value), raising=True)
+    monkeypatch.setattr(paths_module, "_CWD_CASE_INSENSITIVE", False)
+    monkeypatch.setattr(paths_module, "normalize_cwd", lambda value: Path(str(value)))
 
     assert cwd_identity_key("/srv/A") != cwd_identity_key("/srv/a")
 

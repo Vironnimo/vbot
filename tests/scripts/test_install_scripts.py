@@ -145,6 +145,12 @@ def test_windows_install_manifest_function_is_defined_before_main_flow() -> None
     )
 
 
+def test_linux_install_manifest_records_selected_environment_interpreter() -> None:
+    script = (PROJECT_ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
+
+    assert 'PYTHON_EXECUTABLE="$(command -v "$PYTHON")"' in script
+
+
 def test_windows_bootstrap_rejects_dev_with_version_before_install(tmp_path: Path) -> None:
     powershell = shutil.which("pwsh") or shutil.which("powershell")
     if powershell is None:
