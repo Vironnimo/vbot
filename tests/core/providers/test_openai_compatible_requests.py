@@ -22,7 +22,9 @@ from .openai_compatible_test_support import (
     SAMPLE_MESSAGES,
     SAMPLE_TOOLS,
     SUCCESS_RESPONSE,
+    AuthConfig,
     Capabilities,
+    ConnectionConfig,
     Model,
     OpenAICompatibleAdapter,
     ProviderError,
@@ -32,6 +34,7 @@ from .openai_compatible_test_support import (
     httpx,
     json,
     pytest,
+    replace,
     respx,
 )
 from .openai_compatible_test_support import openai_adapter as openai_adapter
@@ -727,6 +730,36 @@ class TestSendHeaders:
         request_headers = route.calls.last.request.headers
         assert request_headers.get("x-service-token") == f"Token {API_KEY}"
         assert request_headers.get("authorization") is None
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_keyless_connection_omits_auth_header(self):
+        """A none connection sends no auth header while preserving extra headers."""
+        # Arrange
+        keyless_config = replace(
+            NO_DEFAULTS_CONFIG,
+            connections=[
+                ConnectionConfig(
+                    id="local",
+                    type="none",
+                    label="Local",
+                    auth=AuthConfig(header="", prefix="", credential_key=""),
+                )
+            ],
+            extra_headers={"X-Client": "vBot"},
+        )
+        adapter = OpenAICompatibleAdapter(keyless_config, "")
+        route = respx.post(MINIMAL_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+
+        # Act
+        await adapter.send(SAMPLE_MESSAGES, model_id="minimal-model")
+
+        # Assert
+        request_headers = route.calls.last.request.headers
+        assert request_headers.get("authorization") is None
+        assert request_headers["x-client"] == "vBot"
 
     @respx.mock
     @pytest.mark.asyncio
