@@ -742,6 +742,7 @@ async def test_message_handlers_ignore_edited_messages_and_channel_posts(
                 "type": "regular",
                 "allows_multiple_answers": False,
                 "allows_revoting": False,
+                "members_only": False,
             },
             None,
         )
