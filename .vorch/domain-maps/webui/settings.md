@@ -33,7 +33,9 @@ Read this reference only for WebUI Settings, Provider, Extension, Skill, Agent, 
 ## Desktop Voice and browser boundaries
 
 - `desktopBridge.js` is the only browser-side seam for the native desktop bridge. Web-only accessors must remain functional when no bridge exists.
-- `wakewordSettings.js` separates saved Voice settings from runtime wakeword status. Payload builders submit configuration; status subscriptions report what the desktop runtime is currently doing.
+- `wakewordSettings.js` separates saved Voice settings from runtime wakeword status. Payload builders submit the single active `model_id`, that model's effective sensitivity, microphone, and routing configuration; status subscriptions report what the desktop runtime is currently doing without overwriting unsaved edits.
+- The Voice panel obtains the authoritative model catalog through `listWakewordModels()`. It distinguishes curated Built-ins from imported ONNX models, permits any number to be installed but one to be selected, imports finished custom models through `importWakewordModel()`, and gates permanent imported-model removal with the shared `ConfirmDialog`; custom training is not a WebUI responsibility.
+- Imported-model paths are Desktop-private. The browser receives only the descriptor fields required for selection and management and transfers file content as base64 only for the explicit import call.
 - Bridge discovery, event subscriptions, and media/runtime listeners require explicit timeout and cleanup behavior. UI state must not claim the wakeword runtime is active merely because the saved setting is enabled.
 - Log listing and file reads use RPC; live tailing uses the dedicated log WebSocket. Log content is display data and must not be interpreted as HTML.
 

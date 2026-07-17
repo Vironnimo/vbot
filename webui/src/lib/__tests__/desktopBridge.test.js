@@ -8,6 +8,9 @@ import {
   setWakewordEnabled,
   setWakewordConfig,
   listMicrophones,
+  listWakewordModels,
+  importWakewordModel,
+  deleteWakewordModel,
   retryWakeword,
   onWakewordStatusChange,
   waitForDesktopBridge,
@@ -258,6 +261,43 @@ describe('desktop Voice recovery and devices', () => {
     await retryWakeword();
 
     expect(retry).toHaveBeenCalledOnce();
+  });
+});
+
+describe('desktop wakeword models', () => {
+  it('lists, imports, and deletes models through the bridge', async () => {
+    const models = [{ id: 'builtin/hey_jarvis', label: 'Hey Jarvis' }];
+    const importModel = vi.fn(() => ({
+      id: 'custom/model',
+      label: 'Hey Computer',
+    }));
+    const deleteModel = vi.fn(() => ({ deleted: true }));
+    globalThis.window = {
+      location: { search: '?accessor=desktop' },
+      pywebview: {
+        api: {
+          listWakewordModels: () => models,
+          importWakewordModel: importModel,
+          deleteWakewordModel: deleteModel,
+        },
+      },
+    };
+
+    await expect(listWakewordModels()).resolves.toEqual(models);
+    await expect(
+      importWakewordModel('computer.onnx', 'b25ueA=='),
+    ).resolves.toEqual({ id: 'custom/model', label: 'Hey Computer' });
+    await expect(deleteWakewordModel('custom/model')).resolves.toEqual({
+      deleted: true,
+    });
+    expect(importModel).toHaveBeenCalledWith('computer.onnx', 'b25ueA==');
+    expect(deleteModel).toHaveBeenCalledWith('custom/model');
+  });
+
+  it('returns an empty model list when the bridge is unavailable', async () => {
+    globalThis.window = { location: { search: '' }, pywebview: undefined };
+
+    await expect(listWakewordModels()).resolves.toEqual([]);
   });
 });
 

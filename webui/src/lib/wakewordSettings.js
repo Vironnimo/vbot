@@ -2,12 +2,11 @@
 
 const VOICE_SETTINGS_DEFAULTS = Object.freeze({
   enabled: false,
-  engine: 'openwakeword',
   microphone: null,
+  model_id: 'builtin/hey_jarvis',
   sensitivity: 0.5,
   target_agent_id: null,
   session_behavior: 'active',
-  wake_phrase: 'hey_jarvis',
   liveState: 'off',
   mock: false,
   mode: 'real',
@@ -46,10 +45,10 @@ export function applyWakewordStatus(state, status) {
   return {
     ...state,
     enabled: hasKey(status, 'enabled') ? status.enabled : state.enabled,
-    engine: hasKey(status, 'engine') ? status.engine : state.engine,
     microphone: hasKey(status, 'microphone')
       ? status.microphone
       : state.microphone,
+    model_id: hasKey(status, 'model_id') ? status.model_id : state.model_id,
     sensitivity: hasKey(status, 'sensitivity')
       ? status.sensitivity
       : state.sensitivity,
@@ -59,9 +58,6 @@ export function applyWakewordStatus(state, status) {
     session_behavior: hasKey(status, 'session_behavior')
       ? status.session_behavior
       : state.session_behavior,
-    wake_phrase: hasKey(status, 'wake_phrase')
-      ? status.wake_phrase
-      : state.wake_phrase,
     liveState: hasKey(status, 'state') ? status.state : state.liveState,
     mock: hasKey(status, 'mock') ? status.mock : state.mock,
     mode: hasKey(status, 'mode') ? status.mode : state.mode,
@@ -112,12 +108,11 @@ export function buildVoiceSettingsPayload(state, lastSaved) {
   if (!lastSaved) {
     return {
       enabled: state.enabled,
-      engine: state.engine,
       microphone: state.microphone,
+      model_id: state.model_id,
       sensitivity: state.sensitivity,
       target_agent_id: state.target_agent_id,
       session_behavior: state.session_behavior,
-      wake_phrase: state.wake_phrase,
     };
   }
   const payload = {};

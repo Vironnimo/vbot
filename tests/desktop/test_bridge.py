@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import threading
 from dataclasses import dataclass, field
@@ -12,7 +13,14 @@ import pytest
 
 from desktop.connection import ServerEntry
 from desktop.main import DesktopProbeResult, DesktopTarget
+from desktop.wakeword import bridge as bridge_module
+from desktop.wakeword import engine as engine_module
 from desktop.wakeword.bridge import DesktopBridge
+from desktop.wakeword.engine import (
+    DEFAULT_WAKEWORD_MODEL_ID,
+    WakewordModelDescriptor,
+    WakewordModelError,
+)
 
 
 def _write_settings(path: Path, wakeword_config: dict | None = None) -> None:
@@ -88,7 +96,13 @@ def test_get_desktop_capabilities(tmp_path: Path) -> None:
 
 
 def test_get_wakeword_status_shape(tmp_path: Path) -> None:
-    _write_settings(tmp_path / "settings.json", {"enabled": True, "sensitivity": 0.7})
+    _write_settings(
+        tmp_path / "settings.json",
+        {
+            "enabled": True,
+            "model_sensitivities": {DEFAULT_WAKEWORD_MODEL_ID: 0.7},
+        },
+    )
 
     bridge = DesktopBridge(settings_path=tmp_path / "settings.json")
     status = bridge.getWakewordStatus()
@@ -100,7 +114,7 @@ def test_get_wakeword_status_shape(tmp_path: Path) -> None:
     assert "microphone" in status
     assert "target_agent_id" in status
     assert "session_behavior" in status
-    assert "wake_phrase" in status
+    assert status["model_id"] == DEFAULT_WAKEWORD_MODEL_ID
 
 
 def test_get_wakeword_status_includes_mock_flag(tmp_path: Path) -> None:
@@ -275,6 +289,129 @@ def test_set_wakeword_config_partial_update(tmp_path: Path) -> None:
     status = bridge.getWakewordStatus()
     assert status["sensitivity"] == 0.9
     assert status["target_agent_id"] == "agent-1"
+
+
+def test_bridge_imports_selects_and_deletes_a_custom_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file)
+    monkeypatch.setattr(engine_module, "_validate_custom_model", lambda _path: None)
+    bridge = DesktopBridge(settings_path=settings_file)
+
+    imported = bridge.importWakewordModel(
+        "hey_computer.onnx",
+        base64.b64encode(b"onnx-model").decode("ascii"),
+    )
+    bridge.setWakewordConfig({"model_id": imported["id"], "sensitivity": 0.75})
+
+    assert imported["label"] == "hey computer"
+    assert imported["removable"] is True
+    assert imported in bridge.listWakewordModels()
+    assert bridge.getWakewordStatus()["model_id"] == imported["id"]
+    assert bridge.getWakewordStatus()["sensitivity"] == 0.75
+    assert bridge.resolve_wakeword_model_target().endswith(".onnx")
+    with pytest.raises(WakewordModelError, match="active"):
+        bridge.deleteWakewordModel(imported["id"])
+
+    bridge.setWakewordConfig({"model_id": DEFAULT_WAKEWORD_MODEL_ID})
+    assert bridge.deleteWakewordModel(imported["id"]) == {"deleted": True}
+    assert imported not in bridge.listWakewordModels()
+    stored = json.loads(settings_file.read_text(encoding="utf-8"))["wakeword"]
+    assert imported["id"] not in stored["model_sensitivities"]
+
+
+def test_bridge_rejects_invalid_model_content_and_unknown_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file)
+    bridge = DesktopBridge(settings_path=settings_file)
+
+    with pytest.raises(WakewordModelError, match="base64"):
+        bridge.importWakewordModel("bad.onnx", "%%%")
+    monkeypatch.setattr(bridge_module, "_MAX_CUSTOM_WAKEWORD_MODEL_BASE64_CHARS", 8)
+    with pytest.raises(WakewordModelError, match="size limit"):
+        bridge.importWakewordModel("large.onnx", "a" * 9)
+    with pytest.raises(WakewordModelError, match="not available"):
+        bridge.setWakewordConfig({"model_id": "custom/missing"})
+
+
+def test_model_import_validation_does_not_block_status_polling(tmp_path: Path) -> None:
+    import_started = threading.Event()
+    release_import = threading.Event()
+    errors: list[Exception] = []
+
+    class BlockingCatalog:
+        def import_model(self, _filename: str, _content: bytes) -> WakewordModelDescriptor:
+            import_started.set()
+            release_import.wait(timeout=2)
+            return WakewordModelDescriptor(
+                id="custom/model",
+                label="Model",
+                source="imported",
+                format="onnx",
+                removable=True,
+                target="model.onnx",
+            )
+
+    bridge = DesktopBridge(
+        settings_path=tmp_path / "settings.json",
+        model_catalog=BlockingCatalog(),
+    )
+
+    def import_model() -> None:
+        try:
+            bridge.importWakewordModel("model.onnx", base64.b64encode(b"model").decode())
+        except Exception as exc:  # pragma: no cover - asserted through the shared list
+            errors.append(exc)
+
+    import_thread = threading.Thread(target=import_model)
+    import_thread.start()
+    assert import_started.wait(timeout=1)
+
+    status_thread = threading.Thread(target=bridge.getWakewordStatus)
+    status_thread.start()
+    status_thread.join(timeout=0.2)
+    release_import.set()
+    import_thread.join(timeout=1)
+    status_thread.join(timeout=1)
+
+    assert not status_thread.is_alive()
+    assert not import_thread.is_alive()
+    assert errors == []
+
+
+def test_sensitivity_is_preserved_per_wakeword_model(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file)
+    bridge = DesktopBridge(settings_path=settings_file)
+
+    bridge.setWakewordConfig({"sensitivity": 0.8})
+    bridge.setWakewordConfig({"model_id": "builtin/hey_mycroft", "sensitivity": 0.35})
+    assert bridge.getWakewordStatus()["sensitivity"] == 0.35
+
+    bridge.setWakewordConfig({"model_id": DEFAULT_WAKEWORD_MODEL_ID})
+    assert bridge.getWakewordStatus()["sensitivity"] == 0.8
+
+
+def test_worker_factory_model_error_becomes_actionable_status(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file)
+
+    def worker_factory(_bridge: DesktopBridge) -> FakeWorker:
+        raise WakewordModelError(
+            "missing model",
+            error_code="wakeword_model_unavailable",
+        )
+
+    bridge = DesktopBridge(settings_path=settings_file, worker_factory=worker_factory)
+
+    bridge.setWakewordEnabled(True)
+
+    status = bridge.getWakewordStatus()
+    assert status["state"] == "error"
+    assert status["error_code"] == "wakeword_model_unavailable"
 
 
 def test_voice_target_profile_is_isolated_per_server(tmp_path: Path) -> None:
