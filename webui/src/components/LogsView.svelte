@@ -392,14 +392,16 @@
   }
 </script>
 
-<section class="logs-view" aria-labelledby="logs-title">
-  <header class="logs-view__header">
-    <div>
-      <p class="logs-view__eyebrow">{t('logs.eyebrow', 'Daily log viewer')}</p>
-      <h2 id="logs-title" class="logs-view__title">
+<section class="logs-view view-frame" aria-labelledby="logs-title">
+  <header class="logs-view__header view-header">
+    <div class="view-header__intro">
+      <p class="logs-view__eyebrow view-header__eyebrow">
+        {t('logs.eyebrow', 'Daily log viewer')}
+      </p>
+      <h2 id="logs-title" class="logs-view__title view-header__title">
         {t('logs.title', 'Logs')}
       </h2>
-      <p class="logs-view__subtitle">
+      <p class="logs-view__subtitle view-header__subtitle">
         {t(
           'logs.subtitle',
           'The application’s technical log, useful when diagnosing problems. Read one daily file at a time with filtering and live updates.',
@@ -407,7 +409,7 @@
       </p>
     </div>
 
-    <div class="logs-view__header-actions">
+    <div class="logs-view__header-actions view-header__actions">
       <StatusChip variant={streamStatusVariant(viewState.streamStatus)}>
         {streamStatusLabel(viewState.streamStatus)}
       </StatusChip>
@@ -441,84 +443,92 @@
     </Banner>
   {/if}
 
-  <div class="logs-view__toolbar">
-    <label class="logs-view__field">
-      <span class="logs-view__field-label">{t('logs.file', 'File')}</span>
-      <Dropdown
-        id="logs-file"
-        value={viewState.selectedFile}
-        options={fileOptions}
-        placeholder={t('logs.emptyOption', 'No log files')}
-        ariaLabel={t('logs.file', 'File')}
-        disabled={!hasFiles ||
-          viewState.loadingCatalog ||
-          viewState.loadingEntries}
-        triggerClass="logs-view__dropdown"
-        listClass="logs-view__dropdown-list"
-        onValueChange={handleFileChange}
-      />
-    </label>
+  <div class="logs-view__toolbar view-toolbar view-toolbar--stack">
+    <div class="logs-view__filters">
+      <label class="logs-view__field">
+        <span class="logs-view__field-label view-toolbar__label"
+          >{t('logs.file', 'File')}</span
+        >
+        <Dropdown
+          id="logs-file"
+          value={viewState.selectedFile}
+          options={fileOptions}
+          placeholder={t('logs.emptyOption', 'No log files')}
+          ariaLabel={t('logs.file', 'File')}
+          disabled={!hasFiles ||
+            viewState.loadingCatalog ||
+            viewState.loadingEntries}
+          triggerClass="logs-view__dropdown"
+          listClass="logs-view__dropdown-list"
+          onValueChange={handleFileChange}
+        />
+      </label>
 
-    <label class="logs-view__field logs-view__field--narrow">
-      <span class="logs-view__field-label"
-        >{t('logs.levelFilter', 'Level')}</span
-      >
-      <Dropdown
-        id="logs-level-filter"
-        value={viewState.levelFilter}
-        options={levelDropdownOptions}
-        ariaLabel={t('logs.levelFilter', 'Level')}
-        disabled={!hasFiles}
-        triggerClass="logs-view__dropdown"
-        listClass="logs-view__dropdown-list"
-        onValueChange={handleLevelChange}
-      />
-    </label>
+      <label class="logs-view__field logs-view__field--narrow">
+        <span class="logs-view__field-label view-toolbar__label"
+          >{t('logs.levelFilter', 'Level')}</span
+        >
+        <Dropdown
+          id="logs-level-filter"
+          value={viewState.levelFilter}
+          options={levelDropdownOptions}
+          ariaLabel={t('logs.levelFilter', 'Level')}
+          disabled={!hasFiles}
+          triggerClass="logs-view__dropdown"
+          listClass="logs-view__dropdown-list"
+          onValueChange={handleLevelChange}
+        />
+      </label>
 
-    <label class="logs-view__field logs-view__field--narrow">
-      <span class="logs-view__field-label">{t('logs.sort', 'Order')}</span>
-      <Dropdown
-        id="logs-sort-order"
-        value={viewState.sortOrder}
-        options={sortOrderOptions}
-        ariaLabel={t('logs.sort', 'Order')}
-        disabled={!hasFiles}
-        triggerClass="logs-view__dropdown"
-        listClass="logs-view__dropdown-list"
-        onValueChange={handleSortChange}
-      />
-    </label>
+      <label class="logs-view__field logs-view__field--narrow">
+        <span class="logs-view__field-label view-toolbar__label"
+          >{t('logs.sort', 'Order')}</span
+        >
+        <Dropdown
+          id="logs-sort-order"
+          value={viewState.sortOrder}
+          options={sortOrderOptions}
+          ariaLabel={t('logs.sort', 'Order')}
+          disabled={!hasFiles}
+          triggerClass="logs-view__dropdown"
+          listClass="logs-view__dropdown-list"
+          onValueChange={handleSortChange}
+        />
+      </label>
 
-    <label class="logs-view__field logs-view__field--search">
-      <span class="logs-view__field-label">{t('logs.search', 'Search')}</span>
-      <input
-        class="logs-view__input"
-        type="search"
-        value={viewState.searchText}
-        placeholder={t(
-          'logs.searchPlaceholder',
-          'Search timestamp, level, logger, or message…',
-        )}
-        aria-label={t('logs.search', 'Search')}
-        disabled={!hasFiles}
-        oninput={handleSearchInput}
-      />
-    </label>
-  </div>
+      <label class="logs-view__field logs-view__field--search">
+        <span class="logs-view__field-label view-toolbar__label"
+          >{t('logs.search', 'Search')}</span
+        >
+        <input
+          class="logs-view__input"
+          type="search"
+          value={viewState.searchText}
+          placeholder={t(
+            'logs.searchPlaceholder',
+            'Search timestamp, level, logger, or message…',
+          )}
+          aria-label={t('logs.search', 'Search')}
+          disabled={!hasFiles}
+          oninput={handleSearchInput}
+        />
+      </label>
+    </div>
 
-  <div class="logs-view__summary">
-    <span>
-      {t('logs.resultsCount', '{count} visible entries', {
-        count: filteredEntries.length,
-      })}
-    </span>
-    {#if viewState.selectedFile}
-      <span class="logs-view__summary-file">
-        {t('logs.currentFile', 'Current file: {file}', {
-          file: viewState.selectedFile,
+    <div class="logs-view__summary view-toolbar__meta">
+      <span>
+        {t('logs.resultsCount', '{count} visible entries', {
+          count: filteredEntries.length,
         })}
       </span>
-    {/if}
+      {#if viewState.selectedFile}
+        <span class="logs-view__summary-file">
+          {t('logs.currentFile', 'Current file: {file}', {
+            file: viewState.selectedFile,
+          })}
+        </span>
+      {/if}
+    </div>
   </div>
 
   {#if viewState.loadingCatalog || viewState.loadingEntries}
@@ -594,55 +604,10 @@
     min-height: 0;
     flex: 1;
     flex-direction: column;
-    gap: 14px;
-    padding: 24px 28px 28px;
     overflow: hidden;
     background: var(--bg);
   }
-
-  .logs-view__header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
-  }
-
-  .logs-view__eyebrow {
-    margin: 0 0 6px;
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    font-weight: 500;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-
-  .logs-view__title {
-    margin: 0;
-    color: var(--text-hi);
-    font-size: 20px;
-    font-weight: 600;
-    letter-spacing: -0.02em;
-    line-height: 1.2;
-  }
-
-  .logs-view__subtitle {
-    max-width: 720px;
-    margin: 6px 0 0;
-    color: var(--text-med);
-    font-size: 12.5px;
-    line-height: 1.5;
-  }
-
-  .logs-view__header-actions {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 10px;
-  }
-
-  .logs-view__toolbar {
+  .logs-view__filters {
     display: grid;
     grid-template-columns:
       minmax(180px, 240px)
@@ -658,15 +623,6 @@
     min-width: 0;
     flex-direction: column;
     gap: 6px;
-  }
-
-  .logs-view__field-label {
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    font-weight: 500;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
   }
 
   :global(.logs-view__dropdown),
@@ -715,9 +671,6 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px 16px;
-    color: var(--text-lo);
-    font-family: var(--font-mono);
-    font-size: 11px;
   }
 
   .logs-view__summary-file {
@@ -851,21 +804,8 @@
   }
 
   @media (max-width: 960px) {
-    .logs-view {
-      padding: 20px;
-    }
-
-    .logs-view__header {
-      flex-direction: column;
-      align-items: stretch;
-    }
-
-    .logs-view__header-actions {
-      justify-content: flex-start;
-    }
-
-    .logs-view__toolbar {
-      grid-template-columns: 1fr;
+    .logs-view__filters {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     .logs-entry {
@@ -892,6 +832,12 @@
     .logs-entry__message {
       white-space: normal;
       text-overflow: clip;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .logs-view__filters {
+      grid-template-columns: minmax(0, 1fr);
     }
   }
 </style>

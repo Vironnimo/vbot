@@ -87,6 +87,11 @@ describe('DebugView', () => {
     expect(text).toContain('No traces captured yet');
     expect(text).toContain('Enable debug mode in Settings');
     expect(text).not.toContain('(none)');
+    expect(document.querySelector('.debug-view.view-frame')).toBeTruthy();
+    expect(document.querySelector('.debug-view .view-header')).toBeTruthy();
+    expect(
+      document.querySelector('.debug-view .view-toolbar--split'),
+    ).toBeTruthy();
   });
 
   it('exposes full provider and model values via the quick tooltip on trace rows', async () => {

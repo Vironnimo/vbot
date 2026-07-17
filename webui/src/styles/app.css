@@ -1519,6 +1519,122 @@ textarea::placeholder {
   scrollbar-gutter: stable;
 }
 
+/* View chrome: the shared vertical rhythm above each view's feature content.
+   Views retain their own data layout; these classes own only the frame,
+   identity header, and local navigation/control surface. */
+.view-frame {
+  gap: var(--space-md);
+  padding: 24px 28px 28px;
+}
+
+.view-header {
+  display: flex;
+  min-width: 0;
+  flex-shrink: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.view-header__intro {
+  min-width: 0;
+}
+
+.view-header__eyebrow {
+  margin: 0 0 6px;
+  color: var(--text-med);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.view-header__title {
+  margin: 0;
+  color: var(--text-hi);
+  font-size: var(--fs-heading-lg);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+
+.view-header__subtitle {
+  max-width: 720px;
+  margin: 6px 0 0;
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
+}
+
+.view-header__actions,
+.view-toolbar__actions {
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.view-toolbar {
+  min-width: 0;
+  flex-shrink: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.view-toolbar--split {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 12px;
+}
+
+.view-toolbar--stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.view-toolbar--tabs {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 10px 0 4px;
+  overflow: hidden;
+}
+
+.view-toolbar--tabs .view-toolbar__tabs {
+  min-width: 0;
+  flex: 1;
+  border-bottom: 0;
+}
+
+.view-toolbar--tabs .view-toolbar__actions {
+  padding: 7px 2px;
+}
+
+.view-toolbar__label {
+  color: var(--text-med);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.view-toolbar__meta {
+  color: var(--text-med);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
+}
+
 .modal-footer {
   justify-content: flex-end;
   gap: 8px;
@@ -2580,6 +2696,38 @@ kbd {
    band and the navigation becomes a single compact horizontal scroll row so it
    doesn't eat vertical space. Touch targets grow to a ≥40px hit area. */
 @media (max-width: 640px) {
+  .view-frame {
+    padding: 16px;
+  }
+
+  .view-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .view-header__actions,
+  .view-toolbar__actions {
+    justify-content: flex-start;
+  }
+
+  .view-toolbar--tabs {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 0;
+    padding: 0;
+  }
+
+  .view-toolbar--tabs .view-toolbar__tabs {
+    width: 100%;
+    padding-inline: 4px;
+  }
+
+  .view-toolbar--tabs .view-toolbar__actions {
+    justify-content: space-between;
+    padding: 8px 10px;
+    border-top: 1px solid var(--border);
+  }
+
   .server-availability-notice {
     top: 18vh;
     width: calc(100vw - 28px);
