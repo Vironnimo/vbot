@@ -13,6 +13,7 @@ For a high-level overview and the fastest one-line install, see the [README](REA
   - [Desktop add-ons](#desktop-add-ons)
   - [Manual development install](#manual-development-install)
   - [Uninstalling](#uninstalling)
+- [Updating](#updating)
 - [Data Directory and Configuration](#data-directory-and-configuration)
 - [Running the Server](#running-the-server)
 - [Using the WebUI](#using-the-webui)
@@ -35,7 +36,7 @@ For a high-level overview and the fastest one-line install, see the [README](REA
 
 ## Installation
 
-The quickest path is the one-line bootstrap documented in the [README](README.md#quick-start). The script installers below give you full control over data directory, port, autostart, and desktop accessors. Both installers are conservative: they never overwrite an existing valid `settings.json` or `.env`, they respect existing port settings unless a port is passed explicitly (an explicit port is then also written into `settings.json`, so autostart and later flag-less commands resolve the same port), and they stop rather than clobber an invalid `settings.json`.
+The quickest path is the one-line bootstrap documented in the [README](README.md#quick-start). The script installers below give you full control over data directory, port, autostart, and desktop accessors. Both installers are conservative: they never overwrite an existing valid `settings.json` or `.env`, they respect existing port settings unless a port is passed explicitly (an explicit port is then also written into `settings.json`, so autostart and later flag-less commands resolve the same port), and they stop rather than clobber an invalid `settings.json`. A successful install also writes `.vbot-install.json` inside the checkout. This checkout-local state records the exact dependency groups, Python interpreter, source track, applied revision, and WebUI revision used by update and uninstall; it contains no credentials or runtime data.
 
 ### Windows installer
 
@@ -78,8 +79,8 @@ Notes:
   scripts/install.sh
   ```
 
-- Autostart (on by default; pass `--no-autostart` to skip) writes a systemd user unit to `~/.config/systemd/user/vbot.service` and enables login lingering so the server starts at boot, without root. The unit uses `KillMode=process`, so an agent-triggered `vbot server restart` survives the unit's own shutdown. Manage it with `systemctl --user status|start|stop vbot`.
-- `--skip-webui-build` is for low-memory hosts (Pi 3 class) where `npm install` is not practical: build the WebUI on another machine (`cd webui && npm install && npm run build`) and copy `webui/dist` into the checkout first. On a Pi 5 the default on-device build is fine.
+- Autostart (on by default; pass `--no-autostart` to skip) writes a systemd user unit to `~/.config/systemd/user/vbot.service` and enables login lingering so the server starts at boot, without root. The unit quotes all executable and path arguments, and custom service names must start with a letter or number, then use only letters, numbers, `.`, `_`, `@`, and `-`, without a `.service` suffix. If login lingering cannot be enabled, the installer reports that boot-before-login is not guaranteed instead of claiming full success. The unit uses `KillMode=process`, so an agent-triggered `vbot server restart` survives the unit's own shutdown. Manage it with `systemctl --user status|start|stop vbot`.
+- `--skip-webui-build` is for low-memory hosts (Pi 3 class) where `npm ci` is not practical: build the WebUI on another machine (`cd webui && npm ci && npm run build`) and copy `webui/dist` into the checkout first. On a Pi 5 the default on-device build is fine.
 
 ### Desktop add-ons
 
@@ -117,13 +118,13 @@ pip install -e ".[dev]"
 
 ```bash
 cd webui
-npm install
+npm ci
 cd ..
 ```
 
 ### Uninstalling
 
-Uninstall is intentionally data-directory preserving — it never removes `~/.vbot`.
+Uninstall is intentionally data-directory preserving — it never removes `~/.vbot`. It uses the Python interpreter recorded by the installer rather than whichever `python` happens to be first on the current PATH, then removes the checkout-local install state after a successful package removal.
 
 ```powershell
 .\scripts\uninstall.ps1
@@ -136,6 +137,14 @@ scripts/uninstall.sh --remove-autostart
 ```
 
 Pass the autostart flag to also remove the Task Scheduler task (Windows) or the systemd user unit (Linux). A bootstrap install has its own bundled uninstaller that removes the whole `~/vbot` tree; see the [README](README.md#quick-start).
+
+## Updating
+
+Run `vbot update` from an installed checkout. The updater reads `.vbot-install.json` and preserves the exact installation: `server`, `server-desktop`, or `desktop-client`, together with its recorded dependency groups and Python interpreter. Older checkouts without the file are inferred once and then persisted.
+
+Release installs preflight the matching `webui-dist.tar.gz` before moving to a newer tag; bootstrap waits briefly for that asset when a freshly published release is still assembling. Development installs use `npm ci` and rebuild only when the recorded WebUI revision requires it. Dependency and WebUI completion are recorded separately, so a failed step can be retried even when Git already reached the target revision. A staged WebUI replacement never removes the last working `webui/dist` when extraction or swapping fails.
+
+Local tracked changes still require an explicit choice: `--discard` drops them, while `--stash` restores them after both successful and failed update attempts. A stash conflict is kept for manual recovery and is reported without pretending the server restarted. Use `--no-restart` to update a server installation without restarting it. Desktop Client installations skip WebUI management and server restart entirely.
 
 ## Data Directory and Configuration
 

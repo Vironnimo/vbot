@@ -9,6 +9,7 @@
 .worktrees/
 .vbot-worktree
 .vbot-bootstrap
+.vbot-install.json
 .playwright-cli/
 
 # Python

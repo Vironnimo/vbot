@@ -148,11 +148,13 @@ def test_enable_linux_writes_unit_and_enables(tmp_path: Path) -> None:
     )
 
     assert result.ok, result.message
-    assert "started via the service" in result.message
+    assert "start requested via the service" in result.message
     assert events == []  # Linux starts via systemctl --now, not the managed start
     unit = (tmp_path / "vbot.service").read_text(encoding="utf-8")
-    assert "ExecStart=/usr/bin/python3 -m server.main --host 127.0.0.1 --port 8420" in unit
-    assert f"WorkingDirectory={repo}" in unit
+    assert 'ExecStart="/usr/bin/python3" "-m" "server.main"' in unit
+    assert '"--host" "127.0.0.1" "--port" "8420"' in unit
+    escaped_repo = str(repo).replace("\\", "\\\\")
+    assert f'WorkingDirectory="{escaped_repo}"' in unit
     assert runner.ran("systemctl", "--user", "enable", "--now", "vbot.service")
 
 
@@ -181,7 +183,7 @@ def test_disable_windows_deletes_existing_task() -> None:
 
 def test_disable_windows_idempotent_when_absent() -> None:
     def handler(command: list[str]) -> CommandRun:
-        return _err() if command[:2] == ["schtasks", "/Query"] else _ok()
+        return _err() if "/TN" in command else _ok()
 
     runner = ScriptedRunner(handler)
     result = disable_autostart(_instance(), platform="win32", runner=runner)
@@ -213,11 +215,102 @@ def test_status_reports_enabled_windows() -> None:
 
 
 def test_status_reports_not_enabled_linux() -> None:
-    runner = ScriptedRunner(lambda command: _err("disabled"))
+    runner = ScriptedRunner(lambda command: CommandRun(1, "disabled", ""))
     result = autostart_status(_instance(), platform="linux", runner=runner)
 
     assert result.ok
     assert "not enabled" in result.message
+
+
+def test_linux_service_name_cannot_escape_unit_directory(tmp_path: Path) -> None:
+    runner = ScriptedRunner(lambda command: _ok())
+
+    result = enable_autostart(
+        _instance(),
+        platform="linux",
+        runner=runner,
+        unit_dir=tmp_path,
+        service_name="../../outside",
+    )
+
+    assert not result.ok
+    assert "invalid systemd service name" in result.message
+    assert list(tmp_path.iterdir()) == []
+    assert runner.calls == []
+
+
+def test_linux_unit_quotes_paths_and_escapes_specifiers(tmp_path: Path) -> None:
+    runner = ScriptedRunner(lambda command: _ok())
+    instance = _instance()
+    instance = ServerInstance(
+        host=instance.host,
+        port=instance.port,
+        data_dir=Path("/home/user/My Data/%n"),
+        url=instance.url,
+        log_path=instance.log_path,
+    )
+
+    result = enable_autostart(
+        instance,
+        platform="linux",
+        runner=runner,
+        unit_dir=tmp_path,
+        python_executable="/home/user/My Python/bin/python",
+        repo_root=Path("/home/user/My Repo/%i"),
+    )
+
+    assert result.ok, result.message
+    unit = (tmp_path / "vbot.service").read_text(encoding="utf-8")
+    escaped_repo = str(Path("/home/user/My Repo/%i")).replace("%", "%%").replace("\\", "\\\\")
+    escaped_data = str(instance.data_dir).replace("%", "%%").replace("\\", "\\\\")
+    assert f'WorkingDirectory="{escaped_repo}"' in unit
+    assert 'ExecStart="/home/user/My Python/bin/python"' in unit
+    assert f'"--data-dir" "{escaped_data}"' in unit
+
+
+def test_linux_disable_failure_preserves_unit(tmp_path: Path) -> None:
+    unit = tmp_path / "vbot.service"
+    unit.write_text("[Unit]\n", encoding="utf-8")
+
+    def handler(command: list[str]) -> CommandRun:
+        if "disable" in command:
+            return _err("dbus unavailable")
+        return _ok()
+
+    result = disable_autostart(
+        _instance(), platform="linux", runner=ScriptedRunner(handler), unit_dir=tmp_path
+    )
+
+    assert not result.ok
+    assert "systemctl disable failed" in result.message
+    assert unit.exists()
+
+
+def test_linux_status_surfaces_systemctl_failure() -> None:
+    result = autostart_status(
+        _instance(), platform="linux", runner=ScriptedRunner(lambda command: _err("no bus"))
+    )
+
+    assert not result.ok
+    assert "systemctl is-enabled failed" in result.message
+
+
+def test_linger_failure_is_reported_without_rolling_back_enabled_unit(tmp_path: Path) -> None:
+    def handler(command: list[str]) -> CommandRun:
+        if command[0] == "loginctl":
+            return _err("permission denied")
+        return _ok()
+
+    result = enable_autostart(
+        _instance(),
+        platform="linux",
+        runner=ScriptedRunner(handler),
+        unit_dir=tmp_path,
+    )
+
+    assert result.ok
+    assert "boot-before-login is not guaranteed" in result.message
+    assert (tmp_path / "vbot.service").exists()
 
 
 def test_parse_args_autostart() -> None:

@@ -19,6 +19,9 @@ DEV=0
 TAG=""
 VERSION=""
 INSTALLER_ARGS=()
+WEBUI_ASSET_URL=""
+ASSET_WAIT_SECONDS=300
+ASSET_POLL_SECONDS=10
 
 usage() {
     cat <<USAGE
@@ -56,6 +59,11 @@ case "$INSTALL_DIR" in
     "~") INSTALL_DIR="$HOME" ;;
     "~/"*) INSTALL_DIR="${HOME}/${INSTALL_DIR#\~/}" ;;
 esac
+case "$INSTALL_DIR" in
+    /*) ;;
+    *) INSTALL_DIR="$(pwd)/${INSTALL_DIR}" ;;
+esac
+[ -e "$INSTALL_DIR" ] && fail "$INSTALL_DIR already exists. To update an existing install run 'vbot update'; otherwise remove it or pass --dir to choose another location."
 
 if [ "$DEV" -eq 1 ] && [ -n "$VERSION" ]; then
     fail "--version selects a specific release tag and cannot be combined with --dev."
@@ -99,6 +107,15 @@ ensure_python() {
         || fail "Installed Python is older than 3.11; install a newer Python and re-run."
 }
 
+ensure_venv_support() {
+    if python3 -c 'import ensurepip, venv' >/dev/null 2>&1; then
+        return
+    fi
+    apt_install python3-venv python3-pip
+    python3 -c 'import ensurepip, venv' >/dev/null 2>&1 \
+        || fail "Python is available, but its venv/ensurepip support is missing. Install the venv package matching $(python3 --version) and re-run."
+}
+
 ensure_node() {
     { have node && have npm; } && return
     apt_install nodejs npm
@@ -118,35 +135,76 @@ clone_repo() {
     if [ "$DEV" -eq 1 ]; then
         step "Cloning ${REPO_URL} (main) into ${INSTALL_DIR}"
         git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
-    elif [ -n "$VERSION" ]; then
-        TAG="$VERSION"
-        step "Cloning ${REPO_URL} (${TAG}) into ${INSTALL_DIR}"
-        git clone --depth 1 --branch "$TAG" "$REPO_URL" "$INSTALL_DIR"
     else
-        TAG="$(latest_release_tag || true)"
-        [ -n "$TAG" ] || fail "Could not determine the latest release. Use --dev to install from main."
         step "Cloning ${REPO_URL} (${TAG}) into ${INSTALL_DIR}"
         git clone --depth 1 --branch "$TAG" "$REPO_URL" "$INSTALL_DIR"
     fi
+    INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd)"
+}
+
+installer_has_argument() {
+    local expected="$1"
+    local argument
+    for argument in "${INSTALLER_ARGS[@]}"; do
+        [ "$argument" = "$expected" ] && return 0
+    done
+    return 1
+}
+
+release_asset_url() {
+    curl -fsSL "${API_BASE}/releases/tags/${TAG}" | python3 -c '
+import json
+import sys
+
+payload = json.load(sys.stdin)
+for asset in payload.get("assets", []):
+    if asset.get("name") == "webui-dist.tar.gz":
+        print(asset.get("browser_download_url", ""))
+        break
+'
+}
+
+wait_for_webui_asset() {
+    step "Waiting for the prebuilt WebUI for ${TAG}"
+    local waited=0
+    while [ "$waited" -lt "$ASSET_WAIT_SECONDS" ]; do
+        if ! WEBUI_ASSET_URL="$(release_asset_url 2>/dev/null)"; then
+            fail "Could not query release ${TAG} while waiting for its WebUI asset."
+        fi
+        [ -n "$WEBUI_ASSET_URL" ] && return
+        sleep "$ASSET_POLL_SECONDS"
+        waited=$((waited + ASSET_POLL_SECONDS))
+    done
+    fail "Release ${TAG} still has no webui-dist.tar.gz asset after ${ASSET_WAIT_SECONDS} seconds. The install directory was not created; re-run once the release workflow finishes."
 }
 
 fetch_prebuilt_webui() {
     step "Fetching prebuilt WebUI for ${TAG}"
-    local url
-    url="$(curl -fsSL "${API_BASE}/releases/tags/${TAG}" \
-        | grep -o '"browser_download_url":[[:space:]]*"[^"]*webui-dist\.tar\.gz"' \
-        | head -n1 \
-        | sed -E 's/.*"(https:[^"]+)"/\1/' || true)"
-    [ -n "$url" ] || fail "Release ${TAG} has no webui-dist.tar.gz asset yet. Use --dev to build locally, or wait for the release workflow to finish."
+    [ -n "$WEBUI_ASSET_URL" ] || fail "No preflighted WebUI asset URL is available."
     mkdir -p "${INSTALL_DIR}/webui"
     local archive="${INSTALL_DIR}/webui-dist.tar.gz"
-    curl -fsSL "$url" -o "$archive"
-    # Refuse a tarball whose members escape webui/ (mirrors `vbot update`'s data filter).
-    if tar -tzf "$archive" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
+    curl -fsSL "$WEBUI_ASSET_URL" -o "$archive"
+    if ! python3 - "$archive" "${INSTALL_DIR}/webui" <<'PY'
+import sys
+import tarfile
+from pathlib import Path
+
+archive_path = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+root = destination.resolve()
+with tarfile.open(archive_path, mode='r:gz') as archive:
+    for member in archive.getmembers():
+        if not (member.isdir() or member.isfile()):
+            raise SystemExit(f'unsafe member type in WebUI archive: {member.name}')
+        target = (destination / member.name).resolve()
+        if not target.is_relative_to(root):
+            raise SystemExit(f'unsafe path in WebUI archive: {member.name}')
+    archive.extractall(destination)
+PY
+    then
         rm -f "$archive"
-        fail "Refusing to unpack the WebUI archive: it contains unsafe paths."
+        fail "Refusing to unpack the WebUI archive: it contains an unsafe path or member type."
     fi
-    tar -xzf "$archive" -C "${INSTALL_DIR}/webui"
     rm -f "$archive"
     [ -f "${INSTALL_DIR}/webui/dist/index.html" ] || fail "Prebuilt WebUI did not unpack to webui/dist."
 }
@@ -197,18 +255,38 @@ MARKER
 
 ensure_git
 ensure_python
+ensure_venv_support
 [ "$DEV" -eq 1 ] && ensure_node
+
+if [ "$DEV" -eq 0 ]; then
+    if [ -n "$VERSION" ]; then
+        TAG="$VERSION"
+    else
+        TAG="$(latest_release_tag || true)"
+        [ -n "$TAG" ] || fail "Could not determine the latest release. Use --dev to install from main."
+    fi
+    if ! installer_has_argument "--desktop-client"; then
+        wait_for_webui_asset
+    fi
+fi
 
 clone_repo
 write_marker
-[ "$DEV" -eq 0 ] && fetch_prebuilt_webui
+if [ "$DEV" -eq 0 ] && ! installer_has_argument "--desktop-client"; then
+    fetch_prebuilt_webui
+fi
 run_installer
 link_vbot
 
 step "vBot bootstrap complete"
 echo "Installed at: ${INSTALL_DIR}"
-echo "Data dir:     ${HOME}/.vbot"
+echo "The installer output above shows the configured data directory (Desktop Client has none)."
+if installer_has_argument "--desktop-client"; then
+    NEXT_COMMAND="desktop"
+else
+    NEXT_COMMAND="server status"
+fi
 case ":${PATH}:" in
-    *":${HOME}/.local/bin:"*) echo "Run: vbot server status" ;;
-    *) echo "Add ${HOME}/.local/bin to your PATH, or run: ${INSTALL_DIR}/.venv/bin/vbot server status" ;;
+    *":${HOME}/.local/bin:"*) echo "Run: vbot ${NEXT_COMMAND}" ;;
+    *) echo "Add ${HOME}/.local/bin to your PATH, or run: ${INSTALL_DIR}/.venv/bin/vbot ${NEXT_COMMAND}" ;;
 esac

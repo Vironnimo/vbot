@@ -12,6 +12,7 @@ import httpx
 import pytest
 import respx
 
+from cli.install_state import InstallState, file_digest, write_install_state
 from cli.main import dispatch_update_command
 from cli.parser import parse_args
 from cli.server_management import CommandResult, ServerInstance
@@ -20,7 +21,6 @@ from cli.update_management import (
     ReleaseInfo,
     _default_runner,
     _extract_within,
-    _reinstall_extras,
     run_update,
 )
 
@@ -89,6 +89,37 @@ def _webui_tar_bytes() -> bytes:
     return buffer.getvalue()
 
 
+def _write_state(
+    root: Path,
+    *,
+    track: str = "dev",
+    revision: str = "samesha",
+    shape: str = "server",
+    groups: tuple[str, ...] | None = None,
+    dependency_digest: str | None = None,
+    webui_revision: str | None = None,
+) -> None:
+    if groups is None:
+        groups = ("cli", "desktop") if shape == "desktop-client" else ("server", "cli")
+    write_install_state(
+        root,
+        InstallState(
+            schema_version=1,
+            install_shape=shape,
+            dependency_groups=groups,
+            python_executable=sys.executable,
+            source_track=track,
+            applied_revision=revision,
+            dependency_digest=(
+                file_digest(root / "pyproject.toml")
+                if dependency_digest is None
+                else dependency_digest
+            ),
+            webui_revision=None if shape == "desktop-client" else webui_revision,
+        ),
+    )
+
+
 def test_update_refuses_non_git_checkout(tmp_path: Path) -> None:
     def runner(command: list[str], cwd: Path) -> CommandRun:
         raise AssertionError(f"runner should not run before the git check: {command}")
@@ -103,12 +134,15 @@ def test_update_refuses_non_git_checkout(tmp_path: Path) -> None:
 
 def test_update_refuses_dirty_without_flags(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
+    _write_state(tmp_path)
 
     def handler(command: list[str]) -> CommandRun:
         if command[:2] == ["git", "symbolic-ref"]:
             return _ok("main")
         if command[:2] == ["git", "status"]:
             return _ok(" M core/foo.py")
+        if command[:2] == ["git", "rev-parse"]:
+            return _ok("samesha")
         raise AssertionError(f"unexpected command after refusal: {command}")
 
     runner = ScriptedRunner(handler)
@@ -123,6 +157,7 @@ def test_update_refuses_dirty_without_flags(tmp_path: Path) -> None:
 
 def test_update_discard_resets_then_updates(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
+    _write_state(tmp_path)
 
     def handler(command: list[str]) -> CommandRun:
         if command[:2] == ["git", "symbolic-ref"]:
@@ -144,6 +179,7 @@ def test_update_discard_resets_then_updates(tmp_path: Path) -> None:
 
 def test_dev_track_up_to_date_restarts(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
+    _write_state(tmp_path)
 
     def handler(command: list[str]) -> CommandRun:
         if command[:2] == ["git", "symbolic-ref"]:
@@ -162,12 +198,10 @@ def test_dev_track_up_to_date_restarts(tmp_path: Path) -> None:
     assert events == ["stop", "start"]
 
 
-def test_dev_track_reinstalls_deps_and_rebuilds_webui(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr("cli.update_management._desktop_extra_installed", lambda: False)
+def test_dev_track_reinstalls_deps_and_rebuilds_webui(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / "pyproject.toml").write_text("before", encoding="utf-8")
+    _write_state(tmp_path, revision="beforesha", webui_revision="beforesha")
     revisions = iter(["beforesha", "aftersha"])
 
     def handler(command: list[str]) -> CommandRun:
@@ -190,30 +224,16 @@ def test_dev_track_reinstalls_deps_and_rebuilds_webui(
 
     assert result.ok, result.message
     assert "updated beforesha -> aftersha" in result.message
-    assert "dependencies reinstalled ([dev])" in result.message
+    assert "dependencies reinstalled ([server,cli])" in result.message
     assert "webui rebuilt" in result.message
-    assert runner.ran("-m", "pip", "install", "-e", ".[dev]")
+    assert runner.ran("-m", "pip", "install", "-e", ".[server,cli]")
     assert any("npm" in call for call in runner.calls)
     assert events == ["stop", "start"]
 
 
-def test_reinstall_extras_keeps_desktop_add_on(monkeypatch: pytest.MonkeyPatch) -> None:
-    # An install made with the desktop accessor must not lose it on update.
-    monkeypatch.setattr("cli.update_management._desktop_extra_installed", lambda: True)
-
-    assert _reinstall_extras("release") == "server,cli,desktop"
-    assert _reinstall_extras("dev") == "dev,desktop"
-
-
-def test_reinstall_extras_without_desktop(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("cli.update_management._desktop_extra_installed", lambda: False)
-
-    assert _reinstall_extras("release") == "server,cli"
-    assert _reinstall_extras("dev") == "dev"
-
-
 def test_release_track_requires_webui_asset(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
+    _write_state(tmp_path, track="release", revision="old", webui_revision="old")
     revisions = iter(["old", "new"])
 
     def handler(command: list[str]) -> CommandRun:
@@ -238,13 +258,46 @@ def test_release_track_requires_webui_asset(tmp_path: Path) -> None:
 
     assert not result.ok
     assert "no webui-dist.tar.gz asset" in result.message
-    assert runner.ran("git", "checkout", "--force", "v9.9.9")
+    assert not runner.ran("git", "checkout", "--force", "v9.9.9")
     assert events == []
+
+
+def test_release_track_does_not_require_missing_asset_for_intact_current_tag(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".git").mkdir()
+    dist = tmp_path / "webui" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    _write_state(tmp_path, track="release", revision="same", webui_revision="same")
+
+    def handler(command: list[str]) -> CommandRun:
+        if command[:2] == ["git", "symbolic-ref"]:
+            return _err()
+        if command[:2] == ["git", "status"]:
+            return _ok("")
+        if command[:2] == ["git", "rev-parse"]:
+            return _ok("same")
+        if command[:2] == ["git", "describe"]:
+            return _ok("v1.0.0")
+        return _ok("")
+
+    result = run_update(
+        _instance(),
+        runner=ScriptedRunner(handler),
+        root=tmp_path,
+        restart=False,
+        latest_release=lambda: ReleaseInfo(tag="v1.0.0", webui_asset_url=None),
+    )
+
+    assert result.ok, result.message
+    assert "already up to date" in result.message
 
 
 @respx.mock
 def test_release_track_downloads_prebuilt_webui(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
+    _write_state(tmp_path, track="release", revision="old", webui_revision="old")
     asset_url = "https://example.com/webui-dist.tar.gz"
     respx.get(asset_url).mock(return_value=httpx.Response(200, content=_webui_tar_bytes()))
     revisions = iter(["old", "new", "new"])
@@ -277,6 +330,7 @@ def test_release_track_downloads_prebuilt_webui(tmp_path: Path) -> None:
 
 def test_stash_conflict_fails_before_restart(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
+    _write_state(tmp_path, revision="old", webui_revision="old")
     revisions = iter(["old", "new"])
 
     def handler(command: list[str]) -> CommandRun:
@@ -303,6 +357,7 @@ def test_stash_conflict_fails_before_restart(tmp_path: Path) -> None:
 
 def test_no_restart_skips_server(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
+    _write_state(tmp_path)
 
     def handler(command: list[str]) -> CommandRun:
         if command[:2] == ["git", "symbolic-ref"]:
@@ -379,6 +434,7 @@ def test_release_track_skips_download_when_up_to_date(tmp_path: Path) -> None:
     dist = tmp_path / "webui" / "dist"
     dist.mkdir(parents=True)
     (dist / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    _write_state(tmp_path, track="release", webui_revision="samesha")
     asset_url = "https://example.com/webui-dist.tar.gz"
     route = respx.get(asset_url).mock(return_value=httpx.Response(200, content=_webui_tar_bytes()))
 
@@ -409,6 +465,7 @@ def test_release_track_skips_download_when_up_to_date(tmp_path: Path) -> None:
 @respx.mock
 def test_release_track_redownloads_when_dist_missing(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
+    _write_state(tmp_path, track="release", webui_revision="samesha")
     asset_url = "https://example.com/webui-dist.tar.gz"
     route = respx.get(asset_url).mock(return_value=httpx.Response(200, content=_webui_tar_bytes()))
 
@@ -443,6 +500,7 @@ def test_release_download_replaces_stale_dist(tmp_path: Path) -> None:
     dist = tmp_path / "webui" / "dist"
     dist.mkdir(parents=True)
     (dist / "stale-bundle.js").write_text("old", encoding="utf-8")
+    _write_state(tmp_path, track="release", revision="old", webui_revision="old")
     asset_url = "https://example.com/webui-dist.tar.gz"
     respx.get(asset_url).mock(return_value=httpx.Response(200, content=_webui_tar_bytes()))
     revisions = iter(["old", "new", "new"])
@@ -479,6 +537,7 @@ def test_release_download_keeps_dist_on_corrupt_archive(tmp_path: Path) -> None:
     dist = tmp_path / "webui" / "dist"
     dist.mkdir(parents=True)
     (dist / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    _write_state(tmp_path, track="release", revision="old", webui_revision="old")
     asset_url = "https://example.com/webui-dist.tar.gz"
     respx.get(asset_url).mock(return_value=httpx.Response(200, content=b"not a tarball"))
     revisions = iter(["old", "new", "new"])
@@ -507,6 +566,144 @@ def test_release_download_keeps_dist_on_corrupt_archive(tmp_path: Path) -> None:
     assert "unpacking the prebuilt WebUI failed" in result.message
     assert (dist / "index.html").is_file()
     assert not (tmp_path / "webui" / "dist.staging").exists()
+    assert events == []
+
+
+def test_dependency_failure_is_retried_after_head_already_advanced(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "pyproject.toml").write_text("before", encoding="utf-8")
+    _write_state(tmp_path, revision="old", webui_revision="old")
+    first_revisions = iter(["old", "new"])
+
+    def first_handler(command: list[str]) -> CommandRun:
+        if command[:2] == ["git", "symbolic-ref"]:
+            return _ok("main")
+        if command[:2] == ["git", "rev-parse"]:
+            return _ok(next(first_revisions))
+        if command[:2] == ["git", "status"]:
+            return _ok("")
+        if command[:2] == ["git", "pull"]:
+            (tmp_path / "pyproject.toml").write_text("after", encoding="utf-8")
+            return _ok()
+        if "pip" in command:
+            return _err("pip failed")
+        return _ok()
+
+    events, stop, start = _recording_restart()
+    first = run_update(
+        _instance(),
+        runner=ScriptedRunner(first_handler),
+        root=tmp_path,
+        stop=stop,
+        start=start,
+    )
+    assert not first.ok
+    assert "dependency update failed" in first.message
+
+    def retry_handler(command: list[str]) -> CommandRun:
+        if command[:2] == ["git", "symbolic-ref"]:
+            return _ok("main")
+        if command[:2] == ["git", "rev-parse"]:
+            return _ok("new")
+        if command[:2] == ["git", "status"]:
+            return _ok("")
+        if command[:3] == ["git", "diff", "--quiet"]:
+            return _ok()
+        return _ok()
+
+    retry_runner = ScriptedRunner(retry_handler)
+    retried = run_update(_instance(), runner=retry_runner, root=tmp_path, stop=stop, start=start)
+
+    assert retried.ok, retried.message
+    assert retry_runner.ran("-m", "pip", "install", "-e", ".[server,cli]")
+
+
+def test_release_asset_preflight_can_be_retried_without_poisoning_checkout(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".git").mkdir()
+    dist = tmp_path / "webui" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("old", encoding="utf-8")
+    _write_state(tmp_path, track="release", revision="old", webui_revision="old")
+
+    def first_handler(command: list[str]) -> CommandRun:
+        if command[:2] == ["git", "symbolic-ref"]:
+            return _err()
+        if command[:2] == ["git", "rev-parse"]:
+            return _ok("old")
+        if command[:2] == ["git", "status"]:
+            return _ok("")
+        if command[:2] == ["git", "describe"]:
+            return _err("not the current release tag")
+        raise AssertionError(f"checkout must not advance without the asset: {command}")
+
+    first = run_update(
+        _instance(),
+        runner=ScriptedRunner(first_handler),
+        root=tmp_path,
+        restart=False,
+        latest_release=lambda: ReleaseInfo("v2", None),
+    )
+    assert not first.ok
+    assert "left unchanged" in first.message
+
+
+def test_stash_is_restored_when_git_pull_fails(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    _write_state(tmp_path, revision="old", webui_revision="old")
+
+    def handler(command: list[str]) -> CommandRun:
+        if command[:2] == ["git", "symbolic-ref"]:
+            return _ok("main")
+        if command[:2] == ["git", "rev-parse"]:
+            return _ok("old")
+        if command[:2] == ["git", "status"]:
+            return _ok(" M local.py")
+        if command[:2] == ["git", "pull"]:
+            return _err("offline")
+        return _ok()
+
+    runner = ScriptedRunner(handler)
+    result = run_update(_instance(), stash=True, runner=runner, root=tmp_path)
+
+    assert not result.ok
+    assert "local changes reapplied" in result.message
+    assert runner.ran("git", "stash", "pop", "stash@{0}")
+
+
+def test_desktop_client_update_keeps_exact_shape_and_never_starts_server(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "pyproject.toml").write_text("before", encoding="utf-8")
+    _write_state(
+        tmp_path,
+        revision="old",
+        shape="desktop-client",
+        groups=("cli", "desktop"),
+    )
+    revisions = iter(["old", "new"])
+
+    def handler(command: list[str]) -> CommandRun:
+        if command[:2] == ["git", "symbolic-ref"]:
+            return _ok("main")
+        if command[:2] == ["git", "rev-parse"]:
+            return _ok(next(revisions))
+        if command[:2] == ["git", "status"]:
+            return _ok("")
+        if command[:2] == ["git", "pull"]:
+            (tmp_path / "pyproject.toml").write_text("after", encoding="utf-8")
+        return _ok()
+
+    runner = ScriptedRunner(handler)
+    events, stop, start = _recording_restart()
+    result = run_update(_instance(), runner=runner, root=tmp_path, stop=stop, start=start)
+
+    assert result.ok, result.message
+    assert runner.ran("-m", "pip", "install", "-e", ".[cli,desktop]")
+    assert not any("npm" in call for call in runner.calls)
+    assert "not applicable (desktop-client install)" in result.message
     assert events == []
 
 
@@ -553,6 +750,21 @@ def test_extract_within_rejects_link_members(tmp_path: Path) -> None:
     with tarfile.open(fileobj=buffer, mode="r:gz") as archive, pytest.raises(tarfile.TarError):
         _extract_within(archive, destination)
     assert not (destination / "dist" / "evil").exists()
+
+
+def test_extract_within_rejects_special_members(tmp_path: Path) -> None:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        fifo = tarfile.TarInfo("dist/special")
+        fifo.type = tarfile.FIFOTYPE
+        archive.addfile(fifo)
+    buffer.seek(0)
+    destination = tmp_path / "webui"
+    destination.mkdir()
+
+    with tarfile.open(fileobj=buffer, mode="r:gz") as archive, pytest.raises(tarfile.TarError):
+        _extract_within(archive, destination)
+    assert not (destination / "dist" / "special").exists()
 
 
 def test_default_runner_disables_git_prompt(tmp_path: Path) -> None:

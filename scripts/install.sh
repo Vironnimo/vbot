@@ -65,6 +65,10 @@ fail() {
 # only shortcut created (no autostart — the Desktop is user-launched only).
 write_desktop_entry() {
     local vbot_command="$1"
+    local escaped_command
+    escaped_command="${vbot_command//%/%%}"
+    escaped_command="${escaped_command//\\/\\\\}"
+    escaped_command="${escaped_command//\"/\\\"}"
     local entry_dir
     entry_dir="$(dirname "$DESKTOP_ENTRY_PATH")"
     mkdir -p "$entry_dir"
@@ -73,7 +77,7 @@ write_desktop_entry() {
 Type=Application
 Name=vBot Desktop
 Comment=vBot desktop accessor
-Exec=${vbot_command} desktop
+Exec="${escaped_command}" desktop
 Terminal=false
 Categories=Utility;
 DESKTOPEOF
@@ -101,6 +105,12 @@ if [ "$DESKTOP" -eq 1 ] && [ "$DESKTOP_CLIENT" -eq 1 ]; then
 fi
 if [ "$DESKTOP_CLIENT" -eq 1 ] && [ "$DEV" -eq 1 ]; then
     fail "--desktop-client and --dev are mutually exclusive: --desktop-client installs the accessor with no server stack, --dev installs the full development environment."
+fi
+if [ "$DESKTOP_CLIENT" -eq 0 ]; then
+    [ "${#SERVICE_NAME}" -le 200 ] || fail "--service-name must be at most 200 characters."
+    case "$SERVICE_NAME" in
+        "" | [!A-Za-z0-9]* | *[!A-Za-z0-9_.@-]* | *.service) fail "--service-name must start with a letter or number, then contain only letters, numbers, '.', '_', '@', or '-', without a .service suffix." ;;
+    esac
 fi
 
 # The desktop-client mode installs only the accessor: it owns no server data dir,
@@ -268,16 +278,23 @@ fi
 # so a dev install with the desktop accessor gets both dependency groups.
 # --desktop-client is its own accessor-only shape and excludes --dev.
 if [ "$DESKTOP_CLIENT" -eq 1 ]; then
-    EXTRA=".[cli,desktop]"
+    INSTALL_GROUPS=(cli desktop)
+    INSTALL_SHAPE="desktop-client"
 elif [ "$DEV" -eq 1 ] && [ "$DESKTOP" -eq 1 ]; then
-    EXTRA=".[dev,desktop]"
+    INSTALL_GROUPS=(dev desktop)
+    INSTALL_SHAPE="server-desktop"
 elif [ "$DEV" -eq 1 ]; then
-    EXTRA=".[dev]"
+    INSTALL_GROUPS=(dev)
+    INSTALL_SHAPE="server"
 elif [ "$DESKTOP" -eq 1 ]; then
-    EXTRA=".[server,cli,desktop]"
+    INSTALL_GROUPS=(server cli desktop)
+    INSTALL_SHAPE="server-desktop"
 else
-    EXTRA=".[server,cli]"
+    INSTALL_GROUPS=(server cli)
+    INSTALL_SHAPE="server"
 fi
+GROUP_LIST="$(IFS=,; echo "${INSTALL_GROUPS[*]}")"
+EXTRA=".[${GROUP_LIST}]"
 step "Installing Python package in editable mode: ${EXTRA}"
 (cd "$PROJECT_ROOT" && "$PYTHON" -m pip install -e "$EXTRA")
 
@@ -288,11 +305,11 @@ if [ "$DESKTOP_CLIENT" -eq 1 ]; then
 elif [ "$SKIP_WEBUI_BUILD" -eq 1 ]; then
     step "Skipping WebUI build (--skip-webui-build)"
     [ -f "${WEBUI_DIR}/dist/index.html" ] \
-        || fail "webui/dist/index.html not found. Build the WebUI on another machine (cd webui && npm install && npm run build) and copy webui/dist here, or re-run without --skip-webui-build."
+        || fail "webui/dist/index.html not found. Build the WebUI on another machine (cd webui && npm ci && npm run build) and copy webui/dist here, or re-run without --skip-webui-build."
     echo "Using existing webui/dist."
 else
     step "Installing WebUI dependencies"
-    (cd "$WEBUI_DIR" && npm install)
+    (cd "$WEBUI_DIR" && npm ci)
     step "Building WebUI"
     (cd "$WEBUI_DIR" && npm run build)
     [ -f "${WEBUI_DIR}/dist/index.html" ] || fail "WebUI build did not create webui/dist/index.html."
@@ -322,6 +339,14 @@ else
     "$VBOT_PATH" --help >/dev/null
     "$VBOT_PATH" doctor settings --data-dir "$DATA_DIR"
 fi
+
+PYTHON_EXECUTABLE="$($PYTHON -c 'import sys; print(sys.executable)')"
+step "Recording installation shape: ${INSTALL_SHAPE}"
+(cd "$PROJECT_ROOT" && "$PYTHON" -m cli.install_state write \
+    --root "$PROJECT_ROOT" \
+    --shape "$INSTALL_SHAPE" \
+    --groups "${INSTALL_GROUPS[@]}" \
+    --python-executable "$PYTHON_EXECUTABLE")
 
 if [ -z "$VBOT_ON_ORIGINAL_PATH" ]; then
     echo "Note: ${SCRIPTS_PATH} is not on your PATH. Add it to your shell profile to use 'vbot' directly."

@@ -20,6 +20,7 @@ $ErrorActionPreference = "Stop"
 
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Marker = Join-Path $ProjectRoot ".vbot-bootstrap"
+$InstallManifest = Join-Path $ProjectRoot ".vbot-install.json"
 
 # Start-menu shortcut filename. Kept in sync with scripts/install.ps1, which
 # creates a shortcut by this exact name under -Desktop / -DesktopClient.
@@ -80,6 +81,24 @@ function Resolve-PythonCommand {
     throw "Python is required to uninstall the pip package, but neither 'python' nor 'py' was found."
 }
 
+function Resolve-UninstallPython {
+    if (Test-Path -LiteralPath $InstallManifest -PathType Leaf) {
+        try {
+            $state = Get-Content -Raw -LiteralPath $InstallManifest | ConvertFrom-Json
+            $recordedPython = $state.python_executable
+            if (-not [string]::IsNullOrWhiteSpace($recordedPython) -and (Test-Path -LiteralPath $recordedPython -PathType Leaf)) {
+                Write-Host "Using the Python interpreter recorded by the installer: $recordedPython"
+                return New-CommandSpec -Exe $recordedPython
+            }
+            Write-Warning "The installation manifest's Python interpreter is unavailable; falling back to PATH."
+        }
+        catch {
+            Write-Warning "The installation manifest is invalid; falling back to PATH: $($_.Exception.Message)"
+        }
+    }
+    return Resolve-PythonCommand
+}
+
 function Invoke-External {
     param(
         [object]$CommandSpec,
@@ -99,19 +118,32 @@ function Invoke-External {
     }
 }
 
+function Get-VbotAutostartTask {
+    $expectedPath = "\" + $TaskName.TrimStart('\')
+    try {
+        $tasks = @(Get-ScheduledTask -ErrorAction Stop)
+    }
+    catch {
+        throw "Could not query Windows Task Scheduler: $($_.Exception.Message)"
+    }
+    return $tasks | Where-Object {
+        ($_.TaskPath + $_.TaskName) -ieq $expectedPath
+    } | Select-Object -First 1
+}
+
 function Remove-VbotAutostart {
     if (-not (Test-RunningOnWindows)) {
         Write-Warning "Autostart removal is only implemented for Windows Task Scheduler."
         return
     }
 
-    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    $task = Get-VbotAutostartTask
     if ($null -eq $task) {
         Write-Host "No autostart task named '$TaskName' exists. If you installed with a custom -TaskName, pass the same one here."
         return
     }
 
-    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+    Unregister-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -Confirm:$false -ErrorAction Stop
     Write-Host "Removed autostart task '$TaskName'."
 }
 
@@ -120,7 +152,13 @@ function Warn-IfAutostartRemains {
         return
     }
 
-    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    try {
+        $task = Get-VbotAutostartTask
+    }
+    catch {
+        Write-Warning $_.Exception.Message
+        return
+    }
     if ($null -ne $task) {
         Write-Warning "Autostart task '$TaskName' still exists. Re-run with -RemoveAutostart to remove it."
     }
@@ -176,17 +214,28 @@ function Remove-DirectoryWithRetry {
 function Invoke-BootstrapUninstall {
     $rootNormalized = [System.IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\', '/')
     $homeNormalized = [System.IO.Path]::GetFullPath($HOME).TrimEnd('\', '/')
-    if ([string]::IsNullOrWhiteSpace($rootNormalized) -or ($rootNormalized -ieq $homeNormalized)) {
+    $driveRootNormalized = [System.IO.Path]::GetPathRoot($rootNormalized).TrimEnd('\', '/')
+    if (
+        [string]::IsNullOrWhiteSpace($rootNormalized) -or
+        ($rootNormalized -ieq $homeNormalized) -or
+        ($rootNormalized -ieq $driveRootNormalized)
+    ) {
         throw "Refusing to remove '$ProjectRoot'."
     }
 
     Write-Step "Removing bootstrap install at $ProjectRoot"
 
     if (Test-RunningOnWindows) {
-        $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+        try {
+            $task = Get-VbotAutostartTask
+        }
+        catch {
+            Write-Warning "$($_.Exception.Message) The install will be removed, but its autostart task may remain."
+            $task = $null
+        }
         if ($null -ne $task) {
             try {
-                Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+                Unregister-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -Confirm:$false -ErrorAction Stop
                 Write-Host "Removed autostart task '$TaskName'."
             }
             catch {
@@ -222,8 +271,13 @@ function Invoke-BootstrapUninstall {
 
 function Invoke-ManualUninstall {
     Write-Step "Uninstalling pip package: $PackageName"
-    $python = Resolve-PythonCommand
+    $python = Resolve-UninstallPython
     Invoke-External $python @("-m", "pip", "uninstall", "-y", $PackageName)
+
+    if (Test-Path -LiteralPath $InstallManifest) {
+        Remove-Item -LiteralPath $InstallManifest -Force
+        Write-Host "Removed installation manifest."
+    }
 
     Remove-DesktopShortcut
 

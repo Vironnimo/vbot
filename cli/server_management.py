@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import locale
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -27,6 +28,8 @@ WEBUI_PATH = "/"
 WILDCARD_HOSTS = {"", "*", "0.0.0.0", "::"}
 CLI_SERVER_LOGGER_NAME = "cli.server_management"
 DEFAULT_SERVICE_NAME = "vbot"
+_SYSTEMD_SERVICE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@-]*$")
+_SYSTEMD_SERVICE_NAME_MAX_LENGTH = 200
 # A bare systemctl probe (is-active) returns immediately, but `restart` blocks on
 # the unit's stop+start: the stop alone can take the unit's whole TimeoutStopSec
 # (10s in the unit we install) before SIGKILL, plus the fresh start. The restart
@@ -39,6 +42,17 @@ _SYSTEMCTL_RESTART_TIMEOUT_SECONDS = 30.0
 _SYSTEMCTL_TIMEOUT_RETURN_CODE = 124
 _SYSTEMD_RESTART_READY_TIMEOUT_SECONDS = 10.0
 _SYSTEMD_RESTART_PROBE_INTERVAL_SECONDS = 0.2
+
+
+def is_valid_systemd_service_name(service_name: str) -> bool:
+    """Return whether a user-supplied basename is safe as one systemd unit file."""
+
+    return (
+        bool(service_name)
+        and len(service_name) <= _SYSTEMD_SERVICE_NAME_MAX_LENGTH
+        and not service_name.endswith(".service")
+        and _SYSTEMD_SERVICE_NAME_PATTERN.fullmatch(service_name) is not None
+    )
 
 
 def decode_command_output(output: bytes | str | None) -> str:
@@ -541,7 +555,7 @@ def is_systemd_managed(
     systemctl probe.
     """
 
-    if not platform.startswith("linux"):
+    if not platform.startswith("linux") or not is_valid_systemd_service_name(service_name):
         return False
     units = unit_dir or _systemd_user_unit_dir()
     if not (units / f"{service_name}.service").is_file():
@@ -634,6 +648,16 @@ def restart_server(
     desyncs from the unmanaged process), so route the restart through the unit
     instead. Everywhere else fall back to the managed terminate-then-start path.
     """
+
+    if not is_valid_systemd_service_name(service_name):
+        return CommandResult(
+            ok=False,
+            message=(
+                "invalid systemd service name; start with a letter or number, then use only "
+                "letters, numbers, '.', '_', '@', or '-', without a .service suffix"
+            ),
+            instance=instance,
+        )
 
     via_systemd = restart_via_systemd_if_managed(
         instance, service_name=service_name, is_managed=is_managed, do_restart=do_restart

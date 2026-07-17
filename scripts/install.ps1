@@ -316,19 +316,12 @@ function Initialize-DataDirectory {
 }
 
 function Install-PythonPackage {
-    param([object]$Python)
+    param(
+        [object]$Python,
+        [string[]]$Groups
+    )
 
-    # -Dev swaps the base groups; -Desktop stays an add-on on top of either base,
-    # so a dev install with the desktop accessor gets both dependency groups.
-    # -DesktopClient is its own accessor-only shape and excludes -Dev.
-    $groups = if ($Dev) { @("dev") } else { @("server", "cli") }
-    if ($DesktopClient) {
-        $groups = @("cli", "desktop")
-    }
-    elseif ($Desktop) {
-        $groups += "desktop"
-    }
-    $extra = ".[{0}]" -f ($groups -join ",")
+    $extra = ".[{0}]" -f ($Groups -join ",")
 
     Write-Step "Installing Python package in editable mode: $extra"
     Invoke-External $Python @("-m", "pip", "install", "-e", $extra)
@@ -342,7 +335,7 @@ function Build-WebUi {
     }
 
     Write-Step "Installing WebUI dependencies"
-    Invoke-External $Npm @("install") $WebUiDir
+    Invoke-External $Npm @("ci") $WebUiDir
 
     Write-Step "Building WebUI"
     Invoke-External $Npm @("run", "build") $WebUiDir
@@ -474,14 +467,46 @@ function New-DesktopShortcut {
     Write-Host "Created Start-menu shortcut: $shortcutPath"
 }
 
-$resolvedDataDir = Resolve-UserPath $DataDir
-$effectivePort = Resolve-EffectivePort `
-    -ResolvedDataDir $resolvedDataDir `
-    -DefaultPort $Port `
-    -PortWasProvided ($PSBoundParameters.ContainsKey("Port"))
+function Write-InstallManifest {
+    param(
+        [object]$Python,
+        [string[]]$Groups,
+        [string]$InstallShape
+    )
+
+    $pythonExecutable = Invoke-Capture $Python @("-c", "import sys; print(sys.executable)")
+    $arguments = @(
+        "-m", "cli.install_state", "write",
+        "--root", $ProjectRoot,
+        "--shape", $InstallShape,
+        "--groups"
+    ) + $Groups + @("--python-executable", $pythonExecutable)
+    Write-Step "Recording installation shape: $InstallShape"
+    Invoke-External $Python $arguments
+}
+
 # The desktop-client mode installs only the accessor: no server stack, no local
 # WebUI build, no data dir, no autostart. It still needs Python, the package, the
 # vbot command on PATH, and the Start-menu shortcut.
+$resolvedDataDir = $null
+$effectivePort = $Port
+if (-not $DesktopClient) {
+    $resolvedDataDir = Resolve-UserPath $DataDir
+    $effectivePort = Resolve-EffectivePort `
+        -ResolvedDataDir $resolvedDataDir `
+        -DefaultPort $Port `
+        -PortWasProvided ($PSBoundParameters.ContainsKey("Port"))
+}
+$installGroups = if ($Dev) { @("dev") } else { @("server", "cli") }
+$installShape = "server"
+if ($DesktopClient) {
+    $installGroups = @("cli", "desktop")
+    $installShape = "desktop-client"
+}
+elseif ($Desktop) {
+    $installGroups += "desktop"
+    $installShape = "server-desktop"
+}
 $buildWebUi = (-not $SkipWebuiBuild) -and (-not $DesktopClient)
 
 $python = Resolve-PythonCommand
@@ -504,7 +529,7 @@ if (-not $DesktopClient) {
         -Python $python `
         -SyncPortIntoSettings ($PSBoundParameters.ContainsKey("Port"))
 }
-Install-PythonPackage $python
+Install-PythonPackage -Python $python -Groups $installGroups
 if ($DesktopClient) {
     Write-Step "Skipping WebUI build (desktop-client install has no local server)"
 }
@@ -534,6 +559,8 @@ else {
     Invoke-External $vbotCommand @("--help")
     Invoke-External $vbotCommand @("doctor", "settings", "--data-dir", $resolvedDataDir)
 }
+
+Write-InstallManifest -Python $python -Groups $installGroups -InstallShape $installShape
 
 if ($Desktop -or $DesktopClient) {
     Write-Step "Creating Start-menu shortcut"
