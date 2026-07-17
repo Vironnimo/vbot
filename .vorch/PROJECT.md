@@ -156,6 +156,10 @@ Live testing exercises the running application rather than writing pytest or Vit
 - Before live testing the CLI, read `.vorch/workflows/cli-test-workflow.md` in full.
 - Read both when the task explicitly spans both accessors.
 
+## End-to-End Testing
+
+The Playwright E2E suite lives under `tests/e2e/` and is intentionally excluded from the normal quality gates. Run it only when the user explicitly requests E2E test execution, and read `.vorch/workflows/e2e-test-workflow.md` in full before every run.
+
 ## Context
 
 Use this section only for important strategic decisions, unusual global constraints, or things an agent would otherwise likely assume incorrectly.
