@@ -158,7 +158,7 @@ Live testing exercises the running application rather than writing pytest or Vit
 
 ## End-to-End Testing
 
-The Playwright E2E suite lives under `tests/e2e/` and is intentionally excluded from the normal quality gates. `.github/workflows/e2e.yml` runs it as a separate non-gating Chromium workflow on manual dispatch and a weekly schedule while the WebUI is changing; failed runs retain the Playwright report, traces, screenshots, and videos as a short-lived artifact. For local agent execution, run it only when the user explicitly requests E2E test execution, and read `.vorch/workflows/e2e-test-workflow.md` in full before every run.
+The Playwright E2E suite lives under `tests/e2e/` and is intentionally excluded from the normal quality gates. `.github/workflows/e2e.yml` runs it as a separate non-gating Chromium workflow only on explicit manual dispatch while the WebUI is changing; failed runs retain the Playwright report, traces, screenshots, and videos as a short-lived artifact. For local agent execution, run it only when the user explicitly requests E2E test execution, and read `.vorch/workflows/e2e-test-workflow.md` in full before every run.
 
 ## Context
 
