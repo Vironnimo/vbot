@@ -221,11 +221,11 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         )
 
     async def _build_headers(self) -> dict[str, str]:
-        """Build request headers from selected connection auth and extra_headers."""
+        """Build request headers; keyless connections contribute no auth header."""
         token = await self._token_getter()
-        headers: dict[str, str] = {
-            self._auth_config.header: f"{self._auth_config.prefix}{token}",
-        }
+        headers: dict[str, str] = {}
+        if self._auth_config.header and token:
+            headers[self._auth_config.header] = f"{self._auth_config.prefix}{token}"
         if self._config.extra_headers:
             headers.update(self._config.extra_headers)
         return headers
