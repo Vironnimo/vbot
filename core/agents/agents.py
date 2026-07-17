@@ -22,9 +22,9 @@ from core.config_validation import (
     add_error,
     error_diagnostic,
     load_validated_json_file,
+    validate_allowed_string,
     validate_json_file,
     validate_non_empty_string,
-    validate_optional_allowed_string,
     validate_optional_path_string,
     validate_required_fields,
     validate_string,
@@ -164,12 +164,13 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
         data.get("thinking_effort"),
         allow_none=True,
     )
-    validate_optional_allowed_string(
-        diagnostics,
-        "$.memory_prompt_mode",
-        data.get("memory_prompt_mode"),
-        frozenset(MEMORY_PROMPT_MODES),
-    )
+    if "memory_prompt_mode" in data:
+        validate_allowed_string(
+            diagnostics,
+            "$.memory_prompt_mode",
+            data["memory_prompt_mode"],
+            frozenset(MEMORY_PROMPT_MODES),
+        )
     validate_string_list(diagnostics, "$.allowed_tools", data.get("allowed_tools"))
     validate_string_list(diagnostics, "$.allowed_skills", data.get("allowed_skills"))
     if "custom_system_prompt_enabled" in data and not isinstance(

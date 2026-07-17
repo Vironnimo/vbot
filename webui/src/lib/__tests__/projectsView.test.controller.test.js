@@ -74,6 +74,40 @@ describe('Projects controller', () => {
     expect(state.projects).toMatchObject([{ project_id: 'new-project' }]);
   });
 
+  it('reloads Projects on token changes and defers replacement while a modal is open', async () => {
+    const oldProject = {
+      project_id: 'project-one',
+      display_name: 'Old name',
+      cwd: 'C:/repo',
+    };
+    const refreshedProject = { ...oldProject, display_name: 'Fresh name' };
+    const projectOperations = operations({
+      listProjects: vi
+        .fn()
+        .mockResolvedValueOnce({ projects: [oldProject] })
+        .mockResolvedValueOnce({ projects: [refreshedProject] }),
+      showProject: vi.fn().mockResolvedValue({ scan: null }),
+    });
+    const state = createProjectsState();
+    const controller = createProjectsController({
+      operations: projectOperations,
+      state,
+    });
+
+    await controller.loadProjects();
+    controller.updateProjectsRefreshToken(0);
+    controller.openAdd();
+    await controller.updateProjectsRefreshToken(1);
+
+    expect(projectOperations.listProjects).toHaveBeenCalledTimes(2);
+    expect(state.projects[0].display_name).toBe('Old name');
+
+    controller.closeAdd();
+
+    expect(state.projects[0].display_name).toBe('Fresh name');
+    expect(state.selectedProjectId).toBe('project-one');
+  });
+
   it('debounces path detection and normalizes the winning result', async () => {
     vi.useFakeTimers();
     const detectProject = vi.fn().mockResolvedValue({

@@ -182,13 +182,16 @@ def test_webui_serving_keeps_api_routes_precedence(monkeypatch, tmp_path: Path) 
     assert rpc_response.json()["ok"] is False
 
 
-def test_rpc_endpoint_returns_error_envelope_for_malformed_json(tmp_path: Path) -> None:
+@pytest.mark.parametrize("content", ["{", b"\xff"])
+def test_rpc_endpoint_returns_error_envelope_for_malformed_json(
+    tmp_path: Path, content: str | bytes
+) -> None:
     app = create_app(runtime=Runtime(Config(data_dir=tmp_path / "data")))
 
     with TestClient(app) as client:
         response = client.post(
             "/api/rpc",
-            content="{",
+            content=content,
             headers={"content-type": "application/json"},
         )
 
