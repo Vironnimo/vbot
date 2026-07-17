@@ -1,0 +1,68 @@
+name: E2E
+
+# The suite is intentionally observational while the WebUI is changing. It is
+# manually runnable and executes weekly, but does not gate pushes or releases.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  chromium:
+    name: WebUI E2E (Chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            webui/package-lock.json
+            tests/e2e/package-lock.json
+
+      - name: Install backend development dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Install WebUI dependencies
+        working-directory: webui
+        run: npm ci
+
+      - name: Install E2E dependencies
+        working-directory: tests/e2e
+        run: npm ci
+
+      - name: Install Chromium and system dependencies
+        working-directory: tests/e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the complete E2E suite
+        working-directory: tests/e2e
+        env:
+          CI: "true"
+          PLAYWRIGHT_HTML_OPEN: never
+        run: npm test
+
+      - name: Clean up E2E services
+        if: always()
+        working-directory: tests/e2e
+        run: npm run cleanup
+
+      - name: Upload failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: playwright-failure-evidence
+          path: tests/e2e/artifacts/
+          if-no-files-found: ignore
+          retention-days: 7

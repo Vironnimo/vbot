@@ -4,13 +4,13 @@ Run the Playwright E2E suite only when the user explicitly requests E2E test exe
 
 ## Scope and Current Baseline
 
-The suite lives in `tests/e2e/` as its own Node package and exercises the built WebUI against a dedicated vBot server and fake Provider. It is intentionally not part of `scripts/quality.py` or `scripts/quality-frontend.py`.
+The suite lives in `tests/e2e/` as its own Node package and exercises the built WebUI against a dedicated vBot server and fake Provider. It is intentionally not part of `scripts/quality.py` or `scripts/quality-frontend.py`. `.github/workflows/e2e.yml` installs its clean CI prerequisites and runs the complete Chromium suite on manual dispatch and weekly schedule; this separate observational workflow does not gate pushes or releases while the WebUI is changing, and it uploads failure evidence for seven days.
 
 Some tests may currently fail because the WebUI is still changing. Report those results accurately, but do not fix, skip, delete, or rebaseline failing tests unless the user explicitly asks to stabilize or update the E2E suite. Known E2E failures do not block unrelated work.
 
 ## Prerequisites
 
-Run from the repository root. The current Python environment, `webui/node_modules/`, `tests/e2e/node_modules/`, and the Playwright Chromium browser must already be available. Do not install missing dependencies or browsers as part of an E2E run; report the missing prerequisite as blocked.
+For a local agent run, start from the repository root. The current Python environment, `webui/node_modules/`, `tests/e2e/node_modules/`, and the Playwright Chromium browser must already be available. Do not install missing dependencies or browsers as part of a local E2E run; report the missing prerequisite as blocked. The GitHub workflow is the clean-run exception: it deliberately installs the locked npm dependencies, Chromium, and required Linux libraries on its disposable runner before executing the suite.
 
 The suite owns ports `8437` for vBot and `8438` for its fake Provider by default. Override them with `VBOT_E2E_PORT` and `VBOT_E2E_PROVIDER_PORT` when either port is unavailable, and use `VBOT_E2E_PYTHON` when the required Python interpreter is not the platform default. Never point the suite at product data or a user-owned server.
 
