@@ -1383,6 +1383,29 @@ describe('ProjectsView', () => {
       rpcMock.mock.calls.filter((call) => call[0] === 'connection.list').length,
     ).toBeGreaterThan(connectionListBefore);
   });
+
+  it('reloads Project management state when projectsRefreshToken changes', async () => {
+    const props = reactiveProps({ projectsRefreshToken: 0 });
+    mountedComponent = mount(ProjectsView, { target: document.body, props });
+    flushSync();
+    await waitForCondition(() => listProjectsMock.mock.calls.length === 1);
+
+    listProjectsMock.mockResolvedValue({
+      projects: [
+        project({ project_id: 'external', display_name: 'External project' }),
+      ],
+    });
+    props.projectsRefreshToken = 1;
+    flushSync();
+
+    await waitForCondition(() => listProjectsMock.mock.calls.length === 2);
+    await waitForCondition(() =>
+      document.querySelector('[data-testid="project-panel-external"]'),
+    );
+    expect(
+      document.querySelector('[data-testid="project-panel-external"]'),
+    ).toBeTruthy();
+  });
 });
 
 function project(overrides = {}) {

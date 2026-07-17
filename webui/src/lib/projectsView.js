@@ -65,6 +65,7 @@ export function createProjectsState({ selectedProjectId = '' } = {}) {
     modelDropdownOpenCount: 0,
     pendingModelCatalogs: null,
     lastModelsRefreshToken: null,
+    lastProjectsRefreshToken: null,
     globalAgentDefaults: {},
     globalCompactionPolicy: null,
     isAddOpen: false,
@@ -134,6 +135,7 @@ export function createProjectsController({
   let scanRequestId = 0;
   let autoSaveTimer = null;
   let detectTimer = null;
+  let pendingProjectList = null;
 
   function errorText(error) {
     if (typeof error?.message === 'string' && error.message.trim()) {
@@ -227,8 +229,68 @@ export function createProjectsController({
     void loadScan(projectId);
   }
 
-  async function loadProjects() {
+  function overrideDraftsHaveChanges() {
+    return state.activeTeam.some((member) => {
+      const draft = state.overrideDrafts[member.agent_id];
+      if (!draft) {
+        return false;
+      }
+      const savedDraft = seedTeamOverrideDraft(member);
+      return (
+        draft.model !== savedDraft.model ||
+        draft.temperature !== savedDraft.temperature ||
+        draft.thinking_effort !== savedDraft.thinking_effort ||
+        JSON.stringify(draft.compaction_policy) !==
+          JSON.stringify(savedDraft.compaction_policy)
+      );
+    });
+  }
+
+  function projectReloadCanApply() {
+    return shouldApplyReloadNow(SURFACE_FORM, {
+      dropdownOpen: state.modelDropdownOpenCount > 0,
+      focused:
+        state.isAddOpen ||
+        Boolean(state.removeConfirmProject) ||
+        Boolean(state.rePointProject) ||
+        hasManageChanges(pendingChanges()) ||
+        overrideDraftsHaveChanges(),
+      savePending:
+        autoSaveTimer !== null ||
+        state.addingProject ||
+        state.editSaving ||
+        Boolean(state.overrideBusyKey) ||
+        Boolean(state.removingProjectId) ||
+        state.rePointing,
+    });
+  }
+
+  function applyProjectList(projects) {
+    pendingProjectList = null;
+    state.projects = projects;
+    const preferredProject = state.projects.find(
+      (project) => project.project_id === state.selectedProjectId,
+    );
+    const projectToOpen = preferredProject ?? state.projects[0] ?? null;
+    if (projectToOpen) {
+      selectProject(projectToOpen.project_id);
+    } else {
+      clearSelectedProject();
+    }
+  }
+
+  function flushPendingProjects() {
+    if (!active || !pendingProjectList || !projectReloadCanApply()) {
+      return false;
+    }
+    const projects = pendingProjectList;
+    applyProjectList(projects);
+    return true;
+  }
+
+  async function loadProjects({ reload = false } = {}) {
     const requestId = ++listRequestId;
+    pendingProjectList = null;
     state.loadingProjects = true;
     state.listError = '';
     try {
@@ -236,15 +298,11 @@ export function createProjectsController({
       if (!active || requestId !== listRequestId) {
         return false;
       }
-      state.projects = normalizeProjects(result?.projects);
-      const preferredProject = state.projects.find(
-        (project) => project.project_id === state.selectedProjectId,
-      );
-      const projectToOpen = preferredProject ?? state.projects[0] ?? null;
-      if (projectToOpen) {
-        selectProject(projectToOpen.project_id);
+      const projects = normalizeProjects(result?.projects);
+      if (reload && !projectReloadCanApply()) {
+        pendingProjectList = projects;
       } else {
-        clearSelectedProject();
+        applyProjectList(projects);
       }
       return true;
     } catch (error) {
@@ -379,6 +437,7 @@ export function createProjectsController({
     if (state.modelDropdownOpenCount === 0 && state.pendingModelCatalogs) {
       applyModelCatalogs(state.pendingModelCatalogs);
     }
+    flushPendingProjects();
   }
 
   function updateModelsRefreshToken(token) {
@@ -392,15 +451,30 @@ export function createProjectsController({
     }
   }
 
+  function updateProjectsRefreshToken(token) {
+    if (state.lastProjectsRefreshToken === null) {
+      state.lastProjectsRefreshToken = token;
+      return null;
+    }
+    if (token !== state.lastProjectsRefreshToken) {
+      state.lastProjectsRefreshToken = token;
+      return loadProjects({ reload: true });
+    }
+    return null;
+  }
+
   async function initialize(preferredProjectId = '') {
     state.selectedProjectId = preferredProjectId;
     await Promise.all([loadCatalogs(), loadGlobalDefaults(), loadProjects()]);
   }
 
-  function clearAutoSave() {
+  function clearAutoSave({ flushPending = true } = {}) {
     if (autoSaveTimer !== null) {
       clearTimeout(autoSaveTimer);
       autoSaveTimer = null;
+    }
+    if (flushPending) {
+      flushPendingProjects();
     }
   }
 
@@ -457,6 +531,7 @@ export function createProjectsController({
     state.isAddOpen = false;
     state.addError = '';
     clearDetect();
+    flushPendingProjects();
   }
 
   function updateAddField(field, value) {
@@ -517,6 +592,7 @@ export function createProjectsController({
     } finally {
       if (active) {
         state.addingProject = false;
+        flushPendingProjects();
       }
     }
   }
@@ -566,7 +642,7 @@ export function createProjectsController({
       }
       return;
     }
-    clearAutoSave();
+    clearAutoSave({ flushPending: false });
     state.editSaving = true;
     state.editError = '';
     state.statusMessage = '';
@@ -592,6 +668,7 @@ export function createProjectsController({
     } finally {
       if (active) {
         state.editSaving = false;
+        flushPendingProjects();
       }
     }
   }
@@ -613,6 +690,7 @@ export function createProjectsController({
       [agentId]: { ...overrideDraft(agentId), [field]: value },
     };
     state.editError = '';
+    flushPendingProjects();
   }
 
   function overrideKey(agentId, field) {
@@ -687,6 +765,7 @@ export function createProjectsController({
     } finally {
       if (active) {
         state.overrideBusyKey = '';
+        flushPendingProjects();
       }
     }
   }
@@ -723,6 +802,7 @@ export function createProjectsController({
     } finally {
       if (active) {
         state.overrideBusyKey = '';
+        flushPendingProjects();
       }
     }
   }
@@ -734,6 +814,7 @@ export function createProjectsController({
 
   function cancelRemove() {
     state.removeConfirmProject = null;
+    flushPendingProjects();
   }
 
   function removeErrorText(error) {
@@ -756,6 +837,7 @@ export function createProjectsController({
     const project = state.removeConfirmProject;
     state.removeConfirmProject = null;
     if (!project) {
+      flushPendingProjects();
       return;
     }
     state.removingProjectId = project.project_id;
@@ -808,6 +890,7 @@ export function createProjectsController({
     } finally {
       if (active) {
         state.removingProjectId = '';
+        flushPendingProjects();
       }
     }
   }
@@ -824,6 +907,7 @@ export function createProjectsController({
     }
     state.rePointProject = null;
     state.rePointError = '';
+    flushPendingProjects();
   }
 
   async function submitRePoint() {
@@ -865,6 +949,7 @@ export function createProjectsController({
     } finally {
       if (active) {
         state.rePointing = false;
+        flushPendingProjects();
       }
     }
   }
@@ -873,6 +958,7 @@ export function createProjectsController({
     active = false;
     listRequestId += 1;
     scanRequestId += 1;
+    pendingProjectList = null;
     clearAutoSave();
     clearDetect();
   }
@@ -900,6 +986,7 @@ export function createProjectsController({
     openRePoint,
     overrideDraft,
     pendingChanges,
+    flushPendingProjects,
     refreshScan,
     replaceListField,
     scheduleAutoSave,
@@ -915,6 +1002,7 @@ export function createProjectsController({
     updateEditField,
     updateListField,
     updateModelsRefreshToken,
+    updateProjectsRefreshToken,
     updateOverrideDraft,
   };
 }

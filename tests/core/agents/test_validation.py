@@ -52,6 +52,13 @@ def test_validate_agent_data_rejects_invalid_memory_prompt_mode() -> None:
     ]
 
 
+def test_validate_agent_data_rejects_null_memory_prompt_mode() -> None:
+    data = _valid_agent_data()
+    data["memory_prompt_mode"] = None
+
+    assert _diagnostics(data) == [("error", "$.memory_prompt_mode", "is required")]
+
+
 def test_validate_agent_data_rejects_non_finite_temperature() -> None:
     data = _valid_agent_data()
     data["temperature"] = float("nan")

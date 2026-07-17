@@ -866,6 +866,7 @@
         onToast={showToast}
         onNavigateToSettingsPanel={navigateToSettingsPanel}
         {modelsRefreshToken}
+        {projectsRefreshToken}
       />
     {:else if activeViewId === 'cron'}
       <CronView onToast={showToast} />

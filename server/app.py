@@ -162,7 +162,7 @@ def create_app(
     async def rpc(request: Request) -> JsonObject:
         try:
             payload = await request.json()
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             return {
                 "ok": False,
                 "error": {
@@ -234,7 +234,7 @@ def create_app(
         speech_service = request.app.state.runtime.speech
         try:
             payload = await request.json()
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise HTTPException(
                 status_code=400,
                 detail="Request body must be valid JSON",

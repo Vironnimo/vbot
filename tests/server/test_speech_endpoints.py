@@ -52,6 +52,22 @@ def test_synthesize_endpoint_rejects_malformed_json_before_speech_call(tmp_path:
     assert runtime.speech.synthesize_calls == 0
 
 
+def test_synthesize_endpoint_rejects_invalid_utf8_before_speech_call(tmp_path: Path) -> None:
+    runtime = _SpeechRuntime(tmp_path / "data", fail=False)
+    app = create_app(runtime=cast(Any, runtime))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/speech/synthesize",
+            content=b"\xff",
+            headers={"content-type": "application/json"},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Request body must be valid JSON"
+    assert runtime.speech.synthesize_calls == 0
+
+
 def test_speech_expected_errors_map_to_http_status(tmp_path: Path) -> None:
     with _create_client(tmp_path, fail=True) as client:
         response = client.post(

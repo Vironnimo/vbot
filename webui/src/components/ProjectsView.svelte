@@ -86,6 +86,7 @@
     onToast = noop,
     onNavigateToSettingsPanel = noop,
     modelsRefreshToken = 0,
+    projectsRefreshToken = 0,
   } = $props();
 
   const projectsState = $state(createProjectsState());
@@ -270,6 +271,13 @@
   // model/provider change (first run is a no-op: mount already loaded).
   $effect(() => {
     projectsController.updateModelsRefreshToken(modelsRefreshToken);
+  });
+
+  // Reload Project list/detail/scan state after another surface mutates the
+  // server-owned Project catalog. The controller defers visible replacement
+  // while this view owns an active form, picker, modal, or save.
+  $effect(() => {
+    projectsController.updateProjectsRefreshToken(projectsRefreshToken);
   });
 
   // Presentation-only labels and projections stay in the component. Project
