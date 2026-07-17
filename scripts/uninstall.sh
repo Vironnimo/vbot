@@ -11,6 +11,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 MARKER="${PROJECT_ROOT}/.vbot-bootstrap"
+INSTALL_MANIFEST="${PROJECT_ROOT}/.vbot-install.json"
 
 PACKAGE_NAME="vbot"
 REMOVE_AUTOSTART=0
@@ -66,7 +67,26 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+[ "${#SERVICE_NAME}" -le 200 ] || fail "--service-name must be at most 200 characters."
+case "$SERVICE_NAME" in
+    "" | [!A-Za-z0-9]* | *[!A-Za-z0-9_.@-]* | *.service) fail "--service-name must start with a letter or number, then contain only letters, numbers, '.', '_', '@', or '-', without a .service suffix." ;;
+esac
+
 UNIT_FILE="${HOME}/.config/systemd/user/${SERVICE_NAME}.service"
+UNIT_WANTS_LINK="${HOME}/.config/systemd/user/default.target.wants/${SERVICE_NAME}.service"
+
+remove_systemd_unit() {
+    if systemctl --user disable --now "${SERVICE_NAME}.service"; then
+        echo "Disabled systemd user unit '${SERVICE_NAME}'."
+    else
+        echo "Warning: systemctl could not disable '${SERVICE_NAME}'; removing its exact user-unit files directly." >&2
+    fi
+    rm -f "$UNIT_WANTS_LINK"
+    rm -f "$UNIT_FILE"
+    if ! systemctl --user daemon-reload; then
+        echo "Warning: systemctl daemon-reload failed. The unit files are removed, but the user manager may retain stale state until the next login." >&2
+    fi
+}
 
 # --- bootstrap install: remove the whole self-contained tree ------------------
 
@@ -78,11 +98,9 @@ bootstrap_uninstall() {
 
     step "Removing bootstrap install at ${PROJECT_ROOT}"
 
-    if [ -f "$UNIT_FILE" ]; then
+    if [ -f "$UNIT_FILE" ] || [ -L "$UNIT_WANTS_LINK" ]; then
         step "Removing systemd user unit '${SERVICE_NAME}'"
-        systemctl --user disable --now "${SERVICE_NAME}.service" 2>/dev/null || true
-        rm -f "$UNIT_FILE"
-        systemctl --user daemon-reload 2>/dev/null || true
+        remove_systemd_unit
     fi
 
     # Stop any server still holding files in the venv (no-op if already stopped
@@ -125,20 +143,32 @@ manual_uninstall() {
         fail "Python is required to uninstall the pip package, but neither 'python3' nor 'python' was found."
     fi
 
+    if [ -f "$INSTALL_MANIFEST" ]; then
+        recorded_python="$(cd "$PROJECT_ROOT" && "$PYTHON" -m cli.install_state python --root "$PROJECT_ROOT" 2>/dev/null || true)"
+        if [ -n "$recorded_python" ] && [ -x "$recorded_python" ]; then
+            PYTHON="$recorded_python"
+            echo "Using the Python interpreter recorded by the installer: ${PYTHON}"
+        else
+            echo "Warning: the installation manifest's Python interpreter is unavailable; falling back to PATH." >&2
+        fi
+    fi
+
     step "Uninstalling pip package: ${PACKAGE_NAME}"
     "$PYTHON" -m pip uninstall -y "$PACKAGE_NAME"
+    if [ -f "$INSTALL_MANIFEST" ]; then
+        rm -f "$INSTALL_MANIFEST"
+        echo "Removed installation manifest."
+    fi
 
     if [ "$REMOVE_AUTOSTART" -eq 1 ]; then
         step "Removing systemd user unit"
-        if [ -f "$UNIT_FILE" ]; then
-            systemctl --user disable --now "${SERVICE_NAME}.service" 2>/dev/null || true
-            rm -f "$UNIT_FILE"
-            systemctl --user daemon-reload
+        if [ -f "$UNIT_FILE" ] || [ -L "$UNIT_WANTS_LINK" ]; then
+            remove_systemd_unit
             echo "Removed systemd user unit '${SERVICE_NAME}'."
         else
             echo "No systemd user unit named '${SERVICE_NAME}' exists. If you installed with a custom --service-name, pass the same one here."
         fi
-    elif [ -f "$UNIT_FILE" ]; then
+    elif [ -f "$UNIT_FILE" ] || [ -L "$UNIT_WANTS_LINK" ]; then
         echo "Warning: systemd user unit '${SERVICE_NAME}' still exists. Re-run with --remove-autostart to remove it." >&2
     fi
 

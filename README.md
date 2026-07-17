@@ -99,7 +99,7 @@ For a development checkout, install the package in editable mode and the WebUI d
 
 ```bash
 pip install -e ".[dev]"
-cd webui && npm install && cd ..
+cd webui && npm ci && cd ..
 ```
 
 Full options for every installer — data directory, ports, autostart, and desktop accessors — are documented in [USAGE.md](USAGE.md).
@@ -157,7 +157,7 @@ Update an installed instance with:
 vbot update
 ```
 
-It updates the code from the git checkout it was installed from and restarts the server, without touching your data in `~/.vbot`. A release install fetches the latest release and its prebuilt WebUI; a `main` (dev) install pulls and rebuilds the WebUI locally. If you have local changes to tracked files, `update` stops — re-run with `--discard` to drop them or `--stash` to keep them (reapplied after). Use `--no-restart` to update without restarting.
+It updates the code from the git checkout it was installed from and restarts the server, without touching your data in `~/.vbot`. The installer records the exact dependency groups, Python interpreter, source track, and WebUI revision in the checkout, so `update` preserves server-only, server-plus-desktop, and Desktop Client installations instead of guessing from imports. A release install fetches the latest release and its prebuilt WebUI; a `main` (dev) install pulls and rebuilds the WebUI locally. Failed dependency, WebUI, or stash steps remain retryable even when Git already advanced, and a release update checks that the required WebUI asset exists before changing the checkout. If you have local changes to tracked files, `update` stops — re-run with `--discard` to drop them or `--stash` to keep them (reapplied after, including when the update fails). Use `--no-restart` to update without restarting; Desktop Client updates never try to restart a server.
 
 ## Default Data Directory
 

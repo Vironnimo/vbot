@@ -22,6 +22,7 @@ $ErrorActionPreference = "Stop"
 if ($Dev -and -not [string]::IsNullOrWhiteSpace($Version)) {
     throw "-Version selects a specific release tag and cannot be combined with -Dev."
 }
+$DesktopClientRequested = $InstallerArgs -contains "-DesktopClient"
 # Accept a bare version (0.1.2) as well as the tag form (v0.1.2).
 if (-not [string]::IsNullOrWhiteSpace($Version) -and ($Version -notmatch '^v')) {
     $Version = "v$Version"
@@ -32,6 +33,8 @@ $RepoName = "vbot"
 $RepoUrl = "https://github.com/$RepoOwner/$RepoName.git"
 $ApiBase = "https://api.github.com/repos/$RepoOwner/$RepoName"
 $ApiHeaders = @{ "User-Agent" = "vbot-bootstrap"; "Accept" = "application/vnd.github+json" }
+$AssetWaitSeconds = 300
+$AssetPollSeconds = 10
 
 function Write-Step { param([string]$Message) Write-Host "==> $Message" }
 
@@ -117,6 +120,28 @@ function Get-WebuiAssetUrl {
     return $asset.browser_download_url
 }
 
+function Wait-WebuiAssetUrl {
+    param([string]$Tag)
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($AssetWaitSeconds)
+    do {
+        try {
+            $url = Get-WebuiAssetUrl -Tag $Tag
+            if (-not [string]::IsNullOrWhiteSpace($url)) {
+                return $url
+            }
+        }
+        catch {
+            throw "Could not query release $Tag while waiting for its WebUI asset: $($_.Exception.Message)"
+        }
+        if ([DateTime]::UtcNow -lt $deadline) {
+            Start-Sleep -Seconds $AssetPollSeconds
+        }
+    } while ([DateTime]::UtcNow -lt $deadline)
+
+    throw "Release $Tag still has no webui-dist.tar.gz asset after $AssetWaitSeconds seconds. The install directory was not created; re-run once the release workflow finishes."
+}
+
 function Add-ToUserPath {
     param([string]$PathToAdd)
     $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
@@ -169,7 +194,47 @@ function Write-BootstrapMarker {
     [System.IO.File]::WriteAllText($marker, $content, (New-Object System.Text.UTF8Encoding($false)))
 }
 
-if (Test-Path $InstallDir) {
+function Expand-WebuiArchive {
+    param(
+        [string]$Archive,
+        [string]$Destination
+    )
+
+    $extractScript = @'
+import sys
+import tarfile
+from pathlib import Path
+
+archive_path = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+root = destination.resolve()
+with tarfile.open(archive_path, mode='r:gz') as archive:
+    for member in archive.getmembers():
+        if not (member.isdir() or member.isfile()):
+            raise SystemExit(f'unsafe member type in WebUI archive: {member.name}')
+        target = (destination / member.name).resolve()
+        if not target.is_relative_to(root):
+            raise SystemExit(f'unsafe path in WebUI archive: {member.name}')
+    archive.extractall(destination)
+'@
+    & python -c $extractScript $Archive $Destination
+    if ($LASTEXITCODE -ne 0) {
+        throw "Refusing to unpack the WebUI archive: it contains an unsafe path or member type."
+    }
+}
+
+if ($InstallDir -eq "~") {
+    $InstallDir = $HOME
+}
+elseif ($InstallDir.StartsWith("~\") -or $InstallDir.StartsWith("~/")) {
+    $InstallDir = Join-Path $HOME $InstallDir.Substring(2)
+}
+elseif (-not [System.IO.Path]::IsPathRooted($InstallDir)) {
+    $InstallDir = Join-Path (Get-Location).ProviderPath $InstallDir
+}
+$InstallDir = [System.IO.Path]::GetFullPath($InstallDir)
+
+if (Test-Path -LiteralPath $InstallDir) {
     throw "$InstallDir already exists. To update an existing install run 'vbot update'; otherwise remove it or pass -InstallDir to choose another location."
 }
 
@@ -197,6 +262,12 @@ else {
             throw "Could not determine the latest release. Use -Dev to install from main."
         }
     }
+    $assetUrl = $null
+    if (-not $DesktopClientRequested) {
+        Write-Step "Waiting for the prebuilt WebUI for $tag"
+        $assetUrl = Wait-WebuiAssetUrl -Tag $tag
+    }
+
     Write-Step "Cloning $RepoUrl ($tag) into $InstallDir"
     git clone --depth 1 --branch $tag $RepoUrl $InstallDir
     if ($LASTEXITCODE -ne 0) {
@@ -204,25 +275,21 @@ else {
     }
     Write-BootstrapMarker -InstallDir $InstallDir
 
-    Write-Step "Fetching prebuilt WebUI for $tag"
-    $assetUrl = Get-WebuiAssetUrl -Tag $tag
-    if ($null -eq $assetUrl) {
-        throw "Release $tag has no webui-dist.tar.gz asset yet. Use -Dev to build locally, or wait for the release workflow to finish."
-    }
-    $webuiDir = Join-Path $InstallDir "webui"
-    New-Item -ItemType Directory -Path $webuiDir -Force | Out-Null
-    $archive = Join-Path $InstallDir "webui-dist.tar.gz"
-    Invoke-WebRequest -Uri $assetUrl -OutFile $archive -Headers $ApiHeaders
-    # Refuse a tarball whose members escape webui/ (mirrors `vbot update`'s data filter).
-    $unsafe = & tar -tzf $archive | Where-Object { $_ -match '(^/)|((^|/)\.\.(/|$))' }
-    if ($unsafe) {
-        Remove-Item $archive -Force
-        throw "Refusing to unpack the WebUI archive: it contains unsafe paths."
-    }
-    tar -xzf $archive -C $webuiDir
-    Remove-Item $archive -Force
-    if (-not (Test-Path (Join-Path $webuiDir "dist\index.html"))) {
-        throw "Prebuilt WebUI did not unpack to webui/dist."
+    if (-not $DesktopClientRequested) {
+        Write-Step "Fetching prebuilt WebUI for $tag"
+        $webuiDir = Join-Path $InstallDir "webui"
+        New-Item -ItemType Directory -Path $webuiDir -Force | Out-Null
+        $archive = Join-Path $InstallDir "webui-dist.tar.gz"
+        Invoke-WebRequest -Uri $assetUrl -OutFile $archive -Headers $ApiHeaders
+        try {
+            Expand-WebuiArchive -Archive $archive -Destination $webuiDir
+        }
+        finally {
+            Remove-Item $archive -Force
+        }
+        if (-not (Test-Path (Join-Path $webuiDir "dist\index.html"))) {
+            throw "Prebuilt WebUI did not unpack to webui/dist."
+        }
     }
 }
 
@@ -255,5 +322,10 @@ Add-VbotShim -InstallDir $InstallDir -VenvDir $venvDir
 
 Write-Step "vBot bootstrap complete"
 Write-Host "Installed at: $InstallDir (virtual environment in .venv)"
-Write-Host "Data dir:     $(Join-Path $HOME '.vbot')"
-Write-Host "Open a new terminal, then run: vbot server status"
+Write-Host "The installer output above shows the configured data directory (Desktop Client has none)."
+if ($DesktopClientRequested) {
+    Write-Host "Open a new terminal, then run: vbot desktop"
+}
+else {
+    Write-Host "Open a new terminal, then run: vbot server status"
+}

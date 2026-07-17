@@ -895,6 +895,40 @@ def test_restart_server_uses_systemd_when_unit_managed(tmp_path: Path) -> None:
     assert "via systemd" in result.message
 
 
+def test_restart_server_rejects_unsafe_systemd_service_name(tmp_path: Path) -> None:
+    instance = make_instance(tmp_path)
+
+    def unexpected(_instance: ServerInstance) -> CommandResult:
+        raise AssertionError("an invalid service name must fail before server lifecycle work")
+
+    result = restart_server(
+        instance,
+        service_name="../../outside",
+        stop=unexpected,
+        start=unexpected,
+    )
+
+    assert not result.ok
+    assert "invalid systemd service name" in result.message
+
+
+def test_restart_server_rejects_option_like_systemd_service_name(tmp_path: Path) -> None:
+    instance = make_instance(tmp_path)
+
+    def unexpected(_instance: ServerInstance) -> CommandResult:
+        raise AssertionError("an option-like name must fail before server lifecycle work")
+
+    result = restart_server(
+        instance,
+        service_name="--system",
+        stop=unexpected,
+        start=unexpected,
+    )
+
+    assert not result.ok
+    assert "invalid systemd service name" in result.message
+
+
 def test_restart_via_systemd_returns_none_when_unmanaged(tmp_path: Path) -> None:
     instance = make_instance(tmp_path)
 
