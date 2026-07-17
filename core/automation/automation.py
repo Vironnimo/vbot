@@ -46,11 +46,28 @@ class TriggerService:
         ``project_id`` creates the auto-session under that project's anchor and
         scopes the Run to the project (cwd = repo, project files in the prompt).
         """
+        if session_id is None:
+            try:
+                if internal:
+                    return await self._trigger_chat_loop.start_run_in_new_session(
+                        agent_id,
+                        message,
+                        internal=True,
+                        reply_surface=reply_surface,
+                        project_id=project_id,
+                    )
+                return await self._trigger_chat_loop.start_run_in_new_session(
+                    agent_id,
+                    message,
+                    sender=sender,
+                    reply_surface=reply_surface,
+                    project_id=project_id,
+                )
+            except BaseException:
+                self.release_waiting_work(waiting_work_admission)
+                raise
+
         target_session_id = session_id
-        if target_session_id is None:
-            target_session_id = self._runtime.chat_sessions.create(
-                agent_id, project_id=project_id
-            ).id
         try:
             if internal:
                 run = await self._trigger_chat_loop.start_run(

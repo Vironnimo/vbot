@@ -264,6 +264,7 @@ def test_allowed_resource_kinds_lock_the_documented_wire_contract() -> None:
         "channels",
         "debug_traces",
         "projects",
+        "cron",
     } == ALLOWED_RESOURCE_KINDS
 
 

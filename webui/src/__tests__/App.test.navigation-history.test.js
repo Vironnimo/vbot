@@ -127,7 +127,7 @@ describe('App', () => {
     flushSync();
 
     const cronButton = Array.from(document.querySelectorAll('nav button')).find(
-      (button) => button.textContent?.includes('Cron'),
+      (button) => button.textContent?.includes('Schedules'),
     );
 
     expect(cronButton).toBeTruthy();

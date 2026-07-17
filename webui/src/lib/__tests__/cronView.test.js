@@ -1,18 +1,77 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  applyCronListResponse,
   buildCreateCronPayload,
   buildCronAgentDropdownOptions,
   buildCronAgentOptions,
   buildCronPresetOptions,
   buildUpdateCronPayload,
   createCronFormValues,
+  createCronViewState,
   CRON_PRESET_CUSTOM,
+  cronFormFingerprint,
   cronPresetExpression,
   cronPresetForExpression,
   describeCronExpression,
+  formatTimestamp,
+  toDateTimeLocalInput,
   visibleCronJobs,
 } from '../cronView.js';
+
+describe('cron time and history projection', () => {
+  it('shows a persisted instant in the schedule timezone in list and form', () => {
+    const job = {
+      id: 'job-once',
+      agent_id: 'main',
+      prompt: 'Run once',
+      schedule_type: 'once',
+      run_at: '2026-07-18T16:00:00+00:00',
+      timezone: 'UTC',
+      effective_timezone: 'UTC',
+      status: 'active',
+    };
+
+    const [normalized] = visibleCronJobs([job]);
+    const form = createCronFormValues(job, 'Europe/Berlin');
+
+    expect(normalized.schedule_description).toContain('16:00');
+    expect(form.run_at).toBe('2026-07-18T16:00');
+    expect(formatTimestamp(job.run_at, 'Europe/Berlin')).toContain('18:00');
+    expect(toDateTimeLocalInput(job.run_at, 'Europe/Berlin')).toBe(
+      '2026-07-18T18:00',
+    );
+  });
+
+  it('keeps completed and missed jobs visible as manageable history', () => {
+    const jobs = visibleCronJobs([
+      { id: 'active', status: 'active' },
+      { id: 'completed', status: 'completed' },
+      { id: 'missed', status: 'missed' },
+    ]);
+    expect(jobs.map((job) => job.id)).toEqual([
+      'active',
+      'completed',
+      'missed',
+    ]);
+  });
+
+  it('stores the server IANA timezone from cron.list', () => {
+    const state = createCronViewState();
+    applyCronListResponse(state, {
+      jobs: [],
+      system_timezone: 'Europe/Berlin',
+    });
+    expect(state.systemTimezone).toBe('Europe/Berlin');
+  });
+
+  it('detects form edits without including server-only execution state', () => {
+    const form = createCronFormValues(null, 'UTC');
+    const baseline = cronFormFingerprint(form);
+    form.prompt = 'Changed';
+    expect(cronFormFingerprint(form)).not.toBe(baseline);
+  });
+});
 
 describe('describeCronExpression', () => {
   it('describes a standard five-field expression in plain text', () => {

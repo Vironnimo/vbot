@@ -560,6 +560,38 @@ class ChatLoop:
             tool_restriction=tool_restriction,
         )
 
+    async def start_run_in_new_session(
+        self,
+        agent_id: str,
+        content: str | list[ContentBlock],
+        *,
+        internal: bool = False,
+        input_origin: InputOrigin | None = None,
+        sender: MessageSender | None = None,
+        reply_surface: ReplySurface | None = None,
+        project_id: str | None = None,
+        tool_restriction: Sequence[str] | None = None,
+    ) -> Run:
+        """Validate a target, create its Session, and start one Run.
+
+        Automation entry points use this instead of creating a Session before
+        target/model/provider validation. A rejected trigger therefore leaves no
+        empty Session behind, while the server-facing :meth:`start_run` contract
+        still requires an explicitly existing Session.
+        """
+        return await self._start_run(
+            agent_id,
+            content,
+            session_id=None,
+            create_missing=True,
+            internal=internal,
+            input_origin=input_origin,
+            sender=sender,
+            reply_surface=reply_surface,
+            project_id=project_id,
+            tool_restriction=tool_restriction,
+        )
+
     async def queue_run(
         self,
         agent_id: str,

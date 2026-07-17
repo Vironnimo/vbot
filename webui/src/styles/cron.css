@@ -140,6 +140,27 @@
   white-space: nowrap;
 }
 
+.cron-view .cron-item-prompt {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-med);
+  font-size: 11.5px;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.cron-view .cron-load-error {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.cron-view .cron-load-error > :last-child {
+  align-self: flex-start;
+}
+
 .cron-view .cron-list-state {
   margin: 0;
   padding: 12px 16px;
@@ -214,6 +235,17 @@
   gap: 10px;
 }
 
+.cron-view .cron-enabled-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
 /* ── Read-only info rows ──────────────────────────────────────────────────── */
 
 .cron-view .cron-info-rows {
@@ -244,6 +276,13 @@
   color: var(--text-med);
   font-family: var(--font-mono);
   font-size: 12px;
+}
+
+.cron-view .cron-info-value--mono {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ── Form fields ──────────────────────────────────────────────────────────── */
@@ -328,11 +367,18 @@
 }
 
 .cron-view .cron-detail-footer {
+  position: sticky;
+  z-index: 3;
+  bottom: -26px;
   display: flex;
   flex-shrink: 0;
   justify-content: flex-end;
   gap: 8px;
-  padding: 0 0 4px;
+  margin-top: auto;
+  padding: 14px 0 22px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  box-shadow: 0 -14px 24px var(--bg);
 }
 
 /* ── Responsive ───────────────────────────────────────────────────────────── */
@@ -353,5 +399,10 @@
 
   .cron-view .cron-detail-scroll {
     padding: 22px 18px;
+  }
+
+  .cron-view .cron-detail-footer {
+    bottom: -22px;
+    padding-bottom: 18px;
   }
 }

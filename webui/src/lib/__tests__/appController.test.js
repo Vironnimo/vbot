@@ -119,6 +119,7 @@ describe('App controller', () => {
       expect(state.sessionsRefreshToken).toBe(1);
       expect(state.clientsRefreshToken).toBe(1);
       expect(state.channelsRefreshToken).toBe(1);
+      expect(state.cronRefreshToken).toBe(1);
       expect(state.debugTracesRefreshToken).toBe(1);
       expect(actions.onLoadProjects).toHaveBeenCalledOnce();
       expect(actions.onReloadAgents).toHaveBeenCalledOnce();
@@ -140,9 +141,21 @@ describe('App controller', () => {
     expect(state.sessionsRefreshToken).toBe(0);
     expect(state.clientsRefreshToken).toBe(0);
     expect(state.channelsRefreshToken).toBe(0);
+    expect(state.cronRefreshToken).toBe(0);
     expect(state.debugTracesRefreshToken).toBe(0);
     expect(actions.onLoadProjects).not.toHaveBeenCalled();
     expect(actions.onReloadAgents).not.toHaveBeenCalled();
+  });
+
+  it('bumps the cron refresh token for cron changes', async () => {
+    const { controller, state } = setup();
+
+    await controller.handleServerEvent({
+      type: 'resource_changed',
+      payload: { kind: 'cron' },
+    });
+
+    expect(state.cronRefreshToken).toBe(1);
   });
 
   it('owns delayed offline and restored connection notices', async () => {

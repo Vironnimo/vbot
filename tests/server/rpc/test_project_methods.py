@@ -1330,6 +1330,25 @@ async def test_rm_ignores_bare_cron_with_same_named_identity_agent(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_rm_ignores_terminal_cron_history_for_project_agent(tmp_path: Path) -> None:
+    cron_jobs = [
+        SimpleNamespace(
+            id="job-1",
+            agent_id="builder",
+            project_id="vbot",
+            status="missed",
+        )
+    ]
+    state = _make_state(tmp_path, cron_jobs=cron_jobs)
+    repo = _make_repo(tmp_path, "vbot", "builder.md")
+    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+
+    result = await _remove_project(state, {"project_id": "vbot"})
+
+    assert result["archived"] is True
+
+
+@pytest.mark.asyncio
 async def test_rm_ignores_cron_pointing_at_other_project_agent(tmp_path: Path) -> None:
     # A cron job qualified with a different project's id does not block.
     cron_jobs = [SimpleNamespace(id="job-1", agent_id="builder", project_id="other")]

@@ -9,16 +9,15 @@ from unittest.mock import Mock
 
 import pytest
 
-import core.tools.cron as cron_tool_module
-from core.automation.cron import CronJob, CronJobNotFoundError
+from core.automation.cron import CronJob, CronJobNotFoundError, CronJobValidationError
 from core.tools.cron import CRON_TOOL_NAME, register_cron_tool
 from core.tools.tools import ToolContext, ToolRegistry, tool_failure
 
 ScheduleType = Literal["cron", "once"]
-CronStatus = Literal["active", "paused", "completed"]
+CronStatus = Literal["active", "paused", "completed", "failed", "missed"]
 
 
-def _context(tmp_path: Path) -> ToolContext:
+def _context(tmp_path: Path, *, project_id: str | None = None) -> ToolContext:
     return ToolContext(
         agent_id="agent-one",
         session_id="session-one",
@@ -29,6 +28,7 @@ def _context(tmp_path: Path) -> ToolContext:
         workspace=tmp_path,
         app_root=tmp_path,
         data_root=tmp_path,
+        project_id=project_id,
     )
 
 
@@ -36,8 +36,12 @@ async def _dispatch(
     registry: ToolRegistry,
     tmp_path: Path,
     arguments: dict[str, object],
+    *,
+    project_id: str | None = None,
 ) -> dict[str, object]:
-    return await registry.dispatch(_context(tmp_path), arguments, [CRON_TOOL_NAME])
+    return await registry.dispatch(
+        _context(tmp_path, project_id=project_id), arguments, [CRON_TOOL_NAME]
+    )
 
 
 def _make_job(
@@ -67,8 +71,22 @@ def _make_job(
     )
 
 
+def _cron_service_mock() -> Mock:
+    service = Mock()
+    service.system_timezone_name.return_value = "UTC"
+    service.effective_timezone_name.side_effect = lambda job: job.timezone or "UTC"
+    service.next_fire_at.side_effect = lambda job: (
+        "2026-05-14T12:05:00+00:00"
+        if job.status == "active" and job.schedule_type == "cron"
+        else job.run_at
+        if job.status == "active" and job.schedule_type == "once"
+        else None
+    )
+    return service
+
+
 def test_create_action_returns_success(tmp_path: Path) -> None:
-    cron_service = Mock()
+    cron_service = _cron_service_mock()
     cron_service.create_job.return_value = _make_job(job_id="job-create")
     registry = ToolRegistry()
     register_cron_tool(registry, cron_service)
@@ -102,11 +120,45 @@ def test_create_action_returns_success(tmp_path: Path) -> None:
         run_at=None,
         timezone="UTC",
         session_id="session-one",
+        project_id=None,
+    )
+
+
+def test_create_defaults_to_current_agent_and_project(tmp_path: Path) -> None:
+    cron_service = _cron_service_mock()
+    cron_service.create_job.return_value = _make_job(job_id="job-current")
+    registry = ToolRegistry()
+    register_cron_tool(registry, cron_service)
+
+    result = asyncio.run(
+        _dispatch(
+            registry,
+            tmp_path,
+            {
+                "action": "create",
+                "prompt": "Continue project work",
+                "schedule_type": "cron",
+                "cron_expression": "0 9 * * *",
+            },
+            project_id="vbot",
+        )
+    )
+
+    assert result["ok"] is True
+    cron_service.create_job.assert_called_once_with(
+        agent_id="agent-one",
+        prompt="Continue project work",
+        schedule_type="cron",
+        cron_expression="0 9 * * *",
+        run_at=None,
+        timezone=None,
+        session_id=None,
+        project_id="vbot",
     )
 
 
 def test_list_action_returns_success_and_next_fire_at(tmp_path: Path) -> None:
-    cron_service = Mock()
+    cron_service = _cron_service_mock()
     cron_service.list_jobs.return_value = [
         _make_job(job_id="job-cron", schedule_type="cron", status="active"),
         _make_job(
@@ -128,21 +180,13 @@ def test_list_action_returns_success_and_next_fire_at(tmp_path: Path) -> None:
     jobs = cast(list[dict[str, Any]], data["jobs"])
     assert [job["id"] for job in jobs] == ["job-cron", "job-once", "job-paused"]
     assert jobs[0]["next_fire_at"] is not None
-    assert jobs[1]["next_fire_at"] is None
+    assert jobs[1]["next_fire_at"] == "2026-05-15T12:00:00+00:00"
     assert jobs[2]["next_fire_at"] is None
     cron_service.list_jobs.assert_called_once_with()
 
 
-def test_list_action_preserves_utc_next_fire_at_without_zoneinfo_database(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def missing_zoneinfo(_timezone_name: str) -> Any:
-        raise cron_tool_module.ZoneInfoNotFoundError("timezone data unavailable")
-
-    monkeypatch.setattr(cron_tool_module, "ZoneInfo", missing_zoneinfo)
-
-    cron_service = Mock()
+def test_list_action_uses_canonical_service_projection(tmp_path: Path) -> None:
+    cron_service = _cron_service_mock()
     cron_service.list_jobs.return_value = [
         _make_job(job_id="job-cron", schedule_type="cron", status="active", timezone="UTC")
     ]
@@ -158,7 +202,7 @@ def test_list_action_preserves_utc_next_fire_at_without_zoneinfo_database(
 
 
 def test_update_action_returns_success(tmp_path: Path) -> None:
-    cron_service = Mock()
+    cron_service = _cron_service_mock()
     cron_service.update_job.return_value = _make_job(job_id="job-update", prompt="Updated prompt")
     registry = ToolRegistry()
     register_cron_tool(registry, cron_service)
@@ -184,7 +228,7 @@ def test_update_action_returns_success(tmp_path: Path) -> None:
 
 
 def test_delete_action_returns_success(tmp_path: Path) -> None:
-    cron_service = Mock()
+    cron_service = _cron_service_mock()
     registry = ToolRegistry()
     register_cron_tool(registry, cron_service)
 
@@ -205,7 +249,7 @@ def test_delete_action_returns_success(tmp_path: Path) -> None:
 
 
 def test_enable_action_returns_success(tmp_path: Path) -> None:
-    cron_service = Mock()
+    cron_service = _cron_service_mock()
     cron_service.enable_job.return_value = _make_job(
         job_id="job-enable",
         status="active",
@@ -233,7 +277,7 @@ def test_enable_action_returns_success(tmp_path: Path) -> None:
 
 
 def test_disable_action_returns_success(tmp_path: Path) -> None:
-    cron_service = Mock()
+    cron_service = _cron_service_mock()
     cron_service.disable_job.return_value = _make_job(
         job_id="job-disable",
         status="paused",
@@ -261,7 +305,7 @@ def test_disable_action_returns_success(tmp_path: Path) -> None:
 
 
 def test_invalid_action_returns_failure(tmp_path: Path) -> None:
-    cron_service = Mock()
+    cron_service = _cron_service_mock()
     registry = ToolRegistry()
     register_cron_tool(registry, cron_service)
 
@@ -274,7 +318,8 @@ def test_invalid_action_returns_failure(tmp_path: Path) -> None:
 
 
 def test_create_invalid_cron_expression_returns_failure(tmp_path: Path) -> None:
-    cron_service = Mock()
+    cron_service = _cron_service_mock()
+    cron_service.create_job.side_effect = CronJobValidationError("cron_expression is invalid")
     registry = ToolRegistry()
     register_cron_tool(registry, cron_service)
 
@@ -293,7 +338,7 @@ def test_create_invalid_cron_expression_returns_failure(tmp_path: Path) -> None:
     )
 
     assert result == tool_failure("invalid_arguments", "cron_expression is invalid")
-    cron_service.create_job.assert_not_called()
+    cron_service.create_job.assert_called_once()
 
 
 @pytest.mark.parametrize(
@@ -311,7 +356,7 @@ def test_unknown_id_failures_return_job_not_found(
     method_name: str,
     arguments: dict[str, object],
 ) -> None:
-    cron_service = Mock()
+    cron_service = _cron_service_mock()
     getattr(cron_service, method_name).side_effect = CronJobNotFoundError(
         "Cron job not found: missing"
     )

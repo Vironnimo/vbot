@@ -871,9 +871,9 @@ describe('i18n t()', () => {
       'cron.presets.mondayMornings',
       'cron.presets.monthlyFirst',
     ]);
-    expect(t('cron.list.ariaLabel')).toBe('Cron jobs');
-    expect(t('cron.detail.createTitle')).toBe('Create cron job');
-    expect(t('cron.detail.editTitle')).toBe('Edit cron job');
+    expect(t('cron.list.ariaLabel')).toBe('Scheduled Runs');
+    expect(t('cron.detail.createTitle')).toBe('Create Scheduled Run');
+    expect(t('cron.detail.editTitle')).toBe('Edit Scheduled Run');
     expect(t('cron.form.preset')).toBe('Schedule preset');
     expect(t('cron.presets.custom')).toBe('Custom');
     expect(t('cron.presets.every15Minutes')).toBe('Every 15 minutes');
@@ -1018,7 +1018,7 @@ describe('i18n t()', () => {
     expect(t('common.reset')).toBe('Reset');
     expect(t('projects.remove.confirmTitle')).toBe('Remove project');
     expect(t('sessions.delete_confirm_title')).toBe('Delete session');
-    expect(t('cron.deleteConfirmTitle')).toBe('Delete cron job');
+    expect(t('cron.deleteConfirmTitle')).toBe('Delete Scheduled Run');
     expect(t('settings.channels.delete_confirm_title')).toBe('Delete channel');
     expect(t('settings.skills.deleteConfirmTitle')).toBe('Delete skill');
     expect(t('systemPrompt.fragmentEditor.resetConfirmTitle')).toBe(

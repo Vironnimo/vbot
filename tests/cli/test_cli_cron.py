@@ -177,11 +177,12 @@ def test_cron_list_formats_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         "cron jobs:",
         (
             "- id=job-1 agent=assistant status=active schedule=cron[0 9 * * *] "
-            "next_fire_at=2026-06-12T07:00:00+00:00 prompt=Check the news"
+            "next_fire_at=2026-06-12T07:00:00+00:00 last_outcome=- prompt=Check the news"
         ),
         (
             "- id=job-2 agent=coder status=paused "
-            "schedule=once[2026-07-01T09:00:00+00:00] next_fire_at=- prompt=" + "A" * 57 + "..."
+            "schedule=once[2026-07-01T09:00:00+00:00] next_fire_at=- last_outcome=- "
+            "prompt=" + "A" * 57 + "..."
         ),
     ]
 

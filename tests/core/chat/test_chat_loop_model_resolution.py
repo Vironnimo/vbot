@@ -53,6 +53,24 @@ async def test_empty_agent_model_raises_chat_error_before_persisting(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_automation_new_session_is_created_only_after_target_validation(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="", allowed_tools=["*"])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=StubAdapter([]),
+        provider_ids={"openai"},
+    )
+
+    with pytest.raises(ChatError, match="no model set"):
+        await build_chat_loop(runtime).start_run_in_new_session("coder", "Scheduled work")
+
+    assert runtime.chat_sessions.list("coder") == []
+
+
+@pytest.mark.asyncio
 async def test_chat_loop_uses_connection_from_model_suffix(tmp_path: Path) -> None:
     agent = StubAgent(
         id="coder",

@@ -32,7 +32,12 @@ from core.settings import SettingsValidationError, load_validated_settings_json
 from core.utils.config import Config
 from core.utils.log_viewer import LogViewer
 from server.clients import ClientRegistry
-from server.events import RESOURCE_KIND_CLIENTS, RESOURCE_KIND_SESSIONS, ServerEventBus
+from server.events import (
+    RESOURCE_KIND_CLIENTS,
+    RESOURCE_KIND_CRON,
+    RESOURCE_KIND_SESSIONS,
+    ServerEventBus,
+)
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST
 from server.rpc.event_bridge import bridge_run_to_event_bus, publish_resource_changed
 from server.rpc.methods import dispatch_rpc
@@ -145,6 +150,7 @@ def create_app(
             )
             _unregister_run_event_bridge(app.state)
             _unregister_session_title_bridge(app.state)
+            _unregister_cron_change_bridge(app.state)
             await _shutdown_log_viewer(app.state.log_viewer, server_logger)
             await _shutdown_device_flow_engine(
                 getattr(app.state, "device_flow_engine", None),
@@ -365,6 +371,7 @@ def _initialize_app_state(
     app.state.run_event_bridge_run_ids = OrderedDict()
     app.state.run_event_bridge_unsubscribe = _register_run_event_bridge(app.state)
     app.state.session_title_bridge_unsubscribe = _register_session_title_bridge(app.state)
+    app.state.cron_change_bridge_unsubscribe = _register_cron_change_bridge(app.state)
     app.state.chat_loop = runtime.chat_loop
     app.state.streaming_chat_loop = runtime.streaming_chat_loop
     app.state.command_dispatcher = runtime.command_dispatcher
@@ -407,6 +414,21 @@ def _unregister_session_title_bridge(state: Any) -> None:
     if callable(unsubscribe):
         unsubscribe()
     state.session_title_bridge_unsubscribe = None
+
+
+def _register_cron_change_bridge(state: Any) -> Any:
+    cron_service = getattr(state.runtime, "cron_service", None)
+    add_callback = getattr(cron_service, "add_changed_callback", None)
+    if not callable(add_callback):
+        return None
+    return add_callback(lambda: publish_resource_changed(state, RESOURCE_KIND_CRON))
+
+
+def _unregister_cron_change_bridge(state: Any) -> None:
+    unsubscribe = getattr(state, "cron_change_bridge_unsubscribe", None)
+    if callable(unsubscribe):
+        unsubscribe()
+    state.cron_change_bridge_unsubscribe = None
 
 
 async def _read_upload_file_with_limit(

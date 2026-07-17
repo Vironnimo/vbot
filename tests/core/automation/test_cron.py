@@ -9,22 +9,34 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
+from zoneinfo import ZoneInfo
 
 import pytest
 
 import core.automation.cron as cron_module
 from core.automation.cron import (
     CronJobNotFoundError,
+    CronJobStatus,
     CronJobValidationError,
     CronService,
     CronStorageError,
 )
 
 
-def make_service(tmp_path: Path) -> tuple[CronService, SimpleNamespace]:
+def make_service(
+    tmp_path: Path,
+    *,
+    agent_resolver: Any = None,
+    sessions: Any = None,
+) -> tuple[CronService, SimpleNamespace]:
     trigger_service = SimpleNamespace(trigger_run=AsyncMock())
-    service = CronService(cast(Any, trigger_service), tmp_path)
+    service = CronService(
+        cast(Any, trigger_service),
+        tmp_path,
+        agent_resolver=agent_resolver,
+        sessions=sessions,
+    )
     return service, trigger_service
 
 
@@ -71,6 +83,46 @@ def test_jobs_json_is_created_on_demand(tmp_path: Path) -> None:
     assert jobs == []
     assert jobs_path.exists()
     assert json.loads(jobs_path.read_text(encoding="utf-8")) == []
+
+
+@pytest.mark.parametrize("terminal_status", ["completed", "missed"])
+def test_terminal_job_status_cannot_be_changed_through_update(
+    tmp_path: Path, terminal_status: CronJobStatus
+) -> None:
+    service, _trigger_service = make_service(tmp_path)
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Historical run",
+        schedule_type="once",
+        run_at=(datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
+    )
+    service.update_job(job.id, status=terminal_status)
+
+    with pytest.raises(CronJobValidationError, match="immutable history"):
+        service.update_job(job.id, status="active")
+
+    assert service.get_job(job.id).status == terminal_status
+
+
+def test_active_job_limit_prevents_unbounded_scheduler_tasks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, _trigger_service = make_service(tmp_path)
+    monkeypatch.setattr(cron_module, "MAX_ACTIVE_CRON_JOBS", 1)
+    service.create_job(
+        agent_id="agent-one",
+        prompt="First",
+        schedule_type="cron",
+        cron_expression="0 9 * * *",
+    )
+
+    with pytest.raises(CronJobValidationError, match="At most 1"):
+        service.create_job(
+            agent_id="agent-two",
+            prompt="Second",
+            schedule_type="cron",
+            cron_expression="0 10 * * *",
+        )
 
 
 def test_jobs_json_schema_is_validated_on_read(tmp_path: Path) -> None:
@@ -133,8 +185,72 @@ def test_non_utc_timezone_still_fails_when_zoneinfo_database_is_unavailable(
         )
 
 
+def test_cron_expression_rejects_seconds_field(tmp_path: Path) -> None:
+    service, _trigger_service = make_service(tmp_path)
+
+    with pytest.raises(CronJobValidationError, match="exactly 5 fields"):
+        service.create_job(
+            agent_id="agent-one",
+            prompt="Too frequent",
+            schedule_type="cron",
+            cron_expression="* * * * * *",
+        )
+
+
+def test_once_timestamp_is_normalized_to_explicit_utc(tmp_path: Path) -> None:
+    service, _trigger_service = make_service(tmp_path)
+
+    created = service.create_job(
+        agent_id="agent-one",
+        prompt="Run at local wall time",
+        schedule_type="once",
+        run_at="2026-07-18T16:00",
+        timezone="Europe/Berlin",
+    )
+
+    assert created.run_at == "2026-07-18T14:00:00+00:00"
+    assert service.next_fire_at(created) == "2026-07-18T14:00:00+00:00"
+
+
+def test_system_timezone_uses_iana_zone_with_dst_rules(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, _trigger_service = make_service(tmp_path)
+    monkeypatch.setattr(cron_module, "get_localzone", lambda: ZoneInfo("Europe/Berlin"))
+    monkeypatch.setattr(cron_module, "get_localzone_name", lambda: "Europe/Berlin")
+
+    created = service.create_job(
+        agent_id="agent-one",
+        prompt="Use system zone",
+        schedule_type="once",
+        run_at="2026-12-18T16:00",
+    )
+
+    assert service.system_timezone_name() == "Europe/Berlin"
+    assert created.run_at == "2026-12-18T15:00:00+00:00"
+
+
+def test_create_validates_target_and_owned_session(tmp_path: Path) -> None:
+    resolver = SimpleNamespace(resolve_agent=Mock(return_value=SimpleNamespace(id="agent-one")))
+    sessions = SimpleNamespace(exists=Mock(return_value=False))
+    service, _trigger_service = make_service(tmp_path, agent_resolver=resolver, sessions=sessions)
+
+    with pytest.raises(CronJobValidationError, match="Session does not exist"):
+        service.create_job(
+            agent_id="agent-one",
+            prompt="Reuse context",
+            schedule_type="cron",
+            cron_expression="0 9 * * *",
+            session_id="wrong-session",
+            project_id="vbot",
+        )
+
+    resolver.resolve_agent.assert_called_once_with("vbot", "agent-one")
+    sessions.exists.assert_called_once_with("agent-one", "wrong-session", "vbot")
+
+
 @pytest.mark.asyncio
-async def test_start_creates_active_tasks_and_completes_missed_once_jobs(
+async def test_start_creates_active_tasks_and_records_missed_once_jobs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -169,7 +285,8 @@ async def test_start_creates_active_tasks_and_completes_missed_once_jobs(
     # Assert
     assert active_cron.id in service._job_tasks
     assert missed.id not in service._job_tasks
-    assert service.get_job(missed.id).status == "completed"
+    assert service.get_job(missed.id).status == "missed"
+    assert service.get_job(missed.id).last_outcome == "missed"
     trigger_service.trigger_run.assert_not_called()
 
     service.stop()
@@ -249,6 +366,57 @@ async def test_run_once_job_fires_and_marks_completed(
     assert updated.last_fired_at is not None
     assert updated.last_fired_at.endswith("+00:00")
     assert not service._once_fire_claim_path(job.id).exists()
+
+
+@pytest.mark.asyncio
+async def test_trigger_waits_for_run_and_records_execution_health(tmp_path: Path) -> None:
+    service, trigger_service = make_service(tmp_path)
+    run = SimpleNamespace(id="run-one", wait=AsyncMock(return_value=None))
+    trigger_service.trigger_run.return_value = run
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Health check",
+        schedule_type="cron",
+        cron_expression="0 9 * * *",
+    )
+
+    succeeded = await service._trigger_job_run(job)
+
+    assert succeeded is True
+    run.wait.assert_awaited_once_with()
+    updated = service.get_job(job.id)
+    assert updated.last_attempt_at is not None
+    assert updated.last_fired_at is not None
+    assert updated.last_completed_at is not None
+    assert updated.last_run_id == "run-one"
+    assert updated.last_outcome == "success"
+    assert updated.last_error is None
+    assert updated.consecutive_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_recurring_job_stops_after_consecutive_run_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, trigger_service = make_service(tmp_path)
+    monkeypatch.setattr(cron_module, "MAX_CONSECUTIVE_CRON_FAILURES", 2)
+    trigger_service.trigger_run.side_effect = RuntimeError("provider unavailable")
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Health check",
+        schedule_type="cron",
+        cron_expression="0 9 * * *",
+    )
+
+    assert await service._trigger_job_run(job) is False
+    assert service.get_job(job.id).status == "active"
+    assert await service._trigger_job_run(job) is False
+
+    updated = service.get_job(job.id)
+    assert updated.status == "failed"
+    assert updated.last_outcome == "failed"
+    assert updated.last_error == "provider unavailable"
+    assert updated.consecutive_failures == 2
 
 
 @pytest.mark.asyncio
@@ -378,7 +546,7 @@ async def test_run_once_job_retries_completed_save_without_refiring(
     trigger_service.trigger_run.assert_awaited_once_with(
         "agent-one", "Once prompt", None, project_id=None
     )
-    assert save_attempts == 2
+    assert save_attempts == 4
     updated = service.get_job(job.id)
     assert updated.status == "completed"
     assert updated.last_fired_at is not None

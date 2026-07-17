@@ -679,7 +679,12 @@ class Runtime:
         )
         self._start_channel_service()
         self._sync_channel_tool_registration()
-        self._cron_service = CronService(self._trigger_service, self._storage.data_dir)
+        self._cron_service = CronService(
+            self._trigger_service,
+            self._storage.data_dir,
+            agent_resolver=self._agent_resolver,
+            sessions=self._chat_sessions,
+        )
         self._start_cron_service()
         register_cron_tool(self._tools, self._cron_service)
         register_bash_tool(self._tools, self._process_manager, self._trigger_service)

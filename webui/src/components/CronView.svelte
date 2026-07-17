@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
 
   import Dropdown from './Dropdown.svelte';
+  import SearchableDropdown from './SearchableDropdown.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
@@ -35,11 +36,15 @@
     CRON_SCHEDULE_TYPE_CRON,
     CRON_SCHEDULE_TYPE_ONCE,
     CRON_STATUS_ACTIVE,
+    CRON_STATUS_COMPLETED,
+    CRON_STATUS_MISSED,
+    cronFormFingerprint,
     cronPresetExpression,
     cronPresetForExpression,
     describeCronExpression,
     projectIdsFromList,
     projectTeamEntry,
+    cronTimezoneOptions,
     visibleCronJobs,
   } from '$lib/cronView.js';
   import { t } from '$lib/i18n.js';
@@ -47,8 +52,14 @@
   import InfoHint from './ui/InfoHint.svelte';
 
   const noop = () => {};
+  const initialFormValues = createCronFormValues();
 
-  let { onToast = noop } = $props();
+  let {
+    onToast = noop,
+    cronRefreshToken = 0,
+    agentsRefreshToken = 0,
+    projectsRefreshToken = 0,
+  } = $props();
 
   let viewState = $state(createCronViewState());
 
@@ -57,7 +68,8 @@
   // list is the master. Selecting a row, or starting a job, reseeds these.
   let selectedJobId = $state('');
   let isCreating = $state(false);
-  let formValues = $state(createCronFormValues());
+  let formValues = $state(initialFormValues);
+  let formBaseline = $state(cronFormFingerprint(initialFormValues));
   let selectedPreset = $state(CRON_PRESET_CUSTOM);
   let formErrorMessage = $state('');
   let submittingForm = $state(false);
@@ -66,6 +78,9 @@
   let mutatingJobId = $state('');
   // The cron job awaiting delete confirmation (null = dialog closed).
   let deleteConfirmJob = $state(null);
+  let pendingDiscardAction = null;
+  let showDiscardConfirm = $state(false);
+  let pendingJobsResult = null;
 
   // Project teams power the project-agent options in the cron dropdown. They are
   // loaded lazily the first time the detail pane renders a form and cached for
@@ -78,6 +93,9 @@
   let destroyed = false;
   let jobsRequestId = 0;
   let agentsRequestId = 0;
+  let lastCronRefreshToken = 0;
+  let lastAgentsRefreshToken = 0;
+  let lastProjectsRefreshToken = 0;
 
   let hasAgents = $derived(viewState.agents.length > 0);
   let isLoading = $derived(viewState.loadingAgents || viewState.loadingJobs);
@@ -87,6 +105,9 @@
   );
   // The detail form is shown when creating, or when a real job is selected.
   let showDetailForm = $derived(isCreating || Boolean(selectedJob));
+  let isDirty = $derived(
+    showDetailForm && cronFormFingerprint(formValues) !== formBaseline,
+  );
   let isCronSchedule = $derived(
     formValues.schedule_type === CRON_SCHEDULE_TYPE_CRON,
   );
@@ -95,8 +116,8 @@
   );
   let detailTitle = $derived(
     isCreating
-      ? t('cron.detail.createTitle', 'Create cron job')
-      : t('cron.detail.editTitle', 'Edit cron job'),
+      ? t('cron.detail.createTitle', 'Create Scheduled Run')
+      : t('cron.detail.editTitle', 'Edit Scheduled Run'),
   );
   let presetOptions = $derived(
     buildCronPresetOptions((key) =>
@@ -125,6 +146,7 @@
       ]),
     ),
   );
+  let timezoneOptions = $derived(cronTimezoneOptions(viewState.systemTimezone));
 
   onMount(() => {
     loadInitialData();
@@ -140,9 +162,37 @@
     if (isCreating || jobs.length === 0) {
       return;
     }
-    if (!jobs.some((job) => job.id === selectedJobId)) {
-      selectJob(jobs[0]);
+    if (!jobs.some((job) => job.id === selectedJobId) && !isDirty) {
+      selectJobNow(jobs[0]);
     }
+  });
+
+  $effect(() => {
+    const token = cronRefreshToken;
+    if (token === lastCronRefreshToken) {
+      return;
+    }
+    lastCronRefreshToken = token;
+    loadJobs({ silent: true, external: true });
+  });
+
+  $effect(() => {
+    const token = agentsRefreshToken;
+    if (token === lastAgentsRefreshToken) {
+      return;
+    }
+    lastAgentsRefreshToken = token;
+    loadAgents();
+  });
+
+  $effect(() => {
+    const token = projectsRefreshToken;
+    if (token === lastProjectsRefreshToken) {
+      return;
+    }
+    lastProjectsRefreshToken = token;
+    projectTeamsLoaded = false;
+    loadProjectTeams();
   });
 
   async function loadInitialData() {
@@ -153,6 +203,7 @@
     const requestId = agentsRequestId + 1;
     agentsRequestId = requestId;
     viewState.loadingAgents = true;
+    viewState.agentsError = '';
 
     try {
       const result = await listAgents();
@@ -166,14 +217,7 @@
         return;
       }
 
-      showToast(
-        t(
-          'cron.errors.loadAgents',
-          'Agents could not be loaded for cron jobs.',
-        ),
-        'error',
-        error,
-      );
+      viewState.agentsError = `${t('cron.errors.loadAgents', 'Agents could not be loaded for cron jobs.')} ${errorMessageText(error, t('common.unknown', 'Unknown'))}`;
     } finally {
       if (!destroyed && requestId === agentsRequestId) {
         viewState.loadingAgents = false;
@@ -188,6 +232,7 @@
     if (options.silent !== true) {
       viewState.loadingJobs = true;
     }
+    viewState.jobsError = '';
 
     try {
       const result = await listCronJobs();
@@ -195,17 +240,18 @@
         return;
       }
 
+      if (options.external === true && isDirty) {
+        pendingJobsResult = result;
+        return;
+      }
+      pendingJobsResult = null;
       applyCronListResponse(viewState, result);
     } catch (error) {
       if (destroyed || requestId !== jobsRequestId) {
         return;
       }
 
-      showToast(
-        t('cron.errors.loadJobs', 'Cron jobs could not be loaded.'),
-        'error',
-        error,
-      );
+      viewState.jobsError = `${t('cron.errors.loadJobs', 'Cron jobs could not be loaded.')} ${errorMessageText(error, t('common.unknown', 'Unknown'))}`;
     } finally {
       if (!destroyed && requestId === jobsRequestId) {
         viewState.loadingJobs = false;
@@ -259,22 +305,35 @@
     if (!job?.id) {
       return;
     }
+    if (!isCreating && job.id === selectedJobId) {
+      return;
+    }
+    requestFormTransition(() => selectJobNow(job));
+  }
+
+  function selectJobNow(job) {
     isCreating = false;
     selectedJobId = job.id;
-    formValues = createCronFormValues(job);
+    formValues = createCronFormValues(job, viewState.systemTimezone);
     if (!formValues.agent_id) {
       formValues.agent_id = viewState.agents[0]?.id ?? '';
     }
     selectedPreset = cronPresetForExpression(formValues.cron_expression);
+    formBaseline = cronFormFingerprint(formValues);
     formErrorMessage = '';
     loadProjectTeams();
   }
 
   function startCreate() {
+    requestFormTransition(startCreateNow);
+  }
+
+  function startCreateNow() {
     isCreating = true;
-    formValues = createCronFormValues();
+    formValues = createCronFormValues(null, viewState.systemTimezone);
     formValues.agent_id = viewState.agents[0]?.id ?? '';
     selectedPreset = CRON_PRESET_CUSTOM;
+    formBaseline = cronFormFingerprint(formValues);
     formErrorMessage = '';
     loadProjectTeams();
   }
@@ -284,12 +343,39 @@
     if (submittingForm) {
       return;
     }
-    isCreating = false;
-    if (selectedJob) {
-      selectJob(selectedJob);
-    } else if (jobs.length > 0) {
-      selectJob(jobs[0]);
+    requestFormTransition(() => {
+      isCreating = false;
+      if (selectedJob) {
+        selectJobNow(selectedJob);
+      } else if (jobs.length > 0) {
+        selectJobNow(jobs[0]);
+      }
+    });
+  }
+
+  function requestFormTransition(action) {
+    if (!isDirty) {
+      action();
+      return;
     }
+    pendingDiscardAction = action;
+    showDiscardConfirm = true;
+  }
+
+  function cancelDiscard() {
+    pendingDiscardAction = null;
+    showDiscardConfirm = false;
+  }
+
+  function confirmDiscard() {
+    const action = pendingDiscardAction;
+    pendingDiscardAction = null;
+    showDiscardConfirm = false;
+    if (pendingJobsResult) {
+      applyCronListResponse(viewState, pendingJobsResult);
+      pendingJobsResult = null;
+    }
+    action?.();
   }
 
   function setScheduleType(scheduleType) {
@@ -378,6 +464,12 @@
         selectedJobId = targetJobId;
       }
       await loadJobs({ silent: true });
+      const savedJob = jobs.find((job) => job.id === targetJobId);
+      if (savedJob) {
+        selectJobNow(savedJob);
+      } else {
+        formBaseline = cronFormFingerprint(formValues);
+      }
     } catch (error) {
       formErrorMessage = `${t('cron.errors.save', 'Cron job could not be saved.')} ${errorMessageText(error, t('common.unknown', 'Unknown'))}`;
     } finally {
@@ -388,7 +480,11 @@
   }
 
   async function toggleJob(job) {
-    if (!job?.id) {
+    if (
+      !job?.id ||
+      job.status === CRON_STATUS_COMPLETED ||
+      job.status === CRON_STATUS_MISSED
+    ) {
       return;
     }
 
@@ -480,23 +576,61 @@
       return t('cron.status.failed', 'Failed');
     }
 
+    if (status === CRON_STATUS_MISSED) {
+      return t('cron.status.missed', 'Missed');
+    }
+
     return t('cron.status.completed', 'Completed');
   }
 
-  function statusChipVariant(status) {
-    if (status === CRON_STATUS_ACTIVE) {
+  function statusChipVariant(job) {
+    if (
+      job.status === CRON_STATUS_ACTIVE &&
+      job.last_outcome !== 'failed' &&
+      job.last_outcome !== 'cancelled'
+    ) {
       return 'success';
     }
 
-    if (status === 'paused') {
+    if (job.status === 'paused' || job.status === CRON_STATUS_MISSED) {
       return 'warn';
     }
 
-    if (status === 'failed') {
+    if (
+      job.status === 'failed' ||
+      job.last_outcome === 'failed' ||
+      job.last_outcome === 'cancelled'
+    ) {
       return 'error';
     }
 
     return 'neutral';
+  }
+
+  function outcomeLabel(outcome) {
+    if (outcome === 'success') {
+      return t('cron.outcome.success', 'Succeeded');
+    }
+    if (outcome === 'failed') {
+      return t('cron.outcome.failed', 'Failed');
+    }
+    if (outcome === 'cancelled') {
+      return t('cron.outcome.cancelled', 'Cancelled');
+    }
+    if (outcome === 'missed') {
+      return t('cron.outcome.missed', 'Missed');
+    }
+    if (outcome === 'unknown') {
+      return t('cron.outcome.unknown', 'Outcome unknown after restart');
+    }
+    return t('cron.notAvailable', '—');
+  }
+
+  function isTerminalJob(job) {
+    return (
+      job?.status === CRON_STATUS_COMPLETED ||
+      job?.status === CRON_STATUS_MISSED
+    );
   }
 
   // Route a message to the app-level toast stack. Error toasts are sticky by
@@ -528,7 +662,7 @@
     <aside class="cron-list-pane" aria-labelledby="cron-list-title">
       <div class="pane-header">
         <span id="cron-list-title" class="pane-title">
-          {t('cron.title', 'Cron')}
+          {t('cron.title', 'Scheduled Runs')}
         </span>
         <div class="pane-header-actions">
           <Button variant="primary" disabled={!hasAgents} onClick={startCreate}>
@@ -541,7 +675,16 @@
       </div>
 
       <div class="cron-list-scroll">
-        {#if !hasAgents}
+        {#if viewState.agentsError}
+          <div class="cron-load-error">
+            <Banner variant="error" role="alert">
+              {viewState.agentsError}
+            </Banner>
+            <Button variant="secondary" onClick={loadAgents}>
+              {t('common.retry', 'Retry')}
+            </Button>
+          </div>
+        {:else if !hasAgents && !viewState.loadingAgents}
           <p class="cron-list-state cron-list-state--warn" role="status">
             {t('cron.noAgents', 'Create an agent before adding cron jobs.')}
           </p>
@@ -551,18 +694,23 @@
           <p class="cron-list-state" role="status">
             {t('cron.loading', 'Loading cron jobs…')}
           </p>
+        {:else if viewState.jobsError}
+          <div class="cron-load-error">
+            <Banner variant="error" role="alert">
+              {viewState.jobsError}
+            </Banner>
+            <Button variant="secondary" onClick={() => loadJobs()}>
+              {t('common.retry', 'Retry')}
+            </Button>
+          </div>
         {:else if jobs.length === 0}
-          <EmptyState
-            title={t('cron.emptyTitle', 'No scheduled jobs')}
-            description={t(
-              'cron.emptySubtitle',
-              'Create a job to run an agent prompt on a schedule.',
-            )}
-          />
+          <p class="cron-list-state" role="status">
+            {t('cron.emptyTitle', 'No scheduled jobs')}
+          </p>
         {:else}
           <ul
             class="cron-list"
-            aria-label={t('cron.list.ariaLabel', 'Cron jobs')}
+            aria-label={t('cron.list.ariaLabel', 'Scheduled Runs')}
           >
             {#each jobs as job (job.id)}
               <li>
@@ -579,7 +727,7 @@
                       <span class="cron-item-name">
                         {agentLabel(job.agent_id)}
                       </span>
-                      <StatusChip variant={statusChipVariant(job.status)}>
+                      <StatusChip variant={statusChipVariant(job)}>
                         {statusLabel(job.status)}
                       </StatusChip>
                     </span>
@@ -589,6 +737,7 @@
                     >
                       {displayValue(job.schedule_description)}
                     </span>
+                    <span class="cron-item-prompt">{job.prompt}</span>
                   </span>
                 </button>
               </li>
@@ -607,7 +756,7 @@
             ? t('cron.noAgents', 'Create an agent before adding cron jobs.')
             : t(
                 'cron.emptySubtitle',
-                'Create a job to run an agent prompt on a schedule.',
+                'Create a recurring or one-time Run. Every fire gets a fresh Session unless you choose an existing one.',
               )}
         />
       </div>
@@ -625,20 +774,25 @@
 
               <div class="detail-btns">
                 {#if !isCreating && selectedJob}
-                  <Toggle
-                    checked={selectedJob.status === CRON_STATUS_ACTIVE}
-                    ariaLabel={selectedJob.status === CRON_STATUS_ACTIVE
-                      ? t('cron.actions.disableJob', 'Disable job {id}', {
-                          id: selectedJob.id,
-                        })
-                      : t('cron.actions.enableJob', 'Enable job {id}', {
-                          id: selectedJob.id,
-                        })}
-                    disabled={submittingForm ||
-                      mutatingJobId === selectedJob.id}
-                    data-testid={`cron-toggle-${selectedJob.id}`}
-                    onChange={() => toggleJob(selectedJob)}
-                  />
+                  {#if !isTerminalJob(selectedJob)}
+                    <label class="cron-enabled-control">
+                      <span>{t('cron.actions.enabled', 'Enabled')}</span>
+                      <Toggle
+                        checked={selectedJob.status === CRON_STATUS_ACTIVE}
+                        ariaLabel={selectedJob.status === CRON_STATUS_ACTIVE
+                          ? t('cron.actions.disableJob', 'Disable job {id}', {
+                              id: selectedJob.id,
+                            })
+                          : t('cron.actions.enableJob', 'Enable job {id}', {
+                              id: selectedJob.id,
+                            })}
+                        disabled={submittingForm ||
+                          mutatingJobId === selectedJob.id}
+                        data-testid={`cron-toggle-${selectedJob.id}`}
+                        onChange={() => toggleJob(selectedJob)}
+                      />
+                    </label>
+                  {/if}
                   <Button
                     variant="danger"
                     ariaLabel={t('cron.actions.deleteJob', 'Delete job {id}', {
@@ -661,9 +815,17 @@
                   <span class="cron-info-label">
                     {t('cron.detail.status', 'Status')}
                   </span>
-                  <StatusChip variant={statusChipVariant(selectedJob.status)}>
+                  <StatusChip variant={statusChipVariant(selectedJob)}>
                     {statusLabel(selectedJob.status)}
                   </StatusChip>
+                </div>
+                <div class="cron-info-row">
+                  <span class="cron-info-label">
+                    {t('cron.detail.lastAttempt', 'Last attempt')}
+                  </span>
+                  <span class="cron-info-value">
+                    {displayValue(selectedJob.last_attempt_at_display)}
+                  </span>
                 </div>
                 <div class="cron-info-row">
                   <span class="cron-info-label">
@@ -675,13 +837,57 @@
                 </div>
                 <div class="cron-info-row">
                   <span class="cron-info-label">
+                    {t('cron.detail.lastCompleted', 'Last completed')}
+                  </span>
+                  <span class="cron-info-value">
+                    {displayValue(selectedJob.last_completed_at_display)}
+                  </span>
+                </div>
+                <div class="cron-info-row">
+                  <span class="cron-info-label">
                     {t('cron.detail.nextFire', 'Next fire')}
                   </span>
                   <span class="cron-info-value">
                     {displayValue(selectedJob.next_fire_at_display)}
                   </span>
                 </div>
+                <div class="cron-info-row">
+                  <span class="cron-info-label">
+                    {t('cron.detail.lastOutcome', 'Last outcome')}
+                  </span>
+                  <span class="cron-info-value">
+                    {outcomeLabel(selectedJob.last_outcome)}
+                    {#if selectedJob.consecutive_failures > 0}
+                      · {selectedJob.consecutive_failures}
+                      {t(
+                        'cron.detail.consecutiveFailures',
+                        'consecutive failures',
+                      )}
+                    {/if}
+                  </span>
+                </div>
+                <div class="cron-info-row">
+                  <span class="cron-info-label">
+                    {t('cron.detail.lastRun', 'Last Run')}
+                  </span>
+                  <span class="cron-info-value cron-info-value--mono">
+                    {displayValue(selectedJob.last_run_id)}
+                  </span>
+                </div>
+                <div class="cron-info-row">
+                  <span class="cron-info-label">
+                    {t('cron.detail.timezone', 'Schedule timezone')}
+                  </span>
+                  <span class="cron-info-value">
+                    {selectedJob.effective_timezone}
+                  </span>
+                </div>
               </div>
+              {#if selectedJob.last_error}
+                <Banner variant="error" role="status">
+                  {selectedJob.last_error}
+                </Banner>
+              {/if}
             {/if}
 
             <div class="cron-fields">
@@ -817,15 +1023,20 @@
                     )}
                   />
                 </span>
-                <TextField
+                <SearchableDropdown
                   id="cron-job-timezone"
                   value={formValues.timezone}
-                  placeholder={t(
-                    'cron.form.timezonePlaceholder',
-                    'System default',
+                  options={timezoneOptions}
+                  placeholder={viewState.systemTimezone}
+                  searchPlaceholder={t(
+                    'cron.form.timezoneSearch',
+                    'Filter timezones…',
                   )}
+                  ariaLabel={t('cron.form.timezone', 'Timezone')}
                   disabled={submittingForm}
-                  onInput={(next) => updateFormField('timezone', next)}
+                  triggerClass="cron-dropdown"
+                  panelClass="cron-dropdown-list"
+                  onValueChange={(next) => updateFormField('timezone', next)}
                 />
               </label>
 
@@ -865,7 +1076,11 @@
                   {t('common.cancel', 'Cancel')}
                 </Button>
               {/if}
-              <Button variant="primary" type="submit" disabled={submittingForm}>
+              <Button
+                variant="primary"
+                type="submit"
+                disabled={submittingForm || (!isCreating && !isDirty)}
+              >
                 {submittingForm
                   ? t('common.saving', 'Saving…')
                   : t('common.save', 'Save')}
@@ -879,7 +1094,7 @@
 
   {#if deleteConfirmJob}
     <ConfirmDialog
-      title={t('cron.deleteConfirmTitle', 'Delete cron job')}
+      title={t('cron.deleteConfirmTitle', 'Delete Scheduled Run')}
       body={t(
         'cron.deleteConfirm',
         'Delete this job permanently? It will no longer run.',
@@ -887,6 +1102,19 @@
       confirmLabel={t('common.delete', 'Delete')}
       onConfirm={confirmDeleteJob}
       onCancel={cancelDeleteJob}
+    />
+  {/if}
+
+  {#if showDiscardConfirm}
+    <ConfirmDialog
+      title={t('cron.discardConfirmTitle', 'Discard unsaved changes?')}
+      body={t(
+        'cron.discardConfirm',
+        'Your edits have not been saved. Discard them and continue?',
+      )}
+      confirmLabel={t('common.discard', 'Discard')}
+      onConfirm={confirmDiscard}
+      onCancel={cancelDiscard}
     />
   {/if}
 </section>

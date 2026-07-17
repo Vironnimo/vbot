@@ -754,6 +754,26 @@ async def test_agent_delete_ignores_project_qualified_cron_reference(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_agent_delete_ignores_terminal_cron_history(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.create("writer", "Writer")
+    state.runtime.cron_service = SimpleNamespace(
+        list_jobs=lambda: [
+            SimpleNamespace(
+                id="job-coder",
+                agent_id="coder",
+                project_id=None,
+                status="completed",
+            )
+        ]
+    )
+
+    response = await dispatch_rpc(state, {"method": "agent.delete", "params": {"id": "coder"}})
+
+    assert response["ok"] is True
+
+
+@pytest.mark.asyncio
 async def test_agent_delete_serializes_minimum_one_check_and_delete(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
     state.runtime.agents.create("writer", "Writer")

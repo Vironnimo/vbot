@@ -5,14 +5,16 @@ Schedule recurring or one-time agent prompts.
 ```bash
 vbot cron list
 vbot cron create <agent> --prompt <text> (--cron "<expression>" | --at <iso-datetime>) [--timezone <iana-timezone>] [--session <session-id>]
-vbot cron update <job-id> [--agent <agent>] [--prompt <text>] [--cron "<expression>" | --at <iso-datetime>] [--timezone <iana-timezone>] [--session <session-id>] [--status active|paused|completed]
+vbot cron update <job-id> [--agent <agent>] [--prompt <text>] [--cron "<expression>" | --at <iso-datetime>] [--timezone <iana-timezone>] [--session <session-id>] [--status active|paused]
 vbot cron delete|enable|disable <job-id>
 ```
 
-- `create` requires exactly one of `--cron` (recurring cron expression) or `--at` (one-time ISO 8601 datetime); the schedule type is derived from the flag.
+- `create` requires exactly one of `--cron` (exactly five fields: minute, hour, day of month, month, weekday; minimum cadence one minute) or `--at` (one-time ISO 8601 datetime); the schedule type is derived from the flag.
 - `<agent>` (and `update --agent`) takes a bare identity agent or `agent@projekt`; a project-targeted job runs in that project.
-- `cron list` shows id, target (same address form), status, schedule, next fire time, and a prompt preview — read job ids from there.
-- `--session` pins the job to a fixed session instead of a job-managed one.
+- `cron list` includes active, paused, failed, completed, and missed history, and shows id, target (same address form), status, schedule, next fire time, last outcome, and a prompt preview — read job ids from there.
+- `--session` pins the job to an existing Session owned by the target. Without it, every fire creates a fresh Session.
+- A timestamp passed to `--at` without an offset is interpreted in `--timezone`; when no timezone is provided, the server's current IANA system timezone is used. A missed one-time job does not catch up after a restart and is recorded as `missed`.
+- A recurring job waits for its Run to finish before scheduling its next occurrence, so fires never overlap for the same job. Repeated Run failures are recorded and eventually stop the job as `failed`.
 - A cron job targeting a project agent blocks `project rm` for that project (`project_in_use`) — retarget or delete the job first.
 
 ```bash

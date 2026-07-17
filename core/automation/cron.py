@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, tzinfo
 from pathlib import Path
@@ -13,6 +14,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import croniter  # type: ignore[import-untyped]
+from tzlocal import get_localzone, get_localzone_name
 
 from core.config_validation import (
     JsonConfigValidationError,
@@ -25,23 +27,35 @@ from core.config_validation import (
     validate_allowed_string,
     validate_json_file,
     validate_non_empty_string,
+    validate_optional_allowed_string,
     validate_optional_string,
     warn_unknown_keys,
 )
-from core.settings import is_valid_agent_id
+from core.settings import is_valid_agent_id, is_valid_project_id
 from core.utils.atomic import atomic_write_text
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.automation.automation import TriggerService
+    from core.projects import AgentResolver
+    from core.sessions import ChatSessionManager
 
 ScheduleType = Literal["cron", "once"]
-CronJobStatus = Literal["active", "paused", "completed", "failed"]
+CronJobStatus = Literal["active", "paused", "completed", "failed", "missed"]
+CronRunOutcome = Literal["success", "failed", "cancelled", "missed", "unknown"]
 
 _ALLOWED_SCHEDULE_TYPES = frozenset(("cron", "once"))
-_ALLOWED_STATUSES = frozenset(("active", "paused", "completed", "failed"))
+_ALLOWED_STATUSES = frozenset(("active", "paused", "completed", "failed", "missed"))
+_ALLOWED_RUN_OUTCOMES = frozenset(("success", "failed", "cancelled", "missed", "unknown"))
 _RESTART_FIELDS = frozenset(("schedule_type", "cron_expression", "run_at", "timezone", "status"))
+CRON_EXPRESSION_FIELD_COUNT = 5
+MAX_ACTIVE_CRON_JOBS = 64
+MAX_STORED_CRON_JOBS = 512
+MAX_CONCURRENT_CRON_RUNS = 4
+MAX_CONSECUTIVE_CRON_FAILURES = 5
+TERMINAL_CRON_JOB_STATUSES = frozenset(("completed", "missed"))
+_LAST_ERROR_MAX_CHARS = 500
 _ONCE_RETRY_DELAY_SECONDS = 60.0
 # Exponential backoff for repeatedly failing once-job fires: the Nth retry waits
 # base * factor**(N-1), capped, and the job is abandoned after the attempt limit
@@ -69,7 +83,17 @@ _MUTABLE_FIELDS = frozenset(
         "project_id",
     )
 )
-_CRON_JOB_FIELDS = _MUTABLE_FIELDS | {"created_at", "id", "last_fired_at"}
+_CRON_JOB_FIELDS = _MUTABLE_FIELDS | {
+    "consecutive_failures",
+    "created_at",
+    "id",
+    "last_attempt_at",
+    "last_completed_at",
+    "last_error",
+    "last_fired_at",
+    "last_outcome",
+    "last_run_id",
+}
 
 _LOGGER = get_logger("automation.cron")
 
@@ -147,11 +171,32 @@ def validate_cron_jobs_data(data: Any) -> list[JsonDiagnostic]:
             "session_id",
             "project_id",
             "last_fired_at",
+            "last_attempt_at",
+            "last_completed_at",
+            "last_error",
+            "last_run_id",
         ):
             validate_optional_string(
                 diagnostics,
                 f"{item_path}.{field_name}",
                 item.get(field_name),
+            )
+        validate_optional_allowed_string(
+            diagnostics,
+            f"{item_path}.last_outcome",
+            item.get("last_outcome"),
+            _ALLOWED_RUN_OUTCOMES,
+        )
+        consecutive_failures = item.get("consecutive_failures")
+        if consecutive_failures is not None and (
+            isinstance(consecutive_failures, bool)
+            or not isinstance(consecutive_failures, int)
+            or consecutive_failures < 0
+        ):
+            add_error(
+                diagnostics,
+                f"{item_path}.consecutive_failures",
+                "must be a non-negative integer",
             )
         validate_non_empty_string(
             diagnostics, f"{item_path}.created_at", item.get("created_at"), required=True
@@ -193,6 +238,12 @@ class CronJob:
     last_fired_at: str | None
     created_at: str
     project_id: str | None = None
+    last_attempt_at: str | None = None
+    last_completed_at: str | None = None
+    last_run_id: str | None = None
+    last_outcome: CronRunOutcome | None = None
+    last_error: str | None = None
+    consecutive_failures: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize one CronJob to a JSON-compatible payload."""
@@ -209,6 +260,12 @@ class CronJob:
             "last_fired_at": self.last_fired_at,
             "created_at": self.created_at,
             "project_id": self.project_id,
+            "last_attempt_at": self.last_attempt_at,
+            "last_completed_at": self.last_completed_at,
+            "last_run_id": self.last_run_id,
+            "last_outcome": self.last_outcome,
+            "last_error": self.last_error,
+            "consecutive_failures": self.consecutive_failures,
         }
 
     @classmethod
@@ -227,14 +284,29 @@ class CronJob:
             last_fired_at=payload.get("last_fired_at"),
             created_at=str(payload["created_at"]),
             project_id=payload.get("project_id"),
+            last_attempt_at=payload.get("last_attempt_at"),
+            last_completed_at=payload.get("last_completed_at"),
+            last_run_id=payload.get("last_run_id"),
+            last_outcome=payload.get("last_outcome"),
+            last_error=payload.get("last_error"),
+            consecutive_failures=int(payload.get("consecutive_failures", 0)),
         )
 
 
 class CronService:
     """Manage cron jobs, persistence, and per-job scheduling tasks."""
 
-    def __init__(self, trigger_service: TriggerService, data_root: str | Path) -> None:
+    def __init__(
+        self,
+        trigger_service: TriggerService,
+        data_root: str | Path,
+        *,
+        agent_resolver: AgentResolver | None = None,
+        sessions: ChatSessionManager | None = None,
+    ) -> None:
         self._trigger_service = trigger_service
+        self._agent_resolver = agent_resolver
+        self._sessions = sessions
         self._data_root = Path(data_root).expanduser()
         self._cron_dir = self._data_root / "cron"
         self._jobs_path = self._cron_dir / "jobs.json"
@@ -242,7 +314,18 @@ class CronService:
         self._jobs: dict[str, CronJob] = {}
         self._jobs_loaded = False
         self._job_tasks: dict[str, asyncio.Task[None]] = {}
+        self._run_slots = asyncio.Semaphore(MAX_CONCURRENT_CRON_RUNS)
+        self._changed_callbacks: set[Callable[[], None]] = set()
         self._started = False
+
+    def add_changed_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
+        """Subscribe to persisted Cron changes and return an unsubscribe function."""
+        self._changed_callbacks.add(callback)
+
+        def unsubscribe() -> None:
+            self._changed_callbacks.discard(callback)
+
+        return unsubscribe
 
     def create_job(
         self,
@@ -263,6 +346,10 @@ class CronService:
         scopes the fired Session/Run to that project's anchor.
         """
         self._ensure_jobs_loaded()
+        if len(self._jobs) >= MAX_STORED_CRON_JOBS:
+            raise CronJobValidationError(
+                f"Cron stores at most {MAX_STORED_CRON_JOBS} jobs; delete history first"
+            )
         job = CronJob(
             id=str(uuid4()),
             agent_id=agent_id,
@@ -278,8 +365,14 @@ class CronService:
             project_id=project_id,
         )
         self._validate_job(job)
+        self._validate_capacity(job)
         self._jobs[job.id] = job
-        self._save_jobs()
+        try:
+            self._save_jobs()
+        except Exception:
+            self._jobs.pop(job.id, None)
+            raise
+        self._notify_changed()
 
         if self._started and job.status == "active":
             self._start_job_task(job)
@@ -298,6 +391,40 @@ class CronService:
         if job_id not in self._jobs:
             raise CronJobNotFoundError(f"Cron job not found: {job_id}")
         return self._clone_job(self._jobs[job_id])
+
+    def system_timezone_name(self) -> str:
+        """Return the server's canonical IANA timezone name."""
+        try:
+            return get_localzone_name()
+        except Exception as error:
+            _LOGGER.warning("Could not resolve system timezone name: %s", error)
+            return "UTC"
+
+    def effective_timezone_name(self, job: CronJob) -> str:
+        """Return the IANA timezone that defines one job's wall-clock schedule."""
+        return job.timezone or self.system_timezone_name()
+
+    def next_fire_at(self, job: CronJob, *, reference_time: datetime | None = None) -> str | None:
+        """Project the next UTC fire instant from the canonical schedule rules."""
+        if job.status != "active":
+            return None
+        if job.schedule_type == "once":
+            return self._parse_run_at_utc(job).isoformat()
+        if job.cron_expression is None:
+            return None
+
+        timezone = self._resolve_timezone(job.timezone)
+        reference_utc = reference_time or _utc_now()
+        if reference_utc.tzinfo is None:
+            reference_utc = reference_utc.replace(tzinfo=UTC)
+        reference_local = reference_utc.astimezone(timezone)
+        next_fire_local = cast(
+            datetime,
+            croniter(job.cron_expression, reference_local).get_next(datetime),
+        )
+        if next_fire_local.tzinfo is None:
+            next_fire_local = next_fire_local.replace(tzinfo=timezone)
+        return next_fire_local.astimezone(UTC).isoformat()
 
     def update_job(self, job_id: str, **fields: Any) -> CronJob:
         """Update mutable cron job fields and persist changes."""
@@ -319,10 +446,22 @@ class CronService:
 
         for field_name, field_value in fields.items():
             setattr(candidate, field_name, field_value)
+        if job.status in TERMINAL_CRON_JOB_STATUSES and candidate.status != job.status:
+            raise CronJobValidationError(
+                "Completed or missed jobs are immutable history and cannot change status"
+            )
+        if fields.get("status") == "active" and job.status == "failed":
+            candidate.consecutive_failures = 0
 
         self._validate_job(candidate)
+        self._validate_capacity(candidate, replacing_id=job_id)
         self._jobs[job_id] = candidate
-        self._save_jobs()
+        try:
+            self._save_jobs()
+        except Exception:
+            self._jobs[job_id] = job
+            raise
+        self._notify_changed()
 
         if self._started and restart_task:
             self._restart_job_task(candidate)
@@ -335,8 +474,13 @@ class CronService:
         if job_id not in self._jobs:
             raise CronJobNotFoundError(f"Cron job not found: {job_id}")
 
-        self._jobs.pop(job_id)
-        self._save_jobs()
+        removed = self._jobs.pop(job_id)
+        try:
+            self._save_jobs()
+        except Exception:
+            self._jobs[job_id] = removed
+            raise
+        self._notify_changed()
         self._remove_once_fire_claim(job_id)
         self._cancel_job_task(job_id)
 
@@ -346,8 +490,8 @@ class CronService:
         existing = self._jobs.get(job_id)
         if existing is None:
             raise CronJobNotFoundError(f"Cron job not found: {job_id}")
-        if existing.status == "completed":
-            raise CronJobValidationError("Completed jobs cannot be re-enabled")
+        if existing.status in {"completed", "missed"}:
+            raise CronJobValidationError("Completed or missed jobs cannot be re-enabled")
         return self.update_job(job_id, status="active")
 
     def disable_job(self, job_id: str) -> CronJob:
@@ -356,8 +500,8 @@ class CronService:
         existing = self._jobs.get(job_id)
         if existing is None:
             raise CronJobNotFoundError(f"Cron job not found: {job_id}")
-        if existing.status == "completed":
-            raise CronJobValidationError("Completed jobs cannot be paused")
+        if existing.status in {"completed", "missed"}:
+            raise CronJobValidationError("Completed or missed jobs cannot be paused")
         return self.update_job(job_id, status="paused")
 
     def start(self) -> None:
@@ -385,22 +529,27 @@ class CronService:
                     )
                     job.status = "completed"
                     job.last_fired_at = claimed_at
+                    job.last_outcome = "unknown"
+                    job.last_error = "vBot restarted after this once job was claimed"
                     needs_save = True
                     once_claims_to_remove.append(job.id)
                     continue
             if job.schedule_type == "once" and self._is_missed_once_job(job, reference_time):
                 _LOGGER.warning(
-                    "Marking missed once job as completed (id=%s run_at=%s)",
+                    "Marking missed once job as missed (id=%s run_at=%s)",
                     job.id,
                     job.run_at,
                 )
-                job.status = "completed"
+                job.status = "missed"
+                job.last_outcome = "missed"
+                job.last_error = "Scheduled time passed while vBot was offline"
                 needs_save = True
                 continue
             self._start_job_task(job)
 
         if needs_save:
             self._save_jobs()
+            self._notify_changed()
             for job_id in once_claims_to_remove:
                 self._remove_once_fire_claim(job_id)
 
@@ -429,7 +578,7 @@ class CronService:
         jobs: dict[str, CronJob] = {}
         for item in raw_payload:
             job = CronJob.from_dict(item)
-            self._validate_job(job)
+            self._validate_job(job, validate_references=False)
             jobs[job.id] = job
         return jobs
 
@@ -444,6 +593,17 @@ class CronService:
             atomic_write_text(self._jobs_path, serialized)
         except OSError as error:
             raise CronStorageError(f"Cannot write {self._jobs_path}: {error}") from error
+
+    def _notify_changed(self) -> None:
+        for callback in tuple(self._changed_callbacks):
+            try:
+                callback()
+            except Exception as error:
+                _LOGGER.error(
+                    "Cron change callback failed: %s",
+                    error,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
 
     def _start_job_task(self, job: CronJob) -> None:
         """Create and track one asyncio task for an active cron job."""
@@ -483,28 +643,18 @@ class CronService:
                     f"Cron job {current.id} is missing cron_expression while active"
                 )
 
-            timezone = self._resolve_timezone(current.timezone)
-            now_local = datetime.now(timezone)
-            next_fire_local = croniter(current.cron_expression, now_local).get_next(datetime)
-            if next_fire_local.tzinfo is None:
-                next_fire_local = next_fire_local.replace(tzinfo=timezone)
-
-            await _sleep_until_utc(next_fire_local.astimezone(UTC))
+            next_fire_at = self.next_fire_at(current)
+            if next_fire_at is None:
+                return
+            await _sleep_until_utc(
+                _parse_iso_datetime(next_fire_at, field_name="next_fire_at", allow_naive=False)
+            )
 
             latest = self._jobs.get(job.id)
             if latest is None or latest.status != "active" or latest.schedule_type != "cron":
                 return
 
-            if not await self._trigger_job_run(latest):
-                continue
-
-            latest = self._jobs.get(job.id)
-            if latest is None:
-                return
-
-            latest.last_fired_at = _utc_now_iso()
-            self._jobs[latest.id] = latest
-            self._save_jobs_after_fire(latest.id)
+            await self._trigger_job_run(latest)
 
     async def _run_once_job(self, job: CronJob) -> None:
         """Sleep until run_at, fire once, then mark completed.
@@ -555,7 +705,6 @@ class CronService:
                 return
 
             latest.status = "completed"
-            latest.last_fired_at = _utc_now_iso()
             self._jobs[latest.id] = latest
             while not self._save_jobs_after_fire(latest.id):
                 await asyncio.sleep(_ONCE_RETRY_DELAY_SECONDS)
@@ -598,32 +747,79 @@ class CronService:
         self._remove_once_fire_claim(job_id)
 
     async def _trigger_job_run(self, job: CronJob) -> bool:
-        _LOGGER.info(
-            "Cron job fired (job=%s agent=%s session=%s%s)",
-            job.id,
-            job.agent_id,
-            job.session_id,
-            f" project={job.project_id}" if job.project_id else "",
-        )
-        try:
-            await self._trigger_service.trigger_run(
-                job.agent_id,
-                job.prompt,
-                job.session_id,
-                project_id=job.project_id,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:
-            _LOGGER.error(
-                "Cron job trigger failed for job=%s: %s",
-                job.id,
-                error,
-                exc_info=(type(error), error, error.__traceback__),
-            )
-            return False
+        async with self._run_slots:
+            latest = self._jobs.get(job.id)
+            if latest is None or latest.status != "active":
+                return False
 
-        return True
+            latest.last_attempt_at = _utc_now_iso()
+            latest.last_error = None
+            self._jobs[latest.id] = latest
+            self._save_jobs_after_fire(latest.id)
+            _LOGGER.info(
+                "Cron job fired (job=%s agent=%s session=%s%s)",
+                latest.id,
+                latest.agent_id,
+                latest.session_id,
+                f" project={latest.project_id}" if latest.project_id else "",
+            )
+            try:
+                run = await self._trigger_service.trigger_run(
+                    latest.agent_id,
+                    latest.prompt,
+                    latest.session_id,
+                    project_id=latest.project_id,
+                )
+                latest = self._jobs.get(job.id)
+                if latest is None:
+                    return False
+                latest.last_fired_at = _utc_now_iso()
+                run_id = getattr(run, "id", None)
+                latest.last_run_id = run_id if isinstance(run_id, str) else None
+                self._jobs[latest.id] = latest
+                self._save_jobs_after_fire(latest.id)
+
+                wait_for_run = getattr(run, "wait", None)
+                if callable(wait_for_run):
+                    await wait_for_run()
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                self._record_run_failure(job.id, error)
+                _LOGGER.error(
+                    "Cron job Run failed for job=%s: %s",
+                    job.id,
+                    error,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+                return False
+
+            latest = self._jobs.get(job.id)
+            if latest is None:
+                return False
+            latest.last_completed_at = _utc_now_iso()
+            latest.last_outcome = "success"
+            latest.last_error = None
+            latest.consecutive_failures = 0
+            self._jobs[latest.id] = latest
+            self._save_jobs_after_fire(latest.id)
+            return True
+
+    def _record_run_failure(self, job_id: str, error: BaseException) -> None:
+        job = self._jobs.get(job_id)
+        if job is None:
+            return
+        job.last_completed_at = _utc_now_iso()
+        job.last_outcome = "cancelled" if type(error).__name__ == "RunCancelledError" else "failed"
+        job.last_error = _truncate_error(str(error) or type(error).__name__)
+        job.consecutive_failures += 1
+        if (
+            job.schedule_type == "cron"
+            and job.consecutive_failures >= MAX_CONSECUTIVE_CRON_FAILURES
+        ):
+            job.status = "failed"
+        self._jobs[job_id] = job
+        self._save_jobs_after_fire(job_id)
 
     def _save_jobs_after_fire(self, job_id: str) -> bool:
         try:
@@ -637,6 +833,7 @@ class CronService:
             )
             return False
 
+        self._notify_changed()
         return True
 
     def _ensure_jobs_loaded(self) -> None:
@@ -678,13 +875,17 @@ class CronService:
             error,
             exc_info=(type(error), error, error.__traceback__),
         )
+        self._record_run_failure(job_id, error)
 
-    def _validate_job(self, job: CronJob) -> None:
+    def _validate_job(self, job: CronJob, *, validate_references: bool = True) -> None:
         if not isinstance(job.id, str) or not job.id:
             raise CronJobValidationError("id must be a non-empty string")
 
-        if not isinstance(job.agent_id, str) or not job.agent_id.strip():
-            raise CronJobValidationError("agent_id must be a non-empty string")
+        if not isinstance(job.agent_id, str) or not is_valid_agent_id(job.agent_id.strip()):
+            raise CronJobValidationError(
+                "agent_id must be 1-64 characters using only letters, numbers, "
+                "hyphen, or underscore"
+            )
         job.agent_id = job.agent_id.strip()
 
         if not isinstance(job.prompt, str) or not job.prompt.strip():
@@ -695,15 +896,25 @@ class CronService:
             raise CronJobValidationError("schedule_type must be 'cron' or 'once'")
 
         if job.status not in _ALLOWED_STATUSES:
-            raise CronJobValidationError("status must be active, paused, completed, or failed")
+            raise CronJobValidationError(
+                "status must be active, paused, completed, failed, or missed"
+            )
 
         if job.session_id is not None and not isinstance(job.session_id, str):
             raise CronJobValidationError("session_id must be a string when provided")
+        if job.session_id is not None:
+            normalized_session_id = job.session_id.strip()
+            job.session_id = normalized_session_id or None
 
         if job.project_id is not None:
             if not isinstance(job.project_id, str):
                 raise CronJobValidationError("project_id must be a string when provided")
             normalized_project_id = job.project_id.strip()
+            if normalized_project_id and not is_valid_project_id(normalized_project_id):
+                raise CronJobValidationError(
+                    "project_id must be 1-64 characters using only letters, numbers, "
+                    "hyphen, or underscore"
+                )
             job.project_id = normalized_project_id or None
 
         if job.timezone is not None and not isinstance(job.timezone, str):
@@ -720,11 +931,39 @@ class CronService:
         self._parse_utc_timestamp(job.created_at, field_name="created_at")
         if job.last_fired_at is not None:
             self._parse_utc_timestamp(job.last_fired_at, field_name="last_fired_at")
+        for field_name in ("last_attempt_at", "last_completed_at"):
+            value = getattr(job, field_name)
+            if value is not None:
+                self._parse_utc_timestamp(value, field_name=field_name)
+        if job.last_outcome is not None and job.last_outcome not in _ALLOWED_RUN_OUTCOMES:
+            raise CronJobValidationError(
+                "last_outcome must be success, failed, cancelled, missed, unknown, or null"
+            )
+        if (
+            isinstance(job.consecutive_failures, bool)
+            or not isinstance(job.consecutive_failures, int)
+            or job.consecutive_failures < 0
+        ):
+            raise CronJobValidationError("consecutive_failures must be a non-negative integer")
+        if job.last_error is not None:
+            if not isinstance(job.last_error, str):
+                raise CronJobValidationError("last_error must be a string when provided")
+            job.last_error = _truncate_error(job.last_error)
+        if job.last_run_id is not None and not isinstance(job.last_run_id, str):
+            raise CronJobValidationError("last_run_id must be a string when provided")
+
+        if validate_references:
+            self._validate_references(job)
 
         if job.schedule_type == "cron":
             if not isinstance(job.cron_expression, str) or not job.cron_expression.strip():
                 raise CronJobValidationError("cron_expression is required for cron jobs")
             normalized_expression = job.cron_expression.strip()
+            if len(normalized_expression.split()) != CRON_EXPRESSION_FIELD_COUNT:
+                raise CronJobValidationError(
+                    f"cron_expression must contain exactly {CRON_EXPRESSION_FIELD_COUNT} fields "
+                    "(minute hour day-of-month month day-of-week)"
+                )
             if not croniter.is_valid(normalized_expression):
                 raise CronJobValidationError("cron_expression is invalid")
             job.cron_expression = normalized_expression
@@ -734,8 +973,37 @@ class CronService:
         if not isinstance(job.run_at, str) or not job.run_at.strip():
             raise CronJobValidationError("run_at is required for once jobs")
         job.run_at = job.run_at.strip()
-        self._parse_run_at_utc(job)
+        job.run_at = self._parse_run_at_utc(job).isoformat()
         job.cron_expression = None
+
+    def _validate_references(self, job: CronJob) -> None:
+        if self._agent_resolver is not None:
+            try:
+                self._agent_resolver.resolve_agent(job.project_id, job.agent_id)
+            except Exception as error:
+                target = f"{job.agent_id}@{job.project_id}" if job.project_id else job.agent_id
+                raise CronJobValidationError(f"Cron target does not exist: {target}") from error
+        if (
+            job.session_id is not None
+            and self._sessions is not None
+            and not self._sessions.exists(job.agent_id, job.session_id, job.project_id)
+        ):
+            raise CronJobValidationError(
+                f"Session does not exist for cron target {job.agent_id}: {job.session_id}"
+            )
+
+    def _validate_capacity(self, candidate: CronJob, *, replacing_id: str | None = None) -> None:
+        if candidate.status != "active":
+            return
+        active_jobs = sum(
+            1
+            for job_id, job in self._jobs.items()
+            if job_id != replacing_id and job.status == "active"
+        )
+        if active_jobs >= MAX_ACTIVE_CRON_JOBS:
+            raise CronJobValidationError(
+                f"At most {MAX_ACTIVE_CRON_JOBS} cron jobs may be active at once"
+            )
 
     def _parse_run_at_utc(self, job: CronJob) -> datetime:
         if job.run_at is None:
@@ -762,10 +1030,11 @@ class CronService:
             except ZoneInfoNotFoundError as error:
                 raise CronJobValidationError(f"Unknown timezone: {timezone_name}") from error
 
-        local_timezone = datetime.now().astimezone().tzinfo
-        if local_timezone is not None:
-            return local_timezone
-        return UTC
+        try:
+            return get_localzone()
+        except Exception as error:
+            _LOGGER.warning("Could not resolve system timezone: %s", error)
+            return UTC
 
     def _is_missed_once_job(self, job: CronJob, reference_time_utc: datetime) -> bool:
         if job.schedule_type != "once":
@@ -832,6 +1101,13 @@ def _once_retry_delay(attempt: int) -> float:
     exponent = max(attempt - 1, 0)
     delay = _ONCE_RETRY_DELAY_SECONDS * (_ONCE_RETRY_BACKOFF_FACTOR**exponent)
     return min(delay, _ONCE_RETRY_MAX_DELAY_SECONDS)
+
+
+def _truncate_error(message: str) -> str:
+    normalized = " ".join(message.split())
+    if len(normalized) <= _LAST_ERROR_MAX_CHARS:
+        return normalized
+    return f"{normalized[: _LAST_ERROR_MAX_CHARS - 1]}…"
 
 
 def _utc_now() -> datetime:
