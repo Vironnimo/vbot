@@ -10,6 +10,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
+import idna
 
 from core.search_config import (
     DEFAULT_SEARXNG_BASE_URL,
@@ -41,6 +42,14 @@ _BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search"
 _REQUEST_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
 
 _HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
+_DOMAIN_LABEL_PATTERN = re.compile(r"(?!-)[a-z0-9-]{1,63}(?<!-)\Z")
+
+_MAX_DOMAIN_FILTERS = 10
+
+_SEARXNG_DOMAIN_WARNING = (
+    "domain-filter completeness depends on the configured SearXNG engines; "
+    "returned results are still restricted to applied_domains"
+)
 
 _BROWSER_HEADERS: dict[str, str] = {
     "User-Agent": (
@@ -81,15 +90,18 @@ _SEARXNG_TIME_RANGE_MAP: dict[str, str] = {
     "y": "year",
 }
 
-_ALLOWED_ARGUMENTS = frozenset({"query", "count", "page", "freshness", "date_after", "date_before"})
+_ALLOWED_ARGUMENTS = frozenset(
+    {"query", "domains", "count", "page", "freshness", "date_after", "date_before"}
+)
 
 WEB_SEARCH_TOOL_NAME = "web_search"
 WEB_SEARCH_TOOL_DESCRIPTION = (
     "Search the public web using the configured search provider and return "
     "structured results with title, url, description, and page age where "
     "available. Descriptions are short snippets - use web_fetch on a result "
-    "url to read the full page. Supports recency filtering (freshness or "
-    "date bounds) and pagination (page)."
+    "url to read the full page. Supports domain restriction (domains), "
+    "recency filtering (freshness or date bounds), and pagination (page). "
+    "Search operators in query are passed through to the configured provider."
 )
 WEB_SEARCH_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -97,6 +109,18 @@ WEB_SEARCH_TOOL_PARAMETERS: JsonObject = {
         "query": {
             "type": "string",
             "description": "Search query text.",
+        },
+        "domains": {
+            "type": "array",
+            "description": (
+                "Optional domains that every returned result must belong to. "
+                "Use hostnames without a scheme or path (for example, example.com). "
+                "A domain includes its subdomains; a specific subdomain narrows the scope."
+            ),
+            "items": {"type": "string"},
+            "minItems": 1,
+            "maxItems": _MAX_DOMAIN_FILTERS,
+            "uniqueItems": True,
         },
         "count": {
             "type": "integer",
@@ -146,6 +170,91 @@ def _normalize_text(raw: Any) -> str:
     if not isinstance(raw, str):
         return ""
     return raw.strip()
+
+
+def _canonicalize_domain(raw: str) -> tuple[str | None, str | None]:
+    text = raw.strip().rstrip(".").lower()
+    if not text:
+        return None, "must be a non-empty domain"
+
+    try:
+        domain = idna.encode(text, uts46=True, std3_rules=True).decode("ascii")
+    except idna.IDNAError:
+        return None, "must be a valid domain"
+
+    if len(domain) > 253:
+        return None, "must be at most 253 characters"
+
+    labels = domain.split(".")
+    if any(_DOMAIN_LABEL_PATTERN.fullmatch(label) is None for label in labels):
+        return None, "must be a hostname without a scheme, port, path, query, or wildcard"
+
+    return domain, None
+
+
+def _normalize_domains(raw: Any) -> tuple[list[str], str | None]:
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return [], None
+
+    raw_domains = [raw] if isinstance(raw, str) else raw
+    if not isinstance(raw_domains, list):
+        return [], "domains must be an array of domain strings"
+    if not raw_domains:
+        return [], "domains must contain at least one domain when provided"
+    if len(raw_domains) > _MAX_DOMAIN_FILTERS:
+        return [], f"domains must contain at most {_MAX_DOMAIN_FILTERS} domains"
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for index, raw_domain in enumerate(raw_domains):
+        if not isinstance(raw_domain, str):
+            return [], f"domains[{index}] must be a string"
+        domain, error = _canonicalize_domain(raw_domain)
+        if error is not None or domain is None:
+            return [], f"domains[{index}] {error or 'must be a valid domain'}"
+        if domain not in seen:
+            seen.add(domain)
+            normalized.append(domain)
+
+    return normalized, None
+
+
+def _build_search_query(query: str, domains: list[str]) -> str:
+    if not domains:
+        return query
+    domain_expression = " OR ".join(f"site:{domain}" for domain in domains)
+    return f"{query} {domain_expression}"
+
+
+def _url_matches_domains(url: str, domains: list[str]) -> bool:
+    try:
+        hostname = urlsplit(url).hostname
+    except ValueError:
+        return False
+    if hostname is None:
+        return False
+
+    canonical_hostname, error = _canonicalize_domain(hostname)
+    if error is not None or canonical_hostname is None:
+        return False
+    return any(
+        canonical_hostname == domain or canonical_hostname.endswith(f".{domain}")
+        for domain in domains
+    )
+
+
+def _restrict_results_to_domains(
+    results: list[dict[str, Any]],
+    domains: list[str],
+    count: int,
+) -> list[dict[str, Any]]:
+    if not domains:
+        return results[:count]
+    return [
+        result
+        for result in results
+        if _url_matches_domains(_normalize_text(result.get("url")), domains)
+    ][:count]
 
 
 def _clean_snippet(raw: Any) -> str:
@@ -301,7 +410,7 @@ def _standardize_results(raw_results: Any) -> list[dict[str, Any]]:
     return normalized
 
 
-def _standardize_searxng_results(raw_results: Any, count: int) -> list[dict[str, Any]]:
+def _standardize_searxng_results(raw_results: Any) -> list[dict[str, Any]]:
     if not isinstance(raw_results, list):
         return []
 
@@ -329,8 +438,6 @@ def _standardize_searxng_results(raw_results: Any, count: int) -> list[dict[str,
         if page_age:
             entry["page_age"] = page_age
         normalized.append(entry)
-        if len(normalized) >= count:
-            break
 
     return normalized
 
@@ -362,6 +469,7 @@ async def _search_brave(
     *,
     api_key: str,
     query: str,
+    domains: list[str],
     count: int,
     page: int,
     freshness: str,
@@ -372,8 +480,10 @@ async def _search_brave(
     if filter_error is not None:
         return None, HttpRequestFailure(filter_error)
 
+    search_query = _build_search_query(query, domains)
+
     # text_decorations off: Brave otherwise wraps snippets in highlight markup.
-    params: dict[str, Any] = {"q": query, "count": count, "text_decorations": "false"}
+    params: dict[str, Any] = {"q": search_query, "count": count, "text_decorations": "false"}
     if page > 1:
         # Brave paginates with a zero-based page offset in units of `count`.
         params["offset"] = page - 1
@@ -431,7 +541,11 @@ async def _search_brave(
                 if isinstance(web_payload, dict):
                     raw_results = web_payload.get("results")
 
-            results = _standardize_results(raw_results)
+            results = _restrict_results_to_domains(
+                _standardize_results(raw_results),
+                domains,
+                count,
+            )
             normalized_payload: dict[str, Any] = {
                 "provider": "brave",
                 "query": query,
@@ -441,6 +555,8 @@ async def _search_brave(
                 "results": results,
                 "content_trust": "untrusted_web_content",
             }
+            if domains:
+                normalized_payload["applied_domains"] = domains
             if filters:
                 normalized_payload["filters"] = filters
             if warnings:
@@ -470,6 +586,7 @@ async def _search_searxng(
     *,
     base_url: str,
     query: str,
+    domains: list[str],
     count: int,
     page: int,
     freshness: str,
@@ -486,8 +603,9 @@ async def _search_searxng(
     if filter_error is not None:
         return None, HttpRequestFailure(filter_error)
 
+    search_query = _build_search_query(query, domains)
     params: dict[str, Any] = {
-        "q": query,
+        "q": search_query,
         "format": "json",
         "pageno": page,
         "safesearch": 0,
@@ -540,7 +658,11 @@ async def _search_searxng(
                 return None, HttpRequestFailure("provider returned invalid JSON")
 
             raw_results = payload.get("results") if isinstance(payload, dict) else None
-            results = _standardize_searxng_results(raw_results, count)
+            results = _restrict_results_to_domains(
+                _standardize_searxng_results(raw_results),
+                domains,
+                count,
+            )
             normalized_payload: dict[str, Any] = {
                 "provider": WEB_SEARCH_PROVIDER_SEARXNG,
                 "query": query,
@@ -550,6 +672,9 @@ async def _search_searxng(
                 "results": results,
                 "content_trust": "untrusted_web_content",
             }
+            if domains:
+                normalized_payload["applied_domains"] = domains
+                warnings.append(_SEARXNG_DOMAIN_WARNING)
             if filters:
                 normalized_payload["filters"] = filters
             if warnings:
@@ -630,6 +755,10 @@ async def web_search_handler(
     if not query:
         return tool_failure("validation_error", "query must be a non-empty string", retryable=False)
 
+    domains, domains_error = _normalize_domains(arguments.get("domains"))
+    if domains_error is not None:
+        return tool_failure("validation_error", domains_error, retryable=False)
+
     settings, settings_error = _resolve_web_search_settings(settings_resolver)
     if settings_error is not None:
         return tool_failure("configuration_error", settings_error, retryable=False)
@@ -679,6 +808,7 @@ async def web_search_handler(
         payload, search_failure = await _search_searxng(
             base_url=settings["searxng"]["base_url"],
             query=query,
+            domains=domains,
             count=count,
             page=page,
             freshness=freshness,
@@ -698,6 +828,7 @@ async def web_search_handler(
     payload, search_failure = await _search_brave(
         api_key=api_key,
         query=query,
+        domains=domains,
         count=count,
         page=page,
         freshness=freshness,
