@@ -29,20 +29,22 @@ git commit -m "chore(release): bump version to X.Y.Z"
 git push origin main
 ```
 
-### 4. Create the release with auto-generated notes
+### 4. Dispatch the gated release workflow
 
-**Always `--generate-notes`. Never hand-write `--notes`.** The house style is the single auto-generated line GitHub produces:
-`**Full Changelog**: https://github.com/Vironnimo/vbot/compare/<prev>...vX.Y.Z` (the previous tag is selected automatically).
+Dispatch `.github/workflows/release.yml` from `main`. Pass the version without the leading `v`:
 
 ```bash
-gh release create vX.Y.Z --target main --title "vX.Y.Z" --generate-notes
+gh workflow run release.yml --ref main -f version=X.Y.Z
 ```
 
-Tag and title are both `vX.Y.Z` (leading `v`); the tag must equal the `pyproject.toml` version.
+The workflow calls the complete reusable CI workflow first, covering Backend, Frontend, Linux install/uninstall, and Windows install/uninstall. Only after all four jobs pass does it build the WebUI and create `vX.Y.Z` at the exact commit that was dispatched. The release is created with the mandatory `webui-dist.tar.gz` already attached, so GitHub never exposes an incomplete installable release.
+
+The workflow validates that `X.Y.Z` is SemVer, equals `pyproject.toml` → `version`, and does not already exist as a tag. It creates auto-generated notes; never replace them with hand-written notes. The house style is the single auto-generated line GitHub produces:
+`**Full Changelog**: https://github.com/Vironnimo/vbot/compare/<prev>...vX.Y.Z` (the previous tag is selected automatically).
 
 ### 5. Verify the workflow ran and the asset attached
 
-Publishing fires `.github/workflows/release.yml`, which builds the WebUI and attaches `webui-dist.tar.gz`. The bootstrap and `vbot update` fail without it, so confirm it landed (the run takes a few seconds to register after publishing):
+Wait for the dispatched workflow and confirm the release and asset landed. The bootstrap and `vbot update` fail without the asset:
 
 ```bash
 gh run list --workflow=release.yml --limit 3            # find the run for vX.Y.Z
@@ -67,4 +69,4 @@ gh api repos/Vironnimo/vbot/releases/generate-notes \
 - **Notes**: only the auto-generated Full Changelog line — no custom prose. A custom `--notes` replaces it and breaks the convention every prior release follows.
 - **Asset is mandatory**: a release without `webui-dist.tar.gz` cannot be installed by the bootstrap or reached by `vbot update`. Never skip step 5.
 - **Tag = version**: `vX.Y.Z` must equal the `pyproject.toml` version, with a leading `v`.
-- **Publish, not draft**: the workflow triggers on a *published* release. `gh release create` publishes by default — don't pass `--draft`.
+- **Publication is last**: never create the tag or GitHub Release manually. The workflow publishes both only after the full CI gate and WebUI packaging succeed.
