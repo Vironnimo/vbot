@@ -131,6 +131,15 @@ describe('CronView', () => {
     expect(
       document.querySelector('[data-testid="cron-item-job-missed"]'),
     ).toBeTruthy();
+    expect(
+      document.querySelector('.cron-list-scroll.secondary-list'),
+    ).toBeTruthy();
+    expect(
+      document
+        .querySelector('[data-testid="cron-item-job-active"]')
+        .classList.contains('secondary-list__item'),
+    ).toBe(true);
+    expect(document.querySelector('.cron-bar')).toBeNull();
     expect(document.body.textContent).toContain('Failed');
     expect(document.body.textContent).toContain('Missed');
   });

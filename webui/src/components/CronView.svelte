@@ -677,7 +677,7 @@
         </div>
       </div>
 
-      <div class="cron-list-scroll secondary-pane__scroll">
+      <div class="cron-list-scroll secondary-pane__scroll secondary-list">
         {#if viewState.agentsError}
           <div class="cron-load-error">
             <Banner variant="error" role="alert">
@@ -719,12 +719,11 @@
               <li>
                 <button
                   type="button"
-                  class="cron-item"
+                  class="cron-item secondary-list__item"
                   class:active={!isCreating && job.id === selectedJobId}
                   data-testid={`cron-item-${job.id}`}
                   onclick={() => selectJob(job)}
                 >
-                  <span class="cron-bar"></span>
                   <span class="cron-item-inner">
                     <span class="cron-item-head">
                       <span class="cron-item-name">
