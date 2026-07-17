@@ -24,7 +24,7 @@ jobs:
             python: "3.11"
           - platform: windows x64
             runner: windows-latest
-            python: "3.12"
+            python: "3.11"
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
