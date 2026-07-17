@@ -872,6 +872,7 @@
     {:else if activeViewId === 'cron'}
       <CronView
         onToast={showToast}
+        {serverUnavailable}
         {cronRefreshToken}
         {agentsRefreshToken}
         {projectsRefreshToken}

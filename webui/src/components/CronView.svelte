@@ -56,6 +56,7 @@
 
   let {
     onToast = noop,
+    serverUnavailable = false,
     cronRefreshToken = 0,
     agentsRefreshToken = 0,
     projectsRefreshToken = 0,
@@ -678,7 +679,7 @@
       </div>
 
       <div class="cron-list-scroll secondary-pane__scroll secondary-list">
-        {#if viewState.agentsError}
+        {#if viewState.agentsError && !serverUnavailable}
           <div class="cron-load-error">
             <Banner variant="error" role="alert">
               {viewState.agentsError}
@@ -687,17 +688,17 @@
               {t('common.retry', 'Retry')}
             </Button>
           </div>
-        {:else if !hasAgents && !viewState.loadingAgents}
+        {:else if !serverUnavailable && !hasAgents && !viewState.loadingAgents}
           <p class="cron-list-state cron-list-state--warn" role="status">
             {t('cron.noAgents', 'Create an agent before adding cron jobs.')}
           </p>
         {/if}
 
-        {#if isLoading}
+        {#if isLoading && !serverUnavailable}
           <p class="cron-list-state" role="status">
             {t('cron.loading', 'Loading cron jobs…')}
           </p>
-        {:else if viewState.jobsError}
+        {:else if viewState.jobsError && !serverUnavailable}
           <div class="cron-load-error">
             <Banner variant="error" role="alert">
               {viewState.jobsError}
@@ -707,9 +708,13 @@
             </Button>
           </div>
         {:else if jobs.length === 0}
-          <p class="cron-list-state" role="status">
-            {t('cron.emptyTitle', 'No scheduled jobs')}
-          </p>
+          <EmptyState
+            title={t('cron.emptyTitle', 'No scheduled runs yet')}
+            description={t(
+              'cron.emptyListSubtitle',
+              'Use Add to create a recurring or one-time Run.',
+            )}
+          />
         {:else}
           <ul
             class="cron-list"
@@ -754,7 +759,7 @@
         <EmptyState
           fill
           class="master-detail-empty"
-          title={!hasAgents
+          title={!serverUnavailable && !hasAgents
             ? t('cron.noAgents', 'Create an agent before adding cron jobs.')
             : t(
                 'cron.emptySubtitle',

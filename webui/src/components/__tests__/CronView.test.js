@@ -68,10 +68,10 @@ describe('CronView', () => {
     vi.restoreAllMocks();
   });
 
-  function mountView() {
+  function mountView(props = {}) {
     mountedComponent = mount(CronView, {
       target: document.body,
-      props: { onToast: toastMock },
+      props: { onToast: toastMock, ...props },
     });
     flushSync();
     return mountedComponent;
@@ -423,7 +423,35 @@ describe('CronView', () => {
     await waitForCondition(() => document.body.textContent.includes('Retry'));
 
     expect(document.body.textContent).toContain('server unavailable');
-    expect(document.body.textContent).not.toContain('No scheduled jobs');
+    expect(document.body.textContent).not.toContain('No scheduled runs yet');
+  });
+
+  it('defers transport failures to the global outage notice while offline', async () => {
+    rpcMock.mockRejectedValue(new Error('agent transport unavailable'));
+    listCronJobsMock.mockRejectedValue(new Error('cron transport unavailable'));
+
+    mountView({ serverUnavailable: true });
+
+    await waitForCondition(() =>
+      document.body.textContent.includes('No scheduled runs yet'),
+    );
+
+    expect(
+      document.querySelector('.cron-list-scroll .empty-state'),
+    ).toBeTruthy();
+    expect(document.body.textContent).toContain(
+      'Use Add to create a recurring or one-time Run.',
+    );
+    expect(document.body.textContent).not.toContain('Retry');
+    expect(document.body.textContent).not.toContain(
+      'agent transport unavailable',
+    );
+    expect(document.body.textContent).not.toContain(
+      'cron transport unavailable',
+    );
+    expect(document.body.textContent).not.toContain(
+      'Create an agent before adding cron jobs.',
+    );
   });
 
   it('shows execution health and disables toggling terminal history', async () => {
