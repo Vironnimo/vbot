@@ -471,7 +471,11 @@ function Write-InstallManifest {
     param(
         [object]$Python,
         [string[]]$Groups,
-        [string]$InstallShape
+        [string]$InstallShape,
+        [string]$ServerHost,
+        [int]$ServerPort,
+        [AllowNull()]
+        [string]$ServerDataDirectory
     )
 
     $pythonExecutable = Invoke-Capture $Python @("-c", "import sys; print(sys.executable)")
@@ -481,6 +485,13 @@ function Write-InstallManifest {
         "--shape", $InstallShape,
         "--groups"
     ) + $Groups + @("--python-executable", $pythonExecutable)
+    if ($InstallShape -ne "desktop-client") {
+        $arguments += @(
+            "--server-host", $ServerHost,
+            "--server-port", "$ServerPort",
+            "--server-data-directory", $ServerDataDirectory
+        )
+    }
     Write-Step "Recording installation shape: $InstallShape"
     Invoke-External $Python $arguments
 }
@@ -560,7 +571,13 @@ else {
     Invoke-External $vbotCommand @("doctor", "settings", "--data-dir", $resolvedDataDir)
 }
 
-Write-InstallManifest -Python $python -Groups $installGroups -InstallShape $installShape
+Write-InstallManifest `
+    -Python $python `
+    -Groups $installGroups `
+    -InstallShape $installShape `
+    -ServerHost $HostName `
+    -ServerPort $effectivePort `
+    -ServerDataDirectory $resolvedDataDir
 
 if ($Desktop -or $DesktopClient) {
     Write-Step "Creating Start-menu shortcut"

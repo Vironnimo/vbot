@@ -22,7 +22,8 @@ from pathlib import Path
 from typing import Any
 
 INSTALL_STATE_FILE = ".vbot-install.json"
-INSTALL_STATE_SCHEMA_VERSION = 1
+INSTALL_STATE_SCHEMA_VERSION = 2
+_SUPPORTED_INSTALL_STATE_SCHEMA_VERSIONS = frozenset({1, INSTALL_STATE_SCHEMA_VERSION})
 
 SERVER_SHAPE = "server"
 SERVER_DESKTOP_SHAPE = "server-desktop"
@@ -55,6 +56,9 @@ class InstallState:
     applied_revision: str
     dependency_digest: str
     webui_revision: str | None
+    server_host: str | None = None
+    server_port: int | None = None
+    server_data_directory: str | None = None
 
 
 def install_state_path(root: Path) -> Path:
@@ -98,6 +102,9 @@ def build_install_state(
     install_shape: str,
     dependency_groups: tuple[str, ...],
     python_executable: str,
+    server_host: str | None = None,
+    server_port: int | None = None,
+    server_data_directory: str | None = None,
 ) -> InstallState:
     """Build the completed state written by an installer."""
 
@@ -119,6 +126,13 @@ def build_install_state(
             "applied_revision": revision,
             "dependency_digest": file_digest(root / "pyproject.toml"),
             "webui_revision": webui_revision,
+            "server_host": server_host,
+            "server_port": server_port,
+            "server_data_directory": (
+                _absolute_path_preserving_symlinks(server_data_directory)
+                if server_data_directory is not None
+                else None
+            ),
         },
         install_state_path(root),
     )
@@ -225,8 +239,11 @@ def _parse_install_state(payload: object, path: Path) -> InstallState:
         raise InstallStateError(f"{path} must contain a JSON object")
 
     schema_version = payload.get("schema_version")
-    if schema_version != INSTALL_STATE_SCHEMA_VERSION:
-        raise InstallStateError(f"{path} schema_version must be {INSTALL_STATE_SCHEMA_VERSION}")
+    if schema_version not in _SUPPORTED_INSTALL_STATE_SCHEMA_VERSIONS:
+        supported = ", ".join(
+            str(version) for version in sorted(_SUPPORTED_INSTALL_STATE_SCHEMA_VERSIONS)
+        )
+        raise InstallStateError(f"{path} schema_version must be one of: {supported}")
 
     shape = payload.get("install_shape")
     if shape not in INSTALL_SHAPES:
@@ -260,8 +277,26 @@ def _parse_install_state(payload: object, path: Path) -> InstallState:
     if shape == DESKTOP_CLIENT_SHAPE and webui_revision is not None:
         raise InstallStateError(f"{path} desktop-client must not own a WebUI revision")
 
+    server_host = payload.get("server_host")
+    server_port = payload.get("server_port")
+    server_data_directory = payload.get("server_data_directory")
+    server_target = (server_host, server_port, server_data_directory)
+    if any(value is not None for value in server_target):
+        if not all(value is not None for value in server_target):
+            raise InstallStateError(f"{path} server target must be complete")
+        if shape == DESKTOP_CLIENT_SHAPE:
+            raise InstallStateError(f"{path} desktop-client must not own a server target")
+        if not isinstance(server_host, str) or not server_host.strip():
+            raise InstallStateError(f"{path} server_host must be a non-empty string")
+        if isinstance(server_port, bool) or not isinstance(server_port, int):
+            raise InstallStateError(f"{path} server_port must be an integer")
+        if not 1 <= server_port <= 65535:
+            raise InstallStateError(f"{path} server_port must be between 1 and 65535")
+        if not isinstance(server_data_directory, str) or not server_data_directory.strip():
+            raise InstallStateError(f"{path} server_data_directory must be a non-empty string")
+
     return InstallState(
-        schema_version=schema_version,
+        schema_version=INSTALL_STATE_SCHEMA_VERSION,
         install_shape=shape,
         dependency_groups=groups,
         python_executable=python_executable,
@@ -269,6 +304,9 @@ def _parse_install_state(payload: object, path: Path) -> InstallState:
         applied_revision=applied_revision,
         dependency_digest=dependency_digest,
         webui_revision=webui_revision,
+        server_host=server_host,
+        server_port=server_port,
+        server_data_directory=server_data_directory,
     )
 
 
@@ -281,6 +319,9 @@ def _parse_cli(argv: list[str] | None = None) -> argparse.Namespace:
     write_parser.add_argument("--shape", required=True, choices=sorted(INSTALL_SHAPES))
     write_parser.add_argument("--groups", required=True, nargs="+")
     write_parser.add_argument("--python-executable", required=True)
+    write_parser.add_argument("--server-host")
+    write_parser.add_argument("--server-port", type=int)
+    write_parser.add_argument("--server-data-directory")
 
     python_parser = subparsers.add_parser("python")
     python_parser.add_argument("--root", required=True)
@@ -299,6 +340,9 @@ def main(argv: list[str] | None = None) -> int:
                 install_shape=args.shape,
                 dependency_groups=tuple(args.groups),
                 python_executable=args.python_executable,
+                server_host=args.server_host,
+                server_port=args.server_port,
+                server_data_directory=args.server_data_directory,
             )
             write_install_state(root, state)
             print(f"installation manifest: {install_state_path(root)} ({state.install_shape})")

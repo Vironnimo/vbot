@@ -211,6 +211,35 @@ function Remove-DirectoryWithRetry {
     }
 }
 
+function Get-RecordedServerStopArguments {
+    $stopArguments = @("server", "stop")
+    if (-not (Test-Path -LiteralPath $InstallManifest -PathType Leaf)) {
+        return $stopArguments
+    }
+
+    try {
+        $state = Get-Content -Raw -LiteralPath $InstallManifest | ConvertFrom-Json
+        $hostProperty = $state.PSObject.Properties["server_host"]
+        $portProperty = $state.PSObject.Properties["server_port"]
+        $dataProperty = $state.PSObject.Properties["server_data_directory"]
+        if (
+            $null -ne $hostProperty -and $null -ne $hostProperty.Value -and
+            $null -ne $portProperty -and $null -ne $portProperty.Value -and
+            $null -ne $dataProperty -and $null -ne $dataProperty.Value
+        ) {
+            $stopArguments += @(
+                "--host", [string]$hostProperty.Value,
+                "--port", [string]$portProperty.Value,
+                "--data-dir", [string]$dataProperty.Value
+            )
+        }
+    }
+    catch {
+        Write-Warning "Could not read the recorded server target; stopping the default instance instead: $($_.Exception.Message)"
+    }
+    return $stopArguments
+}
+
 function Invoke-BootstrapUninstall {
     $rootNormalized = [System.IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\', '/')
     $homeNormalized = [System.IO.Path]::GetFullPath($HOME).TrimEnd('\', '/')
@@ -248,7 +277,8 @@ function Invoke-BootstrapUninstall {
     $venvVbot = Join-Path $ProjectRoot ".venv\Scripts\vbot.exe"
     if (Test-Path $venvVbot) {
         try {
-            & $venvVbot server stop *> $null
+            $stopArguments = Get-RecordedServerStopArguments
+            & $venvVbot @stopArguments *> $null
         }
         catch {
             # best-effort

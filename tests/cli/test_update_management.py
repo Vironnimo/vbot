@@ -12,7 +12,12 @@ import httpx
 import pytest
 import respx
 
-from cli.install_state import InstallState, file_digest, write_install_state
+from cli.install_state import (
+    INSTALL_STATE_SCHEMA_VERSION,
+    InstallState,
+    file_digest,
+    write_install_state,
+)
 from cli.main import dispatch_update_command
 from cli.parser import parse_args
 from cli.server_management import CommandResult, ServerInstance
@@ -104,7 +109,7 @@ def _write_state(
     write_install_state(
         root,
         InstallState(
-            schema_version=1,
+            schema_version=INSTALL_STATE_SCHEMA_VERSION,
             install_shape=shape,
             dependency_groups=groups,
             python_executable=sys.executable,

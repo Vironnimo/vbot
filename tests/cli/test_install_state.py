@@ -11,6 +11,7 @@ import pytest
 from cli.install_state import (
     DESKTOP_CLIENT_SHAPE,
     INSTALL_STATE_FILE,
+    INSTALL_STATE_SCHEMA_VERSION,
     InstallState,
     InstallStateError,
     build_install_state,
@@ -22,7 +23,7 @@ from cli.install_state import (
 
 def _state(**changes: object) -> InstallState:
     values: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": INSTALL_STATE_SCHEMA_VERSION,
         "install_shape": "server",
         "dependency_groups": ("server", "cli"),
         "python_executable": sys.executable,
@@ -46,7 +47,7 @@ def test_write_and_read_install_state_round_trip(tmp_path: Path) -> None:
 
 def test_read_install_state_rejects_invalid_shape(tmp_path: Path) -> None:
     payload = {
-        "schema_version": 1,
+        "schema_version": INSTALL_STATE_SCHEMA_VERSION,
         "install_shape": "mystery",
         "dependency_groups": ["cli"],
         "python_executable": sys.executable,
@@ -61,12 +62,53 @@ def test_read_install_state_rejects_invalid_shape(tmp_path: Path) -> None:
         read_install_state(tmp_path)
 
 
+def test_read_legacy_manifest_upgrades_schema_and_keeps_target_optional(
+    tmp_path: Path,
+) -> None:
+    state = _state()
+    payload = {
+        key: value
+        for key, value in state.__dict__.items()
+        if key not in {"server_host", "server_port", "server_data_directory"}
+    }
+    payload["schema_version"] = 1
+    payload["dependency_groups"] = list(state.dependency_groups)
+    (tmp_path / INSTALL_STATE_FILE).write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = read_install_state(tmp_path)
+
+    assert loaded is not None
+    assert loaded.schema_version == INSTALL_STATE_SCHEMA_VERSION
+    assert loaded.server_host is None
+    assert loaded.server_port is None
+    assert loaded.server_data_directory is None
+
+
 def test_desktop_client_cannot_claim_local_webui(tmp_path: Path) -> None:
     with pytest.raises(InstallStateError, match="must not own"):
         write_install_state(
             tmp_path,
             _state(install_shape=DESKTOP_CLIENT_SHAPE, webui_revision="abc"),
         )
+
+
+def test_desktop_client_cannot_claim_server_target(tmp_path: Path) -> None:
+    with pytest.raises(InstallStateError, match="must not own a server target"):
+        write_install_state(
+            tmp_path,
+            _state(
+                install_shape=DESKTOP_CLIENT_SHAPE,
+                webui_revision=None,
+                server_host="127.0.0.1",
+                server_port=8420,
+                server_data_directory=str(tmp_path / "data"),
+            ),
+        )
+
+
+def test_server_target_must_be_complete(tmp_path: Path) -> None:
+    with pytest.raises(InstallStateError, match="server target must be complete"):
+        write_install_state(tmp_path, _state(server_host="127.0.0.1"))
 
 
 def test_build_install_state_records_exact_groups_and_digest(
@@ -84,6 +126,9 @@ def test_build_install_state_records_exact_groups_and_digest(
         install_shape="server-desktop",
         dependency_groups=("server", "cli", "desktop"),
         python_executable=sys.executable,
+        server_host="127.0.0.1",
+        server_port=18420,
+        server_data_directory=str(tmp_path / "data"),
     )
 
     assert state.dependency_groups == ("server", "cli", "desktop")
@@ -91,6 +136,9 @@ def test_build_install_state_records_exact_groups_and_digest(
     assert state.applied_revision == "revision"
     assert state.webui_revision == "revision"
     assert len(state.dependency_digest) == 64
+    assert state.server_host == "127.0.0.1"
+    assert state.server_port == 18420
+    assert state.server_data_directory == str((tmp_path / "data").absolute())
 
 
 def test_build_install_state_preserves_symlinked_environment_interpreter(

@@ -345,11 +345,20 @@ fi
 # the venv, which would make a later uninstall target the wrong environment.
 PYTHON_EXECUTABLE="$(command -v "$PYTHON")"
 step "Recording installation shape: ${INSTALL_SHAPE}"
-(cd "$PROJECT_ROOT" && "$PYTHON" -m cli.install_state write \
-    --root "$PROJECT_ROOT" \
-    --shape "$INSTALL_SHAPE" \
-    --groups "${INSTALL_GROUPS[@]}" \
-    --python-executable "$PYTHON_EXECUTABLE")
+INSTALL_STATE_ARGS=(
+    --root "$PROJECT_ROOT"
+    --shape "$INSTALL_SHAPE"
+    --groups "${INSTALL_GROUPS[@]}"
+    --python-executable "$PYTHON_EXECUTABLE"
+)
+if [ "$DESKTOP_CLIENT" -eq 0 ]; then
+    INSTALL_STATE_ARGS+=(
+        --server-host "$HOST"
+        --server-port "$PORT"
+        --server-data-directory "$DATA_DIR"
+    )
+fi
+(cd "$PROJECT_ROOT" && "$PYTHON" -m cli.install_state write "${INSTALL_STATE_ARGS[@]}")
 
 if [ -z "$VBOT_ON_ORIGINAL_PATH" ]; then
     echo "Note: ${SCRIPTS_PATH} is not on your PATH. Add it to your shell profile to use 'vbot' directly."

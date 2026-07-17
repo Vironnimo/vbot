@@ -107,7 +107,32 @@ bootstrap_uninstall() {
     # above or never running).
     local venv_vbot="${PROJECT_ROOT}/.venv/bin/vbot"
     if [ -x "$venv_vbot" ]; then
-        "$venv_vbot" server stop >/dev/null 2>&1 || true
+        local venv_python="${PROJECT_ROOT}/.venv/bin/python"
+        if [ -x "$venv_python" ] && [ -f "$INSTALL_MANIFEST" ]; then
+            "$venv_python" - "$INSTALL_MANIFEST" "$venv_vbot" <<'PY' >/dev/null 2>&1 || true
+import json
+import subprocess
+import sys
+
+manifest_path, vbot_path = sys.argv[1:]
+arguments = [vbot_path, "server", "stop"]
+try:
+    with open(manifest_path, encoding="utf-8") as manifest_file:
+        state = json.load(manifest_file)
+    host = state.get("server_host")
+    port = state.get("server_port")
+    data_directory = state.get("server_data_directory")
+    if host is not None and port is not None and data_directory is not None:
+        arguments.extend(
+            ["--host", str(host), "--port", str(port), "--data-dir", str(data_directory)]
+        )
+except (OSError, ValueError, TypeError):
+    pass
+subprocess.run(arguments, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+PY
+        else
+            "$venv_vbot" server stop >/dev/null 2>&1 || true
+        fi
     fi
 
     # Remove the ~/.local/bin/vbot launcher only if it points into this install.
