@@ -349,9 +349,12 @@ async def test_registered_search_tools_execute_and_persist_envelopes(
         for event in run.events
         if event.type == TOOL_CALL_STARTED_EVENT
     ] == ["glob", "grep"]
-    assert [
-        event.payload["result"] for event in run.events if event.type == TOOL_CALL_RESULT_EVENT
-    ] == [glob_result, grep_result]
+    results_by_tool = {
+        event.payload["tool_call"]["name"]: event.payload["result"]
+        for event in run.events
+        if event.type == TOOL_CALL_RESULT_EVENT
+    }
+    assert results_by_tool == {"glob": glob_result, "grep": grep_result}
 
 
 @pytest.mark.asyncio
