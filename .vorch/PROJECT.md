@@ -160,6 +160,8 @@ Live testing exercises the running application rather than writing pytest or Vit
 
 The Playwright E2E suite lives under `tests/e2e/` and is intentionally excluded from the normal quality gates. `.github/workflows/e2e.yml` runs it as a separate non-gating Chromium workflow only on explicit manual dispatch while the WebUI is changing; failed runs retain the Playwright report, traces, screenshots, and videos as a short-lived artifact. For local agent execution, run it only when the user explicitly requests E2E test execution, and read `.vorch/workflows/e2e-test-workflow.md` in full before every run.
 
+The suite's dedicated fake Provider supports deterministic streamed Chat and Tool-call loops plus local OpenAI-compatible speech and image task endpoints. Tool E2E coverage may exercise workspace files, Runtime processes, Memory, Skills, Session search and History, Schedules, Sub-agents, cancellation, attachments, per-Agent Tool allowlists, and served media artifacts without real Provider credentials or external services. All state stays under the suite's disposable data/resources roots, and lifecycle scenarios clean up shared records that could influence later specs.
+
 ## Context
 
 Use this section only for important strategic decisions, unusual global constraints, or things an agent would otherwise likely assume incorrectly.

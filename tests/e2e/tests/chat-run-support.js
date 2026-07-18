@@ -1,9 +1,12 @@
 import { expect } from "@playwright/test";
 
-export async function startIsolatedChat(page) {
+export async function startIsolatedChat(page, { agentName = "" } = {}) {
   await page.goto("/#chat");
 
   const chat = page.getByRole("region", { name: "Chat" });
+  if (agentName) {
+    await chat.getByRole("button", { exact: true, name: agentName }).click();
+  }
   await chat.getByRole("button", { exact: true, name: "Sessions" }).click();
   const sessionDrawer = chat.getByRole("complementary", { name: "Sessions" });
   const sessionItems = sessionDrawer.getByRole("listitem");
