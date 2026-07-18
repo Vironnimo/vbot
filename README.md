@@ -1,6 +1,6 @@
 <h1 align="center">vBot</h1>
 
-<p align="center"><i>Another personal AI agent. Supports your existing projects and their agents+skills, and the usual stuff.</i></p>
+<p align="center"><i>A local-first agent harness for personal agents, project teams, tools, skills, automation, and the models you choose.</i></p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache-2.0">
@@ -8,59 +8,163 @@
   <img src="https://img.shields.io/badge/status-alpha-orange.svg" alt="Status: Alpha">
 </p>
 
-vBot is a personal AI agent you host yourself. You chat with it in the web UI — in your browser or through the bundled desktop app that wraps it — or from messaging apps like Telegram and Discord. It keeps persistent memory and skills and works with any model you choose. Point it at a project you already have and it picks up that project's agent team and skills, ready to run.
+vBot is a self-hosted runtime for AI agents. Use it through the WebUI, the optional Desktop app, the CLI, Telegram, Discord, or its HTTP/SSE/WebSocket interfaces. Identity Agents keep their own Workspace, Memory, Skills, and Sessions; Projects let the same runtime discover and execute an existing OpenCode or Claude Code team without copying that team out of the repository.
 
-One async Python core runs everything; the web UI, desktop shell, CLI, and chat channels are just different ways to reach the same agents.
+One async Python kernel owns all agent behavior. The FastAPI server exposes it, while the WebUI, Desktop, CLI, and Channels are Accessors rather than separate control planes.
 
 ## Features
 
 <table>
-<tr><td><b>Talk to it your way</b></td><td>Chat in the web UI, in a bundled desktop app, or from Telegram and Discord — the same agent and the same memory on every surface.</td></tr>
-<tr><td><b>Any model, any provider</b></td><td>OpenAI, Anthropic, OpenRouter, Ollama, Mistral, GitHub Copilot, and more. Pick a model per agent, with automatic fallback. No lock-in.</td></tr>
-<tr><td><b>Brings your projects along</b></td><td>Point it at a repo you already have and it discovers that project's agent team and skills — OpenCode and Claude Code layouts both work — and runs them as they are.</td></tr>
-<tr><td><b>Persistent by design</b></td><td>Every agent has its own workspace, curated long-term memory, and sessions that survive restarts.</td></tr>
-<tr><td><b>Skills</b></td><td>Reusable playbooks the agent can load on demand — bundled, global, per-project, or ones the agent writes for itself.</td></tr>
-<tr><td><b>Runs unattended</b></td><td>A built-in cron scheduler triggers agents on a schedule for reports, backups, and routine jobs.</td></tr>
-<tr><td><b>Extensible</b></td><td>Local Python extensions and hooks can intercept tool calls and add prompt blocks. Home Assistant ships as a bundled extension.</td></tr>
-<tr><td><b>Full API</b></td><td>HTTP RPC, Server-Sent Events streaming, and WebSocket events for your own integrations.</td></tr>
+<tr><td><b>Personal and project agents</b></td><td>Use durable Identity Agents, root one in a Project while retaining its identity, or run repository-defined Project Agents addressed as <code>agent@project</code>.</td></tr>
+<tr><td><b>Many providers and models</b></td><td>Connect OpenAI, Anthropic, OpenRouter, Ollama, Mistral, GitHub Copilot, and others through API-key, OAuth, or keyless Connections, with per-Agent defaults and Run-local fallback.</td></tr>
+<tr><td><b>Host tools and Sub-Agents</b></td><td>Agents can read, write, search, execute processes, browse the web, work with attachments, and delegate to authorized Identity or Project Agents.</td></tr>
+<tr><td><b>Durable Sessions</b></td><td>Session history survives restarts and supports Queueing, cancellation, Recall, policy-driven Compaction, Continuation checkpoints, automatic titles, Handoff, and Agent Takeover.</td></tr>
+<tr><td><b>Skills</b></td><td>Load bundled, global, Project, Extension, and private per-Agent playbooks. Identity Agents can author private or global Skills, and users can manage them in Settings.</td></tr>
+<tr><td><b>Speech, images, and embeddings</b></td><td>Bind dedicated Models for speech-to-text, text-to-speech, Image Generation/Edit, and semantic Recall independently of the Agent's chat Model.</td></tr>
+<tr><td><b>Desktop voice</b></td><td>The optional Desktop app includes local wakeword detection, microphone selection, per-server Agent routing, and built-in or imported openWakeWord ONNX models.</td></tr>
+<tr><td><b>Channels and automation</b></td><td>Reach Identity Agents through Telegram and Discord, use media and commands, and schedule recurring or one-time Runs through Cron.</td></tr>
+<tr><td><b>Extensions</b></td><td>Trusted local Python Extensions can add Tools, hooks, Recall backends, System Prompt blocks, settings, Channel interactions, and Skills. Home Assistant ships as a bundled Extension.</td></tr>
+<tr><td><b>Observable and scriptable</b></td><td>Use Debug traces, Logs, Statistics, configuration diagnostics, HTTP RPC, per-Run SSE, and app-wide WebSocket events.</td></tr>
 </table>
+
+## Agent and Project model
+
+An **Identity Agent** is stored under the vBot data directory and owns a Workspace, Memory, private Skills, and Sessions. It may select a registered Project as its working Project without moving any of that identity-owned state.
+
+A **Project Agent** is a Config Agent discovered from the selected Project Source Format: `.opencode/agents/` or `.claude/agents/`. It has no independent Workspace or Memory; its runtime configuration comes from the repository plus Project defaults, capability ceilings, and vBot-owned overrides. Its Sessions live under the Project anchor and it is addressed as `agent@project`.
+
+Project registration and Team scanning never modify the repository. Agents may still edit the repository through their normal file and shell Tools when their Run's working directory points there.
 
 ## Security
 
-> **vBot runs AI agents with full access to the host it runs on.** By design, agents can read, write, and execute files, run arbitrary shell commands, edit vBot's own source, and trigger restarts. The server has **no authentication** — anyone who can reach its port can drive an agent with all of these capabilities.
+> **vBot runs AI agents with the operating-system permissions of the account that starts it.** Agents can read and write files, execute commands, edit vBot itself, contact external services, and trigger restarts. Trusted Extensions execute inside the same process. The server has no built-in authentication.
 
-This is safe only as a **local, single-user** tool bound to `127.0.0.1` (the default). Do **not**:
+The safe default is a single-user instance bound to `127.0.0.1`. Never expose an unauthenticated vBot port to the public internet. If a Desktop Client must reach a server on another machine, keep the server on a trusted private network or VPN, restrict inbound traffic to the intended client with a firewall, and add your own authenticated TLS reverse proxy if the network boundary is not fully trusted. Binding to `0.0.0.0` makes every reachable interface part of the security boundary.
 
-- bind the server to `0.0.0.0` or any public network interface,
-- port-forward or reverse-proxy it to the internet without putting your own authentication in front of it,
-- run it on a shared or untrusted host.
-
-Treat exposing vBot to a network as granting remote code execution on that machine. API keys and bot tokens live in `~/.vbot/.env`, never in the repository — keep that directory private.
+Treat network access to vBot as remote code execution on the host. Keep the data directory private because it contains credentials, OAuth tokens, Sessions, attachments, Logs, and Agent state.
 
 ## Requirements
 
 - Python **3.11+**
-- Node.js for WebUI development and builds (not needed on hosts that use a prebuilt `webui/dist` via `--skip-webui-build`)
+- Git for Bootstrap installs and updates
+- Node.js only when building the WebUI locally; release Bootstrap installs download a prebuilt WebUI
+- A supported Provider credential, OAuth Connection, or enabled keyless local Connection before an Agent can run a Model
+
+## Installation model
+
+vBot intentionally has two installation layers:
+
+1. `scripts/bootstrap.sh` and `scripts/bootstrap.ps1` are Fresh-install scripts. They install or verify prerequisites, clone a release or `main`, create an isolated `<install-dir>/.venv`, obtain the WebUI, and then call the platform Installer inside that checkout.
+2. `scripts/install.sh` and `scripts/install.ps1` are the actual checkout Installers. Run them directly when the repository already exists. They install vBot into the active Python environment, prepare the data directory for a server install, build or verify the WebUI, record `.vbot-install.json`, optionally add Desktop support, and enable autostart unless disabled.
+
+The Windows and Linux Installer files both exist under `scripts/`; they are not generated by Bootstrap.
 
 ## Quick Start
 
-The fastest path is the one-line bootstrap: it installs prerequisites (Python and git), clones the repo into `~/vbot`, installs into an isolated virtual environment (`~/vbot/.venv`), fetches the prebuilt WebUI, and puts `vbot` on your PATH (open a new terminal to use it). Your data lives separately in `~/.vbot`.
+The default Bootstrap installs the latest release into `~/vbot`, creates `~/vbot/.venv`, fetches the matching prebuilt WebUI, adds `vbot` to the user PATH, enables autostart, and starts the server. Runtime data stays separate under `~/.vbot`.
 
-**Linux / Raspberry Pi:**
+### Debian-like Linux / Raspberry Pi
+
+The Bootstrap script can install missing prerequisites through `apt` on Debian-like systems, including Raspberry Pi OS.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.sh | bash
 ```
 
-**Windows (PowerShell):**
+Bootstrap options belong before its forwarding separator. For example, install a specific release or track `main`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.sh | bash -s -- --version v0.1.11
+curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.sh | bash -s -- --dev
+```
+
+Installer options are passed after a second `--` because the first one is consumed by `bash` and the second one tells Bootstrap to forward the remaining arguments:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.sh | bash -s -- -- --no-autostart
+curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.sh | bash -s -- -- --desktop
+curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.sh | bash -s -- -- --desktop-client
+```
+
+### Windows PowerShell
+
+The no-option one-liner is:
 
 ```powershell
 irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.ps1 | iex
 ```
 
-This installs the latest **release**, so no Node.js is needed on the machine, and enables autostart by default (pass `--no-autostart` to skip). On Windows, run the one-liner in an elevated PowerShell so the autostart task can be created — the install still succeeds otherwise. To pin a specific release instead of the latest, pass `--version v0.1.2` (Linux) or `-Version v0.1.2` (Windows); with the piped one-liner, append it after `bash -s --` (e.g. `… | bash -s -- --version v0.1.2`). To track `main` and build the WebUI locally instead, use the dev track: `bootstrap.sh --dev` on Linux, or download `bootstrap.ps1` and run it with `-Dev` on Windows. As always with `curl | bash` / `irm | iex`, download and read the script first if you prefer to review it before running.
+Use a ScriptBlock when passing Bootstrap or Installer options:
 
-To uninstall a bootstrap install, run its bundled uninstaller — it removes the whole `~/vbot` directory (virtual environment included), the `vbot` launcher, and the autostart entry, while leaving your data in `~/.vbot` untouched:
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.ps1))) -Version v0.1.11
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.ps1))) -Dev
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.ps1))) -NoAutostart
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.ps1))) -Desktop
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.ps1))) -DesktopClient
+```
+
+Run the default Windows install from an elevated PowerShell when possible so the Task Scheduler autostart entry can be created. If that step lacks permission, the package install still completes and reports how to enable autostart later.
+
+As with any `curl | bash` or `irm | iex` command, download and inspect the script first if you prefer not to execute network content directly.
+
+## First Run
+
+Open `http://127.0.0.1:8420/`. Runtime has already created a bootstrap Identity Agent and its first Session. The setup guide connects a Provider or OAuth subscription and assigns a Model; creating another Agent is optional.
+
+Provider credentials may also be added later in Settings or through the CLI. Process environment variables take precedence over the data-directory `.env` fallback.
+
+```bash
+vbot provider set-key openrouter YOUR_KEY --refresh-models
+vbot provider connect openai --connection openai:subscription
+vbot provider enable ollama
+```
+
+An API key passed as a CLI argument may enter shell history; Settings or a protected environment variable is preferable for real credentials.
+
+## Install from an Existing Checkout
+
+The direct Installers use the currently selected Python environment and build the WebUI unless told to use an existing `webui/dist`.
+
+**Windows:**
+
+```powershell
+.\scripts\install.ps1
+.\scripts\install.ps1 -Desktop
+.\scripts\install.ps1 -DesktopClient
+.\scripts\install.ps1 -NoAutostart
+```
+
+**Linux:**
+
+```bash
+scripts/install.sh
+scripts/install.sh --desktop
+scripts/install.sh --desktop-client
+scripts/install.sh --no-autostart
+```
+
+On PEP 668 systems such as Debian and Raspberry Pi OS, create and activate a virtual environment before running the direct Linux Installer. Bootstrap already creates and uses its own isolated environment. See [USAGE.md](USAGE.md#installation) for every Bootstrap, Installer, install-shape, and Uninstaller option.
+
+## Updating
+
+```bash
+vbot update
+```
+
+The updater reads the checkout-local `.vbot-install.json`, preserves the recorded install shape, Python interpreter, dependency groups, source track, and WebUI revision, and never touches the runtime data directory. Release installs move to the newest release with a matching WebUI asset; development installs pull `main` and rebuild when needed.
+
+Tracked local changes require an explicit policy:
+
+```bash
+vbot update --stash
+vbot update --discard
+vbot update --no-restart
+```
+
+## Uninstalling
+
+Run the Uninstaller bundled with the checkout:
 
 ```bash
 ~/vbot/scripts/uninstall.sh
@@ -70,138 +174,75 @@ To uninstall a bootstrap install, run its bundled uninstaller — it removes the
 & "$HOME\vbot\scripts\uninstall.ps1"
 ```
 
-On Windows, run the uninstaller from an elevated PowerShell so the autostart task can be removed too.
+For a Bootstrap install, the Uninstaller stops the recorded server, removes autostart when possible, deletes the complete install directory including `.venv`, and removes its launcher/shortcut. For a direct Installer run, it uninstalls the Python package but keeps the checkout unless you remove it yourself. Both modes preserve runtime data such as `~/.vbot`.
 
-Once installed, open the WebUI in your browser (default `http://127.0.0.1:8420/`), add at least one provider key, create an agent, and start chatting. See [USAGE.md](USAGE.md) for the full walkthrough.
+## Default Data Directory
 
-## Manual Install
+By default vBot stores runtime state under `~/.vbot`, including:
 
-Prefer to clone the repo and run the installer yourself? On Windows, the installer prepares the Python CLI, builds the WebUI, and creates missing files in `~/.vbot` without overwriting an existing valid `settings.json` or `.env`:
+- `.env` — Provider keys, bot tokens, and Extension secrets
+- `settings.json` — instance settings
+- `agents/` — Identity Agent configs, Workspaces, private Skills, and Sessions
+- `projects/` — Project metadata and Project Agent Sessions
+- `skills/` — global user Skills
+- `channels/` and `cron/` — Channel configs and scheduled jobs
+- `attachments/`, `speech/`, and `images/` — uploaded and generated artifacts
+- `recall/` — disposable Recall indexes
+- `oauth/` — OAuth tokens
+- `debug/` and `logs/` — traces and daily Logs
+- `temp/` — retained temporary Bash output and Sub-Agent activity files
+- `archive/` — archived Agents, Projects, and Sessions
 
-```powershell
-.\scripts\install.ps1
-```
+## Running from Source
 
-By default it enables autostart (a Windows Task Scheduler logon task) and starts the server. Creating the task needs an elevated (Administrator) PowerShell. Skip both with `-NoAutostart`. Uninstall removes the Python package only and leaves `~/.vbot` untouched (add `-RemoveAutostart` to also remove the task):
-
-```powershell
-.\scripts\uninstall.ps1
-```
-
-On Linux (e.g. a Raspberry Pi), the equivalent installer behaves the same way. On PEP 668 systems such as Debian and Raspberry Pi OS it must run inside a virtual environment and tells you how to create one otherwise. On low-memory hosts (Pi 3 class), skip the on-device WebUI build with `--skip-webui-build` and copy over a `webui/dist` built elsewhere.
-
-```bash
-scripts/install.sh
-scripts/uninstall.sh
-```
-
-For a development checkout, install the package in editable mode and the WebUI dependencies:
+For development, install the development group and WebUI dependencies:
 
 ```bash
 pip install -e ".[dev]"
-cd webui && npm ci && cd ..
+cd webui
+npm ci
+cd ..
 ```
 
-Full options for every installer — data directory, ports, autostart, and desktop accessors — are documented in [USAGE.md](USAGE.md).
-
-## Add API Keys
-
-vBot reads configuration from `~/.vbot/` by default. Create `~/.vbot/.env`, for example:
-
-```env
-OPENAI_API_KEY=...
-OPENROUTER_API_KEY=...
-ANTHROPIC_API_KEY=...
-```
-
-Home Assistant ships as a bundled extension; configure it in Settings → Extensions instead of the `.env` file. See [USAGE.md](USAGE.md) for details.
-
-## Start the Server
-
-Managed background start via CLI:
-
-```bash
-python cli/main.py server start
-```
-
-Alternative foreground start:
+Start the server in the foreground or as a managed background process:
 
 ```bash
 python server/main.py
+vbot server start
 ```
 
-The default server URL is `http://127.0.0.1:8420`, and `http://127.0.0.1:8420/health` returns `{"status":"ok"}` once it is up.
-
-## Open the UI
-
-For WebUI development, run the Vite dev server and open the URL it prints:
+Run the Vite development server separately when working on the frontend:
 
 ```bash
 cd webui
 npm run dev
 ```
 
-For the server-served WebUI, build once and open `http://127.0.0.1:8420/`:
-
-```bash
-cd webui
-npm run build
-cd ..
-```
-
-## Updating
-
-Update an installed instance with:
-
-```bash
-vbot update
-```
-
-It updates the code from the git checkout it was installed from and restarts the server, without touching your data in `~/.vbot`. The installer records the exact dependency groups, Python interpreter, source track, and WebUI revision in the checkout, so `update` preserves server-only, server-plus-desktop, and Desktop Client installations instead of guessing from imports. A release install fetches the latest release and its prebuilt WebUI; a `main` (dev) install pulls and rebuilds the WebUI locally. Failed dependency, WebUI, or stash steps remain retryable even when Git already advanced, and a release update checks that the required WebUI asset exists before changing the checkout. If you have local changes to tracked files, `update` stops — re-run with `--discard` to drop them or `--stash` to keep them (reapplied after, including when the update fails). Use `--no-restart` to update without restarting; Desktop Client updates never try to restart a server.
-
-## Default Data Directory
-
-By default vBot stores runtime data under `~/.vbot`. This includes, among other things:
-
-- `.env` for API keys and tokens
-- `settings.json` for instance settings
-- `agents/<agent-id>/` for each agent's config, sessions, and workspace
-- `extensions/` for local Python hooks
-- `oauth/` for OAuth tokens
-- `attachments/` for uploaded blobs
-- `logs/` for daily log files
-- `cron/` for persisted schedules
-
-## Access Paths
-
-- WebUI in the browser
-- Desktop shell via `python desktop/main.py`
-- Messaging channels (Telegram, Discord)
-- CLI via `python cli/main.py ...` for server lifecycle and RPC-backed management
-- HTTP, SSE, and WebSocket integrations against the server
-
 ## Server Interfaces
 
-The server exposes:
-
-- `POST /api/rpc` for the RPC API
-- `GET /api/runs/{run_id}/events` for one Run's SSE stream
-- `GET /ws` for app-wide server events
-- `GET /ws/logs` for live log streaming
-- `POST /api/upload` for attachment uploads
-- `GET /api/attachments/{attachment_id}` for attachment downloads
-- `GET /health` for server health
+- `POST /api/rpc` — command and management RPC
+- `GET /api/runs/{run_id}/events` — complete per-Run SSE timeline
+- `WS /ws` — app-wide lifecycle, reconnect, presence, and resource-change events
+- `WS /ws/logs` — selected Log streaming
+- `POST /api/upload` and `GET /api/attachments/{attachment_id}` — attachment transfer
+- `POST /api/speech/transcribe`, `POST /api/speech/synthesize`, and `GET /api/speech/artifacts/{artifact_id}` — speech workflows
+- `GET /api/images/artifacts/{artifact_id}` — generated image artifacts
+- `GET /health` — exact vBot health probe
 
 ## Documentation
 
-- [USAGE.md](USAGE.md) — detailed setup, configuration, extensions, RPC examples, and workflows
+- [USAGE.md](USAGE.md) — installation, first-run setup, Agents, Projects, Chat, Skills, Settings, Channels, CLI, API, and troubleshooting
+- [docs/extensions.md](docs/extensions.md) — trusted Python Extension authoring
+- [examples/extensions](examples/extensions) — runnable Extension examples
 
 ## Quality Checks
 
 ```bash
-python scripts/quality.py            # backend
-python scripts/quality-frontend.py   # frontend
+python scripts/quality.py
+python scripts/quality-frontend.py
 ```
+
+The Playwright suite under `tests/e2e/` is separate and opt-in; follow the repository workflow instructions before running it.
 
 ## License
 
