@@ -16,7 +16,6 @@ def _valid_agent_data() -> dict[str, object]:
         "memory_prompt_mode": "agent_user",
         "allowed_tools": ["*"],
         "allowed_skills": ["*"],
-        "allowed_agents": ["*"],
         "custom_system_prompt_enabled": False,
         "created_at": "2026-05-03T12:00:00Z",
         "updated_at": "2026-05-03T12:00:00Z",
@@ -37,11 +36,23 @@ def test_validate_agent_data_accepts_missing_custom_prompt_toggle() -> None:
     assert validate_agent_data(data) == []
 
 
-def test_validate_agent_data_requires_allowed_agents() -> None:
+def test_validate_agent_data_accepts_missing_tool_settings() -> None:
     data = _valid_agent_data()
-    del data["allowed_agents"]
 
-    assert _diagnostics(data) == [("error", "$.allowed_agents", "is required")]
+    assert _diagnostics(data) == []
+
+
+def test_validate_agent_data_validates_optional_subagent_tool_settings() -> None:
+    data = _valid_agent_data()
+    data["tools"] = {"subagent": {"allowed_agents": ["worker", 1]}}
+
+    assert _diagnostics(data) == [
+        (
+            "error",
+            "$.tools.subagent.allowed_agents[1]",
+            "must be a string",
+        )
+    ]
 
 
 def test_validate_agent_data_rejects_non_bool_custom_prompt_toggle() -> None:

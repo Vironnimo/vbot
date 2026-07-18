@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
@@ -11,6 +11,9 @@ from core.memory import MEMORY_PROMPT_MODE_OFF, MemoryPromptMode
 MEMORY_TOOL_NAME = "memory"
 SKILL_MANAGE_TOOL_NAME = "skill_manage"
 SUBAGENT_TOOL_NAMES: frozenset[str] = frozenset({"subagent", "subagent_result"})
+SUBAGENT_TOOL_SETTINGS_KEY = "subagent"
+SUBAGENT_ALLOWED_AGENTS_KEY = "allowed_agents"
+DEFAULT_SUBAGENT_ALLOWED_AGENTS: tuple[str, ...] = ("*",)
 
 # Tools usable only by an identity agent (one with a Workspace). ``skill_manage``
 # writes to the agent's own private skill home under ``<data_dir>/agents/<id>/skills/``,
@@ -37,7 +40,7 @@ def effective_agent_allowed_tools(
     registered_tool_names: Sequence[str],
     workspace: str = "",
     session_tool_grants: Sequence[str] = (),
-    allowed_agents: Sequence[str] | None = None,
+    tool_settings: Mapping[str, Any] | None = None,
 ) -> list[str] | None:
     """Return the runtime allowlist after applying Agent memory mode and identity-only gating.
 
@@ -52,7 +55,7 @@ def effective_agent_allowed_tools(
     excluded: set[str] = set() if workspace else set(IDENTITY_ONLY_TOOLS)
     if not memory_tool_enabled(memory_prompt_mode):
         excluded.add(MEMORY_TOOL_NAME)
-    if allowed_agents is not None and not allowed_agents:
+    if not subagent_allowed_agents(tool_settings):
         excluded.update(SUBAGENT_TOOL_NAMES)
 
     grants = [tool_name for tool_name in session_tool_grants if tool_name in registered_tool_names]
@@ -119,6 +122,30 @@ def apply_agent_target_tool_visibility(
     return projected
 
 
+def agent_tool_settings(agent_tools: Any) -> dict[str, Any]:
+    """Copy the generic root ``tools`` mapping from one RuntimeAgent."""
+    if not isinstance(agent_tools, Mapping):
+        return {}
+    return deepcopy(dict(agent_tools))
+
+
+def subagent_allowed_agents(tool_settings: Mapping[str, Any] | None) -> list[str]:
+    """Resolve the Sub-Agent target policy from its optional Tool settings block."""
+    if not isinstance(tool_settings, Mapping):
+        return list(DEFAULT_SUBAGENT_ALLOWED_AGENTS)
+    subagent = tool_settings.get(SUBAGENT_TOOL_SETTINGS_KEY)
+    if subagent is None:
+        return list(DEFAULT_SUBAGENT_ALLOWED_AGENTS)
+    if not isinstance(subagent, Mapping):
+        return []
+    allowed = subagent.get(SUBAGENT_ALLOWED_AGENTS_KEY)
+    if allowed is None:
+        return list(DEFAULT_SUBAGENT_ALLOWED_AGENTS)
+    if not isinstance(allowed, list) or not all(isinstance(item, str) for item in allowed):
+        return []
+    return list(allowed)
+
+
 def _without(tool_names: Sequence[str], excluded: set[str]) -> list[str]:
     return sorted({tool_name for tool_name in tool_names if tool_name not in excluded})
 
@@ -127,9 +154,14 @@ __all__ = [
     "IDENTITY_ONLY_TOOLS",
     "MEMORY_TOOL_NAME",
     "SKILL_MANAGE_TOOL_NAME",
+    "DEFAULT_SUBAGENT_ALLOWED_AGENTS",
+    "SUBAGENT_ALLOWED_AGENTS_KEY",
+    "SUBAGENT_TOOL_SETTINGS_KEY",
     "SUBAGENT_TOOL_NAMES",
+    "agent_tool_settings",
     "apply_agent_target_tool_visibility",
     "effective_agent_allowed_tools",
     "memory_tool_enabled",
     "sanitize_configured_allowed_tools",
+    "subagent_allowed_agents",
 ]

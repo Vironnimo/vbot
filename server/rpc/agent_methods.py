@@ -537,7 +537,7 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
         "thinking_effort",
         "allowed_tools",
         "allowed_skills",
-        "allowed_agents",
+        "tools",
         "custom_system_prompt_enabled",
         "compaction_policy",
     }
@@ -601,8 +601,23 @@ def _validate_agent_field(key: str, value: Any) -> Any:
         return _validate_thinking_effort(value, allow_none=True)
     if key == "memory_prompt_mode":
         return _validate_memory_prompt_mode(value)
-    if key in {"allowed_tools", "allowed_skills", "allowed_agents"}:
+    if key in {"allowed_tools", "allowed_skills"}:
         return _validate_string_list(key, value)
+    if key == "tools":
+        if not isinstance(value, dict):
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.tools must be an object")
+        subagent = value.get("subagent")
+        if subagent is not None and not isinstance(subagent, dict):
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                "params.tools.subagent must be an object",
+            )
+        if isinstance(subagent, dict) and "allowed_agents" in subagent:
+            _validate_string_list(
+                "tools.subagent.allowed_agents",
+                subagent["allowed_agents"],
+            )
+        return dict(value)
     if key == "custom_system_prompt_enabled":
         if not isinstance(value, bool):
             raise RpcError(

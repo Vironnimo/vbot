@@ -74,7 +74,11 @@ def test_provider_tool_definitions_hide_subagent_tools_without_targets(
             handler=lambda _context, _arguments: tool_success({}),
         )
     manager = _manager(tmp_path, tools=registry)
-    agent = _agent(workspace, allowed_tools=["*"], allowed_agents=[])
+    agent = _agent(
+        workspace,
+        allowed_tools=["*"],
+        tools={"subagent": {"allowed_agents": []}},
+    )
 
     definitions = manager.provider_tool_definitions(agent)
 
@@ -99,7 +103,7 @@ def test_provider_tool_definitions_narrow_explicit_agent_targets(
         workspace,
         agent_id="orchestrator",
         allowed_tools=["*"],
-        allowed_agents=["worker", "builder@vbot"],
+        tools={"subagent": {"allowed_agents": ["worker", "builder@vbot"]}},
     )
 
     definitions = manager.provider_tool_definitions(agent)

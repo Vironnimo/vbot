@@ -302,7 +302,7 @@ def _agent(
     agent_id: str = "coder",
     allowed_tools: list[str] | None = None,
     allowed_skills: list[str] | None = None,
-    allowed_agents: list[str] | None = None,
+    tools: dict[str, Any] | None = None,
     custom_system_prompt_enabled: bool = False,
     memory_prompt_mode: MemoryPromptMode = MEMORY_PROMPT_MODE_AGENT_USER,
 ) -> Agent:
@@ -317,7 +317,7 @@ def _agent(
         memory_prompt_mode=memory_prompt_mode,
         allowed_tools=["*"] if allowed_tools is None else allowed_tools,
         allowed_skills=["*"] if allowed_skills is None else allowed_skills,
-        allowed_agents=["*"] if allowed_agents is None else allowed_agents,
+        tools={} if tools is None else tools,
         custom_system_prompt_enabled=custom_system_prompt_enabled,
         created_at="2026-05-03T12:00:00Z",
         updated_at="2026-05-03T12:00:00Z",

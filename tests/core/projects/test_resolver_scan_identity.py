@@ -174,26 +174,37 @@ def test_identity_resolution_unknown_agent_raises(
 def test_identity_wildcard_keeps_global_and_cross_project_reach(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
-    created = agents.create("orchestrator", "Orchestrator", allowed_agents=["*"])
     agents.create("worker", "Worker")
     _write_agent(repo, "builder.md", model="openai/gpt-5.2")
-    _project(projects, repo)
+    project = _project(projects, repo)
+    created = agents.create("orchestrator", "Orchestrator")
+    created = agents.update("orchestrator", root_project_id=project.project_id)
     resolver = _resolver(agents, projects, _openai_configured())
 
     resolved = resolver.resolve_agent(None, "orchestrator")
 
     assert resolved == created
-    assert resolved.allowed_agents == ["*"]
+    assert resolved.tools == {}
+    assert resolved.root_project_id == "vbot"
 
 
-def test_identity_explicit_targets_filter_missing_addresses_live(
+def test_identity_explicit_targets_remain_in_optional_subagent_tool_settings(
     agents: AgentStore, projects: ProjectStore, repo: Path
 ) -> None:
     agents.create("worker", "Worker")
     agents.create(
         "orchestrator",
         "Orchestrator",
-        allowed_agents=["worker", "missing", "builder@vbot", "ghost@vbot", "bad@address@x"],
+        tools={
+            "subagent": {
+                "allowed_agents": [
+                    "worker",
+                    "missing",
+                    "builder@vbot",
+                    "ghost@vbot",
+                ]
+            }
+        },
     )
     _write_agent(repo, "builder.md", model="openai/gpt-5.2")
     _project(projects, repo)
@@ -201,7 +212,9 @@ def test_identity_explicit_targets_filter_missing_addresses_live(
 
     resolved = resolver.resolve_agent(None, "orchestrator")
 
-    assert resolved.allowed_agents == ["worker", "builder@vbot"]
+    assert resolved.tools == {
+        "subagent": {"allowed_agents": ["worker", "missing", "builder@vbot", "ghost@vbot"]}
+    }
 
 
 def test_single_agent_config_is_read_fresh_per_resolve(

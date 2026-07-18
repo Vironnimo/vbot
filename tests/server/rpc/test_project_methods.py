@@ -806,8 +806,10 @@ def test_team_member_reports_effective_repo_owned_agent_targets(tmp_path: Path) 
     result = _show_project(state, {"project_id": "vbot"})
 
     members = {member["agent_id"]: member for member in result["scan"]["team"]}
-    assert members["orchestrator"]["allowed_agents"] == ["reviewer"]
-    assert members["builder"]["allowed_agents"] == ["builder", "orchestrator", "reviewer"]
+    assert members["orchestrator"]["tools"] == {"subagent": {"allowed_agents": ["reviewer"]}}
+    assert members["builder"]["tools"] == {
+        "subagent": {"allowed_agents": ["builder", "orchestrator", "reviewer"]}
+    }
 
 
 # ---------------------------------------------------------------------------

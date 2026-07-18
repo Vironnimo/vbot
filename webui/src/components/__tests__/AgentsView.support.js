@@ -403,7 +403,7 @@ export function baseAgent() {
     memory_prompt_mode: 'agent_user',
     allowed_tools: ['*'],
     allowed_skills: ['*'],
-    allowed_agents: ['*'],
+    tools: {},
     custom_system_prompt_enabled: false,
     created_at: '2026-05-08T00:00:00+00:00',
     updated_at: '2026-05-08T00:00:00+00:00',

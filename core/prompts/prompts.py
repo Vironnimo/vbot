@@ -50,8 +50,10 @@ from core.tools.availability import (
     IDENTITY_ONLY_TOOLS,
     MEMORY_TOOL_NAME,
     SKILL_MANAGE_TOOL_NAME,
+    agent_tool_settings,
     apply_agent_target_tool_visibility,
     memory_tool_enabled,
+    subagent_allowed_agents,
 )
 from core.utils.logging import get_logger
 
@@ -201,8 +203,8 @@ class PromptAgent(Protocol):
         ...
 
     @property
-    def allowed_agents(self) -> list[str]:
-        """Sub-Agent target allowlist for prompt-visible delegation."""
+    def tools(self) -> dict[str, Any]:
+        """Optional Tool-owned settings from the root agent.json tools block."""
         ...
 
     @property
@@ -1536,7 +1538,9 @@ class SystemPromptManager:
         return apply_agent_target_tool_visibility(
             definitions,
             agent_id=agent.id,
-            allowed_agents=getattr(agent, "allowed_agents", ["*"]),
+            allowed_agents=subagent_allowed_agents(
+                agent_tool_settings(getattr(agent, "tools", {}))
+            ),
         )
 
     def _prompt_definitions_for_agent(
@@ -1566,7 +1570,9 @@ class SystemPromptManager:
         return apply_agent_target_tool_visibility(
             definitions,
             agent_id=agent.id,
-            allowed_agents=getattr(agent, "allowed_agents", ["*"]),
+            allowed_agents=subagent_allowed_agents(
+                agent_tool_settings(getattr(agent, "tools", {}))
+            ),
         )
 
     def _apply_identity_only_tool_visibility(

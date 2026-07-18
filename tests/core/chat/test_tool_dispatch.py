@@ -39,7 +39,7 @@ class _StubAgent:
     workspace: Path
     allowed_tools: list[str] | None = None
     allowed_skills: list[str] | None = None
-    allowed_agents: list[str] | None = None
+    tools: dict[str, object] | None = None
     memory_prompt_mode: str = "agent_user"
 
 
@@ -186,7 +186,7 @@ async def test_empty_agent_targets_block_subagent_at_dispatch(tmp_path: Path) ->
         id=wildcard_agent.id,
         workspace=wildcard_agent.workspace,
         allowed_tools=["*"],
-        allowed_agents=[],
+        tools={"subagent": {"allowed_agents": []}},
     )
     session = _build_session(tmp_path)
 

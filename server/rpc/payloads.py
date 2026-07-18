@@ -118,7 +118,7 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
         "memory_prompt_mode": agent.memory_prompt_mode,
         "allowed_tools": list(agent.allowed_tools),
         "allowed_skills": list(agent.allowed_skills),
-        "allowed_agents": list(agent.allowed_agents),
+        "tools": dict(getattr(agent, "tools", {})),
         "custom_system_prompt_enabled": bool(agent.custom_system_prompt_enabled),
         "compaction_policy": dict(agent_policy) if agent_policy is not None else None,
         "effective_compaction_policy": (

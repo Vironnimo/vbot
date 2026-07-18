@@ -1527,7 +1527,8 @@ export function projectTeam(scan) {
     source_format: asText(member?.source_format),
     source_path: asText(member?.source_path),
     denied_tools: normalizeStringList(member?.denied_tools),
-    allowed_agents: normalizeStringList(member?.allowed_agents),
+    tools:
+      member?.tools && typeof member.tools === 'object' ? member.tools : {},
     // The per-agent override object (any subset of model/temperature/thinking_effort),
     // or null when the agent has no override. Read shape-only here — the row derives
     // whether a field is overridden from `effective[field].source === 'override'`.
@@ -1543,7 +1544,11 @@ export function projectTeam(scan) {
 // current Team. Project targets are always local bare ids; there is deliberately
 // no vBot override tier for this policy.
 export function projectAgentTargetSummary(member, team = []) {
-  const allowed = normalizeStringList(member?.allowed_agents);
+  const configured = member?.tools?.subagent?.allowed_agents;
+  if (!Array.isArray(configured)) {
+    return { mode: 'unavailable', agents: [] };
+  }
+  const allowed = normalizeStringList(configured);
   const teamIds = (Array.isArray(team) ? team : [])
     .map((candidate) => asText(candidate?.agent_id).trim())
     .filter(Boolean);

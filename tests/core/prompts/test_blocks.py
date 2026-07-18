@@ -46,7 +46,7 @@ class StubAgent:
     memory_prompt_mode: MemoryPromptMode = MEMORY_PROMPT_MODE_AGENT_USER
     allowed_tools: list[str] = field(default_factory=lambda: ["*"])
     allowed_skills: list[str] = field(default_factory=lambda: ["*"])
-    allowed_agents: list[str] = field(default_factory=lambda: ["*"])
+    tools: dict[str, object] = field(default_factory=dict)
     custom_system_prompt_enabled: bool = False
 
 

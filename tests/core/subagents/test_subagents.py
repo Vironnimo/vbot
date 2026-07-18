@@ -57,7 +57,9 @@ def make_context(
         project_id=project_id,
         nesting_depth=nesting_depth,
         emit_hook=emit_hook,
-        allowed_agents=allowed_agents,
+        tool_settings=(
+            None if allowed_agents is None else {"subagent": {"allowed_agents": allowed_agents}}
+        ),
     )
 
 

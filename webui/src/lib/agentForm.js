@@ -15,9 +15,6 @@ const DEFAULT_AGENT_ALLOWED_TOOLS = Object.freeze([DEFAULT_AGENT_ALLOWED_LIST]);
 const DEFAULT_AGENT_ALLOWED_SKILLS = Object.freeze([
   DEFAULT_AGENT_ALLOWED_LIST,
 ]);
-const DEFAULT_AGENT_ALLOWED_AGENTS = Object.freeze([
-  DEFAULT_AGENT_ALLOWED_LIST,
-]);
 const DEFAULT_AGENT_MEMORY_PROMPT_MODE = 'agent_user';
 export const MEMORY_TOOL_NAME = 'memory';
 export const AGENT_MEMORY_PROMPT_MODES = Object.freeze([
@@ -51,7 +48,7 @@ const EDITABLE_AGENT_FIELDS = Object.freeze([
   'root_project_id',
   'allowed_tools',
   'allowed_skills',
-  'allowed_agents',
+  'tools',
   'custom_system_prompt_enabled',
   'compaction_policy',
 ]);
@@ -88,10 +85,7 @@ export function createAgentFormValues(agent = {}) {
       agent.allowed_skills,
       DEFAULT_AGENT_ALLOWED_SKILLS,
     ),
-    allowed_agents: normalizeArrayList(
-      agent.allowed_agents,
-      DEFAULT_AGENT_ALLOWED_AGENTS,
-    ),
+    tools: normalizeAgentTools(agent.tools),
     custom_system_prompt_enabled: Boolean(agent.custom_system_prompt_enabled),
     compaction_policy: isPlainObject(raw.compaction_policy)
       ? normalizeCompactionPolicy(raw.compaction_policy)
@@ -121,7 +115,10 @@ export function normalizeAgentForm(values, options = {}) {
     errors.temperature = 'invalid_number';
   }
 
-  const payloadOptions = { includeWorkspace: mode === AGENT_FORM_MODE_EDIT };
+  const payloadOptions = {
+    includeWorkspace: mode === AGENT_FORM_MODE_EDIT,
+    includeTools: mode === AGENT_FORM_MODE_EDIT,
+  };
   let payload = buildAgentPayload(normalized, temperature, payloadOptions);
 
   if (
@@ -208,10 +205,7 @@ function normalizeValues(values = {}) {
     memory_prompt_mode: normalizeMemoryPromptMode(values.memory_prompt_mode),
     allowed_tools: normalizeList(values.allowed_tools),
     allowed_skills: normalizeArrayList(values.allowed_skills),
-    allowed_agents: normalizeArrayList(
-      values.allowed_agents,
-      DEFAULT_AGENT_ALLOWED_AGENTS,
-    ),
+    tools: normalizeAgentTools(values.tools),
     custom_system_prompt_enabled: Boolean(values.custom_system_prompt_enabled),
     compaction_policy: isPlainObject(values.compaction_policy)
       ? normalizeCompactionPolicy(values.compaction_policy)
@@ -270,7 +264,6 @@ function buildAgentPayload(normalized, temperature, options = {}) {
     memory_prompt_mode: normalized.memory_prompt_mode,
     allowed_tools: normalized.allowed_tools,
     allowed_skills: normalized.allowed_skills,
-    allowed_agents: normalized.allowed_agents,
     custom_system_prompt_enabled: normalized.custom_system_prompt_enabled,
     compaction_policy: normalized.compaction_policy,
   };
@@ -280,7 +273,55 @@ function buildAgentPayload(normalized, temperature, options = {}) {
     payload.root_project_id = normalized.root_project_id;
   }
 
+  if (options.includeTools || Object.keys(normalized.tools).length > 0) {
+    payload.tools = normalized.tools;
+  }
+
   return payload;
+}
+
+export function subagentAllowedAgents(tools) {
+  const allowed = tools?.subagent?.allowed_agents;
+  return Array.isArray(allowed)
+    ? normalizeArrayList(allowed, [])
+    : [DEFAULT_AGENT_ALLOWED_LIST];
+}
+
+export function withSubagentAllowedAgents(tools, allowedAgents) {
+  const next = normalizeAgentTools(tools);
+  const normalizedAllowed = normalizeArrayList(allowedAgents, [
+    DEFAULT_AGENT_ALLOWED_LIST,
+  ]);
+  const subagent = { ...(next.subagent ?? {}) };
+  if (normalizedAllowed.includes(DEFAULT_AGENT_ALLOWED_LIST)) {
+    delete subagent.allowed_agents;
+  } else {
+    subagent.allowed_agents = normalizedAllowed;
+  }
+  if (Object.keys(subagent).length > 0) {
+    next.subagent = subagent;
+  } else {
+    delete next.subagent;
+  }
+  return next;
+}
+
+function normalizeAgentTools(tools) {
+  if (!isPlainObject(tools)) {
+    return {};
+  }
+  const normalizedTools = {};
+  for (const [toolName, toolSettings] of Object.entries(tools)) {
+    if (!toolName || !isPlainObject(toolSettings)) {
+      continue;
+    }
+    normalizedTools[toolName] = { ...toolSettings };
+  }
+  const subagent = normalizedTools.subagent;
+  if (isPlainObject(subagent) && 'allowed_agents' in subagent) {
+    subagent.allowed_agents = normalizeArrayList(subagent.allowed_agents, []);
+  }
+  return normalizedTools;
 }
 
 // Build the global target catalog for an Identity Agent. Identity targets use a
