@@ -29,3 +29,8 @@ export async function startIsolatedChat(page, { agentName = "" } = {}) {
 
   return chat;
 }
+
+export async function sendChatMessage(chat, content) {
+  await chat.getByRole("textbox", { name: "Message" }).fill(content);
+  await chat.getByRole("button", { name: "Send message" }).click();
+}
