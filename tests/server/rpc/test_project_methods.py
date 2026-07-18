@@ -787,6 +787,29 @@ def test_team_member_reports_denied_tools(tmp_path: Path) -> None:
     assert member["denied_tools"] == ["edit", "subagent", "write"]
 
 
+def test_team_member_reports_effective_repo_owned_agent_targets(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    repo = tmp_path / "repos" / "vbot"
+    agents_dir = repo.joinpath(*OPENCODE_AGENTS_SUBPATH)
+    agents_dir.mkdir(parents=True)
+    for name in ("builder", "reviewer"):
+        _write_agent(repo, f"{name}.md")
+    agents_dir.joinpath("orchestrator.md").write_text(
+        (
+            "---\nmodel: openai/gpt-5.2\npermission:\n  task:\n"
+            '    "*": deny\n    reviewer: allow\n---\nBody.\n'
+        ),
+        encoding="utf-8",
+    )
+    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+
+    result = _show_project(state, {"project_id": "vbot"})
+
+    members = {member["agent_id"]: member for member in result["scan"]["team"]}
+    assert members["orchestrator"]["allowed_agents"] == ["reviewer"]
+    assert members["builder"]["allowed_agents"] == ["builder", "orchestrator", "reviewer"]
+
+
 # ---------------------------------------------------------------------------
 # Per-agent Overrides: team response fields (overrides + effective) + set/clear handlers.
 # ---------------------------------------------------------------------------

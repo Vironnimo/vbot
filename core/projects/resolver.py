@@ -47,11 +47,13 @@ risk, mirroring ``core/providers/task_client.py`` / ``usage.py``).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from core.memory import MemoryPromptMode
+from core.projects.address import InvalidAgentAddressError, parse_agent_address
 from core.projects.projects import ProjectError
 from core.projects.scan_report import FindingType, ScanFinding
 from core.projects.scanners.base import (
@@ -109,9 +111,8 @@ class RuntimeAgent(Protocol):
     - ``fallback_model`` — secondary model (empty for a config agent in v1).
     - ``workspace`` — identity/memory home; **empty** for a config agent.
     - ``temperature`` / ``thinking_effort`` — run knobs (may be ``None``).
-    - ``allowed_tools`` / ``allowed_skills`` — allow-lists (for a config agent the
-      project Tool Whitelist minus the agent's denials, and the project-derived
-      skills, respectively).
+    - ``allowed_tools`` / ``allowed_skills`` / ``allowed_agents`` — allow-lists
+      (for a config agent, project-derived capabilities bounded to its Project).
     - ``memory_prompt_mode`` — pinned-memory selection (``"off"`` for config).
     - ``custom_system_prompt_enabled`` — private prompt scope (``False`` for config).
     - ``current_session_id`` — the agent's active session (empty for config; the
@@ -140,6 +141,8 @@ class RuntimeAgent(Protocol):
     def allowed_tools(self) -> list[str]: ...
     @property
     def allowed_skills(self) -> list[str]: ...
+    @property
+    def allowed_agents(self) -> list[str]: ...
     @property
     def memory_prompt_mode(self) -> MemoryPromptMode: ...
     @property
@@ -173,6 +176,7 @@ class ConfigAgent:
     temperature: float | None
     allowed_tools: list[str]
     allowed_skills: list[str]
+    allowed_agents: list[str]
     body: str
     source_path: Path
     source_format: str
@@ -497,13 +501,32 @@ class AgentResolver:
         return self._resolve_config_agent(project_id, agent_id)
 
     def _resolve_identity_agent(self, agent_id: str) -> Agent:
-        """Identity path: the store agent, unchanged (decision: byte-for-byte today)."""
+        """Resolve one Identity Agent and filter explicit target addresses live."""
         from core.agents.agents import AgentError
 
         try:
-            return self._agents.get(agent_id)
+            agent = self._agents.get(agent_id)
         except AgentError as error:
             raise AgentResolutionError(str(error)) from error
+        if "*" in agent.allowed_agents:
+            return agent
+        effective = [
+            address for address in agent.allowed_agents if self._identity_target_exists(address)
+        ]
+        return replace(agent, allowed_agents=effective)
+
+    def _identity_target_exists(self, address: str) -> bool:
+        try:
+            target_agent_id, target_project_id = parse_agent_address(address)
+        except InvalidAgentAddressError:
+            return False
+        if target_project_id is None:
+            return self._agents.exists(target_agent_id)
+        try:
+            project = self._load_project(target_project_id)
+        except AgentResolutionError:
+            return False
+        return target_agent_id in {member.agent_id for member in self._project_team(project)}
 
     def _resolve_config_agent(self, project_id: str, agent_id: str) -> ConfigAgent:
         project = self._load_project(project_id)
@@ -524,6 +547,7 @@ class AgentResolver:
         resolved_thinking_effort = _resolve_thinking_effort(scanned, project, global_defaults)
         allowed_tools = _effective_allowed_tools(project, scanned)
         allowed_skills = _effective_allowed_skills(project, self._project_skill_names(project_id))
+        allowed_agents = _effective_allowed_agents(scanned, team)
         return _build_config_agent(
             scanned,
             resolved_model,
@@ -531,6 +555,7 @@ class AgentResolver:
             resolved_thinking_effort,
             allowed_tools,
             allowed_skills,
+            allowed_agents,
             project.overrides.get(agent_id, {}).get("compaction_policy"),
         )
 
@@ -561,6 +586,12 @@ class AgentResolver:
         if project_id is None:
             return self._identity_effective_config(agent_id)
         return self._config_effective_config(project_id, agent_id)
+
+    def effective_allowed_agents_for_member(
+        self, project: Project, member: ScannedAgent
+    ) -> list[str]:
+        """Project one scanned member's target rules onto its current Team."""
+        return _effective_allowed_agents(member, self._project_team(project))
 
     def effective_config_for_member(
         self, project: Project, scanned: ScannedAgent
@@ -913,6 +944,19 @@ def _effective_allowed_skills(project: Project, project_skill_names: frozenset[s
     return sorted(allowed)
 
 
+def _effective_allowed_agents(scanned: ScannedAgent, team: list[ScannedAgent]) -> list[str]:
+    """Materialize ordered repository target rules against the current Project Team."""
+    allowed: list[str] = []
+    for member in team:
+        member_allowed = True
+        for rule in scanned.agent_target_rules:
+            if fnmatchcase(member.agent_id, rule.pattern):
+                member_allowed = rule.allowed
+        if member_allowed:
+            allowed.append(member.agent_id)
+    return sorted(allowed)
+
+
 def _build_config_agent(
     scanned: ScannedAgent,
     resolved_model: str,
@@ -920,6 +964,7 @@ def _build_config_agent(
     resolved_thinking_effort: str | None,
     allowed_tools: list[str],
     allowed_skills: list[str],
+    allowed_agents: list[str],
     compaction_policy: Any,
 ) -> ConfigAgent:
     return ConfigAgent(
@@ -933,6 +978,7 @@ def _build_config_agent(
         source_format=scanned.source_format,
         allowed_tools=allowed_tools,
         allowed_skills=allowed_skills,
+        allowed_agents=allowed_agents,
         compaction_policy=(
             dict(compaction_policy) if isinstance(compaction_policy, dict) else None
         ),

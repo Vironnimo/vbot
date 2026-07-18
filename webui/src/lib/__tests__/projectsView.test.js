@@ -24,6 +24,7 @@ import {
   normalizeScanReport,
   normalizeScanSkills,
   presentFormats,
+  projectAgentTargetSummary,
   projectTeam,
   seedTeamOverrideDraft,
   setListMembership,
@@ -489,6 +490,7 @@ describe('projectTeam', () => {
             source_format: 'opencode',
             source_path: '.opencode/agents/builder.md',
             denied_tools: ['bash'],
+            allowed_agents: ['builder'],
             overrides: { model: 'openai/gpt-mini' },
             effective: {
               model: { value: 'openai/gpt-mini', source: 'override' },
@@ -510,6 +512,7 @@ describe('projectTeam', () => {
         source_format: 'opencode',
         source_path: '.opencode/agents/builder.md',
         denied_tools: ['bash'],
+        allowed_agents: ['builder'],
         // The per-agent override object (subset of the three fields), or null.
         overrides: { model: 'openai/gpt-mini' },
         // Provenance-aware resolved values per run field.
@@ -529,6 +532,7 @@ describe('projectTeam', () => {
         source_format: '',
         source_path: '',
         denied_tools: [],
+        allowed_agents: [],
         // No override → null; effective defaults to a stable null-per-field map.
         overrides: null,
         effective: {
@@ -555,6 +559,24 @@ describe('projectTeam', () => {
   it('returns an empty list for a missing team', () => {
     expect(projectTeam({})).toEqual([]);
     expect(projectTeam(undefined)).toEqual([]);
+  });
+
+  it('summarizes repository-owned Project Agent targets against the Team', () => {
+    const team = [{ agent_id: 'builder' }, { agent_id: 'reviewer' }];
+
+    expect(projectAgentTargetSummary({ allowed_agents: [] }, team)).toEqual({
+      mode: 'none',
+      agents: [],
+    });
+    expect(
+      projectAgentTargetSummary(
+        { allowed_agents: ['builder', 'reviewer'] },
+        team,
+      ),
+    ).toEqual({ mode: 'all', agents: ['builder', 'reviewer'] });
+    expect(
+      projectAgentTargetSummary({ allowed_agents: ['reviewer'] }, team),
+    ).toEqual({ mode: 'limited', agents: ['reviewer'] });
   });
 });
 

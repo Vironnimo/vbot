@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from copy import deepcopy
+from typing import Any
 
 from core.memory import MEMORY_PROMPT_MODE_OFF, MemoryPromptMode
 
 MEMORY_TOOL_NAME = "memory"
 SKILL_MANAGE_TOOL_NAME = "skill_manage"
+SUBAGENT_TOOL_NAMES: frozenset[str] = frozenset({"subagent", "subagent_result"})
 
 # Tools usable only by an identity agent (one with a Workspace). ``skill_manage``
 # writes to the agent's own private skill home under ``<data_dir>/agents/<id>/skills/``,
@@ -34,6 +37,7 @@ def effective_agent_allowed_tools(
     registered_tool_names: Sequence[str],
     workspace: str = "",
     session_tool_grants: Sequence[str] = (),
+    allowed_agents: Sequence[str] | None = None,
 ) -> list[str] | None:
     """Return the runtime allowlist after applying Agent memory mode and identity-only gating.
 
@@ -48,6 +52,8 @@ def effective_agent_allowed_tools(
     excluded: set[str] = set() if workspace else set(IDENTITY_ONLY_TOOLS)
     if not memory_tool_enabled(memory_prompt_mode):
         excluded.add(MEMORY_TOOL_NAME)
+    if allowed_agents is not None and not allowed_agents:
+        excluded.update(SUBAGENT_TOOL_NAMES)
 
     grants = [tool_name for tool_name in session_tool_grants if tool_name in registered_tool_names]
 
@@ -73,6 +79,46 @@ def effective_agent_allowed_tools(
     return list(dict.fromkeys([*configured_tools, *grants]))
 
 
+def apply_agent_target_tool_visibility(
+    definitions: list[dict[str, Any]],
+    *,
+    agent_id: str,
+    allowed_agents: Sequence[str] | None,
+) -> list[dict[str, Any]]:
+    """Hide or narrow Sub-Agent Tool definitions from one RuntimeAgent snapshot."""
+    if allowed_agents is None or "*" in allowed_agents:
+        return definitions
+    if not allowed_agents:
+        return [
+            definition
+            for definition in definitions
+            if definition.get("name") not in SUBAGENT_TOOL_NAMES
+        ]
+
+    targets = list(dict.fromkeys(allowed_agents))
+    projected: list[dict[str, Any]] = []
+    for definition in definitions:
+        if definition.get("name") not in SUBAGENT_TOOL_NAMES:
+            projected.append(definition)
+            continue
+        narrowed = deepcopy(definition)
+        description = str(narrowed.get("description", "")).rstrip()
+        narrowed["description"] = f"{description} Allowed agent targets: {', '.join(targets)}."
+        parameters = narrowed.get("parameters")
+        if isinstance(parameters, dict):
+            properties = parameters.get("properties")
+            if isinstance(properties, dict) and isinstance(properties.get("agent_id"), dict):
+                properties["agent_id"]["enum"] = targets
+            if agent_id not in targets:
+                required = parameters.get("required")
+                required_names = list(required) if isinstance(required, list) else []
+                if "agent_id" not in required_names:
+                    required_names.append("agent_id")
+                parameters["required"] = required_names
+        projected.append(narrowed)
+    return projected
+
+
 def _without(tool_names: Sequence[str], excluded: set[str]) -> list[str]:
     return sorted({tool_name for tool_name in tool_names if tool_name not in excluded})
 
@@ -81,6 +127,8 @@ __all__ = [
     "IDENTITY_ONLY_TOOLS",
     "MEMORY_TOOL_NAME",
     "SKILL_MANAGE_TOOL_NAME",
+    "SUBAGENT_TOOL_NAMES",
+    "apply_agent_target_tool_visibility",
     "effective_agent_allowed_tools",
     "memory_tool_enabled",
     "sanitize_configured_allowed_tools",

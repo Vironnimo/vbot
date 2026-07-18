@@ -1,5 +1,10 @@
 import { parseModelSelectionValue } from './modelSelection.js';
 import { normalizeCompactionPolicy } from './compactionPolicy.js';
+import {
+  AGENT_TARGET_GROUP_PROJECT,
+  buildAgentTargetOptions,
+} from './agentTargetOptions.js';
+import { parseAgentAddress } from './agentAddress.js';
 
 export const AGENT_FORM_MODE_CREATE = 'create';
 export const AGENT_FORM_MODE_EDIT = 'edit';
@@ -8,6 +13,9 @@ const DEFAULT_AGENT_TEMPERATURE = '';
 const DEFAULT_AGENT_ALLOWED_LIST = '*';
 const DEFAULT_AGENT_ALLOWED_TOOLS = Object.freeze([DEFAULT_AGENT_ALLOWED_LIST]);
 const DEFAULT_AGENT_ALLOWED_SKILLS = Object.freeze([
+  DEFAULT_AGENT_ALLOWED_LIST,
+]);
+const DEFAULT_AGENT_ALLOWED_AGENTS = Object.freeze([
   DEFAULT_AGENT_ALLOWED_LIST,
 ]);
 const DEFAULT_AGENT_MEMORY_PROMPT_MODE = 'agent_user';
@@ -43,6 +51,7 @@ const EDITABLE_AGENT_FIELDS = Object.freeze([
   'root_project_id',
   'allowed_tools',
   'allowed_skills',
+  'allowed_agents',
   'custom_system_prompt_enabled',
   'compaction_policy',
 ]);
@@ -78,6 +87,10 @@ export function createAgentFormValues(agent = {}) {
     allowed_skills: normalizeArrayList(
       agent.allowed_skills,
       DEFAULT_AGENT_ALLOWED_SKILLS,
+    ),
+    allowed_agents: normalizeArrayList(
+      agent.allowed_agents,
+      DEFAULT_AGENT_ALLOWED_AGENTS,
     ),
     custom_system_prompt_enabled: Boolean(agent.custom_system_prompt_enabled),
     compaction_policy: isPlainObject(raw.compaction_policy)
@@ -195,6 +208,10 @@ function normalizeValues(values = {}) {
     memory_prompt_mode: normalizeMemoryPromptMode(values.memory_prompt_mode),
     allowed_tools: normalizeList(values.allowed_tools),
     allowed_skills: normalizeArrayList(values.allowed_skills),
+    allowed_agents: normalizeArrayList(
+      values.allowed_agents,
+      DEFAULT_AGENT_ALLOWED_AGENTS,
+    ),
     custom_system_prompt_enabled: Boolean(values.custom_system_prompt_enabled),
     compaction_policy: isPlainObject(values.compaction_policy)
       ? normalizeCompactionPolicy(values.compaction_policy)
@@ -253,6 +270,7 @@ function buildAgentPayload(normalized, temperature, options = {}) {
     memory_prompt_mode: normalized.memory_prompt_mode,
     allowed_tools: normalized.allowed_tools,
     allowed_skills: normalized.allowed_skills,
+    allowed_agents: normalized.allowed_agents,
     custom_system_prompt_enabled: normalized.custom_system_prompt_enabled,
     compaction_policy: normalized.compaction_policy,
   };
@@ -263,6 +281,54 @@ function buildAgentPayload(normalized, temperature, options = {}) {
   }
 
   return payload;
+}
+
+// Build the global target catalog for an Identity Agent. Identity targets use a
+// bare Agent id; Project targets use the canonical `agent@project` address. The
+// catalog carries presentation metadata only — the persisted allow-list remains
+// a list of exact address strings (or the `*` wildcard).
+export function buildAgentTargetCatalog({
+  identityAgents = [],
+  projectTeams = [],
+} = {}) {
+  const teams = Array.isArray(projectTeams) ? projectTeams : [];
+  const projectNames = new Map(
+    teams.map((project) => [
+      asText(project?.projectId),
+      asText(project?.displayName) || asText(project?.projectId),
+    ]),
+  );
+  const memberNames = new Map();
+  for (const project of teams) {
+    const projectId = asText(project?.projectId);
+    for (const member of Array.isArray(project?.team) ? project.team : []) {
+      const agentId = asText(member?.agent_id);
+      if (projectId && agentId) {
+        memberNames.set(
+          `${projectId}:${agentId}`,
+          asText(member?.display_name) || agentId,
+        );
+      }
+    }
+  }
+
+  return buildAgentTargetOptions(identityAgents, teams).map((option) => {
+    if (option.group !== AGENT_TARGET_GROUP_PROJECT) {
+      return {
+        name: option.value,
+        displayName: option.label,
+        kind: 'identity',
+      };
+    }
+    const { agentId } = parseAgentAddress(option.value);
+    return {
+      name: option.value,
+      displayName: memberNames.get(`${option.projectId}:${agentId}`) || agentId,
+      kind: 'project',
+      projectId: option.projectId,
+      projectName: projectNames.get(option.projectId) || option.projectId,
+    };
+  });
 }
 
 function filterChangedFields(payload, baselinePayload) {

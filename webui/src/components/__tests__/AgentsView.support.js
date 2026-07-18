@@ -286,6 +286,18 @@ export function createAgentsRpcMock(options = {}) {
       return { projects: options.projects ?? [] };
     }
 
+    if (method === 'project.show') {
+      const projectId = params?.project_id;
+      const configured = options.projectScans?.[projectId];
+      if (configured) {
+        return configured;
+      }
+      const project = (options.projects ?? []).find(
+        (candidate) => candidate.project_id === projectId,
+      );
+      return { project: project ?? {}, scan: { team: [] } };
+    }
+
     if (method === 'agent.list') {
       return { agents };
     }
@@ -391,6 +403,7 @@ export function baseAgent() {
     memory_prompt_mode: 'agent_user',
     allowed_tools: ['*'],
     allowed_skills: ['*'],
+    allowed_agents: ['*'],
     custom_system_prompt_enabled: false,
     created_at: '2026-05-08T00:00:00+00:00',
     updated_at: '2026-05-08T00:00:00+00:00',

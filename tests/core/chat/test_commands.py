@@ -96,6 +96,7 @@ def _make_agent(
         thinking_effort=thinking_effort,
         allowed_tools=["*"],
         allowed_skills=["*"],
+        allowed_agents=["*"],
         created_at="2026-05-18T10:00:00+00:00",
         updated_at="2026-05-18T10:00:00+00:00",
     )

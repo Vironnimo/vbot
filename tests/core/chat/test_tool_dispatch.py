@@ -39,6 +39,7 @@ class _StubAgent:
     workspace: Path
     allowed_tools: list[str] | None = None
     allowed_skills: list[str] | None = None
+    allowed_agents: list[str] | None = None
     memory_prompt_mode: str = "agent_user"
 
 
@@ -169,6 +170,37 @@ async def test_session_tool_grant_precedes_agent_and_run_dispatch_gates(tmp_path
     assert _decode_tool_result(unavailable[0].content)["error"]["code"] == "history_unavailable"
     assert _decode_tool_result(granted[0].content) == tool_success({"ran": True})
     assert _decode_tool_result(restricted[0].content)["error"]["code"] == "tool_not_allowed"
+
+
+@pytest.mark.asyncio
+async def test_empty_agent_targets_block_subagent_at_dispatch(tmp_path: Path) -> None:
+    tools = ToolRegistry()
+    tools.register(
+        "subagent",
+        "Start a Sub-Agent",
+        {"type": "object"},
+        lambda _context, _arguments: tool_success({"ran": True}),
+    )
+    runtime, wildcard_agent = _build_runtime_and_agent(tmp_path, tools)
+    agent = _StubAgent(
+        id=wildcard_agent.id,
+        workspace=wildcard_agent.workspace,
+        allowed_tools=["*"],
+        allowed_agents=[],
+    )
+    session = _build_session(tmp_path)
+
+    messages, _ = await _dispatch_tool_calls(
+        runtime,
+        agent,
+        [ToolCall(id="subagent-call", name="subagent", arguments={})],
+        session,
+        Run(run_id="run", agent_id=agent.id, session_id=session.id),
+        nesting_depth=0,
+        base_allowed_tools=("subagent",),
+    )
+
+    assert _decode_tool_result(messages[0].content)["error"]["code"] == "tool_not_allowed"
 
 
 class TestDispatchCancelWiring:

@@ -39,7 +39,7 @@ from core.tools import (
     tool_failure,
 )
 from core.tools import ToolCall as ScheduledToolCall
-from core.tools.availability import effective_agent_allowed_tools
+from core.tools.availability import SUBAGENT_TOOL_NAMES, effective_agent_allowed_tools
 from core.tools.skill import load_skill_content
 from core.utils.logging import get_logger
 
@@ -367,6 +367,7 @@ async def _dispatch_tool_calls(
             ),
             session_tool_grants=context.session_tool_grants,
             allowed_skills=getattr(agent, "allowed_skills", ["*"]),
+            allowed_agents=getattr(agent, "allowed_agents", ["*"]),
             emit_hook=lambda event_type, payload: _emit_tool_context_event(
                 run,
                 event_type,
@@ -588,6 +589,7 @@ def _runtime_allowed_tools(agent: Any, tool_registry: ToolRegistry) -> Sequence[
         getattr(agent, "memory_prompt_mode", "agent_user"),
         registered_tool_names=[tool.name for tool in tool_registry.list_tools()],
         workspace=getattr(agent, "workspace", "") or "",
+        allowed_agents=getattr(agent, "allowed_agents", ["*"]),
     )
 
 
@@ -619,6 +621,15 @@ def _dispatch_allowed_tools(
         if base_allowed_tools is not None
         else _runtime_allowed_tools(agent, tool_registry)
     )
+    if not getattr(agent, "allowed_agents", ["*"]):
+        if effective is None:
+            effective = [
+                tool.name
+                for tool in tool_registry.list_tools()
+                if tool.name not in SUBAGENT_TOOL_NAMES
+            ]
+        else:
+            effective = [name for name in effective if name not in SUBAGENT_TOOL_NAMES]
     if tool_restriction is None:
         return effective
     restriction = set(tool_restriction)

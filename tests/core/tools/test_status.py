@@ -38,6 +38,7 @@ def _make_agent(*, model: str = "openai/gpt-5.2") -> Agent:
         thinking_effort="none",
         allowed_tools=["*"],
         allowed_skills=["*"],
+        allowed_agents=["*"],
         created_at="2026-05-18T10:00:00+00:00",
         updated_at="2026-05-18T10:00:00+00:00",
     )
@@ -496,6 +497,7 @@ def test_status_tool_splits_selected_and_actual_thinking_effort(tmp_path: Path) 
         thinking_effort="max",
         allowed_tools=["*"],
         allowed_skills=["*"],
+        allowed_agents=["*"],
         created_at="2026-05-18T10:00:00+00:00",
         updated_at="2026-05-18T10:00:00+00:00",
     )
@@ -543,6 +545,7 @@ def _make_config_agent() -> ConfigAgent:
         temperature=None,
         allowed_tools=["*"],
         allowed_skills=["*"],
+        allowed_agents=["*"],
         body="You orchestrate the team.",
         source_path=Path("/repo/.opencode/agents/orchestrator.md"),
         source_format="opencode",

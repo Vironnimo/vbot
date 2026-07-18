@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   AGENT_FORM_MODE_EDIT,
   THINKING_EFFORT_OPTIONS,
+  buildAgentTargetCatalog,
   createAgentFormValues,
   effortOptionsForReasoning,
   normalizeAgentForm,
@@ -24,6 +25,7 @@ describe('agent form helpers', () => {
       memory_prompt_mode: 'agent_user',
       allowed_tools: ['*'],
       allowed_skills: ['*'],
+      allowed_agents: ['*'],
       compaction_policy: null,
       custom_system_prompt_enabled: false,
     });
@@ -159,6 +161,7 @@ describe('agent form helpers', () => {
       memory_prompt_mode: ' off ',
       allowed_tools: [' read ', '', 'write '],
       allowed_skills: [' debugging ', ''],
+      allowed_agents: [' worker ', 'builder@vbot'],
       custom_system_prompt_enabled: true,
     });
 
@@ -173,6 +176,7 @@ describe('agent form helpers', () => {
       memory_prompt_mode: 'off',
       allowed_tools: ['read', 'write'],
       allowed_skills: ['debugging'],
+      allowed_agents: ['worker', 'builder@vbot'],
       compaction_policy: null,
       custom_system_prompt_enabled: true,
     });
@@ -190,6 +194,34 @@ describe('agent form helpers', () => {
 
     expect(result.isValid).toBe(true);
     expect(result.payload.temperature).toBe(0.25);
+  });
+
+  it('builds canonical Identity and Project Agent target addresses', () => {
+    expect(
+      buildAgentTargetCatalog({
+        identityAgents: [
+          { id: 'alpha', name: 'Alpha' },
+          { id: 'worker', name: 'Worker' },
+        ],
+        projectTeams: [
+          {
+            projectId: 'vbot',
+            displayName: 'vBot',
+            team: [{ agent_id: 'builder', display_name: 'Builder' }],
+          },
+        ],
+      }),
+    ).toEqual([
+      { name: 'alpha', displayName: 'Alpha', kind: 'identity' },
+      { name: 'worker', displayName: 'Worker', kind: 'identity' },
+      {
+        name: 'builder@vbot',
+        displayName: 'Builder',
+        kind: 'project',
+        projectId: 'vbot',
+        projectName: 'vBot',
+      },
+    ]);
   });
 
   it('removes memory from allowed tool payloads', () => {

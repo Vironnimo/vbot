@@ -47,6 +47,7 @@ def _config_agent(body: str) -> ConfigAgent:
         temperature=0.1,
         allowed_tools=["*"],
         allowed_skills=["*"],
+        allowed_agents=["*"],
         body=body,
         source_path=Path(".opencode/agents/orchestrator.md"),
         source_format="opencode",

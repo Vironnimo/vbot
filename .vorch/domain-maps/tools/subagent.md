@@ -19,6 +19,8 @@ Registers the public sub-agent tools and delegates orchestration to `core/subage
 
 ## Conventions
 
+- `allowed_agents` is independent of `allowed_tools` and authorizes both `subagent` and `subagent_result` immediately after canonical address parsing, before target lookup, Session work, quota reservation, or queueing. Identity-Agent `['*']` reaches every Identity Agent and every Project Agent across registered Projects; explicit entries use bare Identity ids or qualified `agent@project` addresses. A Project Agent is always bounded to its own current Team, including when its repository policy is a wildcard.
+- When effective `allowed_agents` is empty, both provider Tool definitions are omitted and dispatch rejects both Tools. When the set is explicit, the provider schema requires `agent_id` and narrows it to that target enum; wildcard access retains the optional free-address schema.
 - With `session_id`, `subagent` routes into an existing Session; otherwise it creates a new persisted Session for the target Agent.
 - Busy target Sessions enqueue a follow-up Run through `ChatRunManager`.
 - Foreground mode waits for completion and returns the result payload; spawn/result payloads carry `activity_file: string | null` for the matching Run. Every successful `subagent` result whose file was allocated also carries `activity_note` with the concrete path and the instruction to read it if the Sub-Agent's status or progress becomes relevant.
@@ -29,6 +31,7 @@ Registers the public sub-agent tools and delegates orchestration to `core/subage
 ## Constraints & Gotchas
 
 - The caller cannot target its own active Session.
+- Authorization is repeated inside `SubAgentCoordinator` for both operations; provider-schema narrowing and Tool availability are visibility and guidance, not the security boundary.
 - Depth and per-turn limits are enforced from runtime settings.
 - Parent cancellation removes queued child Runs when possible and cancels already-started child Runs.
 - Completed entries that were fetched are pruned from the in-memory tracker.

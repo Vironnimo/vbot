@@ -93,6 +93,14 @@ def string_field(value: Any) -> str:
 
 
 @dataclass(frozen=True)
+class AgentTargetRule:
+    """One ordered, format-neutral rule for a Project Agent target id."""
+
+    pattern: str
+    allowed: bool
+
+
+@dataclass(frozen=True)
 class ScannedAgent:
     """One agent profile emitted by a detector — the detector→resolver contract.
 
@@ -139,6 +147,7 @@ class ScannedAgent:
     source_format: str
     source_path: Path
     denied_tools: frozenset[str] = frozenset()
+    agent_target_rules: tuple[AgentTargetRule, ...] = ()
     thinking_effort: str | None = None
 
 

@@ -537,6 +537,7 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
         "thinking_effort",
         "allowed_tools",
         "allowed_skills",
+        "allowed_agents",
         "custom_system_prompt_enabled",
         "compaction_policy",
     }
@@ -600,7 +601,7 @@ def _validate_agent_field(key: str, value: Any) -> Any:
         return _validate_thinking_effort(value, allow_none=True)
     if key == "memory_prompt_mode":
         return _validate_memory_prompt_mode(value)
-    if key in {"allowed_tools", "allowed_skills"}:
+    if key in {"allowed_tools", "allowed_skills", "allowed_agents"}:
         return _validate_string_list(key, value)
     if key == "custom_system_prompt_enabled":
         if not isinstance(value, bool):
