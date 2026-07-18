@@ -98,7 +98,7 @@ Each domain has a **domain map** in `.vorch/domain-maps/`, named after its modul
 ```bash
 pip install -e ".[dev]"
 ```
-Use the current Python interpreter directly — do not assume a virtual environment for installs, quality gates, or runtime commands. End-user installation (the one-line bootstrap, the Windows/Linux installers with autostart and desktop add-ons, update, and uninstall) lives in [USAGE.md](../USAGE.md#installation); read it only when you touch the installer or bootstrap scripts under `scripts/`. Successful installers persist checkout-local lifecycle state in `.vbot-install.json`; `cli/install_state.py` owns its schema and atomic I/O, and update/uninstall use its recorded dependency groups and Python interpreter instead of inferring the environment on every run. The file is git-ignored and contains no runtime data or credentials.
+Use the current Python interpreter directly — do not assume a virtual environment for installs, quality gates, or runtime commands. End-user installation (the public Windows/Linux `install.*` entrypoints with autostart and Desktop shapes, update, and uninstall) lives in [USAGE.md](../USAGE.md#installation); read it when you touch the installer, internal checkout setup, update, or uninstall scripts under `scripts/`. Successful installers persist checkout-local lifecycle state in `.vbot-install.json`; `cli/install_state.py` owns its schema and atomic I/O, and update/uninstall use its recorded dependency groups and Python interpreter instead of inferring the environment on every run. The file is git-ignored and contains no runtime data or credentials.
 
 **Worktree commands:** Project worktrees are managed with:
 ```bash

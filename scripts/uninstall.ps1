@@ -9,20 +9,19 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-# vBot uninstaller for Windows. Mirrors scripts/uninstall.sh. Two modes, picked by
-# whether this is a self-contained bootstrap install:
-#   - bootstrap install (a .vbot-bootstrap marker sits next to scripts\): remove
-#     the whole tree (venv + source), the 'vbot' shim + its PATH entry, and the
-#     autostart task.
-#   - manual/editable install (no marker): uninstall the pip package from the
-#     active interpreter and optionally remove the autostart task.
+# vBot uninstaller for Windows. Mirrors scripts/uninstall.sh. Managed fresh
+# installs remove their complete installer-owned tree; managed installations in
+# an existing checkout remove only the installer-owned venv and launcher; direct
+# internal setup installs uninstall only the pip package.
 # Either way the data dir (~\.vbot) is never touched.
 
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$Marker = Join-Path $ProjectRoot ".vbot-bootstrap"
+$RootMarker = Join-Path $ProjectRoot ".vbot-install-root"
+$VenvMarker = Join-Path $ProjectRoot ".vbot-install-venv"
+$LegacyRootMarker = Join-Path $ProjectRoot ".vbot-bootstrap"
 $InstallManifest = Join-Path $ProjectRoot ".vbot-install.json"
 
-# Start-menu shortcut filename. Kept in sync with scripts/install.ps1, which
+# Start-menu shortcut filename. Kept in sync with scripts/setup.ps1, which
 # creates a shortcut by this exact name under -Desktop / -DesktopClient.
 $DesktopShortcutName = "vBot Desktop.lnk"
 
@@ -240,19 +239,25 @@ function Get-RecordedServerStopArguments {
     return $stopArguments
 }
 
-function Invoke-BootstrapUninstall {
-    $rootNormalized = [System.IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\', '/')
-    $homeNormalized = [System.IO.Path]::GetFullPath($HOME).TrimEnd('\', '/')
-    $driveRootNormalized = [System.IO.Path]::GetPathRoot($rootNormalized).TrimEnd('\', '/')
-    if (
-        [string]::IsNullOrWhiteSpace($rootNormalized) -or
-        ($rootNormalized -ieq $homeNormalized) -or
-        ($rootNormalized -ieq $driveRootNormalized)
-    ) {
-        throw "Refusing to remove '$ProjectRoot'."
-    }
+function Invoke-ManagedUninstall {
+    param([switch]$PreserveCheckout)
 
-    Write-Step "Removing bootstrap install at $ProjectRoot"
+    if ($PreserveCheckout) {
+        Write-Step "Removing managed vBot environment from $ProjectRoot"
+    }
+    else {
+        $rootNormalized = [System.IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\', '/')
+        $homeNormalized = [System.IO.Path]::GetFullPath($HOME).TrimEnd('\', '/')
+        $driveRootNormalized = [System.IO.Path]::GetPathRoot($rootNormalized).TrimEnd('\', '/')
+        if (
+            [string]::IsNullOrWhiteSpace($rootNormalized) -or
+            ($rootNormalized -ieq $homeNormalized) -or
+            ($rootNormalized -ieq $driveRootNormalized)
+        ) {
+            throw "Refusing to remove '$ProjectRoot'."
+        }
+        Write-Step "Removing managed install at $ProjectRoot"
+    }
 
     if (Test-RunningOnWindows) {
         try {
@@ -285,17 +290,39 @@ function Invoke-BootstrapUninstall {
         }
     }
 
-    # The shim itself lives inside ProjectRoot (removed with it); drop its PATH entry.
+    # The shim itself lives inside ProjectRoot; drop its PATH entry.
     Remove-FromUserPath -PathToRemove (Join-Path $ProjectRoot "bin")
 
     # The Start-menu shortcut lives outside ProjectRoot, so remove it explicitly.
     Remove-DesktopShortcut
 
     Set-Location $HOME
-    Remove-DirectoryWithRetry -Path $ProjectRoot
+    if ($PreserveCheckout) {
+        $venvPath = Join-Path $ProjectRoot ".venv"
+        $binPath = Join-Path $ProjectRoot "bin"
+        if (Test-Path -LiteralPath $venvPath) {
+            Remove-DirectoryWithRetry -Path $venvPath
+        }
+        if (Test-Path -LiteralPath $binPath) {
+            Remove-DirectoryWithRetry -Path $binPath
+        }
+        foreach ($path in @($InstallManifest, $VenvMarker)) {
+            if (Test-Path -LiteralPath $path) {
+                Remove-Item -LiteralPath $path -Force
+            }
+        }
+    }
+    else {
+        Remove-DirectoryWithRetry -Path $ProjectRoot
+    }
 
     Write-Step "Uninstall complete"
-    Write-Host "Removed $ProjectRoot (including its virtual environment)."
+    if ($PreserveCheckout) {
+        Write-Host "Removed the installer-managed virtual environment; preserved $ProjectRoot."
+    }
+    else {
+        Write-Host "Removed $ProjectRoot (including its virtual environment)."
+    }
     Write-Host "Data directories such as ~\.vbot were not modified."
 }
 
@@ -324,8 +351,11 @@ function Invoke-ManualUninstall {
     Write-Host "Source files, webui/node_modules, and webui/dist were not removed."
 }
 
-if (Test-Path $Marker) {
-    Invoke-BootstrapUninstall
+if ((Test-Path $RootMarker) -or (Test-Path $LegacyRootMarker)) {
+    Invoke-ManagedUninstall
+}
+elseif (Test-Path $VenvMarker) {
+    Invoke-ManagedUninstall -PreserveCheckout
 }
 else {
     Invoke-ManualUninstall

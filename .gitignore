@@ -9,6 +9,8 @@
 .worktrees/
 .vbot-worktree
 .vbot-bootstrap
+.vbot-install-root
+.vbot-install-venv
 .vbot-install.json
 .playwright-cli/
 

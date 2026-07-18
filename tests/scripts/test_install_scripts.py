@@ -10,13 +10,13 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SHELL_SCRIPTS = (
-    PROJECT_ROOT / "scripts" / "bootstrap.sh",
     PROJECT_ROOT / "scripts" / "install.sh",
+    PROJECT_ROOT / "scripts" / "setup.sh",
     PROJECT_ROOT / "scripts" / "uninstall.sh",
 )
 POWERSHELL_SCRIPTS = (
-    PROJECT_ROOT / "scripts" / "bootstrap.ps1",
     PROJECT_ROOT / "scripts" / "install.ps1",
+    PROJECT_ROOT / "scripts" / "setup.ps1",
     PROJECT_ROOT / "scripts" / "uninstall.ps1",
 )
 
@@ -70,7 +70,7 @@ def test_linux_installer_rejects_unsafe_service_name_before_data_dir_creation(
     result = subprocess.run(
         [
             bash,
-            "scripts/install.sh",
+            "scripts/setup.sh",
             "--service-name",
             "../../outside",
             "--data-dir",
@@ -96,7 +96,7 @@ def test_linux_installer_rejects_option_like_service_name(tmp_path: Path) -> Non
     result = subprocess.run(
         [
             bash,
-            "scripts/install.sh",
+            "scripts/setup.sh",
             "--service-name",
             "--system",
             "--data-dir",
@@ -111,6 +111,34 @@ def test_linux_installer_rejects_option_like_service_name(tmp_path: Path) -> Non
     assert result.returncode != 0
     assert "must start with a letter or number" in result.stderr
     assert not data_dir.exists()
+
+
+def test_linux_public_installer_rejects_conflicting_shapes_before_install(
+    tmp_path: Path,
+) -> None:
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is unavailable")
+    install_dir = tmp_path / "must-not-exist"
+
+    result = subprocess.run(
+        [
+            bash,
+            "scripts/install.sh",
+            "--dir",
+            str(install_dir),
+            "--desktop",
+            "--desktop-client",
+        ],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode != 0
+    assert "mutually exclusive" in result.stderr
+    assert not install_dir.exists()
 
 
 def test_powershell_lifecycle_scripts_parse() -> None:
@@ -138,18 +166,18 @@ def test_powershell_lifecycle_scripts_parse() -> None:
 
 
 def test_windows_install_manifest_function_is_defined_before_main_flow() -> None:
-    script = (PROJECT_ROOT / "scripts" / "install.ps1").read_text(encoding="utf-8")
+    script = (PROJECT_ROOT / "scripts" / "setup.ps1").read_text(encoding="utf-8")
 
     assert script.index("function Write-InstallManifest") < script.rindex("Write-InstallManifest")
 
 
 def test_linux_install_manifest_records_selected_environment_interpreter() -> None:
-    script = (PROJECT_ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
+    script = (PROJECT_ROOT / "scripts" / "setup.sh").read_text(encoding="utf-8")
 
     assert 'PYTHON_EXECUTABLE="$(command -v "$PYTHON")"' in script
 
 
-@pytest.mark.parametrize("script_name", ["install.sh", "install.ps1"])
+@pytest.mark.parametrize("script_name", ["setup.sh", "setup.ps1"])
 def test_server_install_manifest_records_lifecycle_target(script_name: str) -> None:
     script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
 
@@ -159,7 +187,7 @@ def test_server_install_manifest_records_lifecycle_target(script_name: str) -> N
 
 
 @pytest.mark.parametrize("script_name", ["uninstall.sh", "uninstall.ps1"])
-def test_bootstrap_uninstaller_uses_recorded_lifecycle_target(script_name: str) -> None:
+def test_managed_uninstaller_uses_recorded_lifecycle_target(script_name: str) -> None:
     script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
 
     assert "server_host" in script
@@ -167,7 +195,7 @@ def test_bootstrap_uninstaller_uses_recorded_lifecycle_target(script_name: str) 
     assert "server_data_directory" in script
 
 
-def test_windows_bootstrap_rejects_dev_with_version_before_install(tmp_path: Path) -> None:
+def test_windows_installer_rejects_dev_with_version_before_install(tmp_path: Path) -> None:
     powershell = shutil.which("pwsh") or shutil.which("powershell")
     if powershell is None:
         pytest.skip("PowerShell is unavailable")
@@ -179,7 +207,7 @@ def test_windows_bootstrap_rejects_dev_with_version_before_install(tmp_path: Pat
             "-NoProfile",
             "-NonInteractive",
             "-File",
-            str(PROJECT_ROOT / "scripts" / "bootstrap.ps1"),
+            str(PROJECT_ROOT / "scripts" / "install.ps1"),
             "-Dev",
             "-Version",
             "v1.0.0",
@@ -197,8 +225,59 @@ def test_windows_bootstrap_rejects_dev_with_version_before_install(tmp_path: Pat
     assert not install_dir.exists()
 
 
-def test_windows_bootstrap_forwards_installer_options_through_powershell() -> None:
-    script = (PROJECT_ROOT / "scripts" / "bootstrap.ps1").read_text(encoding="utf-8")
+def test_windows_installer_forwards_setup_options_through_powershell() -> None:
+    script = (PROJECT_ROOT / "scripts" / "install.ps1").read_text(encoding="utf-8")
 
-    assert "-File $installer @installerArgList" in script
-    assert "& $installer @installerArgList" not in script
+    assert "-File $setup @setupArgList" in script
+    assert "& $setup @setupArgList" not in script
+
+
+def test_public_installers_are_the_only_fresh_install_entrypoints() -> None:
+    assert (PROJECT_ROOT / "scripts" / "install.sh").is_file()
+    assert (PROJECT_ROOT / "scripts" / "install.ps1").is_file()
+    assert not (PROJECT_ROOT / "scripts" / "bootstrap.sh").exists()
+    assert not (PROJECT_ROOT / "scripts" / "bootstrap.ps1").exists()
+
+
+@pytest.mark.parametrize("doc_name", ["README.md", "USAGE.md"])
+def test_public_docs_install_only_through_install_files(doc_name: str) -> None:
+    document = (PROJECT_ROOT / doc_name).read_text(encoding="utf-8")
+
+    assert "scripts/install.sh" in document
+    assert "scripts/install.ps1" in document
+    assert "bootstrap.sh" not in document
+    assert "bootstrap.ps1" not in document
+
+
+@pytest.mark.parametrize("script_name", ["install.sh", "install.ps1"])
+def test_public_installer_owns_fresh_install_and_calls_internal_setup(script_name: str) -> None:
+    script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+    setup_reference = "scripts/setup.sh" if script_name.endswith(".sh") else "scripts\\setup.ps1"
+
+    assert "git clone" in script
+    assert ".venv" in script
+    assert setup_reference in script
+    assert ".vbot-install-root" in script
+
+
+@pytest.mark.parametrize("script_name", ["uninstall.sh", "uninstall.ps1"])
+def test_uninstaller_accepts_new_and_legacy_managed_install_markers(script_name: str) -> None:
+    script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+
+    assert ".vbot-install-root" in script
+    assert ".vbot-install-venv" in script
+    assert ".vbot-bootstrap" in script
+
+
+@pytest.mark.parametrize("script_name", ["install.sh", "install.ps1"])
+def test_public_installer_can_configure_releases_from_before_setup_rename(
+    script_name: str,
+) -> None:
+    script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+
+    assert "legacy" in script.lower()
+    assert ".vbot-bootstrap" in script
+    if script_name.endswith(".sh"):
+        assert "editable pip install" in script
+    else:
+        assert "function Install-PythonPackage" in script
