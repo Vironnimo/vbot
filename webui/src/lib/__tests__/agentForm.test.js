@@ -493,7 +493,7 @@ describe('agent form helpers', () => {
     });
   });
 
-  it('reports required create fields and invalid temperature', () => {
+  it('requires only the id when creating an agent', () => {
     const result = normalizeAgentForm({
       id: '',
       name: '',
@@ -503,9 +503,17 @@ describe('agent form helpers', () => {
     expect(result.isValid).toBe(false);
     expect(result.errors).toEqual({
       id: 'required',
-      name: 'required',
       temperature: 'invalid_number',
     });
+  });
+
+  it('accepts an id-only create form and omits the blank name', () => {
+    const result = normalizeAgentForm({ id: 'minimal' });
+
+    expect(result.isValid).toBe(true);
+    expect(result.errors).toEqual({});
+    expect(result.payload.id).toBe('minimal');
+    expect(result.payload).not.toHaveProperty('name');
   });
 
   it('reports unsafe agent ids before submitting', () => {
@@ -519,18 +527,20 @@ describe('agent form helpers', () => {
     expect(result.errors.id).toBe('invalid_id');
   });
 
-  it('reports a required workspace while editing', () => {
+  it('allows an empty optional name and workspace while editing', () => {
     const result = normalizeAgentForm(
       {
         id: 'coder',
-        name: 'Coder',
+        name: '',
         workspace: '',
       },
       { mode: AGENT_FORM_MODE_EDIT },
     );
 
-    expect(result.isValid).toBe(false);
-    expect(result.errors.workspace).toBe('required');
+    expect(result.isValid).toBe(true);
+    expect(result.errors).toEqual({});
+    expect(result.payload.name).toBe('');
+    expect(result.payload.workspace).toBe('');
   });
 
   it('converts list text using one item per line', () => {

@@ -42,6 +42,32 @@ def test_validate_agent_data_accepts_missing_tool_settings() -> None:
     assert _diagnostics(data) == []
 
 
+def test_validate_agent_data_requires_only_id() -> None:
+    assert _diagnostics({"id": "minimal"}) == []
+
+
+def test_validate_agent_data_treats_null_optional_fields_as_missing() -> None:
+    data = dict.fromkeys(_valid_agent_data())
+    data["id"] = "minimal"
+    data["workspace"] = None
+    data["root_project_id"] = None
+    data["tools"] = None
+    data["compaction_policy"] = None
+    data["current_session_id"] = None
+
+    assert _diagnostics(data) == []
+
+
+def test_validate_agent_data_rejects_missing_id_once() -> None:
+    assert _diagnostics({}) == [
+        (
+            "error",
+            "$.id",
+            "must be a non-empty string",
+        )
+    ]
+
+
 def test_validate_agent_data_validates_optional_subagent_tool_settings() -> None:
     data = _valid_agent_data()
     data["tools"] = {"subagent": {"allowed_agents": ["worker", 1]}}
@@ -71,11 +97,11 @@ def test_validate_agent_data_rejects_invalid_memory_prompt_mode() -> None:
     ]
 
 
-def test_validate_agent_data_rejects_null_memory_prompt_mode() -> None:
+def test_validate_agent_data_treats_null_memory_prompt_mode_as_missing() -> None:
     data = _valid_agent_data()
     data["memory_prompt_mode"] = None
 
-    assert _diagnostics(data) == [("error", "$.memory_prompt_mode", "is required")]
+    assert _diagnostics(data) == []
 
 
 def test_validate_agent_data_rejects_non_finite_temperature() -> None:

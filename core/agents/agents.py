@@ -27,7 +27,6 @@ from core.config_validation import (
     validate_json_file,
     validate_non_empty_string,
     validate_optional_path_string,
-    validate_required_fields,
     validate_string,
     validate_string_list,
     warn_unknown_keys,
@@ -53,6 +52,7 @@ from core.settings.validation import (
 )
 from core.tools.availability import sanitize_configured_allowed_tools
 from core.utils.atomic import atomic_write_text
+from core.utils.logging import get_logger
 
 DEFAULT_FALLBACK_MODEL = ""
 DEFAULT_MODEL = ""
@@ -60,6 +60,9 @@ DEFAULT_TEMPERATURE: float | None = None
 DEFAULT_THINKING_EFFORT: str | None = None
 DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED = False
 DEFAULT_ALLOWED_ITEMS = ("*",)
+_BOOTSTRAP_AGENT_ID = "main"
+_BOOTSTRAP_AGENT_NAME = "Main"
+_LOGGER = get_logger("agents")
 # Only SOUL.md is identity the agent domain owns and seeds. USER.md/MEMORY.md belong
 # to the memory system and are created lazily on the first memory write, so a
 # memory-off agent never gets them and deleting them does not resurrect them.
@@ -85,20 +88,6 @@ _AGENT_CONFIG_FIELDS = frozenset(
         "thinking_effort",
         "updated_at",
         "workspace",
-    }
-)
-_REQUIRED_AGENT_CONFIG_FIELDS = frozenset(
-    {
-        "allowed_skills",
-        "allowed_tools",
-        "created_at",
-        "fallback_model",
-        "id",
-        "model",
-        "name",
-        "temperature",
-        "thinking_effort",
-        "updated_at",
     }
 )
 _SUBAGENT_TOOL_SETTING_FIELDS = frozenset({"allowed_agents"})
@@ -146,11 +135,10 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
         return [error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
 
     warn_unknown_keys(diagnostics, "$", data, _AGENT_CONFIG_FIELDS, "agent field")
-    validate_required_fields(diagnostics, "$", data, _REQUIRED_AGENT_CONFIG_FIELDS)
     _validate_agent_config_id(diagnostics, "$.id", data.get("id"))
-    validate_non_empty_string(diagnostics, "$.name", data.get("name"), required=True)
-    validate_string(diagnostics, "$.model", data.get("model"), required=True)
-    validate_string(diagnostics, "$.fallback_model", data.get("fallback_model"), required=True)
+    validate_non_empty_string(diagnostics, "$.name", data.get("name"), required=False)
+    validate_string(diagnostics, "$.model", data.get("model"), required=False)
+    validate_string(diagnostics, "$.fallback_model", data.get("fallback_model"), required=False)
     validate_optional_path_string(diagnostics, "$.workspace", data.get("workspace"))
     validate_non_empty_string(
         diagnostics,
@@ -167,29 +155,29 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
         data.get("thinking_effort"),
         allow_none=True,
     )
-    if "memory_prompt_mode" in data:
+    if data.get("memory_prompt_mode") is not None:
         validate_allowed_string(
             diagnostics,
             "$.memory_prompt_mode",
             data["memory_prompt_mode"],
             frozenset(MEMORY_PROMPT_MODES),
         )
-    if "allowed_tools" in data:
+    if data.get("allowed_tools") is not None:
         validate_string_list(diagnostics, "$.allowed_tools", data["allowed_tools"])
-    if "allowed_skills" in data:
+    if data.get("allowed_skills") is not None:
         validate_string_list(diagnostics, "$.allowed_skills", data["allowed_skills"])
-    if "tools" in data:
+    if data.get("tools") is not None:
         _validate_agent_tools_diagnostics(diagnostics, data["tools"])
-    if "custom_system_prompt_enabled" in data and not isinstance(
+    if data.get("custom_system_prompt_enabled") is not None and not isinstance(
         data["custom_system_prompt_enabled"], bool
     ):
         add_error(diagnostics, "$.custom_system_prompt_enabled", "must be a boolean")
     validate_optional_compaction_policy(
         diagnostics, data.get("compaction_policy"), "$.compaction_policy"
     )
-    validate_string(diagnostics, "$.created_at", data.get("created_at"), required=True)
-    validate_string(diagnostics, "$.updated_at", data.get("updated_at"), required=True)
-    if "current_session_id" in data:
+    validate_string(diagnostics, "$.created_at", data.get("created_at"), required=False)
+    validate_string(diagnostics, "$.updated_at", data.get("updated_at"), required=False)
+    if data.get("current_session_id") is not None:
         validate_string(
             diagnostics, "$.current_session_id", data.get("current_session_id"), required=False
         )
@@ -202,6 +190,8 @@ def _validate_agent_tools_diagnostics(diagnostics: list[JsonDiagnostic], tools: 
         return
     for tool_name, tool_settings in tools.items():
         path = f"$.tools.{tool_name}"
+        if tool_settings is None:
+            continue
         if not isinstance(tool_settings, dict):
             add_error(diagnostics, path, "must be an object")
     subagent = tools.get("subagent")
@@ -214,7 +204,7 @@ def _validate_agent_tools_diagnostics(diagnostics: list[JsonDiagnostic], tools: 
         _SUBAGENT_TOOL_SETTING_FIELDS,
         "subagent setting",
     )
-    if "allowed_agents" in subagent:
+    if subagent.get("allowed_agents") is not None:
         validate_string_list(
             diagnostics,
             "$.tools.subagent.allowed_agents",
@@ -304,7 +294,7 @@ class AgentStore:
     def create(
         self,
         agent_id: str,
-        name: str,
+        name: str | None = None,
         *,
         model: str = DEFAULT_MODEL,
         fallback_model: str = DEFAULT_FALLBACK_MODEL,
@@ -324,7 +314,7 @@ class AgentStore:
         if agent_dir.exists():
             raise AgentAlreadyExistsError(f"Agent already exists: {agent_id}")
 
-        validated_name = _validate_string_field("name", name, allow_empty=False)
+        validated_name = _normalize_agent_name(agent_id, name)
         validated_model = _validate_string_field("model", model, allow_empty=True)
         validated_fallback_model = _validate_string_field(
             "fallback_model", fallback_model, allow_empty=True
@@ -344,10 +334,12 @@ class AgentStore:
             else None
         )
         now = _utc_now()
-        workspace_path = _resolve_workspace(
-            workspace if workspace is not None else self._default_workspace(agent_id),
-            data_dir=self._data_dir,
-        )
+        workspace_value = workspace
+        if workspace_value is None or (
+            isinstance(workspace_value, str) and not workspace_value.strip()
+        ):
+            workspace_value = self._default_workspace(agent_id)
+        workspace_path = _resolve_workspace(workspace_value, data_dir=self._data_dir)
 
         agent_dir.mkdir(parents=True)
         session = self._session_manager().create(agent_id)
@@ -404,19 +396,29 @@ class AgentStore:
         return self._load_raw_agent(agent_path)
 
     def exists(self, agent_id: str) -> bool:
-        """Return whether an identity agent with this id is persisted in the store.
+        """Return whether a valid identity Agent with this id can be loaded.
 
-        A cheap existence probe that never raises: an id failing the agent-id
-        format cannot name a stored agent and yields ``False``, so gating callers
-        (e.g. the runtime's private-skill layering) can probe ids that originate
-        outside the identity store — such as project-team slugs — safely.
+        The probe never raises. Invalid ids, missing files, malformed configs, and
+        configs whose persisted id disagrees with their directory all yield
+        ``False`` so a broken Agent is never treated as an available target.
         """
         if not is_valid_agent_id(agent_id):
             return False
-        return self._agent_path(agent_id).exists()
+        agent_path = self._agent_path(agent_id)
+        if not agent_path.exists():
+            return False
+        try:
+            self._read_agent_config(agent_path)
+        except (AgentError, OSError):
+            return False
+        return True
 
     def list(self) -> list[Agent]:
-        """Return all persisted agents sorted by ID."""
+        """Return valid persisted Agents sorted by id.
+
+        One malformed or unreadable ``agent.json`` is logged and skipped. Strict
+        single-Agent access through :meth:`get` still reports that Agent's error.
+        """
         agents_dir = self._data_dir / "agents"
         if not agents_dir.exists():
             return []
@@ -424,9 +426,28 @@ class AgentStore:
         defaults = self._agent_defaults()
         agents: list[Agent] = []
         for agent_path in sorted(agents_dir.glob("*/agent.json")):
-            raw_agent = self._load_raw_agent(agent_path)
-            agents.append(self._apply_defaults(raw_agent, defaults))
+            try:
+                raw_agent = self._load_raw_agent(agent_path)
+                agents.append(self._apply_defaults(raw_agent, defaults))
+            except (AgentError, OSError) as error:
+                _LOGGER.warning("Skipping invalid Agent config %s: %s", agent_path, error)
         return agents
+
+    def ensure_bootstrap(self) -> Agent | None:
+        """Create one valid bootstrap Agent when the store has none.
+
+        Invalid Agent directories are preserved for diagnosis. If one already
+        occupies ``main``, the bootstrap Agent uses the first free ``main-N`` id.
+        """
+        if self.list():
+            return None
+
+        candidate = _BOOTSTRAP_AGENT_ID
+        suffix = 2
+        while self._agent_dir(candidate).exists():
+            candidate = f"{_BOOTSTRAP_AGENT_ID}-{suffix}"
+            suffix += 1
+        return self.create(candidate, _BOOTSTRAP_AGENT_NAME)
 
     def update(self, agent_id: str, **changes: Any) -> Agent:
         """Update mutable fields for an existing agent."""
@@ -471,12 +492,9 @@ class AgentStore:
         if unknown_fields:
             raise AgentError(f"Unknown agent fields: {', '.join(unknown_fields)}")
 
-        string_fields = {
-            "name",
-            "model",
-            "fallback_model",
-            "current_session_id",
-        }
+        if "name" in changes:
+            changes["name"] = _normalize_agent_name(agent_id, changes["name"])
+        string_fields = {"model", "fallback_model", "current_session_id"}
         for field_name in sorted(string_fields & set(changes)):
             changes[field_name] = _validate_string_field(
                 field_name,
@@ -484,9 +502,10 @@ class AgentStore:
                 allow_empty=field_name in {"model", "fallback_model"},
             )
         if "workspace" in changes:
-            changes["workspace"] = str(
-                _resolve_workspace(changes["workspace"], data_dir=self._data_dir)
-            )
+            workspace = changes["workspace"]
+            if workspace is None or (isinstance(workspace, str) and not workspace.strip()):
+                workspace = self._default_workspace(agent_id)
+            changes["workspace"] = str(_resolve_workspace(workspace, data_dir=self._data_dir))
             if changes["workspace"] == agent.workspace:
                 if copy_workspace_identity_files:
                     raise AgentError("copy_workspace_identity_files requires a changed workspace")
@@ -720,7 +739,7 @@ class AgentStore:
         return defaults
 
     def _load_raw_agent(self, agent_path: Path) -> Agent:
-        data = load_validated_agent_json(agent_path)
+        data = self._validated_agent_data(agent_path)
         workspace_missing = _is_missing_workspace(data.get("workspace"))
         agent = _agent_from_dict(
             data,
@@ -739,12 +758,22 @@ class AgentStore:
         current-session normalization, so a caller can inspect a dangling current
         pointer before it would otherwise be silently replaced.
         """
-        data = load_validated_agent_json(agent_path)
+        data = self._validated_agent_data(agent_path)
         return _agent_from_dict(
             data,
             data_dir=self._data_dir,
             default_workspace=self._default_workspace(data["id"]),
         )
+
+    @staticmethod
+    def _validated_agent_data(agent_path: Path) -> JsonObject:
+        data = load_validated_agent_json(agent_path)
+        directory_id = agent_path.parent.name
+        if data["id"] != directory_id:
+            raise AgentError(
+                f"{agent_path}: Agent id {data['id']!r} does not match directory {directory_id!r}"
+            )
+        return data
 
     def _apply_defaults(self, agent: Agent, defaults: dict[str, Any]) -> Agent:
         changes: dict[str, Any] = {}
@@ -813,6 +842,15 @@ def _validate_string_field(field: str, value: Any, *, allow_empty: bool) -> str:
     return value
 
 
+def _normalize_agent_name(agent_id: str, value: Any) -> str:
+    """Use the immutable id as the display name when no name is configured."""
+    if value is None:
+        return agent_id
+    if not isinstance(value, str):
+        raise AgentError("name must be a string or null")
+    return value if value.strip() else agent_id
+
+
 def _validate_temperature(value: Any) -> float | None:
     try:
         return validate_temperature(value, label="temperature", allow_none=True)
@@ -859,6 +897,8 @@ def _normalize_agent_tools(tools: Mapping[str, Any] | None) -> dict[str, Any]:
     for tool_name, tool_settings in tools.items():
         if not isinstance(tool_name, str) or not tool_name:
             raise AgentError("tools keys must be non-empty strings")
+        if tool_settings is None:
+            continue
         if not isinstance(tool_settings, Mapping):
             raise AgentError(f"tools.{tool_name} must be an object")
         normalized_tools[tool_name] = deepcopy(dict(tool_settings))
@@ -931,12 +971,15 @@ def _agent_from_dict(
     time; this constructor only normalizes shapes (workspace fallback, tool
     sanitization, optional-field defaults) without re-validating.
     """
+    agent_id = cast(str, data["id"])
+    timestamp_default = _utc_now()
     temperature = data.get("temperature")
+    memory_prompt_mode = data.get("memory_prompt_mode")
     return Agent(
-        id=data["id"],
-        name=data["name"],
-        model=data["model"],
-        fallback_model=data["fallback_model"],
+        id=agent_id,
+        name=data.get("name") or agent_id,
+        model=data.get("model") or "",
+        fallback_model=data.get("fallback_model") or "",
         workspace=str(
             _workspace_from_data(
                 data.get("workspace"),
@@ -947,23 +990,23 @@ def _agent_from_dict(
         root_project_id=data.get("root_project_id"),
         temperature=None if temperature is None else float(temperature),
         thinking_effort=data.get("thinking_effort"),
-        memory_prompt_mode=cast(
-            MemoryPromptMode, data.get("memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
+        memory_prompt_mode=cast(MemoryPromptMode, memory_prompt_mode or DEFAULT_MEMORY_PROMPT_MODE),
+        allowed_tools=sanitize_configured_allowed_tools(
+            _validate_allowed_items("allowed_tools", data.get("allowed_tools"))
         ),
-        allowed_tools=sanitize_configured_allowed_tools(data["allowed_tools"]),
-        allowed_skills=list(data["allowed_skills"]),
-        tools=deepcopy(data.get("tools", {})),
-        custom_system_prompt_enabled=data.get(
-            "custom_system_prompt_enabled", DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED
+        allowed_skills=_validate_allowed_items("allowed_skills", data.get("allowed_skills")),
+        tools=_normalize_agent_tools(data.get("tools")),
+        custom_system_prompt_enabled=bool(
+            data.get("custom_system_prompt_enabled", DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED)
         ),
         compaction_policy=(
             dict(data["compaction_policy"])
             if isinstance(data.get("compaction_policy"), dict)
             else None
         ),
-        current_session_id=data.get("current_session_id", ""),
-        created_at=data["created_at"],
-        updated_at=data["updated_at"],
+        current_session_id=data.get("current_session_id") or "",
+        created_at=data.get("created_at") or timestamp_default,
+        updated_at=data.get("updated_at") or timestamp_default,
     )
 
 

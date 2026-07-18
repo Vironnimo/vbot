@@ -80,9 +80,9 @@ def _get_agent(state: Any, params: JsonObject) -> JsonObject:
 
 def _create_agent(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "id")
-    name = _required_string(params, "name")
     try:
-        changes = _agent_changes(params, blocked={"id", "name"}, for_create=True)
+        changes = _agent_changes(params, blocked={"id"}, for_create=True)
+        name = changes.pop("name", None)
         _ensure_agent_model_connections(state, changes)
         state.runtime.agents.create(agent_id, name, **changes)
         if changes.get("custom_system_prompt_enabled") is True:
@@ -571,7 +571,21 @@ def _ensure_agent_model_connections(state: Any, changes: JsonObject) -> None:
 
 
 def _validate_agent_field(key: str, value: Any) -> Any:
-    if key in {"name", "current_session_id", "workspace"}:
+    if key == "name":
+        if value is not None and not isinstance(value, str):
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                "params.name must be a string or null",
+            )
+        return value
+    if key == "workspace":
+        if value is not None and not isinstance(value, str):
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                "params.workspace must be a string or null",
+            )
+        return value
+    if key == "current_session_id":
         if not isinstance(value, str) or not value:
             raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a non-empty string")
         return value

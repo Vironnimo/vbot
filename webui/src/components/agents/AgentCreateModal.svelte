@@ -203,6 +203,7 @@
         <FormField
           controlId="agent-create-id"
           label={t('agents.form.id', 'Agent ID')}
+          required
           help={t(
             'agents.form.idHelp',
             'Agent IDs are immutable after creation.',

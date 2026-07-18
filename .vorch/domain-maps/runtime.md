@@ -91,8 +91,8 @@ All service properties raise `RuntimeError` before `start()` and after `stop()`,
 
 ## Constraints & Gotchas
 
-- On first start with an empty data directory, Runtime creates the bootstrap Agent `main` / `Main`. Agent creation also creates the first empty Session and persists it as `current_session_id`.
-- Existing data directories with at least one Agent are preserved; Runtime does not add another `main` Agent just because `main` is absent.
+- On startup with no valid Agent, Runtime creates a bootstrap Agent. It uses `main` / `Main` when that directory is free; if an invalid preserved Agent directory already occupies `main`, it uses the first free `main-N` id. Agent creation also creates the first empty Session and persists it as `current_session_id`.
+- Existing data directories with at least one valid Agent are preserved; Runtime does not add another `main` Agent just because `main` is absent. Invalid individual Agent configs are logged and skipped by collection loading, so they do not block Runtime or the remaining Agents from starting.
 - The bootstrap Agent is ensured **before** `ChannelService` starts, so a configured channel targeting `main` can come up during first-start recovery.
 - `ChannelService.start()` and `CronService.start()` share the event-loop guard: when runtime startup happens without an active asyncio loop, the service is wired but its listeners are not started.
 - Channel startup failures are isolated to the channel service and recorded as failed channel health state; they must not fail `Runtime.start()`.
