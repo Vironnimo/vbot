@@ -59,7 +59,7 @@ function prepareTestResources() {
     "utf8",
   );
 
-  const model = (name) => ({
+  const model = (name, capabilityOverrides = {}) => ({
     name,
     connections: ["local"],
     context_window: 65_536,
@@ -71,8 +71,9 @@ function prepareTestResources() {
       reasoning: { supported: false },
       supported_parameters: [],
       task_types: ["chat", "text_output"],
-      tools: false,
+      tools: true,
       vision: false,
+      ...capabilityOverrides,
     },
   });
   writeFileSync(
@@ -85,6 +86,62 @@ function prepareTestResources() {
           "e2e-fallback": model("E2E Fallback"),
         },
         provider_id: "fake",
+        source: "e2e",
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+
+  writeFileSync(
+    path.join(environment.resourcesDir, "providers", "openai.json"),
+    `${JSON.stringify(
+      {
+        id: "openai",
+        name: "E2E Fake OpenAI Task Provider",
+        adapter: "openai",
+        base_url: `http://${environment.fakeProviderHost}:${environment.providerPort}/v1`,
+        connections: [
+          {
+            id: "local",
+            type: "api_key",
+            label: "Local E2E",
+            auth: {
+              header: "x-vbot-e2e-task-key",
+              prefix: "",
+              credential_key: "VBOT_E2E_FAKE_TASK_KEY",
+            },
+          },
+        ],
+        defaults: { max_tokens: 512, temperature: 0 },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  writeFileSync(
+    path.join(environment.resourcesDir, "models", "openai.json"),
+    `${JSON.stringify(
+      {
+        fetched_at: "2026-07-17T00:00:00+00:00",
+        models: {
+          "e2e-image": model("E2E Image", {
+            output_modalities: ["image"],
+            supported_parameters: ["response_format", "output_format"],
+            task_types: ["image_generation"],
+            tools: false,
+          }),
+          "e2e-tts": model("E2E Text to Speech", {
+            output_modalities: ["speech"],
+            supported_parameters: ["voice", "response_format"],
+            supported_voices: ["alloy"],
+            task_types: ["text_to_speech"],
+            tools: false,
+          }),
+        },
+        provider_id: "openai",
         source: "e2e",
       },
       null,
@@ -105,6 +162,16 @@ function prepareTestData() {
           agent: {
             fallback_model: "fake/e2e-fallback::local",
             model: "fake/e2e-primary::local",
+          },
+        },
+        model_tasks: {
+          image_generation: {
+            target: "openai/e2e-image::local",
+            options: { output_format: "png", response_format: "b64_json" },
+          },
+          text_to_speech: {
+            target: "openai/e2e-tts::local",
+            options: { response_format: "wav", voice: "alloy" },
           },
         },
         providers: { connections: { "fake:local": true } },
@@ -141,7 +208,11 @@ export default async function startServer() {
   try {
     execFileSync(environment.python, lifecycleArguments("start"), {
       cwd: environment.repoRoot,
-      env: { ...process.env, RESOURCES_PATH: environment.resourcesDir },
+      env: {
+        ...process.env,
+        RESOURCES_PATH: environment.resourcesDir,
+        VBOT_E2E_FAKE_TASK_KEY: "local-e2e-only",
+      },
       stdio: "inherit",
     });
   } catch (error) {
