@@ -302,6 +302,45 @@ describe('AgentsView', () => {
     });
   });
 
+  it('auto-saves Identity and qualified Project Agent target access', async () => {
+    const worker = { ...baseAgent(), id: 'worker', name: 'Worker' };
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [{ ...baseAgent(), root_project_id: 'vbot' }, worker],
+        projects: [
+          { project_id: 'vbot', display_name: 'vBot', cwd: 'C:/repos/vbot' },
+        ],
+        projectScans: {
+          vbot: {
+            project: { project_id: 'vbot', display_name: 'vBot' },
+            scan: {
+              team: [{ agent_id: 'builder', display_name: 'Builder' }],
+            },
+          },
+        },
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+    await waitForText('builder@vbot');
+    expect(document.body.textContent).toContain(
+      'Rooting does not narrow this.',
+    );
+
+    vi.useFakeTimers();
+    getButtonByAriaLabel('Toggle agent worker').click();
+    flushSync();
+    await vi.advanceTimersByTimeAsync(800);
+    await flushAsyncUpdates();
+
+    expect(getAgentUpdateCalls()).toHaveLength(1);
+    expect(getAgentUpdateCalls()[0][1]).toEqual({
+      id: 'alpha',
+      allowed_agents: ['alpha', 'builder@vbot'],
+    });
+  });
+
   it('renders memory as a display-only first tool chip that is never a toggle', async () => {
     rpcMock.mockImplementation(
       createAgentsRpcMock({
@@ -335,8 +374,15 @@ describe('AgentsView', () => {
     expect(memoryState.textContent).toContain('currently available');
 
     // Memory is the first chip in the tools cloud.
-    const firstChipName = document.body
-      .querySelector('.access-chip__name')
+    const toolsSection = Array.from(
+      document.body.querySelectorAll('.tl-section'),
+    ).find((section) =>
+      section
+        .querySelector('.tl-section-label')
+        ?.textContent.includes('Allowed tools'),
+    );
+    const firstChipName = toolsSection
+      ?.querySelector('.access-chip__name')
       ?.textContent?.trim();
     expect(firstChipName).toBe('memory');
   });

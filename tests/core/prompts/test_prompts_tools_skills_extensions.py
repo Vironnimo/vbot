@@ -59,6 +59,57 @@ def test_provider_tool_definitions_omit_memory_when_agent_memory_is_off(
     assert "memory" not in [definition["name"] for definition in definitions]
 
 
+def test_provider_tool_definitions_hide_subagent_tools_without_targets(
+    workspace: Path, tmp_path: Path
+) -> None:
+    registry = ToolRegistry()
+    for name in ("subagent", "subagent_result"):
+        registry.register(
+            name=name,
+            description=f"{name} description",
+            parameters={
+                "type": "object",
+                "properties": {"agent_id": {"type": "string"}},
+            },
+            handler=lambda _context, _arguments: tool_success({}),
+        )
+    manager = _manager(tmp_path, tools=registry)
+    agent = _agent(workspace, allowed_tools=["*"], allowed_agents=[])
+
+    definitions = manager.provider_tool_definitions(agent)
+
+    assert definitions == []
+
+
+def test_provider_tool_definitions_narrow_explicit_agent_targets(
+    workspace: Path, tmp_path: Path
+) -> None:
+    registry = ToolRegistry()
+    registry.register(
+        name="subagent",
+        description="Start a Sub-Agent",
+        parameters={
+            "type": "object",
+            "properties": {"agent_id": {"type": "string"}},
+        },
+        handler=lambda _context, _arguments: tool_success({}),
+    )
+    manager = _manager(tmp_path, tools=registry)
+    agent = _agent(
+        workspace,
+        agent_id="orchestrator",
+        allowed_tools=["*"],
+        allowed_agents=["worker", "builder@vbot"],
+    )
+
+    definitions = manager.provider_tool_definitions(agent)
+
+    assert len(definitions) == 1
+    parameters = definitions[0]["parameters"]
+    assert parameters["properties"]["agent_id"]["enum"] == ["worker", "builder@vbot"]
+    assert parameters["required"] == ["agent_id"]
+
+
 def test_provider_tool_definitions_offer_skill_and_skill_manage_for_identity_agent(
     workspace: Path, tmp_path: Path
 ) -> None:

@@ -42,6 +42,7 @@ def make_context(
     project_id: str | None = None,
     nesting_depth: int = 0,
     emit_hook: Any | None = None,
+    allowed_agents: list[str] | None = None,
 ) -> ToolContext:
     return ToolContext(
         agent_id=agent_id,
@@ -56,6 +57,7 @@ def make_context(
         project_id=project_id,
         nesting_depth=nesting_depth,
         emit_hook=emit_hook,
+        allowed_agents=allowed_agents,
     )
 
 
@@ -282,7 +284,62 @@ async def test_identity_parent_can_spawn_qualified_project_agent(tmp_path: Path)
     await asyncio.sleep(0)
 
 
-async def test_project_parent_can_spawn_qualified_agent_in_another_project(
+async def test_identity_parent_explicit_targets_use_canonical_addresses(tmp_path: Path) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(
+        project_id=None,
+        allowed_agents=["worker@vbot"],
+    )
+
+    denied = await _handle_subagent(
+        context,
+        {"content": "spawn", "agent_id": "worker"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+    allowed = await _handle_subagent(
+        context,
+        {"content": "spawn", "agent_id": "worker@vbot"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert denied["ok"] is False
+    assert denied["error"]["code"] == "agent_not_allowed"
+    assert allowed["ok"] is True
+    assert allowed["data"]["project_id"] == "vbot"
+    assert len(manager.started) == 1
+    manager.started[0]["run"].mark_completed(
+        ChatMessage.assistant(model="openai/gpt-5.2", content="done")
+    )
+    await asyncio.sleep(0)
+
+
+async def test_empty_target_policy_rejects_spawn_before_resolution_or_session_creation(
+    tmp_path: Path,
+) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(allowed_agents=[])
+
+    result = await _handle_subagent(
+        context,
+        {"content": "spawn", "agent_id": "worker"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "agent_not_allowed"
+    assert runtime.agent_resolver.calls == []
+    assert manager.started == []
+    assert not (tmp_path / "agents" / "worker" / "sessions").exists()
+
+
+async def test_project_parent_cannot_spawn_qualified_agent_in_another_project(
     tmp_path: Path,
 ) -> None:
     manager = FakeRunManager()
@@ -298,18 +355,11 @@ async def test_project_parent_can_spawn_qualified_agent_in_another_project(
         batch_tracker=tracker,
     )
 
-    assert result["ok"] is True
-    assert result["data"]["project_id"] == "vbot"
-    assert runtime.agent_resolver.calls[-1] == ("vbot", "worker")
-    assert manager.started[0]["project_id"] == "vbot"
+    assert result["ok"] is False
+    assert result["error"]["code"] == "agent_not_allowed"
+    assert runtime.agent_resolver.calls == []
+    assert manager.started == []
     assert manager.parent_run.project_id == "acme"
-    child_session_id = result["data"]["session_id"]
-    metadata = runtime.chat_sessions.get_metadata("worker", child_session_id, "vbot")
-    assert metadata["subagent_parent"]["project_id"] == "acme"
-    manager.started[0]["run"].mark_completed(
-        ChatMessage.assistant(model="openai/gpt-5.2", content="done")
-    )
-    await asyncio.sleep(0)
 
 
 async def test_project_subagent_parent_link_metadata_carries_project_id(
@@ -409,7 +459,7 @@ async def test_qualified_subagent_result_uses_target_project_for_persisted_fallb
     assert result["data"]["result"] == "project result"
 
 
-async def test_qualified_subagent_result_uses_target_scope_for_live_run(tmp_path: Path) -> None:
+async def test_project_parent_cannot_read_cross_project_subagent_result(tmp_path: Path) -> None:
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
     tracker = SubAgentBatchTracker(RecordingTriggerService())
@@ -434,9 +484,8 @@ async def test_qualified_subagent_result_uses_target_scope_for_live_run(tmp_path
         batch_tracker=tracker,
     )
 
-    assert result["ok"] is True
-    assert result["data"]["project_id"] == "vbot"
-    assert result["data"]["result"] == "live result"
+    assert result["ok"] is False
+    assert result["error"]["code"] == "agent_not_allowed"
 
 
 @pytest.mark.parametrize("tool_name", ["subagent", "subagent_result"])

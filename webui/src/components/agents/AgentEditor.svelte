@@ -57,6 +57,8 @@
     availableTools = [],
     availableSkills = [],
     invalidSkills = [],
+    availableAgentTargets = [],
+    agentTargetCatalogError = '',
     projectOptions = [],
     projectCatalogError = '',
     loadError = '',
@@ -113,6 +115,7 @@
   );
   let visibleToolItems = $derived(toolAccessItems());
   let visibleSkillItems = $derived(skillAccessItems());
+  let visibleAgentTargetItems = $derived(agentTargetAccessItems());
   // Memory is a display-only, never-a-toggle chip (a "locked" chip with an "auto"
   // tag): it follows the Memory setting, not the allow-list. Rendered first in the
   // tools cloud; its hover card carries the description and the follows-setting note.
@@ -137,6 +140,12 @@
   let skillChipItems = $derived(
     visibleSkillItems.map((skill) => ({ ...skill, allowed: skill.isAllowed })),
   );
+  let agentTargetChipItems = $derived(
+    visibleAgentTargetItems.map((target) => ({
+      ...target,
+      allowed: target.isAllowed,
+    })),
+  );
   // The memory tool from the catalog (if present), rendered as a display-only
   // first row: it follows the Memory setting and is never an allow-list toggle.
   let memoryToolItem = $derived(
@@ -147,6 +156,7 @@
   // that flipping any single toggle collapses the wildcard into a fixed list.
   let toolsAreWildcard = $derived(isWildcardAccess(formValues.allowed_tools));
   let skillsAreWildcard = $derived(isWildcardAccess(formValues.allowed_skills));
+  let agentsAreWildcard = $derived(isWildcardAccess(formValues.allowed_agents));
   let showAllModels = $state(false);
   let showAllFallbackModels = $state(false);
   let allModelOptions = $derived(
@@ -440,6 +450,9 @@
       allowed_tools: Array.isArray(values.allowed_tools)
         ? [...values.allowed_tools]
         : [],
+      allowed_agents: Array.isArray(values.allowed_agents)
+        ? [...values.allowed_agents]
+        : [],
     };
   }
 
@@ -510,6 +523,11 @@
 
     if (fieldName === 'allowed_skills') {
       updateSkillAccessItem(itemName, isAllowed);
+      return;
+    }
+
+    if (fieldName === 'allowed_agents') {
+      updateAgentTargetAccessItem(itemName, isAllowed);
     }
   }
 
@@ -521,6 +539,11 @@
 
     if (fieldName === 'allowed_skills') {
       formValues.allowed_skills = isAllowed ? [WILDCARD_ACCESS] : [];
+      return;
+    }
+
+    if (fieldName === 'allowed_agents') {
+      formValues.allowed_agents = isAllowed ? [WILDCARD_ACCESS] : [];
     }
   }
 
@@ -601,6 +624,85 @@
       warnings: Array.isArray(skill.warnings) ? skill.warnings : [],
       isAllowed: hasWildcard || allowedItems.includes(skill.name),
     }));
+  }
+
+  function agentTargetAccessItems() {
+    const currentItems = Array.isArray(formValues.allowed_agents)
+      ? formValues.allowed_agents
+      : [];
+    const hasWildcard = currentItems.includes(WILDCARD_ACCESS);
+    const catalog = Array.isArray(availableAgentTargets)
+      ? availableAgentTargets
+      : [];
+    const knownNames = new Set(catalog.map((target) => target.name));
+    const missingTargets = hasWildcard
+      ? []
+      : currentItems
+          .filter((name) => !knownNames.has(name))
+          .map((name) => ({ name, unavailable: true }));
+
+    return [...catalog, ...missingTargets].map((target) => ({
+      ...target,
+      description: agentTargetDescription(target),
+      isAllowed: hasWildcard || currentItems.includes(target.name),
+    }));
+  }
+
+  function agentTargetDescription(target) {
+    if (target.unavailable) {
+      return t(
+        'agents.access.unavailableAgentTarget',
+        'This configured target is not present in the current Identity Agent or Project Team catalogs.',
+      );
+    }
+    if (target.kind === 'project') {
+      return t(
+        'agents.access.projectAgentTarget',
+        'Project Agent · {agent} · {project}',
+        {
+          agent: target.displayName || target.name,
+          project: target.projectName || target.projectId,
+        },
+      );
+    }
+    return t('agents.access.identityAgentTarget', 'Identity Agent · {agent}', {
+      agent: target.displayName || target.name,
+    });
+  }
+
+  function updateAgentTargetAccessItem(itemName, isAllowed) {
+    const allTargetNames = agentTargetAccessItems().map(
+      (target) => target.name,
+    );
+    if (allTargetNames.length === 0) {
+      formValues.allowed_agents = [];
+      return;
+    }
+
+    const currentItems = Array.isArray(formValues.allowed_agents)
+      ? [...formValues.allowed_agents]
+      : [];
+    if (currentItems.includes(WILDCARD_ACCESS)) {
+      formValues.allowed_agents = isAllowed
+        ? [WILDCARD_ACCESS]
+        : allTargetNames.filter((name) => name !== itemName);
+      return;
+    }
+
+    const nextItems = currentItems.filter((item) =>
+      allTargetNames.includes(item),
+    );
+    const existingIndex = nextItems.indexOf(itemName);
+    if (isAllowed && existingIndex === -1) {
+      nextItems.push(itemName);
+    } else if (!isAllowed && existingIndex !== -1) {
+      nextItems.splice(existingIndex, 1);
+    }
+    formValues.allowed_agents = allTargetNames.every((name) =>
+      nextItems.includes(name),
+    )
+      ? [WILDCARD_ACCESS]
+      : nextItems;
   }
 
   function updateSkillAccessItem(itemName, isAllowed) {
@@ -1279,6 +1381,46 @@
     <div class="detail-group">
       <div class="detail-group-title">
         {t('agents.detail.access', 'Access')}
+      </div>
+
+      <div class="tl-section">
+        <div class="tl-section-header">
+          <span class="tl-section-label">
+            {t('agents.form.allowedAgents', 'Allowed agents')}
+            <InfoHint
+              text={t(
+                'agents.form.allowedAgentsHelp',
+                'Controls which Agents this Identity Agent may call through the Sub-Agent tools. Project Agents use agent@project addresses. Rooting does not narrow this permission.',
+              )}
+            />
+          </span>
+        </div>
+        <ToggleChipList
+          items={agentTargetChipItems}
+          emptyLabel={t(
+            'agents.access.noAgentTargets',
+            'No Agent targets are available.',
+          )}
+          note={agentsAreWildcard && visibleAgentTargetItems.length > 0
+            ? t(
+                'agents.form.agentWildcardNote',
+                'All Identity Agents and all Agents on every registered Project are allowed, including ones added later. Rooting does not narrow this.',
+              )
+            : t(
+                'agents.form.agentAddressNote',
+                'Project Agents use agent@project addresses. Rooting does not change this list.',
+              )}
+          ariaToggleLabel={(name) =>
+            t('agents.access.toggleAgent', 'Toggle agent {name}', { name })}
+          onToggle={(name, next) =>
+            updateAccessItem('allowed_agents', name, next)}
+          onSetAll={(next) => setAccessItems('allowed_agents', next)}
+        />
+        {#if agentTargetCatalogError}
+          <p class="agents-view__placeholder-row" role="status">
+            {agentTargetCatalogError}
+          </p>
+        {/if}
       </div>
 
       <div class="tl-section">

@@ -12,6 +12,7 @@ from core.chat import (
 from core.projects import (
     AgentResolutionError,
     InvalidAgentAddressError,
+    format_agent_address,
     parse_agent_address,
     resolve_working_project_id,
 )
@@ -169,6 +170,9 @@ async def _handle_subagent(
         session_id = optional_string(arguments.get("session_id"), field_name="session_id")
     except (ToolArgumentError, InvalidAgentAddressError) as error:
         return tool_failure("invalid_arguments", str(error))
+
+    if not _target_is_allowed(context, target_agent_id, target_project_id):
+        return tool_failure("agent_not_allowed", "target agent is not allowed for this parent")
 
     # A sub-agent (depth >= 1) cannot park work for a later run, so force its spawns
     # to run in the foreground regardless of the requested mode; the top level keeps
@@ -458,6 +462,9 @@ async def _handle_subagent_result(
         run_id = optional_string(arguments.get("run_id"), field_name="run_id")
     except (ToolArgumentError, InvalidAgentAddressError) as error:
         return tool_failure("invalid_arguments", str(error))
+
+    if not _target_is_allowed(context, agent_id, target_project_id):
+        return tool_failure("agent_not_allowed", "target agent is not allowed for this parent")
 
     parent_key = _parent_key(context)
     resolved_run_id = run_id or batch_tracker.run_id_for_session(
@@ -1030,6 +1037,25 @@ def _resolve_target_address(
     """
     agent_id, addressed_project_id = parse_agent_address(address)
     return agent_id, addressed_project_id or caller_project_id
+
+
+def _target_is_allowed(
+    context: ToolContext,
+    target_agent_id: str,
+    target_project_id: str | None,
+) -> bool:
+    """Check the parent snapshot and enforce the Project boundary independently."""
+    if context.project_id is not None and target_project_id != context.project_id:
+        return False
+    allowed = context.allowed_agents
+    if allowed is None or "*" in allowed:
+        return True
+    address = (
+        target_agent_id
+        if context.project_id is not None
+        else format_agent_address(target_agent_id, target_project_id)
+    )
+    return address in allowed
 
 
 def _with_target_project(data: JsonObject, project_id: str | None) -> JsonObject:

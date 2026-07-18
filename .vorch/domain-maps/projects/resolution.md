@@ -6,7 +6,7 @@ Read this reference when changing how a Project Agent becomes effective runtime 
 
 `core/projects/resolver.py` owns `AgentResolver.resolve_agent(project_id | None, agent_id)`, the common boundary used by Run-producing paths. With no Project id it returns the stored Identity Agent; with a Project id it verifies Team membership and synthesizes a `ConfigAgent` from repository and Project state. Callers should not reproduce this branch or assemble Project Agent configuration themselves.
 
-Team membership is cached per Project, but the selected repository Agent source is reread on each resolution. This gives stable, cheap membership lookup while allowing edits to model, instructions, denials, or scalar settings to take effect without a Team rebuild.
+Team membership is cached per Project, but the selected repository Agent source is reread on each resolution. This gives stable, cheap membership lookup while allowing edits to model, instructions, Tool denials, Agent-target rules, or scalar settings to take effect without a Team rebuild.
 
 ## Model & Scalar Resolution
 
@@ -49,6 +49,8 @@ Effective Skills are:
 ```
 
 The disabled-name subtraction applies to the combined set, so a disabled Project Skill cannot be resurrected by a bundled or global Skill with the same name. The `"*"` sentinel is configuration syntax, never an effective Skill name.
+
+Effective Agent targets are the current Project Team filtered by the repository Agent's ordered `AgentTargetRule` list, with the last matching rule winning. No target rules means the whole Team; a result with no members means neither Sub-Agent Tool is available. A Project Agent cannot address an Identity Agent or another Project even if its source policy is a wildcard, because Project scope is the hard outer boundary.
 
 ## Working-Project Helpers
 

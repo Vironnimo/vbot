@@ -1527,6 +1527,7 @@ export function projectTeam(scan) {
     source_format: asText(member?.source_format),
     source_path: asText(member?.source_path),
     denied_tools: normalizeStringList(member?.denied_tools),
+    allowed_agents: normalizeStringList(member?.allowed_agents),
     // The per-agent override object (any subset of model/temperature/thinking_effort),
     // or null when the agent has no override. Read shape-only here — the row derives
     // whether a field is overridden from `effective[field].source === 'override'`.
@@ -1536,6 +1537,28 @@ export function projectTeam(scan) {
     // "provider default" (temperature/thinking); a null source means no tier won.
     effective: normalizeEffective(member?.effective),
   }));
+}
+
+// Summarize one Project Agent's repository-owned Sub-Agent targets against the
+// current Team. Project targets are always local bare ids; there is deliberately
+// no vBot override tier for this policy.
+export function projectAgentTargetSummary(member, team = []) {
+  const allowed = normalizeStringList(member?.allowed_agents);
+  const teamIds = (Array.isArray(team) ? team : [])
+    .map((candidate) => asText(candidate?.agent_id).trim())
+    .filter(Boolean);
+  if (allowed.length === 0) {
+    return { mode: 'none', agents: [] };
+  }
+  const allowedSet = new Set(allowed);
+  if (
+    teamIds.length > 0 &&
+    allowed.length === teamIds.length &&
+    teamIds.every((agentId) => allowedSet.has(agentId))
+  ) {
+    return { mode: 'all', agents: allowed };
+  }
+  return { mode: 'limited', agents: allowed };
 }
 
 // Normalize the member's `overrides` object into a plain map of the known fields, or

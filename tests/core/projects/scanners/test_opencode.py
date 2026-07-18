@@ -53,6 +53,7 @@ def test_detect_parses_frontmatter_and_body(tmp_path: Path) -> None:
     assert agent.source_format == OPENCODE_FORMAT_KEY
     # permission.task: deny → the subagent tool is the only thing turned off.
     assert agent.denied_tools == frozenset({"subagent"})
+    assert [(rule.pattern, rule.allowed) for rule in agent.agent_target_rules] == [("*", False)]
     assert agent.body == "# builder Agent\n\nYou write code.\n"
 
 
@@ -316,3 +317,34 @@ def test_denied_tools_foreign_permission_shape_fails_open(tmp_path: Path) -> Non
     # A non-string, non-map permission value is foreign — treated as not a deny.
     front_matter = "permission:\n  bash: 123\n"
     assert _denied_tools_for(tmp_path, front_matter) == frozenset()
+
+
+def test_agent_target_rules_preserve_ordered_task_patterns(tmp_path: Path) -> None:
+    _write_agent(
+        tmp_path,
+        "orchestrator.md",
+        (
+            '---\npermission:\n  task:\n    "*": deny\n'
+            '    "review-*": allow\n    "review-legacy": deny\n---\nBody.\n'
+        ),
+    )
+
+    detected = OpenCodeDetector().detect(tmp_path)
+
+    agent = detected[0].agent
+    assert agent is not None
+    assert [(rule.pattern, rule.allowed) for rule in agent.agent_target_rules] == [
+        ("*", False),
+        ("review-*", True),
+        ("review-legacy", False),
+    ]
+
+
+def test_tools_task_false_denies_every_agent_target(tmp_path: Path) -> None:
+    _write_agent(tmp_path, "orchestrator.md", "---\ntools:\n  task: false\n---\nBody.\n")
+
+    detected = OpenCodeDetector().detect(tmp_path)
+
+    agent = detected[0].agent
+    assert agent is not None
+    assert [(rule.pattern, rule.allowed) for rule in agent.agent_target_rules] == [("*", False)]

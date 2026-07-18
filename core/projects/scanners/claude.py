@@ -36,6 +36,7 @@ from typing import Any
 
 from core.projects.paths import slugify_agent_id
 from core.projects.scanners.base import (
+    AgentTargetRule,
     DetectedFile,
     ScannedAgent,
     parse_front_matter,
@@ -67,7 +68,7 @@ _CLAUDE_TOOL_MAP: dict[str, frozenset[str]] = {
     "bash": frozenset({"bash", "process"}),
     "webfetch": frozenset({"web_fetch"}),
     "websearch": frozenset({"web_search"}),
-    "task": frozenset({"subagent"}),
+    "agent": frozenset({"subagent"}),
     "skill": frozenset({"skill"}),
 }
 
@@ -135,6 +136,7 @@ class ClaudeDetector:
             source_format=CLAUDE_FORMAT_KEY,
             source_path=path,
             denied_tools=_denied_tools(fields),
+            agent_target_rules=_agent_target_rules(fields),
         )
         return DetectedFile(source_path=path, raw_name=raw_name, agent=agent)
 
@@ -152,19 +154,70 @@ def _denied_tools(fields: dict[str, Any]) -> frozenset[str]:
 
     disallowed = _tool_name_list(fields.get("disallowedTools"))
     if disallowed is not None:
-        for name in disallowed:
-            mapped = _CLAUDE_TOOL_MAP.get(name)
+        for entry in disallowed:
+            base_name = _tool_base_name(entry)
+            if base_name == "agent" and _scoped_agent_targets(entry) is not None:
+                continue
+            mapped = _CLAUDE_TOOL_MAP.get(base_name)
             if mapped is not None:
                 denied.update(mapped)
 
     allowed = _tool_name_list(fields.get("tools"))
     if allowed is not None:
-        allowed_names = set(allowed)
+        allowed_names = {_tool_base_name(entry) for entry in allowed}
         for name, mapped in _CLAUDE_TOOL_MAP.items():
             if name not in allowed_names:
                 denied.update(mapped)
 
     return frozenset(denied)
+
+
+def _agent_target_rules(fields: dict[str, Any]) -> tuple[AgentTargetRule, ...]:
+    """Normalize Claude's Agent/Task tool scopes into ordered target rules."""
+    rules: list[AgentTargetRule] = []
+    allowed = _tool_name_list(fields.get("tools"))
+    if allowed is not None:
+        agent_entries = [entry for entry in allowed if _tool_base_name(entry) in {"agent", "task"}]
+        if not agent_entries:
+            rules.append(AgentTargetRule("*", False))
+        elif not any(_scoped_agent_targets(entry) is None for entry in agent_entries):
+            rules.append(AgentTargetRule("*", False))
+            for entry in agent_entries:
+                for target in _scoped_agent_targets(entry) or ():
+                    rules.append(AgentTargetRule(target, True))
+
+    disallowed = _tool_name_list(fields.get("disallowedTools"))
+    if disallowed is not None:
+        for entry in disallowed:
+            if _tool_base_name(entry) not in {"agent", "task"}:
+                continue
+            targets = _scoped_agent_targets(entry)
+            if targets is None:
+                rules.append(AgentTargetRule("*", False))
+            else:
+                rules.extend(AgentTargetRule(target, False) for target in targets)
+    return tuple(rules)
+
+
+def _tool_base_name(entry: str) -> str:
+    name = entry.partition("(")[0].strip().lower()
+    return "agent" if name == "task" else name
+
+
+def _scoped_agent_targets(entry: str) -> tuple[str, ...] | None:
+    start = entry.find("(")
+    if start < 0 or not entry.endswith(")"):
+        return None
+    targets: list[str] = []
+    for raw_target in entry[start + 1 : -1].split(","):
+        target = raw_target.strip()
+        if not target:
+            continue
+        try:
+            targets.append(slugify_agent_id(target))
+        except ValueError:
+            continue
+    return tuple(targets)
 
 
 def _tool_name_list(value: Any) -> list[str] | None:
@@ -178,9 +231,32 @@ def _tool_name_list(value: Any) -> list[str] | None:
     which for ``tools`` means "no tools allowed".
     """
     if isinstance(value, str):
-        names = [item.strip().lower() for item in value.split(",")]
+        names = [item.strip().lower() for item in _split_tool_entries(value)]
         cleaned = [name for name in names if name]
         return cleaned if cleaned else None
     if isinstance(value, list):
-        return [item.strip().lower() for item in value if isinstance(item, str) and item.strip()]
+        return [
+            entry.strip().lower()
+            for item in value
+            if isinstance(item, str)
+            for entry in _split_tool_entries(item)
+            if entry.strip()
+        ]
     return None
+
+
+def _split_tool_entries(value: str) -> list[str]:
+    """Split comma-separated Claude Tool specs without splitting scoped arguments."""
+    entries: list[str] = []
+    start = 0
+    depth = 0
+    for index, character in enumerate(value):
+        if character == "(":
+            depth += 1
+        elif character == ")" and depth > 0:
+            depth -= 1
+        elif character == "," and depth == 0:
+            entries.append(value[start:index])
+            start = index + 1
+    entries.append(value[start:])
+    return entries

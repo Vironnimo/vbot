@@ -42,6 +42,7 @@ def test_config_agent_resolves_to_runnable_runtime_agent(
     assert runtime_agent.allowed_tools == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
     # No project skills and nothing opted in → the agent has zero skills.
     assert runtime_agent.allowed_skills == []
+    assert runtime_agent.allowed_agents == ["builder"]
     assert runtime_agent.fallback_model == ""
     assert runtime_agent.thinking_effort is None
 
@@ -116,6 +117,29 @@ def test_project_ceiling_omitting_a_tool_wins_over_no_denial(
     runtime_agent = resolver.resolve_agent(project.project_id, "writer")
 
     assert runtime_agent.allowed_tools == ["read", "grep"]
+
+
+def test_effective_agent_targets_are_materialized_from_current_project_team(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(repo, "builder.md", model="openai/gpt-5.2")
+    _write_agent(repo, "review-one.md", model="openai/gpt-5.2")
+    _write_agent(repo, "review-legacy.md", model="openai/gpt-5.2")
+    orchestrator = repo / ".opencode" / "agents" / "orchestrator.md"
+    orchestrator.write_text(
+        (
+            "---\nmodel: openai/gpt-5.2\npermission:\n  task:\n"
+            '    "*": deny\n    "review-*": allow\n'
+            '    "review-legacy": deny\n---\nBody.\n'
+        ),
+        encoding="utf-8",
+    )
+    project = _project(projects, repo)
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    runtime_agent = resolver.resolve_agent(project.project_id, "orchestrator")
+
+    assert runtime_agent.allowed_agents == ["review-one"]
 
 
 def test_effective_skills_default_to_project_skills(

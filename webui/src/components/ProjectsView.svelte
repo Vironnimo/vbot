@@ -26,6 +26,7 @@
     memberFieldIsOverridden,
     needsRePoint,
     presentFormats,
+    projectAgentTargetSummary,
     shouldSuggestClaudeMd,
   } from '$lib/projectsView.js';
   import {
@@ -52,6 +53,25 @@
 
   function formatLabel(formatKey) {
     return FORMAT_LABELS[formatKey] ? FORMAT_LABELS[formatKey]() : formatKey;
+  }
+
+  function agentTargetPolicyText(member) {
+    const summary = projectAgentTargetSummary(member, projectsState.activeTeam);
+    if (summary.mode === 'none') {
+      return t(
+        'projects.team.agentTargetsNone',
+        'Can call no Agents on this Project Team.',
+      );
+    }
+    if (summary.mode === 'all') {
+      return t(
+        'projects.team.agentTargetsAll',
+        'Can call every Agent on this Project Team.',
+      );
+    }
+    return t('projects.team.agentTargetsLimited', 'Can call: {agents}', {
+      agents: summary.agents.join(', '),
+    });
   }
 
   // Maps each effective/override field to its section-header label key and the empty
@@ -1556,6 +1576,18 @@
                                 {t(
                                   'projects.team.overrideHelp',
                                   'An override replaces the agent file and all defaults for this agent in this project. The model override can also be set with /model in chat.',
+                                )}
+                              </p>
+                            </div>
+
+                            <div>
+                              <p class="projects-tools-line">
+                                {agentTargetPolicyText(member)}
+                              </p>
+                              <p class="projects-tools-follow">
+                                {t(
+                                  'projects.team.agentTargetsRepoOwned',
+                                  'Defined by the repository Agent config and read-only in vBot. Even full access stays inside this Project Team.',
                                 )}
                               </p>
                             </div>

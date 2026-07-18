@@ -1211,8 +1211,14 @@ describe('ProjectsView', () => {
             agent_id: 'restricted',
             display_name: 'Restricted',
             denied_tools: ['bash', 'process'],
+            allowed_agents: ['open'],
           }),
-          member({ agent_id: 'open', display_name: 'Open', denied_tools: [] }),
+          member({
+            agent_id: 'open',
+            display_name: 'Open',
+            denied_tools: [],
+            allowed_agents: ['restricted', 'open'],
+          }),
         ],
         report: { clean: true, findings: [] },
       },
@@ -1240,6 +1246,13 @@ describe('ProjectsView', () => {
     );
     expect(document.body.textContent).toContain(
       'No tool denials — follows the project tool whitelist.',
+    );
+    expect(document.body.textContent).toContain('Can call: open');
+    expect(document.body.textContent).toContain(
+      'Can call every Agent on this Project Team.',
+    );
+    expect(document.body.textContent).toContain(
+      'Defined by the repository Agent config and read-only in vBot.',
     );
   });
 
@@ -1445,6 +1458,7 @@ function member(overrides = {}) {
     source_format: 'opencode',
     source_path: '.opencode/agents/agent.md',
     denied_tools: [],
+    allowed_agents: [],
     overrides: null,
     effective: {
       model: { value: null, source: null },

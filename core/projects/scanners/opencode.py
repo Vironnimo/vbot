@@ -35,6 +35,7 @@ from typing import Any
 
 from core.projects.paths import slugify_agent_id
 from core.projects.scanners.base import (
+    AgentTargetRule,
     DetectedFile,
     ScannedAgent,
     parse_front_matter,
@@ -52,6 +53,8 @@ OPENCODE_AGENTS_SUBPATH = (".opencode", "agents")
 OPENCODE_FORMAT_KEY = "opencode"
 _AGENT_FILE_GLOB = "*.md"
 _OPENCODE_DENY = "deny"
+_OPENCODE_ALLOW = "allow"
+_OPENCODE_TARGET_ACTIONS = frozenset({_OPENCODE_ALLOW, _OPENCODE_DENY, "ask"})
 
 # OpenCode ``permission`` key → the vBot tools a full deny on that key turns off.
 # ``edit`` covers both edit and write (no ``write`` permission key exists); ``bash``
@@ -147,6 +150,7 @@ class OpenCodeDetector:
             source_format=OPENCODE_FORMAT_KEY,
             source_path=path,
             denied_tools=_denied_tools(fields),
+            agent_target_rules=_agent_target_rules(fields),
         )
         return DetectedFile(source_path=path, raw_name=raw_name, agent=agent)
 
@@ -198,6 +202,36 @@ def _denied_tools(fields: dict[str, Any]) -> frozenset[str]:
     _collect_permission_denials(fields.get("permission"), denied)
     _collect_tools_denials(fields.get("tools"), denied)
     return frozenset(denied)
+
+
+def _agent_target_rules(fields: dict[str, Any]) -> tuple[AgentTargetRule, ...]:
+    """Normalize OpenCode's scoped task permission into ordered target rules."""
+    tools = fields.get("tools")
+    if isinstance(tools, dict) and tools.get("task") is False:
+        return (AgentTargetRule("*", False),)
+
+    permission = fields.get("permission")
+    if not isinstance(permission, dict):
+        return ()
+    task = permission.get("task")
+    if isinstance(task, str):
+        action = task.strip().lower()
+        if action not in _OPENCODE_TARGET_ACTIONS:
+            return ()
+        return () if action == _OPENCODE_ALLOW else (AgentTargetRule("*", False),)
+    if not isinstance(task, dict):
+        return ()
+
+    rules: list[AgentTargetRule] = []
+    for raw_pattern, raw_action in task.items():
+        if not isinstance(raw_pattern, str) or not isinstance(raw_action, str):
+            continue
+        pattern = raw_pattern.strip().lower()
+        action = raw_action.strip().lower()
+        if not pattern or action not in _OPENCODE_TARGET_ACTIONS:
+            continue
+        rules.append(AgentTargetRule(pattern, action == _OPENCODE_ALLOW))
+    return tuple(rules)
 
 
 def _collect_permission_denials(permission: Any, denied: set[str]) -> None:

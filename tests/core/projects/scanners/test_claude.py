@@ -251,3 +251,39 @@ def test_denied_tools_malformed_shapes_fail_open(tmp_path: Path) -> None:
 def test_denied_tools_empty_tools_string_fails_open(tmp_path: Path) -> None:
     # "tools: ''" is more likely noise than an explicit empty allow-list.
     assert _denied_tools_for(tmp_path, "tools: ''\n") == frozenset()
+
+
+def test_scoped_agent_allowlist_keeps_subagent_and_limits_targets(tmp_path: Path) -> None:
+    _write_agent(
+        tmp_path,
+        "orchestrator.md",
+        "---\nname: orchestrator\ntools: Agent(worker, reviewer), Read\n---\nBody.\n",
+    )
+
+    detected = ClaudeDetector().detect(tmp_path)
+
+    agent = detected[0].agent
+    assert agent is not None
+    assert "subagent" not in agent.denied_tools
+    assert [(rule.pattern, rule.allowed) for rule in agent.agent_target_rules] == [
+        ("*", False),
+        ("worker", True),
+        ("reviewer", True),
+    ]
+
+
+def test_scoped_agent_denial_does_not_disable_other_targets(tmp_path: Path) -> None:
+    _write_agent(
+        tmp_path,
+        "orchestrator.md",
+        "---\nname: orchestrator\ndisallowedTools: Agent(worker)\n---\nBody.\n",
+    )
+
+    detected = ClaudeDetector().detect(tmp_path)
+
+    agent = detected[0].agent
+    assert agent is not None
+    assert "subagent" not in agent.denied_tools
+    assert [(rule.pattern, rule.allowed) for rule in agent.agent_target_rules] == [
+        ("worker", False)
+    ]

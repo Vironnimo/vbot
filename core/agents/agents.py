@@ -67,6 +67,7 @@ WORKSPACE_IDENTITY_FILES = ("SOUL.md", "USER.md", "MEMORY.md")
 
 _AGENT_CONFIG_FIELDS = frozenset(
     {
+        "allowed_agents",
         "allowed_skills",
         "allowed_tools",
         "compaction_policy",
@@ -87,6 +88,7 @@ _AGENT_CONFIG_FIELDS = frozenset(
 )
 _REQUIRED_AGENT_CONFIG_FIELDS = frozenset(
     {
+        "allowed_agents",
         "allowed_skills",
         "allowed_tools",
         "created_at",
@@ -171,8 +173,12 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
             data["memory_prompt_mode"],
             frozenset(MEMORY_PROMPT_MODES),
         )
-    validate_string_list(diagnostics, "$.allowed_tools", data.get("allowed_tools"))
-    validate_string_list(diagnostics, "$.allowed_skills", data.get("allowed_skills"))
+    if "allowed_tools" in data:
+        validate_string_list(diagnostics, "$.allowed_tools", data["allowed_tools"])
+    if "allowed_skills" in data:
+        validate_string_list(diagnostics, "$.allowed_skills", data["allowed_skills"])
+    if "allowed_agents" in data:
+        validate_string_list(diagnostics, "$.allowed_agents", data["allowed_agents"])
     if "custom_system_prompt_enabled" in data and not isinstance(
         data["custom_system_prompt_enabled"], bool
     ):
@@ -226,6 +232,7 @@ class Agent:
     thinking_effort: str | None
     allowed_tools: list[str]
     allowed_skills: list[str]
+    allowed_agents: list[str]
     created_at: str
     updated_at: str
     root_project_id: str | None = None
@@ -280,6 +287,7 @@ class AgentStore:
         memory_prompt_mode: MemoryPromptMode = DEFAULT_MEMORY_PROMPT_MODE,
         allowed_tools: list[str] | None = None,
         allowed_skills: list[str] | None = None,
+        allowed_agents: list[str] | None = None,
         custom_system_prompt_enabled: bool = DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
         compaction_policy: dict[str, Any] | None = None,
     ) -> Agent:
@@ -299,6 +307,7 @@ class AgentStore:
         validated_memory_prompt_mode = _validate_memory_prompt_mode(memory_prompt_mode)
         validated_allowed_tools = _validate_allowed_items("allowed_tools", allowed_tools)
         validated_allowed_skills = _validate_allowed_items("allowed_skills", allowed_skills)
+        validated_allowed_agents = _validate_allowed_items("allowed_agents", allowed_agents)
         validated_custom_system_prompt_enabled = _validate_bool_field(
             "custom_system_prompt_enabled", custom_system_prompt_enabled
         )
@@ -327,6 +336,7 @@ class AgentStore:
             memory_prompt_mode=validated_memory_prompt_mode,
             allowed_tools=validated_allowed_tools,
             allowed_skills=validated_allowed_skills,
+            allowed_agents=validated_allowed_agents,
             custom_system_prompt_enabled=validated_custom_system_prompt_enabled,
             compaction_policy=validated_compaction_policy,
             current_session_id=session.id,
@@ -473,6 +483,10 @@ class AgentStore:
         if "allowed_skills" in changes:
             changes["allowed_skills"] = _validate_allowed_items(
                 "allowed_skills", changes["allowed_skills"]
+            )
+        if "allowed_agents" in changes:
+            changes["allowed_agents"] = _validate_allowed_items(
+                "allowed_agents", changes["allowed_agents"]
             )
         if "custom_system_prompt_enabled" in changes:
             changes["custom_system_prompt_enabled"] = _validate_bool_field(
@@ -883,6 +897,7 @@ def _agent_from_dict(
         ),
         allowed_tools=sanitize_configured_allowed_tools(data["allowed_tools"]),
         allowed_skills=list(data["allowed_skills"]),
+        allowed_agents=list(data["allowed_agents"]),
         custom_system_prompt_enabled=data.get(
             "custom_system_prompt_enabled", DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED
         ),

@@ -62,6 +62,7 @@ class StubAgent:
     memory_prompt_mode: str = DEFAULT_MEMORY_PROMPT_MODE
     allowed_tools: list[str] | None = None
     allowed_skills: list[str] | None = None
+    allowed_agents: list[str] | None = None
     custom_system_prompt_enabled: bool = False
     current_session_id: str = ""
     created_at: str = "2026-05-04T00:00:00Z"
@@ -72,6 +73,8 @@ class StubAgent:
             object.__setattr__(self, "allowed_tools", ["*"])
         if self.allowed_skills is None:
             object.__setattr__(self, "allowed_skills", ["*"])
+        if self.allowed_agents is None:
+            object.__setattr__(self, "allowed_agents", ["*"])
 
 
 class StubAgents:

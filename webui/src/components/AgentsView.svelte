@@ -9,7 +9,13 @@
     listProjects,
     listSkills,
     listTools,
+    showProject,
   } from '$lib/api.js';
+  import { buildAgentTargetCatalog } from '$lib/agentForm.js';
+  import {
+    projectIdsFromList,
+    projectTeamEntry,
+  } from '$lib/agentTargetOptions.js';
   import { t } from '$lib/i18n.js';
   import {
     SURFACE_FORM,
@@ -45,7 +51,9 @@
   let availableSkills = $state([]);
   let invalidSkills = $state([]);
   let availableProjects = $state([]);
+  let projectTargetProjects = $state([]);
   let projectCatalogError = $state('');
+  let agentTargetCatalogError = $state('');
   // The global agent defaults, fetched once when the create modal opens so it can
   // label its inherit options from the live global default (an agent's
   // "effective" does not exist yet at create time). Empty object on failure.
@@ -57,9 +65,16 @@
   let pendingModelCatalogs = null;
   let lastModelsRefreshToken = null;
   let lastProjectsRefreshToken = null;
+  let projectCatalogRequestId = 0;
 
   let selectedAgent = $derived(
     agents.find((agent) => agent.id === selectedAgentId) ?? null,
+  );
+  let availableAgentTargets = $derived(
+    buildAgentTargetCatalog({
+      identityAgents: agents,
+      projectTeams: projectTargetProjects,
+    }),
   );
 
   $effect(() => {
@@ -95,20 +110,50 @@
   });
 
   async function loadProjectCatalog() {
+    const requestId = ++projectCatalogRequestId;
     try {
       const result = await listProjects();
-      availableProjects = Array.isArray(result?.projects)
-        ? result.projects.map((project) => ({
-            value: project.project_id,
-            label: project.display_name || project.project_id,
-          }))
-        : [];
+      if (requestId !== projectCatalogRequestId) {
+        return;
+      }
+      const projects = Array.isArray(result?.projects) ? result.projects : [];
+      availableProjects = projects.map((project) => ({
+        value: project.project_id,
+        label: project.display_name || project.project_id,
+      }));
       projectCatalogError = '';
+      const projectIds = projectIdsFromList(result);
+      const teamResults = await Promise.allSettled(
+        projectIds.map(async (projectId) => {
+          const shown = await showProject(projectId);
+          return projectTeamEntry(projectId, shown);
+        }),
+      );
+      if (requestId !== projectCatalogRequestId) {
+        return;
+      }
+      projectTargetProjects = teamResults
+        .filter((entry) => entry.status === 'fulfilled')
+        .map((entry) => entry.value);
+      agentTargetCatalogError = teamResults.some(
+        (entry) => entry.status === 'rejected',
+      )
+        ? t(
+            'agents.access.projectTargetsLoadError',
+            'Some Project Agent targets could not be loaded.',
+          )
+        : '';
     } catch (error) {
+      if (requestId !== projectCatalogRequestId) {
+        return;
+      }
+      availableProjects = [];
+      projectTargetProjects = [];
       projectCatalogError = viewErrorMessage(
         error,
         t('agents.form.projectLoadError', 'Projects could not be loaded.'),
       );
+      agentTargetCatalogError = projectCatalogError;
     }
   }
 
@@ -307,6 +352,8 @@
         {availableTools}
         {availableSkills}
         {invalidSkills}
+        {availableAgentTargets}
+        {agentTargetCatalogError}
         projectOptions={availableProjects}
         {projectCatalogError}
         {loadError}
