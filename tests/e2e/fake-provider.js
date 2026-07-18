@@ -54,6 +54,9 @@ function responseText(model, prompt) {
   if (model.includes("e2e-fallback")) {
     return "Fallback provider response.";
   }
+  if (prompt.includes("E2E_QUEUE_FOLLOWUP")) {
+    return "Fake provider queued response.";
+  }
   if (prompt.includes("E2E_STREAM")) {
     return "Fake provider streaming response.";
   }
@@ -211,6 +214,21 @@ async function handleChatCompletion(request, response) {
       ...Array.from({ length: 80 }, () => " still running"),
     ];
     await streamCompletion(response, model, chunks, 200);
+    return;
+  }
+
+  if (prompt.includes("E2E_QUEUE_ACTIVE")) {
+    await streamCompletion(
+      response,
+      model,
+      [
+        "Queue run started.",
+        " Still active.",
+        " Almost finished.",
+        " Done.",
+      ],
+      600,
+    );
     return;
   }
 

@@ -1,19 +1,21 @@
 import { expect, test } from "@playwright/test";
 
-test("a cron job persists through update, pause, and deletion", async ({
+test("a Scheduled Run persists through update, pause, and deletion", async ({
   page,
 }) => {
   await page.goto("/#cron");
 
-  const cron = page.getByRole("region", { name: "Cron" });
-  const cronListPane = cron.getByRole("complementary", { name: "Cron" });
+  const cron = page.getByRole("region", { name: "Scheduled Runs" });
+  const cronListPane = cron.getByRole("complementary", {
+    name: "Scheduled Runs",
+  });
   await expect(
-    cron.getByText("No scheduled jobs", { exact: true }),
+    cron.getByText("No scheduled runs yet", { exact: true }),
   ).toBeVisible();
   await cronListPane.getByRole("button", { exact: true, name: "Add" }).click();
 
   await expect(
-    cron.getByText("Create cron job", { exact: true }),
+    cron.getByText("Create Scheduled Run", { exact: true }),
   ).toBeVisible();
   await cron
     .getByRole("textbox", { name: "Prompt" })
@@ -21,7 +23,7 @@ test("a cron job persists through update, pause, and deletion", async ({
   await cron.getByPlaceholder("0 9 * * 1-5").fill("0 6 * * *");
   await cron.getByRole("button", { exact: true, name: "Save" }).click();
 
-  const jobs = cron.getByRole("list", { name: "Cron jobs" });
+  const jobs = cron.getByRole("list", { name: "Scheduled Runs" });
   let job = jobs.getByRole("button", { name: /Main Active 0 6 \* \* \*/ });
   await expect(job).toBeVisible();
 
@@ -54,14 +56,16 @@ test("a cron job persists through update, pause, and deletion", async ({
   ).not.toBeChecked();
 
   await cron.getByRole("button", { name: /^Delete job / }).click();
-  const deleteDialog = page.getByRole("dialog", { name: "Delete cron job" });
+  const deleteDialog = page.getByRole("dialog", {
+    name: "Delete Scheduled Run",
+  });
   await expect(deleteDialog).toContainText("Delete this job permanently?");
   await deleteDialog
     .getByRole("button", { exact: true, name: "Delete" })
     .click();
 
   await expect(
-    cron.getByText("No scheduled jobs", { exact: true }),
+    cron.getByText("No scheduled runs yet", { exact: true }),
   ).toBeVisible();
   await expect(jobs).toHaveCount(0);
 });
