@@ -28,15 +28,14 @@ class TestLoadLocalModelsSettings:
 
         assert result == {"context_windows": {"ollama/ministral-3:8b": 16384}}
 
-    def test_rejects_non_object_section(self, tmp_path: Path) -> None:
+    def test_defaults_non_object_section(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(json.dumps({"local_models": []}), encoding="utf-8")
 
-        with pytest.raises(StorageError, match=r"\$\.local_models: must be an object"):
-            storage.load_local_models_settings()
+        assert storage.load_local_models_settings() == {"context_windows": {}}
 
-    def test_rejects_invalid_window_value(self, tmp_path: Path) -> None:
+    def test_defaults_invalid_window_value(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(
@@ -44,8 +43,7 @@ class TestLoadLocalModelsSettings:
             encoding="utf-8",
         )
 
-        with pytest.raises(StorageError, match="must be a positive integer"):
-            storage.load_local_models_settings()
+        assert storage.load_local_models_settings() == {"context_windows": {}}
 
 
 class TestUpdateLocalModelsSettings:

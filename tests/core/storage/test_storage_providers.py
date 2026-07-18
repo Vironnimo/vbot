@@ -28,15 +28,14 @@ class TestLoadProvidersSettings:
 
         assert result == {"connections": {"ollama:local": True, "openai:api-key": False}}
 
-    def test_rejects_non_object_section(self, tmp_path: Path) -> None:
+    def test_defaults_non_object_section(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(json.dumps({"providers": []}), encoding="utf-8")
 
-        with pytest.raises(StorageError, match=r"\$\.providers: must be an object"):
-            storage.load_providers_settings()
+        assert storage.load_providers_settings() == {"connections": {}}
 
-    def test_rejects_non_boolean_value(self, tmp_path: Path) -> None:
+    def test_defaults_non_boolean_value(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(
@@ -44,10 +43,9 @@ class TestLoadProvidersSettings:
             encoding="utf-8",
         )
 
-        with pytest.raises(StorageError, match="must be a boolean"):
-            storage.load_providers_settings()
+        assert storage.load_providers_settings() == {"connections": {}}
 
-    def test_rejects_key_without_connection_part(self, tmp_path: Path) -> None:
+    def test_defaults_key_without_connection_part(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(
@@ -55,8 +53,7 @@ class TestLoadProvidersSettings:
             encoding="utf-8",
         )
 
-        with pytest.raises(StorageError, match="'<provider>:<connection>'"):
-            storage.load_providers_settings()
+        assert storage.load_providers_settings() == {"connections": {}}
 
 
 class TestSetProviderConnectionEnabled:

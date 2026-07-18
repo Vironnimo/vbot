@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, cast
@@ -120,6 +121,57 @@ def load_validated_settings_json(settings_path: str | Path) -> JsonObject:
         )
     except JsonConfigValidationError as error:
         raise SettingsValidationError(str(error)) from error
+
+
+def load_runtime_settings_json(
+    settings_path: str | Path,
+) -> tuple[JsonObject, tuple[JsonDiagnostic, ...]]:
+    """Load usable Settings without letting one invalid key reject valid siblings.
+
+    Syntax and root-shape failures cannot be isolated and therefore raise. Schema
+    failures are isolated at their top-level Settings key: the invalid section or
+    scalar is omitted, valid siblings remain live, and diagnostics are returned so
+    runtime callers can report the degradation without mutating the source file.
+    """
+
+    path = Path(settings_path)
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}, ()
+    except OSError as error:
+        raise SettingsValidationError(f"{path}: error $: Cannot read file: {error}") from error
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise SettingsValidationError(
+            f"{path}: error $: Invalid JSON: {error.msg} "
+            f"at line {error.lineno} column {error.colno}"
+        ) from error
+    if not isinstance(data, dict):
+        raise SettingsValidationError(
+            f"{path}: error $: Expected a JSON object, got {type(data).__name__}"
+        )
+
+    errors = tuple(
+        diagnostic for diagnostic in validate_settings_data(data) if diagnostic.severity == "error"
+    )
+    if not errors:
+        return dict(data), ()
+
+    invalid_keys = {_settings_top_level_key(diagnostic.path) for diagnostic in errors}
+    usable = {key: value for key, value in data.items() if key not in invalid_keys}
+    return usable, errors
+
+
+def _settings_top_level_key(path: str) -> str:
+    """Extract the owning top-level Settings key from a schema diagnostic path."""
+
+    if not path.startswith("$."):
+        raise SettingsValidationError(f"Cannot isolate root Settings diagnostic: {path}")
+    remainder = path[2:]
+    return remainder.split(".", 1)[0].split("[", 1)[0]
 
 
 def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport, ...]:

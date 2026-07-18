@@ -63,73 +63,66 @@ class TestLoadDebugSettings:
 
         assert result == {"enabled": False, "trace_limit": 500}
 
-    def test_rejects_non_object_debug_section(self, tmp_path: Path) -> None:
+    def test_defaults_non_object_debug_section(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(json.dumps({"debug": []}), encoding="utf-8")
 
-        with pytest.raises(StorageError, match=r"\$\.debug: must be an object"):
-            storage.load_debug_settings()
+        assert storage.load_debug_settings() == {"enabled": False, "trace_limit": 50}
 
-    def test_rejects_non_boolean_enabled(self, tmp_path: Path) -> None:
+    def test_defaults_non_boolean_enabled(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(
             json.dumps({"debug": {"enabled": "yes"}}), encoding="utf-8"
         )
 
-        with pytest.raises(StorageError, match=r"\$\.debug\.enabled: must be a boolean"):
-            storage.load_debug_settings()
+        assert storage.load_debug_settings() == {"enabled": False, "trace_limit": 50}
 
-    def test_rejects_non_integer_trace_limit(self, tmp_path: Path) -> None:
+    def test_defaults_non_integer_trace_limit(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(
             json.dumps({"debug": {"trace_limit": "fifty"}}), encoding="utf-8"
         )
 
-        with pytest.raises(StorageError, match=r"\$\.debug\.trace_limit"):
-            storage.load_debug_settings()
+        assert storage.load_debug_settings() == {"enabled": False, "trace_limit": 50}
 
-    def test_rejects_zero_trace_limit(self, tmp_path: Path) -> None:
+    def test_defaults_zero_trace_limit(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(
             json.dumps({"debug": {"trace_limit": 0}}), encoding="utf-8"
         )
 
-        with pytest.raises(StorageError, match=r"\$\.debug\.trace_limit"):
-            storage.load_debug_settings()
+        assert storage.load_debug_settings() == {"enabled": False, "trace_limit": 50}
 
-    def test_rejects_negative_trace_limit(self, tmp_path: Path) -> None:
+    def test_defaults_negative_trace_limit(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(
             json.dumps({"debug": {"trace_limit": -1}}), encoding="utf-8"
         )
 
-        with pytest.raises(StorageError, match=r"\$\.debug\.trace_limit"):
-            storage.load_debug_settings()
+        assert storage.load_debug_settings() == {"enabled": False, "trace_limit": 50}
 
-    def test_rejects_trace_limit_over_500(self, tmp_path: Path) -> None:
+    def test_defaults_trace_limit_over_500(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(
             json.dumps({"debug": {"trace_limit": 501}}), encoding="utf-8"
         )
 
-        with pytest.raises(StorageError, match=r"\$\.debug\.trace_limit"):
-            storage.load_debug_settings()
+        assert storage.load_debug_settings() == {"enabled": False, "trace_limit": 50}
 
-    def test_rejects_boolean_trace_limit(self, tmp_path: Path) -> None:
+    def test_defaults_boolean_trace_limit(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(
             json.dumps({"debug": {"trace_limit": True}}), encoding="utf-8"
         )
 
-        with pytest.raises(StorageError, match=r"\$\.debug\.trace_limit"):
-            storage.load_debug_settings()
+        assert storage.load_debug_settings() == {"enabled": False, "trace_limit": 50}
 
 
 class TestUpdateDebugSettings:

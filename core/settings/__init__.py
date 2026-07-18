@@ -33,6 +33,7 @@ from core.settings.settings import (
 from core.settings.validation import (
     SettingsDiagnostic,
     SettingsValidationReport,
+    load_runtime_settings_json,
     load_validated_settings_json,
     validate_data_dir_config,
     validate_settings_data,
@@ -63,6 +64,7 @@ __all__ = [
     "format_report_diagnostics",
     "is_valid_agent_id",
     "is_valid_project_id",
+    "load_runtime_settings_json",
     "load_validated_settings_json",
     "parse_settings_update",
     "validate_data_dir_config",

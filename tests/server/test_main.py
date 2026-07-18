@@ -65,6 +65,25 @@ def test_resolve_port_uses_settings_then_default(tmp_path: Path, monkeypatch) ->
     assert resolve_port(Config(data_dir=tmp_path / "missing")) == DEFAULT_PORT
 
 
+def test_resolve_port_uses_default_when_settings_are_invalid(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("VBOT_SERVER_PORT", raising=False)
+    (tmp_path / "settings.json").write_text("{", encoding="utf-8")
+
+    assert resolve_port(Config(data_dir=tmp_path)) == DEFAULT_PORT
+
+
+def test_resolve_port_keeps_valid_port_next_to_invalid_settings(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.delenv("VBOT_SERVER_PORT", raising=False)
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"server_port": 8500, "debug": {"enabled": "yes"}}),
+        encoding="utf-8",
+    )
+
+    assert resolve_port(Config(data_dir=tmp_path)) == 8500
+
+
 def test_resolve_port_ignores_ambient_port_environment(
     tmp_path: Path,
     monkeypatch,

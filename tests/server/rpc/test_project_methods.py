@@ -542,6 +542,16 @@ def test_set_changes_default_model(tmp_path: Path) -> None:
     assert result["project"]["default_model"] == "openai/gpt-mini"
 
 
+def test_set_clears_display_name_to_project_id(tmp_path: Path) -> None:
+    state = _make_state(tmp_path)
+    repo = _make_repo(tmp_path, "vbot")
+    _add_project(state, {"cwd": str(repo), "display_name": "vBot"})
+
+    result = _set_project(state, {"project_id": "vbot", "display_name": None})
+
+    assert result["project"]["display_name"] == "vbot"
+
+
 def test_set_cwd_rescans_team(tmp_path: Path) -> None:
     state = _make_state(tmp_path)
     old_repo = _make_repo(tmp_path, "vbot", "builder.md")

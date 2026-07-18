@@ -365,6 +365,31 @@ def test_get_returns_persisted_project(data_dir: Path, repo: Path) -> None:
     assert loaded.default_model == "openai/gpt-5"
 
 
+def test_get_defaults_optional_metadata_in_minimal_config(data_dir: Path, repo: Path) -> None:
+    config_path = data_dir / "projects" / "vbot" / "project.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        json.dumps({"project_id": "vbot", "cwd": str(repo)}),
+        encoding="utf-8",
+    )
+    store = ProjectStore(data_dir)
+
+    loaded = store.get("vbot")
+
+    assert loaded.display_name == "vbot"
+    assert loaded.created_at
+    assert loaded.updated_at
+    assert store.exists("vbot") is True
+
+
+def test_exists_returns_false_for_invalid_project_config(data_dir: Path) -> None:
+    config_path = data_dir / "projects" / "broken" / "project.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(json.dumps({"project_id": "broken"}), encoding="utf-8")
+
+    assert ProjectStore(data_dir).exists("broken") is False
+
+
 def test_create_persists_default_temperature_and_thinking(data_dir: Path, repo: Path) -> None:
     store = ProjectStore(data_dir)
     store.create(
@@ -490,6 +515,19 @@ def test_update_changes_display_name(data_dir: Path, repo: Path) -> None:
 
     assert updated.display_name == "vBot Renamed"
     assert store.get("vbot").display_name == "vBot Renamed"
+
+
+@pytest.mark.parametrize("display_name", [None, "", "   "])
+def test_update_clears_display_name_to_project_id(
+    data_dir: Path, repo: Path, display_name: str | None
+) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+
+    updated = store.update("vbot", display_name=display_name)
+
+    assert updated.display_name == "vbot"
+    assert store.get("vbot").display_name == "vbot"
 
 
 def test_rename_keeps_key_and_sessions_path_stable(data_dir: Path, repo: Path) -> None:

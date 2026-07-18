@@ -608,7 +608,13 @@ def _set_changes(params: JsonObject) -> JsonObject:
     if "cwd" in params:
         changes["cwd"] = _required_string(params, "cwd")
     if "display_name" in params:
-        changes["display_name"] = _required_string(params, "display_name")
+        display_name = params["display_name"]
+        if display_name is not None and not isinstance(display_name, str):
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                "params.display_name must be a string or null",
+            )
+        changes["display_name"] = display_name
     if "default_agent" in params:
         changes["default_agent"] = _optional_string(params, "default_agent") or ""
     if "default_model" in params:

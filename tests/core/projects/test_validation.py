@@ -40,13 +40,10 @@ def test_validate_project_data_accepts_full_valid_config() -> None:
     assert validate_project_data(_valid_project_data()) == []
 
 
-def test_validate_project_data_accepts_minimal_project_just_a_cwd() -> None:
+def test_validate_project_data_accepts_only_identity_and_cwd() -> None:
     data = {
         "project_id": "scratch",
-        "display_name": "Scratch",
         "cwd": "/srv/repos/scratch",
-        "created_at": "2026-06-18T10:00:00Z",
-        "updated_at": "2026-06-18T10:00:00Z",
     }
 
     assert validate_project_data(data) == []
@@ -76,11 +73,18 @@ def test_validate_project_data_rejects_invalid_project_id() -> None:
     ) in _diagnostics(data)
 
 
-def test_validate_project_data_rejects_empty_display_name() -> None:
+def test_validate_project_data_accepts_null_display_name() -> None:
+    data = _valid_project_data()
+    data["display_name"] = None
+
+    assert validate_project_data(data) == []
+
+
+def test_validate_project_data_accepts_blank_display_name() -> None:
     data = _valid_project_data()
     data["display_name"] = "   "
 
-    assert ("error", "$.display_name", "must be a non-empty string") in _diagnostics(data)
+    assert validate_project_data(data) == []
 
 
 def test_validate_project_data_rejects_empty_cwd() -> None:
@@ -317,10 +321,10 @@ def test_validate_project_data_warns_on_unknown_field() -> None:
 def test_validate_project_data_reports_missing_required_fields() -> None:
     paths = {path for _, path, _ in _diagnostics({"project_id": "vbot"})}
 
-    assert "$.display_name" in paths
     assert "$.cwd" in paths
-    assert "$.created_at" in paths
-    assert "$.updated_at" in paths
+    assert "$.display_name" not in paths
+    assert "$.created_at" not in paths
+    assert "$.updated_at" not in paths
 
 
 def test_validate_project_file_reports_missing_file(tmp_path: Path) -> None:
