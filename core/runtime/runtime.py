@@ -842,8 +842,7 @@ class Runtime:
     def _ensure_bootstrap_agent(self) -> None:
         if self._agents is None:
             raise RuntimeError("Agent service not available")
-        if not self._agents.list():
-            self._agents.create("main", "Main")
+        self._agents.ensure_bootstrap()
 
     def _log_startup_inventory(self) -> None:
         if (

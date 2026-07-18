@@ -52,7 +52,7 @@ async def test_agent_crud_delegates_expose_current_session_id(tmp_path: Path) ->
         state,
         {
             "method": "agent.create",
-            "params": {"id": "writer", "name": "Writer", "model": "openai/gpt-5.2"},
+            "params": {"id": "writer"},
         },
     )
     update_response = await dispatch_rpc(
@@ -65,11 +65,25 @@ async def test_agent_crud_delegates_expose_current_session_id(tmp_path: Path) ->
 
     assert list_response["result"]["agents"][0]["current_session_id"] == "current-one"
     assert create_response["result"]["id"] == "writer"
+    assert create_response["result"]["name"] == "writer"
     assert create_response["result"]["custom_system_prompt_enabled"] is False
     assert create_response["result"]["memory_prompt_mode"] == "agent_user"
     assert create_response["result"]["tools"] == {}
     assert update_response["result"]["name"] == "Updated Writer"
     assert delete_response["result"]["agent_id"] == "writer"
+
+
+@pytest.mark.asyncio
+async def test_agent_update_empty_name_restores_id_default(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "agent.update", "params": {"id": "coder", "name": None}},
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["name"] == "coder"
 
 
 @pytest.mark.asyncio
@@ -636,7 +650,8 @@ async def test_agent_create_returns_resolved_defaults_and_signals_agents_reload(
         ("agent.update", {"id": "coder", "temperature": 2.1}),
         ("agent.update", {"id": "coder", "thinking_effort": "extreme"}),
         ("agent.update", {"id": "coder", "memory_prompt_mode": "sometimes"}),
-        ("agent.update", {"id": "coder", "name": ""}),
+        ("agent.create", {"id": "writer", "name": 5}),
+        ("agent.update", {"id": "coder", "name": 5}),
         ("agent.update", {"id": "coder", "model": 5}),
         ("agent.update", {"id": "coder", "custom_system_prompt_enabled": "yes"}),
     ],

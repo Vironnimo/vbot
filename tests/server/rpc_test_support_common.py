@@ -142,13 +142,15 @@ class StubAgents:
     def list(self) -> list[StubAgent]:
         return [self._apply_defaults(self._agents[agent_id]) for agent_id in sorted(self._agents)]
 
-    def create(self, agent_id: str, name: str, **changes: Any) -> StubAgent:
-        agent = StubAgent(id=agent_id, name=name, **changes)
+    def create(self, agent_id: str, name: str | None = None, **changes: Any) -> StubAgent:
+        agent = StubAgent(id=agent_id, name=name or agent_id, **changes)
         self._agents[agent_id] = agent
         return self._get_raw(agent_id)
 
     def update(self, agent_id: str, **changes: Any) -> StubAgent:
         agent = self._get_raw(agent_id)
+        if "name" in changes and not changes["name"]:
+            changes["name"] = agent_id
         updated = StubAgent(**{**agent.__dict__, **changes})
         self._agents[agent_id] = updated
         return self.get(agent_id)

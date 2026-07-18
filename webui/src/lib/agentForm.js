@@ -102,20 +102,13 @@ export function normalizeAgentForm(values, options = {}) {
     validateAgentId(normalized.id, errors);
   }
 
-  if (!normalized.name) {
-    errors.name = 'required';
-  }
-
-  if (mode === AGENT_FORM_MODE_EDIT && !normalized.workspace) {
-    errors.workspace = 'required';
-  }
-
   const temperature = normalizeTemperature(normalized.temperature);
   if (normalized.temperature && temperature === null) {
     errors.temperature = 'invalid_number';
   }
 
   const payloadOptions = {
+    includeEmptyName: mode === AGENT_FORM_MODE_EDIT,
     includeWorkspace: mode === AGENT_FORM_MODE_EDIT,
     includeTools: mode === AGENT_FORM_MODE_EDIT,
   };
@@ -256,7 +249,6 @@ function normalizeMemoryPromptMode(value) {
 
 function buildAgentPayload(normalized, temperature, options = {}) {
   const payload = {
-    name: normalized.name,
     model: normalized.model,
     fallback_model: normalized.fallback_model,
     temperature,
@@ -267,6 +259,10 @@ function buildAgentPayload(normalized, temperature, options = {}) {
     custom_system_prompt_enabled: normalized.custom_system_prompt_enabled,
     compaction_policy: normalized.compaction_policy,
   };
+
+  if (normalized.name || options.includeEmptyName) {
+    payload.name = normalized.name;
+  }
 
   if (options.includeWorkspace) {
     payload.workspace = normalized.workspace;

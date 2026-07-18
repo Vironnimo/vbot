@@ -100,6 +100,14 @@ def test_create_writes_agent_json_sessions_and_workspace(store: AgentStore) -> N
         assert (workspace_path / filename).read_text(encoding="utf-8") == f"# {filename}\n"
 
 
+def test_create_requires_only_agent_id(store: AgentStore) -> None:
+    agent = store.create("minimal")
+
+    assert agent.id == "minimal"
+    assert agent.name == "minimal"
+    assert store.get("minimal").name == "minimal"
+
+
 def test_default_workspace_matches_created_agent_workspace(store: AgentStore) -> None:
     agent = store.create("coder", "Coder Agent")
 
@@ -108,6 +116,58 @@ def test_default_workspace_matches_created_agent_workspace(store: AgentStore) ->
     # A default-created agent's stored workspace equals the reported default, so
     # the WebUI's "uses a custom workspace" check (workspace != default) is False.
     assert agent.workspace == default
+
+
+def test_minimal_agent_config_loads_all_optional_field_defaults(store: AgentStore) -> None:
+    agent_dir = store.data_dir / "agents" / "minimal"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "agent.json").write_text('{"id": "minimal"}\n', encoding="utf-8")
+
+    agent = store.get("minimal")
+
+    assert agent.name == "minimal"
+    assert agent.model == ""
+    assert agent.fallback_model == ""
+    assert agent.temperature is None
+    assert agent.thinking_effort is None
+    assert agent.allowed_tools == ["*"]
+    assert agent.allowed_skills == ["*"]
+    assert agent.tools == {}
+    assert agent.memory_prompt_mode == "agent_user"
+    assert agent.custom_system_prompt_enabled is False
+    assert agent.root_project_id is None
+    assert agent.current_session_id
+    assert agent.created_at
+    assert agent.updated_at
+    assert Path(agent.workspace) == agent_dir / "workspace"
+
+
+def test_list_skips_invalid_agent_without_hiding_valid_agents(
+    store: AgentStore,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    store.create("valid", "Valid")
+    invalid_dir = store.data_dir / "agents" / "invalid"
+    invalid_dir.mkdir(parents=True)
+    (invalid_dir / "agent.json").write_text('{"name": "Missing id"}\n', encoding="utf-8")
+
+    agents = store.list()
+
+    assert [agent.id for agent in agents] == ["valid"]
+    assert store.exists("invalid") is False
+    assert "Skipping invalid Agent config" in caplog.text
+
+
+def test_ensure_bootstrap_avoids_invalid_main_directory(store: AgentStore) -> None:
+    invalid_dir = store.data_dir / "agents" / "main"
+    invalid_dir.mkdir(parents=True)
+    (invalid_dir / "agent.json").write_text("not json\n", encoding="utf-8")
+
+    created = store.ensure_bootstrap()
+
+    assert created is not None
+    assert created.id == "main-2"
+    assert [agent.id for agent in store.list()] == ["main-2"]
 
 
 def test_create_with_custom_values_persists_schema(store: AgentStore, tmp_path: Path) -> None:
@@ -205,7 +265,7 @@ def test_create_removes_runtime_derived_memory_tool_from_allowed_tools(
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
-        ("name", "", "name must be a non-empty string"),
+        ("name", 12, "name must be a string or null"),
         ("model", 12, "model must be a string"),
         ("fallback_model", 12, "fallback_model must be a string"),
         ("temperature", "0.4", "temperature must be a number"),
@@ -214,7 +274,6 @@ def test_create_removes_runtime_derived_memory_tool_from_allowed_tools(
         ("thinking_effort", "extreme", "thinking_effort must be one of"),
         ("memory_prompt_mode", "sometimes", "memory_prompt_mode must be one of"),
         ("memory_prompt_mode", True, "memory_prompt_mode must be a string"),
-        ("workspace", "", "workspace must be a non-empty path string"),
         ("allowed_tools", "read_file", "allowed_tools must be a list of strings"),
         ("allowed_tools", ["read_file", 1], "allowed_tools must be a list of strings"),
         ("allowed_skills", "debugging", "allowed_skills must be a list of strings"),
@@ -335,6 +394,18 @@ def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> No
     assert store.get("coder") == updated
 
 
+@pytest.mark.parametrize("name", [None, "", "   "])
+def test_update_empty_optional_name_restores_id_default(
+    store: AgentStore,
+    name: str | None,
+) -> None:
+    store.create("coder", "Coder Agent")
+
+    updated = store.update("coder", name=name)
+
+    assert updated.name == "coder"
+
+
 def test_update_removes_runtime_derived_memory_tool_from_allowed_tools(
     store: AgentStore,
 ) -> None:
@@ -361,6 +432,19 @@ def test_update_changes_workspace_and_seeds_templates(
     agent_path = store.data_dir / "agents" / "coder" / "agent.json"
     data = json.loads(agent_path.read_text(encoding="utf-8"))
     assert data["workspace"] == str(workspace.resolve())
+
+
+@pytest.mark.parametrize("workspace", [None, ""])
+def test_update_empty_optional_workspace_restores_default(
+    store: AgentStore,
+    tmp_path: Path,
+    workspace: str | None,
+) -> None:
+    store.create("coder", "Coder Agent", workspace=tmp_path / "custom-workspace")
+
+    updated = store.update("coder", workspace=workspace)
+
+    assert updated.workspace == store.default_workspace("coder")
 
 
 def test_explicit_root_project_round_trips_independently_of_workspace(
@@ -439,8 +523,7 @@ def test_workspace_copy_rolls_back_destination_when_agent_write_fails(
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
-        ("name", 123, "name must be a string"),
-        ("name", "", "name must be a non-empty string"),
+        ("name", 123, "name must be a string or null"),
         ("model", 123, "model must be a string"),
         ("fallback_model", 123, "fallback_model must be a string"),
         ("temperature", True, "temperature must be a number"),
@@ -448,7 +531,6 @@ def test_workspace_copy_rolls_back_destination_when_agent_write_fails(
         ("thinking_effort", "turbo", "thinking_effort must be one of"),
         ("memory_prompt_mode", "sometimes", "memory_prompt_mode must be one of"),
         ("memory_prompt_mode", 1, "memory_prompt_mode must be a string"),
-        ("workspace", "", "workspace must be a non-empty path string"),
         ("allowed_tools", "read_file", "allowed_tools must be a list of strings"),
         ("allowed_tools", ["read_file", False], "allowed_tools must be a list of strings"),
         ("allowed_skills", "debugging", "allowed_skills must be a list of strings"),

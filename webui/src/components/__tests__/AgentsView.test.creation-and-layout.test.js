@@ -110,6 +110,14 @@ describe('AgentsView', () => {
     expect(modal.textContent).toContain('Temperature');
     expect(modal.textContent).not.toContain('Fallback model');
     expect(modal.textContent).not.toContain('Allowed tools');
+    expect(
+      modal.querySelector('label[for="agent-create-id"] .form-field__required'),
+    ).toBeTruthy();
+    expect(
+      modal.querySelector(
+        'label[for="agent-create-name"] .form-field__required',
+      ),
+    ).toBeNull();
 
     setTextInputValueWithin(modal, 0, 'bravo');
     setTextInputValueWithin(modal, 1, 'Bravo');

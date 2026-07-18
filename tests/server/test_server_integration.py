@@ -88,6 +88,23 @@ def test_bootstrap_agent_and_current_history(tmp_path: Path) -> None:
     }
 
 
+def test_invalid_agent_config_does_not_block_application_startup(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    invalid_agent_dir = data_dir / "agents" / "main"
+    invalid_agent_dir.mkdir(parents=True)
+    (invalid_agent_dir / "agent.json").write_text(
+        json.dumps({"name": "Missing id"}), encoding="utf-8"
+    )
+    runtime = StubRuntime(Config(data_dir=data_dir))
+    app = create_app(runtime=runtime)
+
+    with TestClient(app) as client:
+        response = client.post("/api/rpc", json={"method": "agent.list", "params": {}})
+
+    assert response.status_code == 200
+    assert [agent["id"] for agent in response.json()["result"]["agents"]] == ["main-2"]
+
+
 def test_agent_crud_minimum_one_and_new_current_session(tmp_path: Path) -> None:
     runtime = StubRuntime(Config(data_dir=tmp_path / "data"))
     app = create_app(runtime=runtime)
@@ -100,11 +117,7 @@ def test_agent_crud_minimum_one_and_new_current_session(tmp_path: Path) -> None:
             "/api/rpc",
             json={
                 "method": "agent.create",
-                "params": {
-                    "id": "coder",
-                    "name": "Coder",
-                    "model": "openai/gpt-5.2::api-key",
-                },
+                "params": {"id": "coder"},
             },
         )
         created_agent = create_response.json()["result"]
@@ -131,6 +144,7 @@ def test_agent_crud_minimum_one_and_new_current_session(tmp_path: Path) -> None:
     agents_by_id = {agent["id"]: agent for agent in list_response.json()["result"]["agents"]}
     assert last_delete_response.json()["error"]["code"] == "last_agent"
     assert created_agent["current_session_id"]
+    assert created_agent["name"] == "coder"
     assert update_response.json()["result"]["name"] == "Updated Coder"
     assert new_session_response.json()["result"] == {
         "agent_id": "coder",
