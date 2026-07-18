@@ -73,6 +73,16 @@ function latestUserText(messages) {
   return "";
 }
 
+function messagesText(messages, role = null) {
+  if (!Array.isArray(messages)) {
+    return "";
+  }
+  return messages
+    .filter((message) => role === null || message?.role === role)
+    .map((message) => contentText(message?.content))
+    .join("\n");
+}
+
 function parseJsonValue(value) {
   if (typeof value !== "string") {
     return value;
@@ -124,6 +134,36 @@ function toolCall(name, args) {
 }
 
 function plannedToolResponse(prompt, results, offeredTools) {
+  if (prompt.includes("E2E_LEARN_COMMAND")) {
+    if (resultsFor(results, "skill_manage").length === 0) {
+      return {
+        calls: [
+          toolCall("skill_manage", {
+            operation: "create",
+            name: "e2e-learned-command",
+            content:
+              "---\nname: e2e-learned-command\ndescription: Temporary Skill authored by the slash-command E2E scenario.\n---\n\n# Learned Command Skill\n\nDeterministic slash-command evidence.\n",
+          }),
+        ],
+      };
+    }
+    return { text: "Created private Skill e2e-learned-command." };
+  }
+
+  if (prompt.includes("E2E_CLEAN_LEARNED_COMMAND")) {
+    if (resultsFor(results, "skill_manage").length === 0) {
+      return {
+        calls: [
+          toolCall("skill_manage", {
+            operation: "delete",
+            name: "e2e-learned-command",
+          }),
+        ],
+      };
+    }
+    return { text: "Learned command Skill cleaned up." };
+  }
+
   if (prompt.includes("E2E_TOOL_CATALOG")) {
     const catalogIsRestricted =
       offeredTools.includes("status") &&
@@ -450,9 +490,27 @@ function plannedToolResponse(prompt, results, offeredTools) {
   return null;
 }
 
-function responseText(model, prompt) {
+function responseText(model, prompt, messages = []) {
   if (model.includes("e2e-fallback")) {
     return "Fallback provider response.";
+  }
+  if (
+    messagesText(messages, "system").includes(
+      "E2E custom provider context 5821",
+    )
+  ) {
+    return "Custom System Prompt reached the Provider.";
+  }
+  if (
+    prompt.includes("You are handing off this conversation to another agent")
+  ) {
+    return "E2E handoff brief 9182.";
+  }
+  if (prompt.includes("E2E handoff brief 9182")) {
+    return "E2E handoff received by target Agent.";
+  }
+  if (prompt.includes("Review this session and update two things")) {
+    return "E2E reflection completed.";
   }
   if (prompt.includes("E2E_QUEUE_FOLLOWUP")) {
     return "Fake provider queued response.";
@@ -643,6 +701,19 @@ async function handleChatCompletion(request, response) {
     offeredTools,
   );
 
+  if (
+    prompt.includes("E2E_COMMAND_CONTINUE") &&
+    messagesText(body?.messages).includes("<continuation-checkpoint")
+  ) {
+    await streamCompletion(
+      response,
+      model,
+      ["Continued interrupted work completed."],
+      25,
+    );
+    return;
+  }
+
   if (prompt.includes("E2E_ERROR")) {
     writeJson(response, 400, {
       error: {
@@ -674,7 +745,7 @@ async function handleChatCompletion(request, response) {
     writeJson(
       response,
       200,
-      completionBody(model, responseText(model, prompt)),
+      completionBody(model, responseText(model, prompt, body?.messages)),
     );
     return;
   }
@@ -703,7 +774,8 @@ async function handleChatCompletion(request, response) {
     return;
   }
 
-  const text = toolResponse?.text ?? responseText(model, prompt);
+  const text =
+    toolResponse?.text ?? responseText(model, prompt, body?.messages);
   const chunks = text.match(/\S+\s*/g) ?? [text];
   await streamCompletion(response, model, chunks, 75);
 }

@@ -1,6 +1,8 @@
 import { expect, test } from "@playwright/test";
 
-test("a custom System Prompt block persists and can be removed", async ({
+import { sendChatMessage, startIsolatedChat } from "./chat-run-support.js";
+
+test("a custom System Prompt block persists, reaches the Provider, and can be removed", async ({
   page,
 }) => {
   await page.goto("/#system-prompt");
@@ -13,7 +15,9 @@ test("a custom System Prompt block persists and can be removed", async ({
     .getByRole("listitem")
     .filter({ hasText: "user:e2e_notes" });
   await expect(customBlock).toBeVisible();
-  await customBlock.getByRole("textbox").fill("E2E custom prompt guidance");
+  await customBlock
+    .getByRole("textbox")
+    .fill("E2E custom provider context 5821");
   await systemPrompt.getByRole("button", { exact: true, name: "Save" }).click();
   await expect(page.getByText("Saved", { exact: true })).toBeVisible();
 
@@ -23,8 +27,22 @@ test("a custom System Prompt block persists and can be removed", async ({
     .getByRole("listitem")
     .filter({ hasText: "user:e2e_notes" });
   await expect(customBlock.getByRole("textbox")).toHaveValue(
-    "E2E custom prompt guidance",
+    "E2E custom provider context 5821",
   );
+
+  const chat = await startIsolatedChat(page, { agentName: "Main" });
+  await sendChatMessage(chat, "Confirm the active custom context");
+  await expect(
+    chat.getByText("Custom System Prompt reached the Provider.", {
+      exact: true,
+    }),
+  ).toBeVisible();
+
+  await page.goto("/#system-prompt");
+  customBlock = page
+    .getByRole("region", { name: "System Prompt" })
+    .getByRole("listitem")
+    .filter({ hasText: "user:e2e_notes" });
 
   await customBlock.getByRole("button", { name: "Remove" }).click();
   const removeDialog = page.getByRole("dialog", { name: "Remove block" });
