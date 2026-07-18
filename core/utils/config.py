@@ -6,12 +6,13 @@ environment variables take highest priority and are always available.
 """
 
 import json
+import logging
 import os
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, TypedDict
 
-from core.settings import SettingsValidationError, load_validated_settings_json
+from core.settings import SettingsValidationError, load_runtime_settings_json
 from core.utils.errors import ConfigError
 
 _WORKTREE_FILE = Path(__file__).resolve().parent.parent.parent / ".vbot-worktree"
@@ -22,6 +23,7 @@ DEFAULT_PORT = 8420
 # Ordered by resolution priority: the first key present in settings.json wins.
 # This is deliberately a tuple, not the unordered validation-side frozenset.
 PORT_SETTING_KEYS = ("server_port", "SERVER_PORT", "port", "PORT")
+_LOGGER = logging.getLogger("vbot.config")
 
 
 def _read_worktree_data_dir(
@@ -156,8 +158,8 @@ class Config:
     2. ``.env``  — environment-specific ``KEY=VALUE`` overrides.
     3. ``os.environ`` — actual process environment (highest priority).
 
-    All three sources are optional — missing ``.env`` or ``settings.json``
-    is **not** an error.  A malformed file *is* an error.
+    All three sources are optional. Invalid Settings are logged and isolated so
+    environment loading and application startup remain available.
 
     Usage::
 
@@ -229,11 +231,25 @@ class Config:
         self._load_os_environ()
 
     def _load_settings_json(self) -> None:
-        """Load key-value pairs from ``settings.json``."""
+        """Load key-value pairs, falling back to defaults for an invalid file."""
         try:
-            data = load_validated_settings_json(self._settings_path)
+            data, ignored = load_runtime_settings_json(self._settings_path)
         except SettingsValidationError as exc:
-            raise ConfigError(str(exc)) from exc
+            _LOGGER.warning(
+                "Ignoring invalid settings file %s and using defaults: %s",
+                self._settings_path,
+                exc,
+            )
+            return
+        if ignored:
+            details = "; ".join(
+                f"{diagnostic.path}: {diagnostic.message}" for diagnostic in ignored
+            )
+            _LOGGER.warning(
+                "Ignoring invalid Settings keys in %s while keeping valid siblings: %s",
+                self._settings_path,
+                details,
+            )
         self._data.update(data)
 
     def _load_env_file(self) -> None:
@@ -339,9 +355,22 @@ def _load_settings_for_port(config: Config) -> dict[str, Any]:
 
     settings_path = config.data_dir / "settings.json"
     try:
-        return load_validated_settings_json(settings_path)
+        settings, ignored = load_runtime_settings_json(settings_path)
     except SettingsValidationError as exc:
-        raise ValueError(str(exc)) from exc
+        _LOGGER.warning(
+            "Ignoring invalid settings file %s for server bind and using the default port: %s",
+            settings_path,
+            exc,
+        )
+        return {}
+    if ignored:
+        details = "; ".join(f"{diagnostic.path}: {diagnostic.message}" for diagnostic in ignored)
+        _LOGGER.warning(
+            "Ignoring invalid Settings keys in %s for server bind while keeping valid siblings: %s",
+            settings_path,
+            details,
+        )
+    return settings
 
 
 def _coerce_port(value: Any, *, source: str) -> int:

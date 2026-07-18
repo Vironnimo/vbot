@@ -240,31 +240,76 @@ def test_save_and_load_settings_round_trip(tmp_path: Path) -> None:
     assert storage.settings_path.read_text(encoding="utf-8").endswith("\n")
 
 
-def test_load_settings_rejects_non_object_json(tmp_path: Path) -> None:
+def test_load_settings_ignores_non_object_json(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     storage = StorageManager(tmp_path)
     storage.ensure_directories()
     storage.settings_path.write_text("[]", encoding="utf-8")
 
-    with pytest.raises(StorageError, match="Expected a JSON object"):
-        storage.load_settings()
+    with caplog.at_level("WARNING"):
+        loaded = storage.load_settings()
+
+    assert loaded == {}
+    assert "using defaults" in caplog.text
+    assert storage.settings_path.read_text(encoding="utf-8") == "[]"
 
 
-def test_load_settings_rejects_invalid_json(tmp_path: Path) -> None:
+def test_load_settings_ignores_invalid_json(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     storage = StorageManager(tmp_path)
     storage.ensure_directories()
     storage.settings_path.write_text("{", encoding="utf-8")
 
-    with pytest.raises(StorageError, match="Invalid JSON"):
-        storage.load_settings()
+    with caplog.at_level("WARNING"):
+        loaded = storage.load_settings()
+
+    assert loaded == {}
+    assert "using defaults" in caplog.text
+    assert storage.settings_path.read_text(encoding="utf-8") == "{"
 
 
-def test_load_settings_rejects_invalid_schema_fields(tmp_path: Path) -> None:
+def test_load_settings_ignores_invalid_schema_fields(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     storage = StorageManager(tmp_path)
     storage.ensure_directories()
-    storage.settings_path.write_text('{"compaction": {"enabled": "yes"}}', encoding="utf-8")
+    original = '{"server_port": 8500, "compaction": {"enabled": "yes"}}'
+    storage.settings_path.write_text(original, encoding="utf-8")
+
+    with caplog.at_level("WARNING"):
+        loaded = storage.load_settings()
+
+    assert loaded == {"server_port": 8500}
+    assert r"$.compaction.enabled: must be a boolean" in caplog.text
+    assert storage.settings_path.read_text(encoding="utf-8") == original
+
+
+def test_load_settings_logs_unchanged_degradation_only_once(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    storage = StorageManager(tmp_path)
+    storage.ensure_directories()
+    storage.settings_path.write_text('{"debug": []}', encoding="utf-8")
+
+    with caplog.at_level("WARNING"):
+        storage.load_settings()
+        storage.load_settings()
+
+    assert caplog.text.count("Ignoring invalid Settings keys") == 1
+
+
+def test_update_settings_rejects_invalid_file_without_overwriting_it(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    storage.ensure_directories()
+    original = '{"server_port": 8420, "compaction": {"enabled": "yes"}}'
+    storage.settings_path.write_text(original, encoding="utf-8")
 
     with pytest.raises(StorageError, match=r"\$\.compaction\.enabled: must be a boolean"):
-        storage.load_settings()
+        storage.update_settings(lambda settings: settings.update({"server_port": 8500}))
+
+    assert storage.settings_path.read_text(encoding="utf-8") == original
 
 
 def test_load_defaults_returns_empty_when_missing(tmp_path: Path) -> None:
@@ -371,12 +416,14 @@ def test_load_appearance_settings_returns_default_language_when_missing(tmp_path
     }
 
 
-def test_load_appearance_settings_rejects_non_object_section(tmp_path: Path) -> None:
+def test_load_appearance_settings_defaults_invalid_section(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
     storage.save_settings({"appearance": []})
 
-    with pytest.raises(StorageError, match=r"\$\.appearance: must be an object"):
-        storage.load_appearance_settings()
+    assert storage.load_appearance_settings() == {
+        "language": DEFAULT_APPEARANCE_LANGUAGE,
+        "chat_width": DEFAULT_APPEARANCE_CHAT_WIDTH,
+    }
 
 
 def test_load_subagent_settings_returns_defaults_when_missing(tmp_path: Path) -> None:
@@ -633,13 +680,12 @@ def test_model_task_empty_target_removes_binding(tmp_path: Path) -> None:
     assert "model_tasks" not in storage.load_settings()
 
 
-def test_load_recall_settings_rejects_invalid_section(tmp_path: Path) -> None:
+def test_load_recall_settings_defaults_invalid_section(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
     storage.ensure_directories()
     storage.settings_path.write_text('{"recall": []}', encoding="utf-8")
 
-    with pytest.raises(StorageError, match=r"\$\.recall: must be an object"):
-        storage.load_recall_settings()
+    assert storage.load_recall_settings() == {"backend": "jsonl_scan"}
 
 
 def test_load_compaction_settings_returns_defaults_when_missing(tmp_path: Path) -> None:

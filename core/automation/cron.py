@@ -135,6 +135,28 @@ def load_validated_cron_jobs_json(jobs_path: str | Path) -> list[JsonObject]:
         raise CronStorageError(str(error)) from error
 
 
+def _load_cron_jobs_payload(jobs_path: str | Path) -> list[Any]:
+    """Load the JSON array without letting one bad job reject its siblings."""
+    try:
+        return cast(
+            "list[Any]",
+            load_validated_json_file(
+                jobs_path,
+                _validate_cron_jobs_container,
+                missing_ok=True,
+                missing_default=[],
+            ),
+        )
+    except JsonConfigValidationError as error:
+        raise CronStorageError(str(error)) from error
+
+
+def _validate_cron_jobs_container(data: Any) -> list[JsonDiagnostic]:
+    if isinstance(data, list):
+        return []
+    return [error_diagnostic("$", f"Expected a JSON array, got {type(data).__name__}")]
+
+
 def validate_cron_jobs_data(data: Any) -> list[JsonDiagnostic]:
     """Validate a decoded raw ``cron/jobs.json`` array."""
     diagnostics: list[JsonDiagnostic] = []
@@ -142,66 +164,68 @@ def validate_cron_jobs_data(data: Any) -> list[JsonDiagnostic]:
         return [error_diagnostic("$", f"Expected a JSON array, got {type(data).__name__}")]
 
     for index, item in enumerate(data):
-        item_path = f"$[{index}]"
-        if not isinstance(item, dict):
-            add_error(diagnostics, item_path, "Expected a JSON object")
-            continue
-        warn_unknown_keys(diagnostics, item_path, item, _CRON_JOB_FIELDS, "cron job field")
-        validate_non_empty_string(diagnostics, f"{item_path}.id", item.get("id"), required=True)
-        _validate_cron_agent_id(diagnostics, f"{item_path}.agent_id", item.get("agent_id"))
-        validate_non_empty_string(
-            diagnostics, f"{item_path}.prompt", item.get("prompt"), required=True
-        )
-        validate_allowed_string(
-            diagnostics,
-            f"{item_path}.schedule_type",
-            item.get("schedule_type"),
-            _ALLOWED_SCHEDULE_TYPES,
-        )
-        validate_allowed_string(
-            diagnostics,
-            f"{item_path}.status",
-            item.get("status"),
-            _ALLOWED_STATUSES,
-        )
-        for field_name in (
-            "cron_expression",
-            "run_at",
-            "timezone",
-            "session_id",
-            "project_id",
-            "last_fired_at",
-            "last_attempt_at",
-            "last_completed_at",
-            "last_error",
-            "last_run_id",
-        ):
-            validate_optional_string(
-                diagnostics,
-                f"{item_path}.{field_name}",
-                item.get(field_name),
-            )
-        validate_optional_allowed_string(
-            diagnostics,
-            f"{item_path}.last_outcome",
-            item.get("last_outcome"),
-            _ALLOWED_RUN_OUTCOMES,
-        )
-        consecutive_failures = item.get("consecutive_failures")
-        if consecutive_failures is not None and (
-            isinstance(consecutive_failures, bool)
-            or not isinstance(consecutive_failures, int)
-            or consecutive_failures < 0
-        ):
-            add_error(
-                diagnostics,
-                f"{item_path}.consecutive_failures",
-                "must be a non-negative integer",
-            )
-        validate_non_empty_string(
-            diagnostics, f"{item_path}.created_at", item.get("created_at"), required=True
-        )
+        _validate_cron_job_data(diagnostics, index, item)
     return diagnostics
+
+
+def _validate_cron_job_data(diagnostics: list[JsonDiagnostic], index: int, item: Any) -> None:
+    item_path = f"$[{index}]"
+    if not isinstance(item, dict):
+        add_error(diagnostics, item_path, "Expected a JSON object")
+        return
+    warn_unknown_keys(diagnostics, item_path, item, _CRON_JOB_FIELDS, "cron job field")
+    validate_non_empty_string(diagnostics, f"{item_path}.id", item.get("id"), required=True)
+    _validate_cron_agent_id(diagnostics, f"{item_path}.agent_id", item.get("agent_id"))
+    validate_non_empty_string(diagnostics, f"{item_path}.prompt", item.get("prompt"), required=True)
+    validate_allowed_string(
+        diagnostics,
+        f"{item_path}.schedule_type",
+        item.get("schedule_type"),
+        _ALLOWED_SCHEDULE_TYPES,
+    )
+    validate_optional_allowed_string(
+        diagnostics,
+        f"{item_path}.status",
+        item.get("status"),
+        _ALLOWED_STATUSES,
+    )
+    for field_name in (
+        "cron_expression",
+        "run_at",
+        "timezone",
+        "session_id",
+        "project_id",
+        "last_fired_at",
+        "last_attempt_at",
+        "last_completed_at",
+        "last_error",
+        "last_run_id",
+    ):
+        validate_optional_string(
+            diagnostics,
+            f"{item_path}.{field_name}",
+            item.get(field_name),
+        )
+    validate_optional_allowed_string(
+        diagnostics,
+        f"{item_path}.last_outcome",
+        item.get("last_outcome"),
+        _ALLOWED_RUN_OUTCOMES,
+    )
+    consecutive_failures = item.get("consecutive_failures")
+    if consecutive_failures is not None and (
+        isinstance(consecutive_failures, bool)
+        or not isinstance(consecutive_failures, int)
+        or consecutive_failures < 0
+    ):
+        add_error(
+            diagnostics,
+            f"{item_path}.consecutive_failures",
+            "must be a non-negative integer",
+        )
+    validate_non_empty_string(
+        diagnostics, f"{item_path}.created_at", item.get("created_at"), required=False
+    )
 
 
 def _validate_cron_agent_id(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
@@ -280,16 +304,16 @@ class CronJob:
             run_at=payload.get("run_at"),
             timezone=payload.get("timezone"),
             session_id=payload.get("session_id"),
-            status=payload["status"],
+            status=payload.get("status") or "active",
             last_fired_at=payload.get("last_fired_at"),
-            created_at=str(payload["created_at"]),
+            created_at=str(payload.get("created_at") or _utc_now_iso()),
             project_id=payload.get("project_id"),
             last_attempt_at=payload.get("last_attempt_at"),
             last_completed_at=payload.get("last_completed_at"),
             last_run_id=payload.get("last_run_id"),
             last_outcome=payload.get("last_outcome"),
             last_error=payload.get("last_error"),
-            consecutive_failures=int(payload.get("consecutive_failures", 0)),
+            consecutive_failures=int(payload.get("consecutive_failures") or 0),
         )
 
 
@@ -312,6 +336,8 @@ class CronService:
         self._jobs_path = self._cron_dir / "jobs.json"
         self._once_fire_claims_dir = self._cron_dir / _ONCE_FIRE_CLAIMS_DIR_NAME
         self._jobs: dict[str, CronJob] = {}
+        self._invalid_job_entries: list[Any] = []
+        self._storage_load_error: CronStorageError | None = None
         self._jobs_loaded = False
         self._job_tasks: dict[str, asyncio.Task[None]] = {}
         self._run_slots = asyncio.Semaphore(MAX_CONCURRENT_CRON_RUNS)
@@ -381,7 +407,7 @@ class CronService:
 
     def list_jobs(self) -> list[CronJob]:
         """List all persisted cron jobs in stable created-order."""
-        self._ensure_jobs_loaded()
+        self._ensure_jobs_loaded(allow_degraded=True)
         ordered = sorted(self._jobs.values(), key=lambda value: (value.created_at, value.id))
         return [self._clone_job(job) for job in ordered]
 
@@ -509,7 +535,13 @@ class CronService:
         if self._started:
             return
 
-        self._jobs = self._load_jobs()
+        try:
+            self._jobs = self._load_jobs()
+            self._storage_load_error = None
+        except CronStorageError as error:
+            self._degrade_invalid_storage(error)
+            self._started = True
+            return
         self._jobs_loaded = True
         self._started = True
         reference_time = _utc_now()
@@ -572,13 +604,33 @@ class CronService:
             await asyncio.gather(*pending_tasks, return_exceptions=True)
 
     def _load_jobs(self) -> dict[str, CronJob]:
-        """Load cron jobs from <data_root>/cron/jobs.json."""
+        """Load valid jobs while preserving invalid sibling entries verbatim."""
         self._ensure_storage_exists()
-        raw_payload = load_validated_cron_jobs_json(self._jobs_path)
+        raw_payload = _load_cron_jobs_payload(self._jobs_path)
+        self._invalid_job_entries = []
         jobs: dict[str, CronJob] = {}
-        for item in raw_payload:
-            job = CronJob.from_dict(item)
-            self._validate_job(job, validate_references=False)
+        for index, item in enumerate(raw_payload):
+            diagnostics: list[JsonDiagnostic] = []
+            _validate_cron_job_data(diagnostics, index, item)
+            errors = [diagnostic for diagnostic in diagnostics if diagnostic.severity == "error"]
+            if errors:
+                details = "; ".join(
+                    f"{diagnostic.path}: {diagnostic.message}" for diagnostic in errors
+                )
+                _LOGGER.warning("Skipping invalid Cron job: %s", details)
+                self._invalid_job_entries.append(item)
+                continue
+            try:
+                job = CronJob.from_dict(cast("dict[str, Any]", item))
+                self._validate_job(job, validate_references=False)
+            except (CronJobValidationError, TypeError, ValueError) as error:
+                _LOGGER.warning("Skipping invalid Cron job at $[%d]: %s", index, error)
+                self._invalid_job_entries.append(item)
+                continue
+            if job.id in jobs:
+                _LOGGER.warning("Skipping duplicate Cron job id at $[%d]: %s", index, job.id)
+                self._invalid_job_entries.append(item)
+                continue
             jobs[job.id] = job
         return jobs
 
@@ -587,7 +639,7 @@ class CronService:
         self._ensure_storage_exists()
         payload = [
             job.to_dict() for job in sorted(self._jobs.values(), key=lambda item: item.created_at)
-        ]
+        ] + list(self._invalid_job_entries)
         serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         try:
             atomic_write_text(self._jobs_path, serialized)
@@ -836,11 +888,27 @@ class CronService:
         self._notify_changed()
         return True
 
-    def _ensure_jobs_loaded(self) -> None:
+    def _ensure_jobs_loaded(self, *, allow_degraded: bool = False) -> None:
         if self._jobs_loaded:
+            if self._storage_load_error is not None and not allow_degraded:
+                raise CronStorageError(str(self._storage_load_error))
             return
-        self._jobs = self._load_jobs()
+        try:
+            self._jobs = self._load_jobs()
+            self._storage_load_error = None
+            self._jobs_loaded = True
+        except CronStorageError as error:
+            self._degrade_invalid_storage(error)
+            if not allow_degraded:
+                raise CronStorageError(str(error)) from error
+
+    def _degrade_invalid_storage(self, error: CronStorageError) -> None:
+        """Keep Runtime available while preventing writes over unreadable Cron data."""
+        self._jobs = {}
+        self._invalid_job_entries = []
+        self._storage_load_error = error
         self._jobs_loaded = True
+        _LOGGER.error("Cron storage is invalid; scheduling is disabled: %s", error)
 
     def _ensure_storage_exists(self) -> None:
         try:

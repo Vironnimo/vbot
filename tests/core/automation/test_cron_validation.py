@@ -15,3 +15,19 @@ def test_validate_cron_jobs_data_rejects_path_traversal_agent_id() -> None:
     assert ("error", "$[0].agent_id", _AGENT_ID_SLUG_ERROR) in [
         (diagnostic.severity, diagnostic.path, diagnostic.message) for diagnostic in diagnostics
     ]
+
+
+def test_validate_cron_jobs_data_accepts_missing_defaulted_metadata() -> None:
+    diagnostics = validate_cron_jobs_data(
+        [
+            {
+                "id": "job-1",
+                "agent_id": "main",
+                "prompt": "do it",
+                "schedule_type": "cron",
+                "cron_expression": "0 9 * * *",
+            }
+        ]
+    )
+
+    assert diagnostics == []

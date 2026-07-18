@@ -37,7 +37,6 @@ from core.config_validation import (
     validate_optional_allowed_string,
     validate_optional_string,
     validate_optional_string_list,
-    validate_required_fields,
     validate_string,
     warn_unknown_keys,
 )
@@ -129,10 +128,6 @@ _PROJECT_CONFIG_FIELDS = frozenset(
         "updated_at",
     }
 )
-_REQUIRED_PROJECT_CONFIG_FIELDS = frozenset(
-    {"created_at", "cwd", "display_name", "project_id", "updated_at"}
-)
-
 # The tool-neutral project-instruction convention (the agents.md standard). Seeded
 # as the first ``auto_load`` entry when a project is created
 # (:func:`seed_default_auto_load`, used by ``ProjectStore.create``), then treated
@@ -196,11 +191,8 @@ def validate_project_data(data: Any) -> list[JsonDiagnostic]:
         return [error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
 
     warn_unknown_keys(diagnostics, "$", data, _PROJECT_CONFIG_FIELDS, "project field")
-    validate_required_fields(diagnostics, "$", data, _REQUIRED_PROJECT_CONFIG_FIELDS)
     _validate_project_config_id(diagnostics, data.get("project_id"))
-    validate_non_empty_string(
-        diagnostics, "$.display_name", data.get("display_name"), required=True
-    )
+    validate_optional_string(diagnostics, "$.display_name", data.get("display_name"))
     # A moved repository remains a valid re-point candidate, so the file rule
     # checks only that cwd is a non-empty path string, never that it exists.
     validate_non_empty_string(diagnostics, "$.cwd", data.get("cwd"), required=True)
@@ -241,8 +233,8 @@ def validate_project_data(data: Any) -> list[JsonDiagnostic]:
         diagnostics, "$.skills_project_disabled", data.get("skills_project_disabled")
     )
     _validate_override_schema(diagnostics, "$.overrides", data.get("overrides"))
-    validate_string(diagnostics, "$.created_at", data.get("created_at"), required=True)
-    validate_string(diagnostics, "$.updated_at", data.get("updated_at"), required=True)
+    validate_string(diagnostics, "$.created_at", data.get("created_at"), required=False)
+    validate_string(diagnostics, "$.updated_at", data.get("updated_at"), required=False)
     return diagnostics
 
 
@@ -419,7 +411,7 @@ def build_project(
     :class:`InvalidProjectIdError` on bad input.
     """
     validated_id = _validate_project_id(project_id)
-    validated_display_name = _validate_non_empty_string("display_name", display_name)
+    validated_display_name = _normalize_project_display_name(validated_id, display_name)
     validated_cwd = str(_normalize_cwd(cwd))
     validated_default_agent = _validate_optional_string("default_agent", default_agent)
     validated_default_model = _validate_optional_string("default_model", default_model)
@@ -464,26 +456,37 @@ def project_from_dict(data: dict[str, Any]) -> Project:
     time; this constructor only normalizes shapes (optional-field defaults,
     auto_load list copy), it does not re-validate.
     """
+    project_id = cast("str", data["project_id"])
+    timestamp_default = _utc_now()
     return Project(
-        project_id=data["project_id"],
-        display_name=data["display_name"],
+        project_id=project_id,
+        display_name=data.get("display_name") or project_id,
         cwd=data["cwd"],
-        default_agent=data.get("default_agent", DEFAULT_DEFAULT_AGENT),
-        default_model=data.get("default_model", DEFAULT_DEFAULT_MODEL),
+        default_agent=data.get("default_agent") or DEFAULT_DEFAULT_AGENT,
+        default_model=data.get("default_model") or DEFAULT_DEFAULT_MODEL,
         default_temperature=data.get("default_temperature", DEFAULT_DEFAULT_TEMPERATURE),
         default_thinking_effort=data.get(
             "default_thinking_effort", DEFAULT_DEFAULT_THINKING_EFFORT
         ),
-        source_format=data.get("source_format", DEFAULT_PROJECT_SOURCE_FORMAT),
+        source_format=data.get("source_format") or DEFAULT_PROJECT_SOURCE_FORMAT,
         auto_load=list(cast("list[str]", data.get("auto_load") or [])),
         allowed_tools=_allowed_tools_from_data(data.get("allowed_tools")),
         skills_bundled_enabled=list(cast("list[str]", data.get("skills_bundled_enabled") or [])),
         skills_global_enabled=list(cast("list[str]", data.get("skills_global_enabled") or [])),
         skills_project_disabled=list(cast("list[str]", data.get("skills_project_disabled") or [])),
         overrides=_overrides_from_data(data.get("overrides")),
-        created_at=data["created_at"],
-        updated_at=data["updated_at"],
+        created_at=data.get("created_at") or timestamp_default,
+        updated_at=data.get("updated_at") or timestamp_default,
     )
+
+
+def _normalize_project_display_name(project_id: str, value: Any) -> str:
+    """Use the stable Project id when no display name is configured."""
+    if value is None:
+        return project_id
+    if not isinstance(value, str):
+        raise ProjectError("display_name must be a string or null")
+    return value if value.strip() else project_id
 
 
 def _allowed_tools_from_data(value: Any) -> list[str]:

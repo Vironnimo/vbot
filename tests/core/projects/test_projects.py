@@ -264,9 +264,8 @@ def test_build_project_rejects_invalid_project_id(tmp_path: Path) -> None:
         build_project("bad/slug", "Bad", tmp_path)
 
 
-def test_build_project_rejects_empty_display_name(tmp_path: Path) -> None:
-    with pytest.raises(ProjectError):
-        build_project("vbot", "   ", tmp_path)
+def test_build_project_defaults_empty_display_name_to_project_id(tmp_path: Path) -> None:
+    assert build_project("vbot", "   ", tmp_path).display_name == "vbot"
 
 
 def test_build_project_rejects_empty_cwd() -> None:

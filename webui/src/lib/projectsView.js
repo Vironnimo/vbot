@@ -1047,10 +1047,9 @@ const MANAGE_FIELDS = Object.freeze([
 ]);
 
 // Fields in the generic diff that are required non-empty on the backend: an
-// empty form value is "no change", never a clear-to-null.
-const NON_CLEARABLE_MANAGE_FIELDS = Object.freeze(
-  new Set(['display_name', 'source_format']),
-);
+// empty form value is "no change", never a clear-to-null. Display name is
+// intentionally clearable and then falls back to the stable Project id.
+const NON_CLEARABLE_MANAGE_FIELDS = Object.freeze(new Set(['source_format']));
 
 // The per-project source format vocabulary (mirrors the backend
 // PROJECT_SOURCE_FORMATS): which coding-agent ecosystem the project's Team
@@ -1156,8 +1155,8 @@ export function buildAddProjectPayload(formValues) {
 // backend's `_optional_string` rejects a sent empty string with
 // `invalid_request`, and only maps JSON `null` (None) to "" to clear the
 // pointer (fall through the model chain). A non-empty pointer is sent as the
-// trimmed string. display_name cannot be cleared (it is a required non-empty
-// field) so an empty display_name is treated as no change.
+// trimmed string. A cleared display_name is likewise sent as null and the
+// Project domain falls back to project_id.
 export function buildManageProjectPayload(formValues, project) {
   const changes = {};
 

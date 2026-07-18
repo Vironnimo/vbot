@@ -28,7 +28,7 @@ from core.model_tasks import (
     SpeechUnsupportedTargetError,
 )
 from core.runs import ChatRunManager, RunNotFoundError, RunStatus
-from core.settings import SettingsValidationError, load_validated_settings_json
+from core.settings import SettingsValidationError, load_runtime_settings_json
 from core.utils.config import Config
 from core.utils.log_viewer import LogViewer
 from server.clients import ClientRegistry
@@ -511,9 +511,21 @@ def _resolve_server_bind(
 
     settings_path = config.data_dir / "settings.json"
     try:
-        data = load_validated_settings_json(settings_path)
+        data, ignored = load_runtime_settings_json(settings_path)
     except SettingsValidationError as exc:
-        raise ValueError(str(exc)) from exc
+        logging.getLogger("vbot.server.app").warning(
+            "Ignoring invalid settings file %s for server bind and using the default port: %s",
+            settings_path,
+            exc,
+        )
+        return _default_server_bind()
+    if ignored:
+        details = "; ".join(f"{diagnostic.path}: {diagnostic.message}" for diagnostic in ignored)
+        logging.getLogger("vbot.server.app").warning(
+            "Ignoring invalid Settings keys in %s for server bind while keeping valid siblings: %s",
+            settings_path,
+            details,
+        )
     if data:
         for key in ("server_port", "SERVER_PORT", "port", "PORT"):
             value = data.get(key)

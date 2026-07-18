@@ -105,6 +105,41 @@ def test_invalid_agent_config_does_not_block_application_startup(tmp_path: Path)
     assert [agent["id"] for agent in response.json()["result"]["agents"]] == ["main-2"]
 
 
+def test_invalid_settings_do_not_block_application_startup(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "settings.json").write_text(
+        json.dumps({"server_port": 8500, "compaction": {"enabled": "yes"}}),
+        encoding="utf-8",
+    )
+    app = create_app(runtime=StubRuntime(Config(data_dir=data_dir)))
+
+    with TestClient(app) as client:
+        assert app.state.server_bind["listen_port"] == 8500
+        response = client.post("/api/rpc", json={"method": "agent.list", "params": {}})
+
+    assert response.status_code == 200
+    assert [agent["id"] for agent in response.json()["result"]["agents"]] == ["main"]
+
+
+def test_invalid_cron_storage_does_not_block_application_startup(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    jobs_path = data_dir / "cron" / "jobs.json"
+    jobs_path.parent.mkdir(parents=True)
+    jobs_path.write_text("{", encoding="utf-8")
+    app = create_app(runtime=StubRuntime(Config(data_dir=data_dir)))
+
+    with TestClient(app) as client:
+        agent_response = client.post("/api/rpc", json={"method": "agent.list", "params": {}})
+        cron_response = client.post("/api/rpc", json={"method": "cron.list", "params": {}})
+
+    assert agent_response.status_code == 200
+    assert [agent["id"] for agent in agent_response.json()["result"]["agents"]] == ["main"]
+    assert cron_response.status_code == 200
+    assert cron_response.json()["result"]["jobs"] == []
+    assert jobs_path.read_text(encoding="utf-8") == "{"
+
+
 def test_agent_crud_minimum_one_and_new_current_session(tmp_path: Path) -> None:
     runtime = StubRuntime(Config(data_dir=tmp_path / "data"))
     app = create_app(runtime=runtime)

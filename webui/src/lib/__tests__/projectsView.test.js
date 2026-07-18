@@ -168,7 +168,7 @@ describe('buildManageProjectPayload', () => {
     expect(changes).toEqual({ default_agent: 'planner' });
   });
 
-  it('treats an emptied display_name as no change (it is required)', () => {
+  it('clears an emptied optional display_name to its id default', () => {
     const changes = buildManageProjectPayload(
       {
         display_name: '',
@@ -178,7 +178,7 @@ describe('buildManageProjectPayload', () => {
       },
       project,
     );
-    expect(changes).toEqual({});
+    expect(changes).toEqual({ display_name: null });
   });
 });
 

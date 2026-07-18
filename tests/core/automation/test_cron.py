@@ -125,16 +125,61 @@ def test_active_job_limit_prevents_unbounded_scheduler_tasks(
         )
 
 
-def test_jobs_json_schema_is_validated_on_read(tmp_path: Path) -> None:
+def test_invalid_job_is_skipped_and_preserved_when_valid_jobs_change(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     jobs_path = tmp_path / "cron" / "jobs.json"
     jobs_path.parent.mkdir(parents=True)
-    jobs_path.write_text(
-        json.dumps([{"id": "job-one", "schedule_type": "daily"}]), encoding="utf-8"
-    )
+    valid_job = {
+        "id": "job-one",
+        "agent_id": "agent-one",
+        "prompt": "Still runs",
+        "schedule_type": "cron",
+        "cron_expression": "0 9 * * *",
+    }
+    invalid_job = {"id": "broken", "schedule_type": "daily"}
+    jobs_path.write_text(json.dumps([valid_job, invalid_job]), encoding="utf-8")
     service, _trigger_service = make_service(tmp_path)
 
-    with pytest.raises(CronStorageError, match=r"\$\[0\]\.schedule_type: must be one of"):
-        service.list_jobs()
+    with caplog.at_level(logging.WARNING):
+        loaded = service.list_jobs()
+    service.create_job(
+        agent_id="agent-two",
+        prompt="New job",
+        schedule_type="cron",
+        cron_expression="0 10 * * *",
+    )
+
+    assert [job.id for job in loaded] == ["job-one"]
+    assert loaded[0].status == "active"
+    assert loaded[0].created_at
+    assert "Skipping invalid Cron job" in caplog.text
+    persisted = json.loads(jobs_path.read_text(encoding="utf-8"))
+    assert invalid_job in persisted
+    assert len(persisted) == 3
+
+
+def test_malformed_jobs_file_disables_cron_without_overwriting_it(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    jobs_path = tmp_path / "cron" / "jobs.json"
+    jobs_path.parent.mkdir(parents=True)
+    jobs_path.write_text("{", encoding="utf-8")
+    service, _trigger_service = make_service(tmp_path)
+
+    with caplog.at_level(logging.ERROR):
+        assert service.list_jobs() == []
+
+    with pytest.raises(CronStorageError, match="Invalid JSON"):
+        service.create_job(
+            agent_id="agent-one",
+            prompt="Must not overwrite",
+            schedule_type="cron",
+            cron_expression="0 9 * * *",
+        )
+
+    assert "scheduling is disabled" in caplog.text
+    assert jobs_path.read_text(encoding="utf-8") == "{"
 
 
 def test_utc_timezone_is_accepted_when_zoneinfo_database_is_unavailable(

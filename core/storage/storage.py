@@ -18,7 +18,11 @@ from threading import RLock
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
 from core.model_tasks import SUPPORTED_TASK_TYPES
-from core.settings import SettingsValidationError, load_validated_settings_json
+from core.settings import (
+    SettingsValidationError,
+    load_runtime_settings_json,
+    load_validated_settings_json,
+)
 from core.settings.normalizers import (
     SUPPORTED_APPEARANCE_LANGUAGES,
     coerce_defaults_section,
@@ -49,6 +53,7 @@ from core.storage.prompt_fragments import PromptFragmentStore
 from core.storage.temp_files import TemporaryFileManager
 from core.utils.atomic import atomic_write_text
 from core.utils.config import build_environment_snapshot, read_env_file
+from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -56,6 +61,7 @@ if TYPE_CHECKING:
     from core.prompts import LayoutEntry
 
 SettingsUpdateResult = TypeVar("SettingsUpdateResult")
+_LOGGER = get_logger("storage")
 
 DEFAULT_DATA_DIR = Path.home() / ".vbot"
 ENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -119,6 +125,7 @@ class StorageManager:
         self.data_dir = self._resolve_data_dir(data_dir, config).expanduser()
         self.resources_dir = self._resolve_resources_dir(resources_dir)
         self._settings_lock = RLock()
+        self._settings_diagnostic_signature: tuple[str, ...] | None = None
         self.temporary_files = TemporaryFileManager(self.data_dir)
         self._prompt_fragments = PromptFragmentStore(
             data_dir=self.data_dir,
@@ -257,13 +264,55 @@ class StorageManager:
         )
 
     def load_settings(self) -> dict[str, Any]:
-        """Load ``settings.json`` or return an empty mapping when it does not exist."""
+        """Load usable Settings, isolating invalid keys or falling back to defaults.
+
+        Read paths must not make one malformed global setting fatal to the app.
+        Valid siblings remain live when a schema error can be isolated. The
+        original file stays untouched and write transactions still use the strict
+        loader so a later save can never overwrite invalid user data.
+        """
 
         with self._settings_lock:
             try:
-                return load_validated_settings_json(self.settings_path)
+                settings, ignored = load_runtime_settings_json(self.settings_path)
             except SettingsValidationError as exc:
-                raise StorageError(str(exc)) from exc
+                self._warn_settings_degradation(
+                    (str(exc),),
+                    "Ignoring invalid settings file %s and using defaults: %s",
+                    exc,
+                )
+                return {}
+            if ignored:
+                details = "; ".join(
+                    f"{diagnostic.path}: {diagnostic.message}" for diagnostic in ignored
+                )
+                self._warn_settings_degradation(
+                    tuple(f"{diagnostic.path}: {diagnostic.message}" for diagnostic in ignored),
+                    "Ignoring invalid Settings keys in %s while keeping valid siblings: %s",
+                    details,
+                )
+            else:
+                self._settings_diagnostic_signature = None
+            return settings
+
+    def _warn_settings_degradation(
+        self,
+        signature: tuple[str, ...],
+        message: str,
+        details: Any,
+    ) -> None:
+        """Log a persisted Settings problem once until its diagnostics change."""
+        if signature == self._settings_diagnostic_signature:
+            return
+        self._settings_diagnostic_signature = signature
+        _LOGGER.warning(message, self.settings_path, details)
+
+    def _load_settings_for_update(self) -> dict[str, Any]:
+        """Strictly load Settings before a mutation so invalid data is preserved."""
+        try:
+            return load_validated_settings_json(self.settings_path)
+        except SettingsValidationError as exc:
+            raise StorageError(str(exc)) from exc
 
     def update_settings(
         self,
@@ -275,7 +324,7 @@ class StorageManager:
             raise StorageError("Settings mutator must be callable")
 
         with self._settings_lock:
-            merged_settings = dict(self.load_settings())
+            merged_settings = dict(self._load_settings_for_update())
             result = mutator(merged_settings)
             self.save_settings(merged_settings)
             return result

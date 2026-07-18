@@ -48,35 +48,32 @@ class TestLoadReflectionSettings:
 
         assert result == {**DEFAULTS, "enabled": True}
 
-    def test_rejects_non_object_reflection_section(self, tmp_path: Path) -> None:
+    def test_defaults_non_object_reflection_section(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(json.dumps({"reflection": []}), encoding="utf-8")
 
-        with pytest.raises(StorageError, match=r"\$\.reflection: must be an object"):
-            storage.load_reflection_settings()
+        assert storage.load_reflection_settings() == DEFAULTS
 
-    def test_rejects_non_boolean_enabled(self, tmp_path: Path) -> None:
+    def test_defaults_non_boolean_enabled(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(
             json.dumps({"reflection": {"enabled": "yes"}}), encoding="utf-8"
         )
 
-        with pytest.raises(StorageError, match=r"\$\.reflection\.enabled"):
-            storage.load_reflection_settings()
+        assert storage.load_reflection_settings() == DEFAULTS
 
     @pytest.mark.parametrize("field", ["memory_turn_interval", "skill_tool_call_interval"])
     @pytest.mark.parametrize("value", ["five", 0, -1, True])
-    def test_rejects_invalid_intervals(self, tmp_path: Path, field: str, value: object) -> None:
+    def test_defaults_invalid_intervals(self, tmp_path: Path, field: str, value: object) -> None:
         storage = StorageManager(tmp_path)
         storage.ensure_directories()
         storage.settings_path.write_text(
             json.dumps({"reflection": {field: value}}), encoding="utf-8"
         )
 
-        with pytest.raises(StorageError, match=rf"\$\.reflection\.{field}"):
-            storage.load_reflection_settings()
+        assert storage.load_reflection_settings() == DEFAULTS
 
 
 class TestUpdateReflectionSettings:

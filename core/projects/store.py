@@ -183,8 +183,15 @@ class ProjectStore:
         return self._read_project(config_path)
 
     def exists(self, project_id: str) -> bool:
-        """Return whether a project anchor with this id exists."""
-        return self._config_path(project_id).exists()
+        """Return whether a valid Project with this id can be loaded."""
+        try:
+            config_path = self._config_path(project_id)
+            if not config_path.exists():
+                return False
+            self._read_project(config_path)
+        except (ProjectError, OSError):
+            return False
+        return True
 
     def list(self) -> list[Project]:
         """Return all persisted projects sorted by id.
