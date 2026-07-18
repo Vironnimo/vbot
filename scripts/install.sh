@@ -1,397 +1,385 @@
 #!/usr/bin/env bash
 # vBot installer for Linux (Raspberry Pi and other Debian-like systems).
-# Mirrors scripts/install.ps1: editable pip install, WebUI build, data-dir
-# bootstrap without overwriting valid existing files, optional autostart.
-# Autostart uses a systemd user unit plus login lingering instead of the
-# Windows Task Scheduler.
+#
+# Installs prerequisites, selects a release or the current checkout, creates an
+# isolated virtual environment, and hands off to the internal scripts/setup.sh.
+# Release installs fetch the matching prebuilt WebUI, so the target needs no Node.
+#   curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash
+# Safer: download it, read it, then run it.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-WEBUI_DIR="${PROJECT_ROOT}/webui"
+REPO_OWNER="Vironnimo"
+REPO_NAME="vbot"
+REPO_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}.git"
+API_BASE="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}"
 
-DATA_DIR="${HOME}/.vbot"
-HOST="127.0.0.1"
-PORT=8420
-PORT_PROVIDED=0
+INSTALL_DIR="${VBOT_DIR:-${HOME}/vbot}"
+INSTALL_DIR_PROVIDED=0
 DEV=0
+TAG=""
+VERSION=""
+SETUP_ARGS=()
 DESKTOP=0
 DESKTOP_CLIENT=0
 SKIP_WEBUI_BUILD=0
-NO_AUTOSTART=0
-SERVICE_NAME="vbot"
+USE_EXISTING_CHECKOUT=0
+LOCAL_CHECKOUT=""
+WEBUI_ASSET_URL=""
+ASSET_WAIT_SECONDS=300
+ASSET_POLL_SECONDS=10
+ROOT_MARKER=".vbot-install-root"
+VENV_MARKER=".vbot-install-venv"
+LEGACY_ROOT_MARKER=".vbot-bootstrap"
 
-# Freedesktop application-menu entry for the Desktop accessor. Kept identical in
-# scripts/uninstall.sh so the uninstaller removes exactly what this writes.
-DESKTOP_ENTRY_PATH="${HOME}/.local/share/applications/vbot-desktop.desktop"
+SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
+if [ -n "$SCRIPT_SOURCE" ] && [ -f "$SCRIPT_SOURCE" ]; then
+    SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+    CANDIDATE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+    if [ -f "${CANDIDATE_ROOT}/pyproject.toml" ] && [ -f "${CANDIDATE_ROOT}/scripts/setup.sh" ]; then
+        LOCAL_CHECKOUT="$CANDIDATE_ROOT"
+    fi
+fi
 
 usage() {
     cat <<USAGE
-Usage: scripts/install.sh [options]
+Usage: install.sh [options]
 
 Options:
-  --data-dir <path>      Data directory (default: ~/.vbot)
-  --host <host>          Server host (default: 127.0.0.1)
-  --port <port>          Server port (default: 8420, or existing settings.json value)
-  --dev                  Install the dev dependency group instead of server+cli
-  --desktop              Also install the desktop accessor and create an
-                         application-menu entry that launches 'vbot desktop'
-                         (added on top of the normal server install)
-  --desktop-client       Install only the desktop accessor (no server stack):
-                         installs .[cli,desktop], skips the WebUI build, the
-                         data-dir init, and autostart, and creates the
-                         application-menu entry. Use on a client machine that
-                         connects to a remote vBot server.
-  --no-autostart         Do not enable autostart or start the server after install
-  --skip-webui-build     Use an existing webui/dist instead of building (for
-                         low-memory hosts such as a Pi 3 — build elsewhere and
-                         copy webui/dist over before running this)
-  --service-name <name>  systemd unit name (default: vbot)
-  -h, --help             Show this help
+  --dir <path>          Installation directory (default: ~/vbot or \$VBOT_DIR;
+                        when run from a checkout, that checkout is the default)
+  --version <tag>       Install a specific release (for example v0.1.2)
+  --dev                 Fresh install: track main; current checkout: add development dependencies
+  --data-dir <path>     Runtime data directory (default: ~/.vbot)
+  --host <host>         Server bind host (default: 127.0.0.1)
+  --port <port>         Server port (default: 8420 or existing settings.json value)
+  --desktop             Add the Desktop accessor to the server install
+  --desktop-client      Install only CLI and Desktop for a remote-server client
+  --no-autostart        Do not enable autostart or start the server
+  --skip-webui-build    Reuse an existing webui/dist (automatic for releases)
+  --service-name <name> systemd user unit name (default: vbot)
+  -h, --help            Show this help
 USAGE
 }
 
-step() {
-    echo "==> $1"
-}
-
-fail() {
-    echo "Error: $1" >&2
-    exit 1
-}
-
-# Write a freedesktop .desktop launcher for the Desktop accessor. Exec points at
-# the resolved vbot command with the 'desktop' subcommand; the menu entry is the
-# only shortcut created (no autostart — the Desktop is user-launched only).
-write_desktop_entry() {
-    local vbot_command="$1"
-    local escaped_command
-    escaped_command="${vbot_command//%/%%}"
-    escaped_command="${escaped_command//\\/\\\\}"
-    escaped_command="${escaped_command//\"/\\\"}"
-    local entry_dir
-    entry_dir="$(dirname "$DESKTOP_ENTRY_PATH")"
-    mkdir -p "$entry_dir"
-    cat > "$DESKTOP_ENTRY_PATH" <<DESKTOPEOF
-[Desktop Entry]
-Type=Application
-Name=vBot Desktop
-Comment=vBot desktop accessor
-Exec="${escaped_command}" desktop
-Terminal=false
-Categories=Utility;
-DESKTOPEOF
-    echo "Created application-menu entry ${DESKTOP_ENTRY_PATH}."
+step() { echo "==> $1"; }
+fail() { echo "Error: $1" >&2; exit 1; }
+have() { command -v "$1" >/dev/null 2>&1; }
+require_value() {
+    [ "$#" -ge 2 ] && [ -n "$2" ] || fail "$1 requires a value."
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --data-dir) DATA_DIR="$2"; shift 2 ;;
-        --host) HOST="$2"; shift 2 ;;
-        --port) PORT="$2"; PORT_PROVIDED=1; shift 2 ;;
+        --dir) require_value "$@"; INSTALL_DIR="$2"; INSTALL_DIR_PROVIDED=1; shift 2 ;;
         --dev) DEV=1; shift ;;
-        --desktop) DESKTOP=1; shift ;;
-        --desktop-client) DESKTOP_CLIENT=1; shift ;;
-        --no-autostart) NO_AUTOSTART=1; shift ;;
-        --skip-webui-build) SKIP_WEBUI_BUILD=1; shift ;;
-        --service-name) SERVICE_NAME="$2"; shift 2 ;;
+        --version) require_value "$@"; VERSION="$2"; shift 2 ;;
+        --data-dir|--host|--port|--service-name)
+            require_value "$@"
+            SETUP_ARGS+=("$1" "$2")
+            shift 2
+            ;;
+        --desktop) DESKTOP=1; SETUP_ARGS+=("$1"); shift ;;
+        --desktop-client) DESKTOP_CLIENT=1; SETUP_ARGS+=("$1"); shift ;;
+        --no-autostart) SETUP_ARGS+=("$1"); shift ;;
+        --skip-webui-build) SKIP_WEBUI_BUILD=1; SETUP_ARGS+=("$1"); shift ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; fail "Unknown option: $1" ;;
     esac
 done
 
 if [ "$DESKTOP" -eq 1 ] && [ "$DESKTOP_CLIENT" -eq 1 ]; then
-    fail "--desktop and --desktop-client are mutually exclusive: --desktop adds the accessor to a full server install, --desktop-client installs the accessor with no server stack."
+    fail "--desktop and --desktop-client are mutually exclusive."
 fi
 if [ "$DESKTOP_CLIENT" -eq 1 ] && [ "$DEV" -eq 1 ]; then
-    fail "--desktop-client and --dev are mutually exclusive: --desktop-client installs the accessor with no server stack, --dev installs the full development environment."
+    fail "--desktop-client and --dev are mutually exclusive."
 fi
-if [ "$DESKTOP_CLIENT" -eq 0 ]; then
-    [ "${#SERVICE_NAME}" -le 200 ] || fail "--service-name must be at most 200 characters."
-    case "$SERVICE_NAME" in
-        "" | [!A-Za-z0-9]* | *[!A-Za-z0-9_.@-]* | *.service) fail "--service-name must start with a letter or number, then contain only letters, numbers, '.', '_', '@', or '-', without a .service suffix." ;;
-    esac
+if [ "$DEV" -eq 1 ] && [ -n "$VERSION" ]; then
+    fail "--version selects a specific release tag and cannot be combined with --dev."
 fi
 
-# The desktop-client mode installs only the accessor: it owns no server data dir,
-# so its normalization and creation are skipped along with the server steps below.
-if [ "$DESKTOP_CLIENT" -eq 0 ]; then
-    case "$DATA_DIR" in
-        "~") DATA_DIR="$HOME" ;;
-        "~/"*) DATA_DIR="${HOME}/${DATA_DIR#\~/}" ;;
-    esac
-    mkdir -p "$DATA_DIR"
-    DATA_DIR="$(cd "$DATA_DIR" && pwd)"
+if [ -n "$LOCAL_CHECKOUT" ] && [ "$INSTALL_DIR_PROVIDED" -eq 0 ] && [ -z "$VERSION" ]; then
+    INSTALL_DIR="$LOCAL_CHECKOUT"
+    USE_EXISTING_CHECKOUT=1
 fi
 
-resolve_python() {
-    if command -v python3 >/dev/null 2>&1; then
-        echo "python3"
-    elif command -v python >/dev/null 2>&1; then
-        echo "python"
-    else
-        fail "Python 3.11 or newer is required, but neither 'python3' nor 'python' was found."
+case "$INSTALL_DIR" in
+    "~") INSTALL_DIR="$HOME" ;;
+    "~/"*) INSTALL_DIR="${HOME}/${INSTALL_DIR#\~/}" ;;
+esac
+case "$INSTALL_DIR" in
+    /*) ;;
+    *) INSTALL_DIR="$(pwd)/${INSTALL_DIR}" ;;
+esac
+if [ "$USE_EXISTING_CHECKOUT" -eq 1 ]; then
+    [ -f "${INSTALL_DIR}/pyproject.toml" ] && [ -f "${INSTALL_DIR}/scripts/setup.sh" ] \
+        || fail "The current checkout is incomplete: ${INSTALL_DIR}."
+else
+    [ -e "$INSTALL_DIR" ] && fail "$INSTALL_DIR already exists. To update an existing install run 'vbot update'; otherwise remove it or pass --dir to choose another location."
+fi
+# Accept a bare version (0.1.2) as well as the tag form (v0.1.2).
+case "$VERSION" in
+    "" | v*) ;;
+    *) VERSION="v${VERSION}" ;;
+esac
+
+# --- prerequisites -----------------------------------------------------------
+
+SUDO=""
+if [ "$(id -u)" -ne 0 ] && have sudo; then
+    SUDO="sudo"
+fi
+
+apt_install() {
+    have apt-get || fail "No supported package manager (apt) found. Install these manually and re-run: $*"
+    if [ "$(id -u)" -ne 0 ] && [ -z "$SUDO" ]; then
+        fail "Root (or sudo) is required to install: $*. Install them manually and re-run."
     fi
+    step "Installing via apt: $*"
+    $SUDO apt-get update -y
+    $SUDO apt-get install -y "$@"
 }
 
-PYTHON="$(resolve_python)"
+ensure_git() {
+    have git && return
+    apt_install git
+    have git || fail "git installation did not put git on PATH."
+}
 
-step "Checking prerequisites"
-"$PYTHON" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' \
-    || fail "Python 3.11 or newer is required; found $("$PYTHON" --version 2>&1)."
+ensure_curl() {
+    have curl && return
+    apt_install curl
+    have curl || fail "curl installation did not put curl on PATH."
+}
 
-# PEP 668: Debian/Raspberry Pi OS block pip installs into the system
-# interpreter. Fail early with venv instructions instead of mid-install.
-if ! "$PYTHON" - <<'PYEOF'
-import os
-import sys
-import sysconfig
+ensure_python() {
+    if have python3 && python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
+        return
+    fi
+    apt_install python3 python3-venv python3-pip
+    have python3 || fail "Python installation did not put python3 on PATH."
+    python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' \
+        || fail "Installed Python is older than 3.11; install a newer Python and re-run."
+}
 
-in_venv = sys.prefix != sys.base_prefix
-marker = os.path.join(sysconfig.get_path("stdlib"), "EXTERNALLY-MANAGED")
-sys.exit(1 if not in_venv and os.path.exists(marker) else 0)
-PYEOF
-then
-    fail "This Python is externally managed (PEP 668). Create a venv and re-run inside it:
-  ${PYTHON} -m venv ~/vbot-venv
-  source ~/vbot-venv/bin/activate
-  scripts/install.sh [options]"
-fi
+ensure_venv_support() {
+    if python3 -c 'import ensurepip, venv' >/dev/null 2>&1; then
+        return
+    fi
+    apt_install python3-venv python3-pip
+    python3 -c 'import ensurepip, venv' >/dev/null 2>&1 \
+        || fail "Python is available, but its venv/ensurepip support is missing. Install the venv package matching $(python3 --version) and re-run."
+}
 
-if [ "$DESKTOP_CLIENT" -eq 0 ] && [ "$SKIP_WEBUI_BUILD" -eq 0 ]; then
-    command -v node >/dev/null 2>&1 || fail "Node.js is required to build the WebUI. Install it, or build webui/dist on another machine and re-run with --skip-webui-build."
-    command -v npm >/dev/null 2>&1 || fail "npm is required to build the WebUI. Install it, or build webui/dist on another machine and re-run with --skip-webui-build."
-    node --version
-    npm --version
-fi
+ensure_node() {
+    { have node && have npm; } && return
+    apt_install nodejs npm
+    { have node && have npm; } || fail "Node.js installation did not put node/npm on PATH."
+}
 
-read_settings_port() {
-    "$PYTHON" - "$1" <<'PYEOF'
+# --- code --------------------------------------------------------------------
+
+latest_release_tag() {
+    curl -fsSL "${API_BASE}/releases/latest" \
+        | grep -m1 '"tag_name"' \
+        | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/'
+}
+
+clone_repo() {
+    [ -e "$INSTALL_DIR" ] && fail "$INSTALL_DIR already exists. To update an existing install run 'vbot update'; otherwise remove it or pass --dir to choose another location."
+    if [ "$DEV" -eq 1 ]; then
+        step "Cloning ${REPO_URL} (main) into ${INSTALL_DIR}"
+        git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+    else
+        step "Cloning ${REPO_URL} (${TAG}) into ${INSTALL_DIR}"
+        git clone --depth 1 --branch "$TAG" "$REPO_URL" "$INSTALL_DIR"
+    fi
+    INSTALL_DIR="$(cd "$INSTALL_DIR" && pwd)"
+}
+
+setup_has_argument() {
+    local expected="$1"
+    local argument
+    for argument in "${SETUP_ARGS[@]}"; do
+        [ "$argument" = "$expected" ] && return 0
+    done
+    return 1
+}
+
+release_asset_url() {
+    curl -fsSL "${API_BASE}/releases/tags/${TAG}" | python3 -c '
 import json
 import sys
-from pathlib import Path
 
-path = Path(sys.argv[1])
-if not path.exists():
-    sys.exit(0)
-try:
-    settings = json.loads(path.read_text(encoding="utf-8"))
-except (OSError, json.JSONDecodeError):
-    print("invalid settings.json", file=sys.stderr)
-    sys.exit(2)
-if not isinstance(settings, dict):
-    print("invalid settings.json", file=sys.stderr)
-    sys.exit(2)
-for key in ("server_port", "SERVER_PORT", "port", "PORT"):
-    if key not in settings:
-        continue
-    value = settings[key]
-    if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 65535:
-        print(f"settings.json value '{key}' must be an integer port between 1 and 65535.", file=sys.stderr)
-        sys.exit(2)
-    print(value)
-    sys.exit(0)
-PYEOF
+payload = json.load(sys.stdin)
+for asset in payload.get("assets", []):
+    if asset.get("name") == "webui-dist.tar.gz":
+        print(asset.get("browser_download_url", ""))
+        break
+'
 }
 
-# Write an explicit --port into an existing settings.json, updating the port key
-# the app actually reads (first present wins, like the server's resolver). Keeps
-# the autostart entry and later flag-less commands (server status/stop) on the
-# same port. Prints the updated key, or nothing when the port already matches.
-sync_settings_port() {
-    "$PYTHON" - "$1" "$2" <<'PYEOF'
-import json
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-port = int(sys.argv[2])
-try:
-    settings = json.loads(path.read_text(encoding="utf-8"))
-except (OSError, json.JSONDecodeError):
-    print("invalid settings.json", file=sys.stderr)
-    sys.exit(2)
-if not isinstance(settings, dict):
-    print("invalid settings.json", file=sys.stderr)
-    sys.exit(2)
-keys = ("server_port", "SERVER_PORT", "port", "PORT")
-key = next((k for k in keys if k in settings), "server_port")
-if settings.get(key) == port:
-    sys.exit(0)
-settings[key] = port
-path.write_text(json.dumps(settings, indent=4, ensure_ascii=False) + "\n", encoding="utf-8")
-print(key)
-PYEOF
-}
-
-# Server data-dir steps (port resolution, settings.json, .env): skipped for the
-# desktop-client mode, which connects to a remote server and owns no local one.
-if [ "$DESKTOP_CLIENT" -eq 0 ]; then
-    SETTINGS_PATH="${DATA_DIR}/settings.json"
-    if [ "$PORT_PROVIDED" -eq 0 ]; then
-        configured_port="$(read_settings_port "$SETTINGS_PATH")" \
-            || fail "Existing settings.json is not usable and was not overwritten: ${SETTINGS_PATH}"
-        if [ -n "$configured_port" ]; then
-            PORT="$configured_port"
-            echo "Using port ${PORT} from existing settings.json. Pass --port to override installer commands."
+wait_for_webui_asset() {
+    step "Waiting for the prebuilt WebUI for ${TAG}"
+    local waited=0
+    while [ "$waited" -lt "$ASSET_WAIT_SECONDS" ]; do
+        if ! WEBUI_ASSET_URL="$(release_asset_url 2>/dev/null)"; then
+            fail "Could not query release ${TAG} while waiting for its WebUI asset."
         fi
-    else
-        case "$PORT" in
-            ''|*[!0-9]*) fail "--port must be an integer between 1 and 65535." ;;
-        esac
-        [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] \
-            || fail "--port must be an integer between 1 and 65535."
-    fi
+        [ -n "$WEBUI_ASSET_URL" ] && return
+        sleep "$ASSET_POLL_SECONDS"
+        waited=$((waited + ASSET_POLL_SECONDS))
+    done
+    fail "Release ${TAG} still has no webui-dist.tar.gz asset after ${ASSET_WAIT_SECONDS} seconds. The install directory was not created; re-run once the release workflow finishes."
+}
 
-    step "Preparing data directory: ${DATA_DIR}"
-    if [ ! -f "$SETTINGS_PATH" ]; then
-        printf '{\n    "server_port": %s\n}\n' "$PORT" > "$SETTINGS_PATH"
-        echo "Created settings.json with server_port ${PORT}."
-    elif [ "$PORT_PROVIDED" -eq 1 ]; then
-        updated_key="$(sync_settings_port "$SETTINGS_PATH" "$PORT")" \
-            || fail "Existing settings.json is not valid JSON and was not updated: ${SETTINGS_PATH}"
-        if [ -n "$updated_key" ]; then
-            echo "Updated ${updated_key} to ${PORT} in existing settings.json (--port)."
+fetch_prebuilt_webui() {
+    step "Fetching prebuilt WebUI for ${TAG}"
+    [ -n "$WEBUI_ASSET_URL" ] || fail "No preflighted WebUI asset URL is available."
+    mkdir -p "${INSTALL_DIR}/webui"
+    local archive="${INSTALL_DIR}/webui-dist.tar.gz"
+    curl -fsSL "$WEBUI_ASSET_URL" -o "$archive"
+    if ! python3 - "$archive" "${INSTALL_DIR}/webui" <<'PY'
+import sys
+import tarfile
+from pathlib import Path
+
+archive_path = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+root = destination.resolve()
+with tarfile.open(archive_path, mode='r:gz') as archive:
+    for member in archive.getmembers():
+        if not (member.isdir() or member.isfile()):
+            raise SystemExit(f'unsafe member type in WebUI archive: {member.name}')
+        target = (destination / member.name).resolve()
+        if not target.is_relative_to(root):
+            raise SystemExit(f'unsafe path in WebUI archive: {member.name}')
+    archive.extractall(destination)
+PY
+    then
+        rm -f "$archive"
+        fail "Refusing to unpack the WebUI archive: it contains an unsafe path or member type."
+    fi
+    rm -f "$archive"
+    [ -f "${INSTALL_DIR}/webui/dist/index.html" ] || fail "Prebuilt WebUI did not unpack to webui/dist."
+}
+
+run_setup() {
+    step "Creating virtual environment at ${INSTALL_DIR}/.venv"
+    python3 -m venv "${INSTALL_DIR}/.venv"
+    # shellcheck disable=SC1091
+    . "${INSTALL_DIR}/.venv/bin/activate"
+
+    local args=()
+    if [ "$DEV" -eq 1 ]; then
+        args+=(--dev)
+    elif [ "$USE_EXISTING_CHECKOUT" -eq 0 ]; then
+        args+=(--skip-webui-build)
+    fi
+    [ "${#SETUP_ARGS[@]}" -gt 0 ] && args+=("${SETUP_ARGS[@]}")
+
+    local setup_script="${INSTALL_DIR}/scripts/setup.sh"
+    if [ ! -f "$setup_script" ]; then
+        local legacy_setup="${INSTALL_DIR}/scripts/install.sh"
+        if [ "$USE_EXISTING_CHECKOUT" -eq 0 ] && [ -f "$legacy_setup" ] \
+            && grep -q 'editable pip install' "$legacy_setup"; then
+            setup_script="$legacy_setup"
+            step "Using the checkout installer contract from release ${TAG}"
         else
-            echo "Keeping existing settings.json (already at port ${PORT})."
+            fail "The selected checkout has no usable internal setup script."
         fi
+    fi
+
+    step "Configuring checkout: ${setup_script#"${INSTALL_DIR}/"} ${args[*]:-}"
+    if [ "${#args[@]}" -gt 0 ]; then
+        bash "$setup_script" "${args[@]}"
     else
-        # Validity was already checked while resolving the port.
-        echo "Keeping existing valid settings.json."
+        bash "$setup_script"
     fi
+}
 
-    ENV_PATH="${DATA_DIR}/.env"
-    if [ ! -f "$ENV_PATH" ]; then
-        cat > "$ENV_PATH" <<'ENVEOF'
-# vBot provider credentials
-# OPENAI_API_KEY=...
-# OPENROUTER_API_KEY=...
-# ANTHROPIC_API_KEY=...
-ENVEOF
-        echo "Created .env template."
+link_vbot() {
+    local target="${INSTALL_DIR}/.venv/bin/vbot"
+    [ -x "$target" ] || return 0
+    mkdir -p "${HOME}/.local/bin"
+    ln -sf "$target" "${HOME}/.local/bin/vbot"
+    step "Linked vbot into ${HOME}/.local/bin"
+}
+
+# A fresh installer-owned clone can be removed wholesale by uninstall.sh.
+write_root_marker() {
+    cat > "${INSTALL_DIR}/${ROOT_MARKER}" <<'MARKER'
+# vBot managed install marker.
+# This directory is a self-contained vBot install created by scripts/install.sh
+# (it has its own virtual environment in .venv). Running scripts/uninstall.sh
+# (uninstall.ps1 on Windows) removes this entire directory, the 'vbot' launcher,
+# and the autostart entry. Your data directory is never touched.
+MARKER
+
+    # Releases published before install.sh became the public entrypoint contain
+    # an uninstaller that recognizes only the retired marker. Write it only for
+    # those checkouts so installing an older explicit/latest tag still uninstalls
+    # completely with the Uninstaller bundled in that tag.
+    if ! grep -q '\.vbot-install-root' "${INSTALL_DIR}/scripts/uninstall.sh" 2>/dev/null; then
+        cat > "${INSTALL_DIR}/${LEGACY_ROOT_MARKER}" <<'MARKER'
+# Compatibility marker for a vBot release with the previous Uninstaller contract.
+MARKER
+    fi
+}
+
+# An existing user checkout is never deleted; only its installer-owned .venv and
+# launcher are removed during uninstall.
+write_venv_marker() {
+    cat > "${INSTALL_DIR}/${VENV_MARKER}" <<'MARKER'
+# vBot managed virtual-environment marker.
+# scripts/install.sh created .venv in this existing checkout. Uninstall removes
+# the managed environment and launcher but preserves the checkout and data.
+MARKER
+}
+
+[ "$USE_EXISTING_CHECKOUT" -eq 0 ] && ensure_git
+ensure_python
+ensure_venv_support
+if [ "$USE_EXISTING_CHECKOUT" -eq 0 ] && [ "$DEV" -eq 0 ]; then
+    ensure_curl
+fi
+if [ "$DESKTOP_CLIENT" -eq 0 ] && [ "$SKIP_WEBUI_BUILD" -eq 0 ] \
+    && { [ "$DEV" -eq 1 ] || [ "$USE_EXISTING_CHECKOUT" -eq 1 ]; }; then
+    ensure_node
+fi
+
+if [ "$USE_EXISTING_CHECKOUT" -eq 0 ] && [ "$DEV" -eq 0 ]; then
+    if [ -n "$VERSION" ]; then
+        TAG="$VERSION"
     else
-        echo "Keeping existing .env."
+        TAG="$(latest_release_tag || true)"
+        [ -n "$TAG" ] || fail "Could not determine the latest release. Use --dev to install from main."
+    fi
+    if [ "$DESKTOP_CLIENT" -eq 0 ]; then
+        wait_for_webui_asset
     fi
 fi
 
-# --dev swaps the base groups; --desktop stays an add-on on top of either base,
-# so a dev install with the desktop accessor gets both dependency groups.
-# --desktop-client is its own accessor-only shape and excludes --dev.
-if [ "$DESKTOP_CLIENT" -eq 1 ]; then
-    INSTALL_GROUPS=(cli desktop)
-    INSTALL_SHAPE="desktop-client"
-elif [ "$DEV" -eq 1 ] && [ "$DESKTOP" -eq 1 ]; then
-    INSTALL_GROUPS=(dev desktop)
-    INSTALL_SHAPE="server-desktop"
-elif [ "$DEV" -eq 1 ]; then
-    INSTALL_GROUPS=(dev)
-    INSTALL_SHAPE="server"
-elif [ "$DESKTOP" -eq 1 ]; then
-    INSTALL_GROUPS=(server cli desktop)
-    INSTALL_SHAPE="server-desktop"
+if [ "$USE_EXISTING_CHECKOUT" -eq 0 ]; then
+    clone_repo
+    write_root_marker
+elif [ ! -f "${INSTALL_DIR}/${ROOT_MARKER}" ] && [ ! -f "${INSTALL_DIR}/${LEGACY_ROOT_MARKER}" ]; then
+    write_venv_marker
+fi
+if [ "$USE_EXISTING_CHECKOUT" -eq 0 ] && [ "$DEV" -eq 0 ] && [ "$DESKTOP_CLIENT" -eq 0 ]; then
+    fetch_prebuilt_webui
+fi
+run_setup
+link_vbot
+
+step "vBot installation complete"
+echo "Installed at: ${INSTALL_DIR}"
+echo "The installer output above shows the configured data directory (Desktop Client has none)."
+if setup_has_argument "--desktop-client"; then
+    NEXT_COMMAND="desktop"
 else
-    INSTALL_GROUPS=(server cli)
-    INSTALL_SHAPE="server"
+    NEXT_COMMAND="server status"
 fi
-GROUP_LIST="$(IFS=,; echo "${INSTALL_GROUPS[*]}")"
-EXTRA=".[${GROUP_LIST}]"
-step "Installing Python package in editable mode: ${EXTRA}"
-(cd "$PROJECT_ROOT" && "$PYTHON" -m pip install -e "$EXTRA")
-
-# The desktop-client mode loads the WebUI from a remote server, so it builds no
-# local WebUI bundle.
-if [ "$DESKTOP_CLIENT" -eq 1 ]; then
-    step "Skipping WebUI build (desktop client connects to a remote server)"
-elif [ "$SKIP_WEBUI_BUILD" -eq 1 ]; then
-    step "Skipping WebUI build (--skip-webui-build)"
-    [ -f "${WEBUI_DIR}/dist/index.html" ] \
-        || fail "webui/dist/index.html not found. Build the WebUI on another machine (cd webui && npm ci && npm run build) and copy webui/dist here, or re-run without --skip-webui-build."
-    echo "Using existing webui/dist."
-else
-    step "Installing WebUI dependencies"
-    (cd "$WEBUI_DIR" && npm ci)
-    step "Building WebUI"
-    (cd "$WEBUI_DIR" && npm run build)
-    [ -f "${WEBUI_DIR}/dist/index.html" ] || fail "WebUI build did not create webui/dist/index.html."
-fi
-
-SCRIPTS_PATH="$("$PYTHON" -c "import sysconfig; print(sysconfig.get_path('scripts'))")"
-VBOT_ON_ORIGINAL_PATH="$(command -v vbot || true)"
-# Prepend so this session — including the autostart registration triggered
-# below — resolves the just-installed vbot, not a stale one elsewhere on PATH.
-export PATH="${SCRIPTS_PATH}:${PATH}"
-
-# Prefer the just-installed command directly over whatever PATH resolves first.
-if [ -x "${SCRIPTS_PATH}/vbot" ]; then
-    VBOT_PATH="${SCRIPTS_PATH}/vbot"
-else
-    VBOT_PATH="$(command -v vbot || true)"
-fi
-if [ -z "$VBOT_PATH" ]; then
-    fail "The vbot command was not found after installation. Check pip output for installation errors."
-fi
-
-if [ "$DESKTOP_CLIENT" -eq 1 ]; then
-    step "Verifying vBot command"
-    "$VBOT_PATH" --help >/dev/null
-else
-    step "Verifying vBot command and settings"
-    "$VBOT_PATH" --help >/dev/null
-    "$VBOT_PATH" doctor settings --data-dir "$DATA_DIR"
-fi
-
-# Preserve the selected environment entry point. Some symlink-based venvs
-# report the base binary through sys.executable even though pip installs into
-# the venv, which would make a later uninstall target the wrong environment.
-PYTHON_EXECUTABLE="$(command -v "$PYTHON")"
-step "Recording installation shape: ${INSTALL_SHAPE}"
-INSTALL_STATE_ARGS=(
-    --root "$PROJECT_ROOT"
-    --shape "$INSTALL_SHAPE"
-    --groups "${INSTALL_GROUPS[@]}"
-    --python-executable "$PYTHON_EXECUTABLE"
-)
-if [ "$DESKTOP_CLIENT" -eq 0 ]; then
-    INSTALL_STATE_ARGS+=(
-        --server-host "$HOST"
-        --server-port "$PORT"
-        --server-data-directory "$DATA_DIR"
-    )
-fi
-(cd "$PROJECT_ROOT" && "$PYTHON" -m cli.install_state write "${INSTALL_STATE_ARGS[@]}")
-
-if [ -z "$VBOT_ON_ORIGINAL_PATH" ]; then
-    echo "Note: ${SCRIPTS_PATH} is not on your PATH. Add it to your shell profile to use 'vbot' directly."
-fi
-
-# Application-menu entry for the Desktop accessor. Created for both the add-on
-# (--desktop) and the server-less client (--desktop-client). Never autostarted.
-if [ "$DESKTOP" -eq 1 ] || [ "$DESKTOP_CLIENT" -eq 1 ]; then
-    step "Creating desktop application-menu entry"
-    write_desktop_entry "$VBOT_PATH"
-fi
-
-# Autostart applies only to the server; the desktop client has none to start.
-if [ "$DESKTOP_CLIENT" -eq 0 ] && [ "$NO_AUTOSTART" -eq 0 ]; then
-    step "Enabling autostart and starting the server"
-    "$VBOT_PATH" autostart enable --host "$HOST" --port "$PORT" --data-dir "$DATA_DIR" --service-name "$SERVICE_NAME" \
-        || echo "Warning: enabling autostart failed (see message above)."
-fi
-
-step "Installation complete"
-echo "vBot command: ${VBOT_PATH}"
-if [ "$DESKTOP_CLIENT" -eq 1 ]; then
-    echo "Desktop client installed (no local server)."
-    echo "Launch the desktop accessor: vbot desktop"
-    echo "It will prompt for the vBot server to connect to on first launch."
-else
-    echo "Data directory: ${DATA_DIR}"
-    echo "Server URL: http://${HOST}:${PORT}"
-    if [ "$NO_AUTOSTART" -eq 0 ]; then
-        echo "Autostart: systemctl --user status ${SERVICE_NAME}"
-    fi
-    if [ "$DESKTOP" -eq 1 ]; then
-        echo "Launch the desktop accessor: vbot desktop"
-    fi
-    echo "Try: vbot server status --host ${HOST} --port ${PORT} --data-dir \"${DATA_DIR}\""
-fi
+case ":${PATH}:" in
+    *":${HOME}/.local/bin:"*) echo "Run: vbot ${NEXT_COMMAND}" ;;
+    *) echo "Add ${HOME}/.local/bin to your PATH, or run: ${INSTALL_DIR}/.venv/bin/vbot ${NEXT_COMMAND}" ;;
+esac

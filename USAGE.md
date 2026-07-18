@@ -25,57 +25,52 @@ This guide covers installing, configuring, operating, and integrating vBot. For 
 ## Requirements
 
 - Python 3.11 or newer
-- Git for Bootstrap installs and updates
-- Node.js and npm only for a development install or a local WebUI build; release Bootstrap installs download a prebuilt WebUI
+- Git for installs and updates
+- Node.js and npm only for a development install or a current-checkout WebUI build; release installs download a prebuilt WebUI
 - At least one usable Provider Connection and Model before an Agent can run
 
 ## Installation
 
-### Bootstrap and Installer are separate layers
+### Public Installer contract
 
-vBot ships both layers for both supported platforms:
+The complete public installers are `scripts/install.sh` for Linux and `scripts/install.ps1` for Windows. A default install selects the latest release, clones it into `~/vbot`, creates `~/vbot/.venv`, downloads the matching WebUI, installs vBot into that isolated environment, exposes the `vbot` command, enables autostart, and starts the server. Runtime state remains separate under `~/.vbot`.
 
-| Platform | Fresh-install Bootstrap | Checkout Installer | Uninstaller |
-|---|---|---|---|
-| Linux | `scripts/bootstrap.sh` | `scripts/install.sh` | `scripts/uninstall.sh` |
-| Windows | `scripts/bootstrap.ps1` | `scripts/install.ps1` | `scripts/uninstall.ps1` |
-
-The Bootstrap scripts install or verify prerequisites, clone a release or `main`, create an isolated `<install-dir>/.venv`, obtain the WebUI, and invoke the platform Installer. The Installer scripts perform the editable Python install inside the selected environment, initialize server state when applicable, build or verify the WebUI, record the installation contract in `.vbot-install.json`, create Desktop launchers when requested, and enable server autostart unless disabled.
-
-Use Bootstrap on a new machine. Use the Installer directly when you already have a checkout and have selected the Python environment into which vBot should be installed.
+When the same Installer is executed from a vBot checkout without an explicit installation directory or version, it installs that checkout into `<checkout>/.venv` and builds the WebUI locally. It never requires or modifies the system Python environment. An internal `scripts/setup.*` helper performs checkout-local package configuration after the public Installer has established the checkout and environment; it is not an end-user installation entrypoint.
 
 ### Fresh Debian-like Linux install
 
-The Linux Bootstrap currently automates prerequisite installation on Debian-like systems, including Raspberry Pi OS. The default release install goes to `~/vbot`, creates `~/vbot/.venv`, stores runtime state separately in `~/.vbot`, installs a `vbot` launcher, enables a `systemd --user` service, and starts the server:
+The Linux Installer automates prerequisite installation through `apt` on Debian-like systems, including Raspberry Pi OS:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash
 ```
 
-Bootstrap options are:
+Installer options are:
 
 | Option | Meaning |
 |---|---|
-| `--dir <path>` | Clone into another directory; default `~/vbot` or `$VBOT_DIR` |
+| `--dir <path>` | Installation directory; default `~/vbot` or `$VBOT_DIR`, or the current checkout when invoked there |
 | `--version <tag>` | Install a specific release, for example `v0.1.11`; cannot be combined with `--dev` |
-| `--dev` | Track `main` and build the WebUI locally; Node.js is required |
-| `-h`, `--help` | Show Bootstrap help |
+| `--dev` | Fresh install: track `main`; current checkout: add development dependencies; either path builds the WebUI locally and requires Node.js |
+| `--data-dir <path>` | Runtime data directory; default `~/.vbot` |
+| `--host <host>` | Server bind host; default `127.0.0.1` |
+| `--port <port>` | Server port; default `8420`, or the existing Settings value when not explicitly overridden |
+| `--desktop` | Add the Desktop accessor to a server install |
+| `--desktop-client` | Install only CLI and Desktop for a remote-server client machine |
+| `--no-autostart` | Do not create or start the systemd user unit |
+| `--skip-webui-build` | Require and reuse an existing `webui/dist`; release installs do this automatically after downloading the asset |
+| `--service-name <name>` | Custom systemd user unit name without `.service`; default `vbot` |
+| `-h`, `--help` | Show Installer help |
 
-Pass Bootstrap options after `bash -s --`:
+Pass every option directly after `bash -s --`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.sh | bash -s -- --version v0.1.11
-curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.sh | bash -s -- --dev
-curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.sh | bash -s -- --dir ~/apps/vbot
-```
-
-To forward Installer options through the pipe, add the Bootstrap forwarding separator as a second `--`:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.sh | bash -s -- -- --no-autostart
-curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.sh | bash -s -- -- --port 9000
-curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.sh | bash -s -- -- --desktop
-curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.sh | bash -s -- -- --desktop-client
+curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash -s -- --version v0.1.11
+curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash -s -- --dev
+curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash -s -- --dir ~/apps/vbot
+curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash -s -- --no-autostart --port 9000
+curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash -s -- --desktop
+curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash -s -- --desktop-client
 ```
 
 ### Fresh Windows install
@@ -83,27 +78,27 @@ curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstr
 Run the default install in PowerShell. An elevated shell is recommended so the Task Scheduler autostart entry can be created:
 
 ```powershell
-irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.ps1 | iex
+irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1 | iex
 ```
 
 Use a ScriptBlock when passing options:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.ps1))) -Version v0.1.11
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.ps1))) -Dev
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.ps1))) -InstallDir D:\Apps\vbot
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.ps1))) -NoAutostart
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.ps1))) -Desktop
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/bootstrap.ps1))) -DesktopClient
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -Version v0.1.11
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -Dev
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -InstallDir D:\Apps\vbot
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -NoAutostart -Port 9000
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -Desktop
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -DesktopClient
 ```
 
-`-InstallDir`, `-Version`, and `-Dev` belong to Bootstrap. Remaining arguments such as `-DataDir`, `-HostName`, `-Port`, `-Desktop`, `-DesktopClient`, and `-NoAutostart` are forwarded to `scripts/install.ps1`. If Task Scheduler permission is unavailable, the package install still completes and reports how to enable autostart later.
+Windows accepts `-InstallDir`, `-Version`, `-Dev`, `-DataDir`, `-HostName`, `-Port`, `-Desktop`, `-DesktopClient`, `-NoAutostart`, `-SkipWebuiBuild`, and `-TaskName` directly. If Task Scheduler permission is unavailable, the package install still completes and reports how to enable autostart later.
 
 As with any `curl | bash` or `irm | iex` command, download and inspect the script first if you do not want to execute network content directly.
 
-### Direct checkout Installer
+### Install the current checkout
 
-The direct Installer uses the active Python environment. On PEP 668 systems such as Debian and Raspberry Pi OS, create and activate a virtual environment first; Bootstrap already does this automatically.
+Run the same public Installer from the repository root. It detects its checkout, creates or reuses `<checkout>/.venv`, builds the WebUI unless a matching `webui/dist` is explicitly reused, records `.vbot-install.json`, and installs the selected server or Desktop shape. This path is safe on PEP 668 systems because it never installs into the system interpreter.
 
 Windows:
 
@@ -114,19 +109,6 @@ Windows:
 .\scripts\install.ps1 -NoAutostart
 ```
 
-| Windows option | Meaning |
-|---|---|
-| `-DataDir <path>` | Runtime data directory; default `$HOME\.vbot` |
-| `-HostName <host>` | Server bind host; default `127.0.0.1` |
-| `-Port <port>` | Server port; default `8420`, or the existing settings value when not explicitly overridden |
-| `-Dev` | Install the development dependency group |
-| `-Desktop` | Add the Desktop accessor to a server or development install |
-| `-DesktopClient` | Install only CLI and Desktop for a remote-server client machine |
-| `-NoAutostart` | Do not create or start the Task Scheduler entry |
-| `-SkipWebuiBuild` | Require and reuse an existing `webui/dist` |
-| `-SkipPathUpdate` | Do not add the selected environment's Scripts directory to the user PATH |
-| `-TaskName <name>` | Custom Task Scheduler task name; default `vBot` |
-
 Linux:
 
 ```bash
@@ -135,18 +117,6 @@ scripts/install.sh --desktop
 scripts/install.sh --desktop-client
 scripts/install.sh --no-autostart
 ```
-
-| Linux option | Meaning |
-|---|---|
-| `--data-dir <path>` | Runtime data directory; default `~/.vbot` |
-| `--host <host>` | Server bind host; default `127.0.0.1` |
-| `--port <port>` | Server port; default `8420`, or the existing settings value when not explicitly overridden |
-| `--dev` | Install the development dependency group |
-| `--desktop` | Add the Desktop accessor to a server or development install |
-| `--desktop-client` | Install only CLI and Desktop for a remote-server client machine |
-| `--no-autostart` | Do not create or start the systemd user unit |
-| `--skip-webui-build` | Require and reuse an existing `webui/dist` |
-| `--service-name <name>` | Custom systemd user unit name without `.service`; default `vbot` |
 
 ### Install shapes
 
@@ -193,13 +163,13 @@ Windows:
 & "$HOME\vbot\scripts\uninstall.ps1"
 ```
 
-A Bootstrap install is detected through its marker. Its Uninstaller stops the recorded server best-effort, removes autostart, the launcher or shortcut, and the entire self-contained install directory including `.venv`. A direct Installer run uninstalls the Python package but keeps the checkout; pass `--remove-autostart` on Linux or `-RemoveAutostart` on Windows to remove a manually created autostart entry. The Linux Uninstaller also accepts `--package-name` and `--service-name`; the Windows Uninstaller accepts `-PackageName` and `-TaskName`.
+A fresh managed install is removed wholesale: the Uninstaller stops the recorded server best-effort, removes autostart and launchers, and deletes the installer-owned source tree plus `.venv`. An install performed in an existing checkout removes the installer-owned `.venv` and launcher but preserves the checkout. Direct internal setup installs remain supported for development and CI; their Uninstaller path removes the Python package and preserves the checkout, with `--remove-autostart` on Linux or `-RemoveAutostart` on Windows when needed. The Linux Uninstaller also accepts `--package-name` and `--service-name`; the Windows Uninstaller accepts `-PackageName` and `-TaskName`.
 
-Both uninstall modes preserve the vBot data directory. Remove `~/.vbot` separately only if you intentionally want to delete credentials, Agent identity, Sessions, and all other runtime state.
+Every uninstall mode preserves the vBot data directory. Remove `~/.vbot` separately only if you intentionally want to delete credentials, Agent identity, Sessions, and all other runtime state.
 
 ## First-run setup
 
-Open `http://127.0.0.1:8420/`. Runtime creates a bootstrap Identity Agent and its first Session automatically. The setup guide connects a Provider or OAuth subscription and selects a Model; creating another Agent is optional.
+Open `http://127.0.0.1:8420/`. Runtime creates an initial Identity Agent and its first Session automatically. The setup guide connects a Provider or OAuth subscription and selects a Model; creating another Agent is optional.
 
 The WebUI is the easiest place to manage Connections and Accounts. Equivalent CLI examples are:
 

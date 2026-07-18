@@ -75,7 +75,7 @@ jobs:
         run: |
           python -m venv .tmp/install-venv
           . .tmp/install-venv/bin/activate
-          bash scripts/install.sh --no-autostart --skip-webui-build --data-dir .tmp/data
+          bash scripts/setup.sh --no-autostart --skip-webui-build --data-dir .tmp/data
           python -c 'import json, pathlib; state=json.loads(pathlib.Path(".vbot-install.json").read_text()); assert state["install_shape"] == "server"; assert state["dependency_groups"] == ["server", "cli"]'
       - name: Uninstall through the recorded interpreter
         run: |
@@ -101,7 +101,7 @@ jobs:
         run: |
           python -m venv .tmp/install-venv
           $env:Path = "$(Resolve-Path .tmp/install-venv/Scripts);$env:Path"
-          & scripts/install.ps1 -NoAutostart -SkipWebuiBuild -SkipPathUpdate -DataDir .tmp/data
+          & scripts/setup.ps1 -NoAutostart -SkipWebuiBuild -SkipPathUpdate -DataDir .tmp/data
           $state = Get-Content -Raw .vbot-install.json | ConvertFrom-Json
           if ($state.install_shape -ne 'server') { throw 'wrong install shape' }
           if (($state.dependency_groups -join ',') -ne 'server,cli') { throw 'wrong dependency groups' }

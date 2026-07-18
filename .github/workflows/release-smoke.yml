@@ -62,9 +62,9 @@ jobs:
         run: |
           install_dir="${RUNNER_TEMP}/vbot-release"
           data_dir="${HOME}/.vbot"
-          bootstrap="${RUNNER_TEMP}/bootstrap.sh"
-          curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/scripts/bootstrap.sh" -o "$bootstrap"
-          bash "$bootstrap" --dir "$install_dir" --version "$RELEASE_TAG" -- --no-autostart
+          installer="${RUNNER_TEMP}/install.sh"
+          curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/scripts/install.sh" -o "$installer"
+          bash "$installer" --dir "$install_dir" --version "$RELEASE_TAG" --no-autostart
 
           test "$(git -C "$install_dir" describe --tags --exact-match)" = "$RELEASE_TAG"
           "$install_dir/.venv/bin/python" - "$install_dir/pyproject.toml" "$RELEASE_TAG" <<'PY'
@@ -102,10 +102,9 @@ jobs:
         run: |
           $installDir = Join-Path $env:RUNNER_TEMP "vbot-release"
           $dataDir = Join-Path $HOME ".vbot"
-          $bootstrap = Join-Path $env:RUNNER_TEMP "bootstrap.ps1"
-          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/$env:GITHUB_REPOSITORY/$env:GITHUB_SHA/scripts/bootstrap.ps1" -OutFile $bootstrap
-          $installerArgs = @("-NoAutostart")
-          & $bootstrap -InstallDir $installDir -Version $env:RELEASE_TAG -InstallerArgs $installerArgs
+          $installer = Join-Path $env:RUNNER_TEMP "install.ps1"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/$env:GITHUB_REPOSITORY/$env:GITHUB_SHA/scripts/install.ps1" -OutFile $installer
+          & $installer -InstallDir $installDir -Version $env:RELEASE_TAG -NoAutostart
 
           $checkedOutTag = (& git -C $installDir describe --tags --exact-match).Trim()
           if ($checkedOutTag -ne $env:RELEASE_TAG) { throw "Installed tag '$checkedOutTag' does not match '$env:RELEASE_TAG'" }
@@ -135,5 +134,5 @@ jobs:
           $uninstaller = Join-Path $installDir "scripts\uninstall.ps1"
           Set-Location $env:RUNNER_TEMP
           & $uninstaller
-          if (Test-Path -LiteralPath $installDir) { throw "Bootstrap install directory still exists after uninstall" }
+          if (Test-Path -LiteralPath $installDir) { throw "Managed install directory still exists after uninstall" }
           if (-not (Test-Path -LiteralPath $dataDir -PathType Container)) { throw "Uninstall removed the data directory" }

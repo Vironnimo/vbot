@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# vBot uninstaller for Linux. Mirrors scripts/uninstall.ps1. Two modes, picked by
-# whether this is a self-contained bootstrap install:
-#   - bootstrap install (a .vbot-bootstrap marker sits next to scripts/): remove
-#     the whole tree (venv + source), the 'vbot' launcher, and the autostart unit.
-#   - manual/editable install (no marker): uninstall the pip package from the
-#     active interpreter and optionally remove the systemd user unit.
+# vBot uninstaller for Linux. Mirrors scripts/uninstall.ps1. Managed fresh
+# installs remove their complete installer-owned tree; managed installations in
+# an existing checkout remove only the installer-owned venv and launcher; direct
+# internal setup installs uninstall only the pip package.
 # Either way the data dir (~/.vbot) is never touched.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-MARKER="${PROJECT_ROOT}/.vbot-bootstrap"
+ROOT_MARKER="${PROJECT_ROOT}/.vbot-install-root"
+VENV_MARKER="${PROJECT_ROOT}/.vbot-install-venv"
+LEGACY_ROOT_MARKER="${PROJECT_ROOT}/.vbot-bootstrap"
 INSTALL_MANIFEST="${PROJECT_ROOT}/.vbot-install.json"
 
 PACKAGE_NAME="vbot"
 REMOVE_AUTOSTART=0
 SERVICE_NAME="vbot"
 
-# Freedesktop application-menu entry written by scripts/install.sh (--desktop /
+# Freedesktop application-menu entry written by scripts/setup.sh (--desktop /
 # --desktop-client). Kept identical here so this removes exactly what was created.
 DESKTOP_ENTRY_PATH="${HOME}/.local/share/applications/vbot-desktop.desktop"
 
@@ -25,15 +25,15 @@ usage() {
     cat <<USAGE
 Usage: scripts/uninstall.sh [options]
 
-A bootstrap install (installed via the one-line bootstrap) is removed wholesale —
-its directory, the 'vbot' launcher, and the autostart unit — regardless of the
-options below. The data dir (~/.vbot) is always left untouched.
+A managed fresh install is removed wholesale. A managed install in an existing
+checkout removes its .venv and launcher but preserves the checkout. The data dir
+(~/.vbot) is always left untouched.
 
 Options:
-  --package-name <name>  pip package to uninstall (default: vbot; manual installs only)
-  --remove-autostart     Disable and remove the systemd user unit (manual installs
-                         only; a bootstrap uninstall always removes the unit)
-  --service-name <name>  systemd unit name (default: vbot; both modes — pass the
+  --package-name <name>  pip package to uninstall (default: vbot; direct setup only)
+  --remove-autostart     Disable and remove the systemd user unit (direct setup
+                         only; managed installs always remove the unit)
+  --service-name <name>  systemd unit name (default: vbot; all modes — pass the
                          same name the install used)
   -h, --help             Show this help
 USAGE
@@ -88,16 +88,9 @@ remove_systemd_unit() {
     fi
 }
 
-# --- bootstrap install: remove the whole self-contained tree ------------------
+# --- managed installs --------------------------------------------------------
 
-bootstrap_uninstall() {
-    # Guard against ever removing something that isn't a real, marked install dir.
-    case "$PROJECT_ROOT" in
-        "" | "/" | "$HOME") fail "Refusing to remove '${PROJECT_ROOT}'." ;;
-    esac
-
-    step "Removing bootstrap install at ${PROJECT_ROOT}"
-
+managed_cleanup() {
     if [ -f "$UNIT_FILE" ] || [ -L "$UNIT_WANTS_LINK" ]; then
         step "Removing systemd user unit '${SERVICE_NAME}'"
         remove_systemd_unit
@@ -146,6 +139,16 @@ PY
     fi
 
     remove_desktop_entry
+}
+
+managed_root_uninstall() {
+    # Guard against ever removing something that isn't a real, marked install dir.
+    case "$PROJECT_ROOT" in
+        "" | "/" | "$HOME") fail "Refusing to remove '${PROJECT_ROOT}'." ;;
+    esac
+
+    step "Removing managed install at ${PROJECT_ROOT}"
+    managed_cleanup
 
     # Removing PROJECT_ROOT deletes this running script's file; bash has already
     # read it, so this is safe. Step out of the tree first so the cwd survives.
@@ -154,6 +157,19 @@ PY
 
     step "Uninstall complete"
     echo "Removed ${PROJECT_ROOT} (including its virtual environment)."
+    echo "Data directories such as ~/.vbot were not modified."
+}
+
+managed_venv_uninstall() {
+    step "Removing managed vBot environment from ${PROJECT_ROOT}"
+    managed_cleanup
+
+    rm -rf "${PROJECT_ROOT}/.venv"
+    rm -f "$INSTALL_MANIFEST"
+    rm -f "$VENV_MARKER"
+
+    step "Uninstall complete"
+    echo "Removed the installer-managed virtual environment; preserved ${PROJECT_ROOT}."
     echo "Data directories such as ~/.vbot were not modified."
 }
 
@@ -204,8 +220,10 @@ manual_uninstall() {
     echo "Source files, webui/node_modules, and webui/dist were not removed."
 }
 
-if [ -f "$MARKER" ]; then
-    bootstrap_uninstall
+if [ -f "$ROOT_MARKER" ] || [ -f "$LEGACY_ROOT_MARKER" ]; then
+    managed_root_uninstall
+elif [ -f "$VENV_MARKER" ]; then
+    managed_venv_uninstall
 else
     manual_uninstall
 fi
