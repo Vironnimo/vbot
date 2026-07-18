@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import core.channels.engine as engine_module
+import core.channels.telegram as telegram_module
 from core.attachments import AttachmentStore
 from core.channels.adapter import (
     ConversationFacts,
@@ -23,6 +24,7 @@ from tests.core.channels.telegram_test_support import (
     make_completed_run,
     make_document_update,
     make_photo_update,
+    make_update,
 )
 
 
@@ -71,6 +73,96 @@ async def test_inbound_photo_stores_attachment_and_triggers_media_block(
     assert isinstance(blocks[0], MediaBlock)
     stored = attachment_store.get(blocks[0].attachment_id)
     assert stored.media_type == "image/png"
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_forward_comment_and_photo_trigger_one_combined_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attachment_store = AttachmentStore(tmp_path)
+    session_id = "ch-tg-assistant-12345"
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="ok")
+    )
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+        attachment_store=attachment_store,
+    )
+    bot.get_file.return_value = SimpleNamespace(
+        download_as_bytearray=AsyncMock(return_value=bytearray(b"\x89PNG\r\n\x1a\nIMG"))
+    )
+
+    await adapter._handle_inbound_message(
+        make_update(
+            chat_id=12345,
+            user_id=50,
+            text="Please edit this image",
+            message_id=700,
+        ),
+        SimpleNamespace(),
+    )
+    trigger_mock.assert_not_awaited()
+
+    await adapter._handle_inbound_media(
+        make_photo_update(
+            chat_id=12345,
+            user_id=50,
+            file_id="photo-1",
+            file_unique_id="uniq-1",
+            message_id=701,
+            forward_origin=SimpleNamespace(type="user"),
+        ),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, 12345)
+
+    trigger_mock.assert_awaited_once()
+    await_args = trigger_mock.await_args
+    assert await_args is not None
+    blocks = await_args.args[1]
+    assert isinstance(blocks, list)
+    assert len(blocks) == 2
+    assert blocks[0] == TextBlock(type="text", text="Please edit this image")
+    assert isinstance(blocks[1], MediaBlock)
+    assert blocks[1].filename == "telegram-photo-uniq-1.jpg"
+    assert adapter._pending_forward_comments == {}
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_possible_forward_comment_flushes_as_plain_text_after_settle_window(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(telegram_module, "_FORWARD_COMMENT_SETTLE_SECONDS", 0)
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(
+            session_id="ch-tg-assistant-12345",
+            output_text="ok",
+        )
+    )
+    adapter, _chat_sessions, _trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+        trigger_run=trigger_mock,
+    )
+
+    await adapter._handle_inbound_message(
+        make_update(chat_id=12345, user_id=50, text="hello", message_id=700),
+        SimpleNamespace(),
+    )
+    await asyncio.gather(*adapter._forward_comment_tasks.values())
+    await drain_chat_queue(adapter, 12345)
+
+    trigger_mock.assert_awaited_once()
+    assert trigger_mock.await_args is not None
+    assert trigger_mock.await_args.args[1] == "hello"
     await adapter.stop()
 
 

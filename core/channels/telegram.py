@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from functools import partial
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, TypeGuard
@@ -44,6 +44,10 @@ TELEGRAM_MESSAGE_LIMIT = 4096
 TELEGRAM_CAPTION_LIMIT = 1024
 # Album items arrive as separate updates; the flush window restarts with each new item.
 _ALBUM_FLUSH_SECONDS = 0.5
+# Telegram sends a comment entered while forwarding as a separate message immediately
+# before the forwarded item. Hold eligible text briefly so the two transport updates can
+# become the single user turn shown by the Telegram client.
+_FORWARD_COMMENT_SETTLE_SECONDS = 0.5
 # Telegram chat actions expire after ~5 s, so the indicator is refreshed on a shorter cycle.
 _TYPING_ACTION = "typing"
 _TYPING_REFRESH_SECONDS = 4.0
@@ -62,6 +66,13 @@ _CHAT_MIGRATED_REPLY = (
 # Retries for a send that Telegram answers with RetryAfter (flood control), honoring the
 # server-provided delay — the project convention of max 3 retries for transient errors.
 _SEND_MAX_RETRIES = 3
+
+
+@dataclass(slots=True, frozen=True)
+class _PendingForwardComment:
+    conversation: ConversationFacts
+    text: str
+    message_id: int
 
 
 class TelegramChannelAdapter(ChannelAdapter):
@@ -118,7 +129,10 @@ class TelegramChannelAdapter(ChannelAdapter):
         self._bot_mention_pattern: re.Pattern[str] | None = None
         self._album_buffers: dict[str, list[Any]] = {}
         self._album_conversations: dict[str, ConversationFacts] = {}
+        self._album_companion_texts: dict[str, str] = {}
         self._album_tasks: dict[str, asyncio.Task[None]] = {}
+        self._pending_forward_comments: dict[str, _PendingForwardComment] = {}
+        self._forward_comment_tasks: dict[str, asyncio.Task[None]] = {}
 
     async def start(self) -> None:
         """Start Telegram long-polling and wait until stop is requested."""
@@ -631,12 +645,26 @@ class TelegramChannelAdapter(ChannelAdapter):
         if conversation.kind == "direct":
             start_payload = _parse_start_command(message_text)
             if start_payload is not None:
+                await self._flush_pending_forward_comment(conversation.chat_id)
                 await self._engine.trigger_internal_reply(
                     conversation, _start_greeting_prompt(start_payload)
                 )
                 return
 
-        await self._engine.handle_inbound_text(conversation, message_text)
+        # Built-in commands must retain their immediate semantics. Normal text is held
+        # for one short settle window because Telegram represents a comment entered in
+        # the forwarding UI as a plain message immediately before the forwarded media.
+        has_message_id = _parse_message_id(conversation.message_id) is not None
+        if (
+            has_message_id
+            and message_text.startswith("/")
+            and self._engine.is_builtin_command(message_text)
+        ):
+            await self._flush_pending_forward_comment(conversation.chat_id)
+            await self._engine.handle_inbound_text(conversation, message_text)
+            return
+
+        await self._buffer_possible_forward_comment(conversation, message_text)
 
     def _strip_bot_command_suffix(self, text: str) -> str:
         # Telegram group clients send commands as `/cmd@botusername`. Strip the suffix
@@ -665,12 +693,24 @@ class TelegramChannelAdapter(ChannelAdapter):
         if message is None:
             return
 
+        companion_text, conversation = await self._take_forward_comment_for_media(
+            conversation, message
+        )
         media_group_id = getattr(message, "media_group_id", None)
         if media_group_id is not None:
-            self._buffer_album_message(str(media_group_id), conversation, message)
+            self._buffer_album_message(
+                str(media_group_id),
+                conversation,
+                message,
+                companion_text=companion_text,
+            )
             return
 
-        await self._engine.handle_inbound_media(conversation, (message,))
+        await self._engine.handle_inbound_media(
+            conversation,
+            (message,),
+            companion_text=companion_text,
+        )
 
     async def _handle_inbound_structured_message(self, update: Any, _context: Any) -> None:
         """Route a location/contact/poll message as rendered text into the engine."""
@@ -690,6 +730,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         if rendered_text is None:
             return
 
+        await self._flush_pending_forward_comment(conversation.chat_id)
         await self._engine.handle_inbound_text(conversation, rendered_text)
 
     async def _handle_chat_migration(self, update: Any, _context: Any) -> None:
@@ -786,6 +827,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         if not self._engine.should_respond(conversation):
             return
 
+        await self._flush_pending_forward_comment(conversation.chat_id)
         # Same reply semantics as engine replies: group replies reference the message
         # they answer, and the reply follows the message into its forum topic.
         await self.send_text(
@@ -907,6 +949,8 @@ class TelegramChannelAdapter(ChannelAdapter):
         album_id: str,
         conversation: ConversationFacts,
         message: Any,
+        *,
+        companion_text: str | None = None,
     ) -> None:
         existing_messages = self._album_buffers.get(album_id)
         if existing_messages is not None:
@@ -923,6 +967,8 @@ class TelegramChannelAdapter(ChannelAdapter):
         else:
             self._album_buffers[album_id] = [message]
             self._album_conversations[album_id] = conversation
+        if companion_text is not None:
+            self._album_companion_texts[album_id] = companion_text
         self._restart_album_flush(album_id)
 
     def _restart_album_flush(self, album_id: str) -> None:
@@ -944,10 +990,15 @@ class TelegramChannelAdapter(ChannelAdapter):
 
         messages = self._album_buffers.pop(album_id, [])
         conversation = self._album_conversations.pop(album_id, None)
+        companion_text = self._album_companion_texts.pop(album_id, None)
         if not messages or conversation is None:
             return
 
-        await self._engine.handle_inbound_media(conversation, tuple(messages))
+        await self._engine.handle_inbound_media(
+            conversation,
+            tuple(messages),
+            companion_text=companion_text,
+        )
 
     def _on_album_task_done(self, album_id: str, task: asyncio.Task[None]) -> None:
         if self._album_tasks.get(album_id) is task:
@@ -966,6 +1017,92 @@ class TelegramChannelAdapter(ChannelAdapter):
             "Telegram album flush failed (channel=%s album=%s): %s",
             self._config.id,
             album_id,
+            error,
+            exc_info=(type(error), error, error.__traceback__),
+        )
+
+    # -- Forward-comment buffering -------------------------------------------------------
+
+    async def _buffer_possible_forward_comment(
+        self,
+        conversation: ConversationFacts,
+        message_text: str,
+    ) -> None:
+        message_id = _parse_message_id(conversation.message_id)
+        if message_id is None:
+            await self._engine.handle_inbound_text(conversation, message_text)
+            return
+
+        await self._flush_pending_forward_comment(conversation.chat_id)
+        self._pending_forward_comments[conversation.chat_id] = _PendingForwardComment(
+            conversation=conversation,
+            text=message_text,
+            message_id=message_id,
+        )
+        task = asyncio.create_task(
+            self._flush_forward_comment_after_delay(conversation.chat_id),
+            name=f"telegram:{self._config.id}:forward-comment:{conversation.chat_id}",
+        )
+        self._forward_comment_tasks[conversation.chat_id] = task
+        task.add_done_callback(partial(self._on_forward_comment_task_done, conversation.chat_id))
+
+    async def _take_forward_comment_for_media(
+        self,
+        conversation: ConversationFacts,
+        message: Any,
+    ) -> tuple[str | None, ConversationFacts]:
+        pending = self._pending_forward_comments.get(conversation.chat_id)
+        if pending is None:
+            return None, conversation
+
+        message_id = _parse_message_id(conversation.message_id)
+        is_matching_forward = (
+            getattr(message, "forward_origin", None) is not None
+            and message_id == pending.message_id + 1
+            and conversation.user_id == pending.conversation.user_id
+            and conversation.thread_id == pending.conversation.thread_id
+        )
+        if not is_matching_forward:
+            await self._flush_pending_forward_comment(conversation.chat_id)
+            return None, conversation
+
+        self._pending_forward_comments.pop(conversation.chat_id, None)
+        self._cancel_forward_comment_task(conversation.chat_id)
+        merged_conversation = replace(
+            conversation,
+            mentioned_bot=(conversation.mentioned_bot or pending.conversation.mentioned_bot),
+            is_reply_to_bot=(conversation.is_reply_to_bot or pending.conversation.is_reply_to_bot),
+        )
+        return pending.text, merged_conversation
+
+    async def _flush_forward_comment_after_delay(self, chat_id: str) -> None:
+        await asyncio.sleep(_FORWARD_COMMENT_SETTLE_SECONDS)
+        await self._flush_pending_forward_comment(chat_id)
+
+    async def _flush_pending_forward_comment(self, chat_id: str) -> None:
+        pending = self._pending_forward_comments.pop(chat_id, None)
+        self._cancel_forward_comment_task(chat_id)
+        if pending is not None:
+            await self._engine.handle_inbound_text(pending.conversation, pending.text)
+
+    def _cancel_forward_comment_task(self, chat_id: str) -> None:
+        task = self._forward_comment_tasks.pop(chat_id, None)
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+
+    def _on_forward_comment_task_done(self, chat_id: str, task: asyncio.Task[None]) -> None:
+        if self._forward_comment_tasks.get(chat_id) is task:
+            self._forward_comment_tasks.pop(chat_id, None)
+
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is None:
+            return
+        _LOGGER.warning(
+            "Telegram forward-comment flush failed (channel=%s target=%s): %s",
+            self._config.id,
+            chat_id,
             error,
             exc_info=(type(error), error, error.__traceback__),
         )
@@ -1134,16 +1271,21 @@ class TelegramChannelAdapter(ChannelAdapter):
 
     async def _stop_workers(self) -> None:
         album_tasks = list(self._album_tasks.values())
+        forward_comment_tasks = list(self._forward_comment_tasks.values())
         self._album_tasks.clear()
         self._album_buffers.clear()
         self._album_conversations.clear()
-        for task in album_tasks:
+        self._album_companion_texts.clear()
+        self._forward_comment_tasks.clear()
+        self._pending_forward_comments.clear()
+        for task in (*album_tasks, *forward_comment_tasks):
             task.cancel()
 
         await self._engine.stop()
 
-        if album_tasks:
-            await asyncio.gather(*album_tasks, return_exceptions=True)
+        background_tasks = [*album_tasks, *forward_comment_tasks]
+        if background_tasks:
+            await asyncio.gather(*background_tasks, return_exceptions=True)
 
     async def _run_lifecycle_step(self, operation: Any, label: str) -> None:
         try:
@@ -1549,6 +1691,16 @@ def _telegram_error_boundary(channel_id: str) -> Iterator[None]:
 
 def _is_integer(value: object) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _parse_message_id(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    return parsed if parsed >= 0 else None
 
 
 __all__ = [
