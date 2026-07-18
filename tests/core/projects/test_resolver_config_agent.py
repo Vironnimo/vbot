@@ -42,7 +42,7 @@ def test_config_agent_resolves_to_runnable_runtime_agent(
     assert runtime_agent.allowed_tools == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
     # No project skills and nothing opted in → the agent has zero skills.
     assert runtime_agent.allowed_skills == []
-    assert runtime_agent.allowed_agents == ["builder"]
+    assert runtime_agent.tools == {"subagent": {"allowed_agents": ["builder"]}}
     assert runtime_agent.fallback_model == ""
     assert runtime_agent.thinking_effort is None
 
@@ -139,7 +139,7 @@ def test_effective_agent_targets_are_materialized_from_current_project_team(
 
     runtime_agent = resolver.resolve_agent(project.project_id, "orchestrator")
 
-    assert runtime_agent.allowed_agents == ["review-one"]
+    assert runtime_agent.tools == {"subagent": {"allowed_agents": ["review-one"]}}
 
 
 def test_effective_skills_default_to_project_skills(

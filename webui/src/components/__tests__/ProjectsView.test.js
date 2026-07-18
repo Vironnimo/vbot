@@ -1211,13 +1211,15 @@ describe('ProjectsView', () => {
             agent_id: 'restricted',
             display_name: 'Restricted',
             denied_tools: ['bash', 'process'],
-            allowed_agents: ['open'],
+            tools: { subagent: { allowed_agents: ['open'] } },
           }),
           member({
             agent_id: 'open',
             display_name: 'Open',
             denied_tools: [],
-            allowed_agents: ['restricted', 'open'],
+            tools: {
+              subagent: { allowed_agents: ['restricted', 'open'] },
+            },
           }),
         ],
         report: { clean: true, findings: [] },
@@ -1458,7 +1460,7 @@ function member(overrides = {}) {
     source_format: 'opencode',
     source_path: '.opencode/agents/agent.md',
     denied_tools: [],
-    allowed_agents: [],
+    tools: {},
     overrides: null,
     effective: {
       model: { value: null, source: null },

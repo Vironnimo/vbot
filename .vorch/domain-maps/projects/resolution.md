@@ -50,7 +50,7 @@ Effective Skills are:
 
 The disabled-name subtraction applies to the combined set, so a disabled Project Skill cannot be resurrected by a bundled or global Skill with the same name. The `"*"` sentinel is configuration syntax, never an effective Skill name.
 
-Effective Agent targets are the current Project Team filtered by the repository Agent's ordered `AgentTargetRule` list, with the last matching rule winning. No target rules means the whole Team; a result with no members means neither Sub-Agent Tool is available. A Project Agent cannot address an Identity Agent or another Project even if its source policy is a wildcard, because Project scope is the hard outer boundary.
+Effective Agent targets are the current Project Team filtered by the repository Agent's ordered `AgentTargetRule` list, with the last matching rule winning. No target rules means the whole Team; a result with no members means neither Sub-Agent Tool is available. When a Sub-Agent Tool is available, the resolver projects these targets into the synthesized config Agent's root `tools.subagent.allowed_agents` block; disabling the Tool omits that runtime block but does not alter the repository target rules that will be applied again when the Tool returns. A Project Agent cannot address an Identity Agent or another Project even if its source policy is a wildcard, because Project scope is the hard outer boundary.
 
 ## Working-Project Helpers
 

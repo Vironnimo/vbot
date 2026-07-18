@@ -57,6 +57,12 @@
 
   function agentTargetPolicyText(member) {
     const summary = projectAgentTargetSummary(member, projectsState.activeTeam);
+    if (summary.mode === 'unavailable') {
+      return t(
+        'projects.team.agentTargetsUnavailable',
+        'Sub-Agent tools are not available to this Agent.',
+      );
+    }
     if (summary.mode === 'none') {
       return t(
         'projects.team.agentTargetsNone',

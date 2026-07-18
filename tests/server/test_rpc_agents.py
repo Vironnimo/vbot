@@ -67,7 +67,7 @@ async def test_agent_crud_delegates_expose_current_session_id(tmp_path: Path) ->
     assert create_response["result"]["id"] == "writer"
     assert create_response["result"]["custom_system_prompt_enabled"] is False
     assert create_response["result"]["memory_prompt_mode"] == "agent_user"
-    assert create_response["result"]["allowed_agents"] == ["*"]
+    assert create_response["result"]["tools"] == {}
     assert update_response["result"]["name"] == "Updated Writer"
     assert delete_response["result"]["agent_id"] == "writer"
 
@@ -606,10 +606,14 @@ async def test_agent_create_returns_resolved_defaults_and_signals_agents_reload(
             "agent.create",
             {"id": "writer", "name": "Writer", "allowed_skills": ["debugging", None]},
         ),
-        ("agent.create", {"id": "writer", "name": "Writer", "allowed_agents": "worker"}),
+        ("agent.create", {"id": "writer", "name": "Writer", "tools": "worker"}),
         (
             "agent.create",
-            {"id": "writer", "name": "Writer", "allowed_agents": ["worker", None]},
+            {
+                "id": "writer",
+                "name": "Writer",
+                "tools": {"subagent": {"allowed_agents": ["worker", None]}},
+            },
         ),
         ("agent.create", {"id": "writer", "name": "Writer", "temperature": "0.7"}),
         ("agent.create", {"id": "writer", "name": "Writer", "temperature": -0.1}),
@@ -619,8 +623,14 @@ async def test_agent_create_returns_resolved_defaults_and_signals_agents_reload(
         ("agent.update", {"id": "coder", "allowed_tools": ["read_file", 1]}),
         ("agent.update", {"id": "coder", "allowed_skills": "debugging"}),
         ("agent.update", {"id": "coder", "allowed_skills": ["debugging", None]}),
-        ("agent.update", {"id": "coder", "allowed_agents": "worker"}),
-        ("agent.update", {"id": "coder", "allowed_agents": ["worker", None]}),
+        ("agent.update", {"id": "coder", "tools": "worker"}),
+        (
+            "agent.update",
+            {
+                "id": "coder",
+                "tools": {"subagent": {"allowed_agents": ["worker", None]}},
+            },
+        ),
         ("agent.update", {"id": "coder", "temperature": "0.7"}),
         ("agent.update", {"id": "coder", "temperature": -0.1}),
         ("agent.update", {"id": "coder", "temperature": 2.1}),

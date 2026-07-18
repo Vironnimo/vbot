@@ -53,7 +53,7 @@ def test_agent_dataclass_is_frozen() -> None:
         thinking_effort="",
         allowed_tools=["*"],
         allowed_skills=["*"],
-        allowed_agents=["*"],
+        tools={},
         memory_prompt_mode="agent_user",
         custom_system_prompt_enabled=False,
         current_session_id="session-one",
@@ -82,7 +82,7 @@ def test_create_writes_agent_json_sessions_and_workspace(store: AgentStore) -> N
     assert data["memory_prompt_mode"] == "agent_user"
     assert data["allowed_tools"] == ["*"]
     assert data["allowed_skills"] == ["*"]
-    assert data["allowed_agents"] == ["*"]
+    assert "tools" not in data
     assert data["custom_system_prompt_enabled"] is False
     assert isinstance(data["current_session_id"], str)
     assert data["current_session_id"]
@@ -123,20 +123,36 @@ def test_create_with_custom_values_persists_schema(store: AgentStore, tmp_path: 
         memory_prompt_mode="agent",
         allowed_tools=[],
         allowed_skills=["memory"],
-        allowed_agents=["researcher", "builder@vbot"],
+        tools={"subagent": {"allowed_agents": ["researcher", "builder@vbot"]}},
         custom_system_prompt_enabled=True,
     )
 
     assert agent.workspace == str(custom_workspace.resolve())
     assert agent.allowed_tools == []
     assert agent.allowed_skills == ["memory"]
-    assert agent.allowed_agents == ["researcher", "builder@vbot"]
+    assert agent.tools == {"subagent": {"allowed_agents": ["researcher", "builder@vbot"]}}
     assert agent.memory_prompt_mode == "agent"
     assert agent.custom_system_prompt_enabled is True
     assert (custom_workspace / "SOUL.md").exists()
     agent_path = store.data_dir / "agents" / "researcher_1" / "agent.json"
     data = json.loads(agent_path.read_text(encoding="utf-8"))
     assert data["workspace"] == str(custom_workspace.resolve())
+    assert data["tools"] == {"subagent": {"allowed_agents": ["researcher", "builder@vbot"]}}
+
+
+def test_disabling_subagent_tools_preserves_their_settings(store: AgentStore) -> None:
+    store.create(
+        "orchestrator",
+        "Orchestrator",
+        tools={"subagent": {"allowed_agents": ["worker"]}},
+    )
+
+    updated = store.update("orchestrator", allowed_tools=["read"])
+
+    assert updated.tools == {"subagent": {"allowed_agents": ["worker"]}}
+    agent_path = store.data_dir / "agents" / "orchestrator" / "agent.json"
+    data = json.loads(agent_path.read_text(encoding="utf-8"))
+    assert data["tools"] == {"subagent": {"allowed_agents": ["worker"]}}
 
 
 def test_create_persists_workspace_inside_data_dir_relative(store: AgentStore) -> None:
@@ -203,8 +219,12 @@ def test_create_removes_runtime_derived_memory_tool_from_allowed_tools(
         ("allowed_tools", ["read_file", 1], "allowed_tools must be a list of strings"),
         ("allowed_skills", "debugging", "allowed_skills must be a list of strings"),
         ("allowed_skills", ["debugging", None], "allowed_skills must be a list of strings"),
-        ("allowed_agents", "worker", "allowed_agents must be a list of strings"),
-        ("allowed_agents", ["worker", 1], "allowed_agents must be a list of strings"),
+        ("tools", [], "tools must be an object"),
+        (
+            "tools",
+            {"subagent": {"allowed_agents": ["worker", 1]}},
+            "tools.subagent.allowed_agents must be a list of strings",
+        ),
         (
             "custom_system_prompt_enabled",
             "yes",
@@ -297,7 +317,7 @@ def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> No
         name="Updated Coder",
         model="openai/gpt-5.2",
         allowed_tools=["read_file"],
-        allowed_agents=[],
+        tools={"subagent": {"allowed_agents": []}},
         memory_prompt_mode="off",
         custom_system_prompt_enabled=True,
     )
@@ -308,7 +328,7 @@ def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> No
     assert updated.name == "Updated Coder"
     assert updated.model == "openai/gpt-5.2"
     assert updated.allowed_tools == ["read_file"]
-    assert updated.allowed_agents == []
+    assert updated.tools == {"subagent": {"allowed_agents": []}}
     assert updated.memory_prompt_mode == "off"
     assert updated.custom_system_prompt_enabled is True
     assert updated.current_session_id == current_session_id
@@ -433,8 +453,12 @@ def test_workspace_copy_rolls_back_destination_when_agent_write_fails(
         ("allowed_tools", ["read_file", False], "allowed_tools must be a list of strings"),
         ("allowed_skills", "debugging", "allowed_skills must be a list of strings"),
         ("allowed_skills", ["debugging", {}], "allowed_skills must be a list of strings"),
-        ("allowed_agents", "worker", "allowed_agents must be a list of strings"),
-        ("allowed_agents", ["worker", False], "allowed_agents must be a list of strings"),
+        ("tools", [], "tools must be an object"),
+        (
+            "tools",
+            {"subagent": {"allowed_agents": ["worker", False]}},
+            "tools.subagent.allowed_agents must be a list of strings",
+        ),
         (
             "custom_system_prompt_enabled",
             1,

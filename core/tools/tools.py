@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import weakref
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
@@ -145,7 +145,7 @@ class ToolContext:
     note_hook: ToolNoteHook | None = None
     skill_activation_hook: ToolSkillActivationHook | None = None
     allowed_skills: Sequence[str] | None = None
-    allowed_agents: Sequence[str] | None = None
+    tool_settings: Mapping[str, Any] | None = None
     # Session-derived grants for tools whose authority belongs to persisted
     # Session state rather than Agent configuration. The registry checks this
     # axis before the ordinary allowlist.
@@ -258,7 +258,7 @@ class ToolExecutionConfig:
     note_hook: ToolNoteHook | None = None
     skill_activation_hook: ToolSkillActivationHook | None = None
     allowed_skills: Sequence[str] | None = None
-    allowed_agents: Sequence[str] | None = None
+    tool_settings: Mapping[str, Any] | None = None
     session_tool_grants: Sequence[str] = field(default_factory=tuple)
     nesting_depth: int = 0
 
@@ -802,7 +802,7 @@ class ToolExecutor:
                 note_hook=config.note_hook,
                 skill_activation_hook=config.skill_activation_hook,
                 allowed_skills=config.allowed_skills,
-                allowed_agents=config.allowed_agents,
+                tool_settings=config.tool_settings,
                 session_tool_grants=config.session_tool_grants,
                 nesting_depth=config.nesting_depth,
             )

@@ -823,7 +823,7 @@ def _team_member_response(resolver: Any, member: ScannedAgent, project: Project)
         # The editor pairs this with the project Tool Whitelist (the ceiling) to show
         # that an individual agent may use less than the project maximum.
         "denied_tools": sorted(member.denied_tools),
-        "allowed_agents": resolver.effective_allowed_agents_for_member(project, member),
+        "tools": resolver.effective_tools_for_member(project, member),
         # The agent's override object (vBot-owned, the top tier of each chain), or
         # null when this agent has none — the Projects tab renders/clears it per row.
         "overrides": project.overrides.get(member.agent_id) or None,

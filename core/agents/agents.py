@@ -7,8 +7,9 @@ import json
 import os
 import shutil
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import suppress
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -67,7 +68,6 @@ WORKSPACE_IDENTITY_FILES = ("SOUL.md", "USER.md", "MEMORY.md")
 
 _AGENT_CONFIG_FIELDS = frozenset(
     {
-        "allowed_agents",
         "allowed_skills",
         "allowed_tools",
         "compaction_policy",
@@ -80,6 +80,7 @@ _AGENT_CONFIG_FIELDS = frozenset(
         "model",
         "name",
         "root_project_id",
+        "tools",
         "temperature",
         "thinking_effort",
         "updated_at",
@@ -88,7 +89,6 @@ _AGENT_CONFIG_FIELDS = frozenset(
 )
 _REQUIRED_AGENT_CONFIG_FIELDS = frozenset(
     {
-        "allowed_agents",
         "allowed_skills",
         "allowed_tools",
         "created_at",
@@ -101,6 +101,7 @@ _REQUIRED_AGENT_CONFIG_FIELDS = frozenset(
         "updated_at",
     }
 )
+_SUBAGENT_TOOL_SETTING_FIELDS = frozenset({"allowed_agents"})
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _DEFAULT_TEMPLATE_DIR = _PROJECT_ROOT / "resources" / "workspace-templates"
@@ -177,8 +178,8 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
         validate_string_list(diagnostics, "$.allowed_tools", data["allowed_tools"])
     if "allowed_skills" in data:
         validate_string_list(diagnostics, "$.allowed_skills", data["allowed_skills"])
-    if "allowed_agents" in data:
-        validate_string_list(diagnostics, "$.allowed_agents", data["allowed_agents"])
+    if "tools" in data:
+        _validate_agent_tools_diagnostics(diagnostics, data["tools"])
     if "custom_system_prompt_enabled" in data and not isinstance(
         data["custom_system_prompt_enabled"], bool
     ):
@@ -193,6 +194,32 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
             diagnostics, "$.current_session_id", data.get("current_session_id"), required=False
         )
     return diagnostics
+
+
+def _validate_agent_tools_diagnostics(diagnostics: list[JsonDiagnostic], tools: Any) -> None:
+    if not isinstance(tools, dict):
+        add_error(diagnostics, "$.tools", "must be an object")
+        return
+    for tool_name, tool_settings in tools.items():
+        path = f"$.tools.{tool_name}"
+        if not isinstance(tool_settings, dict):
+            add_error(diagnostics, path, "must be an object")
+    subagent = tools.get("subagent")
+    if not isinstance(subagent, dict):
+        return
+    warn_unknown_keys(
+        diagnostics,
+        "$.tools.subagent",
+        subagent,
+        _SUBAGENT_TOOL_SETTING_FIELDS,
+        "subagent setting",
+    )
+    if "allowed_agents" in subagent:
+        validate_string_list(
+            diagnostics,
+            "$.tools.subagent.allowed_agents",
+            subagent["allowed_agents"],
+        )
 
 
 def _validate_agent_config_id(diagnostics: list[JsonDiagnostic], path: str, value: Any) -> None:
@@ -232,9 +259,9 @@ class Agent:
     thinking_effort: str | None
     allowed_tools: list[str]
     allowed_skills: list[str]
-    allowed_agents: list[str]
     created_at: str
     updated_at: str
+    tools: dict[str, Any] = field(default_factory=dict)
     root_project_id: str | None = None
     current_session_id: str = ""
     custom_system_prompt_enabled: bool = DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED
@@ -287,7 +314,7 @@ class AgentStore:
         memory_prompt_mode: MemoryPromptMode = DEFAULT_MEMORY_PROMPT_MODE,
         allowed_tools: list[str] | None = None,
         allowed_skills: list[str] | None = None,
-        allowed_agents: list[str] | None = None,
+        tools: Mapping[str, Any] | None = None,
         custom_system_prompt_enabled: bool = DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
         compaction_policy: dict[str, Any] | None = None,
     ) -> Agent:
@@ -307,7 +334,7 @@ class AgentStore:
         validated_memory_prompt_mode = _validate_memory_prompt_mode(memory_prompt_mode)
         validated_allowed_tools = _validate_allowed_items("allowed_tools", allowed_tools)
         validated_allowed_skills = _validate_allowed_items("allowed_skills", allowed_skills)
-        validated_allowed_agents = _validate_allowed_items("allowed_agents", allowed_agents)
+        validated_tools = _normalize_agent_tools(tools)
         validated_custom_system_prompt_enabled = _validate_bool_field(
             "custom_system_prompt_enabled", custom_system_prompt_enabled
         )
@@ -336,7 +363,7 @@ class AgentStore:
             memory_prompt_mode=validated_memory_prompt_mode,
             allowed_tools=validated_allowed_tools,
             allowed_skills=validated_allowed_skills,
-            allowed_agents=validated_allowed_agents,
+            tools=validated_tools,
             custom_system_prompt_enabled=validated_custom_system_prompt_enabled,
             compaction_policy=validated_compaction_policy,
             current_session_id=session.id,
@@ -484,10 +511,8 @@ class AgentStore:
             changes["allowed_skills"] = _validate_allowed_items(
                 "allowed_skills", changes["allowed_skills"]
             )
-        if "allowed_agents" in changes:
-            changes["allowed_agents"] = _validate_allowed_items(
-                "allowed_agents", changes["allowed_agents"]
-            )
+        if "tools" in changes:
+            changes["tools"] = _normalize_agent_tools(changes["tools"])
         if "custom_system_prompt_enabled" in changes:
             changes["custom_system_prompt_enabled"] = _validate_bool_field(
                 "custom_system_prompt_enabled", changes["custom_system_prompt_enabled"]
@@ -677,6 +702,8 @@ class AgentStore:
     def _write_agent(self, agent: Agent) -> None:
         agent_path = self._agent_path(agent.id)
         persisted = asdict(agent)
+        if not persisted["tools"]:
+            persisted.pop("tools")
         persisted["workspace"] = _workspace_for_storage(
             agent.workspace,
             data_dir=self._data_dir,
@@ -822,6 +849,34 @@ def _validate_allowed_items(field: str, items: list[str] | None) -> list[str]:
     return list(items)
 
 
+def _normalize_agent_tools(tools: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Validate and copy the optional Tool-settings blocks from agent.json."""
+    if tools is None:
+        return {}
+    if not isinstance(tools, Mapping):
+        raise AgentError("tools must be an object")
+    normalized_tools: dict[str, Any] = {}
+    for tool_name, tool_settings in tools.items():
+        if not isinstance(tool_name, str) or not tool_name:
+            raise AgentError("tools keys must be non-empty strings")
+        if not isinstance(tool_settings, Mapping):
+            raise AgentError(f"tools.{tool_name} must be an object")
+        normalized_tools[tool_name] = deepcopy(dict(tool_settings))
+    subagent = normalized_tools.get("subagent")
+    if isinstance(subagent, dict):
+        unsupported_subagent = sorted(set(subagent) - _SUBAGENT_TOOL_SETTING_FIELDS)
+        if unsupported_subagent:
+            raise AgentError(
+                "Unsupported tools.subagent fields: " + ", ".join(unsupported_subagent)
+            )
+        if "allowed_agents" in subagent:
+            subagent["allowed_agents"] = _validate_allowed_items(
+                "tools.subagent.allowed_agents",
+                subagent["allowed_agents"],
+            )
+    return normalized_tools
+
+
 def _validate_bool_field(field: str, value: Any) -> bool:
     if not isinstance(value, bool):
         raise AgentError(f"{field} must be a boolean")
@@ -897,7 +952,7 @@ def _agent_from_dict(
         ),
         allowed_tools=sanitize_configured_allowed_tools(data["allowed_tools"]),
         allowed_skills=list(data["allowed_skills"]),
-        allowed_agents=list(data["allowed_agents"]),
+        tools=deepcopy(data.get("tools", {})),
         custom_system_prompt_enabled=data.get(
             "custom_system_prompt_enabled", DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED
         ),

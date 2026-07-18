@@ -40,6 +40,7 @@ from core.tools.arguments import (
     optional_string,
     required_string,
 )
+from core.tools.availability import subagent_allowed_agents
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -1047,8 +1048,8 @@ def _target_is_allowed(
     """Check the parent snapshot and enforce the Project boundary independently."""
     if context.project_id is not None and target_project_id != context.project_id:
         return False
-    allowed = context.allowed_agents
-    if allowed is None or "*" in allowed:
+    allowed = subagent_allowed_agents(context.tool_settings)
+    if "*" in allowed:
         return True
     address = (
         target_agent_id

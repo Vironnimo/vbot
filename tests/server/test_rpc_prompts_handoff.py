@@ -132,7 +132,7 @@ def _register_project_agent(state: SimpleNamespace, repo: Path) -> None:
             temperature=None,
             allowed_tools=["*"],
             allowed_skills=["*"],
-            allowed_agents=["*"],
+            tools={},
             body="Imported builder body",
             source_path=repo / ".opencode" / "agents" / "builder.md",
             source_format="opencode",

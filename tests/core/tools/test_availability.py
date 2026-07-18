@@ -5,6 +5,7 @@ from __future__ import annotations
 from core.tools.availability import (
     apply_agent_target_tool_visibility,
     effective_agent_allowed_tools,
+    subagent_allowed_agents,
 )
 
 
@@ -76,7 +77,17 @@ def test_empty_agent_targets_remove_both_tools_from_dispatch_allowlist() -> None
         "agent_user",
         registered_tool_names=["read", "subagent", "subagent_result"],
         workspace="workspace",
-        allowed_agents=[],
+        tool_settings={"subagent": {"allowed_agents": []}},
     )
 
     assert allowed == ["read"]
+
+
+def test_missing_subagent_tool_settings_defaults_to_wildcard() -> None:
+    assert subagent_allowed_agents({}) == ["*"]
+
+
+def test_nested_subagent_tool_settings_expose_explicit_targets() -> None:
+    assert subagent_allowed_agents(
+        {"subagent": {"allowed_agents": ["worker", "builder@vbot"]}}
+    ) == ["worker", "builder@vbot"]

@@ -27,6 +27,8 @@
     effortOptionsForReasoning,
     normalizeAgentForm,
     reasoningForModelValue,
+    subagentAllowedAgents,
+    withSubagentAllowedAgents,
   } from '$lib/agentForm.js';
   import { activeLocaleTag, t } from '$lib/i18n.js';
   import {
@@ -156,7 +158,13 @@
   // that flipping any single toggle collapses the wildcard into a fixed list.
   let toolsAreWildcard = $derived(isWildcardAccess(formValues.allowed_tools));
   let skillsAreWildcard = $derived(isWildcardAccess(formValues.allowed_skills));
-  let agentsAreWildcard = $derived(isWildcardAccess(formValues.allowed_agents));
+  let configuredAgentTargets = $derived(
+    subagentAllowedAgents(formValues.tools),
+  );
+  let agentsAreWildcard = $derived(isWildcardAccess(configuredAgentTargets));
+  let subagentToolEnabled = $derived(
+    accessAllowsSubagent(formValues.allowed_tools),
+  );
   let showAllModels = $state(false);
   let showAllFallbackModels = $state(false);
   let allModelOptions = $derived(
@@ -450,9 +458,7 @@
       allowed_tools: Array.isArray(values.allowed_tools)
         ? [...values.allowed_tools]
         : [],
-      allowed_agents: Array.isArray(values.allowed_agents)
-        ? [...values.allowed_agents]
-        : [],
+      tools: cloneTools(values.tools),
     };
   }
 
@@ -533,7 +539,7 @@
 
   function setAccessItems(fieldName, isAllowed) {
     if (fieldName === 'allowed_tools') {
-      formValues.allowed_tools = isAllowed ? [WILDCARD_ACCESS] : [];
+      setAllowedTools(isAllowed ? [WILDCARD_ACCESS] : []);
       return;
     }
 
@@ -543,7 +549,10 @@
     }
 
     if (fieldName === 'allowed_agents') {
-      formValues.allowed_agents = isAllowed ? [WILDCARD_ACCESS] : [];
+      formValues.tools = withSubagentAllowedAgents(
+        formValues.tools,
+        isAllowed ? [WILDCARD_ACCESS] : [],
+      );
     }
   }
 
@@ -551,7 +560,7 @@
     const allToolNames = configurableTools().map((tool) => tool.name);
 
     if (allToolNames.length === 0) {
-      formValues.allowed_tools = [];
+      setAllowedTools([]);
       return;
     }
 
@@ -561,13 +570,11 @@
 
     if (currentItems.includes(WILDCARD_ACCESS)) {
       if (isAllowed) {
-        formValues.allowed_tools = [WILDCARD_ACCESS];
+        setAllowedTools([WILDCARD_ACCESS]);
         return;
       }
 
-      formValues.allowed_tools = allToolNames.filter(
-        (name) => name !== itemName,
-      );
+      setAllowedTools(allToolNames.filter((name) => name !== itemName));
       return;
     }
 
@@ -584,11 +591,29 @@
       nextItems.splice(existingIndex, 1);
     }
 
-    formValues.allowed_tools = allToolNames.every((name) =>
-      nextItems.includes(name),
-    )
-      ? [WILDCARD_ACCESS]
-      : nextItems;
+    setAllowedTools(
+      allToolNames.every((name) => nextItems.includes(name))
+        ? [WILDCARD_ACCESS]
+        : nextItems,
+    );
+  }
+
+  function setAllowedTools(items) {
+    formValues.allowed_tools = items;
+  }
+
+  function accessAllowsSubagent(items) {
+    return (
+      isWildcardAccess(items) ||
+      (Array.isArray(items) &&
+        items.some((item) => ['subagent', 'subagent_result'].includes(item)))
+    );
+  }
+
+  function cloneTools(tools) {
+    return tools && typeof tools === 'object'
+      ? JSON.parse(JSON.stringify(tools))
+      : {};
   }
 
   function isWildcardAccess(items) {
@@ -627,9 +652,7 @@
   }
 
   function agentTargetAccessItems() {
-    const currentItems = Array.isArray(formValues.allowed_agents)
-      ? formValues.allowed_agents
-      : [];
+    const currentItems = configuredAgentTargets;
     const hasWildcard = currentItems.includes(WILDCARD_ACCESS);
     const catalog = Array.isArray(availableAgentTargets)
       ? availableAgentTargets
@@ -675,17 +698,18 @@
       (target) => target.name,
     );
     if (allTargetNames.length === 0) {
-      formValues.allowed_agents = [];
+      formValues.tools = withSubagentAllowedAgents(formValues.tools, []);
       return;
     }
 
-    const currentItems = Array.isArray(formValues.allowed_agents)
-      ? [...formValues.allowed_agents]
-      : [];
+    const currentItems = [...configuredAgentTargets];
     if (currentItems.includes(WILDCARD_ACCESS)) {
-      formValues.allowed_agents = isAllowed
-        ? [WILDCARD_ACCESS]
-        : allTargetNames.filter((name) => name !== itemName);
+      formValues.tools = withSubagentAllowedAgents(
+        formValues.tools,
+        isAllowed
+          ? [WILDCARD_ACCESS]
+          : allTargetNames.filter((name) => name !== itemName),
+      );
       return;
     }
 
@@ -698,11 +722,12 @@
     } else if (!isAllowed && existingIndex !== -1) {
       nextItems.splice(existingIndex, 1);
     }
-    formValues.allowed_agents = allTargetNames.every((name) =>
-      nextItems.includes(name),
-    )
-      ? [WILDCARD_ACCESS]
-      : nextItems;
+    formValues.tools = withSubagentAllowedAgents(
+      formValues.tools,
+      allTargetNames.every((name) => nextItems.includes(name))
+        ? [WILDCARD_ACCESS]
+        : nextItems,
+    );
   }
 
   function updateSkillAccessItem(itemName, isAllowed) {
@@ -1386,46 +1411,6 @@
       <div class="tl-section">
         <div class="tl-section-header">
           <span class="tl-section-label">
-            {t('agents.form.allowedAgents', 'Allowed agents')}
-            <InfoHint
-              text={t(
-                'agents.form.allowedAgentsHelp',
-                'Controls which Agents this Identity Agent may call through the Sub-Agent tools. Project Agents use agent@project addresses. Rooting does not narrow this permission.',
-              )}
-            />
-          </span>
-        </div>
-        <ToggleChipList
-          items={agentTargetChipItems}
-          emptyLabel={t(
-            'agents.access.noAgentTargets',
-            'No Agent targets are available.',
-          )}
-          note={agentsAreWildcard && visibleAgentTargetItems.length > 0
-            ? t(
-                'agents.form.agentWildcardNote',
-                'All Identity Agents and all Agents on every registered Project are allowed, including ones added later. Rooting does not narrow this.',
-              )
-            : t(
-                'agents.form.agentAddressNote',
-                'Project Agents use agent@project addresses. Rooting does not change this list.',
-              )}
-          ariaToggleLabel={(name) =>
-            t('agents.access.toggleAgent', 'Toggle agent {name}', { name })}
-          onToggle={(name, next) =>
-            updateAccessItem('allowed_agents', name, next)}
-          onSetAll={(next) => setAccessItems('allowed_agents', next)}
-        />
-        {#if agentTargetCatalogError}
-          <p class="agents-view__placeholder-row" role="status">
-            {agentTargetCatalogError}
-          </p>
-        {/if}
-      </div>
-
-      <div class="tl-section">
-        <div class="tl-section-header">
-          <span class="tl-section-label">
             {t('agents.form.allowedTools', 'Allowed tools')}
           </span>
         </div>
@@ -1445,6 +1430,48 @@
           onOpenExtensions={navigateToExtensions}
         />
       </div>
+
+      {#if subagentToolEnabled}
+        <div class="tl-section">
+          <div class="tl-section-header">
+            <span class="tl-section-label">
+              {t('agents.form.subagentSettings', 'Sub-Agent settings')}
+              <InfoHint
+                text={t(
+                  'agents.form.allowedAgentsHelp',
+                  'Tool-specific settings for subagent and subagent_result. Project Agents use agent@project addresses. Rooting does not narrow this permission.',
+                )}
+              />
+            </span>
+          </div>
+          <ToggleChipList
+            items={agentTargetChipItems}
+            emptyLabel={t(
+              'agents.access.noAgentTargets',
+              'No Agent targets are available.',
+            )}
+            note={agentsAreWildcard && visibleAgentTargetItems.length > 0
+              ? t(
+                  'agents.form.agentWildcardNote',
+                  'Allowed agents: all Identity Agents and all Agents on every registered Project, including ones added later. Rooting does not narrow this.',
+                )
+              : t(
+                  'agents.form.agentAddressNote',
+                  'Allowed agents use bare Identity ids or agent@project addresses. Rooting does not change this list.',
+                )}
+            ariaToggleLabel={(name) =>
+              t('agents.access.toggleAgent', 'Toggle agent {name}', { name })}
+            onToggle={(name, next) =>
+              updateAccessItem('allowed_agents', name, next)}
+            onSetAll={(next) => setAccessItems('allowed_agents', next)}
+          />
+          {#if agentTargetCatalogError}
+            <p class="agents-view__placeholder-row" role="status">
+              {agentTargetCatalogError}
+            </p>
+          {/if}
+        </div>
+      {/if}
 
       <div class="tl-section">
         <div class="tl-section-header">

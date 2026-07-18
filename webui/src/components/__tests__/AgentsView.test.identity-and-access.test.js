@@ -337,7 +337,60 @@ describe('AgentsView', () => {
     expect(getAgentUpdateCalls()).toHaveLength(1);
     expect(getAgentUpdateCalls()[0][1]).toEqual({
       id: 'alpha',
-      allowed_agents: ['alpha', 'builder@vbot'],
+      tools: {
+        subagent: { allowed_agents: ['alpha', 'builder@vbot'] },
+      },
+    });
+  });
+
+  it('hides Sub-Agent settings when neither Sub-Agent tool is allowed', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [
+          {
+            ...baseAgent(),
+            allowed_tools: ['bash'],
+            tools: { subagent: { allowed_agents: ['worker'] } },
+          },
+        ],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    await waitForText('Allowed tools');
+
+    expect(document.body.textContent).not.toContain('Sub-Agent settings');
+  });
+
+  it('does not clear Sub-Agent settings when its tool is temporarily disabled', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [
+          {
+            ...baseAgent(),
+            tools: { subagent: { allowed_agents: ['worker'] } },
+          },
+        ],
+        tools: [
+          { name: 'bash', description: 'Run shell commands.' },
+          { name: 'subagent', description: 'Delegate work.' },
+        ],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    await waitForText('Sub-Agent settings');
+
+    vi.useFakeTimers();
+    getButtonByAriaLabel('Toggle tool subagent').click();
+    flushSync();
+    await vi.advanceTimersByTimeAsync(800);
+    await flushAsyncUpdates();
+
+    expect(getAgentUpdateCalls()).toHaveLength(1);
+    expect(getAgentUpdateCalls()[0][1]).toEqual({
+      allowed_tools: ['bash'],
+      id: 'alpha',
     });
   });
 
