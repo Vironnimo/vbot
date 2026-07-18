@@ -35,7 +35,7 @@ from core.chat.commands import (
     CommandUnavailability,
     PreparedCommand,
 )
-from core.chat.content_blocks import ContentBlock
+from core.chat.content_blocks import ContentBlock, TextBlock
 from core.chat.errors import ChatSessionError
 from core.chat.messages import MessageSender, ReplySurface
 from core.runs import (
@@ -138,6 +138,9 @@ class _QueuedInboundMedia:
     # Raw platform messages; conversion to content blocks happens in the per-conversation
     # worker via the transport so the adapter's update pipeline never blocks.
     messages: tuple[Any, ...]
+    # Some platforms deliver a user's comment and the media it introduces as separate
+    # transport messages. Adapters may reunite that comment with the media before queueing.
+    companion_text: str | None = None
     admission: WaitingWorkAdmission | None = None
 
 
@@ -191,6 +194,10 @@ class ChannelConversationEngine:
         self._busy_reply_times: OrderedDict[str, float] = OrderedDict()
 
     # -- Inbound entry points ---------------------------------------------------------
+
+    def is_builtin_command(self, message_text: str) -> bool:
+        """Return whether Chat recognizes text as a Built-in Command without executing it."""
+        return self._command_dispatcher.prepare(message_text) is not None
 
     async def handle_inbound_text(
         self,
@@ -270,9 +277,18 @@ class ChannelConversationEngine:
         self,
         conversation: ConversationFacts,
         raw_messages: tuple[Any, ...],
+        *,
+        companion_text: str | None = None,
     ) -> None:
         """Gate, route, and enqueue inbound media (one message or a buffered album)."""
-        gating_texts = tuple(self._transport.caption_text(message) for message in raw_messages)
+        normalized_companion = companion_text.strip() if companion_text is not None else None
+        if normalized_companion == "":
+            normalized_companion = None
+        caption_texts = tuple(self._transport.caption_text(message) for message in raw_messages)
+        gating_texts = (
+            *((normalized_companion,) if normalized_companion is not None else ()),
+            *caption_texts,
+        )
         if not self.should_respond(conversation, gating_texts):
             if self._config.observe_unaddressed and conversation.kind == "group":
                 for caption in gating_texts:
@@ -304,6 +320,7 @@ class ChannelConversationEngine:
             _QueuedInboundMedia(
                 conversation=conversation,
                 messages=tuple(raw_messages),
+                companion_text=normalized_companion,
             ),
         ):
             await self._reject_overflow(conversation)
@@ -722,6 +739,8 @@ class ChannelConversationEngine:
         # Per-message handling: one failing album item must not drop its siblings,
         # and every failure produces user-visible feedback instead of silence.
         content_blocks: list[ContentBlock] = []
+        if queued.companion_text is not None:
+            content_blocks.append(TextBlock(type="text", text=queued.companion_text))
         failure_replies: list[str] = []
         for message in queued.messages:
             try:

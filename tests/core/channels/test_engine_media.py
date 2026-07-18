@@ -113,6 +113,34 @@ async def test_media_duplicate_failure_replies_are_deduped(tmp_path: Path) -> No
     await engine.stop()
 
 
+@pytest.mark.asyncio
+async def test_media_companion_text_precedes_built_media_blocks(tmp_path: Path) -> None:
+    block = MediaBlock(
+        type="media", attachment_id="att-1", filename="a.png", media_type="image/png"
+    )
+    transport = FakeTransport(media_builder=AsyncMock(return_value=[block]))
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
+    engine, _sessions, _trigger, _transport = make_engine(
+        tmp_path, trigger_run=trigger_mock, transport=transport
+    )
+
+    await engine.handle_inbound_media(
+        make_conversation(),
+        ("forwarded-photo",),
+        companion_text="Please edit this",
+    )
+    await drain(engine, 12345)
+
+    trigger_mock.assert_awaited_once_with(
+        "assistant",
+        [TextBlock(type="text", text="Please edit this"), block],
+        SESSION_ID,
+        sender=None,
+        reply_surface=CHANNEL_REPLY_SURFACE,
+    )
+    await engine.stop()
+
+
 @pytest.mark.parametrize(
     ("error", "expected"),
     [

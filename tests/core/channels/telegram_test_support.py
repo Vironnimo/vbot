@@ -56,11 +56,21 @@ def make_config(
     return config
 
 
-def make_update(*, chat_id: int, user_id: int, text: str) -> SimpleNamespace:
+def make_update(
+    *,
+    chat_id: int,
+    user_id: int,
+    text: str,
+    message_id: int | None = None,
+) -> SimpleNamespace:
     return SimpleNamespace(
         effective_chat=SimpleNamespace(id=chat_id),
         effective_user=SimpleNamespace(id=user_id),
-        effective_message=SimpleNamespace(text=text, message_thread_id=None),
+        effective_message=SimpleNamespace(
+            text=text,
+            message_id=message_id,
+            message_thread_id=None,
+        ),
     )
 
 
@@ -73,6 +83,8 @@ def make_photo_update(
     caption: str | None = None,
     media_group_id: str | None = None,
     user_full_name: str | None = None,
+    message_id: int | None = None,
+    forward_origin: object | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         effective_chat=SimpleNamespace(id=chat_id),
@@ -83,7 +95,9 @@ def make_photo_update(
             photo=[SimpleNamespace(file_id=file_id, file_unique_id=file_unique_id)],
             document=None,
             media_group_id=media_group_id,
+            message_id=message_id,
             message_thread_id=None,
+            forward_origin=forward_origin,
         ),
     )
 
@@ -239,6 +253,9 @@ def make_adapter(
     chat_migration_persister: Callable[[str, str], None] | None = None,
     set_process_token: bool = True,
 ) -> tuple[TelegramChannelAdapter, ChatSessionManager, AsyncMock, SimpleNamespace]:
+    # Keep unit tests fast while preserving the production behavior: the task still
+    # yields once, so a following forwarded-media handler can claim the pending text.
+    monkeypatch.setattr(telegram_module, "_FORWARD_COMMENT_SETTLE_SECONDS", 0)
     if set_process_token:
         monkeypatch.setenv("TELEGRAM_BOT_TOKEN_TG_ASSISTANT", "test-token")
     else:
@@ -306,6 +323,9 @@ def make_adapter(
 
 
 async def drain_chat_queue(adapter: TelegramChannelAdapter, chat_id: int) -> None:
+    pending_flushes = list(adapter._forward_comment_tasks.values())
+    if pending_flushes:
+        await asyncio.gather(*pending_flushes)
     queue = adapter._engine._chat_queues.get(str(chat_id))
     if queue is None:
         await asyncio.sleep(0)
