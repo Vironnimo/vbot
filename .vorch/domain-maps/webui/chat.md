@@ -39,6 +39,7 @@ An Agent address can be global or Project-scoped. `resolveAgentAddressing()` and
 ## Composer and inputs
 
 - `ChatComposer.svelte` owns draft entry and delegates stateful parsing or media behavior to the established helpers. Sending plain text, a slash command, attachments, file mentions, or speech-derived text must use the same resolved Agent/Project/Session address.
+- Current-session setup guidance is prerequisite-ordered: `App.svelte` passes Chat the tri-state, Settings-backed usable-Provider state; an explicitly missing Provider routes to Settings → Providers and takes priority over Model assignment, while a connected Provider plus a model-less Identity Agent routes to Agents. Chat must not infer Provider readiness from the Model catalog, and it shows neither prompt while Settings are unresolved.
 - Slash commands are discovered from the server and submitted through the Chat command contract; the frontend must not maintain a competing command roster or interpret backend-only command semantics.
 - File mentions are constrained to the server-provided file list for the active address. Attachment ids are opaque public identifiers; previews and downloads use safe server URLs rather than filesystem paths.
 - Speech input owns browser media resources only for its capture lifetime and releases streams, recorders, timers, and object URLs on completion, cancellation, replacement, or teardown.

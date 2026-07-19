@@ -104,6 +104,10 @@ export const englishCatalog = Object.freeze({
   'chat.continuation.continue': 'Continue',
   'chat.continuation.discard': 'Discard',
   'chat.sessionCreateError': 'New session could not be created.',
+  'chat.noProvider.title': 'Connect a provider to start',
+  'chat.noProvider.hint':
+    'No provider is connected yet. Connect one before choosing a model.',
+  'chat.noProvider.action': 'Connect a provider',
   'chat.noModel.title': 'Pick a model to start',
   'chat.noModel.hint':
     'This agent has no model yet. Choose one to send messages.',

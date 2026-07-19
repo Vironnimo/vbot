@@ -96,8 +96,12 @@
     wakewordStatus = { enabled: false, state: 'off' },
     desktopCapabilities = null,
     onNavigateToVoiceSettings = () => {},
-    // Invoked from the "no model" notice so the user can assign a model to the
-    // current agent (App routes to the Agents tab).
+    // App supplies the server-backed operational state. `null` means Settings
+    // are still loading, so Chat does not guess which prerequisite is missing.
+    hasConnectedProvider = true,
+    // Invoked from the setup notices. App routes Provider setup directly to
+    // Settings and Model assignment to the current Agent.
+    onConnectProvider = () => {},
     onPickModel = () => {},
   } = $props();
 
@@ -259,14 +263,21 @@
   let sessionOverrideActive = $derived(Boolean(viewingSessionId));
   let newSessionBlocked = $derived(!canCreateNewSession(activeSessionState));
   let composerDisabled = $derived(!activeAgent || chatState.loadingHistory);
-  // A model-less identity agent on its current session cannot run; surface an
-  // actionable notice instead of failing the send at the provider. Scoped to
-  // the identity current path — a project config agent resolves a model through
-  // project defaults, and an override stand-in carries no model field.
+  // Provider availability is the first prerequisite for every current Agent.
+  // Do not infer it from Models: App supplies Settings' authoritative usable-
+  // connection state. A model-less Identity Agent becomes the second step once
+  // at least one Provider is connected; Project Agents resolve their Model
+  // through Project defaults, and override stand-ins carry no Model field.
+  let providerSetupMissing = $derived(
+    Boolean(activeAgent) &&
+      !sessionOverrideActive &&
+      hasConnectedProvider === false,
+  );
   let agentModelMissing = $derived(
     Boolean(activeAgent) &&
       !projectAgentActive &&
       !sessionOverrideActive &&
+      hasConnectedProvider === true &&
       agentNeedsModel(activeAgent),
   );
   // The composer's per-session draft is keyed by the full displayed-session key;
@@ -2051,7 +2062,32 @@
               </div>
             </Banner>
           {/if}
-          {#if agentModelMissing}
+          {#if providerSetupMissing}
+            <Banner
+              variant="info"
+              class="chat-view__footer-banner"
+              aria-live="polite"
+            >
+              <div class="chat-view__footer-banner-copy">
+                <p class="chat-view__footer-banner-title">
+                  {t('chat.noProvider.title', 'Connect a provider to start')}
+                </p>
+                <p class="chat-view__footer-banner-hint">
+                  {t(
+                    'chat.noProvider.hint',
+                    'No provider is connected yet. Connect one before choosing a model.',
+                  )}
+                </p>
+              </div>
+              <Button
+                variant="primary"
+                class="chat-view__no-provider-action"
+                onClick={onConnectProvider}
+              >
+                {t('chat.noProvider.action', 'Connect a provider')}
+              </Button>
+            </Banner>
+          {:else if agentModelMissing}
             <Banner
               variant="info"
               class="chat-view__footer-banner"
