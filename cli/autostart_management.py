@@ -102,7 +102,22 @@ def enable_autostart(
         return _fail(instance, f"autostart: not supported on this platform ({platform})")
 
     if not registered.ok:
-        return _fail(instance, registered.message)
+        if platform != "win32":
+            return _fail(instance, registered.message)
+        # Task Scheduler registration requires elevation, but the server does
+        # not. Keep these outcomes independent so an otherwise successful
+        # install still leaves the application running for the current session.
+        start_result = start(instance)
+        state = "running" if start_result.ok else f"start failed ({start_result.message})"
+        return CommandResult(
+            ok=False,
+            message=f"{registered.message}; server: {state}",
+            instance=instance,
+            health=start_result.health,
+            webui=start_result.webui,
+            log_path=start_result.log_path,
+            process_id=start_result.process_id,
+        )
 
     if started_by_service:
         return CommandResult(
@@ -358,16 +373,19 @@ def _systemd_user_dir() -> Path:
 
 
 def _resolve_vbot_path() -> str | None:
-    found = shutil.which("vbot")
-    if found:
-        return found
     import sysconfig
 
+    # The active interpreter identifies the environment that owns this CLI.
+    # Prefer its Scripts directory over PATH, which may contain another vBot
+    # checkout and silently register the wrong executable for autostart.
     scripts_dir = Path(sysconfig.get_path("scripts"))
     for name in ("vbot.exe", "vbot.cmd", "vbot"):
         candidate = scripts_dir / name
         if candidate.exists():
             return str(candidate)
+    found = shutil.which("vbot")
+    if found:
+        return found
     return None
 
 

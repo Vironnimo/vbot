@@ -226,7 +226,11 @@ def start_server_process(instance: ServerInstance) -> subprocess.Popen[bytes]:
         return _open_server_process(
             args,
             env=environment,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+            # A new process group only changes console-signal routing; it does
+            # not detach the child from the caller's console. Without
+            # DETACHED_PROCESS, closing the PowerShell window that ran `server
+            # start` also terminates the otherwise healthy server.
+            creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS),
         )
     return _open_server_process(args, env=environment, start_new_session=True)
 

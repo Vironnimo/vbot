@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import sys
+import sysconfig
 from collections.abc import Callable
 from pathlib import Path
 
+import pytest
+
+from cli import autostart_management
 from cli.autostart_management import (
     CommandRun,
     _default_runner,
@@ -129,7 +133,27 @@ def test_enable_windows_failure_hints_elevation() -> None:
 
     assert not result.ok
     assert "elevated" in result.message.lower()
-    assert events == []
+    assert "server: running" in result.message
+    assert events == ["start"]
+
+
+def test_windows_vbot_resolution_prefers_active_environment_over_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scripts_dir = tmp_path / "Scripts"
+    scripts_dir.mkdir()
+    environment_vbot = scripts_dir / "vbot.exe"
+    environment_vbot.touch()
+    monkeypatch.setattr(sysconfig, "get_path", lambda name: str(scripts_dir))
+    monkeypatch.setattr(
+        autostart_management.shutil,
+        "which",
+        lambda name: r"C:\unrelated-python\Scripts\vbot.exe",
+    )
+
+    resolved = autostart_management._resolve_vbot_path()
+
+    assert resolved == str(environment_vbot)
 
 
 def test_enable_linux_writes_unit_and_enables(tmp_path: Path) -> None:

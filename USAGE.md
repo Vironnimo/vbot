@@ -92,7 +92,7 @@ Use a ScriptBlock when passing options:
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -DesktopClient
 ```
 
-Windows accepts `-InstallDir`, `-Version`, `-Dev`, `-DataDir`, `-HostName`, `-Port`, `-Desktop`, `-DesktopClient`, `-NoAutostart`, `-SkipWebuiBuild`, and `-TaskName` directly. The final summary verifies Autostart and the actual server health independently. If Task Scheduler permission is unavailable, the package install still completes, the summary reports `complete with problems`, and it prints the exact elevated recovery command; a live `Server URL` is shown only when the server is running. You do not need to rerun the whole Installer: open PowerShell as Administrator, run the reported `vbot.exe autostart enable ...` command, then run the reported `server status` command.
+Windows accepts `-InstallDir`, `-Version`, `-Dev`, `-DataDir`, `-HostName`, `-Port`, `-Desktop`, `-DesktopClient`, `-NoAutostart`, `-SkipWebuiBuild`, and `-TaskName` directly. The final summary verifies Autostart and the actual server health independently. If Task Scheduler permission is unavailable, the package install and immediate detached server start still complete, while the summary reports `complete with problems` and prints the exact elevated recovery command for Autostart; a live `Server URL` is shown only when the server is running. You do not need to rerun the whole Installer: open PowerShell as Administrator, run the reported `vbot.exe autostart enable ...` command, then run the reported `server status` command.
 
 As with any `curl | bash` or `irm | iex` command, download and inspect the script first if you do not want to execute network content directly.
 

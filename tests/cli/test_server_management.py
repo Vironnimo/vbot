@@ -271,6 +271,30 @@ def test_start_server_process_uses_expected_args_and_log_location(
     assert instance.log_path.exists() is False
 
 
+def test_start_server_process_detaches_from_windows_console(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    calls = []
+
+    class FakePopen:
+        def __init__(self, args, **kwargs) -> None:
+            calls.append({"args": args, "kwargs": kwargs})
+            self.pid = 123
+
+    monkeypatch.setattr(server_management.subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(server_management.sys, "platform", "win32")
+    monkeypatch.setattr(
+        server_management.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200, raising=False
+    )
+    monkeypatch.setattr(server_management.subprocess, "DETACHED_PROCESS", 0x00000008, raising=False)
+
+    start_server_process(instance)
+
+    assert calls[0]["kwargs"]["creationflags"] == 0x00000208
+
+
 def test_resolve_instance_uses_daily_log_file_contract(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
