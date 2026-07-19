@@ -615,7 +615,8 @@ describe('ChatView', () => {
     expect(document.body.textContent).toContain('Hello');
   });
 
-  it('shows an actionable notice when the current agent has no model', async () => {
+  it('prioritizes provider setup before model selection', async () => {
+    const onConnectProvider = vi.fn();
     const onPickModel = vi.fn();
     rpcMock.mockImplementation(
       createChatRpcMock({ agents: [createAgent({ model: '' })] }),
@@ -626,6 +627,37 @@ describe('ChatView', () => {
       props: {
         sharedAgents: [createAgent({ model: '' })],
         sharedSelectedAgentId: 'alpha',
+        hasConnectedProvider: false,
+        onConnectProvider,
+        onPickModel,
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Connect a provider to start'),
+      100,
+    );
+    expect(document.body.textContent).not.toContain('Pick a model to start');
+
+    findButtonByText('Connect a provider')?.click();
+    flushSync();
+    expect(onConnectProvider).toHaveBeenCalledTimes(1);
+    expect(onPickModel).not.toHaveBeenCalled();
+  });
+
+  it('shows model selection once a provider is connected', async () => {
+    const onPickModel = vi.fn();
+    rpcMock.mockImplementation(
+      createChatRpcMock({ agents: [createAgent({ model: '' })] }),
+    );
+
+    chatViewTest.mount({
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent({ model: '' })],
+        sharedSelectedAgentId: 'alpha',
+        hasConnectedProvider: true,
         onPickModel,
       },
     });
@@ -643,6 +675,27 @@ describe('ChatView', () => {
     findButtonByText('Choose a model')?.click();
     flushSync();
     expect(onPickModel).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits for provider state before showing a setup notice', () => {
+    rpcMock.mockImplementation(
+      createChatRpcMock({ agents: [createAgent({ model: '' })] }),
+    );
+
+    chatViewTest.mount({
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent({ model: '' })],
+        sharedSelectedAgentId: 'alpha',
+        hasConnectedProvider: null,
+      },
+    });
+    flushSync();
+
+    expect(document.body.textContent).not.toContain(
+      'Connect a provider to start',
+    );
+    expect(document.body.textContent).not.toContain('Pick a model to start');
   });
 
   it('hides the no-model notice when the current agent has a model', () => {

@@ -423,6 +423,10 @@
     selectView('agents');
   };
 
+  const navigateToProviders = () => {
+    navigateToSettingsPanel('providers');
+  };
+
   // ChatView reflects the project dropdown choice back here so the persisted
   // mirror stays current.
   const selectProject = (projectId) => {
@@ -847,6 +851,8 @@
         {wakewordStatus}
         {desktopCapabilities}
         onNavigateToVoiceSettings={navigateToVoiceSettings}
+        hasConnectedProvider={settings === null ? null : operational}
+        onConnectProvider={navigateToProviders}
         onPickModel={navigateToAgentModel}
       />
     {:else if activeViewId === 'agents'}
