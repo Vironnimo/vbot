@@ -424,6 +424,7 @@ if ($PSBoundParameters.ContainsKey("TaskName")) {
 
 $setupLabel = "scripts\$(Split-Path -Leaf $setup)"
 Write-Step "Configuring checkout: $setupLabel $($setupArgList -join ' ')"
+$setupSupportsRecoverableProblems = (Get-Content -Raw -LiteralPath $setup) -match '\$RecoverableProblemExitCode'
 $powerShellExecutable = if ($PSVersionTable.PSEdition -eq "Core") {
     Join-Path $PSHOME "pwsh.exe"
 }
@@ -434,18 +435,139 @@ else {
 # option names such as -SkipPathUpdate can become values for unrelated parameters.
 # A child PowerShell process parses the forwarded tokens as real named arguments.
 & $powerShellExecutable -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $setup @setupArgList
-if ($LASTEXITCODE -ne 0) {
-    throw "The vBot checkout setup failed with exit code $LASTEXITCODE."
+$setupExitCode = $LASTEXITCODE
+$setupReportedProblems = $setupSupportsRecoverableProblems -and $setupExitCode -eq 2
+if ($setupExitCode -ne 0 -and -not $setupReportedProblems) {
+    throw "The vBot checkout setup failed with exit code $setupExitCode."
 }
 
 Add-VbotShim -InstallDir $InstallDir -VenvDir $venvDir
 
-Write-Step "vBot installation complete"
-Write-Host "Installed at: $InstallDir (virtual environment in .venv)"
-Write-Host "The installer output above shows the configured data directory (Desktop Client has none)."
+Write-Step "Final installation summary"
+$vbotExe = Join-Path $venvDir "Scripts\vbot.exe"
 if ($DesktopClient) {
+    Write-Host "Installation: complete"
+    Write-Host "Installed at: $InstallDir (virtual environment in .venv)"
+    Write-Host "Local server: not installed (Desktop Client)"
+    Write-Host "Autostart: not applicable"
     Write-Host "Open a new terminal, then run: vbot desktop"
 }
 else {
-    Write-Host "Open a new terminal, then run: vbot server status"
+    # The setup manifest is the source of truth for the effective target. In
+    # particular, an existing settings.json may select a port different from
+    # the installer's default when -Port was not explicitly supplied.
+    $summaryHost = $HostName
+    $summaryPort = $Port
+    $summaryDataDir = $DataDir
+    $installStatePath = Join-Path $InstallDir ".vbot-install.json"
+    if (Test-Path -LiteralPath $installStatePath -PathType Leaf) {
+        $installState = Get-Content -Raw -LiteralPath $installStatePath | ConvertFrom-Json
+        $serverHostProperty = $installState.PSObject.Properties["server_host"]
+        $serverPortProperty = $installState.PSObject.Properties["server_port"]
+        $serverDataDirectoryProperty = $installState.PSObject.Properties["server_data_directory"]
+        if (
+            $null -ne $serverHostProperty -and $null -ne $serverHostProperty.Value -and
+            $null -ne $serverPortProperty -and $null -ne $serverPortProperty.Value -and
+            $null -ne $serverDataDirectoryProperty -and $null -ne $serverDataDirectoryProperty.Value
+        ) {
+            $summaryHost = [string]$serverHostProperty.Value
+            $summaryPort = [int]$serverPortProperty.Value
+            $summaryDataDir = [string]$serverDataDirectoryProperty.Value
+        }
+    }
+
+    $serverStatusOutput = @(& $vbotExe server status --host $summaryHost --port $summaryPort --data-dir $summaryDataDir 2>&1)
+    $serverStatusExitCode = $LASTEXITCODE
+    $serverStatusText = ($serverStatusOutput | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+    $serverRunning = $serverStatusText -match '(?m)^running: yes\s*$'
+    $portConflict = $serverStatusText -match '(?m)^conflict: port occupied by non-vBot process\s*$'
+
+    $autostartEnabled = $false
+    $autostartStatusKnown = $true
+    if (-not $NoAutostart) {
+        $autostartStatusOutput = @(& $vbotExe autostart status --host $summaryHost --port $summaryPort --data-dir $summaryDataDir --task-name $TaskName 2>&1)
+        $autostartStatusExitCode = $LASTEXITCODE
+        $autostartStatusText = ($autostartStatusOutput | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+        $autostartEnabled = $autostartStatusExitCode -eq 0 -and $autostartStatusText -match '(?m)^autostart: enabled\b'
+        $autostartStatusKnown = $autostartStatusExitCode -eq 0
+    }
+
+    $problems = New-Object System.Collections.Generic.List[string]
+    if ($setupReportedProblems) {
+        $problems.Add("Autostart setup failed. Any existing Task Scheduler entry was not successfully refreshed for this installation.") | Out-Null
+    }
+    elseif (-not $NoAutostart -and -not $autostartStatusKnown) {
+        $problems.Add("Autostart status could not be verified.") | Out-Null
+    }
+    elseif (-not $NoAutostart -and -not $autostartEnabled) {
+        $problems.Add("Autostart is not enabled. Windows Task Scheduler registration normally requires an elevated terminal.") | Out-Null
+    }
+    if ($serverStatusExitCode -ne 0) {
+        $problems.Add("The final server status check failed.") | Out-Null
+    }
+    elseif (-not $serverRunning -and -not $NoAutostart) {
+        $serverProblem = if ($portConflict) {
+            "The server is not running because port $summaryPort is occupied by another process."
+        }
+        else {
+            "The server is not running, so the WebUI is not available."
+        }
+        $problems.Add($serverProblem) | Out-Null
+    }
+
+    $installationState = if ($problems.Count -eq 0) { "complete" } else { "complete with problems" }
+    Write-Host "Installation: $installationState"
+    Write-Host "Installed at: $InstallDir (virtual environment in .venv)"
+    Write-Host "vBot command: $vbotExe"
+    Write-Host "Data directory: $summaryDataDir"
+    if ($NoAutostart) {
+        Write-Host "Autostart: not requested (-NoAutostart)"
+    }
+    elseif ($setupReportedProblems) {
+        Write-Host "Autostart: SETUP FAILED"
+    }
+    elseif ($autostartEnabled) {
+        Write-Host "Autostart: enabled"
+    }
+    elseif ($autostartStatusKnown) {
+        Write-Host "Autostart: NOT ENABLED"
+    }
+    else {
+        Write-Host "Autostart: status could not be verified"
+    }
+
+    if ($serverRunning) {
+        Write-Host "Server: running"
+        Write-Host "Server URL: http://${summaryHost}:$summaryPort"
+    }
+    elseif ($portConflict) {
+        Write-Host "Server: NOT RUNNING (port $summaryPort is occupied by another process)"
+    }
+    elseif ($serverStatusExitCode -eq 0) {
+        Write-Host "Server: NOT RUNNING"
+    }
+    else {
+        Write-Host "Server: status could not be verified"
+    }
+
+    if ($problems.Count -gt 0) {
+        Write-Host "Problems:"
+        foreach ($problem in $problems) {
+            Write-Host "  - $problem"
+        }
+    }
+
+    if (-not $NoAutostart -and ($setupReportedProblems -or -not $autostartEnabled)) {
+        Write-Host "Required next step: open PowerShell as Administrator and run:"
+        Write-Host "  & `"$vbotExe`" autostart enable --host $summaryHost --port $summaryPort --data-dir `"$summaryDataDir`" --task-name `"$TaskName`""
+        Write-Host "This registers autostart and starts the server. Then verify with:"
+        Write-Host "  & `"$vbotExe`" server status --host $summaryHost --port $summaryPort --data-dir `"$summaryDataDir`""
+    }
+    elseif (-not $serverRunning) {
+        Write-Host "Start the server manually with:"
+        Write-Host "  & `"$vbotExe`" server start --host $summaryHost --port $summaryPort --data-dir `"$summaryDataDir`""
+    }
+    else {
+        Write-Host "Open a new terminal to use 'vbot'."
+    }
 }

@@ -232,6 +232,41 @@ def test_windows_installer_forwards_setup_options_through_powershell() -> None:
     assert "& $setup @setupArgList" not in script
 
 
+def test_windows_public_installer_ends_with_verified_lifecycle_summary() -> None:
+    script = (PROJECT_ROOT / "scripts" / "install.ps1").read_text(encoding="utf-8")
+
+    summary_start = script.index('Write-Step "Final installation summary"')
+    summary = script[summary_start:]
+
+    assert ".vbot-install.json" in summary
+    assert "server status --host $summaryHost --port $summaryPort" in summary
+    assert "autostart status --host $summaryHost --port $summaryPort" in summary
+    assert "$setupReportedProblems" in summary
+    assert 'Write-Host "Server: running"' in summary
+    assert 'Write-Host "Server: NOT RUNNING"' in summary
+    assert 'Write-Host "Problems:"' in summary
+    assert "Required next step: open PowerShell as Administrator" in summary
+    assert 'Write-Host "Server URL: http://${summaryHost}:$summaryPort"' in summary
+    assert summary.index("if ($serverRunning)") < summary.index(
+        'Write-Host "Server URL: http://${summaryHost}:$summaryPort"'
+    )
+
+
+def test_windows_checkout_setup_does_not_claim_an_unverified_server_url() -> None:
+    script = (PROJECT_ROOT / "scripts" / "setup.ps1").read_text(encoding="utf-8")
+
+    summary_start = script.index('Write-Step "Checkout setup summary"')
+    summary = script[summary_start:]
+
+    assert "server status --host $HostName --port $effectivePort" in summary
+    assert 'Write-Host "Server: NOT RUNNING"' in summary
+    assert "Required next step: open PowerShell as Administrator" in summary
+    assert "exit $RecoverableProblemExitCode" in summary
+    assert summary.index("if ($serverRunning)") < summary.index(
+        'Write-Host "Server URL: http://${HostName}:$effectivePort"'
+    )
+
+
 def test_public_installers_are_the_only_fresh_install_entrypoints() -> None:
     assert (PROJECT_ROOT / "scripts" / "install.sh").is_file()
     assert (PROJECT_ROOT / "scripts" / "install.ps1").is_file()
