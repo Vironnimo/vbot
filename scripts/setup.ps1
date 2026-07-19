@@ -21,6 +21,7 @@ $ErrorActionPreference = "Stop"
 
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $WebUiDir = Join-Path $ProjectRoot "webui"
+$RecoverableProblemExitCode = 2
 
 if ($Desktop -and $DesktopClient) {
     throw "-Desktop and -DesktopClient are mutually exclusive: -Desktop adds the accessor to a full server install, -DesktopClient installs the accessor with no server stack."
@@ -587,15 +588,17 @@ if ($Desktop -or $DesktopClient) {
 }
 
 # A desktop-client install has no local server, so autostart never applies.
+$autostartEnableFailed = $false
 if (-not $DesktopClient -and -not $NoAutostart) {
     Write-Step "Enabling autostart and starting the server"
     & $vbotPath autostart enable --host $HostName --port $effectivePort --data-dir $resolvedDataDir --task-name $TaskName
     if ($LASTEXITCODE -ne 0) {
+        $autostartEnableFailed = $true
         Write-Host "Warning: enabling autostart failed (see message above). On Windows, run 'vbot autostart enable' from an elevated terminal."
     }
 }
 
-Write-Step "Installation complete"
+Write-Step "Checkout setup summary"
 Write-Host "vBot command: $vbotPath"
 if ($DesktopClient) {
     Write-Host "Installed the desktop client (no local server)."
@@ -603,6 +606,61 @@ if ($DesktopClient) {
 }
 else {
     Write-Host "Data directory: $resolvedDataDir"
-    Write-Host "Server URL: http://${HostName}:$effectivePort"
-    Write-Host "Try: vbot server status --host $HostName --port $effectivePort --data-dir `"$resolvedDataDir`""
+    $statusOutput = @(& $vbotPath server status --host $HostName --port $effectivePort --data-dir $resolvedDataDir 2>&1)
+    $statusExitCode = $LASTEXITCODE
+    $statusText = ($statusOutput | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+    $serverRunning = $statusText -match '(?m)^running: yes\s*$'
+    $portConflict = $statusText -match '(?m)^conflict: port occupied by non-vBot process\s*$'
+
+    if ($NoAutostart) {
+        Write-Host "Autostart: not requested (-NoAutostart)"
+    }
+    elseif ($autostartEnableFailed) {
+        Write-Host "Autostart: NOT ENABLED"
+    }
+    else {
+        Write-Host "Autostart: enabled"
+    }
+
+    if ($serverRunning) {
+        Write-Host "Server: running"
+        Write-Host "Server URL: http://${HostName}:$effectivePort"
+    }
+    elseif ($portConflict) {
+        Write-Host "Server: NOT RUNNING (port $effectivePort is occupied by another process)"
+    }
+    elseif ($statusExitCode -eq 0) {
+        Write-Host "Server: NOT RUNNING"
+    }
+    else {
+        Write-Host "Server: status could not be verified"
+    }
+
+    if ($autostartEnableFailed -or (-not $serverRunning -and -not $NoAutostart) -or $statusExitCode -ne 0) {
+        Write-Host "Problems:"
+        if ($autostartEnableFailed) {
+            Write-Host "  - Autostart was not enabled. Windows Task Scheduler registration normally requires an elevated terminal."
+        }
+        if (-not $serverRunning -and -not $NoAutostart) {
+            Write-Host "  - The server is not running, so the WebUI is not available."
+        }
+        if ($statusExitCode -ne 0) {
+            Write-Host "  - The final server status check failed."
+        }
+    }
+
+    if ($autostartEnableFailed) {
+        Write-Host "Required next step: open PowerShell as Administrator and run:"
+        Write-Host "  & `"$vbotPath`" autostart enable --host $HostName --port $effectivePort --data-dir `"$resolvedDataDir`" --task-name `"$TaskName`""
+        Write-Host "This registers autostart and starts the server. Then verify with:"
+        Write-Host "  & `"$vbotPath`" server status --host $HostName --port $effectivePort --data-dir `"$resolvedDataDir`""
+    }
+    elseif (-not $serverRunning) {
+        Write-Host "Start the server with:"
+        Write-Host "  & `"$vbotPath`" server start --host $HostName --port $effectivePort --data-dir `"$resolvedDataDir`""
+    }
+}
+
+if ($autostartEnableFailed) {
+    exit $RecoverableProblemExitCode
 }

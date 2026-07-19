@@ -90,7 +90,7 @@ Use a ScriptBlock when passing Installer options:
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -DesktopClient
 ```
 
-Run the default Windows install from an elevated PowerShell when possible so the Task Scheduler autostart entry can be created. If that step lacks permission, the package install still completes and reports how to enable autostart later.
+Run the default Windows install from an elevated PowerShell when possible so the Task Scheduler autostart entry can be created. If that step lacks permission, the package install still completes and its final summary reports Autostart, actual server health, and the exact elevated recovery command; it shows a live Server URL only after the server health check succeeds. Rerunning the whole Installer is not required.
 
 As with any `curl | bash` or `irm | iex` command, download and inspect the script first if you prefer not to execute network content directly.
 
