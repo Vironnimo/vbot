@@ -152,6 +152,44 @@ describe('Projects controller', () => {
     expect(secondSave).toHaveBeenCalledOnce();
   });
 
+  it('persists a changed Project Source Format through the controller', async () => {
+    const originalProject = {
+      project_id: 'project-one',
+      display_name: 'Project one',
+      cwd: 'C:/repo',
+      source_format: 'opencode',
+    };
+    const updatedProject = { ...originalProject, source_format: 'claude' };
+    const setProject = vi.fn().mockResolvedValue({
+      project: updatedProject,
+      scan: { team: [{ agent_id: 'claude-reviewer' }] },
+    });
+    const state = createProjectsState({ selectedProjectId: 'project-one' });
+    state.projects = [originalProject];
+    state.editForm = {
+      ...state.editForm,
+      display_name: originalProject.display_name,
+      source_format: originalProject.source_format,
+    };
+    const controller = createProjectsController({
+      operations: operations({
+        listProjects: vi.fn().mockResolvedValue({ projects: [updatedProject] }),
+        setProject,
+        showProject: vi.fn().mockResolvedValue({ scan: null }),
+      }),
+      state,
+    });
+
+    controller.updateEditField('source_format', 'claude');
+    await controller.saveSelectedProject({ manual: true });
+
+    expect(setProject).toHaveBeenCalledWith('project-one', {
+      source_format: 'claude',
+    });
+    expect(state.projects[0].source_format).toBe('claude');
+    expect(state.editForm.source_format).toBe('claude');
+  });
+
   it('owns overrides and re-pointing without leaking transport details', async () => {
     const setOverride = vi.fn().mockResolvedValue({ scan: {} });
     const clearOverride = vi.fn().mockResolvedValue({ scan: {} });

@@ -165,6 +165,7 @@ export function createProjectsController({
         display_name: state.editForm.display_name,
         default_agent: state.editForm.default_agent,
         default_model: state.editForm.default_model,
+        source_format: state.editForm.source_format,
         default_temperature: state.editForm.default_temperature,
         default_thinking_effort: state.editForm.default_thinking_effort,
         auto_load: state.editForm.auto_load,
