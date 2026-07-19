@@ -134,6 +134,21 @@ function toolCall(name, args) {
 }
 
 function plannedToolResponse(prompt, results, offeredTools) {
+  if (prompt.includes("E2E_MEMORY_PROMPT_SEED")) {
+    if (resultsFor(results, "memory").length === 0) {
+      return {
+        calls: [
+          toolCall("memory", {
+            action: "add",
+            scope: "agent",
+            content: "E2E pinned memory marker 2741",
+          }),
+        ],
+      };
+    }
+    return { text: "Memory prompt seed stored." };
+  }
+
   if (prompt.includes("E2E_LEARN_COMMAND")) {
     if (resultsFor(results, "skill_manage").length === 0) {
       return {
@@ -501,6 +516,23 @@ function responseText(model, prompt, messages = []) {
   ) {
     return "Custom System Prompt reached the Provider.";
   }
+  if (prompt.includes("E2E_MEMORY_PROMPT_CHECK")) {
+    return messagesText(messages, "system").includes(
+      "E2E pinned memory marker 2741",
+    )
+      ? "Pinned Memory reached the Provider."
+      : "Pinned Memory stayed out of the Provider prompt.";
+  }
+  if (prompt.includes("E2E_PROJECT_AGENT_CONTEXT")) {
+    const systemPrompt = messagesText(messages, "system");
+    if (systemPrompt.includes("E2E_OPEN_CODE_AGENT_PROMPT_4172")) {
+      return "OpenCode Project Agent context reached the Provider.";
+    }
+    if (systemPrompt.includes("E2E_CLAUDE_AGENT_PROMPT_6385")) {
+      return "Claude Project Agent context reached the Provider.";
+    }
+    return "Project Agent context was missing.";
+  }
   if (
     prompt.includes("You are handing off this conversation to another agent")
   ) {
@@ -514,6 +546,15 @@ function responseText(model, prompt, messages = []) {
   }
   if (prompt.includes("E2E_QUEUE_FOLLOWUP")) {
     return "Fake provider queued response.";
+  }
+  if (prompt.includes("E2E_QUEUE_FIRST")) {
+    return "First queued response.";
+  }
+  if (prompt.includes("E2E_QUEUE_REMOVED")) {
+    return "Removed queued message unexpectedly ran.";
+  }
+  if (prompt.includes("E2E_QUEUE_THIRD")) {
+    return "Third queued response.";
   }
   if (prompt.includes("E2E_STREAM")) {
     return "Fake provider streaming response.";
@@ -760,11 +801,14 @@ async function handleChatCompletion(request, response) {
   }
 
   if (prompt.includes("E2E_QUEUE_ACTIVE")) {
+    const delayMilliseconds = prompt.includes("E2E_QUEUE_ACTIVE_LONG")
+      ? 1_300
+      : 600;
     await streamCompletion(
       response,
       model,
       ["Queue run started.", " Still active.", " Almost finished.", " Done."],
-      600,
+      delayMilliseconds,
     );
     return;
   }
