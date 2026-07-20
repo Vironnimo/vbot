@@ -10,6 +10,7 @@ import {
   flushSync,
   hoveredTokenBadgeTooltip,
   it,
+  listSessionsMock,
   rpcMock,
   sendComposerMessage,
   setInputValue,
@@ -82,6 +83,129 @@ describe('ChatView', () => {
     await waitForCondition(calledWithAgent, 100);
 
     expect(calledWithAgent()).toBe(true);
+  });
+
+  it('shows background Agent activity as orange without selecting that Agent', async () => {
+    const beta = createAgent({
+      id: 'beta',
+      name: 'Beta',
+      current_session_id: 'session-beta',
+    });
+    rpcMock.mockImplementation(
+      createChatRpcMock({ agents: [createAgent(), beta] }),
+    );
+
+    chatViewTest.mount({
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent(), beta],
+      },
+    });
+    flushSync();
+
+    await waitForCondition(() => testRunStreamRefs.length === 1, 100);
+    testRunStreamRefs[0].handleServerEvents({
+      type: 'run_started',
+      payload: {
+        run_id: 'run-beta',
+        agent_id: 'beta',
+        project_id: null,
+        session_id: 'session-beta',
+        run_event_type: 'run_started',
+        run_event_sequence: 1,
+        output: { status: 'running' },
+      },
+    });
+    flushSync();
+
+    const betaTab = findButtonByText('Beta');
+    expect(betaTab?.classList.contains('active')).toBe(false);
+    expect(betaTab?.querySelector('.tab-indicator--running')).toBeTruthy();
+  });
+
+  it('keeps an inactive Agent blue until its exact result is opened', async () => {
+    const beta = createAgent({
+      id: 'beta',
+      name: 'Beta',
+      current_session_id: 'session-beta',
+    });
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        agents: [createAgent(), beta],
+        sessionMessages: {
+          'session-beta': [
+            {
+              id: 'summary-beta',
+              role: 'run_summary',
+              run_id: 'run-beta',
+              status: 'completed',
+              timestamp: '2026-07-20T10:00:00+00:00',
+            },
+          ],
+        },
+      }),
+    );
+    listSessionsMock.mockImplementation(async (agentId) => ({
+      sessions:
+        agentId === 'beta'
+          ? [
+              {
+                id: 'session-beta',
+                last_active_at: '2026-07-20T10:00:00+00:00',
+                has_unread_completion: true,
+                unread_run_id: 'run-beta',
+                unread_run_status: 'completed',
+                unread_run_at: '2026-07-20T10:00:00+00:00',
+              },
+            ]
+          : [],
+    }));
+
+    chatViewTest.mount({
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent(), beta],
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        Boolean(
+          findButtonByText('Beta')?.querySelector('.tab-indicator--unread'),
+        ),
+      100,
+    );
+    const betaTab = findButtonByText('Beta');
+    await waitForCondition(() => betaTab.disabled === false, 100);
+    betaTab.click();
+
+    await waitForCondition(
+      () => findButtonByText('Beta')?.classList.contains('active') === true,
+      100,
+    );
+    expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      agent_id: 'beta',
+      session_id: 'session-beta',
+      limit: 100,
+    });
+
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.some(
+          ([method, params]) =>
+            method === 'session.mark_read' &&
+            params?.agent_id === 'beta' &&
+            params?.session_id === 'session-beta' &&
+            params?.run_id === 'run-beta',
+        ),
+      100,
+    );
+    flushSync();
+
+    const selectedBetaTab = findButtonByText('Beta');
+    expect(selectedBetaTab.classList.contains('active')).toBe(true);
+    expect(selectedBetaTab.querySelector('.tab-indicator--unread')).toBeNull();
   });
 
   it('shows the combined input and output usage in the token badge', async () => {

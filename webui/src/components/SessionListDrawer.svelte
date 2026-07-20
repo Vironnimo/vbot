@@ -475,6 +475,19 @@
                 >
                   {session.display_name || sessionDisplayName(session)}
                 </p>
+                {#if session.has_unread_completion}
+                  <span
+                    class="session-row__unread"
+                    use:tooltip={t(
+                      'sessions.unreadCompletionHint',
+                      'This Session has an unread result.',
+                    )}
+                  >
+                    <span class="session-row__unread-dot" aria-hidden="true"
+                    ></span>
+                    <span>{t('sessions.unreadCompletion', 'Unread')}</span>
+                  </span>
+                {/if}
                 {#if session.id === asText(agentCurrentSessionId)}
                   <Badge variant="success">
                     {t('sessions.current', 'Current')}
@@ -922,6 +935,24 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .session-row__unread {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 5px;
+    color: var(--blue);
+    font-size: var(--fs-label-sm);
+    font-weight: 600;
+  }
+
+  .session-row__unread-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--blue);
+    box-shadow: 0 0 0 2px var(--blue-dim);
   }
 
   .session-row__meta {

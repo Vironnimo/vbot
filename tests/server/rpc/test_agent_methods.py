@@ -34,6 +34,7 @@ from server.rpc.agent_methods import (
     _fork_session,
     _get_agent,
     _list_sessions,
+    _mark_session_read,
     _rename_session,
     _set_session_compaction_policy,
 )
@@ -54,6 +55,14 @@ class _FakeSessions:
         self.created: list[dict[str, Any]] = []
         self.listed: list[tuple[str, str | None]] = []
         self.renamed: list[tuple[str, str, str, str | None]] = []
+        self.marked_read: list[tuple[str, str, str, str | None]] = []
+        self.mark_read_result: dict[str, Any] = {
+            "has_unread_completion": False,
+            "unread_run_id": None,
+            "unread_run_status": None,
+            "unread_run_at": None,
+            "marked_read": True,
+        }
         self.archived: list[tuple[str, str, str | None]] = []
         self.got: list[tuple[str, str, str | None]] = []
         self.forked: list[dict[str, Any]] = []
@@ -94,6 +103,16 @@ class _FakeSessions:
     def list_with_metadata(self, agent_id: str, project_id: str | None = None) -> list[Any]:
         self.listed.append((agent_id, project_id))
         return self.metadata_rows
+
+    def mark_terminal_run_read(
+        self,
+        agent_id: str,
+        session_id: str,
+        run_id: str,
+        project_id: str | None = None,
+    ) -> dict[str, Any]:
+        self.marked_read.append((agent_id, session_id, run_id, project_id))
+        return dict(self.mark_read_result)
 
     async def fork(
         self,
@@ -268,6 +287,38 @@ def test_list_bare_agent_is_identity() -> None:
     _list_sessions(state, {"agent_id": "builder"})
 
     assert sessions.listed == [("builder", None)]
+
+
+def test_mark_session_read_acknowledges_exact_project_run_and_invalidates_sessions() -> None:
+    state, resolver, sessions = _make_state()
+
+    result = _mark_session_read(
+        state,
+        {"agent_id": "builder@vbot", "session_id": "s1", "run_id": "run-one"},
+    )
+
+    assert resolver.resolved == [("vbot", "builder")]
+    assert sessions.marked_read == [("builder", "s1", "run-one", "vbot")]
+    assert result["agent_id"] == "builder@vbot"
+    assert result["marked_read"] is True
+    assert _sessions_resource_events(state) == [
+        {"kind": "sessions", "scope": {"agent_id": "builder"}}
+    ]
+
+
+def test_mark_session_read_stale_ack_does_not_invalidate_sessions() -> None:
+    state, _resolver, sessions = _make_state()
+    sessions.mark_read_result["marked_read"] = False
+    sessions.mark_read_result["has_unread_completion"] = True
+    sessions.mark_read_result["unread_run_id"] = "run-newer"
+
+    result = _mark_session_read(
+        state,
+        {"agent_id": "builder", "session_id": "s1", "run_id": "run-old"},
+    )
+
+    assert result["unread_run_id"] == "run-newer"
+    assert _sessions_resource_events(state) == []
 
 
 def test_session_compaction_policy_override_and_clear() -> None:

@@ -339,6 +339,36 @@ def _list_sessions(state: Any, params: JsonObject) -> JsonObject:
     return {"sessions": sessions}
 
 
+def _mark_session_read(state: Any, params: JsonObject) -> JsonObject:
+    """Acknowledge the exact terminal Run rendered in one Session."""
+    _reject_unsupported(params, {"agent_id", "session_id", "run_id"}, "session.mark_read")
+    agent_id, project_id = _required_agent_address(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    run_id = _required_string(params, "run_id")
+    try:
+        state.runtime.agent_resolver.resolve_agent(project_id, agent_id)
+        activity = state.runtime.chat_sessions.mark_terminal_run_read(
+            agent_id,
+            session_id,
+            run_id,
+            project_id,
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    if activity.get("marked_read") is True:
+        publish_resource_changed(
+            state,
+            RESOURCE_KIND_SESSIONS,
+            scope={"agent_id": agent_id},
+        )
+    return {
+        "agent_id": format_agent_address(agent_id, project_id),
+        "session_id": session_id,
+        **activity,
+    }
+
+
 async def _fork_session(state: Any, params: JsonObject) -> JsonObject:
     """Copy a session 1:1 into a fresh id, optionally re-homed to another agent.
 
@@ -705,6 +735,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "agent.delete": _delete_agent,
         "session.create": _create_session,
         "session.list": _list_sessions,
+        "session.mark_read": _mark_session_read,
         "session.fork": _fork_session,
         "session.delete": _delete_session,
         "session.rename": _rename_session,

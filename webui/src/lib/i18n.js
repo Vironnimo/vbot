@@ -133,6 +133,9 @@ export const englishCatalog = Object.freeze({
   'chat.runStatus.failed': 'Failed',
   'chat.runStatus.cancelling': 'Cancelling',
   'chat.runStatus.cancelled': 'Cancelled',
+  'chat.agentActivity.idle': '{name}: Idle',
+  'chat.agentActivity.running': '{name}: Running',
+  'chat.agentActivity.unread': '{name}: Unread result',
   'chat.today': 'Today',
   'chat.historyEmptyTitle': 'No messages yet',
   'chat.toolArgs': 'Args',
@@ -202,6 +205,8 @@ export const englishCatalog = Object.freeze({
   'chat.sessions.emptyTitle': 'No sessions yet',
   'sessions.no_sessions': 'No sessions found for this agent.',
   'sessions.current': 'Current',
+  'sessions.unreadCompletion': 'Unread',
+  'sessions.unreadCompletionHint': 'This Session has an unread result.',
   'sessions.fork': 'Fork',
   'sessions.forkHint':
     'A copy of another session. Background reflection and /reflect review a conversation in a fork so the original session stays untouched.',

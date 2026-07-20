@@ -1234,13 +1234,28 @@ class ChatLoop:
                 run.input_token_total,
                 run.output_token_total,
             )
-            session.append(
-                ChatMessage.run_summary(
-                    run_id=run.id,
-                    status=run_status,
-                    timing=run_timing,
-                )
+            run_summary = ChatMessage.run_summary(
+                run_id=run.id,
+                status=run_status,
+                timing=run_timing,
             )
+            session.append(run_summary)
+            try:
+                self._dependencies.sessions.record_terminal_run(
+                    run.agent_id,
+                    run.session_id,
+                    run.id,
+                    run_status,
+                    run_summary.timestamp,
+                    run.project_id,
+                )
+            except Exception:
+                # The canonical Run result is already durable in the transcript.
+                # A damaged activity sidecar must not turn successful agent work
+                # into a failed Run, but the missing notification is diagnosable.
+                _LOGGER.warning(
+                    "Failed to record unread completion for run %s", run.id, exc_info=True
+                )
             if context.continuation_tracker is not None:
                 if (
                     outcome == "success"

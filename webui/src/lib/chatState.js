@@ -13,6 +13,7 @@ import {
   listQueue as requestListQueue,
   listSessions as requestListSessions,
   loadChatHistory as requestLoadChatHistory,
+  markSessionRead as requestMarkSessionRead,
   removeFromQueue as requestRemoveFromQueue,
   showProject as requestShowProject,
   startChatRun as requestStartChatRun,
@@ -33,6 +34,9 @@ export const CHAT_STATUS_RUNNING = 'running';
 export const CHAT_STATUS_COMPLETED = 'completed';
 export const CHAT_STATUS_FAILED = 'failed';
 export const CHAT_STATUS_CANCELLED = 'cancelled';
+export const AGENT_ACTIVITY_IDLE = 'idle';
+export const AGENT_ACTIVITY_RUNNING = 'running';
+export const AGENT_ACTIVITY_UNREAD = 'unread';
 
 export const TERMINAL_RUN_EVENTS = new Set([
   'run_completed',
@@ -72,6 +76,7 @@ function defaultChatOperations() {
     listQueue: (...args) => requestListQueue(...args),
     listSessions: (...args) => requestListSessions(...args),
     loadChatHistory: (...args) => requestLoadChatHistory(...args),
+    markSessionRead: (...args) => requestMarkSessionRead(...args),
     removeFromQueue: (...args) => requestRemoveFromQueue(...args),
     showProject: (...args) => requestShowProject(...args),
     startChatRun: (...args) => requestStartChatRun(...args),
@@ -96,6 +101,7 @@ export function createChatController({
 }) {
   let handledConnectionSnapshot = null;
   let handledQueueInvalidation = null;
+  let activityRefreshVersion = 0;
 
   function errorMessage(error) {
     return typeof error?.message === 'string' && error.message
@@ -171,6 +177,7 @@ export function createChatController({
         sessionUsage: history?.session_usage,
         continuation: history?.continuation ?? null,
       });
+      sessionState.markReadFailedRunId = '';
       if (
         !history?.active_run &&
         isRunActive(sessionState) &&
@@ -181,6 +188,12 @@ export function createChatController({
       }
       if (isDisplayed()) {
         runStream.attachRunStream(sessionState, history?.active_run);
+        if (
+          sessionState.unreadRunId &&
+          sessionHasTerminalRun(sessionState, sessionState.unreadRunId)
+        ) {
+          await markSessionCompletionRead(sessionState);
+        }
       }
       await syncSessionQueue(sessionState);
       return true;
@@ -482,6 +495,75 @@ export function createChatController({
     runStream.handleServerEvents(event, events);
   }
 
+  async function refreshAgentActivity(agentAddresses) {
+    const addresses = [
+      ...new Set(
+        (Array.isArray(agentAddresses) ? agentAddresses : [])
+          .filter((value) => typeof value === 'string')
+          .map((value) => value.trim())
+          .filter(Boolean),
+      ),
+    ];
+    const requestVersion = ++activityRefreshVersion;
+    const results = await Promise.allSettled(
+      addresses.map(async (agentAddress) => ({
+        agentAddress,
+        response: await operations.listSessions(agentAddress),
+      })),
+    );
+    if (requestVersion !== activityRefreshVersion) {
+      return false;
+    }
+    for (const result of results) {
+      if (result.status !== 'fulfilled') {
+        continue;
+      }
+      syncAgentSessionActivity(
+        chatState,
+        result.value.agentAddress,
+        result.value.response?.sessions ?? [],
+      );
+    }
+    return true;
+  }
+
+  async function markSessionCompletionRead(sessionState) {
+    const runId = sessionState?.unreadRunId;
+    if (
+      !sessionState?.agentId ||
+      !sessionState?.sessionId ||
+      !runId ||
+      sessionState.markReadPendingRunId === runId
+    ) {
+      return false;
+    }
+    sessionState.markReadPendingRunId = runId;
+    try {
+      const result = await operations.markSessionRead(
+        sessionState.agentId,
+        sessionState.sessionId,
+        runId,
+      );
+      // Any Session listings that started before this acknowledgement may
+      // still carry the old unread bit. Retire those responses before applying
+      // the authoritative acknowledgement so blue cannot briefly resurrect.
+      activityRefreshVersion += 1;
+      applySessionCompletionActivity(sessionState, result);
+      sessionState.markReadFailedRunId = '';
+      return result?.marked_read === true;
+    } catch {
+      // Read acknowledgement is best-effort from the current view. Keeping the
+      // local unread marker visible makes the failure recoverable on a later
+      // selection/reconnect instead of surfacing a disruptive Chat error.
+      sessionState.markReadFailedRunId = runId;
+      return false;
+    } finally {
+      if (sessionState.markReadPendingRunId === runId) {
+        sessionState.markReadPendingRunId = '';
+      }
+    }
+  }
+
   function applyQueueInvalidation(scope) {
     if (!scope || scope === handledQueueInvalidation) {
       return false;
@@ -529,6 +611,8 @@ export function createChatController({
     loadHistoryPage: (params) => operations.loadChatHistory(params),
     loadOlderHistory,
     loadProject: (projectId) => operations.showProject(projectId),
+    markSessionCompletionRead,
+    refreshAgentActivity,
     removeQueueItem: (agentAddress, sessionId, queuedMessageId) =>
       operations.removeFromQueue(agentAddress, sessionId, queuedMessageId),
     removeQueued,
@@ -621,9 +705,128 @@ export function ensureSessionState(state, agentId, sessionId) {
       continuation: null,
       hasOlderHistory: false,
       loadingOlderHistory: false,
+      hasUnreadCompletion: false,
+      unreadRunId: '',
+      unreadRunStatus: '',
+      unreadRunAt: '',
+      lastActiveAt: '',
+      markReadPendingRunId: '',
+      markReadFailedRunId: '',
     };
   }
   return state.sessions[key];
+}
+
+export function syncAgentSessionActivity(state, agentId, sessions) {
+  const rows = (Array.isArray(sessions) ? sessions : []).filter(
+    (session) => typeof session?.id === 'string' && session.id.length > 0,
+  );
+  const listedSessionIds = new Set(rows.map((session) => session.id));
+  for (const sessionState of Object.values(state.sessions)) {
+    if (
+      sessionState.agentId === agentId &&
+      !listedSessionIds.has(sessionState.sessionId)
+    ) {
+      clearSessionCompletionActivity(sessionState);
+    }
+  }
+  for (const row of rows) {
+    const sessionState = ensureSessionState(state, agentId, row.id);
+    applySessionCompletionActivity(sessionState, row);
+  }
+  return state;
+}
+
+export function applySessionCompletionActivity(sessionState, source) {
+  if (!sessionState) {
+    return sessionState;
+  }
+  const lastActiveAt = normalizedActivityText(source?.last_active_at);
+  const incomingUnreadAt = normalizedActivityText(source?.unread_run_at);
+  const incomingHasUnread = source?.has_unread_completion === true;
+  if (
+    !incomingHasUnread &&
+    sessionState.hasUnreadCompletion &&
+    lastActiveAt &&
+    isAtLeastAsNewActivityTimestamp(sessionState.unreadRunAt, lastActiveAt)
+  ) {
+    return sessionState;
+  }
+
+  sessionState.lastActiveAt = lastActiveAt || sessionState.lastActiveAt;
+  sessionState.hasUnreadCompletion = incomingHasUnread;
+  sessionState.unreadRunId = incomingHasUnread
+    ? normalizedActivityText(source?.unread_run_id)
+    : '';
+  sessionState.unreadRunStatus = incomingHasUnread
+    ? normalizedActivityText(source?.unread_run_status)
+    : '';
+  sessionState.unreadRunAt = incomingHasUnread ? incomingUnreadAt : '';
+  return sessionState;
+}
+
+export function agentActivityStatus(state, agentId) {
+  const sessions = Object.values(state?.sessions ?? {}).filter(
+    (sessionState) => sessionState.agentId === agentId,
+  );
+  if (sessions.some((sessionState) => isRunActive(sessionState))) {
+    return AGENT_ACTIVITY_RUNNING;
+  }
+  if (sessions.some((sessionState) => sessionState.hasUnreadCompletion)) {
+    return AGENT_ACTIVITY_UNREAD;
+  }
+  return AGENT_ACTIVITY_IDLE;
+}
+
+export function newestUnreadSessionForAgent(state, agentId) {
+  const unreadSessions = Object.values(state?.sessions ?? {}).filter(
+    (sessionState) =>
+      sessionState.agentId === agentId &&
+      sessionState.hasUnreadCompletion &&
+      sessionState.unreadRunId,
+  );
+  unreadSessions.sort(
+    (left, right) =>
+      activityTimestamp(right.unreadRunAt || right.lastActiveAt) -
+        activityTimestamp(left.unreadRunAt || left.lastActiveAt) ||
+      left.sessionId.localeCompare(right.sessionId),
+  );
+  return unreadSessions[0] ?? null;
+}
+
+export function sessionHasTerminalRun(sessionState, runId) {
+  if (!sessionState || !runId) {
+    return false;
+  }
+  return (
+    (sessionState.messages ?? []).some(
+      (message) => message?.role === 'run_summary' && message?.run_id === runId,
+    ) ||
+    (sessionState.runEvents ?? []).some(
+      (event) =>
+        event?.run_id === runId && TERMINAL_RUN_EVENTS.has(event?.type),
+    )
+  );
+}
+
+function clearSessionCompletionActivity(sessionState) {
+  sessionState.hasUnreadCompletion = false;
+  sessionState.unreadRunId = '';
+  sessionState.unreadRunStatus = '';
+  sessionState.unreadRunAt = '';
+}
+
+function normalizedActivityText(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function activityTimestamp(value) {
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function isAtLeastAsNewActivityTimestamp(left, right) {
+  return activityTimestamp(left) >= activityTimestamp(right);
 }
 
 export function currentSessionState(state) {
@@ -843,6 +1046,11 @@ export function finishRun(sessionState, event) {
     sessionState.sessionUsage = event.payload.session_usage;
   }
   sessionState.continuation = event?.payload?.continuation ?? null;
+  sessionState.hasUnreadCompletion = true;
+  sessionState.unreadRunId = event?.run_id ?? '';
+  sessionState.unreadRunStatus = status ?? terminalStatus(type);
+  sessionState.unreadRunAt = event?.timestamp ?? '';
+  sessionState.lastActiveAt = event?.timestamp ?? sessionState.lastActiveAt;
   return sessionState;
 }
 

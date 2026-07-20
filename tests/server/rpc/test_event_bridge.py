@@ -275,7 +275,7 @@ def test_publish_resource_changed_rejects_unknown_kind() -> None:
 
 
 @pytest.mark.asyncio
-async def test_terminal_run_event_invalidates_debug_traces() -> None:
+async def test_terminal_run_event_invalidates_debug_traces_and_sessions() -> None:
     event_bus = ServerEventBus()
     run = Run(run_id="run-one", agent_id="agent-1", session_id="session-1")
     run.emit(RUN_STARTED_EVENT, {"status": "running"})
@@ -283,8 +283,10 @@ async def test_terminal_run_event_invalidates_debug_traces() -> None:
 
     await _publish_run_events(event_bus, run)
 
-    assert event_bus.events[-1]["type"] == "resource_changed"
-    assert event_bus.events[-1]["payload"] == {"kind": "debug_traces"}
+    assert [event["payload"] for event in event_bus.events[-2:]] == [
+        {"kind": "debug_traces"},
+        {"kind": "sessions", "scope": {"agent_id": "agent-1"}},
+    ]
 
 
 def test_process_output_deltas_are_sse_only_not_websocket_events() -> None:

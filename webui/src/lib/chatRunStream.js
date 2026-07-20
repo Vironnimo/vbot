@@ -583,14 +583,22 @@ export function createChatRunStream({
         activeRun.agent_id,
         activeRun.project_id,
       );
-      if (!isDisplayedSession(agentAddress, activeRun.session_id)) {
-        continue;
-      }
       const sessionState = ensureSessionState(
         chatState,
         agentAddress,
         activeRun.session_id,
       );
+      if (sessionState.currentRun?.runId !== activeRun.run_id) {
+        startRun(sessionState, {
+          run_id: activeRun.run_id,
+          status: 'running',
+          sse_url: activeRun.sse_url,
+          events: [],
+        });
+      }
+      if (!isDisplayedSession(agentAddress, activeRun.session_id)) {
+        continue;
+      }
       attachRunStream(sessionState, {
         run_id: activeRun.run_id,
         status: 'running',

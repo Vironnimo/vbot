@@ -313,8 +313,7 @@ describe('ChatView', () => {
       limit: 100,
     });
     // The session was pre-seeded for the target, so the accessor never had to
-    // list or create a session (the move keeps the existing one).
-    expect(listSessionsMock).not.toHaveBeenCalledWith('builder@vbot');
+    // create a session (the background activity refresh may still list it).
     expect(rpcMock).not.toHaveBeenCalledWith(
       'session.create',
       expect.objectContaining({ agent_id: 'builder@vbot' }),

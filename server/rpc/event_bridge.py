@@ -36,6 +36,7 @@ from server.events import (
     PROVIDER_AUTH_COMPLETED_EVENT,
     RESOURCE_CHANGED_EVENT,
     RESOURCE_KIND_DEBUG_TRACES,
+    RESOURCE_KIND_SESSIONS,
     RUN_CANCELLED_SERVER_EVENT,
     RUN_COMPLETED_SERVER_EVENT,
     RUN_FAILED_SERVER_EVENT,
@@ -177,6 +178,13 @@ async def _publish_run_events(event_bus: Any, run: Run) -> None:
             event_bus.publish(
                 RESOURCE_CHANGED_EVENT,
                 {"kind": RESOURCE_KIND_DEBUG_TRACES},
+            )
+            event_bus.publish(
+                RESOURCE_CHANGED_EVENT,
+                {
+                    "kind": RESOURCE_KIND_SESSIONS,
+                    "scope": {"agent_id": run.agent_id},
+                },
             )
 
 

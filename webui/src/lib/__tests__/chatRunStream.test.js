@@ -4,6 +4,7 @@ import { createChatRunStream } from '../chatRunStream.js';
 import {
   CHAT_STATUS_IDLE,
   CHAT_STATUS_RUNNING,
+  agentActivityStatus,
   addServerQueuedMessage,
   createChatState,
   ensureSessionState,
@@ -170,6 +171,8 @@ describe('createChatRunStream().applyConnectionSnapshot()', () => {
       'gamma',
       'session-child-2',
     );
+    expect(agentActivityStatus(chatState, 'beta')).toBe('running');
+    expect(agentActivityStatus(chatState, 'gamma')).toBe('running');
   });
 
   it('regression for B11: a connection_ready with empty active_runs and no replayed run_started events opens zero subscriptions and leaves the session idle without an action error', () => {

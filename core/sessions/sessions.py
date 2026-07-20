@@ -8,6 +8,7 @@ import contextvars
 import json
 import os
 import re
+import threading
 import uuid
 from collections import deque
 from collections.abc import Callable
@@ -29,6 +30,7 @@ TIMESTAMP_SUFFIX = "+00:00"
 UTC_Z_SUFFIX = "Z"
 SESSION_FILE_EXTENSION = ".jsonl"
 CONTINUATION_FILE_SUFFIX = ".continuation.jsonl"
+SESSION_ACTIVITY_FILE_SUFFIX = ".activity.json"
 SESSION_LINE_ENDING = "\n"
 SESSION_LINE_ENDING_BYTES = b"\n"
 SESSION_APPEND_FLAGS = os.O_APPEND | os.O_CREAT | os.O_WRONLY
@@ -40,6 +42,7 @@ SESSION_TITLE_KEY = "title"
 SESSION_AUTO_TITLE_KEY = "auto_title"
 SESSION_AUTO_TITLE_INITIALIZED_KEY = "auto_title_initialized"
 SESSION_TITLE_MAX_LENGTH = 200
+SESSION_TERMINAL_RUN_STATUSES = frozenset({"completed", "failed", "cancelled"})
 # Sidecar key recording a forked session's provenance: which source session it was
 # copied from and the fork point. Written on every fork (even when the source had no
 # sidecar) so a fork is self-describing.
@@ -128,6 +131,11 @@ class ChatSession:
     def continuation_path(self) -> Path:
         """Return the append-only continuation journal path for this session."""
         return self.path.with_name(f"{self.path.stem}{CONTINUATION_FILE_SUFFIX}")
+
+    @property
+    def activity_path(self) -> Path:
+        """Return the durable Run-completion/read-state sidecar path."""
+        return self.path.with_name(f"{self.path.stem}{SESSION_ACTIVITY_FILE_SUFFIX}")
 
     def append(self, message: ChatMessage) -> None:
         """Append one canonical message as a single JSONL line."""
@@ -369,9 +377,10 @@ class ChatSession:
         return messages
 
     def delete(self) -> None:
-        """Delete the session file and both sidecars if they exist."""
+        """Delete the session file and its sidecars if they exist."""
         self.path.unlink(missing_ok=True)
         self.sidecar_path.unlink(missing_ok=True)
+        self.activity_path.unlink(missing_ok=True)
         self.clear_continuation()
 
     @staticmethod
@@ -486,6 +495,10 @@ class ChatSessionManager:
     # channel_send) acquires it, so a note can never split a tool cycle. Entries
     # are never reaped: one lock per session file ever written is negligible.
     _write_locks: ClassVar[dict[str, _SessionWriteLock]] = {}
+    # Completion and read-receipt updates are short synchronous JSON replaces.
+    # One process-wide lock keeps their read-modify-write cycle atomic across
+    # manager instances without adding an async lock to the RPC boundary.
+    _activity_lock: ClassVar[threading.RLock] = threading.RLock()
 
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = data_dir
@@ -612,6 +625,76 @@ class ChatSessionManager:
         finally:
             temp_path.unlink(missing_ok=True)
 
+    def record_terminal_run(
+        self,
+        agent_id: str,
+        session_id: str,
+        run_id: str,
+        status: str,
+        timestamp: str,
+        project_id: str | None = None,
+    ) -> None:
+        """Persist the latest terminal Run as an unread completion.
+
+        This state deliberately lives outside the general metadata sidecar: Run
+        completion and read acknowledgement are one tiny state machine with its
+        own atomic writer, so unrelated title/Skill/channel metadata rewrites
+        cannot lose a notification. An absent activity sidecar means no unread
+        completion, which also gives pre-feature Sessions a clean baseline.
+        """
+        if not isinstance(run_id, str) or not run_id:
+            raise ChatSessionError("terminal run id must be a non-empty string")
+        if status not in SESSION_TERMINAL_RUN_STATUSES:
+            raise ChatSessionError("terminal run status is invalid")
+        if not isinstance(timestamp, str) or not timestamp:
+            raise ChatSessionError("terminal run timestamp must be a non-empty string")
+
+        session = self.get(agent_id, session_id, project_id)
+        with self._activity_lock:
+            if not session.path.exists():
+                raise ChatSessionError(f"session does not exist: {session_id}")
+            activity = self._load_activity(session)
+            activity["latest_completion"] = {
+                "run_id": run_id,
+                "status": status,
+                "timestamp": timestamp,
+            }
+            self._write_activity(session, activity)
+
+    def mark_terminal_run_read(
+        self,
+        agent_id: str,
+        session_id: str,
+        run_id: str,
+        project_id: str | None = None,
+    ) -> JsonObject:
+        """Acknowledge exactly the terminal Run the accessor displayed.
+
+        A stale acknowledgement never clears a newer completion: the caller
+        supplies the Run id it rendered, and the write advances only while that
+        id is still the latest completion in this Session.
+        """
+        if not isinstance(run_id, str) or not run_id:
+            raise ChatSessionError("read run id must be a non-empty string")
+        session = self.get(agent_id, session_id, project_id)
+        with self._activity_lock:
+            if not session.path.exists():
+                raise ChatSessionError(f"session does not exist: {session_id}")
+            activity = self._load_activity(session)
+            latest = _valid_latest_completion(activity)
+            marked_read = False
+            if (
+                latest is not None
+                and latest["run_id"] == run_id
+                and activity.get("read_run_id") != run_id
+            ):
+                activity["read_run_id"] = run_id
+                self._write_activity(session, activity)
+                marked_read = True
+            payload = _completion_activity_payload(activity)
+            payload["marked_read"] = marked_read
+            return payload
+
     def set_title(
         self,
         agent_id: str,
@@ -737,16 +820,31 @@ class ChatSessionManager:
                 raise ChatSessionError(f"destination session already exists: {session_id}")
 
             source_sidecar = source.sidecar_path
+            source_activity = source.activity_path
             source_continuation = source.continuation_path
             had_sidecar = source_sidecar.exists()
             had_continuation = source_continuation.exists()
             sidecar_data = self._load_sidecar(source)
 
             destination_dir.mkdir(parents=True, exist_ok=True)
-            try:
-                os.replace(source.path, destination_path)
-            except OSError as exc:
-                raise ChatSessionError(f"failed to move session transcript: {session_id}") from exc
+            with self._activity_lock:
+                had_activity = source_activity.exists()
+                try:
+                    os.replace(source.path, destination_path)
+                except OSError as exc:
+                    raise ChatSessionError(
+                        f"failed to move session transcript: {session_id}"
+                    ) from exc
+                if had_activity:
+                    destination_activity = destination_path.with_name(
+                        f"{session_id}{SESSION_ACTIVITY_FILE_SUFFIX}"
+                    )
+                    try:
+                        os.replace(source_activity, destination_activity)
+                    except OSError as exc:
+                        raise ChatSessionError(
+                            f"failed to move session activity: {session_id}"
+                        ) from exc
 
             if had_sidecar:
                 stripped = {
@@ -852,6 +950,7 @@ class ChatSessionManager:
             metadata = self._load_sidecar(session)
 
             session_data: dict[str, Any] = dict(metadata)
+            session_data.update(self._completion_activity(session))
             session_data["id"] = session.id
             session_data["created_at"] = created_at
             session_data["last_active_at"] = last_active_at
@@ -866,7 +965,9 @@ class ChatSessionManager:
         removed session stays recoverable. Kept as the genuine "remove the
         files" capability that tests and staleness cleanup use.
         """
-        self.get(agent_id, session_id, project_id).delete()
+        session = self.get(agent_id, session_id, project_id)
+        with self._activity_lock:
+            session.delete()
 
     async def archive(self, agent_id: str, session_id: str, project_id: str | None = None) -> Path:
         """Archive one session's transcript and sidecars instead of deleting them.
@@ -890,21 +991,27 @@ class ChatSessionManager:
             archive_dir.mkdir(parents=True, exist_ok=True)
             archived_transcript = archive_dir / source.path.name
             archived_sidecar = archive_dir / source.sidecar_path.name
+            archived_activity = archive_dir / source.activity_path.name
             archived_continuation = archive_dir / source.continuation_path.name
 
             # Replace any prior archive for the same id (mirrors agent/project).
             archived_transcript.unlink(missing_ok=True)
             archived_sidecar.unlink(missing_ok=True)
+            archived_activity.unlink(missing_ok=True)
             archived_continuation.unlink(missing_ok=True)
 
             had_sidecar = source.sidecar_path.exists()
             had_continuation = source.continuation_path.exists()
-            try:
-                os.replace(source.path, archived_transcript)
-            except OSError as exc:
-                raise ChatSessionError(
-                    f"failed to archive session transcript: {session_id}"
-                ) from exc
+            with self._activity_lock:
+                had_activity = source.activity_path.exists()
+                try:
+                    os.replace(source.path, archived_transcript)
+                except OSError as exc:
+                    raise ChatSessionError(
+                        f"failed to archive session transcript: {session_id}"
+                    ) from exc
+                if had_activity:
+                    os.replace(source.activity_path, archived_activity)
             if had_sidecar:
                 os.replace(source.sidecar_path, archived_sidecar)
             if had_continuation:
@@ -943,6 +1050,37 @@ class ChatSessionManager:
         if not isinstance(data, dict):
             raise ChatSessionError(f"metadata for session must be an object: {session.id}")
         return dict(data)
+
+    def _completion_activity(self, session: ChatSession) -> JsonObject:
+        with self._activity_lock:
+            return _completion_activity_payload(self._load_activity(session))
+
+    def _load_activity(self, session: ChatSession) -> JsonObject:
+        activity_path = session.activity_path
+        if not activity_path.exists():
+            return {}
+        try:
+            data = json.loads(activity_path.read_text(encoding="utf-8"))
+        except OSError as exc:
+            raise ChatSessionError(f"failed to read activity for session: {session.id}") from exc
+        except json.JSONDecodeError as exc:
+            raise ChatSessionError(f"invalid activity JSON for session: {session.id}") from exc
+        if not isinstance(data, dict):
+            raise ChatSessionError(f"activity for session must be an object: {session.id}")
+        return dict(data)
+
+    def _write_activity(self, session: ChatSession, data: JsonObject) -> None:
+        activity_path = session.activity_path
+        activity_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = activity_path.with_name(f".{activity_path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            serialized = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+            temp_path.write_text(serialized, encoding="utf-8")
+            os.replace(temp_path, activity_path)
+        except (OSError, TypeError, ValueError) as exc:
+            raise ChatSessionError(f"failed to write activity for session: {session.id}") from exc
+        finally:
+            temp_path.unlink(missing_ok=True)
 
     def _activity_timestamps(self, session: ChatSession) -> tuple[str, str]:
         bookends = session.bookend_timestamps()
@@ -999,6 +1137,43 @@ def _normalize_session_title(title: str) -> str | None:
     if not collapsed:
         return None
     return collapsed[:SESSION_TITLE_MAX_LENGTH]
+
+
+def _valid_latest_completion(activity: JsonObject) -> JsonObject | None:
+    latest = activity.get("latest_completion")
+    if latest is None:
+        return None
+    if not isinstance(latest, dict):
+        raise ChatSessionError("session activity latest_completion must be an object")
+    run_id = latest.get("run_id")
+    status = latest.get("status")
+    timestamp = latest.get("timestamp")
+    if (
+        not isinstance(run_id, str)
+        or not run_id
+        or status not in SESSION_TERMINAL_RUN_STATUSES
+        or not isinstance(timestamp, str)
+        or not timestamp
+    ):
+        raise ChatSessionError("session activity latest_completion is invalid")
+    return {"run_id": run_id, "status": status, "timestamp": timestamp}
+
+
+def _completion_activity_payload(activity: JsonObject) -> JsonObject:
+    latest = _valid_latest_completion(activity)
+    if latest is None or activity.get("read_run_id") == latest["run_id"]:
+        return {
+            "has_unread_completion": False,
+            "unread_run_id": None,
+            "unread_run_status": None,
+            "unread_run_at": None,
+        }
+    return {
+        "has_unread_completion": True,
+        "unread_run_id": latest["run_id"],
+        "unread_run_status": latest["status"],
+        "unread_run_at": latest["timestamp"],
+    }
 
 
 def _skill_context_note_content(name: str, content: str) -> str:

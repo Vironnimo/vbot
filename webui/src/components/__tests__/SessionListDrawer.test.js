@@ -148,6 +148,39 @@ describe('SessionListDrawer', () => {
     expect(buttonByText('Refresh')).toBeNull();
   });
 
+  it('identifies the concrete Session with an unread completion', async () => {
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'session-1',
+          created_at: '2026-05-09T00:00:00+00:00',
+          has_unread_completion: true,
+          unread_run_id: 'run-one',
+          unread_run_status: 'completed',
+          unread_run_at: '2026-07-20T10:00:00+00:00',
+        },
+      ],
+    });
+
+    mountedComponent = mount(SessionListDrawer, {
+      target: document.body,
+      props: {
+        agentId: 'alpha',
+        currentSessionId: 'session-1',
+        agentCurrentSessionId: 'session-1',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.querySelector('.session-row__unread-dot') !== null,
+    );
+
+    expect(
+      document.querySelector('.session-row__unread')?.textContent,
+    ).toContain('Unread');
+  });
+
   it('renames a session through the row menu and reloads the list', async () => {
     mountedComponent = mount(SessionListDrawer, {
       target: document.body,

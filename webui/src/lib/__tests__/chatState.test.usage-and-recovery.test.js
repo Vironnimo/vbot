@@ -5,6 +5,9 @@ import {
   CHAT_STATUS_FAILED,
   CHAT_STATUS_IDLE,
   CHAT_STATUS_RUNNING,
+  AGENT_ACTIVITY_RUNNING,
+  AGENT_ACTIVITY_UNREAD,
+  agentActivityStatus,
   appendRunEvent,
   canCreateNewSession,
   createChatState,
@@ -12,6 +15,7 @@ import {
   isRunActive,
   loadHistory,
   resetStaleRun,
+  newestUnreadSessionForAgent,
   startRun,
   updateSessionUsage,
   visibleTimelineItemsForRender,
@@ -42,11 +46,8 @@ describe('chat state helpers', () => {
   });
 
   it('updates session usage when finishRun processes a run_completed event with usage', () => {
-    const sessionState = ensureSessionState(
-      createChatState(),
-      'alpha',
-      'session-one',
-    );
+    const chatState = createChatState();
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
     startRun(sessionState, {
       run_id: 'run-one',
       sse_url: '/api/runs/run-one/events',
@@ -67,6 +68,33 @@ describe('chat state helpers', () => {
       input_tokens: 8432,
       output_tokens: 512,
     });
+    expect(agentActivityStatus(chatState, 'alpha')).toBe(AGENT_ACTIVITY_UNREAD);
+  });
+
+  it('prioritizes a running Session over unread results and finds the newest unread Session', () => {
+    const chatState = createChatState();
+    const runningSession = ensureSessionState(
+      chatState,
+      'alpha',
+      'session-running',
+    );
+    const olderUnread = ensureSessionState(chatState, 'alpha', 'session-older');
+    const newerUnread = ensureSessionState(chatState, 'alpha', 'session-newer');
+    olderUnread.hasUnreadCompletion = true;
+    olderUnread.unreadRunId = 'run-old';
+    olderUnread.unreadRunAt = '2026-07-20T10:00:00+00:00';
+    newerUnread.hasUnreadCompletion = true;
+    newerUnread.unreadRunId = 'run-new';
+    newerUnread.unreadRunAt = '2026-07-20T10:05:00+00:00';
+    startRun(runningSession, {
+      run_id: 'run-live',
+      status: CHAT_STATUS_RUNNING,
+    });
+
+    expect(agentActivityStatus(chatState, 'alpha')).toBe(
+      AGENT_ACTIVITY_RUNNING,
+    );
+    expect(newestUnreadSessionForAgent(chatState, 'alpha')).toBe(newerUnread);
   });
 
   it('updates token usage after a completed model step while the run stays active', () => {

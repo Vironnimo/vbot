@@ -366,9 +366,14 @@ describe('ChatView', () => {
       document.querySelector('.chat-view__project-team .agent-tab.active')
         ?.textContent,
     ).toContain('Reviewer');
-    // Session/history resolution used the restored agent's full address.
+    // Session/history resolution used the restored agent's full address. The
+    // background activity refresh may list every team member, but it must not
+    // navigate to Builder's history.
     expect(listSessionsMock).toHaveBeenCalledWith('reviewer@vbot');
-    expect(listSessionsMock).not.toHaveBeenCalledWith('builder@vbot');
+    expect(rpcMock).not.toHaveBeenCalledWith(
+      'chat.history',
+      expect.objectContaining({ agent_id: 'builder@vbot' }),
+    );
   });
 
   it('restores the identity agent on reload when it was active alongside the project', async () => {
@@ -412,8 +417,12 @@ describe('ChatView', () => {
     expect(
       document.querySelector('.chat-view__project-team .agent-tab.active'),
     ).toBeNull();
-    // No project agent was opened, so its session was never resolved.
-    expect(listSessionsMock).not.toHaveBeenCalledWith('builder@vbot');
+    // No project agent was opened. Its Sessions may be listed for activity,
+    // but project-agent history is not loaded.
+    expect(rpcMock).not.toHaveBeenCalledWith(
+      'chat.history',
+      expect.objectContaining({ agent_id: 'builder@vbot' }),
+    );
   });
 
   it('falls back to the project default when the remembered agent left the team', async () => {

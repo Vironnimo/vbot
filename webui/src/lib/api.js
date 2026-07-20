@@ -888,6 +888,29 @@ export function listSessions(agentId, options = {}) {
   return rpc('session.list', { agent_id: agentId }, options);
 }
 
+export function markSessionRead(agentId, sessionId, runId, options = {}) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'session.mark_read',
+  );
+  requireNonEmptyString(
+    sessionId,
+    'Session id must be a non-empty string',
+    'session.mark_read',
+  );
+  requireNonEmptyString(
+    runId,
+    'Run id must be a non-empty string',
+    'session.mark_read',
+  );
+  return rpc(
+    'session.mark_read',
+    { agent_id: agentId, session_id: sessionId, run_id: runId },
+    options,
+  );
+}
+
 export function renameSession(agentId, sessionId, title, options = {}) {
   requireNonEmptyString(
     agentId,
