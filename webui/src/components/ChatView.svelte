@@ -288,14 +288,12 @@
   // at least one Provider is connected; Project Agents resolve their Model
   // through Project defaults, and override stand-ins carry no Model field.
   let providerSetupMissing = $derived(
-    Boolean(activeAgent) &&
-      !sessionOverrideActive &&
-      hasConnectedProvider === false,
+    Boolean(activeAgent) && hasConnectedProvider === false,
   );
   let agentModelMissing = $derived(
     Boolean(activeAgent) &&
       !projectAgentActive &&
-      !sessionOverrideActive &&
+      !activeAgent?.__overrideAddress &&
       hasConnectedProvider === true &&
       agentNeedsModel(activeAgent),
   );
@@ -715,6 +713,24 @@
     }, CHAT_TOAST_TIMEOUT_MS);
   };
 
+  const clearSessionActionError = (sessionState = activeSessionState) => {
+    chatState.actionError = '';
+    if (sessionState) {
+      sessionState.actionError = '';
+    }
+  };
+
+  const setSessionActionError = (
+    message,
+    sessionState = activeSessionState,
+  ) => {
+    if (sessionState) {
+      sessionState.actionError = message;
+      return;
+    }
+    chatState.actionError = message;
+  };
+
   const appendTransientCard = (text) => {
     const body = typeof text === 'string' ? text : '';
     if (!body) {
@@ -945,7 +961,10 @@
 
   const loadAgents = (options = {}) => chatController.loadAgents(options);
 
-  const loadCurrentHistory = () => chatController.loadCurrentHistory();
+  const loadCurrentHistory = () => {
+    chatState.actionError = '';
+    return chatController.loadCurrentHistory();
+  };
 
   // Load a session's history by its outside agent spelling (bare id for an
   // identity session, `agent@projekt` for a project-agent session) — one path
@@ -959,8 +978,10 @@
   // only — a stale response must not re-open a subscription the newer
   // navigation just closed, unlock the composer early, or banner-error a
   // healthy session.
-  const loadHistoryForSession = (agentId, sessionId) =>
-    chatController.loadHistoryForSession(agentId, sessionId);
+  const loadHistoryForSession = (agentId, sessionId) => {
+    chatState.actionError = '';
+    return chatController.loadHistoryForSession(agentId, sessionId);
+  };
 
   // Background sub-agent spawns only return a "running" descriptor, so once the
   // child run finishes the timeline asks for its final output here. We fetch the
@@ -1103,7 +1124,7 @@
   // the FULL address (`agent@projekt`) — trap 2.
   const ensureProjectAgentSession = async (addressing) => {
     const { agentAddress } = addressing;
-    chatState.actionError = '';
+    clearSessionActionError();
     try {
       const newestUnreadSession = newestUnreadSessionForAgent(
         chatState,
@@ -1142,7 +1163,9 @@
       if (currentProjectAgentAddress() !== agentAddress) {
         return;
       }
-      chatState.actionError = `${t('chat.project.sessionError', 'The project agent session could not be opened.')} ${error.message}`;
+      setSessionActionError(
+        `${t('chat.project.sessionError', 'The project agent session could not be opened.')} ${error.message}`,
+      );
     }
   };
 
@@ -1421,7 +1444,7 @@
   };
 
   const handleReturnToCurrentSession = async () => {
-    if (!sessionOverrideActive || chatState.loadingHistory) {
+    if (!subAgentSessionActive || chatState.loadingHistory) {
       return;
     }
 
@@ -1476,9 +1499,10 @@
     if (!agent) {
       return;
     }
+    const sourceSessionState = activeSessionState;
     clearSessionOverride();
     creatingSession = true;
-    chatState.actionError = '';
+    clearSessionActionError(sourceSessionState);
     try {
       const session = await chatController.createSession({
         agent_id: agent.id,
@@ -1486,7 +1510,10 @@
       });
       await switchToCurrentSession(agent.id, session.session_id);
     } catch (error) {
-      chatState.actionError = `${t('chat.sessionCreateError', 'New session could not be created.')} ${error.message}`;
+      setSessionActionError(
+        `${t('chat.sessionCreateError', 'New session could not be created.')} ${error.message}`,
+        sourceSessionState,
+      );
     } finally {
       creatingSession = false;
     }
@@ -1500,8 +1527,9 @@
     if (!agentAddress) {
       return;
     }
+    const sourceSessionState = activeSessionState;
     creatingSession = true;
-    chatState.actionError = '';
+    clearSessionActionError(sourceSessionState);
     try {
       const created = await chatController.createSession({
         agent_id: agentAddress,
@@ -1516,7 +1544,10 @@
       };
       await loadHistoryForSession(agentAddress, sessionId);
     } catch (error) {
-      chatState.actionError = `${t('chat.sessionCreateError', 'New session could not be created.')} ${error.message}`;
+      setSessionActionError(
+        `${t('chat.sessionCreateError', 'New session could not be created.')} ${error.message}`,
+        sourceSessionState,
+      );
     } finally {
       creatingSession = false;
     }
@@ -1662,7 +1693,7 @@
   };
 
   const handleTranscriptionError = (message) => {
-    chatState.actionError = message;
+    setSessionActionError(message);
   };
 
   // Reload history for whichever session is active, keyed by its stored
@@ -1716,6 +1747,7 @@
   const handleCancelToolCall = async ({ runId, toolCallId } = {}) => {
     const agent = activeAgent;
     await chatController.cancelTool({
+      sessionState: activeSessionState,
       agentId: agent?.id ?? '',
       runId,
       toolCallId,
@@ -1739,7 +1771,7 @@
       return;
     }
 
-    chatState.actionError = '';
+    sessionState.actionError = '';
     try {
       if (plan.kind === 'run') {
         await chatController.cancelRunById(plan.runId, { reason: 'user' });
@@ -1766,7 +1798,7 @@
         await cancelSubAgentActiveRun(plan.agentId, plan.sessionId);
       }
     } catch (error) {
-      chatState.actionError = `${t('chat.cancelError', 'Run could not be cancelled.')} ${error.message}`;
+      sessionState.actionError = `${t('chat.cancelError', 'Run could not be cancelled.')} ${error.message}`;
     }
   };
 
@@ -1872,9 +1904,6 @@
     syncSessionQueue: (sessionState) =>
       chatController.syncSessionQueue(sessionState),
     isDisplayedSession,
-    setActionError: (message) => {
-      chatState.actionError = message;
-    },
     updateSubAgentRunStatuses: applySubAgentRunStatusUpdates,
   });
   chatController = createChatController({
@@ -2017,14 +2046,13 @@
         <SessionListDrawer
           agentId={activeAgentAddress}
           currentSessionId={viewingSessionId || activeAgent.current_session_id}
-          agentCurrentSessionId={activeAgent.current_session_id}
           reloadToken={sessionsRefreshToken}
           onSessionSelected={handleSessionSelected}
           onSessionDeleted={handleSessionDeleted}
         />
       {/if}
       <div class="chat-view__surface">
-        {#if chatState.loadingHistory || chatState.historyError || chatState.actionError || activeSessionState?.error}
+        {#if chatState.loadingHistory || chatState.historyError || chatState.actionError || chatState.commandsError || activeSessionState?.actionError || activeSessionState?.streamError || activeSessionState?.error}
           <div class="chat-view__notice-stack" aria-live="polite">
             <div class="chat-view__measure chat-view__notice-inner">
               {#if chatState.loadingHistory}
@@ -2043,6 +2071,16 @@
               {/if}
               {#if chatState.actionError}
                 <Banner variant="error">{chatState.actionError}</Banner>
+              {/if}
+              {#if chatState.commandsError}
+                <Banner variant="error">{chatState.commandsError}</Banner>
+              {/if}
+              {#if activeSessionState?.actionError}
+                <Banner variant="error">{activeSessionState.actionError}</Banner
+                >
+              {/if}
+              {#if activeSessionState?.streamError}
+                <Banner variant="warn">{activeSessionState.streamError}</Banner>
               {/if}
               {#if activeSessionState?.error}
                 <Banner variant="error">
@@ -2075,7 +2113,7 @@
           />
         </div>
         <div class="chat-view__footer-stack">
-          {#if sessionOverrideActive}
+          {#if subAgentSessionActive}
             <Banner
               variant="info"
               class="chat-view__footer-banner"
@@ -2083,27 +2121,20 @@
             >
               <div class="chat-view__footer-banner-copy">
                 <p class="chat-view__footer-banner-title">
-                  {subAgentSessionActive
-                    ? t(
-                        'chat.subagentSessionNotice',
-                        'Viewing a sub-agent session',
-                      )
-                    : t('chat.pastSessionNotice', 'Viewing a past session')}
+                  {t(
+                    'chat.subagentSessionNotice',
+                    'Viewing a sub-agent session',
+                  )}
                 </p>
                 <p class="chat-view__footer-banner-hint">
-                  {subAgentSessionActive
-                    ? subAgentParentTarget
-                      ? t(
-                          'chat.subagentSessionParentHint',
-                          'Messages here continue this sub-agent session. Return to the parent session when you are done.',
-                        )
-                      : t(
-                          'chat.subagentSessionHint',
-                          'Messages here continue this sub-agent session. Return to the current agent session when you are done.',
-                        )
+                  {subAgentParentTarget
+                    ? t(
+                        'chat.subagentSessionParentHint',
+                        'Messages here continue this sub-agent session. Return to the parent session when you are done.',
+                      )
                     : t(
-                        'chat.pastSessionHint',
-                        'This is not the agent’s current session. Messages sent here continue this past session.',
+                        'chat.subagentSessionHint',
+                        'Messages here continue this sub-agent session. Return to the current agent session when you are done.',
                       )}
                 </p>
               </div>
@@ -2113,7 +2144,7 @@
                 disabled={chatState.loadingHistory}
                 onClick={handleReturnToCurrentSession}
               >
-                {subAgentSessionActive && subAgentParentTarget
+                {subAgentParentTarget
                   ? t('chat.returnToParentSession', 'Return to parent session')
                   : t(
                       'chat.returnToCurrentSession',

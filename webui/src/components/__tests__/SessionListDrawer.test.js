@@ -68,7 +68,6 @@ describe('SessionListDrawer', () => {
       props: {
         agentId: 'alpha',
         currentSessionId: 'session-1',
-        agentCurrentSessionId: 'session-1',
         get reloadToken() {
           return harness.sessionsRefreshToken;
         },
@@ -101,7 +100,6 @@ describe('SessionListDrawer', () => {
       props: {
         agentId: 'alpha',
         currentSessionId: 'session-1',
-        agentCurrentSessionId: 'session-1',
         get reloadToken() {
           return harness.sessionsRefreshToken;
         },
@@ -129,7 +127,6 @@ describe('SessionListDrawer', () => {
       props: {
         agentId: 'alpha',
         currentSessionId: 'session-1',
-        agentCurrentSessionId: 'session-1',
       },
     });
     flushSync();
@@ -167,7 +164,6 @@ describe('SessionListDrawer', () => {
       props: {
         agentId: 'alpha',
         currentSessionId: 'session-1',
-        agentCurrentSessionId: 'session-1',
       },
     });
     flushSync();
@@ -187,7 +183,6 @@ describe('SessionListDrawer', () => {
       props: {
         agentId: 'alpha',
         currentSessionId: 'session-1',
-        agentCurrentSessionId: 'session-1',
       },
     });
     flushSync();
@@ -229,7 +224,6 @@ describe('SessionListDrawer', () => {
       props: {
         agentId: 'alpha',
         currentSessionId: 'session-1',
-        agentCurrentSessionId: 'session-1',
       },
     });
     flushSync();
@@ -260,7 +254,6 @@ describe('SessionListDrawer', () => {
       props: {
         agentId: 'alpha',
         currentSessionId: 'session-1',
-        agentCurrentSessionId: 'session-1',
         onSessionDeleted,
       },
     });
@@ -302,7 +295,6 @@ describe('SessionListDrawer', () => {
       props: {
         agentId: 'alpha',
         currentSessionId: 'session-1',
-        agentCurrentSessionId: 'session-1',
         onSessionDeleted,
       },
     });
@@ -333,7 +325,6 @@ describe('SessionListDrawer', () => {
       props: {
         agentId: 'alpha',
         currentSessionId: 'session-1',
-        agentCurrentSessionId: 'session-1',
       },
     });
     flushSync();
@@ -373,7 +364,6 @@ describe('SessionListDrawer', () => {
       props: {
         agentId: 'alpha',
         currentSessionId: 'session-1',
-        agentCurrentSessionId: 'session-1',
       },
     });
     flushSync();
@@ -415,7 +405,6 @@ describe('SessionListDrawer', () => {
       props: {
         agentId: 'alpha',
         currentSessionId: 'fork-session',
-        agentCurrentSessionId: 'fork-session',
       },
     });
     flushSync();
