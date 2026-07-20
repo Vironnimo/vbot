@@ -31,6 +31,7 @@ def agent_payload(agent_id: str = "coder") -> dict[str, Any]:
         "model": "openai/gpt-5.2",
         "fallback_model": "anthropic/claude-sonnet-4",
         "workspace": "C:/data/workspace-coder",
+        "root_project_id": "vbot",
         "temperature": 0.4,
         "thinking_effort": "high",
         "memory_prompt_mode": "agent_user",
@@ -98,6 +99,7 @@ def test_agent_show_posts_rpc_and_formats_detail(
         "model: openai/gpt-5.2",
         "fallback_model: anthropic/claude-sonnet-4",
         "workspace: C:/data/workspace-coder",
+        "project: vbot",
         "temperature: 0.4",
         "thinking_effort: high",
         "memory_prompt_mode: agent_user",
@@ -165,6 +167,9 @@ def test_agent_update_posts_null_and_lists(
                 "thinking_effort": "none",
                 "allowed_tools": [],
                 "allowed_skills": ["vbot-cli"],
+                "workspace": "C:/agents/coder",
+                "copy_workspace_identity_files": True,
+                "root_project_id": "vbot",
             },
         }
         return httpx.Response(200, json={"ok": True, "result": {"id": "coder"}})
@@ -179,6 +184,9 @@ def test_agent_update_posts_null_and_lists(
             "thinking_effort": "none",
             "allowed_tools": [],
             "allowed_skills": ["vbot-cli"],
+            "workspace": "C:/agents/coder",
+            "copy_workspace_identity_files": True,
+            "root_project_id": "vbot",
         },
     )
 
@@ -196,8 +204,25 @@ def test_agent_update_rejects_empty_changes(tmp_path: Path) -> None:
             "no agent fields provided; use one of: --name, --model, --fallback-model, "
             "--temperature, --clear-temperature, --thinking-effort, --clear-thinking-effort, "
             "--memory-prompt-mode, --custom-system-prompt, "
-            "--allowed-tools, --allowed-skills, --current-session-id"
+            "--allowed-tools, --allowed-skills, --workspace, --default-workspace, "
+            "--copy-workspace-files, --project, --clear-project, --current-session-id"
         ),
+        instance=instance,
+    )
+
+
+def test_agent_update_requires_workspace_target_when_copying_files(tmp_path: Path) -> None:
+    instance = make_instance(tmp_path)
+
+    result = agent_management.agent_update(
+        instance,
+        "coder",
+        {"copy_workspace_identity_files": True},
+    )
+
+    assert result == CommandResult(
+        ok=False,
+        message="--copy-workspace-files requires --workspace or --default-workspace",
         instance=instance,
     )
 

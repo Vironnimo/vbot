@@ -353,6 +353,11 @@ def test_parse_args_supports_agent_update_fields() -> None:
             "--allowed-skills",
             "debugging",
             "vbot-cli",
+            "--workspace",
+            "C:/agents/coder",
+            "--copy-workspace-files",
+            "--project",
+            "vbot",
             "--current-session-id",
             "session-one",
         ]
@@ -369,6 +374,9 @@ def test_parse_args_supports_agent_update_fields() -> None:
     assert args.custom_system_prompt == "true"
     assert args.allowed_tools == ["read_file", "edit_file"]
     assert args.allowed_skills == ["debugging", "vbot-cli"]
+    assert args.workspace == "C:/agents/coder"
+    assert args.copy_workspace_files is True
+    assert args.project == "vbot"
     assert args.current_session_id == "session-one"
 
 
@@ -493,6 +501,9 @@ def test_run_agent_update_dispatches_changes_and_prints_plain_output(
             "read_file",
             "--allowed-skills",
             "debugging",
+            "--default-workspace",
+            "--copy-workspace-files",
+            "--clear-project",
             "--host",
             "localhost",
             "--port",
@@ -517,6 +528,9 @@ def test_run_agent_update_dispatches_changes_and_prints_plain_output(
                     "temperature": None,
                     "allowed_tools": ["read_file"],
                     "allowed_skills": ["debugging"],
+                    "workspace": None,
+                    "copy_workspace_identity_files": True,
+                    "root_project_id": None,
                 },
             ),
         ),

@@ -464,6 +464,16 @@ def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         changes["allowed_tools"] = list(args.allowed_tools)
     if args.allowed_skills is not None:
         changes["allowed_skills"] = list(args.allowed_skills)
+    if getattr(args, "default_workspace", False):
+        changes["workspace"] = None
+    elif getattr(args, "workspace", None) is not None:
+        changes["workspace"] = args.workspace
+    if getattr(args, "copy_workspace_files", False):
+        changes["copy_workspace_identity_files"] = True
+    if getattr(args, "clear_project", False):
+        changes["root_project_id"] = None
+    elif getattr(args, "project", None) is not None:
+        changes["root_project_id"] = args.project
     if getattr(args, "current_session_id", None) is not None:
         changes["current_session_id"] = args.current_session_id
     return changes

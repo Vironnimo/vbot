@@ -25,6 +25,11 @@ AGENT_UPDATE_FLAGS = (
     "--custom-system-prompt",
     "--allowed-tools",
     "--allowed-skills",
+    "--workspace",
+    "--default-workspace",
+    "--copy-workspace-files",
+    "--project",
+    "--clear-project",
     "--current-session-id",
 )
 
@@ -73,6 +78,12 @@ def agent_update(
 ) -> CommandResult:
     """Update an agent via `agent.update` RPC."""
 
+    if changes.get("copy_workspace_identity_files") is True and "workspace" not in changes:
+        return CommandResult(
+            ok=False,
+            message="--copy-workspace-files requires --workspace or --default-workspace",
+            instance=instance,
+        )
     if not changes:
         return CommandResult(
             ok=False,
@@ -141,6 +152,7 @@ def _format_agent_detail(agent: Mapping[str, Any]) -> str:
             f"model: {_string_or_default(agent.get('model'), '-')}",
             f"fallback_model: {_string_or_default(agent.get('fallback_model'), '-')}",
             f"workspace: {_string_or_default(agent.get('workspace'), '-')}",
+            f"project: {_string_or_default(agent.get('root_project_id'), '-')}",
             f"temperature: {_value_text(agent.get('temperature'))}",
             f"thinking_effort: {_value_text(agent.get('thinking_effort'))}",
             f"memory_prompt_mode: {_string_or_default(agent.get('memory_prompt_mode'), '-')}",

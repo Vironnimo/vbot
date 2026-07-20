@@ -15,6 +15,7 @@ The `vbot` CLI is the automation surface for configuring and operating a vBot in
 - Prefer CLI commands over direct file edits — settings, agents, channels, cron jobs, prompt blocks, and provider keys all have commands. If a manual JSON edit was unavoidable, validate with `vbot doctor config`.
 - Secrets never appear in output or chat. API keys go through `provider set-key`, extension secrets through `extensions <name> set <field> --stdin`, channel tokens by env-var name via `--token-env`.
 - Inspect before changing; verify after with the matching list/show/status command.
+- Keep Identity Agent, Project Agent, Workspace, and Project cwd separate. A generic request to create an Agent means an Identity Agent; root it in a Project when its file/shell work should run there. A Project Agent is a repo-discovered Config Agent with no Workspace, SOUL, or Memory and is created only when the user explicitly asks for a Project Team profile. See `references/agents-projects.md`.
 - Follow CLI error hints (`did you mean`, candidate lists) before retrying. If another process occupies the port, report it — don't kill it.
 - Finish with a compact report: commands run, what changed, verification result, and any remaining user action (complete an OAuth login, send a Telegram message, ...).
 
