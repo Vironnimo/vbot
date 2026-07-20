@@ -94,15 +94,6 @@ export const englishCatalog = Object.freeze({
   'chat.sendError': 'Message could not be sent.',
   'chat.skillsLoadError': 'Skill suggestions could not be loaded.',
   'chat.cancelError': 'Run could not be cancelled.',
-  'chat.continueError': 'Continue failed.',
-  'chat.discardContinuationError': 'Discard failed.',
-  'chat.continuation.title': 'Interrupted work retained',
-  'chat.continuation.hint':
-    'Continue without adding a duplicate message, or discard the retained work.',
-  'chat.continuation.cancelledHint':
-    'Type a correction or a new instruction to continue from the retained work.',
-  'chat.continuation.continue': 'Continue',
-  'chat.continuation.discard': 'Discard',
   'chat.sessionCreateError': 'New session could not be created.',
   'chat.noProvider.title': 'Connect a provider to start',
   'chat.noProvider.hint':
@@ -122,7 +113,6 @@ export const englishCatalog = Object.freeze({
   'chat.event.toolStarted': 'Tool started',
   'chat.event.toolResult': 'Tool result',
   'chat.modelFallbackActivated': 'Switched to {model}',
-  'chat.interrupted': 'Response interrupted — the next turn continues it.',
   'chat.event.completed': 'Run completed',
   'chat.event.failed': 'Run failed',
   'chat.event.cancelled': 'Run cancelled',

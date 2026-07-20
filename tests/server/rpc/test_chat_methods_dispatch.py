@@ -7,7 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -53,24 +53,6 @@ def _history_state(tmp_path: Path) -> tuple[SimpleNamespace, ChatSessionManager]
 def _history_message(index: int) -> ChatMessage:
     message = ChatMessage.user(f"Message {index}")
     return replace(message, id=f"message-{index:03d}")
-
-
-class ContinueLoopStub:
-    def __init__(self, run: Run) -> None:
-        self._run = run
-        self.calls: list[tuple[str, str, str | None]] = []
-
-    async def continue_run(
-        self,
-        agent_id: str,
-        session_id: str,
-        project_id: str | None = None,
-        *,
-        reply_surface: ReplySurface | None = None,
-    ) -> Run:
-        assert reply_surface == ReplySurface.webui()
-        self.calls.append((agent_id, session_id, project_id))
-        return self._run
 
 
 class CommandOutcomeDispatcher(CommandDispatcher):
@@ -163,7 +145,6 @@ def test_transport_layers_do_not_own_command_workflows() -> None:
         "new",
         "rename",
         "model",
-        "continue",
     ):
         assert f'case "{command}"' not in combined
 
@@ -179,130 +160,6 @@ def _make_queued_item(*, item_id: str, content: str, internal: bool = False) -> 
         internal=internal,
         future=asyncio.get_running_loop().create_future(),
         created_at="2026-05-22T00:00:00+00:00",
-    )
-
-
-@pytest.mark.asyncio
-async def test_chat_continue_returns_streaming_run_response() -> None:
-    run = Run(run_id="run-continue", agent_id="parent", session_id="session-one")
-    continue_loop = ContinueLoopStub(run)
-    state = SimpleNamespace(streaming_chat_loop=continue_loop)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "chat.continue",
-            "params": {"agent_id": "parent", "session_id": "session-one"},
-        },
-    )
-
-    assert response["ok"] is True
-    assert response["result"]["run_id"] == "run-continue"
-    assert response["result"]["sse_url"] == "/api/runs/run-continue/events"
-    assert continue_loop.calls == [("parent", "session-one", None)]
-
-
-@pytest.mark.asyncio
-async def test_chat_continue_preserves_project_qualified_address() -> None:
-    run = Run(
-        run_id="run-project-continue",
-        agent_id="builder",
-        session_id="session-one",
-        project_id="vbot",
-    )
-    continue_loop = ContinueLoopStub(run)
-    state = SimpleNamespace(streaming_chat_loop=continue_loop)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "chat.continue",
-            "params": {"agent_id": "builder@vbot", "session_id": "session-one"},
-        },
-    )
-
-    assert response["ok"] is True
-    assert continue_loop.calls == [("builder", "session-one", "vbot")]
-
-
-@pytest.mark.asyncio
-async def test_chat_continue_requires_agent_id() -> None:
-    response = await dispatch_rpc(
-        SimpleNamespace(),
-        {
-            "method": "chat.continue",
-            "params": {"session_id": "session-one"},
-        },
-    )
-
-    assert response["ok"] is False
-    assert response["error"]["code"] == "invalid_request"
-
-
-@pytest.mark.asyncio
-async def test_chat_history_exposes_public_continuation_summary(tmp_path: Path) -> None:
-    state, chat_sessions = _history_state(tmp_path)
-    session = chat_sessions.create("parent", session_id="session-one")
-    session.append_continuation_records(
-        [
-            {
-                "version": CONTINUATION_RECORD_VERSION,
-                "type": "run_started",
-                "run_id": "run-one",
-                "timestamp": "2026-07-11T12:00:00+00:00",
-                "checkpoint_id": "checkpoint-one",
-                "origin_run_id": "run-one",
-                "request": "work",
-            },
-            {
-                "version": CONTINUATION_RECORD_VERSION,
-                "type": "run_interrupted",
-                "run_id": "run-one",
-                "timestamp": "2026-07-11T12:00:01+00:00",
-                "cause": "network",
-                "user_initiated": False,
-            },
-        ]
-    )
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "chat.history",
-            "params": {"agent_id": "parent", "session_id": "session-one"},
-        },
-    )
-
-    assert response["ok"] is True
-    assert response["result"]["continuation"] == {
-        "checkpoint_id": "checkpoint-one",
-        "origin_run_id": "run-one",
-        "latest_run_id": "run-one",
-        "cause": "network",
-        "state": "interrupted",
-        "user_initiated": False,
-        "can_continue": True,
-    }
-
-
-@pytest.mark.asyncio
-async def test_chat_continuation_discard_delegates_to_streaming_loop() -> None:
-    loop = SimpleNamespace(discard_continuation=Mock())
-    state = SimpleNamespace(streaming_chat_loop=loop)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": "chat.continuation_discard",
-            "params": {"agent_id": "builder@vbot", "session_id": "session-one"},
-        },
-    )
-
-    assert response == {"ok": True, "result": {"ok": True}}
-    loop.discard_continuation.assert_called_once_with(
-        "builder",
-        "session-one",
-        project_id="vbot",
     )
 
 
@@ -334,6 +191,43 @@ async def test_chat_history_hides_subagent_batch_completion_note(tmp_path: Path)
         "Sub-agent batch completed." not in (message.get("content") or "")
         for message in response["result"]["messages"]
     )
+
+
+@pytest.mark.asyncio
+async def test_chat_history_hides_internal_continuation_checkpoint(tmp_path: Path) -> None:
+    state, chat_sessions = _history_state(tmp_path)
+    session = chat_sessions.create("parent", session_id="session-one")
+    session.append_continuation_records(
+        [
+            {
+                "version": CONTINUATION_RECORD_VERSION,
+                "type": "run_started",
+                "run_id": "run-one",
+                "timestamp": "2026-07-11T12:00:00+00:00",
+                "checkpoint_id": "checkpoint-one",
+                "origin_run_id": "run-one",
+                "request": "work",
+            },
+            {
+                "version": CONTINUATION_RECORD_VERSION,
+                "type": "run_interrupted",
+                "run_id": "run-one",
+                "timestamp": "2026-07-11T12:00:01+00:00",
+                "cause": "network",
+            },
+        ]
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.history",
+            "params": {"agent_id": "parent", "session_id": "session-one"},
+        },
+    )
+
+    assert response["ok"] is True
+    assert "continuation" not in response["result"]
 
 
 @pytest.mark.asyncio
@@ -454,13 +348,6 @@ async def test_chat_commands_returns_combined_command_and_skill_items() -> None:
                     "type": "command",
                     "argument": "optional",
                     "output": "toast",
-                },
-                {
-                    "name": "continue",
-                    "description": "Continue the interrupted work retained for this session.",
-                    "type": "command",
-                    "argument": "none",
-                    "output": "action",
                 },
                 {
                     "name": "handoff",

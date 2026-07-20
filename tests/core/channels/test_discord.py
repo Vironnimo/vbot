@@ -218,7 +218,6 @@ def make_adapter(
 
     trigger_service = SimpleNamespace(
         trigger_run=trigger_with_admission,
-        continue_run=AsyncMock(),
         compact_session=AsyncMock(return_value="Context compacted."),
         reserve_waiting_work=Mock(
             return_value=WaitingWorkAdmission(id="test-admission", scope="test:chat")
@@ -559,7 +558,6 @@ async def test_mention_backfills_history_since_last_bot_reply_in_order(
 
     trigger_service = SimpleNamespace(
         trigger_run=trigger_with_admission,
-        continue_run=AsyncMock(),
         compact_session=AsyncMock(return_value="Context compacted."),
         reserve_waiting_work=Mock(
             return_value=WaitingWorkAdmission(id="test-admission", scope="test:chat")

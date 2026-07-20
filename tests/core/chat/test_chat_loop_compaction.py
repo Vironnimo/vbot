@@ -59,14 +59,13 @@ async def _maybe_auto_compact(
     run: Run,
     continuation_tracker: ContinuationTracker | None = None,
     continuation_reminder: str | None = None,
-    explicit_continue: bool = False,
 ) -> list[JsonObject]:
     """Build the same Run context used by production before probing Compaction."""
     del agent, model_id
     prior_continuation = recover_continuation(session) if continuation_reminder else None
     context = loop._create_run_execution_context(
         run,
-        _RunRequest(content=None, explicit_continue=explicit_continue),
+        _RunRequest(content="test"),
         session=session,
         prior_continuation=prior_continuation,
         continuation_reminder=continuation_reminder,
@@ -507,17 +506,17 @@ async def test_compaction_reinjects_the_active_continuation_checkpoint(tmp_path:
     await interrupted_tracker.interrupt("network")
     prior = recover_continuation(session)
     assert prior is not None
+    session.append(ChatMessage.user("Keep going"))
     active_tracker = ContinuationTracker(
         session,
         run_id="run-two",
-        request=None,
+        request="Keep going",
         prior_state=prior,
     )
     reminder = render_continuation_reminder(prior, context_window=100)
     messages = inject_continuation_reminder(
         await loop._build_request_messages(agent, session),
         reminder,
-        explicit_continue=True,
     )
     run = Run(run_id="run-two", agent_id=agent.id, session_id=session.id)
 
@@ -532,7 +531,6 @@ async def test_compaction_reinjects_the_active_continuation_checkpoint(tmp_path:
         run=run,
         continuation_tracker=active_tracker,
         continuation_reminder=reminder,
-        explicit_continue=True,
     )
 
     reminder_messages = [

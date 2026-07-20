@@ -617,7 +617,7 @@ async def test_user_cancel_after_visible_stream_preserves_partial_and_stays_canc
 
 
 @pytest.mark.asyncio
-async def test_user_cancel_without_visible_output_retains_checkpoint_without_continue(
+async def test_user_cancel_without_visible_output_retains_checkpoint_for_next_message(
     tmp_path: Path,
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
@@ -643,8 +643,5 @@ async def test_user_cancel_without_visible_output_retains_checkpoint_without_con
     state = recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
     assert state is not None
     assert state.reasoning == "Thinking hard."
-    summary = state.public_summary()
-    assert summary is not None
-    assert summary["can_continue"] is False
     summaries = [message for message in messages if message.role == "run_summary"]
     assert summaries[-1].status == "cancelled"

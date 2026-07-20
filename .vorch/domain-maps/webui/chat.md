@@ -4,7 +4,7 @@ Read this reference only for WebUI Chat selection, Session, history, Run, Queue,
 
 ## Ownership and addressing
 
-`ChatView.svelte` composes Chat presentation and applies navigation consequences, while `createChatController()` in `chatState.js` owns the reactive client projection plus roster/history/command loading, send and Queue workflows, continuation actions, cancellation, and durable-state reconciliation. `chatRunStream.js` owns one active Run stream, and `chatTimeline.js` derives renderable timeline items. Presentation components consume those projections and forward user intents; they do not sequence Chat RPCs or rebuild Run state independently.
+`ChatView.svelte` composes Chat presentation and applies navigation consequences, while `createChatController()` in `chatState.js` owns the reactive client projection plus roster/history/command loading, send and Queue workflows, cancellation, and durable-state reconciliation. `chatRunStream.js` owns one active Run stream, and `chatTimeline.js` derives renderable timeline items. Presentation components consume those projections and forward user intents; they do not sequence Chat RPCs or rebuild Run state independently.
 
 An Agent address can be global or Project-scoped. `resolveAgentAddressing()` and `formatAgentAddress()` are the canonical client helpers for that distinction. Chat's selected Project context changes which Agent address and Session collection are active; it does not change the Project selected for management in `ProjectsView`.
 
@@ -26,7 +26,7 @@ An Agent address can be global or Project-scoped. `resolveAgentAddressing()` and
 - `chatState.js` accepts ordered Run events and tracks the highest contiguous sequence. Gaps trigger recovery/reconnect behavior; duplicates and already-persisted events must not produce duplicate timeline items.
 - WebSocket lifecycle summaries can reveal a Run that started or finished elsewhere. They cause reconciliation, while the full output stream still comes from SSE.
 - The `connection_ready.active_runs` snapshot replaces locally projected active Run and Subagent status. Every active Run creates/refreshes its addressed Session state so background Agents can project running status, but SSE attaches only for the displayed Session. Active `run:` and `session:` Subagent entries absent from the snapshot are removed, while terminal status, duration, tool, and Queue-to-Run metadata remain; visible historical rows can then verify their durable terminal state through `chat.history`.
-- Terminal events complete, fail, or cancel the local Run projection and close its stream. A continuation offer is server state and is only shown, continued, or discarded through the corresponding backend contracts.
+- Terminal events complete, fail, or cancel the local Run projection and close its stream. Interruption checkpoints are internal Chat state: history and terminal events do not project them, the UI shows no recovery banner or controls, and the next normal visible user message receives the checkpoint inside the backend.
 - Cancelling a Run and cancelling a cancellable tool call are distinct operations. The UI must preserve that distinction in labels, availability, and error handling.
 - `sendMessage()` returns a semantic outcome (`move`, `switch`, `transient`, `toast`, `queued`, `started`, or failure) after it has reconciled Session/Run/Queue state. `ChatView` applies only the navigation or presentation consequence of that outcome.
 

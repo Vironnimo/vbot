@@ -30,7 +30,7 @@ test("slash command discovery, help, status, rename, and new Session work togeth
   commandOutputs = chat.getByRole("note", { name: "Command output" });
   await expect(commandOutputs.last()).toContainText("Built-in slash commands:");
   await expect(commandOutputs.last()).toContainText("/handoff");
-  await expect(commandOutputs.last()).toContainText("/continue");
+  await expect(commandOutputs.last()).not.toContainText("/continue");
 
   await sendChatMessage(chat, "/rename E2E Slash Command Session");
   await expect(

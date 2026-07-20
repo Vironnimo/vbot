@@ -106,13 +106,6 @@ describe('i18n t()', () => {
       'chat.subagentSessionNotice',
       'chat.subagentSessionHint',
       'chat.returnToCurrentSession',
-      'chat.continuation.title',
-      'chat.continuation.hint',
-      'chat.continuation.cancelledHint',
-      'chat.continuation.continue',
-      'chat.continuation.discard',
-      'chat.continueError',
-      'chat.discardContinuationError',
       'sessions.subagent_parent',
       'status.connected',
       'status.notReachable',
@@ -155,12 +148,6 @@ describe('i18n t()', () => {
     expect(t('nav.section.work')).toBe('Work');
     expect(t('nav.section.configure')).toBe('Configure');
     expect(t('nav.section.insights')).toBe('Insights');
-  });
-
-  it('contains the interrupted assistant turn marker', () => {
-    expect(englishCatalog['chat.interrupted']).toBeTruthy();
-    expect(t('chat.interrupted')).toBe(englishCatalog['chat.interrupted']);
-    expect(t('chat.interrupted').toLowerCase()).toContain('interrupted');
   });
 
   it('contains the agent takeover divider labels', () => {

@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import { sendChatMessage, startIsolatedChat } from "./chat-run-support.js";
 
-test("stop cancels a Run while continue resumes provider-interrupted work", async ({
+test("a normal message resumes interrupted work without recovery controls", async ({
   page,
 }) => {
   const chat = await startIsolatedChat(page, { agentName: "Main" });
@@ -19,11 +19,11 @@ test("stop cancels a Run while continue resumes provider-interrupted work", asyn
   await expect(chat.getByText("· Cancelled", { exact: true })).toBeVisible();
   await expect(
     chat.getByText("Interrupted work retained", { exact: true }),
-  ).toBeVisible();
+  ).toHaveCount(0);
 
-  await sendChatMessage(chat, "Resume after explicit cancellation");
+  await sendChatMessage(chat, "Resume after cancellation");
   await expect(
-    chat.getByText("Fake provider response.", { exact: true }),
+    chat.getByText("Continued interrupted work completed.", { exact: true }),
   ).toBeVisible();
 
   await sendChatMessage(
@@ -35,11 +35,17 @@ test("stop cancels a Run while continue resumes provider-interrupted work", asyn
   ).toBeVisible();
   await expect(
     chat.getByText("Interrupted work retained", { exact: true }),
-  ).toBeVisible();
+  ).toHaveCount(0);
 
-  await sendChatMessage(chat, "/continue");
+  await sendChatMessage(chat, "Resume after provider interruption");
   await expect(
     chat.getByText("Continued interrupted work completed.", { exact: true }),
-  ).toBeVisible();
+  ).toHaveCount(2);
+  await expect(
+    chat.getByRole("button", { exact: true, name: "Continue" }),
+  ).toHaveCount(0);
+  await expect(
+    chat.getByRole("button", { exact: true, name: "Discard" }),
+  ).toHaveCount(0);
   await expect(chat.getByText("· Running", { exact: true })).toHaveCount(0);
 });

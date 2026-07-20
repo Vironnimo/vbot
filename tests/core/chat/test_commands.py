@@ -332,7 +332,6 @@ def test_built_in_commands_include_current_catalog() -> None:
         "new",
         "reflect",
         "rename",
-        "continue",
         "status",
         "stop",
     }
@@ -353,7 +352,6 @@ def test_built_in_commands_declare_argument_and_result_metadata() -> None:
         "new": "none",
         "reflect": "optional",
         "rename": "optional",
-        "continue": "none",
         "status": "none",
         "stop": "none",
     }
@@ -367,7 +365,6 @@ def test_built_in_commands_declare_argument_and_result_metadata() -> None:
         "new": "state_change",
         "reflect": "state_change",
         "rename": "notice",
-        "continue": "state_change",
         "status": "detail",
         "stop": "notice",
     }
@@ -744,7 +741,6 @@ def test_dispatch_no_argument_command_with_trailing_text_is_not_a_command() -> N
         ("/compact", "compact"),
         ("/new", "new"),
         ("/rename", "rename"),
-        ("/continue", "continue"),
     ],
 )
 def test_prepare_serialized_commands(message: str, command_name: str) -> None:
@@ -831,7 +827,7 @@ def test_dispatch_help_returns_current_command_list() -> None:
     assert result.feedback is not None
     reply = result.feedback.text
     assert "/compact - Compact the current session's context immediately." in reply
-    assert "/continue - Continue the interrupted work retained for this session." in reply
+    assert "/continue" not in reply
     assert "/retry" not in reply
     assert "$skill-name" in reply
 

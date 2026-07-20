@@ -23,7 +23,6 @@ from core.chat import MessageSender
 from core.chat.commands import (
     CommandFeedback,
     CommandOutcome,
-    CommandRun,
     CommandUnavailability,
     PreparedCommand,
 )
@@ -498,38 +497,6 @@ async def test_new_command_starts_fresh_session(
         chat_id=12345,
         text=engine_module._NEW_SESSION_STARTED_REPLY,
     )
-    await adapter.stop()
-
-
-@pytest.mark.asyncio
-async def test_continue_command_action_continues_and_relays_run(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    session_id = "ch-tg-assistant-12345"
-    continued_run = make_completed_run(session_id=session_id, output_text="continued reply")
-    command_dispatcher = make_command_dispatcher(
-        result=CommandOutcome(
-            command="continue",
-            runs=(CommandRun(role="result", run=continued_run),),
-        )
-    )
-    adapter, _chat_sessions, trigger_mock, bot = make_adapter(
-        tmp_path,
-        monkeypatch,
-        allowed_chat_ids=[12345],
-        command_dispatcher=command_dispatcher,
-    )
-
-    await adapter._handle_inbound_message(
-        make_update(chat_id=12345, user_id=50, text="/continue"),
-        SimpleNamespace(),
-    )
-    await drain_chat_queue(adapter, 12345)
-
-    command_dispatcher.execute.assert_awaited_once()
-    trigger_mock.assert_not_awaited()
-    bot.send_message.assert_awaited_once_with(chat_id=12345, text="continued reply")
     await adapter.stop()
 
 

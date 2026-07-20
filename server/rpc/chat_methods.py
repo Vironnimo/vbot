@@ -14,7 +14,6 @@ from core.chat import (
     aggregate_session_usage,
 )
 from core.chat.content_blocks import ContentBlock
-from core.chat.continuation import public_continuation_summary
 from core.chat.file_mentions import expand_file_mentions, resolve_mention_root
 from core.projects import format_agent_address
 from core.runs import ActiveRunError, ChatRunManager, QueuedRunItem, Run
@@ -108,10 +107,6 @@ def _chat_history(state: Any, params: JsonObject) -> JsonObject:
             if active_run_object is not None
             else None
         )
-        continuation = public_continuation_summary(
-            session,
-            active_run_id=active_run_object.id if active_run_object is not None else None,
-        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     response: JsonObject = {
@@ -125,8 +120,6 @@ def _chat_history(state: Any, params: JsonObject) -> JsonObject:
     }
     if active_run is not None:
         response["active_run"] = active_run
-    if continuation is not None:
-        response["continuation"] = continuation
     return response
 
 
@@ -212,7 +205,7 @@ async def _execute_chat_command(
     prepared: PreparedCommand,
     *,
     project_id: str | None = None,
-) -> Run | JsonObject:
+) -> JsonObject:
     dispatcher = _state_command_dispatcher(state)
     emitted_changes: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
 
@@ -239,11 +232,6 @@ async def _execute_chat_command(
 
     for change in outcome.resource_changes:
         on_change(change)
-    result_runs = [command_run.run for command_run in outcome.runs if command_run.role == "result"]
-    if len(result_runs) > 1:
-        raise AssertionError("a command outcome cannot expose more than one result Run")
-    if result_runs:
-        return result_runs[0]
     return _command_outcome_response(outcome)
 
 
@@ -396,63 +384,6 @@ def _run_started_during_enqueue(item: QueuedRunItem) -> Run | None:
     if not item.future.done():
         return None
     return item.future.result()
-
-
-async def _continue_chat(state: Any, params: JsonObject) -> JsonObject:
-    agent_id, project_id = _required_agent_address(params, "agent_id")
-    session_id = _required_string(params, "session_id")
-    return await _continue_chat_for_ids(
-        state, agent_id, session_id, streaming=True, project_id=project_id
-    )
-
-
-async def _continue_chat_for_ids(
-    state: Any,
-    agent_id: str,
-    session_id: str,
-    *,
-    streaming: bool,
-    project_id: str | None = None,
-) -> JsonObject:
-    try:
-        chat_loop = _streaming_chat_loop(state) if streaming else state.chat_loop
-        run = await chat_loop.continue_run(
-            agent_id,
-            session_id,
-            project_id=project_id,
-            reply_surface=WEBUI_REPLY_SURFACE,
-        )
-        _bridge_run_to_event_bus(state, run)
-    except Exception as exc:
-        raise _map_expected_error(exc) from exc
-
-    if streaming:
-        return _run_response(run, sse_url=f"/api/runs/{run.id}/events")
-
-    try:
-        assistant_message = await run.wait()
-    except Exception as exc:
-        raise _map_expected_error(exc) from exc
-    return _run_response(run, final_message=assistant_message)
-
-
-def _discard_continuation(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(
-        params,
-        {"agent_id", "session_id"},
-        "chat.continuation_discard",
-    )
-    agent_id, project_id = _required_agent_address(params, "agent_id")
-    session_id = _required_string(params, "session_id")
-    try:
-        _streaming_chat_loop(state).discard_continuation(
-            agent_id,
-            session_id,
-            project_id=project_id,
-        )
-    except Exception as exc:
-        raise _map_expected_error(exc) from exc
-    return {"ok": True}
 
 
 async def _cancel_chat(state: Any, params: JsonObject) -> JsonObject:
@@ -628,8 +559,6 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "chat.history": _chat_history,
         "chat.send": _send_chat,
         "chat.stream": _stream_chat,
-        "chat.continue": _continue_chat,
-        "chat.continuation_discard": _discard_continuation,
         "chat.cancel": _cancel_chat,
         "chat.cancel_tool_call": _cancel_tool_call_chat,
         "chat.queue_list": _chat_queue_list,

@@ -216,11 +216,9 @@ async def test_streaming_mode_malformed_tool_arguments_persist_provider_error(
 
     assert run.status == RunStatus.FAILED
     assert persisted_roles(messages) == ["user", "error"]
-    continuation = loop.continuation_summary("coder", "session-one")
-    assert continuation is not None
-    assert continuation["cause"] == "internal"
     state = recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
     assert state is not None
+    assert state.cause == "internal"
     assert state.reasoning == "Need to write the file."
     assert messages[1].error_kind == "provider_error"
     assert "malformed or incomplete arguments" in (messages[1].content or "")

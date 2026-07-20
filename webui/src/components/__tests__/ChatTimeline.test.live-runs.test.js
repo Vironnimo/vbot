@@ -890,7 +890,7 @@ describe('ChatTimeline', () => {
     );
   });
 
-  it('renders an interrupted marker under an interrupted assistant turn', () => {
+  it('keeps interrupted assistant output without a recovery marker', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -920,8 +920,7 @@ describe('ChatTimeline', () => {
     flushSync();
 
     const notice = document.querySelector('.run-inline-banner.banner--warn');
-    expect(notice).toBeTruthy();
-    expect(notice.textContent).toContain('interrupted');
+    expect(notice).toBeNull();
     expect(document.body.textContent).toContain('The first half of the answer');
   });
 

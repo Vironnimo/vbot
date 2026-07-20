@@ -304,28 +304,6 @@ async def test_new_session_in_one_chat_leaves_other_chat_untouched(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_continue_command_action_relays_continued_run(tmp_path: Path) -> None:
-    continued_run = make_completed_run(output_text="continued reply")
-    command_dispatcher = make_command_dispatcher(
-        result=CommandOutcome(
-            command="continue",
-            runs=(CommandRun(role="result", run=continued_run),),
-        )
-    )
-    engine, _sessions, trigger_mock, transport = make_engine(
-        tmp_path, command_dispatcher=command_dispatcher
-    )
-
-    await engine.handle_inbound_text(make_conversation(), "/continue")
-    await drain(engine, 12345)
-
-    command_dispatcher.execute.assert_awaited_once()
-    trigger_mock.assert_not_awaited()
-    assert transport.sent == [("12345", "continued reply")]
-    await engine.stop()
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("message", ["/agent", "/agent planner"])
 async def test_agent_command_reports_permanent_channel_limitation(
     tmp_path: Path, message: str

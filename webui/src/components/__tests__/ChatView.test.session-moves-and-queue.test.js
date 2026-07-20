@@ -518,50 +518,6 @@ describe('ChatView', () => {
     ).toBe(true);
   });
 
-  it('subscribes to the run returned by a /continue command', async () => {
-    rpcMock.mockImplementation(
-      createChatRpcMock({
-        streamHandler: ({ content }) => {
-          if (content === '/continue') {
-            return {
-              run_id: 'run-continue-1',
-              sse_url: '/api/runs/run-continue-1/events',
-              status: 'running',
-              events: [],
-            };
-          }
-          throw new Error(`Unexpected stream content: ${content}`);
-        },
-      }),
-    );
-
-    chatViewTest.mount({ target: document.body });
-    flushSync();
-
-    await waitForCondition(
-      () => document.body.textContent.includes('Hello'),
-      100,
-    );
-
-    sendComposerMessage('/continue');
-
-    await waitForCondition(
-      () => subscribeRunEventsMock.mock.calls.length === 1,
-      100,
-    );
-
-    expect(rpcMock).toHaveBeenCalledWith('chat.stream', {
-      agent_id: 'alpha',
-      session_id: 'session-1',
-      content: '/continue',
-    });
-    expect(subscribeRunEventsMock).toHaveBeenCalledWith(
-      '/api/runs/run-continue-1/events',
-      expect.any(Object),
-      { afterSequence: 0 },
-    );
-  });
-
   it('keeps slash skill triggers queued while allowing built-in /stop to bypass during an active run', async () => {
     const streamCalls = [];
     rpcMock.mockImplementation(

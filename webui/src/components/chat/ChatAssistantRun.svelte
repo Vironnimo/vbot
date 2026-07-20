@@ -450,16 +450,6 @@
           {#if child.streaming}<span class="streaming-caret" aria-hidden="true"
             ></span>{/if}
         </div>
-        <!-- A cancelled run shows the "Cancelled" header label instead: the
-             cut was the user's action, not an involuntary interruption. -->
-        {#if child.interrupted && !child.streaming && item.status !== 'cancelled'}
-          <Banner variant="warn" class="run-inline-banner">
-            {t(
-              'chat.interrupted',
-              'Response interrupted — the next turn continues it.',
-            )}
-          </Banner>
-        {/if}
       {:else if child.type === 'model_fallback'}
         <Banner variant="info" class="run-inline-banner">
           {t('chat.modelFallbackActivated', 'Switched to {model}', {
