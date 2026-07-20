@@ -273,7 +273,7 @@ def test_start_server_process_uses_expected_args_and_log_location(
     assert instance.log_path.exists() is False
 
 
-def test_start_server_process_detaches_from_windows_console(
+def test_start_server_process_is_durable_and_windowless_on_windows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -290,11 +290,11 @@ def test_start_server_process_detaches_from_windows_console(
     monkeypatch.setattr(
         server_management.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200, raising=False
     )
-    monkeypatch.setattr(server_management.subprocess, "DETACHED_PROCESS", 0x00000008, raising=False)
+    monkeypatch.setattr(server_management.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
 
     start_server_process(instance)
 
-    assert calls[0]["kwargs"]["creationflags"] == 0x00000208
+    assert calls[0]["kwargs"]["creationflags"] == 0x08000200
 
 
 def test_resolve_instance_uses_daily_log_file_contract(tmp_path: Path) -> None:

@@ -90,7 +90,7 @@ Use a ScriptBlock when passing Installer options:
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -DesktopClient
 ```
 
-Run the default Windows install from an elevated PowerShell when possible so the Task Scheduler autostart entry can be created. Its windowless launcher starts the server without opening a console at sign-in. If that step lacks permission, the package install and immediate detached server start still complete; the final summary reports the missing Autostart and exact elevated recovery command, and shows a live Server URL only after the server health check succeeds. Rerunning the whole Installer is not required.
+Run the default Windows install from an elevated PowerShell when possible so the Task Scheduler autostart entry can be created. Both the immediate background server start and the Task Scheduler launcher are windowless, so no persistent Python console remains after installation or appears at sign-in. If Autostart setup lacks permission, the package install and immediate server start still complete; the final summary reports the missing Autostart and exact elevated recovery command, and shows a live Server URL only after the server health check succeeds. Rerunning the whole Installer is not required.
 
 As with any `curl | bash` or `irm | iex` command, download and inspect the script first if you prefer not to execute network content directly.
 
