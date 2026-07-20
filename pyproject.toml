@@ -26,6 +26,9 @@ dependencies = ["httpx", "idna>=3,<4", "curl_cffi>=0.7,<1", "pyyaml", "croniter"
 [project.scripts]
 vbot = "cli.main:main"
 
+[project.gui-scripts]
+vbot-autostart = "cli.autostart_management:windows_autostart_main"
+
 [project.urls]
 Homepage = "https://github.com/Vironnimo/vbot"
 Repository = "https://github.com/Vironnimo/vbot"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 import sysconfig
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
@@ -16,6 +16,7 @@ from cli.autostart_management import (
     autostart_status,
     disable_autostart,
     enable_autostart,
+    windows_autostart_main,
 )
 from cli.main import dispatch_autostart_command
 from cli.parser import parse_args
@@ -107,7 +108,7 @@ def test_enable_windows_creates_task_and_starts() -> None:
         platform="win32",
         runner=runner,
         start=start,
-        vbot_path=r"C:\Program Files\vbot\vbot.exe",
+        windows_launcher_path=r"C:\Program Files\vbot\vbot-autostart.exe",
     )
 
     assert result.ok, result.message
@@ -117,8 +118,8 @@ def test_enable_windows_creates_task_and_starts() -> None:
     assert create is not None
     action = create[create.index("/TR") + 1]
     assert action == (
-        f'"C:\\Program Files\\vbot\\vbot.exe" server start '
-        f'--host 127.0.0.1 --port 8420 --data-dir "{inst.data_dir}"'
+        f'"C:\\Program Files\\vbot\\vbot-autostart.exe" '
+        f"--host 127.0.0.1 --port 8420 --data-dir {inst.data_dir}"
     )
     assert "ONLOGON" in create
 
@@ -128,7 +129,11 @@ def test_enable_windows_failure_hints_elevation() -> None:
     events, start = _recording_start()
 
     result = enable_autostart(
-        _instance(), platform="win32", runner=runner, start=start, vbot_path=r"C:\vbot.exe"
+        _instance(),
+        platform="win32",
+        runner=runner,
+        start=start,
+        windows_launcher_path=r"C:\vbot-autostart.exe",
     )
 
     assert not result.ok
@@ -137,23 +142,53 @@ def test_enable_windows_failure_hints_elevation() -> None:
     assert events == ["start"]
 
 
-def test_windows_vbot_resolution_prefers_active_environment_over_path(
+def test_windows_launcher_resolution_prefers_active_environment_over_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     scripts_dir = tmp_path / "Scripts"
     scripts_dir.mkdir()
-    environment_vbot = scripts_dir / "vbot.exe"
-    environment_vbot.touch()
+    environment_launcher = scripts_dir / "vbot-autostart.exe"
+    environment_launcher.touch()
     monkeypatch.setattr(sysconfig, "get_path", lambda name: str(scripts_dir))
     monkeypatch.setattr(
         autostart_management.shutil,
         "which",
-        lambda name: r"C:\unrelated-python\Scripts\vbot.exe",
+        lambda name: r"C:\unrelated-python\Scripts\vbot-autostart.exe",
     )
 
-    resolved = autostart_management._resolve_vbot_path()
+    resolved = autostart_management._resolve_windows_autostart_path()
 
-    assert resolved == str(environment_vbot)
+    assert resolved == str(environment_launcher)
+
+
+def test_windows_autostart_launcher_runs_server_start_without_output(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured: list[str] = []
+
+    def run_cli(argv: Sequence[str]) -> int:
+        captured.extend(argv)
+        print("hidden status output")
+        return 7
+
+    with pytest.raises(SystemExit) as raised:
+        windows_autostart_main(
+            ["--host", "127.0.0.1", "--port", "8420", "--data-dir", r"C:\vBot Data"],
+            run_cli=run_cli,
+        )
+
+    assert raised.value.code == 7
+    assert captured == [
+        "server",
+        "start",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8420",
+        "--data-dir",
+        r"C:\vBot Data",
+    ]
+    assert capsys.readouterr().out == ""
 
 
 def test_enable_linux_writes_unit_and_enables(tmp_path: Path) -> None:
