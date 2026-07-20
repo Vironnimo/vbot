@@ -299,6 +299,8 @@ vbot agent show coder
 vbot agent update coder --thinking-effort high
 ```
 
+`agent update --project <project-id>` selects the Project used for relative file and shell work without moving the Agent's Workspace or Memory; `--clear-project` removes that selection. Workspace relocation is a separate operation: use `--workspace <absolute-path>` or `--default-workspace`, optionally with `--copy-workspace-files` to copy `SOUL.md`, `USER.md`, and `MEMORY.md` into the destination.
+
 ### Projects and Project Agents
 
 A Project registers a server-side repository path, one Source Format, optional auto-load files, Project defaults, and Sessions. Its Source Format is either OpenCode (`.opencode/agents/` and `.opencode/skills/`) or Claude Code (`.claude/agents/` and `.claude/skills/`). Exactly one format is active; vBot does not merge them.
@@ -307,6 +309,7 @@ Project Agents are Config Agents scanned from the Project Team. They are profile
 
 ```bash
 vbot project add ./my-repo --name "My Project" --format opencode
+vbot agent update coder --project my-project
 vbot project list
 vbot project show my-project
 vbot project set my-project --default-agent orchestrator

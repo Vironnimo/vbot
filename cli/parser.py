@@ -289,7 +289,12 @@ def _add_agent_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     )
     create_parser.add_argument("id", metavar="<agent-id>", help="Id for the new agent")
     create_parser.add_argument("name", metavar="<name>", help="Display name for the new agent")
-    _add_agent_change_arguments(create_parser, include_name=False, include_session=False)
+    _add_agent_change_arguments(
+        create_parser,
+        include_name=False,
+        include_session=False,
+        include_location=False,
+    )
 
     update_parser = _add_command_parser(
         agent_subparsers,
@@ -298,7 +303,12 @@ def _add_agent_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         example="agent update assistant --thinking-effort high",
     )
     update_parser.add_argument("id", metavar="<agent-id>", help="Agent id to update")
-    _add_agent_change_arguments(update_parser, include_name=True, include_session=True)
+    _add_agent_change_arguments(
+        update_parser,
+        include_name=True,
+        include_session=True,
+        include_location=True,
+    )
 
     delete_parser = _add_command_parser(
         agent_subparsers, "delete", AGENT_HELP["delete"], example="agent delete coder"
@@ -311,6 +321,7 @@ def _add_agent_change_arguments(
     *,
     include_name: bool,
     include_session: bool,
+    include_location: bool,
 ) -> None:
     if include_name:
         parser.add_argument("--name", help="New display name")
@@ -344,6 +355,31 @@ def _add_agent_change_arguments(
     )
     parser.add_argument("--allowed-tools", nargs="*", help="Replace the full tool allowlist")
     parser.add_argument("--allowed-skills", nargs="*", help="Replace the full skill allowlist")
+    if include_location:
+        parser.add_argument(
+            "--workspace",
+            help="Move the identity and Memory home to this absolute path",
+        )
+        parser.add_argument(
+            "--default-workspace",
+            action="store_true",
+            help="Move the identity and Memory home back to the agent's default Workspace",
+        )
+        parser.add_argument(
+            "--copy-workspace-files",
+            action="store_true",
+            help="Copy SOUL.md, USER.md, and MEMORY.md when changing Workspace",
+        )
+        parser.add_argument(
+            "--project",
+            metavar="<project-id>",
+            help="Select the Project used for relative file and shell work",
+        )
+        parser.add_argument(
+            "--clear-project",
+            action="store_true",
+            help="Clear the selected Project without changing Workspace or Memory",
+        )
     if include_session:
         parser.add_argument("--current-session-id", help="Switch the agent's current session")
 
