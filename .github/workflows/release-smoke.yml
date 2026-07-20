@@ -104,7 +104,7 @@ jobs:
           $dataDir = Join-Path $HOME ".vbot"
           $installer = Join-Path $env:RUNNER_TEMP "install.ps1"
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/$env:GITHUB_REPOSITORY/$env:GITHUB_SHA/scripts/install.ps1" -OutFile $installer
-          & $installer -InstallDir $installDir -Version $env:RELEASE_TAG -NoAutostart
+          & $installer -InstallDir $installDir -Version $env:RELEASE_TAG -NoAutostart -AllowElevatedInstall
 
           $checkedOutTag = (& git -C $installDir describe --tags --exact-match).Trim()
           if ($checkedOutTag -ne $env:RELEASE_TAG) { throw "Installed tag '$checkedOutTag' does not match '$env:RELEASE_TAG'" }

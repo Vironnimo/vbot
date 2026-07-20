@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import base64
+import json
+import re
 import sys
 import sysconfig
 from collections.abc import Callable, Sequence
@@ -39,6 +42,16 @@ def _ok(stdout: str = "") -> CommandRun:
 
 def _err(stderr: str = "Access is denied") -> CommandRun:
     return CommandRun(returncode=1, stdout="", stderr=stderr)
+
+
+def _windows_task_script_and_payload(command: list[str]) -> tuple[str, dict[str, str]]:
+    assert command[0] == "powershell.exe"
+    assert command[-2] == "-EncodedCommand"
+    script = base64.b64decode(command[-1]).decode("utf-16-le")
+    matched = re.search(r'\$payloadToken = "([A-Za-z0-9+/=]+)"', script)
+    assert matched is not None
+    payload = json.loads(base64.b64decode(matched.group(1)).decode("utf-8"))
+    return script, payload
 
 
 def test_default_runner_decodes_utf8_and_preserves_invalid_bytes() -> None:
@@ -114,17 +127,21 @@ def test_enable_windows_creates_task_and_starts() -> None:
     assert result.ok, result.message
     assert "running" in result.message
     assert events == ["start"]
-    create = runner.first("schtasks", "/Create")
-    assert create is not None
-    action = create[create.index("/TR") + 1]
-    assert action == (
-        f'"C:\\Program Files\\vbot\\vbot-autostart.exe" '
-        f"--host 127.0.0.1 --port 8420 --data-dir {inst.data_dir}"
-    )
-    assert "ONLOGON" in create
+    assert len(runner.calls) == 1
+    script, payload = _windows_task_script_and_payload(runner.calls[0])
+    assert payload == {
+        "operation": "enable",
+        "task_name": "vBot",
+        "launcher": r"C:\Program Files\vbot\vbot-autostart.exe",
+        "arguments": f"--host 127.0.0.1 --port 8420 --data-dir {inst.data_dir}",
+    }
+    assert "$definition.Principal.LogonType = 3" in script
+    assert "$definition.Principal.RunLevel = 0" in script
+    assert "$trigger.UserId = $userId" in script
+    assert "$root.RegisterTaskDefinition(" in script
 
 
-def test_enable_windows_failure_hints_elevation() -> None:
+def test_enable_windows_surfaces_per_user_registration_failure() -> None:
     runner = ScriptedRunner(lambda command: _err("Access is denied"))
     events, start = _recording_start()
 
@@ -137,9 +154,20 @@ def test_enable_windows_failure_hints_elevation() -> None:
     )
 
     assert not result.ok
-    assert "elevated" in result.message.lower()
+    assert "per-user Task Scheduler task failed" in result.message
+    assert "Administrator" not in result.message
     assert "server: running" in result.message
     assert events == ["start"]
+
+
+def test_windows_task_values_are_encoded_as_data() -> None:
+    task_name = 'vBot"; Write-Output "injected'
+    command = autostart_management._windows_task_command("status", task_name=task_name)
+
+    script, payload = _windows_task_script_and_payload(command)
+
+    assert payload == {"operation": "status", "task_name": task_name}
+    assert task_name not in script
 
 
 def test_windows_launcher_resolution_prefers_active_environment_over_path(
@@ -229,27 +257,23 @@ def test_enable_unsupported_platform() -> None:
 
 
 def test_disable_windows_deletes_existing_task() -> None:
-    def handler(command: list[str]) -> CommandRun:
-        return _ok() if command[:2] == ["schtasks", "/Query"] else _ok()
-
-    runner = ScriptedRunner(handler)
+    runner = ScriptedRunner(lambda command: _ok())
     result = disable_autostart(_instance(), platform="win32", runner=runner)
 
     assert result.ok
     assert "removed" in result.message
-    assert runner.ran("schtasks", "/Delete")
+    operations = [_windows_task_script_and_payload(call)[1]["operation"] for call in runner.calls]
+    assert operations == ["status", "delete"]
 
 
 def test_disable_windows_idempotent_when_absent() -> None:
-    def handler(command: list[str]) -> CommandRun:
-        return _err() if "/TN" in command else _ok()
-
-    runner = ScriptedRunner(handler)
+    runner = ScriptedRunner(lambda command: CommandRun(3, "", ""))
     result = disable_autostart(_instance(), platform="win32", runner=runner)
 
     assert result.ok
     assert "already disabled" in result.message
-    assert not runner.ran("schtasks", "/Delete")
+    assert len(runner.calls) == 1
+    assert _windows_task_script_and_payload(runner.calls[0])[1]["operation"] == "status"
 
 
 def test_disable_linux_removes_unit(tmp_path: Path) -> None:
@@ -271,6 +295,22 @@ def test_status_reports_enabled_windows() -> None:
     assert result.ok
     assert "enabled" in result.message
     assert "not enabled" not in result.message
+
+
+def test_status_distinguishes_absent_task_from_scheduler_failure() -> None:
+    absent = autostart_status(
+        _instance(),
+        platform="win32",
+        runner=ScriptedRunner(lambda command: CommandRun(3, "", "")),
+    )
+    failed = autostart_status(
+        _instance(), platform="win32", runner=ScriptedRunner(lambda command: _err("no service"))
+    )
+
+    assert absent.ok
+    assert "not enabled" in absent.message
+    assert not failed.ok
+    assert "no service" in failed.message
 
 
 def test_status_reports_not_enabled_linux() -> None:

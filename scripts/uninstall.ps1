@@ -353,7 +353,7 @@ function Invoke-ManagedUninstall {
                 Write-Host "Removed autostart task '$TaskName'."
             }
             catch {
-                Write-Warning "Could not remove autostart task '$TaskName' (this usually needs an elevated terminal). Remove it manually: Unregister-ScheduledTask -TaskName '$TaskName' -Confirm:`$false"
+                Write-Warning "Could not remove the per-user autostart task '$TaskName'. Remove it manually: Unregister-ScheduledTask -TaskName '$TaskName' -Confirm:`$false"
             }
         }
     }
