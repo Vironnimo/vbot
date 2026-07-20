@@ -193,7 +193,7 @@
     Object.fromEntries(
       chatState.agents.map((agent) => [
         agent.id,
-        agentActivityStatus(chatState, agent.id),
+        agentActivityStatus(chatState, agent.id, displayedSessionKey()),
       ]),
     ),
   );
@@ -201,7 +201,10 @@
     Object.fromEntries(
       projectTeam.map((member) => {
         const address = formatAgentAddress(member.agent_id, selectedProjectId);
-        return [member.agent_id, agentActivityStatus(chatState, address)];
+        return [
+          member.agent_id,
+          agentActivityStatus(chatState, address, displayedSessionKey()),
+        ];
       }),
     ),
   );
