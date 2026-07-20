@@ -41,6 +41,12 @@ vi.mock('$lib/api.js', () =>
     RUN_EVENT_TOOL_CALL_STDOUT: 'tool_call_stdout',
     subscribeRunEvents: (...args) => subscribeRunEventsMock(...args),
     listSessions: (...args) => listSessionsMock(...args),
+    markSessionRead: (agentId, sessionId, runId) =>
+      rpcMock('session.mark_read', {
+        agent_id: agentId,
+        session_id: sessionId,
+        run_id: runId,
+      }),
     listQueue: (...args) => listQueueMock(...args),
     removeFromQueue: (...args) => removeFromQueueMock(...args),
     updateQueueItem: (...args) => updateQueueItemMock(...args),
@@ -278,6 +284,18 @@ export function createChatRpcMock({
       const agentId =
         typeof params?.agent_id === 'string' ? params.agent_id : '';
       return { agent_id: agentId, session_id: `created-${agentId}` };
+    }
+
+    if (method === 'session.mark_read') {
+      return {
+        agent_id: params.agent_id,
+        session_id: params.session_id,
+        has_unread_completion: false,
+        unread_run_id: null,
+        unread_run_status: null,
+        unread_run_at: null,
+        marked_read: true,
+      };
     }
 
     throw new Error(`Unexpected RPC method: ${method}`);

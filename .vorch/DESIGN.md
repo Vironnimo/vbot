@@ -18,6 +18,7 @@ colors:
   accent:      "#E8870A"
   green:       "#4ADE80"
   amber:       "#F59E0B"
+  blue:        "#60A5FA"
   red:         "#FC8181"
 typography:
   display:
@@ -439,6 +440,8 @@ The surface uses a low-contrast `surface-2` tint, dashed `border`, `lg` radius (
 **Every local content view switch uses the shared `TabList` component (`webui/src/components/ui/TabList.svelte`).** Callers pass already-translated `{ id, label }` items, the active `value`, `ariaLabel`, and an `onChange` callback; they keep ownership of panel content and link each panel back to the generated tab id. The component owns `role="tablist"` / `role="tab"`, selected state, one-tab stop, panel ids, and automatic Arrow Left/Right, Home, and End activation. The guard rejects both raw canonical classes and the retired Statistics/Debug tab classes.
 
 `appearance="underline"` is the default section-level treatment: transparent Sans tabs on the shared bottom rule, with the active tab marked only by accent text and a 2px accent underline. `appearance="segmented"` is the compact alternate-representation treatment used for Raw/Parsed content: a `surface-2` bounded group with an `accent-12` active tint. `density="compact"` switches both treatments to the smaller Mono technical voice. Long tab sets scroll horizontally without exposing a scrollbar; every tab uses the global focus ring. Period selectors, filters, and the Chat agent navigation are not content tabs and remain distinct controls.
+
+**Chat Agent activity navigation** — Identity and Project Team Agent bars use a 7px status dot independently from selection. Neutral `text-lo` means idle, amber means a Run is active (a restrained pulse, disabled under reduced motion), and blue means a durable unread terminal result. State priority is running over unread over idle. The selected Agent is identified only by accent text plus the 2px accent underline; selection never recolors the status dot. Every Agent button exposes the same state in its accessible label and quick tooltip. The Session drawer repeats blue as a compact dot-text marker on the concrete unread Session rather than inventing a status chip.
 
 ### Log viewer
 

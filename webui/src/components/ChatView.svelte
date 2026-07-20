@@ -24,6 +24,7 @@
   import { tooltip } from '$lib/tooltip.js';
   import { createChatRunStream } from '../lib/chatRunStream.js';
   import {
+    agentActivityStatus,
     canCreateNewSession,
     createChatController,
     createChatState,
@@ -32,10 +33,12 @@
     formatAgentAddress,
     isProjectSelected,
     isRunActive,
+    newestUnreadSessionForAgent,
     pickProjectAgentSessionId,
     resolveAgentAddressing,
     selectAgent,
     selectedAgent,
+    sessionHasTerminalRun,
     setAgents,
     visibleTimelineItemsForRender,
   } from '../lib/chatState.js';
@@ -186,6 +189,22 @@
 
   let activeAgent = $derived(getActiveAgent());
   let activeSessionState = $derived(getActiveSessionState());
+  let identityAgentStatuses = $derived.by(() =>
+    Object.fromEntries(
+      chatState.agents.map((agent) => [
+        agent.id,
+        agentActivityStatus(chatState, agent.id),
+      ]),
+    ),
+  );
+  let projectAgentStatuses = $derived.by(() =>
+    Object.fromEntries(
+      projectTeam.map((member) => {
+        const address = formatAgentAddress(member.agent_id, selectedProjectId);
+        return [member.agent_id, agentActivityStatus(chatState, address)];
+      }),
+    ),
+  );
   let activeContinuation = $derived(activeSessionState?.continuation ?? null);
   // Outside address of the displayed agent (bare id for identity, full
   // `agent@projekt` otherwise) — what address-parsing RPCs like session.list
@@ -597,6 +616,39 @@
 
   $effect(() => {
     chatController.handleServerEvents(runServerEvent, runServerEvents);
+  });
+
+  let lastActivityRefreshKey = '';
+  $effect(() => {
+    const addresses = [
+      ...chatState.agents.map((agent) => agent.id),
+      ...projectTeam.map((member) =>
+        formatAgentAddress(member.agent_id, selectedProjectId),
+      ),
+    ];
+    const reconnectRevision = connectionSnapshot
+      ? `${connectionSnapshot.epoch ?? ''}:${connectionSnapshot.last_sequence ?? ''}`
+      : '';
+    const refreshKey = `${sessionsRefreshToken}:${reconnectRevision}:${addresses.join('|')}`;
+    if (refreshKey === lastActivityRefreshKey) {
+      return;
+    }
+    lastActivityRefreshKey = refreshKey;
+    void chatController.refreshAgentActivity(addresses);
+  });
+
+  $effect(() => {
+    const sessionState = activeSessionState;
+    const unreadRunId = sessionState?.unreadRunId ?? '';
+    if (
+      !unreadRunId ||
+      sessionState.markReadFailedRunId === unreadRunId ||
+      !isDisplayedSession(sessionState.agentId, sessionState.sessionId) ||
+      !sessionHasTerminalRun(sessionState, unreadRunId)
+    ) {
+      return;
+    }
+    void chatController.markSessionCompletionRead(sessionState);
   });
 
   // Re-sync a held session's queue when another window mutates it. App forwards
@@ -1053,7 +1105,14 @@
     const { agentAddress } = addressing;
     chatState.actionError = '';
     try {
-      let sessionId = projectAgentSessions[agentAddress] ?? '';
+      const newestUnreadSession = newestUnreadSessionForAgent(
+        chatState,
+        agentAddress,
+      );
+      let sessionId =
+        newestUnreadSession?.sessionId ??
+        projectAgentSessions[agentAddress] ??
+        '';
       if (!sessionId) {
         const listed = await chatController.listSessions(agentAddress);
         // A newer project/agent selection may have superseded this one.
@@ -1111,7 +1170,14 @@
   };
 
   const handleSelectProjectAgent = async (agentId) => {
-    if (!agentId || agentId === selectedProjectAgentId) {
+    if (!agentId) {
+      return;
+    }
+    const agentAddress = formatAgentAddress(agentId, selectedProjectId);
+    if (
+      agentId === selectedProjectAgentId &&
+      !newestUnreadSessionForAgent(chatState, agentAddress)
+    ) {
       return;
     }
     await openProjectAgent(agentId);
@@ -1124,6 +1190,23 @@
     // team bar remains, but the active chat is the identity agent).
     selectedProjectAgentId = '';
     onProjectAgentSelected?.('');
+    const unreadSession = newestUnreadSessionForAgent(chatState, agentId);
+    if (unreadSession) {
+      clearSessionOverride();
+      selectAgent(chatState, agentId);
+      onAgentSelected?.(agentId);
+      const currentSessionId =
+        selectedAgent(chatState)?.current_session_id ?? '';
+      viewingSessionId =
+        unreadSession.sessionId === currentSessionId
+          ? ''
+          : unreadSession.sessionId;
+      viewingSessionAgentId = '';
+      viewingSubAgentSession = false;
+      reportSessionNavigation();
+      await loadHistoryForSession(agentId, unreadSession.sessionId);
+      return;
+    }
     if (agentId === chatState.selectedAgentId) {
       if (sessionOverrideActive) {
         clearSessionOverride();
@@ -1826,6 +1909,7 @@
 >
   <ChatHeader
     agents={chatState.agents}
+    agentStatuses={identityAgentStatuses}
     selectedAgentId={projectAgentActive ? '' : chatState.selectedAgentId}
     loadingAgents={chatState.loadingAgents}
     {activeAgent}
@@ -1877,14 +1961,34 @@
           </span>
         {:else}
           {#each projectTeam as member (member.agent_id)}
+            {@const memberName = member.display_name || member.agent_id}
+            {@const memberStatus =
+              projectAgentStatuses[member.agent_id] ?? 'idle'}
+            {@const memberActivityLabel =
+              memberStatus === 'running'
+                ? t('chat.agentActivity.running', '{name}: Running', {
+                    name: memberName,
+                  })
+                : memberStatus === 'unread'
+                  ? t('chat.agentActivity.unread', '{name}: Unread result', {
+                      name: memberName,
+                    })
+                  : t('chat.agentActivity.idle', '{name}: Idle', {
+                      name: memberName,
+                    })}
             <button
               type="button"
               class="agent-tab chat-view__project-tab"
               class:active={member.agent_id === selectedProjectAgentId}
+              aria-label={memberActivityLabel}
+              use:tooltip={memberActivityLabel}
               onclick={() => handleSelectProjectAgent(member.agent_id)}
             >
-              <span class="tab-indicator"></span>
-              <span>{member.display_name || member.agent_id}</span>
+              <span
+                class="tab-indicator tab-indicator--{memberStatus}"
+                aria-hidden="true"
+              ></span>
+              <span>{memberName}</span>
             </button>
           {/each}
         {/if}

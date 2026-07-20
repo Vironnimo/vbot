@@ -7,6 +7,7 @@
 
   let {
     agents = [],
+    agentStatuses = {},
     selectedAgentId = '',
     loadingAgents = false,
     activeAgent = null,
@@ -178,6 +179,16 @@
         return '';
     }
   }
+
+  function agentActivityLabel(name, status) {
+    if (status === 'running') {
+      return t('chat.agentActivity.running', '{name}: Running', { name });
+    }
+    if (status === 'unread') {
+      return t('chat.agentActivity.unread', '{name}: Unread result', { name });
+    }
+    return t('chat.agentActivity.idle', '{name}: Idle', { name });
+  }
 </script>
 
 <header class="chat-header">
@@ -196,14 +207,21 @@
     {/if}
     {#if agents.length > 0}
       {#each agents as agent (agent.id)}
+        {@const agentStatus = agentStatuses[agent.id] ?? 'idle'}
+        {@const activityLabel = agentActivityLabel(agent.name, agentStatus)}
         <button
           type="button"
           class:active={agent.id === selectedAgentId}
           class="agent-tab"
           disabled={loadingAgents}
+          aria-label={activityLabel}
+          use:tooltip={activityLabel}
           onclick={() => onSelectAgent(agent.id)}
         >
-          <span class="tab-indicator"></span>
+          <span
+            class="tab-indicator tab-indicator--{agentStatus}"
+            aria-hidden="true"
+          ></span>
           <span>{agent.name}</span>
         </button>
       {/each}

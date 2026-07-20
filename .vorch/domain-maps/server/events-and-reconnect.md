@@ -30,7 +30,7 @@ Connect registers and publishes `resource_changed(kind="clients")` before the he
 
 `server/rpc/event_bridge.py` subscribes to every Run started by the shared `ChatRunManager`, including RPC starts, queued starts, Automation, and Sub-Agent work. The bridge is idempotent within a bounded Run-id retention window so manager callbacks and explicit RPC bridging cannot duplicate summaries.
 
-Streaming deltas (`assistant_output_delta`, `reasoning_delta`, `tool_call_delta`, stdout/stderr) are deliberately excluded from `/ws`; SSE is their transport. Stable Run output and terminal events become the small server lifecycle types and carry `run_id`, bare `agent_id`, `project_id`, `session_id`, original Run event type/sequence/timestamp, and sanitized output/terminal fields. Opaque Provider metadata is recursively removed. Terminal bridges also publish `resource_changed(kind="debug_traces")` after the terminal summary.
+Streaming deltas (`assistant_output_delta`, `reasoning_delta`, `tool_call_delta`, stdout/stderr) are deliberately excluded from `/ws`; SSE is their transport. Stable Run output and terminal events become the small server lifecycle types and carry `run_id`, bare `agent_id`, `project_id`, `session_id`, original Run event type/sequence/timestamp, and sanitized output/terminal fields. Opaque Provider metadata is recursively removed. Terminal bridges also publish `resource_changed(kind="debug_traces")` and a scoped `resource_changed(kind="sessions")` after the terminal summary so trace views and durable completion projections re-fetch.
 
 `working_project_id` is internal execution state and never appears in SSE, WebSocket, Queue, history, or public Run payloads.
 
@@ -41,7 +41,7 @@ Streaming deltas (`assistant_output_delta`, `reasoning_delta`, `tool_call_delta`
 Emission belongs to the server mutation edge, never `core/`. Representative ownership:
 
 - Model Refresh → `models`; credential/Connection changes → `providers`; Agent CRUD → `agents`; Project mutations/removal → `projects` and any affected `agents`.
-- Session create/rename/delete and title-change callbacks → scoped `sessions`; deleting an Identity Agent's current Session also invalidates `agents` because its current pointer changes.
+- Session create/rename/delete, title-change callbacks, terminal Runs, and successful completion read acknowledgements → scoped `sessions`; deleting an Identity Agent's current Session also invalidates `agents` because its current pointer changes.
 - RPC Queue mutations and the queued branches of `chat.send`/`chat.stream` → scoped `queue`. Core-origin enqueues intentionally do not publish this browser invalidation.
 - Channel mutations → `channels`; `/ws` presence lifecycle → `clients`; terminal Run bridge and Debug mutations → `debug_traces`.
 - `CronService.add_changed_callback` is bridged in `server/app.py` → `cron`, covering RPC/Tool mutations and scheduler-owned status/health transitions without importing the server bus into core.

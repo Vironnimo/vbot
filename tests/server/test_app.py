@@ -250,7 +250,7 @@ async def test_run_event_bridge_publishes_non_rpc_runs() -> None:
             agent_id="coder", session_id="session-one", executor=execute, project_id=None
         )
         await run.wait()
-        await _wait_for_events(state.event_bus, 3)
+        await _wait_for_events(state.event_bus, 4)
     finally:
         if callable(unsubscribe):
             unsubscribe()
@@ -259,9 +259,13 @@ async def test_run_event_bridge_publishes_non_rpc_runs() -> None:
         "run_started",
         "run_completed",
         "resource_changed",
+        "resource_changed",
     ]
     assert all(event["payload"]["run_id"] == run.id for event in state.event_bus.events[:2])
-    assert state.event_bus.events[-1]["payload"] == {"kind": "debug_traces"}
+    assert [event["payload"] for event in state.event_bus.events[-2:]] == [
+        {"kind": "debug_traces"},
+        {"kind": "sessions", "scope": {"agent_id": "coder"}},
+    ]
 
 
 def test_session_title_bridge_publishes_sessions_invalidation(tmp_path: Path) -> None:

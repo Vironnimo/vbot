@@ -641,6 +641,10 @@ class TestChatSessionManager:
                 "id": "session-a",
                 "created_at": first_timestamp.isoformat(),
                 "last_active_at": last_timestamp.isoformat(),
+                "has_unread_completion": False,
+                "unread_run_id": None,
+                "unread_run_status": None,
+                "unread_run_at": None,
                 "source_channel_id": "tg-assistant",
                 "platform": "telegram",
                 "platform_conv_id": "12345678",
@@ -649,8 +653,45 @@ class TestChatSessionManager:
                 "id": "session-b",
                 "created_at": fallback_timestamp.isoformat(),
                 "last_active_at": fallback_timestamp.isoformat(),
+                "has_unread_completion": False,
+                "unread_run_id": None,
+                "unread_run_status": None,
+                "unread_run_at": None,
             },
         ]
+
+    def test_terminal_run_stays_unread_until_exact_run_is_acknowledged(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        session = manager.create("coder", session_id="session-a")
+        first_timestamp = "2026-07-20T10:00:00+00:00"
+        second_timestamp = "2026-07-20T10:05:00+00:00"
+
+        manager.record_terminal_run("coder", "session-a", "run-one", "completed", first_timestamp)
+
+        unread = manager.list_with_metadata("coder")[0]
+        assert unread["has_unread_completion"] is True
+        assert unread["unread_run_id"] == "run-one"
+        assert unread["unread_run_status"] == "completed"
+        assert unread["unread_run_at"] == first_timestamp
+        assert session.activity_path.exists()
+
+        manager.record_terminal_run("coder", "session-a", "run-two", "failed", second_timestamp)
+        stale = manager.mark_terminal_run_read("coder", "session-a", "run-one")
+
+        assert stale["marked_read"] is False
+        assert stale["has_unread_completion"] is True
+        assert stale["unread_run_id"] == "run-two"
+
+        acknowledged = manager.mark_terminal_run_read("coder", "session-a", "run-two")
+
+        assert acknowledged == {
+            "has_unread_completion": False,
+            "unread_run_id": None,
+            "unread_run_status": None,
+            "unread_run_at": None,
+            "marked_read": True,
+        }
+        assert manager.list_with_metadata("coder")[0]["has_unread_completion"] is False
 
     def test_list_with_metadata_recovers_timestamps_from_partial_trailing_line(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
@@ -666,6 +707,10 @@ class TestChatSessionManager:
                 "id": "session-a",
                 "created_at": message_timestamp.isoformat(),
                 "last_active_at": message_timestamp.isoformat(),
+                "has_unread_completion": False,
+                "unread_run_id": None,
+                "unread_run_status": None,
+                "unread_run_at": None,
             }
         ]
 
@@ -688,11 +733,19 @@ class TestChatSessionManager:
         manager = ChatSessionManager(tmp_path)
         session = manager.create("coder", session_id="session-one")
         manager.set_metadata("coder", "session-one", {"is_subagent_session": True})
+        manager.record_terminal_run(
+            "coder",
+            "session-one",
+            "run-one",
+            "completed",
+            "2026-07-20T10:00:00+00:00",
+        )
 
         manager.delete("coder", "session-one")
 
         assert not session.path.exists()
         assert not session.sidecar_path.exists()
+        assert not session.activity_path.exists()
 
     def test_delete_recreated_session_does_not_inherit_metadata(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
@@ -714,16 +767,25 @@ class TestChatSessionManager:
         manager = ChatSessionManager(tmp_path)
         session = manager.create("coder", session_id="session-one")
         manager.set_metadata("coder", "session-one", {"title": "Keep me"})
+        manager.record_terminal_run(
+            "coder",
+            "session-one",
+            "run-one",
+            "completed",
+            "2026-07-20T10:00:00+00:00",
+        )
 
         archive_dir = asyncio.run(manager.archive("coder", "session-one"))
 
         # Gone from the live location, so list() no longer sees it.
         assert not session.path.exists()
         assert not session.sidecar_path.exists()
+        assert not session.activity_path.exists()
         assert manager.list("coder") == []
-        # Both files preserved under the archive (recoverable by hand).
+        # The transcript and both sidecars stay recoverable by hand.
         assert (archive_dir / session.path.name).exists()
         assert (archive_dir / session.sidecar_path.name).exists()
+        assert (archive_dir / session.activity_path.name).exists()
 
     def test_archive_lands_under_sessions_archive_root(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
@@ -997,6 +1059,14 @@ class TestChatSessionManagerMove:
         manager = ChatSessionManager(tmp_path)
         source = self._populate(manager, "alpha", "sess", project_id=source_project_id)
         manager.set_metadata("alpha", "sess", {"platform": "telegram"}, source_project_id)
+        manager.record_terminal_run(
+            "alpha",
+            "sess",
+            "run-one",
+            "completed",
+            "2026-07-20T10:00:00+00:00",
+            source_project_id,
+        )
         original = [message.to_dict() for message in source.load()]
 
         destination = asyncio.run(
@@ -1009,14 +1079,18 @@ class TestChatSessionManagerMove:
             )
         )
 
-        # Source home is empty afterwards (both files gone).
+        # Source home is empty afterwards (transcript and both sidecars gone).
         assert manager.exists("alpha", "sess", source_project_id) is False
         assert not source.sidecar_path.exists()
+        assert not source.activity_path.exists()
         # Destination owns the session with identical history, ids, and timestamps.
         assert manager.exists("beta", "sess", target_project_id) is True
         assert destination.path == manager.sessions_dir("beta", target_project_id) / "sess.jsonl"
         assert [message.to_dict() for message in destination.load()] == original
         assert manager.get_metadata("beta", "sess", target_project_id) == {"platform": "telegram"}
+        assert (
+            manager.list_with_metadata("beta", target_project_id)[0]["unread_run_id"] == "run-one"
+        )
 
     def test_move_tolerates_missing_sidecar(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
@@ -1106,6 +1180,24 @@ class TestChatSessionManagerFork:
 
         assert source.path.read_bytes() == source_bytes
         assert source.sidecar_path.read_bytes() == source_sidecar
+
+    def test_fork_does_not_copy_unread_completion(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        source = self._populate(manager, "alpha", "sess")
+        manager.record_terminal_run(
+            "alpha",
+            "sess",
+            "run-one",
+            "completed",
+            "2026-07-20T10:00:00+00:00",
+        )
+
+        fork = asyncio.run(manager.fork("alpha", "sess"))
+
+        assert source.activity_path.exists()
+        assert not fork.activity_path.exists()
+        fork_row = next(row for row in manager.list_with_metadata("alpha") if row["id"] == fork.id)
+        assert fork_row["has_unread_completion"] is False
 
     def test_fork_records_provenance(self, tmp_path):
         manager = ChatSessionManager(tmp_path)

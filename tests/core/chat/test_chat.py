@@ -129,6 +129,10 @@ async def test_cancel_during_tool_dispatch_persists_all_sibling_tool_results(
     # Run summary marks the run as cancelled.
     assert persisted[-1].role == "run_summary"
     assert persisted[-1].status == "cancelled"
+    activity = runtime.chat_sessions.list_with_metadata("coder")[0]
+    assert activity["has_unread_completion"] is True
+    assert activity["unread_run_id"] == run.id
+    assert activity["unread_run_status"] == "cancelled"
 
 
 def _project_runtime(
