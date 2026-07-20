@@ -105,6 +105,7 @@ from cli.task_model_management import (
 from cli.tool_management import tool_list
 from cli.uninstall_management import UninstallResult, launch_uninstall
 from cli.update_management import run_update
+from core.utils.config import APP_DIR, Config
 
 SUCCESS_EXIT_CODE = 0
 FAILURE_EXIT_CODE = 1
@@ -212,6 +213,12 @@ def run(
     """Run the CLI and return an automation-safe process exit code."""
 
     args = parse_args(argv)
+    if args.area == "home":
+        config = Config(data_dir=Path(args.data_dir) if args.data_dir is not None else None)
+        print(f"app_dir: {APP_DIR}")
+        print(f"data_dir: {config.data_dir.expanduser().resolve()}")
+        return SUCCESS_EXIT_CODE
+
     if args.area == "server":
         context = ServerCommandContext(
             command=args.command,
