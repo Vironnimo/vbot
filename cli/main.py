@@ -103,7 +103,7 @@ from cli.task_model_management import (
     task_model_targets,
 )
 from cli.tool_management import tool_list
-from cli.uninstall_management import UninstallResult, launch_uninstall
+from cli.uninstall_management import UninstallMode, UninstallResult, run_uninstall
 from cli.update_management import run_update
 
 SUCCESS_EXIT_CODE = 0
@@ -207,7 +207,7 @@ def run(
     doctor_settings_fn: Callable[[str | Path | None], CommandResult] = doctor_settings,
     doctor_config_fn: Callable[[str | Path | None], CommandResult] = doctor_config,
     launch_desktop_fn: Callable[[Sequence[str]], None] = _launch_desktop,
-    uninstall_fn: Callable[..., UninstallResult] = launch_uninstall,
+    uninstall_fn: Callable[..., UninstallResult] = run_uninstall,
 ) -> int:
     """Run the CLI and return an automation-safe process exit code."""
 
@@ -247,8 +247,16 @@ def run(
 
     if args.area == "uninstall":
         uninstall_result = uninstall_fn(
+            mode=UninstallMode(args.uninstall_mode) if args.uninstall_mode else None,
+            assume_yes=args.yes,
+            host=args.host,
+            port=args.port,
+            data_dir=args.data_dir,
             task_name=args.task_name or DEFAULT_TASK_NAME,
             service_name=args.service_name or DEFAULT_SERVICE_NAME,
+            resolve=resolve,
+            stop=stop,
+            start=start,
         )
         print(uninstall_result.message)
         return SUCCESS_EXIT_CODE if uninstall_result.ok else FAILURE_EXIT_CODE

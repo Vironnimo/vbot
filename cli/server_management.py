@@ -522,7 +522,7 @@ def _run_systemctl(args: list[str]) -> _SystemctlRun:
 
     timeout = (
         _SYSTEMCTL_RESTART_TIMEOUT_SECONDS
-        if "restart" in args
+        if "restart" in args or "stop" in args
         else _SYSTEMCTL_PROBE_TIMEOUT_SECONDS
     )
     try:
@@ -616,6 +616,75 @@ def _systemd_restart(
     return CommandResult(
         ok=False,
         message="restarted via systemd, but the server did not become healthy in time",
+        instance=instance,
+        health=health,
+        log_path=instance.log_path,
+    )
+
+
+def stop_systemd_server(
+    instance: ServerInstance,
+    service_name: str,
+    *,
+    runner: SystemctlRunner = _run_systemctl,
+) -> CommandResult:
+    """Stop an active systemd-owned server without removing or disabling its unit."""
+
+    if not is_valid_systemd_service_name(service_name):
+        return CommandResult(
+            ok=False,
+            message="invalid systemd service name",
+            instance=instance,
+        )
+    stopped = runner(["systemctl", "--user", "stop", f"{service_name}.service"])
+    if stopped.returncode != 0:
+        return CommandResult(
+            ok=False,
+            message=(
+                f"systemctl --user stop {service_name} failed: {stopped.stderr or stopped.stdout}"
+            ),
+            instance=instance,
+        )
+    return CommandResult(ok=True, message="stopped via systemd", instance=instance)
+
+
+def start_systemd_server(
+    instance: ServerInstance,
+    service_name: str,
+    *,
+    runner: SystemctlRunner = _run_systemctl,
+    await_health: Callable[[ServerInstance], HealthProbeResult] = _await_vbot_health,
+) -> CommandResult:
+    """Start an existing systemd user unit and confirm that vBot becomes healthy."""
+
+    if not is_valid_systemd_service_name(service_name):
+        return CommandResult(
+            ok=False,
+            message="invalid systemd service name",
+            instance=instance,
+        )
+    started = runner(["systemctl", "--user", "start", f"{service_name}.service"])
+    if started.returncode != 0:
+        return CommandResult(
+            ok=False,
+            message=(
+                f"systemctl --user start {service_name} failed: {started.stderr or started.stdout}"
+            ),
+            instance=instance,
+        )
+    health = await_health(instance)
+    if health.is_vbot:
+        return CommandResult(
+            ok=True,
+            message="started via systemd",
+            instance=instance,
+            health=health,
+            webui=probe_webui(instance),
+            log_path=instance.log_path,
+        )
+    return CommandResult(
+        ok=False,
+        message="started via systemd, but the server did not become healthy in time",
         instance=instance,
         health=health,
         log_path=instance.log_path,

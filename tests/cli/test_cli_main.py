@@ -10,7 +10,7 @@ import pytest
 
 from cli import main as cli_main
 from cli.server_management import CommandResult, HealthProbeResult, ServerInstance, WebUIProbeResult
-from cli.uninstall_management import UninstallResult
+from cli.uninstall_management import UninstallMode, UninstallResult
 from core.utils.logging import resolve_daily_log_path
 
 
@@ -181,34 +181,77 @@ def test_parse_args_desktop_rejects_data_dir() -> None:
 
 def test_parse_args_uninstall_accepts_platform_autostart_names() -> None:
     args = cli_main.parse_args(
-        ["uninstall", "--task-name", "My Task", "--service-name", "my-service"]
+        [
+            "uninstall",
+            "--all",
+            "--yes",
+            "--host",
+            "localhost",
+            "--port",
+            "9000",
+            "--data-dir",
+            "custom-data",
+            "--task-name",
+            "My Task",
+            "--service-name",
+            "my-service",
+        ]
     )
 
     assert args.area == "uninstall"
+    assert args.uninstall_mode == "all"
+    assert args.yes is True
+    assert args.host == "localhost"
+    assert args.port == 9000
+    assert args.data_dir == "custom-data"
     assert args.task_name == "My Task"
     assert args.service_name == "my-service"
 
 
-def test_run_uninstall_dispatches_without_resolving_server(
+def test_parse_args_uninstall_rejects_multiple_modes() -> None:
+    with pytest.raises(SystemExit):
+        cli_main.parse_args(["uninstall", "--app-only", "--data-only"])
+
+
+def test_run_uninstall_dispatches_selection_and_target(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    captured: dict[str, str] = {}
+    captured: dict[str, object] = {}
 
-    def uninstall_fn(*, task_name: str, service_name: str) -> UninstallResult:
-        captured.update(task_name=task_name, service_name=service_name)
+    def uninstall_fn(**kwargs: object) -> UninstallResult:
+        captured.update(kwargs)
         return UninstallResult(ok=True, message="uninstall launched")
 
-    def unexpected_resolve(**_kwargs: object) -> ServerInstance:
-        raise AssertionError("uninstall must not resolve a server")
-
     exit_code = cli_main.run(
-        ["uninstall", "--task-name", "My Task", "--service-name", "my-service"],
-        resolve=unexpected_resolve,
+        [
+            "uninstall",
+            "--all",
+            "--yes",
+            "--host",
+            "localhost",
+            "--port",
+            "9000",
+            "--data-dir",
+            "custom-data",
+            "--task-name",
+            "My Task",
+            "--service-name",
+            "my-service",
+        ],
         uninstall_fn=uninstall_fn,
     )
 
     assert exit_code == 0
-    assert captured == {"task_name": "My Task", "service_name": "my-service"}
+    assert captured["mode"] is UninstallMode.ALL
+    assert captured["assume_yes"] is True
+    assert captured["host"] == "localhost"
+    assert captured["port"] == 9000
+    assert captured["data_dir"] == "custom-data"
+    assert captured["task_name"] == "My Task"
+    assert captured["service_name"] == "my-service"
+    assert captured["resolve"] is cli_main.resolve_instance
+    assert captured["stop"] is cli_main.stop_server
+    assert captured["start"] is cli_main.start_server
     assert capsys.readouterr().out.splitlines() == ["uninstall launched"]
 
 

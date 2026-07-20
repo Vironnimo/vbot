@@ -148,15 +148,25 @@ vbot update --discard
 vbot update --no-restart
 ```
 
-## Uninstalling
+## Uninstalling and resetting
 
-Uninstall the application, Autostart, launchers, and managed environment with one command:
+Run the guided removal flow:
 
 ```bash
 vbot uninstall
 ```
 
-For a fresh managed install, the command stops the recorded server, removes Autostart and launchers, and deletes the complete installer-owned directory including `.venv`. When the Installer was run in an existing checkout, Uninstall removes the installer-owned `.venv` and launcher but preserves the checkout. Windows requests elevation and completes removal in a separate PowerShell window so the running `vbot.exe` does not lock its own environment. Runtime data such as `~/.vbot` is always preserved.
+It offers three explicit scopes: remove the application while keeping its data, delete only the data directory as a complete reset, or remove both. Any scope that deletes data shows the exact directory and requires `DELETE` confirmation because settings, credentials, Agents, Sessions, and all other runtime state are permanently removed. A data-only reset preserves the previous server state: a running server restarts with fresh data, while a stopped server remains stopped.
+
+Automation must choose a scope and confirm it explicitly:
+
+```bash
+vbot uninstall --app-only --yes
+vbot uninstall --data-only --yes
+vbot uninstall --all --yes
+```
+
+The target defaults to the server host, port, and data directory recorded by the Installer; `--host`, `--port`, and `--data-dir` override it. Application removal deletes Autostart, launchers, and the managed environment. Windows requests elevation and completes application removal in a separate PowerShell window so the running `vbot.exe` does not lock its own environment.
 
 ## Default Data Directory
 

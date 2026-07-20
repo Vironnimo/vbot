@@ -33,7 +33,7 @@ Read the reference file before using an area's write commands — it has the exa
 |---|---|---|
 | `server` | `start` `stop` `restart` `status` | `references/server.md` |
 | `update` | update the install from git, restart | `references/server.md` |
-| `uninstall` | remove the application and Autostart, preserve data | `references/server.md` |
+| `uninstall` | remove the application, reset its data, or both | `references/server.md` |
 | `autostart` | `enable` `disable` `status` | `references/server.md` |
 | `desktop` | open the desktop window | `references/server.md` |
 | `doctor` | `settings` `config` — validate config files locally | `references/server.md` |

@@ -3,7 +3,11 @@
 param(
     [string]$PackageName = "vbot",
     [switch]$RemoveAutostart,
-    [string]$TaskName = "vBot"
+    [string]$TaskName = "vBot",
+    [switch]$RemoveData,
+    [string]$DataDirectory = (Join-Path $HOME ".vbot"),
+    [string]$ServerHost = "",
+    [int]$ServerPort = 0
 )
 
 Set-StrictMode -Version Latest
@@ -13,7 +17,7 @@ $ErrorActionPreference = "Stop"
 # installs remove their complete installer-owned tree; managed installations in
 # an existing checkout remove only the installer-owned venv and launcher; direct
 # internal setup installs uninstall only the pip package.
-# Either way the data dir (~\.vbot) is never touched.
+# The data dir is preserved unless -RemoveData is explicitly supplied.
 
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $RootMarker = Join-Path $ProjectRoot ".vbot-install-root"
@@ -210,7 +214,56 @@ function Remove-DirectoryWithRetry {
     }
 }
 
+function Remove-VbotDataDirectory {
+    param([string]$Path)
+
+    $dataFull = [System.IO.Path]::GetFullPath($Path)
+    $dataNormalized = $dataFull.TrimEnd('\', '/')
+    $homeNormalized = [System.IO.Path]::GetFullPath($HOME).TrimEnd('\', '/')
+    $rootNormalized = [System.IO.Path]::GetFullPath($ProjectRoot).TrimEnd('\', '/')
+    $driveRootNormalized = [System.IO.Path]::GetPathRoot($dataFull).TrimEnd('\', '/')
+    $currentNormalized = [System.IO.Path]::GetFullPath((Get-Location).Path).TrimEnd('\', '/')
+    $dataPrefix = $dataNormalized + [System.IO.Path]::DirectorySeparatorChar
+    if (
+        [string]::IsNullOrWhiteSpace($dataNormalized) -or
+        ($dataNormalized -ieq $homeNormalized) -or
+        ($dataNormalized -ieq $driveRootNormalized) -or
+        ($dataNormalized -ieq $rootNormalized) -or
+        $rootNormalized.StartsWith($dataPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+    ) {
+        throw "Refusing to remove unsafe data directory '$dataFull'."
+    }
+    if (
+        ($currentNormalized -ieq $dataNormalized) -or
+        $currentNormalized.StartsWith($dataPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+    ) {
+        throw "The current directory is inside '$dataFull'. Change directory before removing it."
+    }
+    if (Test-Path -LiteralPath $dataFull -PathType Leaf) {
+        throw "The data-directory path is not a directory: $dataFull"
+    }
+    if (Test-Path -LiteralPath $dataFull -PathType Container) {
+        Remove-DirectoryWithRetry -Path $dataFull
+        Write-Host "Removed vBot data directory $dataFull."
+    }
+    else {
+        Write-Host "No vBot data directory exists at $dataFull."
+    }
+}
+
 function Get-RecordedServerStopArguments {
+    if (
+        -not [string]::IsNullOrWhiteSpace($ServerHost) -and
+        $ServerPort -ge 1 -and $ServerPort -le 65535 -and
+        -not [string]::IsNullOrWhiteSpace($DataDirectory)
+    ) {
+        return @(
+            "server", "stop",
+            "--host", $ServerHost,
+            "--port", [string]$ServerPort,
+            "--data-dir", $DataDirectory
+        )
+    }
     $stopArguments = @("server", "stop")
     if (-not (Test-Path -LiteralPath $InstallManifest -PathType Leaf)) {
         return $stopArguments
@@ -237,6 +290,33 @@ function Get-RecordedServerStopArguments {
         Write-Warning "Could not read the recorded server target; stopping the default instance instead: $($_.Exception.Message)"
     }
     return $stopArguments
+}
+
+function Stop-VbotServerBestEffort {
+    $vbotCommand = Join-Path $ProjectRoot ".venv\Scripts\vbot.exe"
+    if (-not (Test-Path -LiteralPath $vbotCommand -PathType Leaf)) {
+        $resolved = Get-Command vbot -ErrorAction SilentlyContinue
+        if ($null -eq $resolved) {
+            if ($RemoveData) {
+                throw "Could not locate vbot to stop the server before deleting data."
+            }
+            return
+        }
+        $vbotCommand = $resolved.Source
+    }
+    try {
+        $stopArguments = Get-RecordedServerStopArguments
+        & $vbotCommand @stopArguments *> $null
+        if ($LASTEXITCODE -ne 0 -and $RemoveData) {
+            throw "vbot server stop failed with exit code $LASTEXITCODE."
+        }
+    }
+    catch {
+        if ($RemoveData) {
+            throw
+        }
+        # Application-only removal keeps the historical best-effort stop behavior.
+    }
 }
 
 function Invoke-ManagedUninstall {
@@ -279,16 +359,7 @@ function Invoke-ManagedUninstall {
     }
 
     # Stop a running server so the venv unlocks before removal (best-effort).
-    $venvVbot = Join-Path $ProjectRoot ".venv\Scripts\vbot.exe"
-    if (Test-Path $venvVbot) {
-        try {
-            $stopArguments = Get-RecordedServerStopArguments
-            & $venvVbot @stopArguments *> $null
-        }
-        catch {
-            # best-effort
-        }
-    }
+    Stop-VbotServerBestEffort
 
     # The shim itself lives inside ProjectRoot; drop its PATH entry.
     Remove-FromUserPath -PathToRemove (Join-Path $ProjectRoot "bin")
@@ -297,6 +368,9 @@ function Invoke-ManagedUninstall {
     Remove-DesktopShortcut
 
     Set-Location $HOME
+    if ($RemoveData) {
+        Remove-VbotDataDirectory -Path $DataDirectory
+    }
     if ($PreserveCheckout) {
         $venvPath = Join-Path $ProjectRoot ".venv"
         $binPath = Join-Path $ProjectRoot "bin"
@@ -323,10 +397,15 @@ function Invoke-ManagedUninstall {
     else {
         Write-Host "Removed $ProjectRoot (including its virtual environment)."
     }
-    Write-Host "Data directories such as ~\.vbot were not modified."
+    if (-not $RemoveData) {
+        Write-Host "Data directories such as ~\.vbot were not modified."
+    }
 }
 
 function Invoke-ManualUninstall {
+    if ($RemoveData) {
+        Stop-VbotServerBestEffort
+    }
     Write-Step "Uninstalling pip package: $PackageName"
     $python = Resolve-UninstallPython
     Invoke-External $python @("-m", "pip", "uninstall", "-y", $PackageName)
@@ -346,8 +425,15 @@ function Invoke-ManualUninstall {
         Warn-IfAutostartRemains
     }
 
+    if ($RemoveData) {
+        Set-Location $HOME
+        Remove-VbotDataDirectory -Path $DataDirectory
+    }
+
     Write-Step "Uninstall complete"
-    Write-Host "Data directories such as ~\.vbot were not modified."
+    if (-not $RemoveData) {
+        Write-Host "Data directories such as ~\.vbot were not modified."
+    }
     Write-Host "Source files, webui/node_modules, and webui/dist were not removed."
 }
 

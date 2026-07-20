@@ -155,11 +155,25 @@ vbot update --no-restart
 vbot uninstall
 ```
 
-`vbot uninstall` delegates to the platform Uninstaller bundled with the installation. It stops the recorded server best-effort, removes Autostart and launchers, and removes the managed application environment. A fresh managed install is removed wholesale; an install performed in an existing checkout removes the installer-owned `.venv` and launcher but preserves the checkout. On Windows the command requests elevation and launches a helper that waits for the calling `vbot.exe` to exit before deleting its environment; cancelling UAC leaves the installation unchanged. Custom Autostart names can be supplied with `--task-name` on Windows or `--service-name` on Linux.
+The interactive command resolves the Installer-recorded server target and offers:
 
-The underlying `scripts/uninstall.ps1` and `scripts/uninstall.sh` remain recovery and direct-setup entrypoints, but normal installations do not require locating them manually.
+- application only — removes Autostart, launchers, and the managed application while preserving the data directory
+- data only — permanently deletes the exact data directory while preserving the application
+- application and data — removes both
 
-Every uninstall mode preserves the vBot data directory. Remove `~/.vbot` separately only if you intentionally want to delete credentials, Agent identity, Sessions, and all other runtime state.
+Data-removing scopes display the resolved path and require typing `DELETE`. A data-only reset stops the target server before deletion. If it was running, it restarts with fresh data afterward; if it was stopped, it remains stopped. A systemd-owned server is stopped and started through its existing unit so Autostart ownership is preserved.
+
+Non-interactive callers must supply one scope and `--yes`:
+
+```bash
+vbot uninstall --app-only --yes
+vbot uninstall --data-only --yes
+vbot uninstall --all --yes
+```
+
+Use `--host`, `--port`, and `--data-dir` to override the recorded target. Custom Autostart names can be supplied with `--task-name` on Windows or `--service-name` on Linux. The command refuses protected roots, the home directory, any data target containing the application installation, a data target containing the caller's current directory, and application removal while the caller is inside the installation directory.
+
+Application-removing scopes delegate to the bundled platform Uninstaller. A fresh managed install is removed wholesale; an install performed in an existing checkout removes the installer-owned `.venv` and launcher but preserves the checkout. Windows requests elevation and launches a helper that waits for the calling `vbot.exe` to exit before deleting its environment; cancelling UAC leaves the installation and selected data in place. The underlying `scripts/uninstall.ps1` and `scripts/uninstall.sh` remain recovery and direct-setup entrypoints.
 
 ## First-run setup
 
