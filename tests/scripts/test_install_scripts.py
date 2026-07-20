@@ -195,6 +195,20 @@ def test_managed_uninstaller_uses_recorded_lifecycle_target(script_name: str) ->
     assert "server_data_directory" in script
 
 
+@pytest.mark.parametrize("script_name", ["uninstall.sh", "uninstall.ps1"])
+def test_uninstaller_supports_explicit_data_removal_with_path_guards(script_name: str) -> None:
+    script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+
+    if script_name.endswith(".sh"):
+        assert "--remove-data" in script
+        assert "--data-dir" in script
+    else:
+        assert "RemoveData" in script
+        assert "DataDirectory" in script
+    assert "Refusing to remove" in script
+    assert "data directory" in script.lower()
+
+
 def test_windows_installer_rejects_dev_with_version_before_install(tmp_path: Path) -> None:
     powershell = shutil.which("pwsh") or shutil.which("powershell")
     if powershell is None:

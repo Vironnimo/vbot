@@ -29,10 +29,13 @@ Updates the installation from the git checkout it was installed from, then resta
 ## Uninstall
 
 ```bash
-vbot uninstall [--task-name <name>] [--service-name <name>]
+vbot uninstall
+vbot uninstall (--app-only|--data-only|--all) --yes [--host <host>] [--port <port>] [--data-dir <path>]
 ```
 
-Removes the application, managed environment, launchers, and Autostart while preserving the vBot data directory. Windows requests UAC and finishes in a separate PowerShell window because the running CLI cannot delete its own executable; cancelling elevation leaves the installation in place. Pass the matching custom Autostart name only when the installation did not use the default.
+With an interactive terminal, the bare command asks whether to remove only the application, only the data directory, or both. Data removal displays the exact resolved path and requires typing `DELETE`; it permanently removes settings, credentials, Agents, Sessions, and all other runtime state. A data-only reset preserves the prior server state: running restarts fresh, stopped remains stopped. Non-interactive callers must select one mode and pass `--yes`.
+
+The target defaults to the Installer-recorded server host, port, and data directory; the target flags override it. Application removal deletes the managed environment, launchers, and Autostart. Windows requests UAC and finishes that removal in a separate PowerShell window because the running CLI cannot delete its own executable; cancelling elevation leaves both application and data in place. Pass the matching custom `--task-name` or `--service-name` only when the installation did not use the default.
 
 ## Autostart
 

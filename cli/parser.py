@@ -29,7 +29,7 @@ AREA_HELP = {
     "server": "Start, stop, restart, and inspect the local server",
     "desktop": "Open the desktop window pointed at a local or remote server",
     "update": "Update the installation from git, refresh deps/WebUI, and restart",
-    "uninstall": "Remove vBot and autostart while preserving the data directory",
+    "uninstall": "Remove the application, its data, or both with explicit confirmation",
     "autostart": "Enable, disable, or inspect OS autostart for the server",
     "agent": "Inspect and manage agent configs",
     "project": "Inspect and manage projects and their scanned teams",
@@ -1138,6 +1138,40 @@ def _add_uninstall_parser(
         help=AREA_HELP["uninstall"],
         description=f"{AREA_HELP['uninstall']}. Example: vbot uninstall",
     )
+    modes = uninstall_parser.add_mutually_exclusive_group()
+    modes.add_argument(
+        "--app-only",
+        action="store_const",
+        const="app-only",
+        dest="uninstall_mode",
+        help="Remove the application and Autostart while preserving data",
+    )
+    modes.add_argument(
+        "--data-only",
+        action="store_const",
+        const="data-only",
+        dest="uninstall_mode",
+        help="Delete the data directory while preserving the application",
+    )
+    modes.add_argument(
+        "--all",
+        action="store_const",
+        const="all",
+        dest="uninstall_mode",
+        help="Remove both the application and its data directory",
+    )
+    uninstall_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the confirmation prompt (a removal mode is still required without a TTY)",
+    )
+    uninstall_parser.add_argument(
+        "--host", help="Server host; defaults to the recorded installation target"
+    )
+    uninstall_parser.add_argument(
+        "--port", type=int, help="Server port; defaults to the recorded installation target"
+    )
+    uninstall_parser.add_argument("--data-dir", help="Exact data directory to keep or delete")
     uninstall_parser.add_argument(
         "--task-name", help="Windows Task Scheduler task name (default: vBot)"
     )

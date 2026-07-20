@@ -3,7 +3,7 @@
 # installs remove their complete installer-owned tree; managed installations in
 # an existing checkout remove only the installer-owned venv and launcher; direct
 # internal setup installs uninstall only the pip package.
-# Either way the data dir (~/.vbot) is never touched.
+# The data dir is preserved unless --remove-data is explicitly supplied.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,6 +16,10 @@ INSTALL_MANIFEST="${PROJECT_ROOT}/.vbot-install.json"
 PACKAGE_NAME="vbot"
 REMOVE_AUTOSTART=0
 SERVICE_NAME="vbot"
+REMOVE_DATA=0
+DATA_DIR="${HOME}/.vbot"
+SERVER_HOST=""
+SERVER_PORT=0
 
 # Freedesktop application-menu entry written by scripts/setup.sh (--desktop /
 # --desktop-client). Kept identical here so this removes exactly what was created.
@@ -27,7 +31,7 @@ Usage: scripts/uninstall.sh [options]
 
 A managed fresh install is removed wholesale. A managed install in an existing
 checkout removes its .venv and launcher but preserves the checkout. The data dir
-(~/.vbot) is always left untouched.
+(~/.vbot) is preserved unless --remove-data is supplied.
 
 Options:
   --package-name <name>  pip package to uninstall (default: vbot; direct setup only)
@@ -35,6 +39,10 @@ Options:
                          only; managed installs always remove the unit)
   --service-name <name>  systemd unit name (default: vbot; all modes — pass the
                          same name the install used)
+  --remove-data          Permanently delete the selected vBot data directory
+  --data-dir <path>      Exact data directory to delete (default: ~/.vbot)
+  --host <host>          Server host used for the pre-removal stop
+  --port <port>          Server port used for the pre-removal stop
   -h, --help             Show this help
 USAGE
 }
@@ -57,11 +65,59 @@ remove_desktop_entry() {
     fi
 }
 
+resolve_path() {
+    local python_path="${PROJECT_ROOT}/.venv/bin/python"
+    if [ ! -x "$python_path" ]; then
+        if command -v python3 >/dev/null 2>&1; then
+            python_path="$(command -v python3)"
+        elif command -v python >/dev/null 2>&1; then
+            python_path="$(command -v python)"
+        else
+            fail "Python is required to validate the data-directory path."
+        fi
+    fi
+    "$python_path" - "$1" <<'PY'
+import sys
+from pathlib import Path
+
+print(Path(sys.argv[1]).expanduser().resolve())
+PY
+}
+
+remove_data_directory() {
+    local data_full home_full current_full
+    data_full="$(resolve_path "$DATA_DIR")"
+    home_full="$(resolve_path "$HOME")"
+    current_full="$(resolve_path "$PWD")"
+    case "$data_full" in
+        "" | "/" | "$home_full" | "$PROJECT_ROOT") fail "Refusing to remove unsafe data directory '${data_full}'." ;;
+    esac
+    case "${PROJECT_ROOT}/" in
+        "${data_full}/"*) fail "Refusing to remove data directory '${data_full}' because it contains the vBot installation." ;;
+    esac
+    case "${current_full}/" in
+        "${data_full}/"*) fail "The current directory is inside '${data_full}'. Change directory before removing it." ;;
+    esac
+    if [ -e "$data_full" ] && [ ! -d "$data_full" ]; then
+        fail "The data-directory path is not a directory: ${data_full}"
+    fi
+    if [ -d "$data_full" ]; then
+        rm -rf -- "$data_full"
+        echo "Removed vBot data directory ${data_full}."
+    else
+        echo "No vBot data directory exists at ${data_full}."
+    fi
+}
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --package-name) PACKAGE_NAME="$2"; shift 2 ;;
         --remove-autostart) REMOVE_AUTOSTART=1; shift ;;
         --service-name) SERVICE_NAME="$2"; shift 2 ;;
+        --remove-data) REMOVE_DATA=1; shift ;;
+        --data-dir) DATA_DIR="$2"; shift 2 ;;
+        --host) SERVER_HOST="$2"; shift 2 ;;
+        --port) SERVER_PORT="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; fail "Unknown option: $1" ;;
     esac
@@ -71,6 +127,12 @@ done
 case "$SERVICE_NAME" in
     "" | [!A-Za-z0-9]* | *[!A-Za-z0-9_.@-]* | *.service) fail "--service-name must start with a letter or number, then contain only letters, numbers, '.', '_', '@', or '-', without a .service suffix." ;;
 esac
+case "$SERVER_PORT" in
+    ''|*[!0-9]*) fail "--port must be an integer between 1 and 65535." ;;
+esac
+if [ "$SERVER_PORT" -ne 0 ] && { [ "$SERVER_PORT" -lt 1 ] || [ "$SERVER_PORT" -gt 65535 ]; }; then
+    fail "--port must be an integer between 1 and 65535."
+fi
 
 UNIT_FILE="${HOME}/.config/systemd/user/${SERVICE_NAME}.service"
 UNIT_WANTS_LINK="${HOME}/.config/systemd/user/default.target.wants/${SERVICE_NAME}.service"
@@ -90,19 +152,28 @@ remove_systemd_unit() {
 
 # --- managed installs --------------------------------------------------------
 
-managed_cleanup() {
-    if [ -f "$UNIT_FILE" ] || [ -L "$UNIT_WANTS_LINK" ]; then
-        step "Removing systemd user unit '${SERVICE_NAME}'"
-        remove_systemd_unit
+stop_server_best_effort() {
+    local vbot_path="${PROJECT_ROOT}/.venv/bin/vbot"
+    if [ ! -x "$vbot_path" ]; then
+        vbot_path="$(command -v vbot 2>/dev/null || true)"
+    fi
+    if [ -z "$vbot_path" ]; then
+        if [ "$REMOVE_DATA" -eq 1 ]; then
+            fail "Could not locate vbot to stop the server before deleting data."
+        fi
+        return
+    fi
+    if [ -n "$SERVER_HOST" ] && [ "$SERVER_PORT" -ne 0 ]; then
+        if ! "$vbot_path" server stop --host "$SERVER_HOST" --port "$SERVER_PORT" --data-dir "$DATA_DIR" >/dev/null 2>&1; then
+            [ "$REMOVE_DATA" -eq 0 ] || fail "vbot server stop failed; data was not deleted."
+        fi
+        return
     fi
 
-    # Stop any server still holding files in the venv (no-op if already stopped
-    # above or never running).
-    local venv_vbot="${PROJECT_ROOT}/.venv/bin/vbot"
-    if [ -x "$venv_vbot" ]; then
-        local venv_python="${PROJECT_ROOT}/.venv/bin/python"
-        if [ -x "$venv_python" ] && [ -f "$INSTALL_MANIFEST" ]; then
-            "$venv_python" - "$INSTALL_MANIFEST" "$venv_vbot" <<'PY' >/dev/null 2>&1 || true
+    local venv_python="${PROJECT_ROOT}/.venv/bin/python"
+    if [ -x "$venv_python" ] && [ -f "$INSTALL_MANIFEST" ]; then
+        local stop_status=0
+        "$venv_python" - "$INSTALL_MANIFEST" "$vbot_path" <<'PY' >/dev/null 2>&1 || stop_status=$?
 import json
 import subprocess
 import sys
@@ -121,12 +192,30 @@ try:
         )
 except (OSError, ValueError, TypeError):
     pass
-subprocess.run(arguments, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+completed = subprocess.run(
+    arguments, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False
+)
+raise SystemExit(completed.returncode)
 PY
-        else
-            "$venv_vbot" server stop >/dev/null 2>&1 || true
+        if [ "$stop_status" -ne 0 ] && [ "$REMOVE_DATA" -eq 1 ]; then
+            fail "vbot server stop failed; data was not deleted."
+        fi
+    else
+        if ! "$vbot_path" server stop --data-dir "$DATA_DIR" >/dev/null 2>&1; then
+            [ "$REMOVE_DATA" -eq 0 ] || fail "vbot server stop failed; data was not deleted."
         fi
     fi
+}
+
+managed_cleanup() {
+    if [ -f "$UNIT_FILE" ] || [ -L "$UNIT_WANTS_LINK" ]; then
+        step "Removing systemd user unit '${SERVICE_NAME}'"
+        remove_systemd_unit
+    fi
+
+    # Stop any server still holding files in the venv (no-op if already stopped
+    # above or never running).
+    stop_server_best_effort
 
     # Remove the ~/.local/bin/vbot launcher only if it points into this install.
     local launcher="${HOME}/.local/bin/vbot"
@@ -153,29 +242,43 @@ managed_root_uninstall() {
     # Removing PROJECT_ROOT deletes this running script's file; bash has already
     # read it, so this is safe. Step out of the tree first so the cwd survives.
     cd "$HOME"
+    if [ "$REMOVE_DATA" -eq 1 ]; then
+        remove_data_directory
+    fi
     rm -rf "$PROJECT_ROOT"
 
     step "Uninstall complete"
     echo "Removed ${PROJECT_ROOT} (including its virtual environment)."
-    echo "Data directories such as ~/.vbot were not modified."
+    if [ "$REMOVE_DATA" -eq 0 ]; then
+        echo "Data directories such as ~/.vbot were not modified."
+    fi
 }
 
 managed_venv_uninstall() {
     step "Removing managed vBot environment from ${PROJECT_ROOT}"
     managed_cleanup
 
+    cd "$HOME"
+    if [ "$REMOVE_DATA" -eq 1 ]; then
+        remove_data_directory
+    fi
     rm -rf "${PROJECT_ROOT}/.venv"
     rm -f "$INSTALL_MANIFEST"
     rm -f "$VENV_MARKER"
 
     step "Uninstall complete"
     echo "Removed the installer-managed virtual environment; preserved ${PROJECT_ROOT}."
-    echo "Data directories such as ~/.vbot were not modified."
+    if [ "$REMOVE_DATA" -eq 0 ]; then
+        echo "Data directories such as ~/.vbot were not modified."
+    fi
 }
 
 # --- manual/editable install: uninstall the pip package -----------------------
 
 manual_uninstall() {
+    if [ "$REMOVE_DATA" -eq 1 ]; then
+        stop_server_best_effort
+    fi
     if command -v python3 >/dev/null 2>&1; then
         PYTHON="python3"
     elif command -v python >/dev/null 2>&1; then
@@ -215,8 +318,15 @@ manual_uninstall() {
 
     remove_desktop_entry
 
+    if [ "$REMOVE_DATA" -eq 1 ]; then
+        cd "$HOME"
+        remove_data_directory
+    fi
+
     step "Uninstall complete"
-    echo "Data directories such as ~/.vbot were not modified."
+    if [ "$REMOVE_DATA" -eq 0 ]; then
+        echo "Data directories such as ~/.vbot were not modified."
+    fi
     echo "Source files, webui/node_modules, and webui/dist were not removed."
 }
 

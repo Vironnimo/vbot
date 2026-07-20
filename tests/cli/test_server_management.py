@@ -28,7 +28,9 @@ from cli.server_management import (
     restart_via_systemd_if_managed,
     start_server,
     start_server_process,
+    start_systemd_server,
     stop_server,
+    stop_systemd_server,
 )
 from core.utils.logging import CONSOLE_LOGGING_ENV_VAR, resolve_daily_log_path
 
@@ -1037,7 +1039,48 @@ def test_systemd_restart_unhealthy_after_restart(tmp_path: Path) -> None:
     assert "did not become healthy" in result.message
 
 
-def test_run_systemctl_restart_gets_a_longer_timeout_than_probes(
+def test_systemd_stop_preserves_unit_and_reports_failure(tmp_path: Path) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[list[str]] = []
+
+    def runner(arguments: list[str]) -> server_management._SystemctlRun:
+        calls.append(arguments)
+        return server_management._SystemctlRun(0, "", "")
+
+    stopped = stop_systemd_server(instance, "vbot", runner=runner)
+    failed = stop_systemd_server(
+        instance,
+        "vbot",
+        runner=lambda _arguments: server_management._SystemctlRun(1, "", "permission denied"),
+    )
+
+    assert stopped.ok
+    assert calls == [["systemctl", "--user", "stop", "vbot.service"]]
+    assert not failed.ok
+    assert "permission denied" in failed.message
+
+
+def test_systemd_start_confirms_health(tmp_path: Path) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[list[str]] = []
+
+    def runner(arguments: list[str]) -> server_management._SystemctlRun:
+        calls.append(arguments)
+        return server_management._SystemctlRun(0, "", "")
+
+    result = start_systemd_server(
+        instance,
+        "vbot",
+        runner=runner,
+        await_health=lambda _instance: HealthProbeResult(reachable=True, is_vbot=True),
+    )
+
+    assert result.ok
+    assert calls == [["systemctl", "--user", "start", "vbot.service"]]
+    assert result.health is not None and result.health.is_vbot
+
+
+def test_run_systemctl_lifecycle_gets_a_longer_timeout_than_probes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, float] = {}
@@ -1049,9 +1092,11 @@ def test_run_systemctl_restart_gets_a_longer_timeout_than_probes(
     monkeypatch.setattr(server_management.subprocess, "run", fake_run)
 
     server_management._run_systemctl(["systemctl", "--user", "restart", "vbot.service"])
+    server_management._run_systemctl(["systemctl", "--user", "stop", "vbot.service"])
     server_management._run_systemctl(["systemctl", "--user", "is-active", "vbot.service"])
 
     assert captured["restart"] == server_management._SYSTEMCTL_RESTART_TIMEOUT_SECONDS
+    assert captured["stop"] == server_management._SYSTEMCTL_RESTART_TIMEOUT_SECONDS
     assert captured["is-active"] == server_management._SYSTEMCTL_PROBE_TIMEOUT_SECONDS
     assert captured["restart"] > captured["is-active"]
 
