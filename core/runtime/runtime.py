@@ -121,6 +121,7 @@ from core.tools.process_manager import ProcessManager
 from core.tools.status import register_status_tool
 from core.tools.subagent import register_subagent_tools
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
+from core.utils.config import APP_DIR
 from core.utils.errors import ConfigError, StorageError
 from core.utils.logging import LogManager
 
@@ -128,8 +129,7 @@ from core.utils.logging import LogManager
 # Project root / default resources directory
 # ---------------------------------------------------------------------------
 
-# Three directories up from this file (core/runtime/runtime.py) → project root.
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_PROJECT_ROOT = APP_DIR
 _DEFAULT_RESOURCES_DIR = _PROJECT_ROOT / "resources"
 _PACKAGE_NAME = "vbot"
 _UNKNOWN_APP_VERSION = "0.0.0+unknown"

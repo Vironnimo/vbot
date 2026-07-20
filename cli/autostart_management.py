@@ -29,6 +29,7 @@ from cli.server_management import (
     is_valid_systemd_service_name,
     start_server,
 )
+from core.utils.config import APP_DIR
 
 DEFAULT_TASK_NAME = "vBot"
 
@@ -99,7 +100,7 @@ def enable_autostart(
             service_name=name,
             unit_dir=unit_dir,
             python_executable=python_executable,
-            repo_root=repo_root or _repo_root(),
+            repo_root=repo_root or APP_DIR,
         )
         started_by_service = True
     else:
@@ -421,10 +422,6 @@ def windows_autostart_main(
             run_cli = run
         exit_code = run_cli(["server", "start", *arguments])
     raise SystemExit(exit_code)
-
-
-def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[1]
 
 
 def _default_runner(command: list[str]) -> CommandRun:
