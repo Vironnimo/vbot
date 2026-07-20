@@ -4,7 +4,7 @@ Task-gated reference for Chat admission, provider/Tool progression, streaming re
 
 ## Entry points and admission
 
-`ChatLoop` exposes `send`, `start_run`, `queue_run`, `build_queue_update`, `continue_run`, `continuation_summary`, `discard_continuation`, and `compact_session`. `run_executor(content)` is the public seam handed to `ChatRunManager`; `child_loop(nesting_depth=...)` shares the explicit `ChatLoopDependencies`, attachment resolution, Compaction, reflection, and title notification for Sub-Agent execution. The server-facing paths require an existing Session; the legacy direct `send()` path may still create one when no `session_id` is supplied.
+`ChatLoop` exposes `send`, `start_run`, `queue_run`, `build_queue_update`, and `compact_session`. `run_executor(content)` is the public seam handed to `ChatRunManager`; `child_loop(nesting_depth=...)` shares the explicit `ChatLoopDependencies`, attachment resolution, Compaction, reflection, and title notification for Sub-Agent execution. The server-facing paths require an existing Session; the legacy direct `send()` path may still create one when no `session_id` is supplied.
 
 `start_run` persists visible content as a user message and internal content as a note. `sender`, `input_origin`, `reply_surface`, `project_id`, and dispatch-only `tool_restriction` ride the admitted executor. `queue_run` validates the same prerequisites and captures immutable execution data so a queued item applies surface and working-Project decisions only when it starts. `build_queue_update` returns replacement data without mutating Queue state.
 
@@ -32,9 +32,9 @@ If a retryable `ProviderError` escapes adapter retries and the Agent has a resol
 
 Every admitted visible Run owns a provider-neutral append-only Continuation journal in `core/chat/continuation.py`. It records original visible requests, readable reasoning/partial output, stable Assistant boundaries, Tool references/status, Compaction boundaries, and the interruption cause without copying opaque reasoning metadata or full Tool Results. Dirty streaming state flushes at most every two seconds; completed Model/Tool boundaries and interruption flush immediately. Canonical Session history remains authoritative for actual Tool Calls and Results.
 
-An interrupted checkpoint attaches exactly once at executor start to the next visible Run: before a newly persisted user message or as the tail instruction for explicit Continue. A complete non-interrupted Assistant result resolves it; a further interruption extends the chain. Internal Runs neither consume nor resolve visible continuation state. Explicit Continue creates a new visible Run without a new user message and never replays an unknown Tool effect automatically. Discard removes the checkpoint while idle.
+An interrupted checkpoint attaches exactly once at executor start to the next visible Run, immediately before that Run's newly persisted user message. A complete non-interrupted Assistant result resolves it; a further interruption extends the chain. Internal Runs neither consume nor resolve visible Continuation state. There is no separate Continue or Discard action.
 
-The public summary exposes only safe high-level state. Missing or unknown effects from `write`, `edit`, or `bash` instruct the Agent to inspect real filesystem/process state before repetition. Private readable reasoning and Tool detail remain internal.
+The checkpoint and its interruption cause remain internal to Chat and are not projected through history, terminal Run events, RPC, or the UI. User Cancel, provider failure, network failure, timeout, process restart, and internal failure all use the same next-visible-Run recovery path. Missing or unknown effects from `write`, `edit`, or `bash` instruct the Agent to inspect real filesystem/process state before repetition.
 
 ## Streaming recovery
 
@@ -49,7 +49,7 @@ The public summary exposes only safe high-level state. Missing or unknown effect
 
 Cancel is best effort. `Run.request_cancel` suppresses late non-terminal output, prevents new Tool progression, and calls the runtime ProcessManager cancellation scope. Already persisted history is never rolled back.
 
-User cancel is not a recovery error. When visible streamed content already exists, Chat uses the same partial finalization path so text the user saw remains persisted; the Run still terminates `cancelled`. With no visible content no Assistant message is added, but the checkpoint may retain readable reasoning and the `run_summary` remains the timeline anchor. During Tool dispatch, computed sibling Results persist before cancellation is honored.
+When visible streamed content already exists at cancellation, Chat uses the same partial finalization path as other interruptions so text the user saw remains persisted; the Run still terminates `cancelled`. With no visible content no Assistant message is added, but the checkpoint may retain readable reasoning and the `run_summary` remains the timeline anchor. During Tool dispatch, computed sibling Results persist before cancellation is honored.
 
 ## Source and tests
 

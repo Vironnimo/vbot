@@ -58,7 +58,6 @@ class ContinuationState:
     origin_run_id: str
     latest_run_id: str
     cause: ContinuationCause | None = None
-    user_initiated: bool = False
     active: bool = True
     original_requests: list[Any] = field(default_factory=list)
     model_steps: dict[tuple[str, int], _ModelStepState] = field(default_factory=dict)
@@ -78,19 +77,6 @@ class ContinuationState:
         return [
             dict(value) for value in self.operations.values() if value.get("status") != "completed"
         ]
-
-    def public_summary(self) -> JsonObject | None:
-        if self.active or self.cause is None:
-            return None
-        return {
-            "checkpoint_id": self.checkpoint_id,
-            "origin_run_id": self.origin_run_id,
-            "latest_run_id": self.latest_run_id,
-            "cause": self.cause,
-            "state": "interrupted",
-            "user_initiated": self.user_initiated,
-            "can_continue": not self.user_initiated,
-        }
 
 
 def fold_continuation_records(records: list[JsonObject]) -> ContinuationState | None:
@@ -113,7 +99,6 @@ def fold_continuation_records(records: list[JsonObject]) -> ContinuationState | 
             state.latest_run_id = run_id
             state.active = True
             state.cause = None
-            state.user_initiated = False
             if "request" in record and record["request"] is not None:
                 state.original_requests.append(record["request"])
         elif record_type == "stream_delta" and state is not None:
@@ -181,7 +166,6 @@ def fold_continuation_records(records: list[JsonObject]) -> ContinuationState | 
         elif record_type == "run_interrupted" and state is not None:
             state.latest_run_id = _required_string(record, "run_id")
             state.cause = _required_cause(record)
-            state.user_initiated = record.get("user_initiated") is True
             state.active = False
         elif record_type == "resolved" and state is not None:
             if record.get("checkpoint_id") == state.checkpoint_id:
@@ -311,12 +295,11 @@ class ContinuationTracker:
     def mark_interruption_cause(self, cause: ContinuationCause) -> None:
         self.interruption_cause = cause
 
-    async def interrupt(self, cause: ContinuationCause) -> JsonObject:
+    async def interrupt(self, cause: ContinuationCause) -> None:
         cancelled_task = self._flush_boundary(
             self._record(
                 "run_interrupted",
                 cause=cause,
-                user_initiated=cause == "user",
             )
         )
         await self._close_timer(cancelled_task)
@@ -324,7 +307,6 @@ class ContinuationTracker:
         state = fold_continuation_records(self._session.load_continuation_records())
         if state is None:
             raise RuntimeError("continuation journal lost its unresolved state")
-        return state.public_summary() or {}
 
     async def resolve(self) -> None:
         cancelled_task = self._flush_boundary(
@@ -438,22 +420,12 @@ def recover_continuation(
             "run_id": state.latest_run_id,
             "timestamp": _timestamp(),
             "cause": "process_restart",
-            "user_initiated": False,
         }
     )
     recovered = fold_continuation_records(session.load_continuation_records())
     if recovered is not None:
         _reconcile_canonical_tool_results(recovered, session)
     return recovered
-
-
-def public_continuation_summary(
-    session: ChatSession,
-    *,
-    active_run_id: str | None = None,
-) -> JsonObject | None:
-    state = recover_continuation(session, active_run_id=active_run_id)
-    return state.public_summary() if state is not None else None
 
 
 def render_continuation_reminder(
@@ -528,10 +500,8 @@ def continuation_prompt_budget(context_window: int | None) -> int:
 def inject_continuation_reminder(
     messages: list[JsonObject],
     reminder: str,
-    *,
-    explicit_continue: bool,
 ) -> list[JsonObject]:
-    """Inject exactly one reminder at the tail or immediately before the new turn."""
+    """Inject exactly one reminder immediately before the new user turn."""
     filtered = [
         message
         for message in messages
@@ -545,8 +515,6 @@ def inject_continuation_reminder(
         "role": "user",
         "content": f"<system-reminder>\n{reminder}\n</system-reminder>",
     }
-    if explicit_continue:
-        return [*filtered, reminder_message]
     for index in range(len(filtered) - 1, -1, -1):
         if filtered[index].get("role") == "user":
             return [*filtered[:index], reminder_message, *filtered[index:]]

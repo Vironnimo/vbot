@@ -153,7 +153,6 @@ def test_commands_are_always_present() -> None:
     assert command_names == [
         "agent",
         "compact",
-        "continue",
         "handoff",
         "help",
         "learn",

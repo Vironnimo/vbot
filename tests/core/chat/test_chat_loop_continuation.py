@@ -10,7 +10,6 @@ import pytest
 from core.chat import (
     ChatMessage,
     ChatSessionError,
-    ReplySurface,
 )
 from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
 from core.chat.continuation import (
@@ -59,143 +58,6 @@ async def test_start_run_requires_existing_session(tmp_path: Path) -> None:
         await build_chat_loop(runtime).start_run("coder", "Hi", session_id="missing-session")
 
     assert adapter.requests == []
-
-
-@pytest.mark.asyncio
-async def test_continue_run_uses_checkpoint_without_appending_duplicate_user_message(
-    tmp_path: Path,
-) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    interrupted_adapter = StubAdapter(
-        [],
-        stream_responses=[NetworkError("offline") for _ in range(3)],
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=interrupted_adapter)
-    loop = build_chat_loop(runtime, streaming=True)
-
-    with pytest.raises(NetworkError):
-        await loop.send("coder", "Hi", session_id="session-one")
-
-    adapter = StubAdapter([{"content": "Continued", "tool_calls": None}])
-    runtime.adapter = adapter
-
-    run = await build_chat_loop(runtime).continue_run("coder", "session-one")
-    assistant = await run.wait()
-
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
-    assert assistant.content == "Continued"
-    assert persisted_roles(messages) == ["user", "error", "assistant"]
-    assert sum(1 for message in messages if message.role == "user") == 1
-    request_text = "\n".join(
-        str(message.get("content") or "") for message in adapter.requests[0]["messages"]
-    )
-    assert "<continuation-checkpoint" in request_text
-    assert "Original request(s):\nHi" in request_text
-    assert not runtime.chat_sessions.get("coder", "session-one").continuation_path.exists()
-
-
-@pytest.mark.asyncio
-async def test_continue_run_appends_surface_before_synthetic_continue_instruction(
-    tmp_path: Path,
-) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    interrupted_adapter = StubAdapter(
-        [],
-        stream_responses=[NetworkError("offline") for _ in range(3)],
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=interrupted_adapter)
-    with pytest.raises(NetworkError):
-        await build_chat_loop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
-
-    adapter = StubAdapter([{"content": "Continued", "tool_calls": None}])
-    runtime.adapter = adapter
-    run = await build_chat_loop(runtime).continue_run(
-        "coder",
-        "session-one",
-        reply_surface=ReplySurface.webui(),
-    )
-    await run.wait()
-
-    session = runtime.chat_sessions.get("coder", "session-one")
-    messages = session.load()
-    surface_note_index = next(
-        index
-        for index, message in enumerate(messages)
-        if message.role == "note" and str(message.content).startswith("[reply-surface] ")
-    )
-    assert all(message.role != "user" for message in messages[surface_note_index + 1 :])
-    request_messages = adapter.requests[0]["messages"]
-    surface_request_index = next(
-        index
-        for index, message in enumerate(request_messages)
-        if "shown in the WebUI" in str(message.get("content"))
-    )
-    continuation_index = next(
-        index
-        for index, message in enumerate(request_messages)
-        if "<continuation-checkpoint" in str(message.get("content"))
-    )
-    assert surface_request_index < continuation_index
-
-
-@pytest.mark.asyncio
-async def test_continue_run_raises_when_no_checkpoint_exists(
-    tmp_path: Path,
-) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = StubAdapter([{"content": "unused", "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    runtime.chat_sessions.create("coder", session_id="session-one")
-
-    with pytest.raises(ChatSessionError, match="no interrupted work"):
-        await build_chat_loop(runtime).continue_run("coder", "session-one")
-
-    assert adapter.requests == []
-
-
-@pytest.mark.asyncio
-async def test_continue_run_rejects_second_run_for_same_session(tmp_path: Path) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    interrupted_adapter = StubAdapter(
-        [],
-        stream_responses=[NetworkError("offline") for _ in range(3)],
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=interrupted_adapter)
-    with pytest.raises(NetworkError):
-        await build_chat_loop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
-    adapter = BlockingStubAdapter()
-    runtime.adapter = adapter
-
-    loop = build_chat_loop(runtime)
-    first_run = await loop.continue_run("coder", "session-one")
-    await adapter.request_started.wait()
-
-    with pytest.raises(ActiveRunError, match="active run"):
-        await loop.continue_run("coder", "session-one")
-
-    first_run.request_cancel(reason="user")
-    adapter.release.set()
-    with pytest.raises(RunCancelledError):
-        await first_run.wait()
-
-
-@pytest.mark.asyncio
-async def test_discard_continuation_clears_checkpoint(
-    tmp_path: Path,
-) -> None:
-    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
-    adapter = StubAdapter(
-        [],
-        stream_responses=[NetworkError("offline") for _ in range(3)],
-    )
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    loop = build_chat_loop(runtime, streaming=True)
-    with pytest.raises(NetworkError):
-        await loop.send("coder", "Hi", session_id="session-one")
-
-    loop.discard_continuation("coder", "session-one")
-
-    assert loop.continuation_summary("coder", "session-one") is None
 
 
 @pytest.mark.asyncio
@@ -261,7 +123,8 @@ async def test_internal_run_neither_consumes_nor_resolves_continuation(tmp_path:
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     tracker = ContinuationTracker(session, run_id="interrupted-run", request="visible work")
     await tracker.interrupt("network")
-    before = build_chat_loop(runtime).continuation_summary("coder", "session-one")
+    before = recover_continuation(session)
+    assert before is not None
 
     run = await build_chat_loop(runtime).start_run(
         "coder",
@@ -271,8 +134,10 @@ async def test_internal_run_neither_consumes_nor_resolves_continuation(tmp_path:
     )
     await run.wait()
 
-    after = build_chat_loop(runtime).continuation_summary("coder", "session-one")
-    assert after == before
+    after = recover_continuation(session)
+    assert after is not None
+    assert after.checkpoint_id == before.checkpoint_id
+    assert after.cause == before.cause
     assert all(
         "continuation-checkpoint" not in str(message.get("content") or "")
         for message in adapter.requests[0]["messages"]
@@ -395,7 +260,7 @@ async def test_cancel_after_ten_tools_then_correction_reuses_canonical_results_o
 
 
 @pytest.mark.asyncio
-async def test_second_interrupted_continue_extends_same_checkpoint(tmp_path: Path) -> None:
+async def test_second_interrupted_message_extends_same_checkpoint(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     first_adapter = StubAdapter(
         [],
@@ -417,7 +282,11 @@ async def test_second_interrupted_continue_extends_same_checkpoint(tmp_path: Pat
             ]
         ],
     )
-    second_run = await loop.continue_run("coder", "session-one")
+    second_run = await loop.start_run(
+        "coder",
+        "Try again",
+        session_id="session-one",
+    )
     with pytest.raises(NetworkError):
         await second_run.wait()
 
@@ -451,7 +320,11 @@ async def test_continuation_reminder_is_single_and_provider_policy_neutral(
     tracker.record_stream_delta(reasoning="Readable plan")
     await tracker.interrupt("provider")
 
-    run = await build_chat_loop(runtime).continue_run("coder", "session-one")
+    run = await build_chat_loop(runtime).start_run(
+        "coder",
+        "Keep going",
+        session_id="session-one",
+    )
     await run.wait()
 
     request_text = "\n".join(

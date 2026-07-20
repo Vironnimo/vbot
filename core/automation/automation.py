@@ -153,23 +153,6 @@ class TriggerService:
             return False
         return self._chat_run_manager.release_waiting_work(admission)
 
-    async def continue_run(
-        self,
-        agent_id: str,
-        session_id: str,
-        *,
-        project_id: str | None = None,
-        reply_surface: ReplySurface | None = None,
-    ) -> Run:
-        """Continue retained interrupted work for a channel or automation entry point.
-
-        ``project_id=None`` keeps the identity scope — channels are identity-only
-        callers today.
-        """
-        return await self._trigger_chat_loop.continue_run(
-            agent_id, session_id, project_id=project_id, reply_surface=reply_surface
-        )
-
     def has_active_run(
         self, agent_id: str, session_id: str, *, project_id: str | None = None
     ) -> bool:

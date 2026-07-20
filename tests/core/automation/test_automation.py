@@ -143,34 +143,6 @@ async def test_trigger_run_uses_trigger_chat_loop_when_provided() -> None:
     assert run.id == "run-streaming"
 
 
-async def test_continue_run_delegates_to_trigger_chat_loop_with_project_scope() -> None:
-    runtime = Mock()
-    chat_loop = SimpleNamespace()
-    continued = make_run("continued", "builder", "session-one")
-    trigger_chat_loop = SimpleNamespace(continue_run=AsyncMock(return_value=continued))
-    trigger_service = TriggerService(
-        cast(Any, chat_loop),
-        cast(Any, Mock()),
-        cast(Any, runtime),
-        trigger_chat_loop=cast(Any, trigger_chat_loop),
-    )
-
-    run = await trigger_service.continue_run(
-        "builder",
-        "session-one",
-        project_id="vbot",
-        reply_surface=None,
-    )
-
-    trigger_chat_loop.continue_run.assert_awaited_once_with(
-        "builder",
-        "session-one",
-        project_id="vbot",
-        reply_surface=None,
-    )
-    assert run is continued
-
-
 async def test_trigger_run_can_start_internal_run_without_visible_user_turn() -> None:
     # Arrange
     runtime = Mock()

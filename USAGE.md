@@ -367,7 +367,6 @@ Built-in Commands are owned by Chat and work in the WebUI; Telegram and Discord 
 | `/learn [request]` | Ask an Identity Agent to author or improve a Skill |
 | `/reflect [focus]` | Fork and review an Identity Agent Session through the Reflection policy |
 | `/compact [instruction]` | Manually create a Compaction checkpoint while no Run is active |
-| `/continue` | Resume retained work after an interrupted Run without duplicating the user message |
 
 `/agent` changes Session ownership; `/handoff` creates a new target Session and leaves the source intact. Through a Channel, `/handoff` relays the target's first response once but does not change the Channel's configured Agent or future routing.
 
@@ -431,7 +430,7 @@ The `session_search` Tool exposes Recall to Agents. The `history` Tool is Sessio
 
 Compaction appends a checkpoint Projection and never rewrites or deletes older Session records. Automatic Compaction runs only at safe completed Model boundaries according to the effective Policy; `/compact` invokes the selected strategy manually when no Run is active. Older detail remains discoverable through `history` and Recall.
 
-When a streaming Run is interrupted after making progress, Continuation retains a private checkpoint. The WebUI offers Continue or Discard, and `/continue` resumes without adding a duplicate user turn. A new corrective user message may also supersede the retained continuation.
+When a visible Run is interrupted, Continuation retains a private checkpoint regardless of whether the cause was user Cancel, a Provider or network failure, a timeout, a process restart, or an internal failure. The WebUI exposes no checkpoint banner or recovery controls. The next normal user message receives the checkpoint automatically alongside the new instruction, and a complete response resolves it.
 
 ### Specialized Models
 

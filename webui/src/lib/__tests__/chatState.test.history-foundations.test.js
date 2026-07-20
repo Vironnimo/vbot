@@ -71,7 +71,7 @@ describe('chat state helpers', () => {
     expect(sessionState.queue).toHaveLength(1);
   });
 
-  it('uses history and terminal events as authoritative continuation state', () => {
+  it('does not expose internal continuation data as client state', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -79,26 +79,24 @@ describe('chat state helpers', () => {
     );
     const continuation = {
       checkpoint_id: 'checkpoint-one',
-      can_continue: true,
+      cause: 'network',
     };
 
     loadHistory(sessionState, [], { continuation });
-    expect(sessionState.continuation).toEqual(continuation);
+    expect(sessionState).not.toHaveProperty('continuation');
 
     startRun(sessionState, {
       run_id: 'run-two',
       sse_url: '/runs/run-two',
       status: 'running',
     });
-    expect(sessionState.continuation).toBeNull();
-
     appendRunEvent(sessionState, {
       type: 'run_failed',
       run_id: 'run-two',
       sequence: 1,
       payload: { status: 'failed', continuation },
     });
-    expect(sessionState.continuation).toEqual(continuation);
+    expect(sessionState).not.toHaveProperty('continuation');
   });
 
   it('merges persisted tool timing and run summary into history assistant runs', () => {

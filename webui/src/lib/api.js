@@ -1021,42 +1021,6 @@ export function cancelRun(runId, options = {}, rpcOptions = {}) {
   return rpc('chat.cancel', params, rpcOptions);
 }
 
-export function continueRun(agentId, sessionId, options = {}) {
-  requireNonEmptyString(
-    agentId,
-    'Agent id must be a non-empty string',
-    'chat.continue',
-  );
-  requireNonEmptyString(
-    sessionId,
-    'Session id must be a non-empty string',
-    'chat.continue',
-  );
-  return rpc(
-    'chat.continue',
-    { agent_id: agentId, session_id: sessionId },
-    options,
-  );
-}
-
-export function discardContinuation(agentId, sessionId, options = {}) {
-  requireNonEmptyString(
-    agentId,
-    'Agent id must be a non-empty string',
-    'chat.continuation_discard',
-  );
-  requireNonEmptyString(
-    sessionId,
-    'Session id must be a non-empty string',
-    'chat.continuation_discard',
-  );
-  return rpc(
-    'chat.continuation_discard',
-    { agent_id: agentId, session_id: sessionId },
-    options,
-  );
-}
-
 export function cancelToolCall(
   { agentId, runId, toolCallId } = {},
   options = {},

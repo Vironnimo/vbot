@@ -154,7 +154,6 @@ from core.runs import (
     MODEL_FALLBACK_ACTIVATED_EVENT,
     MODEL_STEP_USAGE_EVENT,
     USER_MESSAGE_EVENT,
-    ActiveRunError,
     QueuedRunItem,
     Run,
     RunExecutor,
@@ -242,7 +241,6 @@ class _RunRequest:
 
     content: str | list[ContentBlock] | None
     internal: bool = False
-    explicit_continue: bool = False
     input_origin: InputOrigin | None = None
     sender: MessageSender | None = None
     reply_surface: ReplySurface | None = None
@@ -669,88 +667,6 @@ class ChatLoop:
             _display_content_preview(content),
         )
 
-    async def continue_run(
-        self,
-        agent_id: str,
-        session_id: str,
-        project_id: str | None = None,
-        *,
-        reply_surface: ReplySurface | None = None,
-    ) -> Run:
-        """Continue one unresolved checkpoint without adding a user message."""
-        session = self._get_session(
-            agent_id, session_id, create_missing=False, project_id=project_id
-        )
-        active = self._dependencies.run_manager.active_run(
-            agent_id=agent_id,
-            session_id=session_id,
-            project_id=project_id,
-        )
-        if active is not None:
-            raise ActiveRunError(f"session already has an active run: {session_id}")
-        state = recover_continuation(
-            session,
-            active_run_id=None,
-        )
-        summary = state.public_summary() if state is not None else None
-        if summary is None:
-            raise ChatSessionError("no interrupted work is available to continue")
-        if summary["can_continue"] is not True:
-            raise ChatSessionError("cancelled work requires a new user message to continue")
-        manager = self._dependencies.run_manager
-        agent = self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
-        working_project_id = resolve_working_project_id(project_id, agent)
-        return await manager.start(
-            agent_id=agent_id,
-            session_id=session.id,
-            executor=lambda run: self._execute_run(
-                run,
-                _RunRequest(
-                    content=None,
-                    explicit_continue=True,
-                    reply_surface=reply_surface,
-                ),
-            ),
-            project_id=project_id,
-            working_project_id=working_project_id,
-        )
-
-    def continuation_summary(
-        self, agent_id: str, session_id: str, project_id: str | None = None
-    ) -> JsonObject | None:
-        """Return the public unresolved checkpoint summary for one Session."""
-        session = self._get_session(
-            agent_id, session_id, create_missing=False, project_id=project_id
-        )
-        active = self._dependencies.run_manager.active_run(
-            agent_id=agent_id,
-            session_id=session_id,
-            project_id=project_id,
-        )
-        state = recover_continuation(
-            session,
-            active_run_id=active.id if active is not None else None,
-        )
-        return state.public_summary() if state is not None else None
-
-    def discard_continuation(
-        self, agent_id: str, session_id: str, project_id: str | None = None
-    ) -> None:
-        """Explicitly abandon one unresolved checkpoint."""
-        if (
-            self._dependencies.run_manager.active_run(
-                agent_id=agent_id,
-                session_id=session_id,
-                project_id=project_id,
-            )
-            is not None
-        ):
-            raise ChatSessionError("interrupted work cannot be discarded while a run is active")
-        session = self._get_session(
-            agent_id, session_id, create_missing=False, project_id=project_id
-        )
-        session.clear_continuation()
-
     async def compact_session(
         self,
         agent_id: str,
@@ -911,8 +827,6 @@ class ChatLoop:
         continuation_tracker: ContinuationTracker | None = None
         if not request.internal:
             prior_continuation = recover_continuation(session, active_run_id=run.id)
-            if request.explicit_continue and prior_continuation is None:
-                raise ChatSessionError("no interrupted work is available to continue")
             if prior_continuation is not None and not prior_continuation.active:
                 continuation_reminder = render_continuation_reminder(
                     prior_continuation,
@@ -941,9 +855,7 @@ class ChatLoop:
                     if run.cancel_requested and run.cancel_reason == "user"
                     else normalize_interruption_cause(exc)
                 )
-                run.terminal_payload_extras["continuation"] = await continuation_tracker.interrupt(
-                    cause
-                )
+                await continuation_tracker.interrupt(cause)
             raise
 
     def _create_run_execution_context(
@@ -1035,7 +947,6 @@ class ChatLoop:
         target = context.primary_target
         project_id = context.project_id
         internal = request.internal
-        explicit_continue = request.explicit_continue
         run_timing_started_at = datetime.now(UTC)
         run_timing_started_perf = time.perf_counter()
         _run_succeeded = True
@@ -1046,8 +957,6 @@ class ChatLoop:
             start_line_extras += f" project={project_id}"
         if internal:
             start_line_extras += " internal"
-        if explicit_continue:
-            start_line_extras += " continue"
         _LOGGER.info(
             "Run %s started (agent=%s session=%s model=%s connection=%s%s)",
             run.id,
@@ -1085,9 +994,7 @@ class ChatLoop:
             async with self._dependencies.sessions.write_lock(
                 run.agent_id, run.session_id, project_id
             ):
-                if explicit_continue:
-                    _append_reply_surface_note(session, request.reply_surface)
-                elif internal:
+                if internal:
                     if not isinstance(request.content, str):
                         raise ChatError("internal runs require string content")
                     _append_reply_surface_note(session, request.reply_surface)
@@ -1100,7 +1007,7 @@ class ChatLoop:
                     user_message = ChatMessage.user(request.content, sender=request.sender)
                     session.append(user_message)
                     _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
-            if not explicit_continue and not internal:
+            if not internal:
                 if self._session_title_service is not None:
                     self._session_title_service.notify_user_message(
                         agent_id=run.agent_id,
@@ -1138,7 +1045,6 @@ class ChatLoop:
                     inject_continuation_reminder(
                         context.request_state.messages,
                         context.continuation_reminder,
-                        explicit_continue=explicit_continue,
                     ),
                     context.request_state.tools,
                     context.request_state.allowed_tool_names,
@@ -1267,7 +1173,6 @@ class ChatLoop:
                     and not completed_assistant.interrupted
                 ):
                     await context.continuation_tracker.resolve()
-                    continuation_summary = None
                 else:
                     if outcome == "cancelled":
                         cause: ContinuationCause = (
@@ -1278,9 +1183,7 @@ class ChatLoop:
                             context.continuation_tracker.interruption_cause
                             or normalize_interruption_cause(run_error)
                         )
-                    continuation_summary = await context.continuation_tracker.interrupt(cause)
-                if continuation_summary is not None:
-                    run.terminal_payload_extras["continuation"] = continuation_summary
+                    await context.continuation_tracker.interrupt(cause)
             # Session usage totals ride every terminal event so accessors can
             # keep their session-level token/cache display current without
             # re-fetching history. Diagnostics only — never mask the outcome.
@@ -2114,7 +2017,6 @@ class ChatLoop:
             rebuilt_messages = inject_continuation_reminder(
                 rebuilt_messages,
                 context.continuation_reminder,
-                explicit_continue=context.request.explicit_continue,
             )
         _LOGGER.info(
             "Auto-compaction completed (run=%s session=%s estimated_tokens_after=%d)",

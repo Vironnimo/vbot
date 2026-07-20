@@ -205,7 +205,6 @@
       }),
     ),
   );
-  let activeContinuation = $derived(activeSessionState?.continuation ?? null);
   // Outside address of the displayed agent (bare id for identity, full
   // `agent@projekt` otherwise) — what address-parsing RPCs like session.list
   // need (trap 2). The session drawer lists sessions through it.
@@ -1830,18 +1829,6 @@
     await handleVerifySubAgentStatus(agentId, sessionId, '');
   };
 
-  const handleContinue = async () => {
-    const sessionState = activeSessionState;
-    if (!activeAgent) {
-      return;
-    }
-    await chatController.continueSession(sessionState);
-  };
-
-  const handleDiscardContinuation = async () => {
-    await chatController.discardSessionContinuation(activeSessionState);
-  };
-
   // Exposed for tests and for the run-component verification wiring
   // (`onVerifySubAgentStatus` callback chain → ChatTimeline → ChatAssistantRun
   // → subAgentNeedsStatusVerification). Returns a promise that resolves when
@@ -2151,50 +2138,6 @@
                       'Return to current session',
                     )}
               </Button>
-            </Banner>
-          {/if}
-          {#if activeContinuation && !isRunActive(activeSessionState)}
-            <Banner
-              variant="warn"
-              class="chat-view__footer-banner"
-              aria-live="polite"
-            >
-              <div class="chat-view__footer-banner-copy">
-                <p class="chat-view__footer-banner-title">
-                  {t('chat.continuation.title', 'Interrupted work retained')}
-                </p>
-                <p class="chat-view__footer-banner-hint">
-                  {activeContinuation.user_initiated
-                    ? t(
-                        'chat.continuation.cancelledHint',
-                        'Type a correction or a new instruction to continue from the retained work.',
-                      )
-                    : t(
-                        'chat.continuation.hint',
-                        'Continue without adding a duplicate message, or discard the retained work.',
-                      )}
-                </p>
-              </div>
-              <div class="chat-view__footer-banner-actions">
-                {#if activeContinuation.can_continue}
-                  <Button
-                    variant="primary"
-                    disabled={Boolean(chatState.continuationActionPending)}
-                    loading={chatState.continuationActionPending === 'continue'}
-                    onClick={handleContinue}
-                  >
-                    {t('chat.continuation.continue', 'Continue')}
-                  </Button>
-                {/if}
-                <Button
-                  variant="secondary"
-                  disabled={Boolean(chatState.continuationActionPending)}
-                  loading={chatState.continuationActionPending === 'discard'}
-                  onClick={handleDiscardContinuation}
-                >
-                  {t('chat.continuation.discard', 'Discard')}
-                </Button>
-              </div>
             </Banner>
           {/if}
           {#if providerSetupMissing}

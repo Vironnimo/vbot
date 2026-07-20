@@ -256,7 +256,6 @@ def make_engine(
     owner_user_ids: list[str] | None = None,
     observe_unaddressed: bool = False,
     trigger_run: AsyncMock | None = None,
-    continue_run: AsyncMock | None = None,
     compact_session: AsyncMock | None = None,
     has_active_run: Mock | None = None,
     command_dispatcher: object | None = None,
@@ -290,7 +289,6 @@ def make_engine(
 
     trigger_service = SimpleNamespace(
         trigger_run=trigger_with_admission,
-        continue_run=continue_run or AsyncMock(),
         compact_session=compact_session or AsyncMock(return_value="Context compacted."),
         # Synchronous on purpose: the real has_active_run returns a bool, not a
         # coroutine. An AsyncMock would return a truthy coroutine -> always "busy".

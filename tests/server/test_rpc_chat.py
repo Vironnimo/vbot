@@ -335,7 +335,6 @@ async def test_chat_commands_returns_normalized_built_in_command_names(
     assert command_names == [
         "agent",
         "compact",
-        "continue",
         "handoff",
         "help",
         "learn",
@@ -380,68 +379,6 @@ async def test_chat_methods_handle_new_command_with_session_payload(
     assert new_session_id != "session-one"
     assert state.runtime.agents.get("coder").current_session_id == new_session_id
     assert state.runtime.chat_sessions.get("coder", new_session_id).load() == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("method", "streaming"),
-    [("chat.send", False), ("chat.stream", True)],
-)
-async def test_chat_methods_handle_continue_command_as_run_response(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    method: str,
-    streaming: bool,
-) -> None:
-    state = make_state(tmp_path, StubAdapter())
-    state.runtime.chat_sessions.create("coder", session_id="session-one")
-    run = StubDelegateRun(
-        run_id="run-continue",
-        agent_id="coder",
-        session_id="session-one",
-        status="running" if streaming else "completed",
-        final_message=ChatMessage.assistant(model="openai/gpt-5.2", content="Continued"),
-    )
-    captured: JsonObject = {}
-
-    async def fake_continue_run(
-        agent_id: str,
-        session_id: str,
-        project_id: str | None = None,
-        *,
-        reply_surface: ReplySurface | None = None,
-    ) -> StubDelegateRun:
-        captured["agent_id"] = agent_id
-        captured["session_id"] = session_id
-        captured["reply_surface"] = reply_surface
-        return run
-
-    monkeypatch.setattr(state.runtime.trigger_service, "continue_run", fake_continue_run)
-    monkeypatch.setattr(chat_methods, "_bridge_run_to_event_bus", lambda _state, _run: None)
-
-    response = await dispatch_rpc(
-        state,
-        {
-            "method": method,
-            "params": {
-                "agent_id": "coder",
-                "session_id": "session-one",
-                "content": " /CONTINUE ",
-            },
-        },
-    )
-
-    assert response["ok"] is True
-    assert response["result"]["run_id"] == "run-continue"
-    assert captured == {
-        "agent_id": "coder",
-        "session_id": "session-one",
-        "reply_surface": ReplySurface.webui(),
-    }
-    if streaming:
-        assert response["result"]["sse_url"] == "/api/runs/run-continue/events"
-    else:
-        assert response["result"]["message"]["content"] == "Continued"
 
 
 @pytest.mark.asyncio

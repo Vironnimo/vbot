@@ -52,16 +52,6 @@ vi.mock('$lib/api.js', () =>
     updateQueueItem: (...args) => updateQueueItemMock(...args),
     cancelRun: (...args) => cancelRunMock(...args),
     cancelToolCall: (...args) => cancelToolCallMock(...args),
-    continueRun: (agentId, sessionId) =>
-      rpcMock('chat.continue', {
-        agent_id: agentId,
-        session_id: sessionId,
-      }),
-    discardContinuation: (agentId, sessionId) =>
-      rpcMock('chat.continuation_discard', {
-        agent_id: agentId,
-        session_id: sessionId,
-      }),
     showProject: (...args) => showProjectMock(...args),
   }),
 );
@@ -168,8 +158,6 @@ export function createChatRpcMock({
   contextWindow = 262144,
   sessionMessages,
   activeRuns,
-  continuations,
-  continueRunResponse,
   streamResponse,
   streamHandler,
   commandsError = false,
@@ -227,9 +215,6 @@ export function createChatRpcMock({
         if (activeRuns?.[params.session_id]) {
           response.active_run = activeRuns[params.session_id];
         }
-        if (continuations?.[params.session_id]) {
-          response.continuation = continuations[params.session_id];
-        }
         return response;
       }
 
@@ -264,17 +249,6 @@ export function createChatRpcMock({
         return streamResponse;
       }
       throw new Error('Unexpected stream call');
-    }
-
-    if (method === 'chat.continue') {
-      if (continueRunResponse) {
-        return continueRunResponse;
-      }
-      throw new Error('Unexpected continue call');
-    }
-
-    if (method === 'chat.continuation_discard') {
-      return { ok: true };
     }
 
     if (method === 'session.create') {

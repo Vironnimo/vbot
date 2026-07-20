@@ -156,7 +156,7 @@ def test_fold_preserves_chain_across_repeated_interruptions() -> None:
             request="first request",
         ),
         _record("stream_delta", step=1, reasoning_delta="plan", content_delta="partial"),
-        _record("run_interrupted", cause="network", user_initiated=False),
+        _record("run_interrupted", cause="network"),
         _record(
             "run_started",
             run_id="run-two",
@@ -175,7 +175,6 @@ def test_fold_preserves_chain_across_repeated_interruptions() -> None:
             "run_interrupted",
             run_id="run-two",
             cause="timeout",
-            user_initiated=False,
         ),
     ]
 
@@ -186,9 +185,6 @@ def test_fold_preserves_chain_across_repeated_interruptions() -> None:
     assert state.latest_run_id == "run-two"
     assert state.cause == "timeout"
     assert state.reasoning == "plan\n\ncontinued plan"
-    summary = state.public_summary()
-    assert summary is not None
-    assert summary["can_continue"] is True
 
 
 @pytest.mark.parametrize(
@@ -218,7 +214,7 @@ def test_prompt_warns_before_repeating_unknown_write_edit_or_bash() -> None:
         ),
         _record("tool_started", tool_call_id="write-1", name="write"),
         _record("tool_started", tool_call_id="read-1", name="read"),
-        _record("run_interrupted", cause="process_restart", user_initiated=False),
+        _record("run_interrupted", cause="process_restart"),
     ]
     state = fold_continuation_records(records)
     assert state is not None
@@ -258,7 +254,7 @@ def test_fold_references_ten_completed_tools_and_keeps_one_dangling_unknown() ->
     records.extend(
         [
             _record("tool_started", tool_call_id="edit-dangling", name="edit"),
-            _record("run_interrupted", cause="process_restart", user_initiated=False),
+            _record("run_interrupted", cause="process_restart"),
         ]
     )
 
@@ -289,7 +285,7 @@ def test_prompt_truncation_keeps_original_request_operations_warning_and_marker(
             content_delta="partial",
         ),
         _record("tool_started", tool_call_id="bash-1", name="bash"),
-        _record("run_interrupted", cause="internal", user_initiated=False),
+        _record("run_interrupted", cause="internal"),
     ]
     state = fold_continuation_records(records)
     assert state is not None
@@ -314,12 +310,10 @@ def test_injection_places_reminder_immediately_before_new_turn_and_deduplicates(
     injected = inject_continuation_reminder(
         messages,
         '<continuation-checkpoint id="one">state</continuation-checkpoint>',
-        explicit_continue=False,
     )
     reinjected = inject_continuation_reminder(
         injected,
         '<continuation-checkpoint id="one">state</continuation-checkpoint>',
-        explicit_continue=False,
     )
 
     assert reinjected[-1]["content"] == "correction"
@@ -344,9 +338,6 @@ def test_recover_classifies_abandoned_journal_as_process_restart(tmp_path: Path)
 
     assert state is not None
     assert state.cause == "process_restart"
-    summary = state.public_summary()
-    assert summary is not None
-    assert summary["can_continue"] is True
 
 
 def test_restart_reconciliation_uses_only_current_transcript_tail(tmp_path: Path) -> None:

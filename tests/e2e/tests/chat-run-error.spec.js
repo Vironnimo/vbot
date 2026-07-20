@@ -17,8 +17,11 @@ test("a provider failure is visible and leaves the Chat recoverable", async ({
   await expect(chat.getByText("ERROR", { exact: true })).toBeVisible();
   await expect(
     chat.getByText("Interrupted work retained", { exact: true }),
-  ).toBeVisible();
+  ).toHaveCount(0);
   await expect(
     chat.getByRole("button", { exact: true, name: "Continue" }),
-  ).toBeVisible();
+  ).toHaveCount(0);
+  await expect(
+    chat.getByRole("button", { exact: true, name: "Discard" }),
+  ).toHaveCount(0);
 });

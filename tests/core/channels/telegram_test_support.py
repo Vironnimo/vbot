@@ -245,7 +245,6 @@ def make_adapter(
     bot_username: str | None = None,
     bot_id: int | None = None,
     trigger_run: AsyncMock | None = None,
-    continue_run: AsyncMock | None = None,
     compact_session: AsyncMock | None = None,
     credential_resolver: Callable[[str], str] | None = None,
     attachment_store: AttachmentStore | None = None,
@@ -270,7 +269,6 @@ def make_adapter(
 
     trigger_service = SimpleNamespace(
         trigger_run=trigger_with_admission,
-        continue_run=continue_run or AsyncMock(),
         compact_session=compact_session or AsyncMock(return_value="Context compacted."),
         # Synchronous like the real one (a bool, not a coroutine); idle by default.
         has_active_run=Mock(return_value=False),

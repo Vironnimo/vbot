@@ -18,6 +18,9 @@ test("cancelling a streaming Chat Run retains its visible output", async ({
   await expect(chat.getByText(/Slow response started\./)).toBeVisible();
   await expect(
     chat.getByText("Interrupted work retained", { exact: true }),
-  ).toBeVisible();
+  ).toHaveCount(0);
+  await expect(
+    chat.getByRole("button", { exact: true, name: "Discard" }),
+  ).toHaveCount(0);
   await expect(chat.getByRole("button", { name: "Cancel run" })).toHaveCount(0);
 });

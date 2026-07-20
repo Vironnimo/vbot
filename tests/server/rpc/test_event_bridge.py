@@ -215,11 +215,10 @@ def test_server_event_forwards_compaction_checkpoint_as_run_output() -> None:
     assert summary["payload"]["output"] == event.payload
 
 
-def test_server_event_forwards_public_continuation_on_terminal_events() -> None:
+def test_server_event_hides_internal_continuation_on_terminal_events() -> None:
     continuation = {
         "checkpoint_id": "checkpoint-one",
         "cause": "network",
-        "can_continue": True,
     }
     event = RunEvent(
         sequence=9,
@@ -232,7 +231,7 @@ def test_server_event_forwards_public_continuation_on_terminal_events() -> None:
 
     summary = _server_event_from_run_event(event)
 
-    assert summary["payload"]["continuation"] == continuation
+    assert "continuation" not in summary["payload"]
 
 
 def test_publish_resource_changed_emits_kind_only_payload() -> None:

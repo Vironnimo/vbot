@@ -4,9 +4,7 @@ import {
   RUN_EVENT_TOOL_CALL_DELTA,
   cancelRun as requestCancelRun,
   cancelToolCall as requestCancelToolCall,
-  continueRun as requestContinueRun,
   createSession as requestCreateSession,
-  discardContinuation as requestDiscardContinuation,
   listAgents as requestListAgents,
   listChatCommands as requestListChatCommands,
   listFiles as requestListFiles,
@@ -59,7 +57,6 @@ export function createChatState() {
     actionError: '',
     commandsError: '',
     cancellingRun: false,
-    continuationActionPending: '',
     availableSkills: [],
   };
 }
@@ -68,9 +65,7 @@ function defaultChatOperations() {
   return {
     cancelRun: (...args) => requestCancelRun(...args),
     cancelToolCall: (...args) => requestCancelToolCall(...args),
-    continueRun: (...args) => requestContinueRun(...args),
     createSession: (...args) => requestCreateSession(...args),
-    discardContinuation: (...args) => requestDiscardContinuation(...args),
     listAgents: (...args) => requestListAgents(...args),
     listChatCommands: (...args) => requestListChatCommands(...args),
     listFiles: (...args) => requestListFiles(...args),
@@ -177,7 +172,6 @@ export function createChatController({
       loadHistory(sessionState, history?.messages ?? [], {
         hasMore: history?.has_more === true,
         sessionUsage: history?.session_usage,
-        continuation: history?.continuation ?? null,
       });
       sessionState.markReadFailedRunId = '';
       if (
@@ -290,8 +284,6 @@ export function createChatController({
       return { kind: 'ignored' };
     }
     sessionState.actionError = '';
-    const retainedContinuation = sessionState.continuation;
-    sessionState.continuation = null;
     try {
       const params = {
         agent_id: sessionState.agentId,
@@ -337,7 +329,6 @@ export function createChatController({
       });
       return { kind: 'started', runId: run.run_id ?? '' };
     } catch (error) {
-      sessionState.continuation = retainedContinuation;
       sessionState.actionError = `${translate('chat.sendError', 'Message could not be sent.')} ${errorMessage(error)}`;
       return { kind: 'failed' };
     }
@@ -377,51 +368,6 @@ export function createChatController({
       if (sessionState) {
         sessionState.actionError = `${translate('chat.cancelError', 'Run could not be cancelled.')} ${errorMessage(error)}`;
       }
-    }
-  }
-
-  async function continueSession(sessionState) {
-    if (!sessionState || isRunActive(sessionState)) {
-      return false;
-    }
-    sessionState.actionError = '';
-    chatState.continuationActionPending = 'continue';
-    sessionState.continuation = null;
-    try {
-      const run = await operations.continueRun(
-        sessionState.agentId,
-        sessionState.sessionId,
-      );
-      startRun(sessionState, run);
-      runStream.subscribeToRun(sessionState, run.sse_url, {
-        afterSequence: 0,
-      });
-      return true;
-    } catch (error) {
-      sessionState.actionError = `${translate('chat.continueError', 'Continue failed.')} ${errorMessage(error)}`;
-      await loadHistoryForSession(sessionState.agentId, sessionState.sessionId);
-      return false;
-    } finally {
-      chatState.continuationActionPending = '';
-    }
-  }
-
-  async function discardSessionContinuation(sessionState) {
-    if (!sessionState || isRunActive(sessionState)) {
-      return;
-    }
-    sessionState.actionError = '';
-    chatState.continuationActionPending = 'discard';
-    try {
-      await operations.discardContinuation(
-        sessionState.agentId,
-        sessionState.sessionId,
-      );
-      sessionState.continuation = null;
-    } catch (error) {
-      sessionState.actionError = `${translate('chat.discardContinuationError', 'Discard failed.')} ${errorMessage(error)}`;
-    } finally {
-      chatState.continuationActionPending = '';
     }
   }
 
@@ -614,9 +560,7 @@ export function createChatController({
     cancelRunById: (runId, options = { reason: 'user' }) =>
       operations.cancelRun(runId, options),
     cancelTool,
-    continueSession,
     createSession: (agentAddress) => operations.createSession(agentAddress),
-    discardSessionContinuation,
     destroy,
     handleServerEvents,
     listFiles: (agentAddress) => operations.listFiles(agentAddress),
@@ -723,7 +667,6 @@ export function ensureSessionState(state, agentId, sessionId) {
       streamStatus: CHAT_STATUS_IDLE,
       usage: null,
       sessionUsage: null,
-      continuation: null,
       hasOlderHistory: false,
       loadingOlderHistory: false,
       hasUnreadCompletion: false,
@@ -907,9 +850,6 @@ export function loadHistory(sessionState, messages, options = {}) {
   if (options.sessionUsage) {
     sessionState.sessionUsage = options.sessionUsage;
   }
-  if (Object.prototype.hasOwnProperty.call(options, 'continuation')) {
-    sessionState.continuation = options.continuation ?? null;
-  }
   return sessionState;
 }
 
@@ -949,7 +889,6 @@ export function startRun(sessionState, run) {
   sessionState.error = null;
   sessionState.streamError = '';
   sessionState.streamStatus = CHAT_STATUS_RUNNING;
-  sessionState.continuation = null;
   sessionState.streamingRunEvents = [];
   sessionState.streamingPhase = 0;
   sessionState.seenStreamingEventKeys = new Set();
@@ -1069,7 +1008,6 @@ export function finishRun(sessionState, event) {
   if (event?.payload?.session_usage) {
     sessionState.sessionUsage = event.payload.session_usage;
   }
-  sessionState.continuation = event?.payload?.continuation ?? null;
   sessionState.hasUnreadCompletion = true;
   sessionState.unreadRunId = event?.run_id ?? '';
   sessionState.unreadRunStatus = status ?? terminalStatus(type);
@@ -1531,7 +1469,7 @@ const AGENT_ADDRESS_SEPARATOR = '@';
 // unchanged); a set project id yields `agent@projekt`. Inverse of the server's
 // `parse_agent_address`. This is the address sent to the RPCs that parse an
 // agent address: session.create / session.list / chat.history / chat.send /
-// chat.stream / chat.continue (RPC-contract trap 2).
+// chat.stream (RPC-contract trap 2).
 export function formatAgentAddress(agentId, projectId) {
   const bareId = typeof agentId === 'string' ? agentId : '';
   const project = typeof projectId === 'string' ? projectId.trim() : '';

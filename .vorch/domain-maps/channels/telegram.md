@@ -13,7 +13,7 @@ Telegram adapter for vBot channels. Owns the Telegram platform I/O behind the sh
 - `ConversationFacts.thread_id` is set only for real forum topics: `message_thread_id` is used **only when `is_topic_message` is set**, because non-forum supergroups also fill `message_thread_id` for plain reply threads and sending it back into a non-forum group fails with "message thread not found". Session routing ignores the topic (all topics share the group Session, see `channels.md`); only delivery follows it.
 - The adapter classifies a conversation's `kind` for the engine: negative chat ids are `group`, all other chats are `direct`; Telegram private chats use `chat_id == user_id`. The engine derives the concrete session id from `kind` and `dm_scope` (see `channels.md`).
 - The adapter supplies the per-message addressing facts on `ConversationFacts`: `message_id` (from `effective_message.message_id`), `mentioned_bot` (word-boundary `@botusername` regex over message text *and* caption, case-insensitive — deliberately regex instead of entity offsets, which are UTF-16 code units), and `is_reply_to_bot` (`reply_to_message.from_user.id == bot id`).
-- Session creation and proactive target resolution write only Channel metadata. Interactive Telegram text/media, private `/start`, reserved `run:` taps, and `/continue` supply a Chat-owned reply surface whose display name is `Telegram`; Chat decides whether the direct reminder is needed when the Run starts.
+- Session creation and proactive target resolution write only Channel metadata. Interactive Telegram text/media, private `/start`, and reserved `run:` taps supply a Chat-owned reply surface whose display name is `Telegram`; Chat decides whether the direct reminder is needed when the Run starts.
 
 ## Interfaces
 

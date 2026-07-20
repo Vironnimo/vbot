@@ -53,7 +53,7 @@ CommandCatalogResult = Literal["notice", "detail", "state_change"]
 CommandExecutionMode = Literal["immediate", "serialized"]
 CommandFeedbackKind = Literal["notice", "detail"]
 CommandNavigationKind = Literal["continue_in_session", "offer_session"]
-CommandRunRole = Literal["result", "follow_up"]
+CommandRunRole = Literal["follow_up"]
 CommandSurfaceKind = Literal["webui", "channel"]
 
 _LOGGER = get_logger("chat.commands")
@@ -382,13 +382,6 @@ class CommandDispatcher:
             catalog_result="notice",
             execution_mode="serialized",
         ),
-        "continue": CommandSpec(
-            "continue",
-            "Continue the interrupted work retained for this session.",
-            argument="none",
-            catalog_result="state_change",
-            execution_mode="serialized",
-        ),
         "status": CommandSpec(
             "status",
             "Show current session and runtime status.",
@@ -444,7 +437,6 @@ class CommandDispatcher:
             "new": self._execute_new,
             "reflect": self._execute_reflect,
             "rename": self._execute_rename,
-            "continue": self._execute_continue,
             "status": self._execute_status,
             "stop": self._execute_stop,
         }
@@ -948,18 +940,6 @@ class CommandDispatcher:
             feedback=CommandFeedback(kind="notice", text=reply),
             facts={"session_id": context.session_id, "title": stored_title},
         )
-
-    async def _execute_continue(
-        self, context: CommandExecutionContext, argument: str | None
-    ) -> CommandOutcome:
-        trigger_service = _require_dependency(self._trigger_service, "TriggerService")
-        run = await trigger_service.continue_run(
-            context.agent_id,
-            context.session_id,
-            project_id=context.project_id,
-            reply_surface=context.reply_surface,
-        )
-        return CommandOutcome(command="continue", runs=(CommandRun(role="result", run=run),))
 
     async def _execute_status(
         self, context: CommandExecutionContext, argument: str | None

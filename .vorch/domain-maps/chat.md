@@ -8,16 +8,6 @@ Chat owns canonical messages, provider-request shaping, Skill/Tool turn orchestr
 
 A Session is the persisted conversation container; a Run is one active execution inside it. Chat is the execution seam between them: it loads canonical Session history, resolves the Agent/Model/Tools, builds provider-ready context, persists canonical results, and emits provider-agnostic Run events.
 
-## Terms
-
-Core terms Agent, Session, Run, Tool, Provider, and Cancel live in `.vorch/GLOSSARY.md`.
-
-### Continue
-
-**Definition:** Start a new visible Run from a Session's unresolved Continuation Checkpoint without appending or replaying a user message. A normal next visible user turn consumes the checkpoint context automatically; Discard abandons it explicitly.
-
-**Not:** Retrying a Provider request or resuming the same coroutine. Continue creates a new Run and never automatically re-executes an unknown Tool effect.
-
 ## Data Model
 
 - `ToolCall` (`core/chat/messages.py`) is the canonical Assistant-requested invocation: `id`, `name`, and JSON-object `arguments`.
@@ -32,10 +22,10 @@ Exact role fields, request rendering, Content Blocks, Continuation state, events
 ## Interfaces and source ownership
 
 - `core/chat/messages.py` owns `ChatMessage`, `ToolCall`, `MessageSender`, `ReplySurface`, validation/round-trip, effective Compaction history, note embedding, reasoning replay shaping, and dangling Tool-call repair.
-- `core/chat/chat.py::ChatLoop` owns the Agentic Loop and exposes `send`, `start_run`, `queue_run`, `build_queue_update`, `continue_run`, Continuation summary/discard, and manual Compaction. `ChatLoopDependencies` is Chat's explicit Runtime wiring contract; `run_executor` is the seam passed to `ChatRunManager`, and `child_loop` creates Sub-Agent loops with the same explicit collaborators.
+- `core/chat/chat.py::ChatLoop` owns the Agentic Loop and exposes `send`, `start_run`, `queue_run`, `build_queue_update`, and manual Compaction. `ChatLoopDependencies` is Chat's explicit Runtime wiring contract; `run_executor` is the seam passed to `ChatRunManager`, and `child_loop` creates Sub-Agent loops with the same explicit collaborators.
 - `core/chat/commands.py::CommandDispatcher` owns Built-in Commands end to end: catalog, recognition/parsing, scheduling policy, surface restrictions, domain guards, state changes, command-started Runs, and neutral outcomes. RPC and Channels supply addressing/`ReplySurface` and generically project feedback, navigation, Runs, and resource changes; command-specific behavior must not return to a transport. See `chat/commands.md`.
 - `core/chat/model_resolution.py` owns Model-string parsing, exact Connection selection, per-Model Connection allowlists, and Run-local fallback resolution.
-- `core/chat/continuation.py` owns the append-only Continuation journal, recovery fold, private reminder, public summary, and prompt budget. `core/chat/streaming.py` owns normalized delta accumulation, chunk timeout, and provider-agnostic stream-recovery decisions.
+- `core/chat/continuation.py` owns the append-only Continuation journal, recovery fold, private reminder, and prompt budget. The journal never crosses the Chat boundary into public history or Run events. `core/chat/streaming.py` owns normalized delta accumulation, chunk timeout, and provider-agnostic stream-recovery decisions.
 - `core/chat/tool_dispatch.py` owns effective Tool dispatch, Extension Tool hooks, Tool lifecycle emission, Visiting detection, Skill activation, and `read_media` extraction. The Tool registry/result-envelope contracts live in `tools.md`; Extension dispatch semantics live in `extensions.md`.
 - `core/chat/content_blocks.py`, `file_mentions.py`, and `block_resolver.py` own canonical content blocks, verified `@`-file snapshots, and last-mile media resolution. Blob storage and extraction live in `attachments.md`.
 - `core/chat/usage.py` owns canonical whole-Session Usage aggregation. Provider adapters own wire normalization; the WebUI consumes the server projection rather than recalculating it.
