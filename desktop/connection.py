@@ -150,6 +150,36 @@ class ServerEntry:
         return f"{self.host}:{self.port}"
 
 
+@dataclass(frozen=True)
+class PreparedConnection:
+    """A probed connection whose visible navigation has not happened yet.
+
+    pywebview API calls return through a Promise callback stored in the current
+    document.  Replacing that document before the Python method returns destroys
+    the callback and makes pywebview raise while delivering the result.  This
+    value lets bridge callers receive the outcome first and navigate from
+    JavaScript afterwards, while native launch/menu callers can still apply the
+    same prepared outcome through :meth:`ConnectionController.connect`.
+    """
+
+    result: DesktopProbeResult
+    navigation_url: str | None = None
+    error_title: str | None = None
+    error_body: str | None = None
+
+    def to_bridge_payload(self) -> dict[str, str]:
+        """Return the plain payload consumed by the shell connection screen."""
+
+        payload = {"status": self.result.status}
+        if self.navigation_url is not None:
+            payload["url"] = self.navigation_url
+        if self.error_title is not None:
+            payload["error_title"] = self.error_title
+        if self.error_body is not None:
+            payload["error_body"] = self.error_body
+        return payload
+
+
 # -- Remembered-servers operations -------------------------------------------
 
 
@@ -332,6 +362,28 @@ class ConnectionController:
         so callers/tests can assert the outcome.
         """
 
+        prepared = self.prepare_connect(host, port, label)
+        if prepared.navigation_url is not None:
+            self._navigate_url(prepared.navigation_url)
+        else:
+            self._show_connection_screen(prepared.result)
+        return prepared.result
+
+    def prepare_connect(
+        self,
+        host: str,
+        port: int,
+        label: str | None = None,
+    ) -> PreparedConnection:
+        """Probe and persist a target without replacing the current document.
+
+        Successful attempts are remembered, marked last-used, and announced to
+        the active-server listener exactly like :meth:`connect`, but navigation
+        is returned as data. Failed attempts carry the existing inline error
+        copy. This is the bridge-safe seam: pywebview can deliver the payload to
+        the connection page before that page navigates or updates itself.
+        """
+
         target = self._build_target(host, port)
         result = self._probe(target)
 
@@ -339,18 +391,24 @@ class ConnectionController:
             self.add_server(target.host, target.port, label)
             select_server(target.host, target.port, settings_file=self._settings_file)
             logger.info("Desktop connecting to %s:%s", target.host, target.port)
-            self._navigate_url(_with_accessor_param(target.url))
             self._notify_active_server(target.url)
-            return result
+            return PreparedConnection(
+                result=result,
+                navigation_url=_with_accessor_param(target.url),
+            )
 
         logger.warning(
-            "Desktop connection to %s:%s failed (%s); showing connection screen",
+            "Desktop connection to %s:%s failed (%s)",
             host,
             port,
             result.status,
         )
-        self._show_connection_screen(result)
-        return result
+        error_title, error_body = _connection_error_copy(result.status)
+        return PreparedConnection(
+            result=result,
+            error_title=error_title,
+            error_body=error_body,
+        )
 
     def switch_to(self, host: str, port: int, label: str | None = None) -> DesktopProbeResult:
         """Connect to a chosen remembered/typed server (menu "Switch…" / list pick)."""
@@ -395,13 +453,13 @@ class ConnectionController:
         an invalid target and the screen can prefill the offending value.
         """
 
-        validated_port = validate_port(port)
         try:
+            validated_port = validate_port(port)
             validated_host = validate_host(host)
         except ValueError as exc:
             return DesktopTarget(
                 host=str(host or ""),
-                port=validated_port,
+                port=_display_port(port),
                 url="",
                 configuration_error=str(exc),
             )
@@ -666,17 +724,50 @@ def build_connection_html(
       </form>
     </main>
     <script>
+      function showConnectionError(title, body) {{
+        var container = document.getElementById("connection-error");
+        container.hidden = false;
+        container.setAttribute("role", "alert");
+        document.getElementById("connection-error-title").textContent = title;
+        document.getElementById("connection-error-body").textContent = body;
+      }}
+      function prefillConnectionTarget(host, port) {{
+        document.getElementById("host").value = host;
+        document.getElementById("port").value = Number.isInteger(port) ? port : "";
+      }}
+      async function requestConnection(host, port) {{
+        if (!(window.pywebview && window.pywebview.api && window.pywebview.api.connect)) {{
+          showConnectionError(
+            "Desktop bridge unavailable",
+            "The native Desktop bridge is not ready. Close the window and start vBot Desktop again."
+          );
+          return;
+        }}
+        try {{
+          var result = await window.pywebview.api.connect(host, port);
+          if (result.url) {{
+            window.location.assign(result.url);
+            return;
+          }}
+          prefillConnectionTarget(host, port);
+          showConnectionError(result.error_title, result.error_body);
+        }} catch (error) {{
+          prefillConnectionTarget(host, port);
+          showConnectionError(
+            "Connection failed",
+            error && error.message
+              ? error.message
+              : "The Desktop bridge could not connect to that server."
+          );
+        }}
+      }}
       function connectFromForm() {{
         var host = document.getElementById("host").value;
         var port = parseInt(document.getElementById("port").value, 10);
-        if (window.pywebview && window.pywebview.api && window.pywebview.api.connect) {{
-          window.pywebview.api.connect(host, port);
-        }}
+        requestConnection(host, port);
       }}
       function connectSaved(host, port) {{
-        if (window.pywebview && window.pywebview.api && window.pywebview.api.connect) {{
-          window.pywebview.api.connect(host, port);
-        }}
+        requestConnection(host, port);
       }}
       document.querySelectorAll("ul.servers button[data-host]").forEach(function (button) {{
         button.addEventListener("click", function () {{
@@ -690,15 +781,20 @@ def build_connection_html(
 
 
 def _render_error_section(probe_result: DesktopProbeResult | None) -> str:
-    """Return the escaped inline error banner, or an empty string on no failure."""
+    """Return the inline error banner and its bridge-update target."""
 
     if probe_result is None or probe_result.status == PROBE_WEBUI_AVAILABLE:
-        return ""
+        return (
+            '      <div id="connection-error" class="error" hidden>\n'
+            '        <h2 id="connection-error-title"></h2>\n'
+            '        <p id="connection-error-body"></p>\n'
+            "      </div>"
+        )
     title, body = _connection_error_copy(probe_result.status)
     return (
-        '      <div class="error" role="alert">\n'
-        f"        <h2>{html.escape(title)}</h2>\n"
-        f"        <p>{html.escape(body)}</p>\n"
+        '      <div id="connection-error" class="error" role="alert">\n'
+        f'        <h2 id="connection-error-title">{html.escape(title)}</h2>\n'
+        f'        <p id="connection-error-body">{html.escape(body)}</p>\n'
         "      </div>"
     )
 
@@ -784,6 +880,15 @@ def _with_accessor_param(url: str) -> str:
 
     separator = "&" if "?" in url else "?"
     return f"{url}{separator}{ACCESSOR_QUERY_PARAM}"
+
+
+def _display_port(value: Any) -> int:
+    """Return a safe form-prefill port for an invalid target."""
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _clear_last_used(settings_file: Path | None) -> None:

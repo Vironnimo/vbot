@@ -92,7 +92,7 @@ Use a ScriptBlock when passing options:
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -DesktopClient
 ```
 
-Windows accepts `-InstallDir`, `-Version`, `-Dev`, `-DataDir`, `-HostName`, `-Port`, `-Desktop`, `-DesktopClient`, `-NoAutostart`, `-SkipWebuiBuild`, and `-TaskName` directly. The immediate background server and the Task Scheduler action both use windowless launch paths, so installation leaves no Python console open and signing in does not create one; the normal `vbot` command remains a console application. The final summary verifies Autostart and the actual server health independently. If Task Scheduler permission is unavailable, the package install and immediate server start still complete, while the summary reports `complete with problems` and prints the exact elevated recovery command for Autostart; a live `Server URL` is shown only when the server is running. You do not need to rerun the whole Installer: open PowerShell as Administrator, run the reported `vbot.exe autostart enable ...` command, then run the reported `server status` command.
+Windows accepts `-InstallDir`, `-Version`, `-Dev`, `-DataDir`, `-HostName`, `-Port`, `-Desktop`, `-DesktopClient`, `-NoAutostart`, `-SkipWebuiBuild`, and `-TaskName` directly. The immediate background server, Task Scheduler action, and installed `vBot Desktop` Start-menu shortcut all use windowless launch paths, so installation, sign-in, and normal app launch leave no Python console open; the normal `vbot` command remains a console application. The final summary verifies Autostart and the actual server health independently. If Task Scheduler permission is unavailable, the package install and immediate server start still complete, while the summary reports `complete with problems` and prints the exact elevated recovery command for Autostart; a live `Server URL` is shown only when the server is running. You do not need to rerun the whole Installer: open PowerShell as Administrator, run the reported `vbot.exe autostart enable ...` command, then run the reported `server status` command.
 
 As with any `curl | bash` or `irm | iex` command, download and inspect the script first if you do not want to execute network content directly.
 
@@ -137,7 +137,7 @@ scripts/install.sh --no-autostart
 vbot update
 ```
 
-The updater reads `.vbot-install.json` from the checkout and preserves the recorded install shape, Python executable, dependency groups, source track, server target, and WebUI revision policy. Release installs move to the newest release with a matching WebUI asset; development installs update `main` and rebuild when needed. Runtime data is not modified.
+The updater reads `.vbot-install.json` from the checkout and preserves the recorded install shape, Python executable, dependency groups, source track, server target, and WebUI revision policy. Release installs move to the newest release with a matching WebUI asset; development installs update `main` and rebuild when needed. On Windows, a Desktop install also refreshes its installer-owned Start-menu shortcut to the current windowless GUI launcher. Runtime data is not modified.
 
 Local changes to tracked checkout files require an explicit policy:
 
@@ -275,6 +275,8 @@ Launch the optional Desktop accessor with:
 vbot desktop
 vbot desktop --host 192.168.1.50 --port 8420
 ```
+
+On Windows, `-Desktop` and `-DesktopClient` installations also create a `vBot Desktop` Start-menu entry backed by the windowless `vbot-desktop` GUI launcher. `vbot desktop` remains the equivalent console command for terminal use.
 
 Without explicit host and port, Desktop opens its Connection screen and auto-connects only when a remembered last-used server exists. It does not silently assume localhost. Probe failures return to the same screen with the target prefilled, and the native Server menu can switch or reconnect at runtime.
 

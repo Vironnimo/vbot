@@ -326,6 +326,52 @@ def test_connect_navigates_window_to_webui_with_accessor_param(tmp_path: Path) -
     assert window.loaded_html == []
 
 
+def test_prepare_connect_returns_url_without_replacing_calling_document(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    window = FakeWindow()
+    controller = desktop_connection.ConnectionController(
+        settings_file=settings_file,
+        window=window,
+        probe=probe_returning(PROBE_WEBUI_AVAILABLE),
+    )
+
+    prepared = controller.prepare_connect("pi.lan", 9000, "Pi")
+
+    assert prepared.to_bridge_payload() == {
+        "status": PROBE_WEBUI_AVAILABLE,
+        "url": "http://pi.lan:9000/?accessor=desktop",
+    }
+    assert window.loaded_urls == []
+    assert window.loaded_html == []
+    assert desktop_connection.resolve_last_used(settings_file) == desktop_connection.ServerEntry(
+        "pi.lan", 9000, "Pi"
+    )
+
+
+def test_prepare_connect_returns_inline_error_without_replacing_calling_document(
+    tmp_path: Path,
+) -> None:
+    window = FakeWindow()
+    controller = desktop_connection.ConnectionController(
+        settings_file=tmp_path / "settings.json",
+        window=window,
+        probe=probe_returning(PROBE_SERVER_UNREACHABLE),
+    )
+
+    prepared = controller.prepare_connect("pi.lan", 9000)
+
+    assert prepared.to_bridge_payload() == {
+        "status": PROBE_SERVER_UNREACHABLE,
+        "error_title": "Server unreachable",
+        "error_body": (
+            "vBot Desktop could not reach that host and port. Check the server is "
+            "running and the address is right, then try again."
+        ),
+    }
+    assert window.loaded_urls == []
+    assert window.loaded_html == []
+
+
 def test_connect_success_remembers_and_marks_last_used(tmp_path: Path) -> None:
     settings_file = tmp_path / "settings.json"
     controller = desktop_connection.ConnectionController(
@@ -449,6 +495,21 @@ def test_connect_invalid_host_renders_invalid_target_screen(tmp_path: Path) -> N
     assert window.loaded_urls == []
     assert "Invalid host or port" in window.loaded_html[0]
     assert 'value="http://pi.lan"' in window.loaded_html[0]
+
+
+def test_prepare_connect_invalid_port_returns_bridge_error_instead_of_raising(
+    tmp_path: Path,
+) -> None:
+    controller = desktop_connection.ConnectionController(
+        settings_file=tmp_path / "settings.json",
+        window=FakeWindow(),
+    )
+
+    prepared = controller.prepare_connect("pi.lan", "not-a-port")  # type: ignore[arg-type]
+
+    assert prepared.result.status == PROBE_INVALID_TARGET
+    assert prepared.error_title == "Invalid host or port"
+    assert prepared.navigation_url is None
 
 
 def test_switch_to_connects_to_chosen_server(tmp_path: Path) -> None:
@@ -635,6 +696,20 @@ def test_connection_html_lists_saved_servers_with_connect_hooks() -> None:
     assert "connectSaved('pi.lan'" not in page
     assert "connectSaved('10.0.0.5'" not in page
     assert "connectSaved(button.dataset.host" in page
+
+
+def test_connection_html_awaits_bridge_result_before_navigation() -> None:
+    page = desktop_connection.build_connection_html([])
+
+    bridge_call = "await window.pywebview.api.connect(host, port)"
+    navigation = "window.location.assign(result.url)"
+    assert bridge_call in page
+    assert navigation in page
+    assert page.index(bridge_call) < page.index(navigation)
+    assert ".textContent = title" in page
+    assert ".textContent = body" in page
+    assert "prefillConnectionTarget(host, port)" in page
+    assert "innerHTML" not in page
 
 
 def test_connection_html_empty_state_when_no_servers() -> None:

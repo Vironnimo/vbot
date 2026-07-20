@@ -27,6 +27,7 @@ import httpx
 
 from cli.install_state import (
     DESKTOP_CLIENT_SHAPE,
+    SERVER_DESKTOP_SHAPE,
     InstallState,
     InstallStateError,
     file_digest,
@@ -50,6 +51,8 @@ WEBUI_ASSET_NAME = "webui-dist.tar.gz"
 _API_TIMEOUT_SECONDS = 30.0
 _DOWNLOAD_TIMEOUT_SECONDS = 60.0
 _COMMAND_TIMEOUT_SECONDS = 600.0
+_WINDOWS_DESKTOP_LAUNCHER_NAME = "vbot-desktop.exe"
+_WINDOWS_POWERSHELL = "powershell.exe"
 
 Restart = Callable[[ServerInstance], CommandResult]
 
@@ -104,12 +107,14 @@ def run_update(
     root: Path | None = None,
     latest_release: ReleaseLookup | None = None,
     service_name: str = DEFAULT_SERVICE_NAME,
+    platform_name: str | None = None,
 ) -> CommandResult:
     """Advance the installed checkout and optionally restart the server."""
 
     run = runner or _default_runner
     repo = root if root is not None else APP_DIR
     lookup = latest_release or _fetch_latest_release
+    effective_platform = os.name if platform_name is None else platform_name
 
     if not (repo / ".git").exists():
         return _fail(
@@ -219,6 +224,17 @@ def run_update(
             lines.append(saved.message)
             return _failure_with_stash(instance, lines, run, repo, stashed=stashed)
 
+    shortcut = _refresh_desktop_shortcut(
+        run,
+        repo,
+        state,
+        platform_name=effective_platform,
+    )
+    if shortcut.message:
+        lines.append(shortcut.message)
+    if not shortcut.ok:
+        return _failure_with_stash(instance, lines, run, repo, stashed=stashed)
+
     if state.install_shape != DESKTOP_CLIENT_SHAPE:
         if track == "dev":
             webui = _refresh_dev_webui(run, repo, state.webui_revision, after)
@@ -324,6 +340,50 @@ def _refresh_dependencies(run: Runner, repo: Path, state: InstallState) -> _Step
     if pip.returncode != 0:
         return _Step(False, f"dependency update failed: {pip.stderr}")
     return _Step(True, f"dependencies reinstalled ([{extras}])")
+
+
+def _refresh_desktop_shortcut(
+    run: Runner,
+    repo: Path,
+    state: InstallState,
+    *,
+    platform_name: str,
+) -> _Step:
+    """Point installer-owned Windows Desktop shortcuts at the GUI launcher."""
+
+    desktop_shapes = {SERVER_DESKTOP_SHAPE, DESKTOP_CLIENT_SHAPE}
+    if platform_name != "nt" or state.install_shape not in desktop_shapes:
+        return _Step(True, "")
+
+    desktop_launcher = (
+        Path(state.python_executable).parent / _WINDOWS_DESKTOP_LAUNCHER_NAME
+    ).resolve()
+    if not desktop_launcher.is_file():
+        return _Step(False, f"desktop shortcut update failed: {desktop_launcher} is missing")
+
+    setup_script = (repo / "scripts" / "setup.ps1").resolve()
+    if not setup_script.is_file():
+        return _Step(False, f"desktop shortcut update failed: {setup_script} is missing")
+
+    refreshed = run(
+        [
+            _WINDOWS_POWERSHELL,
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(setup_script),
+            "-DesktopShortcutTarget",
+            str(desktop_launcher),
+        ],
+        repo,
+    )
+    if refreshed.returncode != 0:
+        detail = refreshed.stderr or refreshed.stdout
+        return _Step(False, f"desktop shortcut update failed: {detail}")
+    return _Step(True, "desktop shortcut refreshed")
 
 
 def _refresh_dev_webui(

@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from desktop.connection import ServerEntry
+from desktop.connection import PreparedConnection, ServerEntry
 from desktop.main import DesktopProbeResult, DesktopTarget
 from desktop.wakeword import bridge as bridge_module
 from desktop.wakeword import engine as engine_module
@@ -56,22 +56,26 @@ class FakeController:
     """
 
     connect_status: str = "webui_available"
-    connect_calls: list[tuple[str, Any]] = field(default_factory=list)
-    switch_calls: list[tuple[str, Any]] = field(default_factory=list)
+    prepare_calls: list[tuple[str, Any]] = field(default_factory=list)
     add_calls: list[tuple[str, Any, str | None]] = field(default_factory=list)
     remove_calls: list[tuple[str, Any]] = field(default_factory=list)
     servers: list[ServerEntry] = field(default_factory=list)
     remove_result: bool = True
 
-    def connect(self, host: str, port: Any, label: str | None = None) -> DesktopProbeResult:
-        self.connect_calls.append((host, port))
+    def prepare_connect(self, host: str, port: Any, label: str | None = None) -> PreparedConnection:
+        self.prepare_calls.append((host, port))
         target = DesktopTarget(host=str(host), port=port if isinstance(port, int) else 0, url="")
-        return DesktopProbeResult(status=self.connect_status, target=target)
-
-    def switch_to(self, host: str, port: Any, label: str | None = None) -> DesktopProbeResult:
-        self.switch_calls.append((host, port))
-        target = DesktopTarget(host=str(host), port=port if isinstance(port, int) else 0, url="")
-        return DesktopProbeResult(status=self.connect_status, target=target)
+        result = DesktopProbeResult(status=self.connect_status, target=target)
+        if self.connect_status == "webui_available":
+            return PreparedConnection(
+                result=result,
+                navigation_url="http://pi.lan:9000/?accessor=desktop",
+            )
+        return PreparedConnection(
+            result=result,
+            error_title="Server unreachable",
+            error_body="Try again.",
+        )
 
     def add_server(self, host: str, port: Any, label: str | None = None) -> ServerEntry:
         self.add_calls.append((host, port, label))
@@ -527,15 +531,18 @@ def test_bridge_thread_safety_concurrent_access(tmp_path: Path) -> None:
 # -- Connection methods (server selection delegated to the controller) -------
 
 
-def test_connect_delegates_to_controller(tmp_path: Path) -> None:
+def test_connect_prepares_controller_result_for_javascript_navigation(tmp_path: Path) -> None:
     _write_settings(tmp_path / "settings.json")
     controller = FakeController(connect_status="webui_available")
     bridge = DesktopBridge(settings_path=tmp_path / "settings.json", connection=controller)
 
     result = bridge.connect("pi.lan", 9000)
 
-    assert controller.connect_calls == [("pi.lan", 9000)]
-    assert result == {"status": "webui_available"}
+    assert controller.prepare_calls == [("pi.lan", 9000)]
+    assert result == {
+        "status": "webui_available",
+        "url": "http://pi.lan:9000/?accessor=desktop",
+    }
 
 
 def test_connect_coerces_string_port_to_int(tmp_path: Path) -> None:
@@ -546,7 +553,7 @@ def test_connect_coerces_string_port_to_int(tmp_path: Path) -> None:
     bridge.connect("pi.lan", "9000")
 
     # The screen may hand a string through; the controller receives a real int.
-    assert controller.connect_calls == [("pi.lan", 9000)]
+    assert controller.prepare_calls == [("pi.lan", 9000)]
 
 
 def test_connect_passes_non_numeric_port_through_for_controller_validation(tmp_path: Path) -> None:
@@ -557,7 +564,7 @@ def test_connect_passes_non_numeric_port_through_for_controller_validation(tmp_p
     bridge.connect("pi.lan", "not-a-port")
 
     # Non-numeric input is left for the controller to reject with a clear message.
-    assert controller.connect_calls == [("pi.lan", "not-a-port")]
+    assert controller.prepare_calls == [("pi.lan", "not-a-port")]
 
 
 def test_connect_reports_failure_status(tmp_path: Path) -> None:
@@ -567,7 +574,11 @@ def test_connect_reports_failure_status(tmp_path: Path) -> None:
 
     result = bridge.connect("pi.lan", 9000)
 
-    assert result == {"status": "server_unreachable"}
+    assert result == {
+        "status": "server_unreachable",
+        "error_title": "Server unreachable",
+        "error_body": "Try again.",
+    }
 
 
 def test_list_servers_returns_plain_payloads(tmp_path: Path) -> None:
@@ -613,15 +624,18 @@ def test_remove_server_reports_outcome(tmp_path: Path) -> None:
     assert controller.remove_calls == [("pi.lan", 9000)]
 
 
-def test_select_server_switches_via_controller(tmp_path: Path) -> None:
+def test_select_server_prepares_bridge_safe_navigation(tmp_path: Path) -> None:
     _write_settings(tmp_path / "settings.json")
     controller = FakeController(connect_status="webui_available")
     bridge = DesktopBridge(settings_path=tmp_path / "settings.json", connection=controller)
 
     result = bridge.selectServer("pi.lan", 9000)
 
-    assert controller.switch_calls == [("pi.lan", 9000)]
-    assert result == {"status": "webui_available"}
+    assert controller.prepare_calls == [("pi.lan", 9000)]
+    assert result == {
+        "status": "webui_available",
+        "url": "http://pi.lan:9000/?accessor=desktop",
+    }
 
 
 def test_connection_methods_raise_without_controller(tmp_path: Path) -> None:
@@ -644,4 +658,4 @@ def test_wakeword_and_connection_methods_share_one_bridge(tmp_path: Path) -> Non
     assert bridge.getWakewordStatus()["state"] == "off"
     assert bridge.getDesktopCapabilities() == {"wakeword": True}
     bridge.connect("pi.lan", 9000)
-    assert controller.connect_calls == [("pi.lan", 9000)]
+    assert controller.prepare_calls == [("pi.lan", 9000)]
