@@ -1030,6 +1030,61 @@ export const englishCatalog = Object.freeze({
   'settings.providers.localContext.maxHint': 'model max {max}',
   'settings.providers.localContext.invalidValue':
     'Context window must be a positive whole number',
+  'settings.providers.openrouter.title': 'Routing',
+  'settings.providers.openrouter.description':
+    'Control which upstream providers OpenRouter may use. vBot also pins each Session to one endpoint to protect prompt-cache hits.',
+  'settings.providers.openrouter.scopeLabel': 'Scope',
+  'settings.providers.openrouter.scopeHelp':
+    'Global routing applies to every OpenRouter model unless that model has an override.',
+  'settings.providers.openrouter.globalScope': 'Global routing',
+  'settings.providers.openrouter.modelSearch': 'Find an OpenRouter model…',
+  'settings.providers.openrouter.modelOverride': 'Model override',
+  'settings.providers.openrouter.modelOverrideOn':
+    'This model has its own routing policy. Global blocks still apply.',
+  'settings.providers.openrouter.modelOverrideOff':
+    'This model inherits the global routing policy.',
+  'settings.providers.openrouter.modelOverrideAria':
+    'Use a routing override for {model}',
+  'settings.providers.openrouter.modeLabel': 'Routing mode',
+  'settings.providers.openrouter.mode.automatic': 'Automatic (cache-friendly)',
+  'settings.providers.openrouter.mode.allowed': 'Only allowed providers',
+  'settings.providers.openrouter.mode.ordered': 'Preferred provider order',
+  'settings.providers.openrouter.orderWarning':
+    'A manual provider order overrides OpenRouter Sticky Routing. OpenRouter tries the listed providers first, but automatic cache affinity is disabled.',
+  'settings.providers.openrouter.preferredProviders': 'Provider priority',
+  'settings.providers.openrouter.allowedProviders': 'Allowed providers',
+  'settings.providers.openrouter.blockedProviders': 'Blocked providers',
+  'settings.providers.openrouter.blockedProvidersModel':
+    'Additionally blocked for this model',
+  'settings.providers.openrouter.addProvider': 'Add provider…',
+  'settings.providers.openrouter.blockProvider': 'Block provider…',
+  'settings.providers.openrouter.providerSearch': 'Find a provider…',
+  'settings.providers.openrouter.customProvider': 'Custom provider slug',
+  'settings.providers.openrouter.customProviderHelp':
+    'Use an exact endpoint tag such as google-vertex/europe when it is not in the fetched list.',
+  'settings.providers.openrouter.customProviderPlaceholder':
+    'google-vertex/europe',
+  'settings.providers.openrouter.block': 'Block',
+  'settings.providers.openrouter.select': 'Select',
+  'settings.providers.openrouter.moveUp': 'Move {provider} up',
+  'settings.providers.openrouter.moveDown': 'Move {provider} down',
+  'settings.providers.openrouter.removeProvider': 'Remove {provider}',
+  'settings.providers.openrouter.unblockProvider': 'Unblock {provider}',
+  'settings.providers.openrouter.invalidSlug':
+    'Enter a valid OpenRouter provider slug.',
+  'settings.providers.openrouter.providerRequired':
+    '{scope} needs at least one provider for this routing mode.',
+  'settings.providers.openrouter.providerConflict':
+    '{provider} is both selected and blocked in {scope}.',
+  'settings.providers.openrouter.fallbacks': 'Provider fallbacks',
+  'settings.providers.openrouter.fallbacksHelp':
+    'When disabled, OpenRouter returns an error instead of trying a backup provider when the primary is unavailable.',
+  'settings.providers.openrouter.fallbacksAria':
+    'Allow OpenRouter provider fallbacks',
+  'settings.providers.openrouter.save': 'Save routing',
+  'settings.providers.openrouter.saved': 'OpenRouter routing settings saved.',
+  'settings.providers.openrouter.saveError':
+    'OpenRouter routing settings could not be saved.',
   'settings.providers.device_flow.title': 'Connect {provider}',
   'settings.providers.device_flow.instructions':
     'Enter this code at the link below:',

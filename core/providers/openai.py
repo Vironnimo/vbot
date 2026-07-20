@@ -189,7 +189,13 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             metadata=base_model.metadata,
         )
 
-    def request_context_kwargs(self, *, agent_id: str, session_id: str) -> dict[str, Any]:
+    def request_context_kwargs(
+        self,
+        *,
+        agent_id: str,
+        session_id: str,
+        project_id: str | None = None,
+    ) -> dict[str, Any]:
         """Scope the Codex prompt cache to the conversation.
 
         The ChatGPT Codex backend routes its prompt cache by per-request headers
@@ -202,6 +208,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         ``api-key`` ``/chat/completions`` path ignores it (that path caches by
         OpenAI's default prefix-hash routing).
         """
+        del project_id
         return {CONVERSATION_ID_KWARG: f"{agent_id}:{session_id}"}
 
     def wire_media_support(self, model_id: str) -> frozenset[str]:

@@ -375,7 +375,7 @@ def _server_bind_response(state: Any) -> JsonObject:
 def _provider_settings_item(runtime: Any, provider_id: str) -> JsonObject:
     provider = runtime.providers.get(provider_id)
     credentials_configured = _provider_has_credentials(runtime, provider_id)
-    return {
+    item: JsonObject = {
         "id": provider.id,
         "name": provider.name,
         "base_url": provider.base_url,
@@ -390,6 +390,9 @@ def _provider_settings_item(runtime: Any, provider_id: str) -> JsonObject:
         "kind": "remote" if provider.base_url else "local",
         "editable": False,
     }
+    if provider.id == "openrouter":
+        item["routing"] = runtime.storage.load_openrouter_routing_settings()
+    return item
 
 
 def method_handlers() -> dict[str, RpcMethodHandler]:

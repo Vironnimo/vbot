@@ -416,6 +416,15 @@ export function createSettingsRpcMock(options = {}) {
       return { connections: options.connections ?? connectionsPayload() };
     }
 
+    if (method === 'provider.routing_options') {
+      return {
+        providers: options.routingProviders ?? [
+          { slug: 'anthropic', name: 'Anthropic' },
+          { slug: 'deepinfra', name: 'DeepInfra' },
+        ],
+      };
+    }
+
     if (method === 'agent.list') {
       return { agents };
     }
@@ -735,6 +744,15 @@ export function connectionsPayload() {
 
 export function settingsPayload(options = {}) {
   const openrouter = provider('openrouter', 'OpenRouter', '/models');
+  openrouter.routing = {
+    default: {
+      mode: 'automatic',
+      providers: [],
+      blocked: [],
+      allow_fallbacks: true,
+    },
+    models: {},
+  };
 
   if (options.eligibleProvider === false) {
     openrouter.credentials_configured = false;

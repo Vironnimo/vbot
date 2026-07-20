@@ -66,6 +66,7 @@ SETTINGS_UPDATE_SECTIONS = frozenset(
         "defaults",
         "recall",
         "model_tasks",
+        "providers",
         "web_search",
         "extensions",
         "reflection",
@@ -73,6 +74,10 @@ SETTINGS_UPDATE_SECTIONS = frozenset(
         "session_titles",
     }
 )
+OPENROUTER_ROUTING_MODES = frozenset({"automatic", "allowed", "ordered"})
+OPENROUTER_PROVIDER_SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*$")
+OPENROUTER_PROVIDER_SLUG_MAX_LENGTH = 128
+OPENROUTER_MODEL_ID_MAX_LENGTH = 256
 REFLECTION_INTERVAL_FIELDS = ("memory_turn_interval", "skill_tool_call_interval")
 SUBAGENT_SETTING_FIELDS = (
     "max_subagent_depth",
@@ -122,6 +127,9 @@ def parse_settings_update(params: Mapping[str, Any]) -> JsonObject:
     if "model_tasks" in params:
         parsed_update["model_tasks"] = _parse_model_tasks_update(params["model_tasks"])
 
+    if "providers" in params:
+        parsed_update["providers"] = _parse_providers_update(params["providers"])
+
     if "web_search" in params:
         parsed_update["web_search"] = _parse_web_search_update(params["web_search"])
 
@@ -138,6 +146,155 @@ def parse_settings_update(params: Mapping[str, Any]) -> JsonObject:
         parsed_update["session_titles"] = _parse_session_titles_update(params["session_titles"])
 
     return parsed_update
+
+
+def _parse_providers_update(providers: Any) -> JsonObject:
+    """Parse the public Provider-settings subset.
+
+    Connection enablement remains owned by ``connection.set_enabled``. The
+    public Settings update surface accepts only OpenRouter routing policy so a
+    routing save cannot accidentally replace Connection state.
+    """
+
+    if not isinstance(providers, Mapping):
+        raise SettingsValidationError("params.providers must be an object")
+    unsupported_fields = sorted(set(providers) - {"openrouter"})
+    if unsupported_fields:
+        raise SettingsValidationError(
+            f"unsupported providers settings: {', '.join(unsupported_fields)}"
+        )
+    if "openrouter" not in providers:
+        raise SettingsValidationError("params.providers requires openrouter")
+
+    openrouter = providers["openrouter"]
+    if not isinstance(openrouter, Mapping):
+        raise SettingsValidationError("params.providers.openrouter must be an object")
+    unsupported_openrouter_fields = sorted(set(openrouter) - {"routing"})
+    if unsupported_openrouter_fields:
+        raise SettingsValidationError(
+            f"unsupported providers.openrouter settings: {', '.join(unsupported_openrouter_fields)}"
+        )
+    if "routing" not in openrouter:
+        raise SettingsValidationError("params.providers.openrouter requires routing")
+    return {"openrouter": {"routing": parse_openrouter_routing(openrouter["routing"])}}
+
+
+def parse_openrouter_routing(value: Any) -> JsonObject:
+    """Validate and normalize the complete OpenRouter routing configuration."""
+
+    path = "params.providers.openrouter.routing"
+    if not isinstance(value, Mapping):
+        raise SettingsValidationError(f"{path} must be an object")
+    unsupported_fields = sorted(set(value) - {"default", "models"})
+    if unsupported_fields:
+        raise SettingsValidationError(
+            f"unsupported {path} settings: {', '.join(unsupported_fields)}"
+        )
+
+    default_policy = _parse_openrouter_routing_policy(
+        value.get("default", {}),
+        path=f"{path}.default",
+    )
+    raw_models = value.get("models", {})
+    if not isinstance(raw_models, Mapping):
+        raise SettingsValidationError(f"{path}.models must be an object")
+
+    models: JsonObject = {}
+    for raw_model_id, raw_policy in raw_models.items():
+        if not isinstance(raw_model_id, str):
+            raise SettingsValidationError(f"{path}.models keys must be strings")
+        model_id = raw_model_id.strip()
+        if not model_id or len(model_id) > OPENROUTER_MODEL_ID_MAX_LENGTH:
+            raise SettingsValidationError(
+                f"{path}.models keys must be 1-{OPENROUTER_MODEL_ID_MAX_LENGTH} characters"
+            )
+        if model_id in models:
+            raise SettingsValidationError(f"{path}.models contains duplicate model '{model_id}'")
+        policy = _parse_openrouter_routing_policy(
+            raw_policy,
+            path=f"{path}.models['{model_id}']",
+        )
+        for provider_slug in policy["providers"]:
+            if any(
+                _openrouter_slug_is_blocked(provider_slug, blocked_slug)
+                for blocked_slug in default_policy["blocked"]
+            ):
+                raise SettingsValidationError(
+                    f"{path}.models['{model_id}'].providers contains globally blocked "
+                    f"provider '{provider_slug}'"
+                )
+        models[model_id] = policy
+
+    return {"default": default_policy, "models": models}
+
+
+def _parse_openrouter_routing_policy(value: Any, *, path: str) -> JsonObject:
+    if not isinstance(value, Mapping):
+        raise SettingsValidationError(f"{path} must be an object")
+    unsupported_fields = sorted(set(value) - {"mode", "providers", "blocked", "allow_fallbacks"})
+    if unsupported_fields:
+        raise SettingsValidationError(
+            f"unsupported {path} settings: {', '.join(unsupported_fields)}"
+        )
+
+    mode = value.get("mode", "automatic")
+    if not isinstance(mode, str) or mode not in OPENROUTER_ROUTING_MODES:
+        allowed = ", ".join(sorted(OPENROUTER_ROUTING_MODES))
+        raise SettingsValidationError(f"{path}.mode must be one of: {allowed}")
+    providers = _parse_openrouter_provider_slugs(
+        value.get("providers", []), path=f"{path}.providers"
+    )
+    blocked = _parse_openrouter_provider_slugs(value.get("blocked", []), path=f"{path}.blocked")
+    allow_fallbacks = value.get("allow_fallbacks", True)
+    if not isinstance(allow_fallbacks, bool):
+        raise SettingsValidationError(f"{path}.allow_fallbacks must be a boolean")
+
+    if mode == "automatic" and providers:
+        raise SettingsValidationError(f"{path}.providers must be empty in automatic mode")
+    if mode != "automatic" and not providers:
+        raise SettingsValidationError(f"{path}.providers must not be empty in {mode} mode")
+    for provider_slug in providers:
+        if any(
+            _openrouter_slug_is_blocked(provider_slug, blocked_slug) for blocked_slug in blocked
+        ):
+            raise SettingsValidationError(
+                f"{path}.providers contains blocked provider '{provider_slug}'"
+            )
+
+    return {
+        "mode": mode,
+        "providers": providers,
+        "blocked": blocked,
+        "allow_fallbacks": allow_fallbacks,
+    }
+
+
+def _parse_openrouter_provider_slugs(value: Any, *, path: str) -> list[str]:
+    if not isinstance(value, list):
+        raise SettingsValidationError(f"{path} must be a list")
+
+    slugs: list[str] = []
+    seen: set[str] = set()
+    for raw_slug in value:
+        if not isinstance(raw_slug, str):
+            raise SettingsValidationError(f"{path} entries must be strings")
+        slug = raw_slug.strip().lower()
+        if (
+            not slug
+            or len(slug) > OPENROUTER_PROVIDER_SLUG_MAX_LENGTH
+            or OPENROUTER_PROVIDER_SLUG_PATTERN.fullmatch(slug) is None
+        ):
+            raise SettingsValidationError(f"{path} entries must be valid OpenRouter provider slugs")
+        if slug not in seen:
+            slugs.append(slug)
+            seen.add(slug)
+    return slugs
+
+
+def _openrouter_slug_is_blocked(provider_slug: str, blocked_slug: str) -> bool:
+    """Mirror OpenRouter base-slug matching for local conflict validation."""
+
+    return provider_slug == blocked_slug or provider_slug.startswith(f"{blocked_slug}/")
 
 
 def _parse_session_titles_update(session_titles: Any) -> JsonObject:

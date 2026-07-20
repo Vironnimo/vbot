@@ -20,6 +20,7 @@ from core.providers.ollama import OllamaAdapter
 from core.providers.openai import CODEX_RESPONSES_MODE, OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
+from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
 from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter
 from core.providers.token_store import OAuthToken
@@ -88,6 +89,40 @@ def test_runtime_provider_config_fields(runtime: Runtime) -> None:
     assert minimax_config.base_url == "https://api.minimaxi.com/v1"
     assert minimax_config.models_endpoint == "/models"
     assert minimax_config.get_connection("api-key").auth.credential_key == "MINIMAX_API_KEY"
+
+
+def test_runtime_injects_openrouter_routing_snapshot(
+    runtime: Runtime,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-token")
+    runtime.storage.update_settings_sections(
+        {
+            "providers": {
+                "openrouter": {
+                    "routing": {
+                        "default": {
+                            "mode": "allowed",
+                            "providers": ["anthropic"],
+                            "blocked": ["deepinfra"],
+                            "allow_fallbacks": False,
+                        },
+                        "models": {},
+                    }
+                }
+            }
+        }
+    )
+
+    adapter = runtime.get_adapter("openrouter", "openrouter:api-key")
+
+    assert isinstance(adapter, OpenRouterAdapter)
+    assert adapter._routing["default"] == {  # type: ignore[attr-defined]
+        "mode": "allowed",
+        "providers": ["anthropic"],
+        "blocked": ["deepinfra"],
+        "allow_fallbacks": False,
+    }
 
 
 def test_provider_credential_resolver_has_credentials_for_connection(

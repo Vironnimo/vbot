@@ -1,6 +1,6 @@
 # OpenRouter Provider
 
-OpenAI-compatible provider with OpenRouter-specific reasoning and multi-modality catalog normalization.
+OpenAI-compatible Provider with OpenRouter-specific reasoning, routing policy, prompt-cache affinity, and multi-modality catalog normalization.
 
 ## Interfaces
 
@@ -9,6 +9,16 @@ OpenAI-compatible provider with OpenRouter-specific reasoning and multi-modality
 - Adapter class: `OpenRouterAdapter`
 - Runtime endpoint: OpenAI-compatible `POST /chat/completions`
 - Catalog endpoint: `GET /models`
+- Routing catalogs: `GET /providers` for base Provider slugs and `GET /models/{author}/{slug}/endpoints` for one Model's exact endpoint tags, exposed to Settings through `provider.routing_options`
+
+## Provider Routing
+
+- `settings.providers.openrouter.routing` stores one complete `default` policy and sparse complete policies keyed by exact OpenRouter wire Model id under `models`. Each policy is `{ mode, providers, blocked, allow_fallbacks }`; modes are `automatic`, `allowed`, and `ordered`.
+- Runtime snapshots the normalized routing policy when it constructs an OpenRouter Adapter for a Run. A Settings save therefore affects the next Run without changing upstream Provider mid-Tool-loop.
+- `automatic` emits no selection field, `allowed` maps `providers` to OpenRouter `provider.only`, and `ordered` maps it to `provider.order`. `blocked` maps to `provider.ignore`; `allow_fallbacks: false` is emitted explicitly. A Model override replaces the global selection mode/list and fallback choice, while its blocks are additive with global blocks.
+- Global Provider options come from OpenRouter's Provider catalog. Per-Model options use exact endpoint tags from that Model's endpoint catalog. Base slugs match that Provider's endpoint variants; exact tags such as `google-vertex/europe` target one variant. The Settings editor also accepts a validated custom slug for endpoints absent from the fetched list.
+- OpenRouter account-level routing preferences remain an independent upstream source of truth and merge with request preferences. vBot request policy can therefore further restrict routing but cannot loosen a restriction already enforced by OpenRouter.
+- Manual `provider.order` takes precedence over OpenRouter Sticky Routing. Settings warns about this; prefer `automatic` with blocks or `allowed` when cache affinity matters more than a strict first-choice order.
 
 ## Reasoning
 
@@ -22,6 +32,7 @@ OpenAI-compatible provider with OpenRouter-specific reasoning and multi-modality
 
 ## Prompt Caching
 
+- **Session affinity.** Every OpenRouter request carries a stable, opaque top-level `session_id` derived from Project, Agent, and Session identity. OpenRouter uses it as the conversation sticky-routing key from the first successful request, so automatic/allowed routing stays on the same upstream endpoint while it remains available. The digest hides local address values and stays below OpenRouter's 256-character limit. Manual `provider.order` disables this Sticky Routing; the session id still remains stable but the explicit order wins.
 - **Claude-family only, envelope layout.** OpenRouter forwards Anthropic's own opt-in caching, but on the OpenAI `/chat/completions` wire, so the `cache_control` marker rides **inside a content part**, not as a native top-level `system` block (that is the Anthropic adapter's shape — see `anthropic.md`). `_build_payload` calls `_apply_openrouter_prompt_caching(payload)` last, only when `_is_claude_family(model_id)` (the `claude` substring — covers `anthropic/claude-*`, the `~…-latest` auto-router slug, dated variants). Non-Claude models are left untouched: OpenAI/Gemini cache implicitly, and a stray `cache_control` key risks a strict-upstream 400.
 - **Placement.** One marker on the last **system message** (caches tools + system) plus up to `OPENROUTER_MAX_HISTORY_CACHE_BREAKPOINTS` (3) rolling markers on the most recent non-system messages, capped at `OPENROUTER_CACHE_BREAKPOINT_LIMIT` (4, Anthropic's limit). Marker is `{"type": "ephemeral"}` (5-minute TTL). A string content is wrapped into a single `text` part to carry it; a list content takes it on the last dict part. A message that cannot carry a marker (empty string, or a pure-tool-call assistant turn with `content: None`) is skipped so a breakpoint is never wasted (`_mark_openrouter_message` returns whether it placed one).
 - **Read accounting.** OpenRouter reports cache reads as `usage.prompt_tokens_details.cached_tokens`, which the base OpenAI-compatible adapter already folds into `cache_read_tokens` (non-stream and stream). OpenRouter also carries `prompt_tokens_details.cache_write_tokens`, which vBot does **not** read today (reads are the billed-savings signal; the cold write is not surfaced).
