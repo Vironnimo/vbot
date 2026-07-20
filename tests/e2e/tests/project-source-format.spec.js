@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
 
-import { sendChatMessage } from "./chat-run-support.js";
+import { getAgentTab, sendChatMessage } from "./chat-run-support.js";
 
 const projectPath = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -38,10 +38,9 @@ async function startProjectChat(page, agentName) {
   const team = chat.locator(
     '.chat-view__project-team[aria-label="Project team"]',
   );
-  await expect(
-    team.getByRole("button", { exact: true, name: agentName }),
-  ).toBeVisible();
-  await team.getByRole("button", { exact: true, name: agentName }).click();
+  const agentTab = getAgentTab(team, agentName);
+  await expect(agentTab).toBeVisible();
+  await agentTab.click();
 
   await chat.getByRole("button", { exact: true, name: "Sessions" }).click();
   const sessionDrawer = chat.getByRole("complementary", { name: "Sessions" });
@@ -49,10 +48,12 @@ async function startProjectChat(page, agentName) {
   const emptySessions = sessionDrawer.getByText("No sessions yet", {
     exact: true,
   });
-  const currentSession = sessionDrawer.getByText("Current", { exact: true });
+  const selectedSession = sessionDrawer.locator(
+    "button.session-row__select--active",
+  );
   await expect(async () => {
     expect(
-      (await emptySessions.isVisible()) || (await currentSession.isVisible()),
+      (await emptySessions.isVisible()) || (await selectedSession.isVisible()),
     ).toBe(true);
   }).toPass();
   const previousCount = await sessionItems.count();

@@ -1,11 +1,21 @@
 import { expect } from "@playwright/test";
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function getAgentTab(container, agentName) {
+  return container.getByRole("button", {
+    name: new RegExp(`^${escapeRegExp(agentName)}:`),
+  });
+}
+
 export async function startIsolatedChat(page, { agentName = "" } = {}) {
   await page.goto("/#chat");
 
   const chat = page.getByRole("region", { name: "Chat" });
   if (agentName) {
-    await chat.getByRole("button", { exact: true, name: agentName }).click();
+    await getAgentTab(chat, agentName).click();
   }
   await chat.getByRole("button", { exact: true, name: "Sessions" }).click();
   const sessionDrawer = chat.getByRole("complementary", { name: "Sessions" });
@@ -13,10 +23,12 @@ export async function startIsolatedChat(page, { agentName = "" } = {}) {
   const emptySessions = sessionDrawer.getByText("No sessions yet", {
     exact: true,
   });
-  const currentSession = sessionDrawer.getByText("Current", { exact: true });
+  const selectedSession = sessionDrawer.locator(
+    "button.session-row__select--active",
+  );
   await expect(async () => {
     expect(
-      (await emptySessions.isVisible()) || (await currentSession.isVisible()),
+      (await emptySessions.isVisible()) || (await selectedSession.isVisible()),
     ).toBe(true);
   }).toPass();
   const previousCount = await sessionItems.count();

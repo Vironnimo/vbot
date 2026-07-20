@@ -322,6 +322,7 @@ describe('ChatView', () => {
         sharedSelectedAgentId: 'alpha',
         projects: [{ project_id: 'vbot', display_name: 'vBot' }],
         selectedProjectId: 'vbot',
+        hasConnectedProvider: false,
       },
     });
     flushSync();
@@ -358,8 +359,12 @@ describe('ChatView', () => {
       session_id: 'builder-old',
       limit: 100,
     });
-    // A same-agent older session is a past-session view, not a sub-agent view.
-    expect(document.body.textContent).toContain('Viewing a past session');
+    // Session selection is ordinary navigation. The backend's default-session
+    // pointer does not make this usable Session "past" or require a return
+    // warning.
+    expect(document.body.textContent).not.toContain('Viewing a past session');
+    expect(findButtonByText('Return to current session')).toBeFalsy();
+    expect(document.body.textContent).toContain('Connect a provider to start');
   });
 
   it('returns from a sub-agent session to its parent session (item 4)', async () => {
@@ -424,9 +429,12 @@ describe('ChatView', () => {
       session_id: 'session-parent',
       limit: 100,
     });
-    // The parent is not the agent's current session, so the result is a
-    // normal past-session view with its own banner — the desired chain.
-    expect(document.body.textContent).toContain('Viewing a past session');
+    // The parent opens as an ordinary Session. Only the cross-owner sub-agent
+    // view needs a contextual return banner.
+    expect(document.body.textContent).not.toContain(
+      'Viewing a sub-agent session',
+    );
+    expect(findButtonByText('Return to current session')).toBeFalsy();
   });
 
   it('falls back to return-to-current when the child has no parent metadata (item 4)', async () => {

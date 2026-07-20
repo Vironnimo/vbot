@@ -17,6 +17,7 @@ An Agent address can be global or Project-scoped. `resolveAgentAddressing()` and
 - History initially loads the newest page and prepends older pages without changing the user's visible reading position. Persisted history and live Run events are reconciled by identity/sequence rather than appended blindly.
 - A history response may always update its addressed Session state, but only the response for the still-displayed Session may change global loading/error state or attach the Run stream. This stale-display guard belongs to `createChatController()`, not the View.
 - Creating, renaming, deleting, moving, or selecting a Session uses backend responses as the final identity and routing decision. Project-Agent addressing and move targets are normalized by the helpers in `chatState.js`.
+- Selecting another same-Agent Session is ordinary browser navigation: the selected row and loaded history identify what the browser is using. The identity Agent's backend `current_session_id` remains a default landing pointer, not an age or usability classification, so the WebUI does not label another selected Session "past," show a return warning, or expose that pointer as a competing "Current" badge. Cross-owner Sub-Agent navigation still shows its contextual return banner.
 - New-Session availability is constrained by active local Run state; a stale local Run can be reset only through the explicit reconciliation path.
 
 ## Runs, streaming, and recovery
@@ -51,7 +52,7 @@ An Agent address can be global or Project-scoped. `resolveAgentAddressing()` and
 
 Usage displayed in Chat is a server-produced Session projection. The frontend formats values and updates the current Session state, but it does not recalculate Provider cost or infer missing usage from rendered text.
 
-Errors are normalized at the transport boundary, then attached to the relevant Session, Run, Queue operation, or transient toast. Rendering a failure must not discard recoverable history or leave a finished Run marked active.
+Errors are normalized at the transport boundary, then attached to the relevant Session, Run, Queue operation, or transient toast. Session action errors and Run-stream recovery warnings live on their addressed Session; command-catalog errors use a separate latest-request-wins projection. History/send admission failures must not be promoted into Run failures. Rendering a failure must not discard recoverable history or leave a finished Run marked active.
 
 ## Source and tests
 

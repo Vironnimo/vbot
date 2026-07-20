@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
 
-import { sendChatMessage, startIsolatedChat } from "./chat-run-support.js";
+import {
+  getAgentTab,
+  sendChatMessage,
+  startIsolatedChat,
+} from "./chat-run-support.js";
 
 test("agent moves a Session while handoff starts a fresh cross-Agent Session", async ({
   page,
@@ -26,9 +30,7 @@ test("agent moves a Session while handoff starts a fresh cross-Agent Session", a
       chat,
       "/agent e2e-command-agent Continue after moving this Session",
     );
-    await expect(
-      chat.getByRole("button", { exact: true, name: "E2E Command Agent" }),
-    ).toBeVisible();
+    await expect(getAgentTab(chat, "E2E Command Agent")).toBeVisible();
     await expect(
       chat
         .getByRole("article")
@@ -42,9 +44,7 @@ test("agent moves a Session while handoff starts a fresh cross-Agent Session", a
       chat,
       "/handoff agent:main Preserve the deterministic E2E handoff brief",
     );
-    await expect(
-      chat.getByRole("button", { exact: true, name: "Main" }),
-    ).toBeVisible();
+    await expect(getAgentTab(chat, "Main")).toBeVisible();
     await expect(
       chat
         .getByRole("article")

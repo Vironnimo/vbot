@@ -597,20 +597,6 @@
     toastDismissTimers.set(id, timer);
   };
 
-  const clearOutageErrorToasts = () => {
-    const errorToastIds = new Set(
-      toastState.toasts
-        .filter((toast) => toast.variant === 'error')
-        .map((toast) => toast.id),
-    );
-    for (const id of errorToastIds) {
-      clearToastDismissTimer(id);
-    }
-    toastState.toasts = toastState.toasts.filter(
-      (toast) => !errorToastIds.has(toast.id),
-    );
-  };
-
   const connectServerEvents = () => appController.connectServerEvents();
 
   // Deep-link to a specific Settings panel (Agent defaults, Extensions, Voice…).
@@ -683,7 +669,6 @@
         variant: 'error',
       });
     },
-    onClearOutageErrors: clearOutageErrorToasts,
     onLoadProjects: loadProjects,
     onReloadAgents: reloadAgentsFromServer,
     onSetOnboardingAside: () => {
