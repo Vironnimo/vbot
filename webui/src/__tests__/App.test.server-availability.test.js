@@ -153,4 +153,53 @@ describe('App', () => {
       vi.useRealTimers();
     }
   });
+
+  it('offers Desktop server switching outside the inert app content', async () => {
+    vi.useFakeTimers();
+    try {
+      window.history.replaceState({}, '', '/?accessor=desktop');
+      window.pywebview = {
+        api: {
+          getDesktopCapabilities: vi.fn().mockResolvedValue({
+            wakeword: false,
+            serverSelection: true,
+          }),
+          listServers: vi
+            .fn()
+            .mockResolvedValue([
+              { host: 'pi.lan', port: 8420, label: 'Home', active: true },
+            ]),
+        },
+      };
+
+      mountedComponent = mount(App, { target: document.body });
+      flushSync();
+      await vi.advanceTimersByTimeAsync(0);
+      flushSync();
+
+      subscribeServerEventsMock.mock.calls[0][0].onClose();
+      await vi.advanceTimersByTimeAsync(1000);
+      flushSync();
+
+      const notice = document.querySelector('.server-availability-notice');
+      const switchButton = [...notice.querySelectorAll('button')].find(
+        (button) => button.textContent.includes('Switch server'),
+      );
+      expect(switchButton).toBeTruthy();
+
+      switchButton.click();
+      flushSync();
+      await vi.advanceTimersByTimeAsync(0);
+      flushSync();
+
+      const modal = document.querySelector('[role="dialog"]');
+      expect(modal).toBeTruthy();
+      expect(modal.closest('.app-shell__content')).toBeNull();
+      expect(document.querySelector('.server-availability-notice')).toBeNull();
+      expect(modal.textContent).toContain('Home');
+      expect(modal.textContent).toContain('Connected');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

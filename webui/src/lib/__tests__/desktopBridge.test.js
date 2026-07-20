@@ -4,6 +4,10 @@ import {
   isDesktop,
   isDesktopAccessor,
   getDesktopCapabilities,
+  listDesktopServers,
+  addDesktopServer,
+  removeDesktopServer,
+  selectDesktopServer,
   getWakewordStatus,
   setWakewordEnabled,
   setWakewordConfig,
@@ -74,24 +78,27 @@ describe('getDesktopCapabilities', () => {
       location: { search: '?accessor=desktop' },
       pywebview: {
         api: {
-          getDesktopCapabilities: () => ({ wakeword: true }),
+          getDesktopCapabilities: () => ({
+            wakeword: true,
+            serverSelection: true,
+          }),
         },
       },
     };
 
     const caps1 = await getDesktopCapabilities();
-    expect(caps1).toEqual({ wakeword: true });
+    expect(caps1).toEqual({ wakeword: true, serverSelection: true });
 
     // Second call should return cached result
     const caps2 = await getDesktopCapabilities();
-    expect(caps2).toEqual({ wakeword: true });
+    expect(caps2).toEqual({ wakeword: true, serverSelection: true });
   });
 
   it('returns disabled when bridge absent', async () => {
     globalThis.window = { location: { search: '' }, pywebview: undefined };
 
     const caps = await getDesktopCapabilities();
-    expect(caps).toEqual({ wakeword: false });
+    expect(caps).toEqual({ wakeword: false, serverSelection: false });
   });
 
   it('does not reuse cached capabilities for a different bridge api object', async () => {
@@ -99,12 +106,18 @@ describe('getDesktopCapabilities', () => {
       location: { search: '?accessor=desktop' },
       pywebview: {
         api: {
-          getDesktopCapabilities: () => ({ wakeword: true }),
+          getDesktopCapabilities: () => ({
+            wakeword: true,
+            serverSelection: true,
+          }),
         },
       },
     };
 
-    expect(await getDesktopCapabilities()).toEqual({ wakeword: true });
+    expect(await getDesktopCapabilities()).toEqual({
+      wakeword: true,
+      serverSelection: true,
+    });
 
     globalThis.window.pywebview = {
       api: {
@@ -112,7 +125,10 @@ describe('getDesktopCapabilities', () => {
       },
     };
 
-    expect(await getDesktopCapabilities()).toEqual({ wakeword: false });
+    expect(await getDesktopCapabilities()).toEqual({
+      wakeword: false,
+      serverSelection: false,
+    });
   });
 });
 
@@ -167,6 +183,65 @@ describe('waitForDesktopBridge', () => {
     await vi.advanceTimersByTimeAsync(100);
 
     await expect(readyPromise).resolves.toBe(false);
+  });
+});
+
+describe('desktop server management', () => {
+  it('lists, adds, removes, and probes servers through the bridge', async () => {
+    const servers = [
+      { host: 'pi.lan', port: 8420, label: 'Home', active: true },
+    ];
+    const addServer = vi.fn(() => ({
+      host: 'office.lan',
+      port: 9000,
+      label: 'Office',
+    }));
+    const removeServer = vi.fn(() => ({ removed: true }));
+    const selectServer = vi.fn(() => ({
+      status: 'server_unreachable',
+      error_title: 'Server unreachable',
+      error_body: 'Try again.',
+    }));
+    globalThis.window = {
+      location: { search: '?accessor=desktop' },
+      pywebview: {
+        api: {
+          listServers: () => servers,
+          addServer,
+          removeServer,
+          selectServer,
+        },
+      },
+    };
+
+    await expect(listDesktopServers()).resolves.toEqual(servers);
+    await expect(
+      addDesktopServer('office.lan', 9000, 'Office'),
+    ).resolves.toEqual({
+      host: 'office.lan',
+      port: 9000,
+      label: 'Office',
+    });
+    await expect(removeDesktopServer('office.lan', 9000)).resolves.toEqual({
+      removed: true,
+    });
+    await expect(selectDesktopServer('office.lan', 9000)).resolves.toEqual({
+      status: 'server_unreachable',
+      error_title: 'Server unreachable',
+      error_body: 'Try again.',
+    });
+    expect(addServer).toHaveBeenCalledWith('office.lan', 9000, 'Office');
+    expect(removeServer).toHaveBeenCalledWith('office.lan', 9000);
+    expect(selectServer).toHaveBeenCalledWith('office.lan', 9000);
+  });
+
+  it('returns an empty list when the bridge returns no server array', async () => {
+    globalThis.window = {
+      location: { search: '?accessor=desktop' },
+      pywebview: { api: { listServers: () => null } },
+    };
+
+    await expect(listDesktopServers()).resolves.toEqual([]);
   });
 });
 

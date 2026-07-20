@@ -522,7 +522,16 @@ svg {
   line-height: 1.45;
 }
 
-.server-availability-notice__retry {
+.server-availability-notice__actions {
+  display: flex;
+  align-items: stretch;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.server-availability-notice__actions .btn-primary,
+.server-availability-notice__actions .btn-secondary {
+  justify-content: center;
   white-space: nowrap;
 }
 
@@ -2769,7 +2778,7 @@ kbd {
     padding: 16px;
   }
 
-  .server-availability-notice__retry {
+  .server-availability-notice__actions {
     grid-column: 2;
     justify-self: start;
   }

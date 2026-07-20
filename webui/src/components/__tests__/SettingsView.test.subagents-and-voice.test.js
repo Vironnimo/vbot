@@ -144,13 +144,14 @@ describe('SettingsView', () => {
     expect(getSettingsUpdateCalls()).toHaveLength(0);
   });
 
-  it('hides the Voice panel outside Desktop wakeword capabilities', async () => {
+  it('hides Desktop app settings outside Desktop capabilities', async () => {
     rpcMock.mockImplementation(createSettingsRpcMock());
 
     mountedComponent = mount(SettingsView, { target: document.body });
     flushSync();
     await waitForCondition(() => buttonByText('Appearance'));
 
+    expect(buttonByText('Connection')).toBeUndefined();
     expect(buttonByText('Voice')).toBeUndefined();
   });
 
@@ -159,6 +160,14 @@ describe('SettingsView', () => {
     window.history.pushState({}, '', '/?accessor=desktop');
     window.pywebview = {
       api: {
+        listServers: vi.fn().mockResolvedValue([
+          {
+            host: 'pi.lan',
+            port: 8420,
+            label: 'Home',
+            active: true,
+          },
+        ]),
         getWakewordStatus: vi.fn().mockResolvedValue({
           enabled: false,
           state: 'off',
@@ -170,7 +179,7 @@ describe('SettingsView', () => {
       target: document.body,
       props: {
         agents: agentsPayload(),
-        desktopCapabilities: { wakeword: true },
+        desktopCapabilities: { wakeword: true, serverSelection: true },
         targetPanelId: 'voice',
         targetPanelRequestId: 1,
       },
@@ -182,6 +191,8 @@ describe('SettingsView', () => {
     await waitForCondition(() =>
       document.body.textContent.includes('Wakeword listening'),
     );
+    expect(buttonByText('Connection')).toBeTruthy();
+    expect(document.body.textContent).toContain('Desktop app');
     await waitForCondition(
       () =>
         buttonByText('Voice')?.classList.contains('snav-item--active') === true,

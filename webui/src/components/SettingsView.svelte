@@ -3,6 +3,7 @@
   import { SvelteSet } from 'svelte/reactivity';
 
   import WakewordVoiceSettings from './WakewordVoiceSettings.svelte';
+  import DesktopConnectionSettings from './settings/DesktopConnectionSettings.svelte';
   import SettingsAppearancePanel from './settings/SettingsAppearancePanel.svelte';
   import SettingsChannelsPanel from './settings/SettingsChannelsPanel.svelte';
   import SettingsCompactionPanel from './settings/SettingsCompactionPanel.svelte';
@@ -224,6 +225,43 @@
         },
       ],
     },
+    ...(desktopCapabilities?.serverSelection
+      ? [
+          {
+            id: 'desktop',
+            label: () => t('settings.groups.desktop', 'Desktop app'),
+            sections: [
+              {
+                id: 'desktop_connection',
+                labelKey: 'settings.desktop.connection.title',
+                labelFallback: 'Connection',
+                label: () =>
+                  t('settings.desktop.connection.title', 'Connection'),
+                subtitle: () =>
+                  t(
+                    'settings.desktop.connection.subtitle',
+                    'Choose which vBot server this Desktop app connects to.',
+                  ),
+              },
+              ...(desktopCapabilities?.wakeword
+                ? [
+                    {
+                      id: 'voice',
+                      labelKey: 'settings.voice.title',
+                      labelFallback: 'Voice',
+                      label: () => t('settings.voice.title', 'Voice'),
+                      subtitle: () =>
+                        t(
+                          'settings.voice.subtitle',
+                          'Wakeword detection and voice command settings.',
+                        ),
+                    },
+                  ]
+                : []),
+            ],
+          },
+        ]
+      : []),
     {
       id: 'system',
       label: () => t('settings.groups.system', 'System'),
@@ -239,21 +277,6 @@
               'Language and chat reading width.',
             ),
         },
-        ...(desktopCapabilities?.wakeword
-          ? [
-              {
-                id: 'voice',
-                labelKey: 'settings.voice.title',
-                labelFallback: 'Voice',
-                label: () => t('settings.voice.title', 'Voice'),
-                subtitle: () =>
-                  t(
-                    'settings.voice.subtitle',
-                    'Wakeword detection and voice command settings.',
-                  ),
-              },
-            ]
-          : []),
         {
           id: 'debug',
           labelKey: 'debug.settings',
@@ -282,6 +305,7 @@
 
   let panels = $derived(groups.flatMap((group) => group.sections));
   let panelById = $derived(new Map(panels.map((panel) => [panel.id, panel])));
+  let groupById = $derived(new Map(groups.map((group) => [group.id, group])));
   let mobileSectionOptions = $derived(
     groups.flatMap((group) =>
       group.sections.map((panel) => ({
@@ -872,8 +896,34 @@
           />
         </section>
 
+        {#if desktopCapabilities?.serverSelection}
+          <div class="s-doc-group" data-settings-group="desktop">
+            {groupById.get('desktop').label()}
+          </div>
+
+          <section
+            class="s-section"
+            data-settings-section="desktop_connection"
+            aria-labelledby="settings-section-desktop_connection"
+          >
+            {@render sectionHeader(panelById.get('desktop_connection'))}
+            <DesktopConnectionSettings {onToast} />
+          </section>
+
+          {#if desktopCapabilities?.wakeword}
+            <section
+              class="s-section"
+              data-settings-section="voice"
+              aria-labelledby="settings-section-voice"
+            >
+              {@render sectionHeader(panelById.get('voice'))}
+              <WakewordVoiceSettings {agents} {onToast} />
+            </section>
+          {/if}
+        {/if}
+
         <div class="s-doc-group" data-settings-group="system">
-          {groups[3].label()}
+          {groupById.get('system').label()}
         </div>
 
         <section
@@ -889,17 +939,6 @@
             onError={(message) => reportSettingsError(message)}
           />
         </section>
-
-        {#if desktopCapabilities?.wakeword}
-          <section
-            class="s-section"
-            data-settings-section="voice"
-            aria-labelledby="settings-section-voice"
-          >
-            {@render sectionHeader(panelById.get('voice'))}
-            <WakewordVoiceSettings {agents} {onToast} />
-          </section>
-        {/if}
 
         <section
           class="s-section"
