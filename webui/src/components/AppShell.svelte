@@ -14,7 +14,10 @@
     connectionStatus = CONNECTION_STATUS_RECONNECTING,
     serverUnavailable = false,
     serverNoticeState = '',
+    showServerNotice = true,
     onRetryConnection = () => {},
+    canSwitchServer = false,
+    onSwitchServer = () => {},
     children,
   } = $props();
 
@@ -204,7 +207,7 @@
     {@render children?.()}
   </main>
 
-  {#if serverNoticeState}
+  {#if serverNoticeState && showServerNotice}
     <aside
       class:server-availability-notice--restored={serverRestored}
       class="server-availability-notice"
@@ -250,13 +253,16 @@
         {/if}
       </div>
       {#if !serverRestored}
-        <Button
-          variant="secondary"
-          class="server-availability-notice__retry"
-          onClick={onRetryConnection}
-        >
-          {t('status.retryNow', 'Retry now')}
-        </Button>
+        <div class="server-availability-notice__actions">
+          <Button variant="secondary" onClick={onRetryConnection}>
+            {t('status.retryNow', 'Retry now')}
+          </Button>
+          {#if canSwitchServer}
+            <Button variant="primary" onClick={onSwitchServer}>
+              {t('status.switchServer', 'Switch server')}
+            </Button>
+          {/if}
+        </div>
       {/if}
     </aside>
   {/if}

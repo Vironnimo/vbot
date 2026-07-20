@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -64,34 +64,6 @@ class FakeWebview:
         self.start_func = func
         if func is not None:
             func()
-
-
-@dataclass
-class FakeMenuAction:
-    title: str
-    function: Callable[[], Any]
-
-
-@dataclass
-class FakeMenuSeparator:
-    pass
-
-
-@dataclass
-class FakeMenu:
-    title: str
-    items: list[Any]
-
-
-@dataclass
-class FakeMenuModule:
-    """Stand-in for ``webview.menu`` so the launch needs no GUI package."""
-
-    Menu: Callable[..., Any] = field(default=lambda title, items: FakeMenu(title, items))
-    MenuAction: Callable[..., Any] = field(
-        default=lambda title, function: FakeMenuAction(title, function)
-    )
-    MenuSeparator: Callable[..., Any] = field(default=lambda: FakeMenuSeparator())
 
 
 def fake_get_for(
@@ -327,7 +299,6 @@ def test_launch_creates_window_before_loop_with_html_and_bridge_js_api(tmp_path:
         settings_file=tmp_path / "settings.json",
         probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
         webview_module=fake_webview,
-        menu_module=FakeMenuModule(),
         app_icon_path=tmp_path / "missing-icon.png",
     )
 
@@ -354,7 +325,6 @@ def test_launch_runs_auto_connect_as_post_loop_func(tmp_path: Path) -> None:
         settings_file=settings_file,
         probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
         webview_module=fake_webview,
-        menu_module=FakeMenuModule(),
         app_icon_path=tmp_path / "missing-icon.png",
     )
 
@@ -372,7 +342,6 @@ def test_launch_first_run_shows_connection_screen_via_auto_connect(tmp_path: Pat
         settings_file=tmp_path / "settings.json",
         probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
         webview_module=fake_webview,
-        menu_module=FakeMenuModule(),
         app_icon_path=tmp_path / "missing-icon.png",
     )
 
@@ -395,7 +364,6 @@ def test_launch_does_not_auto_connect_to_default_localhost(tmp_path: Path) -> No
         settings_file=tmp_path / "settings.json",
         probe=record_probe,
         webview_module=fake_webview,
-        menu_module=FakeMenuModule(),
         app_icon_path=tmp_path / "missing-icon.png",
     )
 
@@ -416,7 +384,6 @@ def test_launch_host_port_override_connects_directly_even_on_first_run(tmp_path:
         settings_file=tmp_path / "settings.json",
         probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
         webview_module=fake_webview,
-        menu_module=FakeMenuModule(),
         app_icon_path=tmp_path / "missing-icon.png",
     )
 
@@ -436,7 +403,6 @@ def test_launch_override_remembers_target_as_last_used(tmp_path: Path) -> None:
         settings_file=settings_file,
         probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
         webview_module=fake_webview,
-        menu_module=FakeMenuModule(),
         app_icon_path=tmp_path / "missing-icon.png",
     )
 
@@ -453,7 +419,6 @@ def test_launch_port_only_override_fills_default_host(tmp_path: Path) -> None:
         settings_file=tmp_path / "settings.json",
         probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
         webview_module=fake_webview,
-        menu_module=FakeMenuModule(),
         app_icon_path=tmp_path / "missing-icon.png",
     )
 
@@ -469,7 +434,6 @@ def test_launch_host_only_override_fills_default_port(tmp_path: Path) -> None:
         settings_file=tmp_path / "settings.json",
         probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
         webview_module=fake_webview,
-        menu_module=FakeMenuModule(),
         app_icon_path=tmp_path / "missing-icon.png",
     )
 
@@ -495,7 +459,6 @@ def test_launch_override_takes_precedence_over_saved_last_used(tmp_path: Path) -
         settings_file=settings_file,
         probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
         webview_module=fake_webview,
-        menu_module=FakeMenuModule(),
         app_icon_path=tmp_path / "missing-icon.png",
     )
 
@@ -524,7 +487,7 @@ def test_resolve_launch_server_url_prefers_override_for_worker(tmp_path: Path) -
     assert desktop_main._resolve_launch_server_url(None, empty_controller) == ""
 
 
-def test_launch_attaches_server_menu_to_start(tmp_path: Path) -> None:
+def test_launch_starts_without_native_menu(tmp_path: Path) -> None:
     fake_webview = FakeWebview()
 
     desktop_main.launch_desktop(
@@ -532,14 +495,11 @@ def test_launch_attaches_server_menu_to_start(tmp_path: Path) -> None:
         settings_file=tmp_path / "settings.json",
         probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
         webview_module=fake_webview,
-        menu_module=FakeMenuModule(),
         app_icon_path=tmp_path / "missing-icon.png",
     )
 
     assert len(fake_webview.start_calls) == 1
-    menu = fake_webview.start_calls[0]["menu"]
-    assert len(menu) == 1
-    assert menu[0].title == "Server"
+    assert "menu" not in fake_webview.start_calls[0]
     assert "icon" not in fake_webview.start_calls[0]
 
 
@@ -553,7 +513,6 @@ def test_launch_passes_icon_only_when_icon_exists(tmp_path: Path) -> None:
         settings_file=tmp_path / "settings.json",
         probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
         webview_module=fake_webview,
-        menu_module=FakeMenuModule(),
         app_icon_path=icon_file,
     )
 
@@ -570,7 +529,6 @@ def test_launch_attaches_the_created_window_to_the_controller(tmp_path: Path) ->
         settings_file=settings_file,
         probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
         webview_module=fake_webview,
-        menu_module=FakeMenuModule(),
         app_icon_path=tmp_path / "missing-icon.png",
     )
 
@@ -625,7 +583,6 @@ def test_launch_stops_worker_even_when_start_raises(
             settings_file=settings_file,
             probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
             webview_module=StartRaisesWebview(),
-            menu_module=FakeMenuModule(),
             app_icon_path=tmp_path / "missing-icon.png",
         )
 
