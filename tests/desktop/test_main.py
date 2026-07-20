@@ -32,6 +32,7 @@ class FakeWindow:
     def __init__(self) -> None:
         self.loaded_urls: list[str] = []
         self.loaded_html: list[str] = []
+        self.events = FakeWindowEvents()
 
     def load_url(self, url: str) -> None:
         self.loaded_urls.append(url)
@@ -40,13 +41,33 @@ class FakeWindow:
         self.loaded_html.append(content)
 
 
+class FakeEvent:
+    """Small pywebview Event double supporting handler registration and emission."""
+
+    def __init__(self) -> None:
+        self.handlers: list[Callable[[], Any]] = []
+
+    def __iadd__(self, handler: Callable[[], Any]) -> FakeEvent:
+        self.handlers.append(handler)
+        return self
+
+    def emit(self) -> None:
+        for handler in self.handlers:
+            handler()
+
+
+class FakeWindowEvents:
+    def __init__(self) -> None:
+        self.shown = FakeEvent()
+
+
 class FakeWebview:
-    """pywebview double honoring the create-before-start / func-after-start order.
+    """pywebview double honoring the create-before-start / shown-event order.
 
     ``create_window`` returns the :class:`FakeWindow` the controller later
-    navigates; ``start`` invokes the post-loop ``func`` (the controller's
-    ``auto_connect``) exactly as pywebview does once the GUI loop is live, so the
-    test exercises the real navigation path without a GUI.
+    navigates; ``start`` emits its ``shown`` event exactly where pywebview makes
+    the native window visible, so tests exercise the real startup boundary
+    without a GUI.
     """
 
     def __init__(self) -> None:
@@ -64,6 +85,7 @@ class FakeWebview:
         self.start_func = func
         if func is not None:
             func()
+        self.window.events.shown.emit()
 
 
 def fake_get_for(
@@ -315,7 +337,7 @@ def test_launch_creates_window_before_loop_with_html_and_bridge_js_api(tmp_path:
     assert hasattr(kwargs["js_api"], "getWakewordStatus")
 
 
-def test_launch_runs_auto_connect_as_post_loop_func(tmp_path: Path) -> None:
+def test_launch_runs_auto_connect_after_window_is_shown(tmp_path: Path) -> None:
     fake_webview = FakeWebview()
     settings_file = tmp_path / "settings.json"
     _write_servers(settings_file, [{"host": "pi.lan", "port": 9000}])
@@ -328,9 +350,10 @@ def test_launch_runs_auto_connect_as_post_loop_func(tmp_path: Path) -> None:
         app_icon_path=tmp_path / "missing-icon.png",
     )
 
-    # start() received auto_connect as func; running it navigated the live window
-    # to the saved server's WebUI with the accessor marker.
-    assert fake_webview.start_func is not None
+    # The shown event navigated the live window to the saved server's WebUI with
+    # the accessor marker; start() itself received no eager startup callback.
+    assert fake_webview.start_func is None
+    assert len(fake_webview.window.events.shown.handlers) == 1
     assert fake_webview.window.loaded_urls == ["http://pi.lan:9000/?accessor=desktop"]
 
 
@@ -538,14 +561,13 @@ def test_launch_attaches_the_created_window_to_the_controller(tmp_path: Path) ->
     assert fake_webview.window.loaded_urls == ["http://pi.lan:9000/?accessor=desktop"]
 
 
-def test_launch_stops_worker_even_when_start_raises(
+def test_launch_does_not_start_worker_when_gui_fails_before_window_is_shown(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings_file = tmp_path / "settings.json"
-    # Pre-enable wakeword so the bridge starts the worker before the loop; the
-    # finally must still stop it when start() raises.
     settings_file.write_text(json.dumps({"wakeword": {"enabled": True}}), encoding="utf-8")
+    created: list[bool] = []
     stopped: list[bool] = []
 
     class StartRaisesWebview(FakeWebview):
@@ -567,12 +589,15 @@ def test_launch_stops_worker_even_when_start_raises(
     def fake_bridge(args: Any, settings: Any, controller: Any, server_url: str) -> Any:
         from desktop.wakeword.bridge import DesktopBridge
 
+        def create_worker(_bridge: DesktopBridge) -> RecordingWorker:
+            created.append(True)
+            return RecordingWorker()
+
         bridge = DesktopBridge(
             settings_path=settings,
-            worker_factory=lambda _bridge: RecordingWorker(),
+            worker_factory=create_worker,
             connection=controller,
         )
-        bridge._start_worker()
         return bridge
 
     monkeypatch.setattr(desktop_main, "_create_wakeword_bridge", fake_bridge)
@@ -586,4 +611,99 @@ def test_launch_stops_worker_even_when_start_raises(
             app_icon_path=tmp_path / "missing-icon.png",
         )
 
-    assert stopped == [True]
+    assert created == []
+    assert stopped == []
+
+
+def test_launch_starts_enabled_voice_only_after_window_is_shown(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps({"wakeword": {"enabled": True}}), encoding="utf-8")
+    fake_webview = FakeWebview()
+    events: list[str] = []
+
+    class RecordingWorker:
+        def start(self) -> None:
+            assert len(fake_webview.created_windows) == 1
+            events.append("started")
+
+        def stop(self) -> None:
+            events.append("stopped")
+
+        def is_running(self) -> bool:
+            return True
+
+    def fake_bridge(args: Any, settings: Any, controller: Any, server_url: str) -> Any:
+        from desktop.wakeword.bridge import DesktopBridge
+
+        return DesktopBridge(
+            settings_path=settings,
+            worker_factory=lambda _bridge: RecordingWorker(),
+            connection=controller,
+        )
+
+    monkeypatch.setattr(desktop_main, "_create_wakeword_bridge", fake_bridge)
+
+    desktop_main.launch_desktop(
+        [],
+        settings_file=settings_file,
+        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
+        webview_module=fake_webview,
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+    assert events == ["started", "stopped"]
+
+
+def test_launch_with_disabled_voice_never_probes_wakeword_dependencies(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_if_probed() -> bool:
+        raise AssertionError("Voice dependencies must stay lazy while Voice is disabled")
+
+    monkeypatch.setattr(desktop_main, "_real_wakeword_available", fail_if_probed)
+
+    desktop_main.launch_desktop(
+        [],
+        settings_file=tmp_path / "settings.json",
+        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
+        webview_module=FakeWebview(),
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+
+def test_enabled_voice_probes_dependencies_only_after_window_exists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps({"wakeword": {"enabled": True}}), encoding="utf-8")
+    fake_webview = FakeWebview()
+    probed: list[bool] = []
+
+    def unavailable_after_window_created() -> bool:
+        assert len(fake_webview.created_windows) == 1
+        probed.append(True)
+        return False
+
+    monkeypatch.setattr(
+        desktop_main,
+        "_real_wakeword_available",
+        unavailable_after_window_created,
+    )
+
+    desktop_main.launch_desktop(
+        [],
+        settings_file=settings_file,
+        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
+        webview_module=fake_webview,
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+    assert probed == [True]
+    bridge = fake_webview.created_windows[0][1]["js_api"]
+    assert bridge.getWakewordStatus()["mode"] == "unavailable"
+    assert bridge.getWakewordStatus()["error_code"] == "voice_stack_unavailable"

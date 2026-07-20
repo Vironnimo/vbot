@@ -393,6 +393,13 @@ class DesktopBridge:
                 dict(active_microphone) if active_microphone is not None else None
             )
 
+    def _set_mode(self, mode: str) -> None:
+        """Publish the lazily resolved local Voice implementation mode."""
+        if mode not in {"real", "mock", "unavailable"}:
+            raise ValueError(f"Invalid wakeword mode: {mode}")
+        with self._lock:
+            self._mode = mode
+
     # -- Active server (voice target follows the window) ---------------------
 
     @property
