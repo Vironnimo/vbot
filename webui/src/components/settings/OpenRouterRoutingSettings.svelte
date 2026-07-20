@@ -21,7 +21,7 @@
     {
       value: 'automatic',
       labelKey: 'settings.providers.openrouter.mode.automatic',
-      fallback: 'Automatic (cache-friendly)',
+      fallback: 'Automatic (OpenRouter managed)',
     },
     {
       value: 'allowed',
@@ -370,10 +370,17 @@
     <div class="s-row-desc">
       {t(
         'settings.providers.openrouter.description',
-        'Control which upstream providers OpenRouter may use. vBot also pins each Session to one endpoint to protect prompt-cache hits.',
+        'Control which upstream providers OpenRouter may use. vBot sends a stable Session identifier so OpenRouter can apply Sticky Routing.',
       )}
     </div>
   </div>
+
+  <Banner variant="info">
+    {t(
+      'settings.providers.openrouter.stabilityHint',
+      'Sticky Routing is best effort. To prevent provider switches, allow one exact endpoint and turn provider fallbacks off.',
+    )}
+  </Banner>
 
   <FormField
     controlId="openrouter-routing-model"

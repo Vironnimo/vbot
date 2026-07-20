@@ -1032,7 +1032,9 @@ export const englishCatalog = Object.freeze({
     'Context window must be a positive whole number',
   'settings.providers.openrouter.title': 'Routing',
   'settings.providers.openrouter.description':
-    'Control which upstream providers OpenRouter may use. vBot also pins each Session to one endpoint to protect prompt-cache hits.',
+    'Control which upstream providers OpenRouter may use. vBot sends a stable Session identifier so OpenRouter can apply Sticky Routing.',
+  'settings.providers.openrouter.stabilityHint':
+    'Sticky Routing is best effort. To prevent provider switches, allow one exact endpoint and turn provider fallbacks off.',
   'settings.providers.openrouter.scopeLabel': 'Scope',
   'settings.providers.openrouter.scopeHelp':
     'Global routing applies to every OpenRouter model unless that model has an override.',
@@ -1046,7 +1048,8 @@ export const englishCatalog = Object.freeze({
   'settings.providers.openrouter.modelOverrideAria':
     'Use a routing override for {model}',
   'settings.providers.openrouter.modeLabel': 'Routing mode',
-  'settings.providers.openrouter.mode.automatic': 'Automatic (cache-friendly)',
+  'settings.providers.openrouter.mode.automatic':
+    'Automatic (OpenRouter managed)',
   'settings.providers.openrouter.mode.allowed': 'Only allowed providers',
   'settings.providers.openrouter.mode.ordered': 'Preferred provider order',
   'settings.providers.openrouter.orderWarning':

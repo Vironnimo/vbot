@@ -80,7 +80,10 @@ describe('OpenRouterRoutingSettings', () => {
     mountEditor();
     await waitForCondition(() => routingCalls().length === 1);
 
-    clickButton('Automatic (cache-friendly)');
+    expect(document.body.textContent).toContain(
+      'Sticky Routing is best effort.',
+    );
+    clickButton('Automatic (OpenRouter managed)');
     clickOption('Only allowed providers');
 
     clickButton('Add provider…');
