@@ -623,7 +623,7 @@ if (-not $DesktopClient -and -not $NoAutostart) {
     & $vbotPath autostart enable --host $HostName --port $effectivePort --data-dir $resolvedDataDir --task-name $TaskName
     if ($LASTEXITCODE -ne 0) {
         $autostartEnableFailed = $true
-        Write-Host "Warning: enabling autostart failed (see message above). On Windows, run 'vbot autostart enable' from an elevated terminal."
+        Write-Host "Warning: enabling per-user autostart failed (see message above). Retry 'vbot autostart enable' from a normal PowerShell."
     }
 }
 
@@ -668,7 +668,7 @@ else {
     if ($autostartEnableFailed -or (-not $serverRunning -and -not $NoAutostart) -or $statusExitCode -ne 0) {
         Write-Host "Problems:"
         if ($autostartEnableFailed) {
-            Write-Host "  - Autostart was not enabled. Windows Task Scheduler registration normally requires an elevated terminal."
+            Write-Host "  - Per-user Autostart was not enabled; Administrator elevation is not required."
         }
         if (-not $serverRunning -and -not $NoAutostart) {
             Write-Host "  - The server is not running, so the WebUI is not available."
@@ -679,7 +679,7 @@ else {
     }
 
     if ($autostartEnableFailed) {
-        Write-Host "Required next step: open PowerShell as Administrator and run:"
+        Write-Host "Required next step: run this from a normal PowerShell:"
         Write-Host "  & `"$vbotPath`" autostart enable --host $HostName --port $effectivePort --data-dir `"$resolvedDataDir`" --task-name `"$TaskName`""
         Write-Host "This registers autostart and starts the server. Then verify with:"
         Write-Host "  & `"$vbotPath`" server status --host $HostName --port $effectivePort --data-dir `"$resolvedDataDir`""

@@ -75,7 +75,7 @@ curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install
 
 ### Fresh Windows install
 
-Run the default install in PowerShell. An elevated shell is recommended so the Task Scheduler autostart entry can be created:
+Run the default install in a normal, non-elevated PowerShell. The installer refuses an elevated shell so the checkout, virtual environment, runtime data, and server process stay owned by the user; Windows Autostart is registered as a low-privilege per-user Task Scheduler entry and needs no UAC prompt:
 
 ```powershell
 irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1 | iex
@@ -92,7 +92,7 @@ Use a ScriptBlock when passing options:
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -DesktopClient
 ```
 
-Windows accepts `-InstallDir`, `-Version`, `-Dev`, `-DataDir`, `-HostName`, `-Port`, `-Desktop`, `-DesktopClient`, `-NoAutostart`, `-SkipWebuiBuild`, and `-TaskName` directly. The immediate background server, Task Scheduler action, and installed `vBot Desktop` Start-menu shortcut all use windowless launch paths, so installation, sign-in, and normal app launch leave no Python console open; the normal `vbot` command remains a console application. The final summary verifies Autostart and the actual server health independently. If Task Scheduler permission is unavailable, the package install and immediate server start still complete, while the summary reports `complete with problems` and prints the exact elevated recovery command for Autostart; a live `Server URL` is shown only when the server is running. You do not need to rerun the whole Installer: open PowerShell as Administrator, run the reported `vbot.exe autostart enable ...` command, then run the reported `server status` command.
+Windows accepts `-InstallDir`, `-Version`, `-Dev`, `-DataDir`, `-HostName`, `-Port`, `-Desktop`, `-DesktopClient`, `-NoAutostart`, `-SkipWebuiBuild`, and `-TaskName` directly. `-AllowElevatedInstall` is an explicit escape hatch for disposable automation only; never use it for a persistent installation. The immediate background server, per-user Task Scheduler action, and installed `vBot Desktop` Start-menu shortcut all use windowless launch paths, so installation, sign-in, and normal app launch leave no Python console open; the normal `vbot` command remains a console application. The final summary verifies Autostart and the actual server health independently. If per-user Task Scheduler registration fails, the package install and immediate server start still complete, while the summary reports `complete with problems` and prints the exact normal-user recovery command; a live `Server URL` is shown only when the server is running.
 
 As with any `curl | bash` or `irm | iex` command, download and inspect the script first if you do not want to execute network content directly.
 

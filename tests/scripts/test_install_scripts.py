@@ -259,6 +259,15 @@ def test_windows_installer_forwards_setup_options_through_powershell() -> None:
     assert "& $setup @setupArgList" not in script
 
 
+def test_windows_installer_refuses_accidental_elevation_before_install_mutation() -> None:
+    script = (PROJECT_ROOT / "scripts" / "install.ps1").read_text(encoding="utf-8")
+
+    guard = script.index("if ((Test-IsElevated) -and -not $AllowElevatedInstall)")
+    assert "normal PowerShell" in script[guard:]
+    assert guard < script.index("Confirm-Git", guard)
+    assert guard < script.index('Write-Step "Cloning', guard)
+
+
 def test_windows_public_installer_ends_with_verified_lifecycle_summary() -> None:
     script = (PROJECT_ROOT / "scripts" / "install.ps1").read_text(encoding="utf-8")
 
@@ -272,7 +281,8 @@ def test_windows_public_installer_ends_with_verified_lifecycle_summary() -> None
     assert 'Write-Host "Server: running"' in summary
     assert 'Write-Host "Server: NOT RUNNING"' in summary
     assert 'Write-Host "Problems:"' in summary
-    assert "Required next step: open PowerShell as Administrator" in summary
+    assert "Required next step: run this from a normal PowerShell" in summary
+    assert "open PowerShell as Administrator" not in summary
     assert 'Write-Host "Server URL: http://${summaryHost}:$summaryPort"' in summary
     assert summary.index("if ($serverRunning)") < summary.index(
         'Write-Host "Server URL: http://${summaryHost}:$summaryPort"'
@@ -287,7 +297,8 @@ def test_windows_checkout_setup_does_not_claim_an_unverified_server_url() -> Non
 
     assert "server status --host $HostName --port $effectivePort" in summary
     assert 'Write-Host "Server: NOT RUNNING"' in summary
-    assert "Required next step: open PowerShell as Administrator" in summary
+    assert "Required next step: run this from a normal PowerShell" in summary
+    assert "open PowerShell as Administrator" not in summary
     assert "exit $RecoverableProblemExitCode" in summary
     assert summary.index("if ($serverRunning)") < summary.index(
         'Write-Host "Server URL: http://${HostName}:$effectivePort"'

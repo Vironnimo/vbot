@@ -11,7 +11,8 @@ boot-persistent in one step.
 
 from __future__ import annotations
 
-import csv
+import base64
+import json
 import os
 import shutil
 import subprocess
@@ -33,9 +34,107 @@ from core.utils.config import APP_DIR
 
 DEFAULT_TASK_NAME = "vBot"
 
-# Cap every autostart command so a stuck `systemctl enable --now`, a polkit
-# prompt on `loginctl enable-linger`, or a hung `schtasks` cannot block
-# `vbot autostart enable` forever on a headless host.
+_WINDOWS_POWERSHELL = "powershell.exe"
+_WINDOWS_TASK_NOT_FOUND_EXIT_CODE = 3
+_WINDOWS_TASK_SCRIPT = r"""
+$ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
+$payloadToken = "__VBOT_PAYLOAD__"
+$payloadJson = [System.Text.Encoding]::UTF8.GetString(
+    [System.Convert]::FromBase64String($payloadToken)
+)
+$payload = $payloadJson | ConvertFrom-Json
+
+function Test-TaskNotFound {
+    param([System.Management.Automation.ErrorRecord]$Record)
+
+    $exception = $Record.Exception
+    while ($null -ne $exception) {
+        $errorCode = [int64]$exception.HResult -band [int64]0xFFFFFFFF
+        if ($errorCode -eq [int64]0x80070002) {
+            return $true
+        }
+        $exception = $exception.InnerException
+    }
+    return $false
+}
+
+try {
+    $service = New-Object -ComObject "Schedule.Service"
+    $service.Connect()
+    $root = $service.GetFolder("\")
+
+    if ($payload.operation -eq "status") {
+        try {
+            $null = $root.GetTask([string]$payload.task_name)
+            exit 0
+        }
+        catch {
+            if (Test-TaskNotFound -Record $_) {
+                exit 3
+            }
+            throw
+        }
+    }
+
+    if ($payload.operation -eq "delete") {
+        try {
+            $root.DeleteTask([string]$payload.task_name, 0)
+            exit 0
+        }
+        catch {
+            if (Test-TaskNotFound -Record $_) {
+                exit 3
+            }
+            throw
+        }
+    }
+
+    if ($payload.operation -ne "enable") {
+        throw "Unsupported Task Scheduler operation: $($payload.operation)"
+    }
+
+    $userId = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $definition = $service.NewTask(0)
+    $definition.Principal.UserId = $userId
+    $definition.Principal.LogonType = 3
+    $definition.Principal.RunLevel = 0
+    $definition.Settings.AllowDemandStart = $true
+    $definition.Settings.DisallowStartIfOnBatteries = $false
+    $definition.Settings.StopIfGoingOnBatteries = $false
+    $definition.Settings.StartWhenAvailable = $true
+    $definition.Settings.ExecutionTimeLimit = "PT0S"
+    $definition.Settings.MultipleInstances = 2
+
+    $trigger = $definition.Triggers.Create(9)
+    $trigger.Enabled = $true
+    $trigger.UserId = $userId
+
+    $action = $definition.Actions.Create(0)
+    $action.Path = [string]$payload.launcher
+    $action.Arguments = [string]$payload.arguments
+
+    $null = $root.RegisterTaskDefinition(
+        [string]$payload.task_name,
+        $definition,
+        6,
+        $userId,
+        $null,
+        3,
+        $null
+    )
+    exit 0
+}
+catch {
+    # Windows PowerShell can serialize progress records onto stderr when its
+    # streams are redirected. Keep the actionable error on clean stdout.
+    [Console]::Out.WriteLine($_.Exception.Message)
+    exit 1
+}
+"""
+
+# Cap every autostart command so a stuck Task Scheduler call,
+# `systemctl enable --now`, or polkit prompt cannot block forever.
 _COMMAND_TIMEOUT_SECONDS = 30.0
 
 Restart = Callable[[ServerInstance], CommandResult]
@@ -109,9 +208,8 @@ def enable_autostart(
     if not registered.ok:
         if platform != "win32":
             return _fail(instance, registered.message)
-        # Task Scheduler registration requires elevation, but the server does
-        # not. Keep these outcomes independent so an otherwise successful
-        # install still leaves the application running for the current session.
+        # Registration and the immediate server start are independent so an
+        # otherwise successful install remains usable after a Scheduler error.
         start_result = start(instance)
         state = "running" if start_result.ok else f"start failed ({start_result.message})"
         return CommandResult(
@@ -183,7 +281,7 @@ def autostart_status(
         state = "enabled" if lookup.exists else "not enabled"
         return CommandResult(
             ok=True,
-            message=f"autostart: {state} (Task Scheduler task '{name}')",
+            message=f"autostart: {state} (per-user Task Scheduler task '{name}')",
             instance=instance,
         )
     if platform.startswith("linux"):
@@ -220,9 +318,8 @@ def _windows_enable(
     launcher = launcher_path or _resolve_windows_autostart_path()
     if launcher is None:
         return _Step(False, "autostart: could not locate the windowless vBot launcher")
-    action = subprocess.list2cmdline(
+    arguments = subprocess.list2cmdline(
         [
-            launcher,
             "--host",
             instance.host,
             "--port",
@@ -231,15 +328,21 @@ def _windows_enable(
             str(instance.data_dir),
         ]
     )
-    created = run(["schtasks", "/Create", "/TN", task_name, "/TR", action, "/SC", "ONLOGON", "/F"])
+    created = run(
+        _windows_task_command(
+            "enable",
+            task_name=task_name,
+            launcher=launcher,
+            arguments=arguments,
+        )
+    )
     if created.returncode != 0:
-        detail = created.stderr or created.stdout
+        detail = created.stdout or created.stderr or f"exit code {created.returncode}"
         return _Step(
             False,
-            f"autostart: creating the Task Scheduler task failed ({detail}). "
-            "On Windows this usually needs an elevated (Administrator) terminal.",
+            f"autostart: creating the per-user Task Scheduler task failed ({detail})",
         )
-    return _Step(True, f"Task Scheduler task '{task_name}' at logon")
+    return _Step(True, f"per-user Task Scheduler task '{task_name}' at logon")
 
 
 def _windows_disable(instance: ServerInstance, run: Runner, *, task_name: str) -> CommandResult:
@@ -252,14 +355,21 @@ def _windows_disable(instance: ServerInstance, run: Runner, *, task_name: str) -
             message=f"autostart already disabled (no Task Scheduler task '{task_name}')",
             instance=instance,
         )
-    deleted = run(["schtasks", "/Delete", "/TN", task_name, "/F"])
+    deleted = run(_windows_task_command("delete", task_name=task_name))
+    if deleted.returncode == _WINDOWS_TASK_NOT_FOUND_EXIT_CODE:
+        return CommandResult(
+            ok=True,
+            message=f"autostart already disabled (no Task Scheduler task '{task_name}')",
+            instance=instance,
+        )
     if deleted.returncode != 0:
+        detail = deleted.stdout or deleted.stderr or f"exit code {deleted.returncode}"
         return _fail(
-            instance, f"autostart: schtasks delete failed: {deleted.stderr or deleted.stdout}"
+            instance, f"autostart: removing the per-user Task Scheduler task failed: {detail}"
         )
     return CommandResult(
         ok=True,
-        message=f"autostart disabled (Task Scheduler task '{task_name}' removed)",
+        message=f"autostart disabled (per-user Task Scheduler task '{task_name}' removed)",
         instance=instance,
     )
 
@@ -451,26 +561,32 @@ def _fail(instance: ServerInstance, message: str) -> CommandResult:
 
 
 def _windows_task_lookup(run: Runner, task_name: str) -> _TaskLookup:
-    targeted = run(["schtasks", "/Query", "/TN", task_name])
-    if targeted.returncode == 0:
+    result = run(_windows_task_command("status", task_name=task_name))
+    if result.returncode == 0:
         return _TaskLookup(True, True)
+    if result.returncode == _WINDOWS_TASK_NOT_FOUND_EXIT_CODE:
+        return _TaskLookup(True, False)
+    detail = result.stdout or result.stderr or f"exit code {result.returncode}"
+    return _TaskLookup(False, False, detail)
 
-    listed = run(["schtasks", "/Query", "/FO", "CSV", "/NH"])
-    if listed.returncode != 0:
-        detail = listed.stderr or listed.stdout or targeted.stderr or targeted.stdout
-        return _TaskLookup(False, False, detail or "Task Scheduler is unavailable")
 
-    normalized_name = task_name.lstrip("\\")
-    target = f"\\{normalized_name}".casefold()
-    try:
-        task_paths = {
-            row[0].strip().casefold()
-            for row in csv.reader(listed.stdout.splitlines())
-            if row and row[0].strip()
-        }
-    except csv.Error as exc:
-        return _TaskLookup(False, False, f"could not parse Task Scheduler output: {exc}")
-    return _TaskLookup(True, target in task_paths)
+def _windows_task_command(operation: str, **values: str) -> list[str]:
+    payload = {"operation": operation, **values}
+    payload_token = base64.b64encode(
+        json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii")
+    script = _WINDOWS_TASK_SCRIPT.replace("__VBOT_PAYLOAD__", payload_token)
+    encoded_script = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    return [
+        _WINDOWS_POWERSHELL,
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        encoded_script,
+    ]
 
 
 def _write_unit_file(path: Path, content: str) -> None:

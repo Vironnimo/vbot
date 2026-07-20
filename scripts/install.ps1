@@ -19,6 +19,7 @@ param(
     [switch]$DesktopClient,
     [switch]$NoAutostart,
     [switch]$SkipWebuiBuild,
+    [switch]$AllowElevatedInstall,
     [string]$TaskName = "vBot"
 )
 
@@ -55,6 +56,14 @@ function Write-Step { param([string]$Message) Write-Host "==> $Message" }
 function Test-Have {
     param([string]$Name)
     return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Test-IsElevated {
+    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object System.Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole(
+        [System.Security.Principal.WindowsBuiltInRole]::Administrator
+    )
 }
 
 function Update-SessionPath {
@@ -303,6 +312,10 @@ elseif (Test-Path -LiteralPath $InstallDir) {
     throw "$InstallDir already exists. To update an existing install run 'vbot update'; otherwise remove it or pass -InstallDir to choose another location."
 }
 
+if ((Test-IsElevated) -and -not $AllowElevatedInstall) {
+    throw "Refusing to install from an elevated PowerShell because the checkout, virtual environment, and runtime files must belong to the normal user. Close this Administrator window and run the installer from a normal PowerShell. -AllowElevatedInstall is reserved for disposable automation."
+}
+
 if (-not $useExistingCheckout) {
     Confirm-Git
 }
@@ -500,7 +513,7 @@ else {
         $problems.Add("Autostart status could not be verified.") | Out-Null
     }
     elseif (-not $NoAutostart -and -not $autostartEnabled) {
-        $problems.Add("Autostart is not enabled. Windows Task Scheduler registration normally requires an elevated terminal.") | Out-Null
+        $problems.Add("Per-user Autostart is not enabled; Administrator elevation is not required.") | Out-Null
     }
     if ($serverStatusExitCode -ne 0) {
         $problems.Add("The final server status check failed.") | Out-Null
@@ -558,7 +571,7 @@ else {
     }
 
     if (-not $NoAutostart -and ($setupReportedProblems -or -not $autostartEnabled)) {
-        Write-Host "Required next step: open PowerShell as Administrator and run:"
+        Write-Host "Required next step: run this from a normal PowerShell:"
         Write-Host "  & `"$vbotExe`" autostart enable --host $summaryHost --port $summaryPort --data-dir `"$summaryDataDir`" --task-name `"$TaskName`""
         Write-Host "This registers autostart and starts the server. Then verify with:"
         Write-Host "  & `"$vbotExe`" server status --host $summaryHost --port $summaryPort --data-dir `"$summaryDataDir`""

@@ -51,8 +51,8 @@ The target defaults to the Installer-recorded server host, port, and data direct
 vbot autostart enable|disable|status [--task-name <name>] [--service-name <name>]
 ```
 
-- `enable` registers OS autostart and starts the server now: a Windows Task Scheduler logon task (`--task-name`, default `vBot`) or a Linux systemd user unit (`--service-name`, default `vbot`) with login lingering.
-- Windows gotcha: creating the task needs an elevated (Administrator) terminal.
+- `enable` registers OS autostart and starts the server now: a low-privilege per-user Windows Task Scheduler logon task (`--task-name`, default `vBot`) or a Linux systemd user unit (`--service-name`, default `vbot`) with login lingering.
+- Windows Autostart uses the current user's interactive token and does not require an elevated terminal; run installation and lifecycle commands from a normal PowerShell so checkout, data, and server processes remain user-owned.
 - `disable` removes the entry but leaves a running server untouched.
 
 ## Desktop
