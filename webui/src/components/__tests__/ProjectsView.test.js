@@ -1218,8 +1218,14 @@ describe('ProjectsView', () => {
             display_name: 'Open',
             denied_tools: [],
             tools: {
-              subagent: { allowed_agents: ['restricted', 'open'] },
+              subagent: { allowed_agents: ['restricted', 'observer'] },
             },
+          }),
+          member({
+            agent_id: 'observer',
+            display_name: 'Observer',
+            denied_tools: [],
+            tools: { subagent: { allowed_agents: [] } },
           }),
         ],
         report: { clean: true, findings: [] },
@@ -1249,9 +1255,9 @@ describe('ProjectsView', () => {
     expect(document.body.textContent).toContain(
       'No tool denials — follows the project tool whitelist.',
     );
-    expect(document.body.textContent).toContain('Can call: open');
+    expect(document.body.textContent).toContain('Can call itself plus: open');
     expect(document.body.textContent).toContain(
-      'Can call every Agent on this Project Team.',
+      'Can call itself and every other Agent on this Project Team.',
     );
     expect(document.body.textContent).toContain(
       'Defined by the repository Agent config and read-only in vBot.',

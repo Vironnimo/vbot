@@ -133,6 +133,10 @@ class BlockRenderContext:
 
     agent: PromptAgent
     project_context: ProjectPromptContext | None = None
+    # Addressing scope of the Agent itself. This is deliberately separate from
+    # ``project_context``: a Rooted Identity Agent may receive Project files while
+    # remaining identity-scoped for Sub-Agent routing.
+    agent_project_id: str | None = None
     scope: str = "default"
     # Optional side channel for build-time file reads. When set, every prompt file
     # whose content actually reaches the prompt (a workspace ``{include:…}``, SOUL,

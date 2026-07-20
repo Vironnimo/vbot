@@ -324,6 +324,9 @@ describe('AgentsView', () => {
     mountedComponent = mount(AgentsView, { target: document.body });
     flushSync();
     await waitForText('builder@vbot');
+    expect(
+      document.body.querySelector('button[aria-label="Toggle agent alpha"]'),
+    ).toBeNull();
     expect(document.body.textContent).toContain(
       'Rooting does not narrow this.',
     );
@@ -338,7 +341,7 @@ describe('AgentsView', () => {
     expect(getAgentUpdateCalls()[0][1]).toEqual({
       id: 'alpha',
       tools: {
-        subagent: { allowed_agents: ['alpha', 'builder@vbot'] },
+        subagent: { allowed_agents: ['builder@vbot'] },
       },
     });
   });

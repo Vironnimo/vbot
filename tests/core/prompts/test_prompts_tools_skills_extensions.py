@@ -1,5 +1,12 @@
 """Prompt Tool, Skill, and extension block tests."""
 
+from types import SimpleNamespace
+from typing import cast
+
+from core.subagents import SubAgentPromptTarget
+from core.tools.subagent import register_subagent_tools
+from core.tools.tools import ToolPromptBlockRegistry
+
 from .prompts_test_support import (
     HISTORY_TOOL_NAME,
     MEMORY_PROMPT_MODE_OFF,
@@ -59,7 +66,7 @@ def test_provider_tool_definitions_omit_memory_when_agent_memory_is_off(
     assert "memory" not in [definition["name"] for definition in definitions]
 
 
-def test_provider_tool_definitions_hide_subagent_tools_without_targets(
+def test_provider_tool_definitions_keep_subagent_tools_for_self_only(
     workspace: Path, tmp_path: Path
 ) -> None:
     registry = ToolRegistry()
@@ -82,7 +89,13 @@ def test_provider_tool_definitions_hide_subagent_tools_without_targets(
 
     definitions = manager.provider_tool_definitions(agent)
 
-    assert definitions == []
+    assert [definition["name"] for definition in definitions] == [
+        "subagent",
+        "subagent_result",
+    ]
+    for definition in definitions:
+        parameters = definition["parameters"]
+        assert parameters["properties"]["agent_id"]["enum"] == ["coder"]
 
 
 def test_provider_tool_definitions_narrow_explicit_agent_targets(
@@ -110,8 +123,12 @@ def test_provider_tool_definitions_narrow_explicit_agent_targets(
 
     assert len(definitions) == 1
     parameters = definitions[0]["parameters"]
-    assert parameters["properties"]["agent_id"]["enum"] == ["worker", "builder@vbot"]
-    assert parameters["required"] == ["agent_id"]
+    assert parameters["properties"]["agent_id"]["enum"] == [
+        "orchestrator",
+        "worker",
+        "builder@vbot",
+    ]
+    assert "required" not in parameters
 
 
 def test_provider_tool_definitions_offer_skill_and_skill_manage_for_identity_agent(
@@ -293,6 +310,76 @@ def test_tool_block_gated_on_tool_allowlist(workspace: Path, tmp_path: Path) -> 
 
     assert "Read-file guidance." in manager.build_system_prompt(allowed)
     assert "Read-file guidance." not in manager.build_system_prompt(denied)
+
+
+def test_subagent_block_renders_only_with_tool_and_lists_additional_targets(
+    workspace: Path, tmp_path: Path
+) -> None:
+    class Coordinator:
+        async def spawn(self, _context: Any, _arguments: Any) -> Any:
+            return tool_success({})
+
+        async def result(self, _context: Any, _arguments: Any) -> Any:
+            return tool_success({})
+
+        def prompt_targets(self, _agent: Any, project_id: str | None) -> Any:
+            assert project_id == "vbot"
+            return [
+                SubAgentPromptTarget(
+                    agent_id="reviewer",
+                    name="Reviewer",
+                    description="Reviews completed work.",
+                )
+            ]
+
+    tools = ToolRegistry()
+    prompt_blocks = ToolPromptBlockRegistry()
+    register_subagent_tools(tools, cast(Any, Coordinator()), prompt_blocks)
+    manager = _manager(
+        tmp_path,
+        tools=tools,
+        block_definitions=prompt_blocks.block_definitions(),
+    )
+    allowed = _agent(workspace, allowed_tools=["subagent"])
+    denied = _agent(workspace, allowed_tools=[])
+
+    prompt = manager.build_system_prompt(allowed, agent_project_id="vbot")
+
+    assert "## Sub-Agents" in prompt
+    assert "omit `agent_id`" in prompt
+    assert "- `reviewer` — Reviewer — Reviews completed work." in prompt
+    assert "## Sub-Agents" not in manager.build_system_prompt(
+        denied,
+        agent_project_id="vbot",
+    )
+
+
+def test_subagent_block_stays_visible_without_additional_targets(
+    workspace: Path, tmp_path: Path
+) -> None:
+    coordinator = SimpleNamespace(
+        spawn=lambda _context, _arguments: tool_success({}),
+        result=lambda _context, _arguments: tool_success({}),
+        prompt_targets=lambda _agent, _project_id: [],
+    )
+    tools = ToolRegistry()
+    prompt_blocks = ToolPromptBlockRegistry()
+    register_subagent_tools(tools, cast(Any, coordinator), prompt_blocks)
+    manager = _manager(
+        tmp_path,
+        tools=tools,
+        block_definitions=prompt_blocks.block_definitions(),
+    )
+    agent = _agent(
+        workspace,
+        allowed_tools=["subagent"],
+        tools={"subagent": {"allowed_agents": []}},
+    )
+
+    prompt = manager.build_system_prompt(agent)
+
+    assert "## Sub-Agents" in prompt
+    assert "**No additional Agents are available.**" in prompt
 
 
 def test_enabling_tools_list_block_renders_tool_descriptions(

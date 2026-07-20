@@ -25,6 +25,7 @@ from core.runs import (
     RunStatus,
 )
 from core.subagents.activity import SubAgentActivity
+from core.subagents.catalog import SubAgentPromptTarget, build_subagent_prompt_targets
 from core.subagents.tracker import (
     _LOGGER as _LOGGER,
 )
@@ -122,6 +123,14 @@ class SubAgentCoordinator:
     def batch_tracker(self) -> SubAgentBatchTracker:
         """Return the in-memory tracker used for this runtime instance."""
         return self._batch_tracker
+
+    def prompt_targets(
+        self,
+        agent: Any,
+        project_id: str | None,
+    ) -> list[SubAgentPromptTarget]:
+        """Return additional targets for the Tool-owned System Prompt block."""
+        return build_subagent_prompt_targets(self._runtime, agent, project_id)
 
     async def spawn(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
         """Spawn or queue a sub-agent run for a tool invocation."""
@@ -1048,6 +1057,8 @@ def _target_is_allowed(
     """Check the parent snapshot and enforce the Project boundary independently."""
     if context.project_id is not None and target_project_id != context.project_id:
         return False
+    if target_agent_id == context.agent_id and target_project_id == context.project_id:
+        return True
     allowed = subagent_allowed_agents(context.tool_settings)
     if "*" in allowed:
         return True

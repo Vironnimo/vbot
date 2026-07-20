@@ -566,24 +566,29 @@ describe('projectTeam', () => {
 
     expect(
       projectAgentTargetSummary(
-        { tools: { subagent: { allowed_agents: [] } } },
-        team,
-      ),
-    ).toEqual({ mode: 'none', agents: [] });
-    expect(
-      projectAgentTargetSummary(
         {
-          tools: { subagent: { allowed_agents: ['builder', 'reviewer'] } },
+          agent_id: 'builder',
+          tools: { subagent: { allowed_agents: [] } },
         },
         team,
       ),
-    ).toEqual({ mode: 'all', agents: ['builder', 'reviewer'] });
+    ).toEqual({ mode: 'self', agents: [] });
     expect(
       projectAgentTargetSummary(
         {
+          agent_id: 'builder',
           tools: { subagent: { allowed_agents: ['reviewer'] } },
         },
         team,
+      ),
+    ).toEqual({ mode: 'all', agents: ['reviewer'] });
+    expect(
+      projectAgentTargetSummary(
+        {
+          agent_id: 'builder',
+          tools: { subagent: { allowed_agents: ['reviewer'] } },
+        },
+        [...team, { agent_id: 'tester' }],
       ),
     ).toEqual({ mode: 'limited', agents: ['reviewer'] });
   });

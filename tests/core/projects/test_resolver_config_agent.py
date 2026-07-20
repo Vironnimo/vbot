@@ -42,7 +42,7 @@ def test_config_agent_resolves_to_runnable_runtime_agent(
     assert runtime_agent.allowed_tools == list(PROJECT_DEFAULT_ALLOWED_TOOLS)
     # No project skills and nothing opted in → the agent has zero skills.
     assert runtime_agent.allowed_skills == []
-    assert runtime_agent.tools == {"subagent": {"allowed_agents": ["builder"]}}
+    assert runtime_agent.tools == {"subagent": {"allowed_agents": []}}
     assert runtime_agent.fallback_model == ""
     assert runtime_agent.thinking_effort is None
 

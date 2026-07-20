@@ -63,21 +63,25 @@
         'Sub-Agent tools are not available to this Agent.',
       );
     }
-    if (summary.mode === 'none') {
+    if (summary.mode === 'self') {
       return t(
-        'projects.team.agentTargetsNone',
-        'Can call no Agents on this Project Team.',
+        'projects.team.agentTargetsSelf',
+        'Can call only itself in a separate Session.',
       );
     }
     if (summary.mode === 'all') {
       return t(
         'projects.team.agentTargetsAll',
-        'Can call every Agent on this Project Team.',
+        'Can call itself and every other Agent on this Project Team.',
       );
     }
-    return t('projects.team.agentTargetsLimited', 'Can call: {agents}', {
-      agents: summary.agents.join(', '),
-    });
+    return t(
+      'projects.team.agentTargetsLimited',
+      'Can call itself plus: {agents}',
+      {
+        agents: summary.agents.join(', '),
+      },
+    );
   }
 
   // Maps each effective/override field to its section-header label key and the empty

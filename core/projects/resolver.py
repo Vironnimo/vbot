@@ -670,6 +670,10 @@ class AgentResolver:
         )
         return ScanResult(team=result.team, report=report)
 
+    def team_for_project(self, project_id: str) -> list[ScannedAgent]:
+        """Return the current cached Team snapshot for one registered Project."""
+        return list(self._project_team(self._load_project(project_id)))
+
     def rescan_project(self, project: Project) -> ScanResult:
         """Re-run the project scan and refresh the cached Team for this project.
 
@@ -926,9 +930,11 @@ def _effective_allowed_skills(project: Project, project_skill_names: frozenset[s
 
 
 def _effective_allowed_agents(scanned: ScannedAgent, team: list[ScannedAgent]) -> list[str]:
-    """Materialize ordered repository target rules against the current Project Team."""
+    """Materialize additional targets against the Team; self is always implicit."""
     allowed: list[str] = []
     for member in team:
+        if member.agent_id == scanned.agent_id:
+            continue
         member_allowed = True
         for rule in scanned.agent_target_rules:
             if fnmatchcase(member.agent_id, rule.pattern):

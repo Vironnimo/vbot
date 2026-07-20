@@ -3,6 +3,7 @@
   { "id": "memory:guidance", "enabled": true, "source": "memory" },
   { "id": "core:runtime", "enabled": true, "source": "core" },
   { "id": "core:tools", "enabled": true, "source": "core" },
+  { "id": "tool:subagent", "enabled": true, "source": "tool" },
   { "id": "core:tools_list", "enabled": false, "source": "core" },
   { "id": "core:channels", "enabled": true, "source": "core" },
   { "id": "core:skills", "enabled": true, "source": "core" },

@@ -958,6 +958,7 @@ class SystemPromptManager:
         *,
         agent_body: str = "",
         project_context: ProjectPromptContext | None = None,
+        agent_project_id: str | None = None,
         skill_registry: SkillPromptRegistry | None = None,
         skill_catalog: PinnedSkillCatalog | None = None,
         read_paths: list[Path] | None = None,
@@ -983,6 +984,10 @@ class SystemPromptManager:
         text instead of re-filtering the registry, so a mid-session skill write never
         shifts the prompt prefix.
 
+        ``agent_project_id`` is the Agent's addressing scope for contributed blocks.
+        It stays separate from ``project_context`` because a Rooted Identity Agent
+        may receive files from its working Project while remaining identity-scoped.
+
         ``read_paths``, when a list is passed, is filled with the resolved absolute
         path of every prompt file whose content actually reached the assembled prompt
         (a workspace ``{include:…}``, SOUL, the project auto-load files, the on-disk
@@ -999,6 +1004,7 @@ class SystemPromptManager:
         context = BlockRenderContext(
             agent=agent,
             project_context=project_context,
+            agent_project_id=agent_project_id,
             scope=scope_key,
             read_observer=observer,
         )

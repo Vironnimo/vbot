@@ -319,7 +319,7 @@ async def test_identity_parent_explicit_targets_use_canonical_addresses(tmp_path
     await asyncio.sleep(0)
 
 
-async def test_empty_target_policy_rejects_spawn_before_resolution_or_session_creation(
+async def test_empty_additional_target_policy_rejects_other_agent_but_allows_self(
     tmp_path: Path,
 ) -> None:
     manager = FakeRunManager()
@@ -327,18 +327,30 @@ async def test_empty_target_policy_rejects_spawn_before_resolution_or_session_cr
     tracker = SubAgentBatchTracker(RecordingTriggerService())
     context = make_context(allowed_agents=[])
 
-    result = await _handle_subagent(
+    denied = await _handle_subagent(
         context,
         {"content": "spawn", "agent_id": "worker"},
         runtime=runtime,
         batch_tracker=tracker,
     )
+    allowed = await _handle_subagent(
+        context,
+        {"content": "self spawn"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
 
-    assert result["ok"] is False
-    assert result["error"]["code"] == "agent_not_allowed"
-    assert runtime.agent_resolver.calls == []
-    assert manager.started == []
+    assert denied["ok"] is False
+    assert denied["error"]["code"] == "agent_not_allowed"
+    assert allowed["ok"] is True
+    assert allowed["data"]["agent_id"] == "parent"
+    assert runtime.agent_resolver.calls == [(None, "parent"), (None, "parent")]
+    assert len(manager.started) == 1
     assert not (tmp_path / "agents" / "worker" / "sessions").exists()
+    manager.started[0]["run"].mark_completed(
+        ChatMessage.assistant(model="openai/gpt-5.2", content="done")
+    )
+    await asyncio.sleep(0)
 
 
 async def test_project_parent_cannot_spawn_qualified_agent_in_another_project(

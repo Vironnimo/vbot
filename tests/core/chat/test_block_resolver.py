@@ -49,12 +49,14 @@ class _StubPrompts:
         *,
         agent_body: str = "",
         project_context: object = None,
+        agent_project_id: str | None = None,
         skill_registry: object = None,
         skill_catalog: object = None,
         read_paths: list[Path] | None = None,
         effective_tool_names: object = None,
         session_tool_grants: object = (),
     ) -> str:
+        del agent_project_id
         return "System prompt"
 
     def provider_tool_definitions(

@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+from core.tools.subagent import (
+    SUBAGENT_RESULT_TOOL_DESCRIPTION,
+    SUBAGENT_RESULT_TOOL_PARAMETERS,
+    SUBAGENT_TOOL_DESCRIPTION,
+    SUBAGENT_TOOL_PARAMETERS,
+)
+
 from .subagent_test_support import (
     SUBAGENT_RESULT_TOOL_NAME,
     SUBAGENT_TOOL_NAME,
@@ -43,8 +50,43 @@ async def test_register_subagent_tools_registers_both_public_tools() -> None:
         SUBAGENT_TOOL_NAME,
         SUBAGENT_RESULT_TOOL_NAME,
     ]
-    assert "activity_file" not in registry.get(SUBAGENT_TOOL_NAME).description
-    assert "activity_file" not in registry.get(SUBAGENT_RESULT_TOOL_NAME).description
+    subagent = registry.get(SUBAGENT_TOOL_NAME)
+    subagent_result = registry.get(SUBAGENT_RESULT_TOOL_NAME)
+    assert subagent.description == (
+        "Delegate work by starting or queueing a Run in a persisted Sub-Agent Session."
+    )
+    assert subagent_result.description == (
+        "Fetch the queued status or final result of a spawned Sub-Agent Run. A running "
+        "Run is awaited; a returned final result is marked as retrieved."
+    )
+    assert subagent.parameters == SUBAGENT_TOOL_PARAMETERS
+    assert subagent_result.parameters == SUBAGENT_RESULT_TOOL_PARAMETERS
+    assert subagent.description == SUBAGENT_TOOL_DESCRIPTION
+    assert subagent_result.description == SUBAGENT_RESULT_TOOL_DESCRIPTION
+    assert subagent.parameters["properties"]["content"]["description"] == (
+        "Self-contained task or message to send to the target Sub-Agent."
+    )
+    assert subagent.parameters["properties"]["agent_id"]["description"] == (
+        "Target Agent id from the allowed values. Omit it to run the calling Agent as a Sub-Agent."
+    )
+    assert subagent.parameters["properties"]["background"]["description"] == (
+        "When true, return after the Run is started or queued. When false, wait for its "
+        "final result. Defaults to true."
+    )
+    assert subagent.parameters["properties"]["session_id"]["description"] == (
+        "Existing Sub-Agent Session to continue. Creates a new persisted Session when omitted."
+    )
+    assert subagent_result.parameters["properties"]["session_id"]["description"] == (
+        "Persisted Sub-Agent Session id returned by subagent."
+    )
+    assert subagent_result.parameters["properties"]["agent_id"]["description"] == (
+        "Agent id that owns the Sub-Agent Session. Omit it if the Session belongs to the "
+        "calling Agent."
+    )
+    assert subagent_result.parameters["properties"]["run_id"]["description"] == (
+        "Specific in-memory Sub-Agent Run id to retrieve. Omit it to resolve the Run "
+        "associated with the Session."
+    )
 
 
 async def test_subagent_tool_enforces_depth_limit(tmp_path: Path) -> None:

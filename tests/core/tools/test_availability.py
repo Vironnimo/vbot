@@ -29,12 +29,23 @@ def _definitions() -> list[dict[str, object]]:
     ]
 
 
-def test_empty_agent_targets_hide_both_subagent_tools() -> None:
+def test_empty_additional_targets_keep_self_delegation_in_both_schemas() -> None:
     definitions = apply_agent_target_tool_visibility(
         _definitions(), agent_id="orchestrator", allowed_agents=[]
     )
 
-    assert [definition["name"] for definition in definitions] == ["read"]
+    assert [definition["name"] for definition in definitions] == [
+        "read",
+        "subagent",
+        "subagent_result",
+    ]
+    for definition in definitions[1:]:
+        parameters = definition["parameters"]
+        assert isinstance(parameters, dict)
+        properties = parameters["properties"]
+        assert isinstance(properties, dict)
+        assert properties["agent_id"]["enum"] == ["orchestrator"]
+        assert "required" not in parameters
 
 
 def test_explicit_agent_targets_narrow_both_tool_schemas_without_mutating_source() -> None:
@@ -53,8 +64,8 @@ def test_explicit_agent_targets_narrow_both_tool_schemas_without_mutating_source
         assert isinstance(properties, dict)
         agent_id = properties["agent_id"]
         assert isinstance(agent_id, dict)
-        assert agent_id["enum"] == ["worker", "reviewer@vbot"]
-        assert parameters["required"] == ["agent_id"]
+        assert agent_id["enum"] == ["orchestrator", "worker", "reviewer@vbot"]
+        assert "required" not in parameters
     source_parameters = source[1]["parameters"]
     assert isinstance(source_parameters, dict)
     source_properties = source_parameters["properties"]
@@ -71,16 +82,15 @@ def test_wildcard_agent_targets_leave_tool_definitions_unchanged() -> None:
     )
 
 
-def test_empty_agent_targets_remove_both_tools_from_dispatch_allowlist() -> None:
+def test_empty_additional_targets_do_not_remove_subagent_tools_from_dispatch() -> None:
     allowed = effective_agent_allowed_tools(
         ["*"],
         "agent_user",
         registered_tool_names=["read", "subagent", "subagent_result"],
         workspace="workspace",
-        tool_settings={"subagent": {"allowed_agents": []}},
     )
 
-    assert allowed == ["read"]
+    assert allowed == ["*"]
 
 
 def test_missing_subagent_tool_settings_defaults_to_wildcard() -> None:

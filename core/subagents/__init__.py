@@ -1,5 +1,6 @@
 """Sub-agent coordination domain."""
 
+from core.subagents.catalog import SubAgentPromptTarget, build_subagent_prompt_targets
 from core.subagents.subagents import (
     SUBAGENT_SESSION_STARTED_EVENT,
     SubAgentCoordinator,
@@ -10,4 +11,6 @@ __all__ = [
     "SUBAGENT_SESSION_STARTED_EVENT",
     "SubAgentBatchTracker",
     "SubAgentCoordinator",
+    "SubAgentPromptTarget",
+    "build_subagent_prompt_targets",
 ]

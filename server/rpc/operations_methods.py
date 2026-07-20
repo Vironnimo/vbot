@@ -199,6 +199,7 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
             scope=prompt_scope,
             agent_body=runtime_agent_body(agent),
             project_context=project_context,
+            agent_project_id=project_id,
             skill_registry=state.runtime.skills_for(skill_project_id, identity_agent_id),
         )
     except Exception as exc:

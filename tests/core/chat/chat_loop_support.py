@@ -184,12 +184,14 @@ class StubPrompts:
         *,
         agent_body: str = "",
         project_context: Any = None,
+        agent_project_id: str | None = None,
         skill_registry: Any = None,
         skill_catalog: Any = None,
         read_paths: list[Path] | None = None,
         effective_tool_names: Any = None,
         session_tool_grants: Any = (),
     ) -> str:
+        del agent_project_id
         self.build_calls.append((agent.id, agent_body, project_context))
         # Echo the body and rendered project files so chat tests can assert what
         # actually reaches the system message, mirroring the real builder's slots
