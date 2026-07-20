@@ -679,25 +679,21 @@ async def test_bash_runs_in_cwd_when_no_workdir_argument(
 
 
 @pytest.mark.asyncio
-async def test_env_overrides_are_sanitised(
+async def test_env_argument_is_rejected(
     manager: ProcessManager,
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
     context = make_context(tmp_path)
-    command = "import os; print(os.environ['SAFE_VALUE']); print(os.environ['PATH'])"
 
     result = await bash_handler(
         context,
-        {"command": command, "env": {"SAFE_VALUE": "allowed", "PATH": "blocked-path"}},
+        {"command": "echo ignored", "env": {"SAFE_VALUE": "unsupported"}},
         manager,
     )
 
-    assert result["ok"] is True
-    assert "allowed" in result["data"]["output"]
-    assert "original-path" in result["data"]["output"]
-    assert "blocked-path" not in result["data"]["output"]
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
+    assert result["error"]["message"] == "Unknown argument(s): env"
 
 
 @pytest.mark.asyncio
@@ -909,6 +905,7 @@ def test_register_bash_tool() -> None:
     tool = registry.get("bash")
     assert tool.parameters == BASH_TOOL_PARAMETERS
     assert tool.parameters["additionalProperties"] is False
+    assert "env" not in tool.parameters["properties"]
 
 
 @pytest.mark.asyncio
