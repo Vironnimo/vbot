@@ -28,6 +28,7 @@ vbot = "cli.main:main"
 
 [project.gui-scripts]
 vbot-autostart = "cli.autostart_management:windows_autostart_main"
+vbot-desktop = "desktop.main:main"
 
 [project.urls]
 Homepage = "https://github.com/Vironnimo/vbot"

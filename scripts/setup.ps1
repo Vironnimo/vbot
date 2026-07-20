@@ -13,6 +13,7 @@ param(
     [switch]$NoAutostart,
     [switch]$SkipWebuiBuild,
     [switch]$SkipPathUpdate,
+    [string]$DesktopShortcutTarget = "",
     [string]$TaskName = "vBot"
 )
 
@@ -433,6 +434,19 @@ function Resolve-VbotCommandPath {
     throw "The vbot command was not found after installation. Check pip output for installation errors."
 }
 
+function Resolve-DesktopCommandPath {
+    param([string]$ScriptsPath)
+
+    foreach ($candidateName in @("vbot-desktop.exe", "vbot-desktop.cmd", "vbot-desktop")) {
+        $candidate = Join-Path $ScriptsPath $candidateName
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+
+    throw "The windowless vBot Desktop launcher was not found after installation. Check pip output for installation errors."
+}
+
 # Start-menu shortcut filename. Kept in sync with scripts/uninstall.ps1, which
 # removes a shortcut by this exact name on both managed and direct setup paths.
 $DesktopShortcutName = "vBot Desktop.lnk"
@@ -458,7 +472,7 @@ function New-DesktopShortcut {
     try {
         $shortcut = $shell.CreateShortcut($shortcutPath)
         $shortcut.TargetPath = $TargetPath
-        $shortcut.Arguments = "desktop"
+        $shortcut.Arguments = ""
         $shortcut.WorkingDirectory = (Split-Path -Parent $TargetPath)
         $shortcut.Description = "Open the vBot desktop window"
         $shortcut.Save()
@@ -468,6 +482,20 @@ function New-DesktopShortcut {
     }
 
     Write-Host "Created Start-menu shortcut: $shortcutPath"
+}
+
+# The updater uses this narrow internal mode to migrate installer-owned Desktop
+# shortcuts after a new GUI launcher is installed. It must stop before normal
+# setup touches dependencies, data, WebUI, or Autostart.
+if (-not [string]::IsNullOrWhiteSpace($DesktopShortcutTarget)) {
+    if (
+        -not [System.IO.Path]::IsPathRooted($DesktopShortcutTarget) -or
+        -not (Test-Path -LiteralPath $DesktopShortcutTarget -PathType Leaf)
+    ) {
+        throw "-DesktopShortcutTarget must name an existing absolute launcher path."
+    }
+    New-DesktopShortcut -TargetPath ([System.IO.Path]::GetFullPath($DesktopShortcutTarget))
+    exit 0
 }
 
 function Write-InstallManifest {
@@ -584,7 +612,8 @@ Write-InstallManifest `
 
 if ($Desktop -or $DesktopClient) {
     Write-Step "Creating Start-menu shortcut"
-    New-DesktopShortcut -TargetPath $vbotPath
+    $desktopPath = Resolve-DesktopCommandPath $scriptsPath
+    New-DesktopShortcut -TargetPath $desktopPath
 }
 
 # A desktop-client install has no local server, so autostart never applies.

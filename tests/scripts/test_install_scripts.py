@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -169,6 +170,18 @@ def test_windows_install_manifest_function_is_defined_before_main_flow() -> None
     script = (PROJECT_ROOT / "scripts" / "setup.ps1").read_text(encoding="utf-8")
 
     assert script.index("function Write-InstallManifest") < script.rindex("Write-InstallManifest")
+
+
+def test_windows_desktop_shortcut_targets_windowless_gui_entrypoint() -> None:
+    with (PROJECT_ROOT / "pyproject.toml").open("rb") as handle:
+        project = tomllib.load(handle)["project"]
+    setup = (PROJECT_ROOT / "scripts" / "setup.ps1").read_text(encoding="utf-8")
+
+    assert project["gui-scripts"]["vbot-desktop"] == "desktop.main:main"
+    assert "$desktopPath = Resolve-DesktopCommandPath $scriptsPath" in setup
+    assert "New-DesktopShortcut -TargetPath $desktopPath" in setup
+    assert '$shortcut.Arguments = "desktop"' not in setup
+    assert '[string]$DesktopShortcutTarget = ""' in setup
 
 
 def test_linux_install_manifest_records_selected_environment_interpreter() -> None:

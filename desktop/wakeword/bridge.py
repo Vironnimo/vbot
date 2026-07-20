@@ -35,7 +35,7 @@ from desktop.wakeword.engine import (
 )
 
 if TYPE_CHECKING:
-    from desktop.connection import DesktopProbeResult, ServerEntry
+    from desktop.connection import PreparedConnection, ServerEntry
 
 logger = logging.getLogger("vbot.desktop.wakeword.bridge")
 
@@ -50,11 +50,8 @@ class ConnectionDelegate(Protocol):
     lightweight double). The controller satisfies this interface.
     """
 
-    def connect(self, host: str, port: Any, label: str | None = ...) -> DesktopProbeResult:
-        """Probe and navigate to a target, or show the connection screen."""
-
-    def switch_to(self, host: str, port: Any, label: str | None = ...) -> DesktopProbeResult:
-        """Connect to a chosen remembered/typed server."""
+    def prepare_connect(self, host: str, port: Any, label: str | None = ...) -> PreparedConnection:
+        """Probe and persist a target without replacing the calling document."""
 
     def add_server(self, host: str, port: Any, label: str | None = ...) -> ServerEntry:
         """Remember a server without connecting."""
@@ -326,15 +323,15 @@ class DesktopBridge:
 
         The connection screen's JavaScript calls
         ``window.pywebview.api.connect(host, port)``; this delegates to the
-        controller, which probes the target and either navigates the window to
-        the WebUI or re-renders the connection screen with an inline error.
-        Returns the resulting probe ``{"status": …}`` so a caller can react,
-        while the visible outcome is the window navigation the controller drives.
+        controller, which probes and persists the target without navigating.
+        JavaScript awaits this method's payload before it navigates or renders
+        the inline error, keeping pywebview's return callback alive until the
+        Promise is resolved.
         """
         controller = self._require_connection()
         with self._connection_lock:
-            result = controller.connect(host, _coerce_port(port))
-        return {"status": result.status}
+            prepared = controller.prepare_connect(host, _coerce_port(port))
+        return prepared.to_bridge_payload()
 
     def listServers(self) -> list[dict[str, Any]]:  # noqa: N802
         """Return the remembered servers as plain dicts for the connection screen."""
@@ -360,11 +357,11 @@ class DesktopBridge:
         return {"removed": removed}
 
     def selectServer(self, host: str, port: Any) -> dict[str, str]:  # noqa: N802
-        """Select and connect to a remembered server (one-click reconnect)."""
+        """Prepare a remembered server connection for bridge-safe navigation."""
         controller = self._require_connection()
         with self._connection_lock:
-            result = controller.switch_to(host, _coerce_port(port))
-        return {"status": result.status}
+            prepared = controller.prepare_connect(host, _coerce_port(port))
+        return prepared.to_bridge_payload()
 
     # -- Worker state callbacks ----------------------------------------------
 

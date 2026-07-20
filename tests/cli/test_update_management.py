@@ -101,18 +101,24 @@ def _write_state(
     revision: str = "samesha",
     shape: str = "server",
     groups: tuple[str, ...] | None = None,
+    python_executable: str | None = None,
     dependency_digest: str | None = None,
     webui_revision: str | None = None,
 ) -> None:
     if groups is None:
-        groups = ("cli", "desktop") if shape == "desktop-client" else ("server", "cli")
+        if shape == "desktop-client":
+            groups = ("cli", "desktop")
+        elif shape == "server-desktop":
+            groups = ("server", "cli", "desktop")
+        else:
+            groups = ("server", "cli")
     write_install_state(
         root,
         InstallState(
             schema_version=INSTALL_STATE_SCHEMA_VERSION,
             install_shape=shape,
             dependency_groups=groups,
-            python_executable=sys.executable,
+            python_executable=python_executable or sys.executable,
             source_track=track,
             applied_revision=revision,
             dependency_digest=(
@@ -703,13 +709,86 @@ def test_desktop_client_update_keeps_exact_shape_and_never_starts_server(
 
     runner = ScriptedRunner(handler)
     events, stop, start = _recording_restart()
-    result = run_update(_instance(), runner=runner, root=tmp_path, stop=stop, start=start)
+    result = run_update(
+        _instance(),
+        runner=runner,
+        root=tmp_path,
+        stop=stop,
+        start=start,
+        platform_name="posix",
+    )
 
     assert result.ok, result.message
     assert runner.ran("-m", "pip", "install", "-e", ".[cli,desktop]")
     assert not any("npm" in call for call in runner.calls)
     assert "not applicable (desktop-client install)" in result.message
     assert events == []
+
+
+def test_windows_desktop_update_refreshes_shortcut_to_gui_launcher(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "pyproject.toml").write_text("before", encoding="utf-8")
+    setup_script = tmp_path / "scripts" / "setup.ps1"
+    setup_script.parent.mkdir()
+    setup_script.write_text("# shortcut mode", encoding="utf-8")
+    dist = tmp_path / "webui" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    scripts_dir = tmp_path / ".venv" / "Scripts"
+    scripts_dir.mkdir(parents=True)
+    python_executable = scripts_dir / "python.exe"
+    python_executable.write_bytes(b"")
+    desktop_launcher = scripts_dir / "vbot-desktop.exe"
+    desktop_launcher.write_bytes(b"")
+    _write_state(
+        tmp_path,
+        revision="old",
+        shape="server-desktop",
+        python_executable=str(python_executable),
+        webui_revision="old",
+    )
+    revisions = iter(["old", "new"])
+
+    def handler(command: list[str]) -> CommandRun:
+        if command[:2] == ["git", "symbolic-ref"]:
+            return _ok("main")
+        if command[:2] == ["git", "rev-parse"]:
+            return _ok(next(revisions))
+        if command[:2] == ["git", "status"]:
+            return _ok("")
+        if command[:2] == ["git", "pull"]:
+            (tmp_path / "pyproject.toml").write_text("after", encoding="utf-8")
+        return _ok("")
+
+    runner = ScriptedRunner(handler)
+    events, stop, start = _recording_restart()
+
+    result = run_update(
+        _instance(),
+        runner=runner,
+        root=tmp_path,
+        stop=stop,
+        start=start,
+        platform_name="nt",
+    )
+
+    assert result.ok, result.message
+    assert "desktop shortcut refreshed" in result.message
+    assert any(
+        call[:7]
+        == [
+            "powershell.exe",
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+        ]
+        and call[-2:] == ["-DesktopShortcutTarget", str(desktop_launcher.resolve())]
+        for call in runner.calls
+    )
+    assert events == ["stop", "start"]
 
 
 def test_extract_within_extracts_benign_archive(tmp_path: Path) -> None:
