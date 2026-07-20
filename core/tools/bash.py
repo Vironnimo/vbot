@@ -73,13 +73,6 @@ BASH_TOOL_PARAMETERS: JsonObject = {
                 "a relative value resolves from it)."
             ),
         },
-        "env": {
-            "type": "object",
-            "description": (
-                "Additional environment variables. Dangerous loader/path keys are ignored."
-            ),
-            "additionalProperties": {"type": "string"},
-        },
         "yield_after": {
             "type": "number",
             "description": (
@@ -103,7 +96,6 @@ BASH_TOOL_PARAMETERS: JsonObject = {
     "additionalProperties": False,
 }
 
-BLOCKED_ENV_KEYS = {"PATH", "LD_PRELOAD", "BASH_ENV", "DYLD_INSERT_LIBRARIES"}
 DEFAULT_YIELD_AFTER_SECONDS = 30.0
 # Inside a sub-agent a foreground command cannot be backgrounded, so its yield_after
 # window doubles as the kill deadline. Default it generously there: a 30s hand-off
@@ -196,7 +188,7 @@ async def bash_handler(
 
     command = parsed["command"]
     workdir = _resolve_workdir(context, parsed.get("workdir"))
-    env = await _build_process_env(parsed.get("env"))
+    env = await _get_shell_env()
     argv = _shell_argv(command)
 
     try:
@@ -453,7 +445,6 @@ def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
     unknown_arguments = set(arguments) - {
         "command",
         "workdir",
-        "env",
         "yield_after",
         "background",
         "timeout",
@@ -486,20 +477,9 @@ def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
     except ValueError as error:
         return str(error)
 
-    env = arguments.get("env")
-    if env is not None:
-        if not isinstance(env, dict):
-            return "env must be an object"
-        for key, value in env.items():
-            if not isinstance(key, str) or not key:
-                return "env keys must be non-empty strings"
-            if not isinstance(value, str):
-                return "env values must be strings"
-
     return {
         "command": command,
         "workdir": workdir,
-        "env": env,
         "yield_after": yield_after,
         "background": background,
         "timeout": timeout,
@@ -517,19 +497,6 @@ def _shell_argv(command: str) -> list[str]:
     if sys.platform == "win32":
         return ["pwsh", "-Command", command]
     return ["bash", "-c", command]
-
-
-async def _build_process_env(overrides: object) -> dict[str, str]:
-    env = await _get_shell_env()
-    if overrides is None:
-        return env
-
-    assert isinstance(overrides, dict)
-    for key, value in overrides.items():
-        if key.upper() in BLOCKED_ENV_KEYS:
-            continue
-        env[key] = value
-    return env
 
 
 async def _get_shell_env() -> dict[str, str]:
