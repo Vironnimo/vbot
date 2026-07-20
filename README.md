@@ -150,17 +150,13 @@ vbot update --no-restart
 
 ## Uninstalling
 
-Run the Uninstaller bundled with the checkout:
+Uninstall the application, Autostart, launchers, and managed environment with one command:
 
 ```bash
-~/vbot/scripts/uninstall.sh
+vbot uninstall
 ```
 
-```powershell
-& "$HOME\vbot\scripts\uninstall.ps1"
-```
-
-For a fresh managed install, the Uninstaller stops the recorded server, removes autostart and launchers when possible, and deletes the complete installer-owned directory including `.venv`. When the Installer was run in an existing checkout, Uninstall removes the installer-owned `.venv` and launcher but preserves the checkout. Runtime data such as `~/.vbot` is always preserved.
+For a fresh managed install, the command stops the recorded server, removes Autostart and launchers, and deletes the complete installer-owned directory including `.venv`. When the Installer was run in an existing checkout, Uninstall removes the installer-owned `.venv` and launcher but preserves the checkout. Windows requests elevation and completes removal in a separate PowerShell window so the running `vbot.exe` does not lock its own environment. Runtime data such as `~/.vbot` is always preserved.
 
 ## Default Data Directory
 

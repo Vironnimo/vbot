@@ -16,7 +16,12 @@ from cli.agent_management import (
     agent_show,
     agent_update,
 )
-from cli.autostart_management import autostart_status, disable_autostart, enable_autostart
+from cli.autostart_management import (
+    DEFAULT_TASK_NAME,
+    autostart_status,
+    disable_autostart,
+    enable_autostart,
+)
 from cli.channel_management import (
     channel_add,
     channel_disable,
@@ -98,6 +103,7 @@ from cli.task_model_management import (
     task_model_targets,
 )
 from cli.tool_management import tool_list
+from cli.uninstall_management import UninstallResult, launch_uninstall
 from cli.update_management import run_update
 
 SUCCESS_EXIT_CODE = 0
@@ -201,6 +207,7 @@ def run(
     doctor_settings_fn: Callable[[str | Path | None], CommandResult] = doctor_settings,
     doctor_config_fn: Callable[[str | Path | None], CommandResult] = doctor_config,
     launch_desktop_fn: Callable[[Sequence[str]], None] = _launch_desktop,
+    uninstall_fn: Callable[..., UninstallResult] = launch_uninstall,
 ) -> int:
     """Run the CLI and return an automation-safe process exit code."""
 
@@ -237,6 +244,14 @@ def run(
         result = dispatch_update_command(args, resolve=resolve, stop=stop, start=start)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
+    if args.area == "uninstall":
+        uninstall_result = uninstall_fn(
+            task_name=args.task_name or DEFAULT_TASK_NAME,
+            service_name=args.service_name or DEFAULT_SERVICE_NAME,
+        )
+        print(uninstall_result.message)
+        return SUCCESS_EXIT_CODE if uninstall_result.ok else FAILURE_EXIT_CODE
 
     if args.area == "autostart":
         result = dispatch_autostart_command(args, resolve=resolve, start=start)
