@@ -68,12 +68,14 @@
   import LogsView from './components/LogsView.svelte';
   import ProjectsView from './components/ProjectsView.svelte';
   import SettingsView from './components/SettingsView.svelte';
+  import DesktopConnectionSettings from './components/settings/DesktopConnectionSettings.svelte';
   import StatisticsView from './components/StatisticsView.svelte';
   import SystemPromptView from './components/SystemPromptView.svelte';
   import OnboardingView from './components/OnboardingView.svelte';
   import ToastStack from './components/ToastStack.svelte';
   import Banner from './components/ui/Banner.svelte';
   import Button from './components/ui/Button.svelte';
+  import Modal from './components/ui/Modal.svelte';
   import { CONNECTION_STATUS_DISCONNECTED } from '$lib/connectionState.js';
   import {
     createAppController,
@@ -268,6 +270,7 @@
   let runServerEvents = $derived(appControllerState.runServerEvents);
   let connectionSnapshot = $derived(appControllerState.connectionSnapshot);
   let desktopCapabilities = $state(null);
+  let serverSwitcherOpen = $state(false);
   let wakewordStatus = $state({ enabled: false, state: 'off' });
   let settingsPanelTarget = $derived(appControllerState.settingsPanelTarget);
   let settingsPanelTargetRequestId = $derived(
@@ -280,6 +283,12 @@
   let cleanupWakewordPoll = null;
   let lastWakewordEventSequence = null;
   const toastDismissTimers = new SvelteMap();
+
+  $effect(() => {
+    if (!serverUnavailable) {
+      serverSwitcherOpen = false;
+    }
+  });
 
   $effect(() => {
     try {
@@ -740,7 +749,10 @@
             return null;
           }
           if (!ready) {
-            desktopCapabilities = { wakeword: false };
+            desktopCapabilities = {
+              wakeword: false,
+              serverSelection: false,
+            };
             return null;
           }
           return getDesktopCapabilities();
@@ -758,11 +770,14 @@
         })
         .catch(() => {
           if (!cancelled) {
-            desktopCapabilities = { wakeword: false };
+            desktopCapabilities = {
+              wakeword: false,
+              serverSelection: false,
+            };
           }
         });
     } else {
-      desktopCapabilities = { wakeword: false };
+      desktopCapabilities = { wakeword: false, serverSelection: false };
     }
 
     debugStatus()
@@ -802,7 +817,10 @@
   connectionStatus={connectionState.status}
   {serverUnavailable}
   {serverNoticeState}
+  showServerNotice={!serverSwitcherOpen}
   onRetryConnection={connectServerEvents}
+  canSwitchServer={Boolean(desktopCapabilities?.serverSelection)}
+  onSwitchServer={() => (serverSwitcherOpen = true)}
 >
   {#if showFinishSetup}
     <Banner variant="info" class="app-finish-setup">
@@ -914,6 +932,24 @@
   <ToastStack toasts={toastState.toasts} onDismiss={dismissAppToast} />
 </AppShell>
 
+{#if serverSwitcherOpen}
+  <Modal
+    title={t('settings.desktop.switchModalTitle', 'Switch server')}
+    labelledById="desktop-server-switch-title"
+    class="desktop-server-switch-modal"
+    onClose={() => (serverSwitcherOpen = false)}
+  >
+    {#snippet body()}
+      <div class="modal-body desktop-server-switch-modal__body">
+        <DesktopConnectionSettings
+          idPrefix="desktop-outage-server"
+          onToast={showToast}
+        />
+      </div>
+    {/snippet}
+  </Modal>
+{/if}
+
 <style>
   /* Slim re-entry banner for a dismissed-but-incomplete first-run setup. Sits
      above the active view inside the content column and disappears the instant
@@ -932,6 +968,15 @@
     color: var(--text-med);
     font-family: var(--font-ui);
     font-size: var(--fs-body-sm);
+  }
+
+  :global(.desktop-server-switch-modal) {
+    width: min(680px, calc(100vw - 40px));
+  }
+
+  .desktop-server-switch-modal__body {
+    max-height: min(70vh, 680px);
+    overflow-y: auto;
   }
 
   @media (max-width: 640px) {

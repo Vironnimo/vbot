@@ -72,8 +72,8 @@ class WebviewModule(Protocol):
 
     pywebview requires the window to be created with initial content *before*
     the GUI loop starts; ``Window.load_url`` / ``load_html`` may only run after
-    ``start``. ``start`` therefore takes the post-loop entry callable
-    (``func``), the native ``menu`` list, and the optional ``icon``.
+    ``start``. ``start`` therefore takes the post-loop entry callable (``func``)
+    and the optional ``icon``.
     """
 
     def create_window(self, title: str, **kwargs: Any) -> Any:
@@ -182,17 +182,16 @@ def launch_desktop(
     settings_file: Path | None = None,
     probe: Callable[[DesktopTarget], DesktopProbeResult] = probe_target,
     webview_module: WebviewModule | None = None,
-    menu_module: Any = None,
     app_icon_path: Path | None = None,
 ) -> None:
-    """Build the controller, bridge, window, and menu, then run the GUI loop.
+    """Build the controller, bridge, and window, then run the GUI loop.
 
     Lifecycle (pywebview requires this order): create the window *before* the
     loop with the connection screen as neutral initial content and the bridge as
     its single ``js_api``; hand the window to the controller; then start the loop
-    with a post-loop entry callable and the native Server menu attached. The
-    entry callable runs only after the loop is live, so its ``load_url`` /
-    ``load_html`` navigation is valid.
+    with a post-loop entry callable. The entry callable runs only after the loop
+    is live, so its ``load_url`` / ``load_html`` navigation is valid. No native
+    menu is attached; connected server management lives in Desktop app Settings.
 
     Target selection: an explicit ``--host`` / ``--port`` override connects
     straight to that target; with no flags the controller auto-connects to the
@@ -203,11 +202,7 @@ def launch_desktop(
     server URL, so window and voice always point at the same server.
     """
 
-    from desktop.connection import (
-        ConnectionController,
-        build_connection_html,
-        build_server_menu,
-    )
+    from desktop.connection import ConnectionController, build_connection_html
 
     args = parse_args(argv)
     webview = webview_module if webview_module is not None else load_webview()
@@ -233,7 +228,7 @@ def launch_desktop(
     )
     controller.attach_window(window)
 
-    start_kwargs: dict[str, Any] = {"menu": build_server_menu(controller, menu_module=menu_module)}
+    start_kwargs: dict[str, Any] = {}
     resolved_icon_path = app_icon_path if app_icon_path is not None else icon_path()
     if resolved_icon_path.exists():
         # pywebview icon support varies by backend/platform, so custom icons are optional.

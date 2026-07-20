@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -60,34 +59,6 @@ def recording_probe(
         return DesktopProbeResult(status=status, target=target)
 
     return _probe, seen
-
-
-@dataclass
-class FakeMenuAction:
-    title: str
-    function: Callable[[], Any]
-
-
-@dataclass
-class FakeMenuSeparator:
-    pass
-
-
-@dataclass
-class FakeMenu:
-    title: str
-    items: list[Any]
-
-
-@dataclass
-class FakeMenuModule:
-    """Stand-in for ``webview.menu`` recording the constructed menu tree."""
-
-    Menu: Callable[..., Any] = field(default=lambda title, items: FakeMenu(title, items))
-    MenuAction: Callable[..., Any] = field(
-        default=lambda title, function: FakeMenuAction(title, function)
-    )
-    MenuSeparator: Callable[..., Any] = field(default=lambda: FakeMenuSeparator())
 
 
 def _write(settings_file: Path, data: dict[str, Any]) -> None:
@@ -624,56 +595,6 @@ def test_controller_delegates_server_list_ops(tmp_path: Path) -> None:
     assert controller.list_servers() == [desktop_connection.ServerEntry("pi.lan", 9000, "Pi")]
     assert controller.remove_server("pi.lan", 9000) is True
     assert controller.list_servers() == []
-
-
-# -- Native menu -------------------------------------------------------------
-
-
-def test_build_server_menu_structure() -> None:
-    controller = desktop_connection.ConnectionController()
-    menus = desktop_connection.build_server_menu(controller, menu_module=FakeMenuModule())
-
-    assert len(menus) == 1
-    server_menu = menus[0]
-    assert server_menu.title == desktop_connection.MENU_TITLE_SERVER
-    titles = [getattr(item, "title", None) for item in server_menu.items]
-    assert titles == [
-        desktop_connection.MENU_ACTION_SWITCH,
-        None,  # the separator carries no title
-        desktop_connection.MENU_ACTION_RECONNECT,
-    ]
-    assert isinstance(server_menu.items[1], FakeMenuSeparator)
-
-
-def test_menu_switch_action_shows_connection_screen(tmp_path: Path) -> None:
-    window = FakeWindow()
-    controller = desktop_connection.ConnectionController(
-        settings_file=tmp_path / "settings.json", window=window
-    )
-    menus = desktop_connection.build_server_menu(controller, menu_module=FakeMenuModule())
-    switch_action = menus[0].items[0]
-
-    switch_action.function()
-
-    assert len(window.loaded_html) == 1
-    assert "Connect to a server" in window.loaded_html[0]
-
-
-def test_menu_reconnect_action_invokes_controller(tmp_path: Path) -> None:
-    settings_file = tmp_path / "settings.json"
-    _write(settings_file, {"last_used": {"host": "pi.lan", "port": 9000}})
-    window = FakeWindow()
-    controller = desktop_connection.ConnectionController(
-        settings_file=settings_file,
-        window=window,
-        probe=probe_returning(PROBE_WEBUI_AVAILABLE),
-    )
-    menus = desktop_connection.build_server_menu(controller, menu_module=FakeMenuModule())
-    reconnect_action = menus[0].items[2]
-
-    reconnect_action.function()
-
-    assert window.loaded_urls == ["http://pi.lan:9000/?accessor=desktop"]
 
 
 # -- Connection screen HTML --------------------------------------------------

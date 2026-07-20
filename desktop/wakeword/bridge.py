@@ -158,7 +158,7 @@ class DesktopBridge:
 
     def getDesktopCapabilities(self) -> dict[str, bool]:  # noqa: N802
         """Return desktop-only feature flags for the WebUI feature gates."""
-        return {"wakeword": True}
+        return {"wakeword": True, "serverSelection": True}
 
     # -- Status polling ------------------------------------------------------
 
@@ -334,11 +334,15 @@ class DesktopBridge:
         return prepared.to_bridge_payload()
 
     def listServers(self) -> list[dict[str, Any]]:  # noqa: N802
-        """Return the remembered servers as plain dicts for the connection screen."""
+        """Return remembered servers and identify the window's active target."""
         controller = self._require_connection()
         with self._connection_lock:
             servers = controller.list_servers()
-        return [_server_to_payload(entry) for entry in servers]
+        active_server_url = self.server_url
+        return [
+            _server_to_payload(entry, active=_server_url(entry) == active_server_url)
+            for entry in servers
+        ]
 
     def addServer(  # noqa: N802
         self, host: str, port: Any, label: str | None = None
@@ -510,9 +514,19 @@ def _coerce_port(value: Any) -> int | str:
     return cast("int | str", value)
 
 
-def _server_to_payload(entry: ServerEntry) -> dict[str, Any]:
+def _server_to_payload(entry: ServerEntry, *, active: bool | None = None) -> dict[str, Any]:
     """Render a remembered-server entry as a JSON-serializable bridge payload."""
-    return entry.to_storage()
+
+    payload = entry.to_storage()
+    if active is not None:
+        payload["active"] = active
+    return payload
+
+
+def _server_url(entry: ServerEntry) -> str:
+    """Build the normalized Desktop URL used for active-target comparison."""
+
+    return f"http://{entry.host}:{entry.port}"
 
 
 def _validated_config_value(key: str, value: Any) -> Any:

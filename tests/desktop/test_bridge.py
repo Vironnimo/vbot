@@ -96,7 +96,7 @@ def test_get_desktop_capabilities(tmp_path: Path) -> None:
 
     capabilities = bridge.getDesktopCapabilities()
 
-    assert capabilities == {"wakeword": True}
+    assert capabilities == {"wakeword": True, "serverSelection": True}
 
 
 def test_get_wakeword_status_shape(tmp_path: Path) -> None:
@@ -586,11 +586,15 @@ def test_list_servers_returns_plain_payloads(tmp_path: Path) -> None:
     controller = FakeController(
         servers=[ServerEntry("pi.lan", 9000, "Pi"), ServerEntry("10.0.0.5", 8500)]
     )
-    bridge = DesktopBridge(settings_path=tmp_path / "settings.json", connection=controller)
+    bridge = DesktopBridge(
+        settings_path=tmp_path / "settings.json",
+        connection=controller,
+        server_url="http://pi.lan:9000/",
+    )
 
     assert bridge.listServers() == [
-        {"host": "pi.lan", "port": 9000, "label": "Pi"},
-        {"host": "10.0.0.5", "port": 8500},
+        {"host": "pi.lan", "port": 9000, "label": "Pi", "active": True},
+        {"host": "10.0.0.5", "port": 8500, "active": False},
     ]
 
 
@@ -656,6 +660,9 @@ def test_wakeword_and_connection_methods_share_one_bridge(tmp_path: Path) -> Non
     # The same bridge object serves both surfaces (it is the window's single
     # js_api across load_url navigation): wakeword status and server connect.
     assert bridge.getWakewordStatus()["state"] == "off"
-    assert bridge.getDesktopCapabilities() == {"wakeword": True}
+    assert bridge.getDesktopCapabilities() == {
+        "wakeword": True,
+        "serverSelection": True,
+    }
     bridge.connect("pi.lan", 9000)
     assert controller.prepare_calls == [("pi.lan", 9000)]
