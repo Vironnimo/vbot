@@ -11,6 +11,7 @@ import pytest
 from cli import main as cli_main
 from cli.server_management import CommandResult, HealthProbeResult, ServerInstance, WebUIProbeResult
 from cli.uninstall_management import UninstallMode, UninstallResult
+from core.utils.config import APP_DIR
 from core.utils.logging import resolve_daily_log_path
 
 
@@ -53,6 +54,7 @@ def make_result(
         ["server", "restart"],
         ["server", "status"],
         ["desktop"],
+        ["home"],
         ["uninstall"],
         ["agent"],
         ["agent", "list"],
@@ -177,6 +179,35 @@ def test_parse_args_desktop_accepts_host_and_port() -> None:
 def test_parse_args_desktop_rejects_data_dir() -> None:
     with pytest.raises(SystemExit):
         cli_main.parse_args(["desktop", "--data-dir", "data"])
+
+
+def test_parse_args_home_accepts_optional_data_dir() -> None:
+    args = cli_main.parse_args(["home", "--data-dir", "dev-data"])
+
+    assert args.area == "home"
+    assert args.data_dir == "dev-data"
+
+
+def test_run_home_prints_app_and_resolved_data_directories_without_server(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    def fail_resolve(**kwargs: object) -> ServerInstance:
+        raise AssertionError(f"home must not resolve a server: {kwargs}")
+
+    exit_code = cli_main.run(
+        ["home", "--data-dir", "runtime-data"],
+        resolve=fail_resolve,
+    )
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.splitlines() == [
+        f"app_dir: {APP_DIR}",
+        f"data_dir: {tmp_path / 'runtime-data'}",
+    ]
 
 
 def test_parse_args_uninstall_accepts_platform_autostart_names() -> None:

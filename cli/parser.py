@@ -28,6 +28,7 @@ TASK_TYPES = tuple(sorted(SUPPORTED_TASK_TYPES))
 AREA_HELP = {
     "server": "Start, stop, restart, and inspect the local server",
     "desktop": "Open the desktop window pointed at a local or remote server",
+    "home": "Show the application and data directories",
     "update": "Update the installation from git, refresh deps/WebUI, and restart",
     "uninstall": "Remove the application, its data, or both with explicit confirmation",
     "autostart": "Enable, disable, or inspect OS autostart for the server",
@@ -171,6 +172,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="area", required=True)
     _add_server_parsers(subparsers)
     _add_desktop_parsers(subparsers)
+    _add_home_parser(subparsers)
     _add_update_parsers(subparsers)
     _add_uninstall_parser(subparsers)
     _add_autostart_parsers(subparsers)
@@ -249,6 +251,18 @@ def _add_desktop_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         type=int,
         metavar="<port>",
         help="Server port to open; omitted auto-connects to the last-used server",
+    )
+
+
+def _add_home_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    home_parser = subparsers.add_parser(
+        "home",
+        help=AREA_HELP["home"],
+        description=f"{AREA_HELP['home']}. Example: vbot home",
+    )
+    home_parser.add_argument(
+        "--data-dir",
+        help="Target data directory; defaults to VBOT_DATA_DIR, worktree marker, or ~/.vbot",
     )
 
 

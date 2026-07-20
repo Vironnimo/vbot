@@ -43,6 +43,7 @@ from cli.server_management import (
     start_server,
     stop_server,
 )
+from core.utils.config import APP_DIR
 
 GITHUB_API_BASE = "https://api.github.com/repos/Vironnimo/vbot"
 WEBUI_ASSET_NAME = "webui-dist.tar.gz"
@@ -107,7 +108,7 @@ def run_update(
     """Advance the installed checkout and optionally restart the server."""
 
     run = runner or _default_runner
-    repo = root if root is not None else _repo_root()
+    repo = root if root is not None else APP_DIR
     lookup = latest_release or _fetch_latest_release
 
     if not (repo / ".git").exists():
@@ -533,10 +534,6 @@ def _default_runner(command: list[str], cwd: Path) -> CommandRun:
         stdout=decode_command_output(completed.stdout).strip(),
         stderr=decode_command_output(completed.stderr).strip(),
     )
-
-
-def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[1]
 
 
 def _detect_track(run: Runner, repo: Path) -> str:
