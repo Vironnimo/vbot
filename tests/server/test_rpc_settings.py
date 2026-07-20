@@ -252,7 +252,56 @@ async def test_settings_get_exposes_provider_models_endpoint_for_refresh_button(
     openrouter = next(provider for provider in providers if provider["id"] == "openrouter")
     openai = next(provider for provider in providers if provider["id"] == "openai")
     assert openrouter["models_endpoint"] == "/models"
+    assert openrouter["routing"] == {
+        "default": {
+            "mode": "automatic",
+            "providers": [],
+            "blocked": [],
+            "allow_fallbacks": True,
+        },
+        "models": {},
+    }
     assert openai["models_endpoint"] is None
+
+
+@pytest.mark.asyncio
+async def test_settings_update_persists_openrouter_routing(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime._models = EmptyStubModels()
+    state.runtime.providers.add(openrouter_provider())
+    routing = {
+        "default": {
+            "mode": "allowed",
+            "providers": ["anthropic", "amazon-bedrock"],
+            "blocked": ["deepinfra"],
+            "allow_fallbacks": False,
+        },
+        "models": {
+            "anthropic/claude-sonnet-4": {
+                "mode": "ordered",
+                "providers": ["anthropic"],
+                "blocked": ["google-vertex"],
+                "allow_fallbacks": True,
+            }
+        },
+    }
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.update",
+            "params": {"providers": {"openrouter": {"routing": routing}}},
+        },
+    )
+
+    assert response["ok"] is True, response
+    openrouter = next(
+        provider
+        for provider in response["result"]["providers"]["items"]
+        if provider["id"] == "openrouter"
+    )
+    assert openrouter["routing"] == routing
+    assert state.runtime.storage.load_openrouter_routing_settings() == routing
 
 
 @pytest.mark.asyncio

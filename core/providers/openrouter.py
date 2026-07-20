@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import replace
 from typing import Any
+from urllib.parse import quote
+
+import httpx
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.providers._http_shared import (
+    classify_http_status,
+    decode_response_json,
+    wrap_network_error,
+)
 from core.providers.openai_compatible import (
     OpenAICompatibleAdapter,
     _parse_optional_int,
@@ -26,7 +36,9 @@ from core.providers.reasoning import (
     model_reasoning_levels,
     resolve_reasoning_intent,
 )
+from core.settings.settings import parse_openrouter_routing
 from core.utils.logging import get_logger
+from core.utils.retry import retry_async
 
 OPENROUTER_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
 # OpenRouter's documented off-shape for a native thinking toggle (``on_off``
@@ -84,6 +96,53 @@ _LOGGER = get_logger("providers.openrouter")
 
 class OpenRouterAdapter(OpenAICompatibleAdapter):
     """OpenAI-compatible adapter with OpenRouter-specific behavior."""
+
+    def __init__(
+        self,
+        *args: Any,
+        routing: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self._routing = parse_openrouter_routing(routing or {})
+
+    def request_context_kwargs(
+        self,
+        *,
+        agent_id: str,
+        session_id: str,
+        project_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Pin OpenRouter routing to one vBot Session without leaking its address."""
+
+        address = json.dumps(
+            [project_id, agent_id, session_id],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        digest = hashlib.sha256(address).hexdigest()
+        return {"session_id": f"vbot-{digest}"}
+
+    async def routing_provider_options(self, model_id: str | None = None) -> list[dict[str, str]]:
+        """Return selectable OpenRouter base providers or one Model's endpoints."""
+
+        endpoint = f"/models/{quote(model_id, safe='/')}/endpoints" if model_id else "/providers"
+
+        async def _fetch() -> dict[str, Any]:
+            try:
+                response = await self._client.get(endpoint, headers=await self._build_headers())
+            except httpx.TransportError as exc:
+                raise wrap_network_error(exc) from exc
+            detail = f"{response.status_code} {response.text}".strip()
+            classify_http_status(
+                response.status_code,
+                detail=detail,
+                response_headers=response.headers,
+            )
+            return decode_response_json(response, "OpenRouter routing catalog")
+
+        payload = await retry_async(_fetch)
+        return _openrouter_routing_options(payload, model_specific=bool(model_id))
 
     @classmethod
     def supplementary_discovery_params(cls) -> list[dict[str, str]]:
@@ -268,7 +327,72 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         # non-Claude models cache implicitly and reject a stray marker.
         if _is_claude_family(model_id):
             _apply_openrouter_prompt_caching(payload)
+        provider_preferences = _openrouter_provider_preferences(self._routing, model_id)
+        if provider_preferences:
+            payload["provider"] = provider_preferences
         return payload
+
+
+def _openrouter_provider_preferences(
+    routing: Mapping[str, Any],
+    model_id: str,
+) -> dict[str, Any]:
+    """Render vBot's routing policy to OpenRouter's request ``provider`` object."""
+
+    default_policy = routing["default"]
+    model_policy = routing["models"].get(model_id)
+    policy = model_policy or default_policy
+
+    blocked: list[str] = list(default_policy["blocked"])
+    if model_policy is not None:
+        blocked.extend(slug for slug in model_policy["blocked"] if slug not in blocked)
+
+    preferences: dict[str, Any] = {}
+    mode = policy["mode"]
+    if mode == "allowed":
+        preferences["only"] = list(policy["providers"])
+    elif mode == "ordered":
+        preferences["order"] = list(policy["providers"])
+    if blocked:
+        preferences["ignore"] = blocked
+    if policy["allow_fallbacks"] is False:
+        preferences["allow_fallbacks"] = False
+    return preferences
+
+
+def _openrouter_routing_options(
+    payload: Mapping[str, Any],
+    *,
+    model_specific: bool,
+) -> list[dict[str, str]]:
+    """Normalize OpenRouter provider and endpoint catalogs for the Settings UI."""
+
+    raw_data = payload.get("data")
+    if model_specific:
+        entries = raw_data.get("endpoints") if isinstance(raw_data, Mapping) else None
+    else:
+        entries = raw_data
+    if not isinstance(entries, list):
+        return []
+
+    options: dict[str, str] = {}
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        raw_slug = entry.get("tag") if model_specific else entry.get("slug")
+        raw_name = entry.get("provider_name") if model_specific else entry.get("name")
+        if not isinstance(raw_slug, str) or not raw_slug.strip():
+            continue
+        slug = raw_slug.strip().lower()
+        name = raw_name.strip() if isinstance(raw_name, str) and raw_name.strip() else slug
+        options.setdefault(slug, name)
+    return [
+        {"slug": slug, "name": name}
+        for slug, name in sorted(
+            options.items(),
+            key=lambda item: (item[1].casefold(), item[0]),
+        )
+    ]
 
 
 def _render_openrouter_reasoning(payload: dict[str, Any], intent: ReasoningIntent) -> None:

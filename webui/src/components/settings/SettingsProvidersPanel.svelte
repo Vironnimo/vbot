@@ -1,6 +1,7 @@
 <script>
   import { SvelteSet } from 'svelte/reactivity';
   import ProviderConnectModal from './ProviderConnectModal.svelte';
+  import OpenRouterRoutingSettings from './OpenRouterRoutingSettings.svelte';
   import Button from '../ui/Button.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
@@ -843,6 +844,17 @@
               </div>
             {/if}
           </div>
+
+          {#if provider.id === 'openrouter'}
+            <OpenRouterRoutingSettings
+              {provider}
+              active={expandedProviders.has(provider.id) &&
+                providerSummaryStatus(provider) === 'connected'}
+              {onReloadSettings}
+              {onToast}
+              {onError}
+            />
+          {/if}
 
           {#if (localModelsByProvider[provider.id] ?? []).length > 0}
             <div class="s-provider-local-context">

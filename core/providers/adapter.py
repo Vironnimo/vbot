@@ -135,7 +135,13 @@ class ProviderAdapter(ABC):
     # Per-request conversation context
     # ------------------------------------------------------------------
 
-    def request_context_kwargs(self, *, agent_id: str, session_id: str) -> JsonObject:
+    def request_context_kwargs(
+        self,
+        *,
+        agent_id: str,
+        session_id: str,
+        project_id: str | None = None,
+    ) -> JsonObject:
         """Return extra per-request kwargs derived from the conversation identity.
 
         The chat layer calls this once per provider request and merges the
@@ -147,7 +153,7 @@ class ProviderAdapter(ABC):
         kwargs — the chat call for every other provider is byte-for-byte
         unchanged, and no wire that would reject an unknown field is touched.
         """
-        del agent_id, session_id
+        del agent_id, session_id, project_id
         return {}
 
     @abstractmethod

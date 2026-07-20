@@ -30,6 +30,7 @@ from core.providers.accounts import (
 from core.runs import ChatRunManager
 from core.settings import AGENT_DEFAULT_FIELDS
 from core.settings.normalizers import normalize_extensions_settings
+from core.settings.settings import parse_openrouter_routing
 from core.storage import StorageError
 from core.tools import FileReadState, ToolRegistry
 from core.utils.errors import ConfigError
@@ -176,6 +177,15 @@ class StubStorage:
         if isinstance(stored, dict) and isinstance(stored.get("context_windows"), dict):
             return {"context_windows": dict(stored["context_windows"])}
         return {"context_windows": {}}
+
+    def load_openrouter_routing_settings(self) -> JsonObject:
+        providers = self._settings.get("providers")
+        if not isinstance(providers, dict):
+            return parse_openrouter_routing({})
+        openrouter = providers.get("openrouter")
+        if not isinstance(openrouter, dict):
+            return parse_openrouter_routing({})
+        return parse_openrouter_routing(openrouter.get("routing", {}))
 
     def load_reflection_settings(self) -> JsonObject:
         defaults: JsonObject = {
@@ -402,6 +412,19 @@ class StubStorage:
         if "model_tasks" in settings_update:
             self._settings = {**self._settings, "model_tasks": settings_update["model_tasks"]}
             updated_sections["model_tasks"] = self.load_model_task_settings()
+        if "providers" in settings_update:
+            current_providers = self._settings.get("providers")
+            if not isinstance(current_providers, dict):
+                current_providers = {}
+            routing = parse_openrouter_routing(
+                settings_update["providers"]["openrouter"]["routing"]
+            )
+            normalized = {
+                **current_providers,
+                "openrouter": {"routing": routing},
+            }
+            self._settings = {**self._settings, "providers": normalized}
+            updated_sections["providers"] = normalized
         if "extensions" in settings_update:
             normalized = normalize_extensions_settings(settings_update["extensions"])
             self._settings = {**self._settings, "extensions": normalized}

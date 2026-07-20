@@ -132,6 +132,68 @@ async def test_connection_list_rejects_params(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_provider_routing_options_delegates_to_openrouter_adapter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RoutingAdapter(StubAdapter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.model_ids: list[str | None] = []
+            self.closed = False
+
+        async def routing_provider_options(
+            self, model_id: str | None = None
+        ) -> list[dict[str, str]]:
+            self.model_ids.append(model_id)
+            return [{"slug": "anthropic", "name": "Anthropic"}]
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    adapter = RoutingAdapter()
+    state = make_state(tmp_path, adapter)
+    state.runtime.providers.add(openrouter_provider())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "provider.routing_options",
+            "params": {
+                "provider_id": "openrouter",
+                "model_id": "anthropic/claude-sonnet-4",
+            },
+        },
+    )
+
+    assert response == {
+        "ok": True,
+        "result": {"providers": [{"slug": "anthropic", "name": "Anthropic"}]},
+    }
+    assert adapter.model_ids == ["anthropic/claude-sonnet-4"]
+    assert adapter.closed is True
+
+
+@pytest.mark.asyncio
+async def test_provider_routing_options_rejects_non_openrouter_provider(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "provider.routing_options",
+            "params": {"provider_id": "openai"},
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
 async def test_provider_set_key_writes_api_key_credential_and_reloads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

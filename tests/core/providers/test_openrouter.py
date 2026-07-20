@@ -356,6 +356,175 @@ async def test_openrouter_stream_requests_usage(openrouter_adapter: OpenRouterAd
     assert request_body["stream_options"] == {"include_usage": True}
 
 
+def test_openrouter_session_id_is_stable_scoped_and_opaque(
+    openrouter_adapter: OpenRouterAdapter,
+) -> None:
+    first = openrouter_adapter.request_context_kwargs(
+        project_id="vbot",
+        agent_id="builder",
+        session_id="main",
+    )
+    repeated = openrouter_adapter.request_context_kwargs(
+        project_id="vbot",
+        agent_id="builder",
+        session_id="main",
+    )
+    other_project = openrouter_adapter.request_context_kwargs(
+        project_id="other",
+        agent_id="builder",
+        session_id="main",
+    )
+
+    assert first == repeated
+    assert first != other_project
+    assert first["session_id"].startswith("vbot-")
+    assert "builder" not in first["session_id"]
+    assert "main" not in first["session_id"]
+    assert len(first["session_id"]) < 256
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_openrouter_applies_global_allowed_and_blocked_providers(
+    openrouter_config: ProviderConfig,
+) -> None:
+    adapter = OpenRouterAdapter(
+        openrouter_config,
+        API_KEY,
+        routing={
+            "default": {
+                "mode": "allowed",
+                "providers": ["anthropic", "amazon-bedrock"],
+                "blocked": ["google-vertex"],
+                "allow_fallbacks": False,
+            },
+            "models": {},
+        },
+    )
+    route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+    await adapter.send(SAMPLE_MESSAGES, model_id="anthropic/claude-sonnet-4")
+
+    body = json.loads(route.calls.last.request.content)
+    assert body["provider"] == {
+        "only": ["anthropic", "amazon-bedrock"],
+        "ignore": ["google-vertex"],
+        "allow_fallbacks": False,
+    }
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_openrouter_model_override_replaces_selection_and_adds_blocks(
+    openrouter_config: ProviderConfig,
+) -> None:
+    adapter = OpenRouterAdapter(
+        openrouter_config,
+        API_KEY,
+        routing={
+            "default": {
+                "mode": "allowed",
+                "providers": ["anthropic", "amazon-bedrock"],
+                "blocked": ["deepinfra"],
+                "allow_fallbacks": True,
+            },
+            "models": {
+                "anthropic/claude-sonnet-4": {
+                    "mode": "ordered",
+                    "providers": ["google-vertex/europe", "anthropic"],
+                    "blocked": ["chutes"],
+                    "allow_fallbacks": False,
+                }
+            },
+        },
+    )
+    route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+    await adapter.send(SAMPLE_MESSAGES, model_id="anthropic/claude-sonnet-4")
+
+    assert json.loads(route.calls.last.request.content)["provider"] == {
+        "order": ["google-vertex/europe", "anthropic"],
+        "ignore": ["deepinfra", "chutes"],
+        "allow_fallbacks": False,
+    }
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_openrouter_automatic_model_override_clears_global_selection(
+    openrouter_config: ProviderConfig,
+) -> None:
+    adapter = OpenRouterAdapter(
+        openrouter_config,
+        API_KEY,
+        routing={
+            "default": {
+                "mode": "ordered",
+                "providers": ["anthropic"],
+                "blocked": ["deepinfra"],
+                "allow_fallbacks": True,
+            },
+            "models": {
+                "openai/gpt-5.2": {
+                    "mode": "automatic",
+                    "providers": [],
+                    "blocked": [],
+                    "allow_fallbacks": True,
+                }
+            },
+        },
+    )
+    route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+
+    await adapter.send(SAMPLE_MESSAGES, model_id="openai/gpt-5.2")
+
+    assert json.loads(route.calls.last.request.content)["provider"] == {"ignore": ["deepinfra"]}
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_openrouter_routing_options_normalize_global_and_model_catalogs(
+    openrouter_config: ProviderConfig,
+) -> None:
+    adapter = OpenRouterAdapter(openrouter_config, API_KEY)
+    respx.get("https://openrouter.ai/api/v1/providers").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"name": "Anthropic", "slug": "anthropic"},
+                    {"name": "Google", "slug": "google-vertex"},
+                ]
+            },
+        )
+    )
+    respx.get("https://openrouter.ai/api/v1/models/anthropic/claude-sonnet-4/endpoints").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": {
+                    "endpoints": [
+                        {"provider_name": "Google", "tag": "google-vertex/europe"},
+                        {"provider_name": "Anthropic", "tag": "anthropic"},
+                    ]
+                }
+            },
+        )
+    )
+
+    global_options = await adapter.routing_provider_options()
+    model_options = await adapter.routing_provider_options("anthropic/claude-sonnet-4")
+
+    assert global_options == [
+        {"slug": "anthropic", "name": "Anthropic"},
+        {"slug": "google-vertex", "name": "Google"},
+    ]
+    assert model_options == [
+        {"slug": "anthropic", "name": "Anthropic"},
+        {"slug": "google-vertex/europe", "name": "Google"},
+    ]
+
+
 def test_reasoning_replay_policy_stays_current_run(
     openrouter_adapter: OpenRouterAdapter,
 ) -> None:

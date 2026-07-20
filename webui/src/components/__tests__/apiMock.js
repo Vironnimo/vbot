@@ -61,6 +61,8 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
         providerParams(providerId, connectionId, account),
       ),
     getProviderUsage: () => call('provider.usage'),
+    listProviderRoutingOptions: (params) =>
+      call('provider.routing_options', params),
     listChannels: () => call('channel.list'),
     getChannelStatus: (id) => call('channel.status', { id }),
     createChannel: (params) => call('channel.create', params),

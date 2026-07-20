@@ -388,7 +388,11 @@ def _resolve_request_context_kwargs(adapter: Any, run: Run) -> dict[str, Any]:
     """
     if hasattr(adapter, "request_context_kwargs"):
         return dict(
-            adapter.request_context_kwargs(agent_id=run.agent_id, session_id=run.session_id)
+            adapter.request_context_kwargs(
+                agent_id=run.agent_id,
+                session_id=run.session_id,
+                project_id=run.project_id,
+            )
         )
     return {}
 

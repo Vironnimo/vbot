@@ -205,6 +205,15 @@ export function listConnections(options = {}) {
   return rpc('connection.list', {}, options);
 }
 
+export function listProviderRoutingOptions(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Provider routing filters must be an object',
+    'provider.routing_options',
+  );
+  return rpc('provider.routing_options', params, options);
+}
+
 export function setConnectionEnabled(params = {}, options = {}) {
   requirePlainObject(
     params,

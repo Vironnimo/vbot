@@ -38,7 +38,7 @@ Compatible Adapters resolve a positive output allowance in this order: explicit 
 
 `wire_media_support(model_id)` declares exact MIME types the concrete wire can carry. Chat intersects this with Model input modalities and degrades unsupported content; the ABC default is empty so a missing declaration degrades rather than crashes. PDF support is declared only on verified concrete wires, not compatible bases.
 
-`request_context_kwargs(agent_id, session_id)` lets an Adapter derive Provider routing/cache hints from stable conversation identity. The default adds nothing. Chat merges returned kwargs without knowing their Provider meaning.
+`request_context_kwargs(agent_id, session_id, project_id=None)` lets an Adapter derive Provider routing/cache hints from stable conversation identity. The default adds nothing. Chat supplies the Run's Project anchor and merges returned kwargs without knowing their Provider meaning. OpenAI Codex uses Agent + Session for its conversation headers; OpenRouter hashes Project + Agent + Session into its top-level sticky-routing `session_id`.
 
 ## HTTP, retry, and streaming
 

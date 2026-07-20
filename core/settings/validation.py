@@ -45,6 +45,7 @@ from core.settings.settings import (
     RECALL_BACKEND_PATTERN,
     SUPPORTED_APPEARANCE_CHAT_WIDTHS,
     SettingsValidationError,
+    parse_openrouter_routing,
     validate_temperature,
     validate_thinking_effort,
 )
@@ -95,7 +96,8 @@ SESSION_TITLE_FIELDS = frozenset({"enabled", "model"})
 MAX_TRACE_LIMIT = 500
 REFLECTION_FIELDS = frozenset({"enabled", "memory_turn_interval", "skill_tool_call_interval"})
 LOCAL_MODELS_FIELDS = frozenset({"context_windows"})
-PROVIDERS_FIELDS = frozenset({"connections"})
+PROVIDERS_FIELDS = frozenset({"connections", "openrouter"})
+OPENROUTER_PROVIDER_FIELDS = frozenset({"routing"})
 REFLECTION_INTERVAL_FIELDS = ("memory_turn_interval", "skill_tool_call_interval")
 
 SettingsDiagnostic = JsonDiagnostic
@@ -667,18 +669,42 @@ def _validate_providers(diagnostics: list[JsonDiagnostic], value: Any) -> None:
 
     _warn_unknown_keys(diagnostics, "$.providers", value, PROVIDERS_FIELDS, "providers field")
     connections = value.get("connections")
-    if connections is None:
+    if connections is not None:
+        if not isinstance(connections, Mapping):
+            _error(diagnostics, "$.providers.connections", "must be an object")
+        else:
+            for key, enabled in connections.items():
+                key_path = f"$.providers.connections['{key}']"
+                if not isinstance(key, str) or ":" not in key or not key.strip():
+                    _error(diagnostics, key_path, "key must be a '<provider>:<connection>' string")
+                    continue
+                if not isinstance(enabled, bool):
+                    _error(diagnostics, key_path, "must be a boolean")
+
+    openrouter = value.get("openrouter")
+    if openrouter is None:
         return
-    if not isinstance(connections, Mapping):
-        _error(diagnostics, "$.providers.connections", "must be an object")
+    if not isinstance(openrouter, Mapping):
+        _error(diagnostics, "$.providers.openrouter", "must be an object")
         return
-    for key, enabled in connections.items():
-        key_path = f"$.providers.connections['{key}']"
-        if not isinstance(key, str) or ":" not in key or not key.strip():
-            _error(diagnostics, key_path, "key must be a '<provider>:<connection>' string")
-            continue
-        if not isinstance(enabled, bool):
-            _error(diagnostics, key_path, "must be a boolean")
+    _warn_unknown_keys(
+        diagnostics,
+        "$.providers.openrouter",
+        openrouter,
+        OPENROUTER_PROVIDER_FIELDS,
+        "providers.openrouter field",
+    )
+    routing = openrouter.get("routing")
+    if routing is None:
+        return
+    try:
+        parse_openrouter_routing(routing)
+    except SettingsValidationError as exc:
+        _error(
+            diagnostics,
+            "$.providers.openrouter.routing",
+            str(exc).replace("params.providers.openrouter.routing", "routing"),
+        )
 
 
 def _validate_reflection(diagnostics: list[JsonDiagnostic], value: Any) -> None:

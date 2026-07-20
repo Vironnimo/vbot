@@ -515,6 +515,88 @@
   border-top: 1px solid var(--border);
 }
 
+.openrouter-routing {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.openrouter-routing .form-field {
+  gap: 6px;
+}
+
+.openrouter-routing__override-row,
+.openrouter-routing__fallback-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.openrouter-routing__disabled {
+  opacity: 0.55;
+}
+
+.openrouter-routing__list-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.openrouter-routing__add-row {
+  width: min(420px, 100%);
+}
+
+.openrouter-routing__provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.openrouter-routing__provider-row {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.openrouter-routing__provider-row code {
+  min-width: 0;
+  color: var(--text-hi);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
+  overflow-wrap: anywhere;
+}
+
+.openrouter-routing__provider-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
+}
+
+.openrouter-routing__custom-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+}
+
+.openrouter-routing__save-row {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
 .s-local-context-row {
   display: flex;
   align-items: center;
@@ -1177,6 +1259,19 @@
   .s-connection-account-actions {
     width: 100%;
     margin-left: 0;
+  }
+
+  .openrouter-routing__custom-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .openrouter-routing__override-row,
+  .openrouter-routing__fallback-row {
+    align-items: flex-start;
+  }
+
+  .openrouter-routing__add-row {
+    width: 100%;
   }
 
   .s-row-control--appearance {

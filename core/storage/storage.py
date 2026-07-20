@@ -79,6 +79,7 @@ SETTINGS_UPDATE_SECTIONS = frozenset(
         "defaults",
         "recall",
         "model_tasks",
+        "providers",
         "web_search",
         "debug",
         "extensions",
@@ -387,6 +388,11 @@ class StorageManager:
                     settings,
                     settings_update["model_tasks"],
                 )
+            if "providers" in settings_update:
+                updated_sections["providers"] = self._apply_providers_settings(
+                    settings,
+                    settings_update["providers"],
+                )
             if "debug" in settings_update:
                 updated_sections["debug"] = self._apply_debug_settings(
                     settings,
@@ -584,13 +590,46 @@ class StorageManager:
     def load_providers_settings(self) -> dict[str, Any]:
         """Return normalized persisted providers settings.
 
-        Shape: ``{"connections": {"<provider>:<connection>": bool}}`` — the
-        per-connection enabled/disabled overrides. Read live at call time (no
-        reload hook) by the provider credential resolver's usability checks.
+        This established Connection-facing surface remains intentionally narrow;
+        OpenRouter request policy has its own loader below.
         """
 
         settings = self.load_settings()
-        return normalize_providers_settings(settings.get("providers"))
+        normalized = normalize_providers_settings(settings.get("providers"))
+        return {"connections": normalized["connections"]}
+
+    def load_openrouter_routing_settings(self) -> dict[str, Any]:
+        """Return the normalized OpenRouter default and per-Model routing policy."""
+
+        settings = self.load_settings()
+        normalized = normalize_providers_settings(settings.get("providers"))
+        return dict(normalized["openrouter"]["routing"])
+
+    def _apply_providers_settings(
+        self,
+        settings: dict[str, Any],
+        providers: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Replace OpenRouter routing while preserving Connection overrides."""
+
+        if not isinstance(providers, Mapping):
+            raise StorageError("Provider settings must be a mapping")
+        unsupported_fields = sorted(set(providers) - {"openrouter"})
+        if unsupported_fields:
+            raise StorageError(
+                f"Unsupported public providers settings: {', '.join(unsupported_fields)}"
+            )
+        if "openrouter" not in providers:
+            raise StorageError("Provider settings must include openrouter")
+
+        current = normalize_providers_settings(settings.get("providers"))
+        candidate = {
+            "connections": current["connections"],
+            "openrouter": providers["openrouter"],
+        }
+        normalized = normalize_providers_settings(candidate)
+        settings["providers"] = normalized
+        return dict(normalized)
 
     def set_provider_connection_enabled(self, connection_key: str, enabled: bool) -> None:
         """Persist one connection's enabled override in a settings transaction.
@@ -610,7 +649,13 @@ class StorageManager:
                 normalize_providers_settings(settings.get("providers"))["connections"]
             )
             connections[connection_key] = enabled
-            settings["providers"] = normalize_providers_settings({"connections": connections})
+            current = normalize_providers_settings(settings.get("providers"))
+            settings["providers"] = normalize_providers_settings(
+                {
+                    "connections": connections,
+                    "openrouter": current["openrouter"],
+                }
+            )
 
         self.update_settings(_mutate)
 

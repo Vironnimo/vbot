@@ -126,6 +126,97 @@ def test_parse_settings_update_omits_absent_chat_width() -> None:
     assert parsed == {"appearance": {"language": "en"}}
 
 
+def test_parse_settings_update_normalizes_openrouter_routing() -> None:
+    parsed = parse_settings_update(
+        {
+            "providers": {
+                "openrouter": {
+                    "routing": {
+                        "default": {
+                            "mode": "allowed",
+                            "providers": [" Anthropic ", "google-vertex"],
+                            "blocked": [" DeepInfra "],
+                            "allow_fallbacks": False,
+                        },
+                        "models": {
+                            "anthropic/claude-sonnet-4": {
+                                "mode": "ordered",
+                                "providers": ["anthropic", "amazon-bedrock/eu-west-1"],
+                                "blocked": ["google-vertex"],
+                                "allow_fallbacks": True,
+                            }
+                        },
+                    }
+                }
+            }
+        }
+    )
+
+    assert parsed["providers"] == {
+        "openrouter": {
+            "routing": {
+                "default": {
+                    "mode": "allowed",
+                    "providers": ["anthropic", "google-vertex"],
+                    "blocked": ["deepinfra"],
+                    "allow_fallbacks": False,
+                },
+                "models": {
+                    "anthropic/claude-sonnet-4": {
+                        "mode": "ordered",
+                        "providers": ["anthropic", "amazon-bedrock/eu-west-1"],
+                        "blocked": ["google-vertex"],
+                        "allow_fallbacks": True,
+                    }
+                },
+            }
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    ("routing", "message"),
+    [
+        (
+            {"default": {"mode": "allowed", "providers": []}},
+            "providers must not be empty",
+        ),
+        (
+            {
+                "default": {
+                    "mode": "ordered",
+                    "providers": ["deepinfra/turbo"],
+                    "blocked": ["deepinfra"],
+                }
+            },
+            "contains blocked provider",
+        ),
+        (
+            {
+                "default": {"blocked": ["google-vertex"]},
+                "models": {
+                    "anthropic/claude-sonnet-4": {
+                        "mode": "allowed",
+                        "providers": ["google-vertex/europe"],
+                    }
+                },
+            },
+            "globally blocked provider",
+        ),
+        (
+            {"default": {"blocked": ["not a slug"]}},
+            "valid OpenRouter provider slugs",
+        ),
+    ],
+)
+def test_parse_settings_update_rejects_conflicting_openrouter_routing(
+    routing: dict,
+    message: str,
+) -> None:
+    with pytest.raises(SettingsValidationError, match=message):
+        parse_settings_update({"providers": {"openrouter": {"routing": routing}}})
+
+
 @pytest.mark.parametrize(
     ("params", "message"),
     [

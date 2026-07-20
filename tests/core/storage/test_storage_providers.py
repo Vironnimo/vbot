@@ -93,3 +93,59 @@ class TestSetProviderConnectionEnabled:
 
         with pytest.raises(StorageError, match="must be a boolean"):
             storage.set_provider_connection_enabled("ollama:local", "yes")  # type: ignore[arg-type]
+
+    def test_preserves_openrouter_routing(self, tmp_path: Path) -> None:
+        storage = StorageManager(tmp_path)
+        storage.update_settings_sections(
+            {
+                "providers": {
+                    "openrouter": {
+                        "routing": {
+                            "default": {
+                                "mode": "allowed",
+                                "providers": ["anthropic"],
+                                "blocked": ["deepinfra"],
+                                "allow_fallbacks": True,
+                            },
+                            "models": {},
+                        }
+                    }
+                }
+            }
+        )
+
+        storage.set_provider_connection_enabled("openrouter:api-key", False)
+
+        assert storage.load_providers_settings() == {"connections": {"openrouter:api-key": False}}
+        assert storage.load_openrouter_routing_settings()["default"] == {
+            "mode": "allowed",
+            "providers": ["anthropic"],
+            "blocked": ["deepinfra"],
+            "allow_fallbacks": True,
+        }
+
+
+def test_openrouter_routing_update_preserves_connection_overrides(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+    storage.set_provider_connection_enabled("openrouter:api-key", True)
+
+    storage.update_settings_sections(
+        {
+            "providers": {
+                "openrouter": {
+                    "routing": {
+                        "default": {
+                            "mode": "automatic",
+                            "providers": [],
+                            "blocked": ["deepinfra"],
+                            "allow_fallbacks": False,
+                        },
+                        "models": {},
+                    }
+                }
+            }
+        }
+    )
+
+    assert storage.load_providers_settings() == {"connections": {"openrouter:api-key": True}}
+    assert storage.load_openrouter_routing_settings()["default"]["blocked"] == ["deepinfra"]

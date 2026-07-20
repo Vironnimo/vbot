@@ -2019,6 +2019,11 @@ class Runtime:
             # wire (options.num_ctx) for flagged-local models; the resolver
             # reads the live settings per call (no reload hook needed).
             extra_kwargs["local_context_resolver"] = self._local_context_resolver_for(provider_id)
+        if adapter_class is OpenRouterAdapter:
+            # Snapshot routing policy for this Adapter/Run. A Settings save
+            # applies to the next Run without changing providers midway through
+            # an active Tool loop and invalidating its warm prompt cache.
+            extra_kwargs["routing"] = self.storage.load_openrouter_routing_settings()
 
         adapter = cast(Any, adapter_class)(
             provider_config,

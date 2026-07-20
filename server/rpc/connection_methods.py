@@ -129,6 +129,52 @@ async def _list_models(state: Any, params: JsonObject) -> JsonObject:
     return {"models": models}
 
 
+async def _routing_provider_options(state: Any, params: JsonObject) -> JsonObject:
+    """Return provider slugs selectable for OpenRouter globally or per Model."""
+
+    _reject_unsupported(params, {"provider_id", "model_id"}, "provider routing options")
+    provider_id = _required_string(params, "provider_id")
+    if provider_id != "openrouter":
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"provider '{provider_id}' does not expose routing options",
+        )
+    model_id = params.get("model_id")
+    if model_id is not None:
+        if not isinstance(model_id, str) or not model_id.strip():
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.model_id must be a non-empty string")
+        model_id = model_id.strip()
+
+    try:
+        runtime = state.runtime
+        provider = runtime.providers.get(provider_id)
+        connection_id = next(
+            (
+                f"{provider_id}:{connection.id}"
+                for connection in provider.connections
+                if runtime.provider_credentials.is_usable(
+                    provider_id,
+                    f"{provider_id}:{connection.id}",
+                )
+            ),
+            None,
+        )
+        if connection_id is None:
+            raise ConfigError("OpenRouter has no usable Connection")
+        adapter = runtime.get_adapter(provider_id, connection_id)
+        loader = getattr(adapter, "routing_provider_options", None)
+        if not callable(loader):
+            await adapter.aclose()
+            raise ConfigError("OpenRouter Adapter does not expose routing options")
+        try:
+            providers = await loader(model_id)
+        finally:
+            await adapter.aclose()
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"providers": providers}
+
+
 def _model_reachability(
     runtime: Any, provider_id: str, allowed_connections: list[Any]
 ) -> bool | None:
@@ -754,6 +800,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "connection.set_enabled": _set_connection_enabled,
         "model.list": _list_models,
         "model.refresh_db": _refresh_model_db,
+        "provider.routing_options": _routing_provider_options,
         "provider.set_key": _set_provider_key,
         "provider.unset_key": _unset_provider_key,
         "provider.connect": _connect_provider,
