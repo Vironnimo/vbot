@@ -1,4 +1,4 @@
-"""Prompt Skill catalog and visiting-project rendering tests."""
+"""Prompt Skill catalog and explicit Project Context rendering tests."""
 
 from .prompts_test_support import (
     MEMORY_PROMPT_MODE_OFF,
@@ -45,7 +45,7 @@ def test_skill_catalog_groups_skills_by_origin(tmp_path: Path) -> None:
     assert "/skills/" not in prompt
 
 
-def test_render_visiting_project_skills_lists_names_descriptions_and_paths(tmp_path: Path) -> None:
+def test_render_project_skills_lists_names_descriptions_and_paths(tmp_path: Path) -> None:
     from types import SimpleNamespace
 
     manager = _manager(tmp_path)
@@ -59,7 +59,7 @@ def test_render_visiting_project_skills_lists_names_descriptions_and_paths(tmp_p
         ),
     ]
 
-    rendered = manager.render_visiting_project_skills("vBot", skills)
+    rendered = manager.render_project_skills("vBot", skills)
 
     assert "Skills from project 'vBot'" in rendered
     assert "`read` tool" in rendered
@@ -68,9 +68,9 @@ def test_render_visiting_project_skills_lists_names_descriptions_and_paths(tmp_p
     assert rendered.index("audit") < rendered.index("deploy")
 
 
-def test_render_visiting_project_skills_empty_is_blank(tmp_path: Path) -> None:
+def test_render_project_skills_empty_is_blank(tmp_path: Path) -> None:
     manager = _manager(tmp_path)
-    assert manager.render_visiting_project_skills("vBot", []) == ""
+    assert manager.render_project_skills("vBot", []) == ""
 
 
 def test_render_skill_catalog_snapshots_text(tmp_path: Path) -> None:

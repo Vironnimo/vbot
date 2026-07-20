@@ -1,9 +1,13 @@
 """Prompt Tool, Skill, and extension block tests."""
 
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import cast
 
+from core.projects import ProjectStore
 from core.subagents import SubAgentPromptTarget
+from core.tools.file_state import FileReadState
+from core.tools.project import register_project_tool
 from core.tools.subagent import register_subagent_tools
 from core.tools.tools import ToolPromptBlockRegistry
 
@@ -380,6 +384,47 @@ def test_subagent_block_stays_visible_without_additional_targets(
 
     assert "## Sub-Agents" in prompt
     assert "**No additional Agents are available.**" in prompt
+
+
+def test_project_block_lists_projects_only_for_identity_agent_with_tool(
+    workspace: Path, tmp_path: Path
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    projects = ProjectStore(tmp_path / "data")
+    projects.create("vbot", "vBot", repo)
+    tools = ToolRegistry()
+    prompt_blocks = ToolPromptBlockRegistry()
+    register_project_tool(
+        tools,
+        projects,
+        lambda: cast(Any, None),
+        lambda _project_id: [],
+        FileReadState(),
+        prompt_blocks,
+    )
+    manager = _manager(
+        tmp_path,
+        tools=tools,
+        block_definitions=prompt_blocks.block_definitions(),
+    )
+    identity = replace(
+        _agent(workspace, allowed_tools=["project"]),
+        root_project_id="vbot",
+    )
+    denied = _agent(workspace, allowed_tools=[])
+    config_agent = _agent("", allowed_tools=["*"], memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+
+    prompt = manager.build_system_prompt(identity)
+
+    assert "## Projects" in prompt
+    assert '<project id="vbot" name="vBot"' in prompt
+    assert f'cwd="{repo.resolve()}"' in prompt
+    assert 'available="true" active="true"' in prompt
+    assert "Call it alone and wait for the result" in prompt
+    assert "on every `bash` call; each call starts a new shell" in prompt
+    assert "## Projects" not in manager.build_system_prompt(denied)
+    assert "## Projects" not in manager.build_system_prompt(config_agent)
 
 
 def test_enabling_tools_list_block_renders_tool_descriptions(

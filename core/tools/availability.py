@@ -10,17 +10,17 @@ from core.memory import MEMORY_PROMPT_MODE_OFF, MemoryPromptMode
 
 MEMORY_TOOL_NAME = "memory"
 SKILL_MANAGE_TOOL_NAME = "skill_manage"
+PROJECT_TOOL_NAME = "project"
 SUBAGENT_TOOL_NAMES: frozenset[str] = frozenset({"subagent", "subagent_result"})
 SUBAGENT_TOOL_SETTINGS_KEY = "subagent"
 SUBAGENT_ALLOWED_AGENTS_KEY = "allowed_agents"
 DEFAULT_SUBAGENT_ALLOWED_AGENTS: tuple[str, ...] = ("*",)
 
-# Tools usable only by an identity agent (one with a Workspace). ``skill_manage``
-# writes to the agent's own private skill home under ``<data_dir>/agents/<id>/skills/``,
-# which a config/project agent (empty workspace) does not own — so it is withheld from
-# those agents even under a wildcard allow-list, the same way ``memory`` is gated by the
-# agent's memory mode.
-IDENTITY_ONLY_TOOLS: frozenset[str] = frozenset({SKILL_MANAGE_TOOL_NAME})
+# Tools usable only by an identity agent (one with a Workspace). ``project`` loads
+# context for work outside that Workspace, while ``skill_manage`` writes to the agent's
+# private skill home. A config/project agent owns neither capability, so both are
+# withheld even under a wildcard allow-list, like ``memory`` under its mode gate.
+IDENTITY_ONLY_TOOLS: frozenset[str] = frozenset({PROJECT_TOOL_NAME, SKILL_MANAGE_TOOL_NAME})
 
 
 def memory_tool_enabled(memory_prompt_mode: MemoryPromptMode) -> bool:
@@ -44,10 +44,11 @@ def effective_agent_allowed_tools(
     """Return the runtime allowlist after applying Agent memory mode and identity-only gating.
 
     A config/project agent (empty ``workspace``) never gets an ``IDENTITY_ONLY_TOOLS``
-    member (``skill_manage``) in its effective set, even under a wildcard allow-list —
-    the same shape as the ``memory`` mode gate below. This is the dispatch-time
-    allowlist ``ToolRegistry.dispatch`` actually enforces, so it must not grant more
-    than what the prompt layer already advertises to the agent; the prompt-layer
+    member (``project`` or ``skill_manage``) in its effective set, even under a
+    wildcard allow-list — the same shape as the ``memory`` mode gate below. This is
+    the dispatch-time allowlist ``ToolRegistry.dispatch`` actually enforces, so it
+    must not grant more than what the prompt layer already advertises to the agent;
+    the prompt-layer
     visibility pass alone (``_apply_identity_only_tool_visibility``) only hides the
     tool definition from the model, it does not block a call that reaches dispatch.
     """
@@ -135,6 +136,7 @@ def _without(tool_names: Sequence[str], excluded: set[str]) -> list[str]:
 __all__ = [
     "IDENTITY_ONLY_TOOLS",
     "MEMORY_TOOL_NAME",
+    "PROJECT_TOOL_NAME",
     "SKILL_MANAGE_TOOL_NAME",
     "DEFAULT_SUBAGENT_ALLOWED_AGENTS",
     "SUBAGENT_ALLOWED_AGENTS_KEY",

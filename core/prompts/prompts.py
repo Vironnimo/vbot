@@ -310,8 +310,8 @@ class PinnedSkillCatalog:
     catalog_text: str
 
 
-class VisitingProjectSkill(Protocol):
-    """Skill fields the visit reminder lists (path-bearing, unlike the catalog)."""
+class ProjectContextSkill(Protocol):
+    """Skill fields the explicit Project Context lists with paths."""
 
     @property
     def name(self) -> str:
@@ -325,7 +325,7 @@ class VisitingProjectSkill(Protocol):
 
     @property
     def path(self) -> Path:
-        """Absolute ``SKILL.md`` path a visiting agent reads directly."""
+        """Absolute ``SKILL.md`` path an Identity Agent reads directly."""
         ...
 
 
@@ -1284,11 +1284,10 @@ class SystemPromptManager:
 
         ``on_read``, when given, is called with the resolved absolute path of every
         file actually inlined, so the caller can stamp it as read-before-write —
-        used both for the system-prompt build and the visiting reminder.
+        used both for the system-prompt build and the explicit ``project`` Tool.
 
         This is the single render used both for ``{project_files}`` in the system
-        prompt (project-born sessions) and for the visiting main agent's
-        ``<system-reminder>`` (same content, different delivery).
+        prompt and for the explicit ``project`` Tool result.
         """
         if project_context is None:
             return ""
@@ -1300,16 +1299,16 @@ class SystemPromptManager:
                 blocks.append(block)
         return "\n".join(blocks)
 
-    def render_visiting_project_skills(
-        self, project_name: str, skills: Sequence[VisitingProjectSkill]
+    def render_project_skills(
+        self, project_name: str, skills: Sequence[ProjectContextSkill]
     ) -> str:
-        """Render a visited project's skills as a path-bearing reminder section.
+        """Render a Project's skills as a path-bearing context section.
 
-        Unlike the system-prompt catalog (deliberately path-free), the visit reminder
-        names each skill's absolute ``SKILL.md`` path and tells the visiting agent to
-        read it with the ``read`` tool — the agent is not a member of that project, so
-        it loads a playbook by reading the file, not via the ``skill`` tool. Returns
-        ``""`` when the project has no skills, so no empty section is emitted.
+        Unlike the system-prompt catalog (deliberately path-free), the explicit
+        Project Context names each skill's absolute ``SKILL.md`` path and tells the
+        Identity Agent to read it with the ``read`` tool — loading a foreign Project
+        does not change the run's Skill scope. Returns ``""`` when the Project has no
+        skills, so no empty section is emitted.
         """
         if not skills:
             return ""

@@ -1,4 +1,4 @@
-"""Phase 4 chat-loop wiring: project files in the system prompt vs. reminder.
+"""Chat-loop wiring for Project files in the System Prompt.
 
 These tests cover how the chat loop feeds the prompt builder:
 
@@ -6,9 +6,8 @@ These tests cover how the chat loop feeds the prompt builder:
   the project context into ``build_system_prompt`` → body + project files land in
   the **system prompt**;
 - an **identity** session (no project) passes empty body / no context → the
-  prompt is unchanged;
-- the **visiting** path renders the same project files but delivers them as a
-  ``<system-reminder>`` (a ``role: "note"``), never in the system prompt.
+  prompt is unchanged. Foreign Project Context is loaded only by the explicit
+  ``project`` Tool and is therefore outside Chat's request-building path.
 
 The doubles are shared with ``test_chat_loop`` (the canonical chat-loop stubs);
 only the project-specific wiring is asserted here.
@@ -152,61 +151,6 @@ async def test_identity_session_passes_no_body_or_project(tmp_path: Path) -> Non
     assert agent_id == "coder"
     assert agent_body == ""
     assert project_context is None
-
-
-@pytest.mark.asyncio
-async def test_visiting_injects_project_files_as_system_reminder(tmp_path: Path) -> None:
-    # The visiting path: an identity session reaching into a project. The files
-    # arrive as a <system-reminder> note, NOT in the system prompt.
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
-    agent = StubAgent(id="coder", model=MODEL, allowed_tools=["*"])
-    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    session = runtime.chat_sessions.create("coder", session_id="s1")
-    context = ProjectPromptContext.from_project(repo, ["AGENTS.md"])
-
-    loop = build_chat_loop(runtime)
-    injected = loop.inject_visiting_project_files(session, context, project_name="vBot")
-    await loop.send("coder", "Hi", session_id="s1")
-
-    assert injected is True
-    # The reminder is embedded as a <system-reminder> synthetic user message, not
-    # in the system prompt.
-    system = _system_message(adapter)
-    assert "Team rules" not in system
-    request_messages = adapter.requests[0]["messages"]
-    reminder_texts = [
-        str(message.get("content", "")) for message in request_messages if message["role"] == "user"
-    ]
-    joined = "\n".join(reminder_texts)
-    assert "<system-reminder>" in joined
-    assert f"You are visiting project 'vBot' at '{repo}'." in joined
-    assert "The auto-loaded files below are this project's instructions." in joined
-    assert "Follow them for every action that affects this project" in joined
-    assert "They apply only to this project" in joined
-    assert "do not change your home Workspace or cwd" in joined
-    assert "Team rules" in joined
-
-
-@pytest.mark.asyncio
-async def test_visiting_with_no_project_files_adds_no_reminder(tmp_path: Path) -> None:
-    # A bare/empty project repo: render is empty → no reminder is injected.
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    agent = StubAgent(id="coder", model=MODEL, allowed_tools=["*"])
-    adapter = StubAdapter([{"content": "Hello", "tool_calls": None}])
-    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
-    session = runtime.chat_sessions.create("coder", session_id="s1")
-    context = ProjectPromptContext.from_project(repo, [])
-
-    injected = build_chat_loop(runtime).inject_visiting_project_files(
-        session, context, project_name="vBot"
-    )
-
-    assert injected is False
-    assert session.load() == []
 
 
 @pytest.mark.asyncio

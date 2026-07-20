@@ -1270,14 +1270,10 @@ async def test_move_directions_relocate_and_re_home_pointers(
     assert move_call["source_project_id"] == source_project
     assert move_call["target_agent_id"] == target_agent
     assert move_call["target_project_id"] == target_project
-    # A move is always cross-agent, so the source agent's residue is stripped:
-    # the pinned skill catalog + seen-skills set (the target re-pins its own
-    # catalog, like a cross-agent fork) and the visited-projects record (visit
-    # injections re-trigger fresh for the target).
+    # A move is always cross-agent, so the source Agent's pinned Skill catalog and
+    # seen-Skills set are stripped; the target re-pins its own catalog.
     assert move_call["strip_meta_keys"] == set(SESSION_MOVE_STRIP_META_KEYS)
-    assert {"pinned_skill_catalog", "seen_skills", "visited_projects"} <= move_call[
-        "strip_meta_keys"
-    ]
+    assert {"pinned_skill_catalog", "seen_skills"} <= move_call["strip_meta_keys"]
 
     # The "current" pointer follows the session on each identity side only.
     assert (state._agents.reset_calls == [("builder", "s1")]) is reset

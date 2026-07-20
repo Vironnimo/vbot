@@ -51,7 +51,6 @@ def build_chat_loop(runtime: Any, **kwargs: Any) -> ChatLoop:
             provider_id, connection_id
         ),
         resolve_skills=lambda project_id, agent_id: runtime.skills_for(project_id, agent_id),
-        list_project_skills=lambda project_id: runtime.project_own_skills(project_id),
         get_local_context_windows=lambda: runtime.local_context_windows(),
     )
     return ChatLoop(dependencies, **kwargs)
@@ -219,7 +218,7 @@ class StubPrompts:
         )
         return PinnedSkillCatalog(catalog_text=f"catalog:{len(skills)}")
 
-    def render_visiting_project_skills(self, project_name: str, skills: Any) -> str:
+    def render_project_skills(self, project_name: str, skills: Any) -> str:
         if not skills:
             return ""
         lines = [
@@ -597,7 +596,7 @@ class StubRuntime:
         # (project_id, agent_id) a run resolves skills against — e.g. that a rooted
         # identity run resolves against its home project, not ``None``.
         self.skills_for_calls: list[tuple[str | None, str | None]] = []
-        # Project-own skills the visiting reminder lists; tests set this per project.
+        # Project-owned Skills exposed by explicit Project Context loading.
         self.project_own_skills_result: list[Any] = []
 
     def get_adapter(self, provider_id: str, connection_id: str) -> StubAdapter:
@@ -621,8 +620,7 @@ class StubRuntime:
         return frozenset()
 
     def project_own_skills(self, _project_id: str) -> list[Any]:
-        # Visiting-reminder source: tests set ``project_own_skills_result`` to skill
-        # objects (name/description/path); default empty means no skills section.
+        # Explicit Project Context source: path-bearing Skill metadata.
         return self.project_own_skills_result
 
     def local_context_windows(self) -> JsonObject:

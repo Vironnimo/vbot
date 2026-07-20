@@ -72,6 +72,14 @@ from core.tools.process import (
     make_process_handler,
     register_process_tool,
 )
+from core.tools.project import (
+    PROJECT_PROMPT_BLOCK_HEADER,
+    PROJECT_TOOL_DESCRIPTION,
+    PROJECT_TOOL_NAME,
+    PROJECT_TOOL_PARAMETERS,
+    make_project_handler,
+    register_project_tool,
+)
 from core.tools.read import (
     READ_TOOL_DESCRIPTION,
     READ_TOOL_NAME,
@@ -211,6 +219,10 @@ __all__ = [
     "PROCESS_TOOL_DESCRIPTION",
     "PROCESS_TOOL_NAME",
     "PROCESS_TOOL_PARAMETERS",
+    "PROJECT_PROMPT_BLOCK_HEADER",
+    "PROJECT_TOOL_DESCRIPTION",
+    "PROJECT_TOOL_NAME",
+    "PROJECT_TOOL_PARAMETERS",
     "READ_TOOL_DESCRIPTION",
     "READ_TOOL_NAME",
     "READ_TOOL_PARAMETERS",
@@ -264,6 +276,7 @@ __all__ = [
     "make_edit_handler",
     "make_memory_handler",
     "make_process_handler",
+    "make_project_handler",
     "make_skill_handler",
     "make_skill_manage_handler",
     "make_text_to_speech_handler",
@@ -280,6 +293,7 @@ __all__ = [
     "register_history_tool",
     "register_memory_tool",
     "register_process_tool",
+    "register_project_tool",
     "register_read_tool",
     "register_session_search_tool",
     "register_skill_manage_tool",

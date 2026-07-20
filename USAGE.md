@@ -324,11 +324,11 @@ Project registration and Team scanning never write to the repository. Normal Age
 
 Project `add`/`set` can replace the Tool Whitelist and bundled/global/Project Skill policy lists. `set-override`/`clear-override` manage one Project Agent's vBot-owned model, temperature, thinking-effort, or Compaction Policy tier without editing the repository. `project rm --copy-rooted-agent-files` preserves `SOUL.md`, `USER.md`, and `MEMORY.md` before rooted Identity Agents with custom Workspaces are reset to their default Workspace; removal output lists every affected Agent and file effect.
 
-### Rooted Agents and Visiting
+### Rooted Agents and Project Context Loading
 
 A Rooted Agent is an Identity Agent whose saved Project selection points at a registered Project. It keeps its bare address, identity-owned Session storage, Workspace, Memory, private Skills, and permissions, while relative file and shell work and Project context use the selected repository.
 
-Visiting occurs when an Identity Agent reaches into another registered Project through an absolute file path. The Visit adds a one-time System Reminder and records Project metadata, but it does not change the Agent's cwd, Session owner, permissions, or identity.
+An Identity Agent with the `project` Tool sees the registered Projects in its System Prompt. Before working in a registered Project that is not its current working Project, it calls `project` with the Project id and waits for the result. The Tool returns the Project's current auto-load files, absolute cwd, and Project Skills; it does not change the Agent's cwd, Rooting, Workspace, Session owner, Skill scope, permissions, or identity. Subsequent file work therefore uses absolute paths. Every `bash` call that should run in the Project sets `workdir` to the returned cwd again: `bash` starts a new one-shot shell for each call, so `cd` and other shell-state changes never persist into the next call.
 
 ### Sessions
 

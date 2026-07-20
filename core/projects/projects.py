@@ -71,8 +71,8 @@ DEFAULT_DEFAULT_THINKING_EFFORT: str | None = None
 # The default-off-but-UI-toggleable tools (``session_search``, ``image_generation``,
 # ``text_to_speech``, ``cron``, ``channel_send``, the Home-Assistant tools) are
 # deliberately absent. ``memory`` (runtime-derived from memory mode) and the
-# identity-only ``skill_manage`` (writes to an identity agent's private skill home) are
-# never project tools at all; ``skill`` itself is an ordinary project tool, default-on.
+# identity-only ``project`` / ``skill_manage`` capabilities are never project tools
+# at all; ``skill`` itself is an ordinary project tool, default-on.
 PROJECT_DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
     "read",
     "write",
@@ -93,6 +93,7 @@ PROJECT_DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
 # project this metadata so accessors never need to mirror tool names or semantics.
 _PROJECT_TOOL_NON_CONFIGURABLE_REASONS: dict[str, str] = {
     "memory": "controlled_by_agent_memory_mode",
+    "project": "requires_identity_agent",
     "skill_manage": "requires_identity_agent_workspace",
 }
 

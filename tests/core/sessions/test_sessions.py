@@ -1108,7 +1108,7 @@ class TestChatSessionManagerMove:
         manager.set_metadata(
             "alpha",
             "sess",
-            {"visited_projects": ["acme"], "platform": "telegram"},
+            {"ephemeral_key": "remove", "platform": "telegram"},
         )
 
         asyncio.run(
@@ -1117,7 +1117,7 @@ class TestChatSessionManagerMove:
                 "sess",
                 "beta",
                 target_project_id="acme",
-                strip_meta_keys=frozenset({"visited_projects"}),
+                strip_meta_keys=frozenset({"ephemeral_key"}),
             )
         )
 

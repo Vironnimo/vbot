@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 from collections.abc import Callable, Sequence
@@ -21,12 +20,7 @@ from core.runs import TOOL_CALL_RESULT_EVENT, TOOL_CALL_STARTED_EVENT, Run
 from core.sessions import ChatSession
 from core.skills.skill_validator import SKILL_NAME_CHARSET_FRAGMENT
 from core.tools import (
-    EDIT_TOOL_NAME,
-    GLOB_TOOL_NAME,
-    GREP_TOOL_NAME,
     READ_MEDIA_ARTIFACT_KIND,
-    READ_TOOL_NAME,
-    WRITE_TOOL_NAME,
     InvalidToolResultError,
     SessionToolUnavailableError,
     ToolContext,
@@ -57,15 +51,6 @@ _LOGGER = get_logger("chat")
 SKILL_SLASH_TRIGGER_PATTERN = re.compile(rf"^/({SKILL_NAME_CHARSET_FRAGMENT})(?=\s|$)")
 SKILL_INLINE_TRIGGER_PATTERN = re.compile(rf"\$({SKILL_NAME_CHARSET_FRAGMENT})")
 
-# File tools that take a ``path`` argument the agent can point at any absolute
-# location. A visiting identity agent reaches into a project repo by absolute
-# path (its cwd stays its own home), so these are the calls that can reveal a
-# visit. ``bash``/``process`` are intentionally excluded: their arguments are
-# free command lines with no single resolvable path.
-_VISITING_PATH_TOOLS = frozenset(
-    {READ_TOOL_NAME, WRITE_TOOL_NAME, EDIT_TOOL_NAME, GREP_TOOL_NAME, GLOB_TOOL_NAME}
-)
-
 
 @dataclass(frozen=True)
 class ToolDispatchContext:
@@ -85,53 +70,6 @@ class ToolDispatchContext:
     tool_restriction: Sequence[str] | None = None
     base_allowed_tools: Sequence[str] | None = None
     session_tool_grants: Sequence[str] = ()
-
-
-def _visiting_candidate_paths(tool_calls: Sequence[ToolCall]) -> list[Path]:
-    """Return the absolute paths a tool-call batch points the file tools at.
-
-    Only the path-bearing file tools are considered, and only absolute ``path``
-    arguments: a visiting agent reaches into a project by absolute path, while a
-    relative path resolves against the agent's own home (never a project repo).
-    These are candidates for visit detection, not validated targets — containment
-    against a registered project decides the rest.
-    """
-    paths: list[Path] = []
-    for tool_call in tool_calls:
-        if tool_call.name not in _VISITING_PATH_TOOLS:
-            continue
-        arguments = tool_call.arguments
-        if not isinstance(arguments, dict):
-            continue
-        raw_path = arguments.get("path")
-        if not isinstance(raw_path, str) or not raw_path.strip():
-            continue
-        candidate = Path(raw_path).expanduser()
-        if candidate.is_absolute():
-            paths.append(candidate)
-    return paths
-
-
-def _project_containing_path(path: Path, projects: Sequence[Any]) -> Any | None:
-    """Return the registered project whose repo cwd contains ``path``, or ``None``.
-
-    Containment is decided on real (symlink-resolved) paths, case-folded only on
-    Windows — the same host-explicit rule the projects domain uses for cwd
-    identity, so detection agrees with how a project's cwd was stored. When
-    nested project repos both contain the path, the most specific (longest cwd)
-    wins.
-    """
-    target = os.path.normcase(os.path.realpath(path))
-    best: Any | None = None
-    best_root_length = -1
-    for project in projects:
-        root = os.path.normcase(os.path.realpath(project.cwd))
-        root_prefix = root if root.endswith(os.sep) else root + os.sep
-        contained = target == root or target.startswith(root_prefix)
-        if contained and len(root) > best_root_length:
-            best = project
-            best_root_length = len(root)
-    return best
 
 
 class _EmittingToolRegistry(ToolRegistry):

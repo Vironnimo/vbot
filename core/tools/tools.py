@@ -669,9 +669,9 @@ class ToolPromptBlockRegistry:
     A declared block is id ``tool:<name>`` and owner ``tool:<name>`` (so gate 2
     renders it only when ``<name>`` is on the agent's effective allowlist), static
     (``default_text``) or dynamic (``render``) — the same split as a core or
-    extension block. The Sub-Agent tool uses this seam for its dynamic target and
-    delegation guidance. Collisions are resolved first-wins with a warning, like
-    tool-name registration.
+    extension block. Project and Sub-Agent use this seam for dynamic catalogs and
+    guidance. Collisions are resolved first-wins with a warning, like tool-name
+    registration.
     """
 
     def __init__(self) -> None:
