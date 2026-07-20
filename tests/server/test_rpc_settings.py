@@ -63,6 +63,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                             "label": "API Key",
                             "configured": False,
                             "enabled": True,
+                            "usable": False,
                             "accounts": [],
                             "credential_key": "ANTHROPIC_API_KEY",
                         }
@@ -85,6 +86,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                             "label": "API Key",
                             "configured": False,
                             "enabled": True,
+                            "usable": False,
                             "accounts": [],
                             "credential_key": "OLLAMA_API_KEY",
                         }
@@ -107,6 +109,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                             "label": "OAuth",
                             "configured": False,
                             "enabled": True,
+                            "usable": False,
                             "accounts": [],
                             "connectable": False,
                         },
@@ -116,6 +119,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                             "label": "API Key",
                             "configured": True,
                             "enabled": True,
+                            "usable": True,
                             "accounts": [
                                 {
                                     "id": "default",
@@ -226,6 +230,7 @@ async def test_settings_get_marks_device_flow_oauth_connections_connectable(
             "label": "Sign in with GitHub",
             "configured": False,
             "enabled": True,
+            "usable": False,
             "accounts": [],
             "connectable": True,
         }

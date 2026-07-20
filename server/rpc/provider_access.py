@@ -200,6 +200,7 @@ def _provider_settings_connection(runtime: Any, provider_id: str, connection: An
         "label": connection.label,
         "configured": _connection_has_credentials(runtime, provider_id, connection_id),
         "enabled": _connection_is_enabled(runtime, provider_id, connection_id),
+        "usable": _connection_is_usable(runtime, provider_id, connection_id),
         "accounts": _connection_accounts_response(runtime, provider_id, connection),
     }
     if getattr(connection, "auto_refresh", False):

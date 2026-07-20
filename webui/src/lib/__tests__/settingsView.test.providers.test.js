@@ -31,11 +31,13 @@ import {
   getPersistedChatWidth,
   getRecallSettings,
   getSkillDirectories,
+  getUsableProviderItems,
   getWebSearchSettings,
   connectionReachability,
   isAppearanceSaveDisabled,
   isConnectionConfigured,
   isConnectionEnabled,
+  isConnectionUsable,
   isValidAccountId,
   normalizeAccountId,
   normalizeAgentDefaultsSettings,
@@ -157,6 +159,29 @@ describe('settingsView helpers', () => {
     );
     // Absent field never hides a keyed connection.
     expect(isConnectionEnabled({ id: 'openai:api-key' })).toBe(true);
+  });
+
+  it('keeps a configured but disabled keyless provider out of usable providers', () => {
+    const localConnection = {
+      id: 'ollama:local',
+      type: 'none',
+      configured: true,
+      enabled: false,
+      usable: false,
+      accounts: [{ id: 'default', usable: true, source: 'none' }],
+    };
+    const settings = {
+      providers: {
+        items: [{ id: 'ollama', connections: [localConnection] }],
+      },
+    };
+
+    expect(isConnectionConfigured(localConnection)).toBe(true);
+    expect(isConnectionUsable(localConnection)).toBe(false);
+    expect(
+      getConnectedProviderItems(settings).map((provider) => provider.id),
+    ).toEqual(['ollama']);
+    expect(getUsableProviderItems(settings)).toEqual([]);
   });
 
   it('reads probe reachability only when the server states it', () => {

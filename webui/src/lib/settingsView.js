@@ -937,6 +937,13 @@ export function isConnectionEnabled(connection) {
   return connection?.enabled !== false;
 }
 
+// Connection-level behavior gate computed by the server. This deliberately
+// stays distinct from configured credentials and account usability: a keyless
+// local connection has both even while its opt-in enable switch is off.
+export function isConnectionUsable(connection) {
+  return connection?.usable === true;
+}
+
 // Last local-catalog probe outcome: false only when the server positively knows
 // the local endpoint (e.g. Ollama) did not answer. Remote connections have no
 // probe and return null (no statement).
@@ -955,6 +962,17 @@ function providerHasConfiguredConnection(provider) {
 
 export function getConnectedProviderItems(settings) {
   return getProviderItems(settings).filter(providerHasConfiguredConnection);
+}
+
+function providerHasUsableConnection(provider) {
+  return (
+    Array.isArray(provider?.connections) &&
+    provider.connections.some(isConnectionUsable)
+  );
+}
+
+export function getUsableProviderItems(settings) {
+  return getProviderItems(settings).filter(providerHasUsableConnection);
 }
 
 export function getConfiguredConnections(provider) {

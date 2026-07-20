@@ -22,10 +22,24 @@ function apiKey(id, { configured = false } = {}) {
     type: 'api_key',
     label: 'API Key',
     configured,
+    enabled: true,
+    usable: configured,
     credential_key: id.replace(/[:-]/g, '_').toUpperCase(),
     accounts: configured
       ? [{ id: 'default', usable: true, source: 'data_dir' }]
       : [],
+  };
+}
+
+function keyless(id, { enabled = false } = {}) {
+  return {
+    id,
+    type: 'none',
+    label: 'Local',
+    configured: true,
+    enabled,
+    usable: enabled,
+    accounts: [{ id: 'default', usable: true, source: 'none' }],
   };
 }
 
@@ -35,12 +49,15 @@ function deviceFlow(id, { label = 'Sign in' } = {}) {
     type: 'oauth',
     label,
     configured: false,
+    enabled: true,
+    usable: false,
     connectable: true,
     accounts: [],
   };
 }
 
-// The seven providers a fresh install ships, none connected.
+// The eight providers a fresh install ships, none usable. Ollama is keyless and
+// therefore configured, but its local connection stays disabled until opt-in.
 function freshInstallSettings() {
   return {
     providers: {
@@ -87,6 +104,11 @@ function freshInstallSettings() {
           name: 'OpenCode Go',
           connections: [apiKey('opencode-go:api-key')],
         },
+        {
+          id: 'ollama',
+          name: 'Ollama',
+          connections: [keyless('ollama:local'), apiKey('ollama:cloud')],
+        },
       ],
     },
   };
@@ -99,9 +121,10 @@ describe('isOperational', () => {
     expect(isOperational({ providers: { items: [] } })).toBe(false);
   });
 
-  it('is true once any connection is configured', () => {
+  it('is true once any connection is usable', () => {
     const settings = freshInstallSettings();
     settings.providers.items[0].connections[0].configured = true;
+    settings.providers.items[0].connections[0].usable = true;
     expect(isOperational(settings)).toBe(true);
   });
 });
@@ -131,6 +154,7 @@ describe('onboardingHeroScope', () => {
   it('hides the hero once OpenRouter is already connected', () => {
     const settings = freshInstallSettings();
     settings.providers.items[0].connections[0].configured = true;
+    settings.providers.items[0].connections[0].usable = true;
     expect(onboardingHeroScope(settings)).toBeNull();
   });
 });
@@ -191,6 +215,7 @@ describe('connectedProviderId / tips / prefill', () => {
     const settings = freshInstallSettings();
     expect(connectedProviderId(settings)).toBe('');
     settings.providers.items[0].connections[0].configured = true;
+    settings.providers.items[0].connections[0].usable = true;
     expect(connectedProviderId(settings)).toBe('openrouter');
   });
 

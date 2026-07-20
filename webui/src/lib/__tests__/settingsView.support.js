@@ -23,6 +23,8 @@ export function createSettingsPayload(overrides = {}) {
               type: 'api_key',
               label: 'API Key',
               configured: false,
+              enabled: true,
+              usable: false,
               credential_key: 'ANTHROPIC_API_KEY',
               accounts: [],
             },
@@ -41,6 +43,8 @@ export function createSettingsPayload(overrides = {}) {
               type: 'api_key',
               label: 'API Key',
               configured: true,
+              enabled: true,
+              usable: true,
               credential_key: 'OPENAI_API_KEY',
               accounts: [
                 {

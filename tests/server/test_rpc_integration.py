@@ -524,6 +524,7 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                                 "label": "API Key",
                                 "configured": False,
                                 "enabled": True,
+                                "usable": False,
                                 "accounts": [],
                                 "credential_key": "ANTHROPIC_API_KEY",
                             }
@@ -546,6 +547,7 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                                 "label": "API Key",
                                 "configured": True,
                                 "enabled": True,
+                                "usable": True,
                                 "accounts": [
                                     {
                                         "id": "default",
@@ -562,6 +564,7 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                                 "label": "ChatGPT Plus/Pro",
                                 "configured": True,
                                 "enabled": True,
+                                "usable": True,
                                 "accounts": [
                                     {
                                         "id": "default",
