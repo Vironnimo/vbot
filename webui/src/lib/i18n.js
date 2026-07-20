@@ -730,11 +730,44 @@ export const englishCatalog = Object.freeze({
   'settings.groups.connect': 'Connect',
   'settings.groups.models': 'Models',
   'settings.groups.behavior': 'Behavior',
+  'settings.groups.desktop': 'Desktop app',
   'settings.groups.system': 'System',
   'settings.search.placeholder': 'Search settings…',
   'settings.search.label': 'Search settings',
   'settings.search.matches': 'Matches: {count}',
   'settings.search.noMatches': 'No settings match your search.',
+  'settings.desktop.connection.title': 'Connection',
+  'settings.desktop.connection.subtitle':
+    'Choose which vBot server this Desktop app connects to.',
+  'settings.desktop.connection.savedTitle': 'Saved servers',
+  'settings.desktop.connection.savedDescription':
+    'The active server supplies this WebUI. Switching reloads the Desktop app without moving Sessions or Runs.',
+  'settings.desktop.connection.loading': 'Loading saved servers…',
+  'settings.desktop.connection.loadError': 'Saved servers could not be loaded.',
+  'settings.desktop.connection.emptyTitle': 'No saved servers',
+  'settings.desktop.connection.emptyDescription':
+    'Add a server below to make it available for this Desktop app.',
+  'settings.desktop.connection.active': 'Connected',
+  'settings.desktop.connection.connect': 'Connect',
+  'settings.desktop.connection.connecting': 'Connecting…',
+  'settings.desktop.connection.connectError':
+    'The Desktop app could not connect to that server.',
+  'settings.desktop.connection.addTitle': 'Add server',
+  'settings.desktop.connection.addDescription':
+    'Save a local or remote vBot server for this Windows app.',
+  'settings.desktop.connection.host': 'Host',
+  'settings.desktop.connection.hostRequired': 'Enter a server host.',
+  'settings.desktop.connection.port': 'Port',
+  'settings.desktop.connection.portInvalid':
+    'Enter a port between 1 and 65535.',
+  'settings.desktop.connection.label': 'Label (optional)',
+  'settings.desktop.connection.labelPlaceholder': 'Home server',
+  'settings.desktop.connection.addAction': 'Add server',
+  'settings.desktop.connection.addSuccess': 'Server saved.',
+  'settings.desktop.connection.addError': 'Server could not be saved.',
+  'settings.desktop.connection.removeSuccess': 'Server removed.',
+  'settings.desktop.connection.removeError': 'Server could not be removed.',
+  'settings.desktop.switchModalTitle': 'Switch server',
   'settings.general.title': 'Server info',
   'settings.general.subtitle':
     'Server address, data directory, and connected clients.',
@@ -1252,6 +1285,7 @@ export const englishCatalog = Object.freeze({
   'status.serverRestoredTitle': 'Server is reachable again',
   'status.serverRestoredMessage': 'The current view has been refreshed.',
   'status.retryNow': 'Retry now',
+  'status.switchServer': 'Switch server',
 
   'settings.voice.title': 'Voice',
   'settings.voice.subtitle': 'Wakeword detection and voice command settings.',

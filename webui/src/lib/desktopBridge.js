@@ -7,6 +7,10 @@
 const POLL_INTERVAL_MS = 500;
 const BRIDGE_READY_EVENT = 'pywebviewready';
 const BRIDGE_READY_TIMEOUT_MS = 5000;
+const DISABLED_DESKTOP_CAPABILITIES = Object.freeze({
+  wakeword: false,
+  serverSelection: false,
+});
 
 let cachedCapabilities = null;
 let cachedBridgeApi = null;
@@ -79,23 +83,55 @@ function callBridge(method, ...args) {
 /**
  * Fetch desktop capabilities from the bridge.
  * Result is cached after the first successful call from a live bridge.
- * Returns { wakeword: false } when the bridge is absent, without caching.
+ * Returns disabled capability flags when the bridge is absent, without caching.
  */
 export async function getDesktopCapabilities() {
   if (!bridgeAvailable()) {
-    return { wakeword: false };
+    return { ...DISABLED_DESKTOP_CAPABILITIES };
   }
   if (cachedCapabilities && cachedBridgeApi === window.pywebview.api) {
     return cachedCapabilities;
   }
   try {
     const caps = await callBridge('getDesktopCapabilities');
-    cachedCapabilities = caps;
+    cachedCapabilities = {
+      wakeword: Boolean(caps?.wakeword),
+      serverSelection: Boolean(caps?.serverSelection),
+    };
     cachedBridgeApi = window.pywebview.api;
-    return caps;
+    return cachedCapabilities;
   } catch {
-    return { wakeword: false };
+    return { ...DISABLED_DESKTOP_CAPABILITIES };
   }
+}
+
+/** Return Desktop-local remembered servers, including the active marker. */
+export async function listDesktopServers() {
+  const servers = await callBridge('listServers');
+  return Array.isArray(servers) ? servers : [];
+}
+
+/** Remember a Desktop server without changing the current connection. */
+export async function addDesktopServer(host, port, label = '') {
+  return callBridge('addServer', host, port, label);
+}
+
+/** Forget an inactive remembered Desktop server. */
+export async function removeDesktopServer(host, port) {
+  return callBridge('removeServer', host, port);
+}
+
+/**
+ * Probe a remembered Desktop server and navigate only after the bridge Promise
+ * resolves. Replacing the page inside the Python bridge call destroys
+ * pywebview's callback, so JavaScript deliberately owns the final navigation.
+ */
+export async function selectDesktopServer(host, port) {
+  const result = await callBridge('selectServer', host, port);
+  if (result?.url) {
+    window.location.assign(result.url);
+  }
+  return result;
 }
 
 /** Fetch the current wakeword status from the bridge. */

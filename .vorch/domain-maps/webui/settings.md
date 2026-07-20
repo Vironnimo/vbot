@@ -30,9 +30,11 @@ Read this reference only for WebUI Settings, Provider, Extension, Skill, Agent, 
 - Provider recommendations and model-search prefills are presentation guidance. Availability and connectability still come from current backend data.
 - Appearance saves language and Chat width through Settings. Changing the active language updates i18n immediately while persisted state still reconciles to the save result.
 
-## Desktop Voice and browser boundaries
+## Desktop app settings and browser boundaries
 
 - `desktopBridge.js` is the only browser-side seam for the native desktop bridge. Web-only accessors must remain functional when no bridge exists.
+- Desktop capability discovery independently gates `serverSelection` and `wakeword`. When server selection is available, Settings inserts a Desktop app group between Behavior and System; Connection and Voice live there rather than being presented as server-owned settings.
+- `DesktopConnectionSettings.svelte` manages the Desktop-local remembered-server list through `desktopBridge.js`: `listServers` marks the active target, add/remove mutate only the OS per-user Desktop config, and a switch probes through `selectServer` before JavaScript applies the returned URL. The component is reused inside the AppShell outage modal, where it remains interactive outside the otherwise inert server-backed content.
 - `wakewordSettings.js` separates saved Voice settings from runtime wakeword status. Payload builders submit the single active `model_id`, that model's effective sensitivity, microphone, and routing configuration; status subscriptions report what the desktop runtime is currently doing without overwriting unsaved edits.
 - The Voice panel obtains the authoritative model catalog through `listWakewordModels()`. It distinguishes curated Built-ins from imported ONNX models, permits any number to be installed but one to be selected, imports finished custom models through `importWakewordModel()`, and gates permanent imported-model removal with the shared `ConfirmDialog`; custom training is not a WebUI responsibility.
 - Imported-model paths are Desktop-private. The browser receives only the descriptor fields required for selection and management and transfers file content as base64 only for the explicit import call.

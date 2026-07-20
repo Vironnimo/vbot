@@ -21,15 +21,13 @@ Three pieces live here:
 
 Target classification reuses ``probe_target`` / ``validate_host`` /
 ``validate_port`` from :mod:`desktop.main` rather than re-deriving them. pywebview
-and ``webview.menu`` are imported lazily (like the rest of ``desktop/``) so the
-backend test gate never requires the optional GUI package; tests inject a fake
-window and a fake menu module.
+is imported lazily (like the rest of ``desktop/``) so the backend test gate never
+requires the optional GUI package; tests inject a fake window.
 """
 
 from __future__ import annotations
 
 import html
-import importlib
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -60,10 +58,6 @@ from desktop.settings import (
 
 logger = logging.getLogger("vbot.desktop.connection")
 
-MENU_TITLE_SERVER = "Server"
-MENU_ACTION_SWITCH = "Switch…"
-MENU_ACTION_RECONNECT = "Reconnect"
-
 _DEFAULT_HOST_PLACEHOLDER = "127.0.0.1"
 _DEFAULT_PORT_PLACEHOLDER = 8420
 
@@ -80,28 +74,6 @@ class WindowProtocol(Protocol):
 
     def load_html(self, content: str) -> Any:
         """Replace the live window content with inline HTML."""
-
-
-class MenuModule(Protocol):
-    """Subset of ``webview.menu`` used to build the native Server menu.
-
-    The three members are the module-level callables ``Menu`` /
-    ``MenuAction`` / ``MenuSeparator``; the builder only ever reads and calls
-    them, so they are declared read-only (properties) to keep a concrete
-    test double structurally compatible.
-    """
-
-    @property
-    def Menu(self) -> Callable[..., Any]:  # noqa: N802
-        """The ``Menu(title, items)`` constructor."""
-
-    @property
-    def MenuAction(self) -> Callable[..., Any]:  # noqa: N802
-        """The ``MenuAction(title, function)`` constructor."""
-
-    @property
-    def MenuSeparator(self) -> Callable[..., Any]:  # noqa: N802
-        """The ``MenuSeparator()`` constructor."""
 
 
 @dataclass(frozen=True)
@@ -143,11 +115,40 @@ class ServerEntry:
         )
 
     def display_name(self) -> str:
-        """Return a human label for menus/screen — explicit label or host:port."""
+        """Return a human label for the UI — explicit label or host:port."""
 
         if self.label:
             return f"{self.label} ({self.host}:{self.port})"
         return f"{self.host}:{self.port}"
+
+
+@dataclass(frozen=True)
+class PreparedConnection:
+    """A probed connection whose visible navigation has not happened yet.
+
+    pywebview API calls return through a Promise callback stored in the current
+    document. Replacing that document before the Python method returns destroys
+    the callback. This value lets bridge callers receive the outcome first and
+    navigate from JavaScript afterwards, while native launch callers can still
+    apply the same prepared outcome through :meth:`ConnectionController.connect`.
+    """
+
+    result: DesktopProbeResult
+    navigation_url: str | None = None
+    error_title: str | None = None
+    error_body: str | None = None
+
+    def to_bridge_payload(self) -> dict[str, str]:
+        """Return the plain payload consumed by Desktop JavaScript callers."""
+
+        payload = {"status": self.result.status}
+        if self.navigation_url is not None:
+            payload["url"] = self.navigation_url
+        if self.error_title is not None:
+            payload["error_title"] = self.error_title
+        if self.error_body is not None:
+            payload["error_body"] = self.error_body
+        return payload
 
 
 # -- Remembered-servers operations -------------------------------------------
@@ -332,6 +333,28 @@ class ConnectionController:
         so callers/tests can assert the outcome.
         """
 
+        prepared = self.prepare_connect(host, port, label)
+        if prepared.navigation_url is not None:
+            self._navigate_url(prepared.navigation_url)
+        else:
+            self._show_connection_screen(prepared.result)
+        return prepared.result
+
+    def prepare_connect(
+        self,
+        host: str,
+        port: int,
+        label: str | None = None,
+    ) -> PreparedConnection:
+        """Probe and persist a target without replacing the current document.
+
+        Successful attempts are remembered, marked last-used, and announced to
+        the active-server listener exactly like :meth:`connect`, but navigation
+        is returned as data. Failed attempts carry the existing inline error
+        copy. This is the bridge-safe seam: pywebview can deliver the payload to
+        JavaScript before that document applies the outcome.
+        """
+
         target = self._build_target(host, port)
         result = self._probe(target)
 
@@ -339,26 +362,32 @@ class ConnectionController:
             self.add_server(target.host, target.port, label)
             select_server(target.host, target.port, settings_file=self._settings_file)
             logger.info("Desktop connecting to %s:%s", target.host, target.port)
-            self._navigate_url(_with_accessor_param(target.url))
             self._notify_active_server(target.url)
-            return result
+            return PreparedConnection(
+                result=result,
+                navigation_url=_with_accessor_param(target.url),
+            )
 
         logger.warning(
-            "Desktop connection to %s:%s failed (%s); showing connection screen",
+            "Desktop connection to %s:%s failed (%s)",
             host,
             port,
             result.status,
         )
-        self._show_connection_screen(result)
-        return result
+        error_title, error_body = _connection_error_copy(result.status)
+        return PreparedConnection(
+            result=result,
+            error_title=error_title,
+            error_body=error_body,
+        )
 
     def switch_to(self, host: str, port: int, label: str | None = None) -> DesktopProbeResult:
-        """Connect to a chosen remembered/typed server (menu "Switch…" / list pick)."""
+        """Connect to a chosen remembered or typed server."""
 
         return self.connect(host, port, label)
 
     def reconnect(self) -> DesktopProbeResult | None:
-        """Re-probe and reload the last-used target (menu "Reconnect").
+        """Re-probe and reload the last-used target.
 
         With nothing remembered, there is no target to retry — the connection
         screen is shown with no inline error and ``None`` is returned.
@@ -381,7 +410,7 @@ class ConnectionController:
         return self.reconnect()
 
     def show_connection_screen(self) -> None:
-        """Render the connection screen with no inline error (first run / Switch…)."""
+        """Render the connection screen with no inline error."""
 
         self._show_connection_screen(probe_result=None)
 
@@ -390,18 +419,18 @@ class ConnectionController:
     def _build_target(self, host: str, port: int) -> DesktopTarget:
         """Validate host/port into a :class:`DesktopTarget`, carrying any error.
 
-        A bad port raises (it is programmer/UI input, not user free-text); a bad
-        host is folded into ``configuration_error`` so the probe classifies it as
-        an invalid target and the screen can prefill the offending value.
+        Invalid values are folded into ``configuration_error`` so the probe
+        classifies them as an invalid target and the UI can keep the attempted
+        values visible without a bridge exception.
         """
 
-        validated_port = validate_port(port)
         try:
+            validated_port = validate_port(port)
             validated_host = validate_host(host)
         except ValueError as exc:
             return DesktopTarget(
                 host=str(host or ""),
-                port=validated_port,
+                port=_display_port(port),
                 url="",
                 configuration_error=str(exc),
             )
@@ -444,56 +473,6 @@ class ConnectionController:
         if self._window is None:
             raise RuntimeError("ConnectionController has no window attached")
         return self._window
-
-
-# -- Native menu -------------------------------------------------------------
-
-
-def build_server_menu(
-    controller: ConnectionController,
-    *,
-    menu_module: MenuModule | None = None,
-) -> list[Any]:
-    """Build the native "Server" menu wired to the controller.
-
-    Returns a ``list[Menu]`` (the top-level menu list pywebview's
-    ``webview.start(menu=…)`` expects). "Switch…" opens the connection screen so
-    the user can pick another server; "Reconnect" retries the last-used target.
-    pywebview ``MenuAction`` callbacks are nullary, so the controller methods are
-    wrapped in zero-argument closures. The menu module is imported lazily so the
-    backend gate never needs the GUI package; tests inject a fake module.
-    """
-
-    module = menu_module if menu_module is not None else load_menu_module()
-
-    def on_switch() -> None:
-        controller.show_connection_screen()
-
-    def on_reconnect() -> None:
-        controller.reconnect()
-
-    server_menu = module.Menu(
-        MENU_TITLE_SERVER,
-        [
-            module.MenuAction(MENU_ACTION_SWITCH, on_switch),
-            module.MenuSeparator(),
-            module.MenuAction(MENU_ACTION_RECONNECT, on_reconnect),
-        ],
-    )
-    return [server_menu]
-
-
-def load_menu_module() -> MenuModule:
-    """Import ``webview.menu`` lazily so non-desktop gates do not require it."""
-
-    try:
-        return importlib.import_module("webview.menu")
-    except ImportError as exc:
-        raise RuntimeError(
-            "pywebview is required to build the vBot Desktop menu. "
-            "Install the desktop optional dependency group, for example: "
-            'pip install -e ".[desktop]"'
-        ) from exc
 
 
 # -- Connection screen HTML --------------------------------------------------
@@ -666,17 +645,44 @@ def build_connection_html(
       </form>
     </main>
     <script>
+      function showConnectionError(title, body) {{
+        var container = document.getElementById("connection-error");
+        container.hidden = false;
+        container.setAttribute("role", "alert");
+        document.getElementById("connection-error-title").textContent = title;
+        document.getElementById("connection-error-body").textContent = body;
+      }}
+      async function requestConnection(host, port) {{
+        if (!(window.pywebview && window.pywebview.api && window.pywebview.api.connect)) {{
+          showConnectionError(
+            "Desktop bridge unavailable",
+            "The native Desktop bridge is not ready. Close the window and start vBot Desktop again."
+          );
+          return;
+        }}
+        try {{
+          var result = await window.pywebview.api.connect(host, port);
+          if (result.url) {{
+            window.location.assign(result.url);
+            return;
+          }}
+          showConnectionError(result.error_title, result.error_body);
+        }} catch (error) {{
+          showConnectionError(
+            "Connection failed",
+            error && error.message
+              ? error.message
+              : "The Desktop bridge could not connect to that server."
+          );
+        }}
+      }}
       function connectFromForm() {{
         var host = document.getElementById("host").value;
         var port = parseInt(document.getElementById("port").value, 10);
-        if (window.pywebview && window.pywebview.api && window.pywebview.api.connect) {{
-          window.pywebview.api.connect(host, port);
-        }}
+        requestConnection(host, port);
       }}
       function connectSaved(host, port) {{
-        if (window.pywebview && window.pywebview.api && window.pywebview.api.connect) {{
-          window.pywebview.api.connect(host, port);
-        }}
+        requestConnection(host, port);
       }}
       document.querySelectorAll("ul.servers button[data-host]").forEach(function (button) {{
         button.addEventListener("click", function () {{
@@ -690,15 +696,20 @@ def build_connection_html(
 
 
 def _render_error_section(probe_result: DesktopProbeResult | None) -> str:
-    """Return the escaped inline error banner, or an empty string on no failure."""
+    """Return the escaped inline error banner and bridge-update target."""
 
     if probe_result is None or probe_result.status == PROBE_WEBUI_AVAILABLE:
-        return ""
+        return (
+            '      <div id="connection-error" class="error" hidden>\n'
+            '        <h2 id="connection-error-title"></h2>\n'
+            '        <p id="connection-error-body"></p>\n'
+            "      </div>"
+        )
     title, body = _connection_error_copy(probe_result.status)
     return (
-        '      <div class="error" role="alert">\n'
-        f"        <h2>{html.escape(title)}</h2>\n"
-        f"        <p>{html.escape(body)}</p>\n"
+        '      <div id="connection-error" class="error" role="alert">\n'
+        f'        <h2 id="connection-error-title">{html.escape(title)}</h2>\n'
+        f'        <p id="connection-error-body">{html.escape(body)}</p>\n'
         "      </div>"
     )
 
@@ -784,6 +795,15 @@ def _with_accessor_param(url: str) -> str:
 
     separator = "&" if "?" in url else "?"
     return f"{url}{separator}{ACCESSOR_QUERY_PARAM}"
+
+
+def _display_port(value: Any) -> int:
+    """Return a safe form-prefill port for an invalid target."""
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _clear_last_used(settings_file: Path | None) -> None:

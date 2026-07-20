@@ -57,6 +57,7 @@ export function resetAppHarness() {
   // Tests share one jsdom window: drop the location hash a previous test's
   // history navigation left behind so every mount starts on the default tab.
   window.history.replaceState(null, '', window.location.pathname);
+  delete window.pywebview;
   init('en');
   listLogsMock.mockReset();
   listClientsMock.mockReset();
@@ -90,6 +91,7 @@ export async function cleanupAppHarness(mountedComponent) {
 
   document.body.innerHTML = '';
   localStorage.clear();
+  delete window.pywebview;
   rpcMock.mockReset();
   return null;
 }
