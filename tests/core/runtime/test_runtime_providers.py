@@ -1141,6 +1141,7 @@ def test_runtime_loads_phase_two_services(runtime: Runtime) -> None:
         "image_generation",
         "memory",
         "process",
+        "project",
         "read",
         "session_search",
         "skill",

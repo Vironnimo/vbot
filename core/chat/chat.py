@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
@@ -133,8 +133,6 @@ from core.chat.tool_dispatch import (
     ToolDispatchContext,
     _activate_triggered_skills,
     _dispatch_tool_calls,
-    _project_containing_path,
-    _visiting_candidate_paths,
 )
 from core.chat.usage import add_session_turn_usage, aggregate_session_usage
 from core.debug import DebugContext
@@ -176,7 +174,7 @@ if TYPE_CHECKING:
     from core.runs import ChatRunManager
     from core.runtime.interfaces import ProviderCredentialResolverProtocol
     from core.sessions import ChatSessionManager
-    from core.skills.skills import SkillMetadata, SkillRegistry
+    from core.skills.skills import SkillRegistry
     from core.storage import StorageManager
     from core.tools.file_state import FileReadState
     from core.tools.process_manager import ProcessManager
@@ -186,12 +184,6 @@ _LOGGER = get_logger("chat")
 
 MAX_TOOL_ITERATIONS = 1000
 
-# Session-meta key recording which registered projects an identity session has
-# already visited (file tools reached into their repo). It makes the project's
-# house-rules show once per project per session instead of on every file touch,
-# and survives across runs — the visited project lives in the session meta, not
-# the session path.
-VISITED_PROJECTS_META_KEY = "visited_projects"
 # Session-pinned skill catalog snapshot (the rendered ``<available_skills>`` text),
 # stored in session metadata so a mid-session skill write never shifts the session's
 # system prompt (the prompt-cache invariant).
@@ -231,7 +223,6 @@ class ChatLoopDependencies:
     get_system_prompts: Callable[[], SystemPromptManager]
     get_adapter: Callable[[str, str], ProviderAdapter]
     resolve_skills: Callable[[str | None, str | None], SkillRegistry]
-    list_project_skills: Callable[[str], list[SkillMetadata]]
     get_local_context_windows: Callable[[], Mapping[str, Any]]
 
 
@@ -279,8 +270,6 @@ class _RunExecutionContext:
     continuation_tracker: ContinuationTracker | None
     continuation_reminder: str | None
     request_state: _RequestState | None = None
-    visiting_projects: list[Any] | None = None
-    visited_projects_this_run: set[str] = field(default_factory=set)
 
 
 # Skill names the session has already surfaced to the model: the pinned catalog at
@@ -291,15 +280,6 @@ SEEN_SKILLS_META_KEY = "seen_skills"
 # cannot grow without breaking the prompt cache, so additions reach the model here.
 SKILL_AVAILABLE_NEW_SKILLS_HEADER = (
     "New skills are now available to you. Load one by name with the `skill` tool when relevant:"
-)
-
-# Prepended (visiting path only) before a reached-into project's auto-loaded files
-# so the model knows why a foreign project's files appeared in its context.
-VISITING_PROJECT_FILES_PREAMBLE = (
-    "You are visiting project '{project_name}' at '{path}'. The auto-loaded files below "
-    "are this project's instructions. Follow them for every action that affects this "
-    "project for as long as you work on it in this Session. They apply only to this "
-    "project and do not change your home Workspace or cwd."
 )
 
 # How often a streaming attempt may be restarted from scratch after a transient
@@ -886,9 +866,6 @@ class ChatLoop:
             if prompt_project is not None
             else None
         )
-        rooted_project_id = (
-            prompt_project.project_id if project_id is None and prompt_project is not None else None
-        )
         skill_project_id, identity_agent_id = resolve_skill_scope(
             project_id, prompt_project, run.agent_id
         )
@@ -915,9 +892,6 @@ class ChatLoop:
             prior_continuation=prior_continuation,
             continuation_tracker=continuation_tracker,
             continuation_reminder=continuation_reminder,
-            visited_projects_this_run=(
-                {rooted_project_id} if rooted_project_id is not None else set()
-            ),
         )
 
     def _create_model_target(
@@ -1333,122 +1307,21 @@ class ChatLoop:
     def _stamp_prompt_files_read(self, session_id: str, paths: list[Path]) -> None:
         """Register auto-injected prompt files as read-before-write for a session.
 
-        Files whose content vBot places into the model's context on its own — the
-        SOUL / pinned-memory files, a project's auto-load files, workspace includes,
-        and a visited project's files — are treated as already read, so the agent can
-        edit one directly with ``write``/``edit`` without a redundant ``read`` call.
+        Files whose content the System Prompt places into the model's context — SOUL,
+        pinned-memory files, a Project's auto-load files, and workspace includes —
+        are treated as already read, so the agent can edit one directly with
+        ``write``/``edit`` without a redundant ``read`` call.
         The guard still forces a re-read if such a file changes on disk afterwards
         (its ``(mtime, size)`` no longer matches), so the "only while unchanged"
         contract holds. ``paths`` is the resolved-absolute-path list the prompt build
-        / visiting render reported; empty is a no-op.
+        reported; empty is a no-op. The explicit Project Tool stamps its own result
+        files directly through the same ``FileReadState`` instance.
         """
         if not paths:
             return
         file_state = self._dependencies.file_read_state
         for path in paths:
             file_state.record_read(session_id, path)
-
-    def inject_visiting_project_files(
-        self,
-        session: ChatSession,
-        project_context: ProjectPromptContext,
-        *,
-        project_name: str,
-        project_skills: Sequence[Any] = (),
-    ) -> bool:
-        """Inject a visited project's files (and skills) into a session as a reminder.
-
-        The visiting case (plan: a main/identity agent told "work on the project
-        at <path>", cwd unchanged): the project files must reach the model as a
-        ``<system-reminder>`` — **not** the system prompt — because the session is
-        not born in the project. It renders the files with the **same**
-        ``render_project_files`` used for the system-prompt placeholder (one
-        source), prepends a one-line preamble naming the reached-into project, then —
-        after the files — lists the project's own skills (name + description +
-        absolute ``SKILL.md`` path) so the visitor can read a playbook directly with
-        the ``read`` tool. The result is persisted through ``session.add_note``,
-        vBot's existing reminder mechanism (a ``role: "note"`` the chat loop later
-        embeds in ``<system-reminder>`` tags). Returns whether a reminder was added
-        (no files and no skills → no empty reminder).
-
-        This is the reminder **mechanism**; the structural visit *trigger* is
-        ``_inject_visiting_projects``, which calls this when an identity session's
-        file tools reach into a registered project's repo.
-        """
-        read_paths: list[Path] = []
-        rendered_files = self._dependencies.get_system_prompts().render_project_files(
-            project_context, on_read=read_paths.append
-        )
-        # Files inlined into the visiting reminder are auto-shown to the agent, so
-        # stamp them as read — same treatment as a project-born session's prompt files.
-        self._stamp_prompt_files_read(session.id, read_paths)
-        rendered_skills = self._dependencies.get_system_prompts().render_visiting_project_skills(
-            project_name, project_skills
-        )
-        sections = [section for section in (rendered_files, rendered_skills) if section.strip()]
-        if not sections:
-            return False
-        preamble = VISITING_PROJECT_FILES_PREAMBLE.format(
-            project_name=project_name,
-            path=project_context.cwd,
-        )
-        session.add_note("\n".join([preamble, *sections]))
-        return True
-
-    def _inject_visiting_projects(
-        self,
-        session: ChatSession,
-        run: Run,
-        candidate_paths: list[Path],
-        projects: list[Any],
-        visited_this_run: set[str],
-    ) -> None:
-        """Show a visiting identity agent the house-rules of a project it reaches into.
-
-        The structural visit trigger: when this identity session's file tools
-        point at an absolute path inside a registered project's repo, that
-        project's auto-load files (AGENTS.md seeded first) are injected **once** as a
-        ``<system-reminder>`` — the same render a project-born session puts in
-        ``{project_files}``, delivered as a note instead because the agent stays
-        home (cwd unchanged). It runs during the tool-use turn, so the note rides
-        the deferred-note path: persisted after the tool results and embedded in
-        the model's next turn (assistant↔tool adjacency preserved).
-
-        Shown once per project per session: ``visited_this_run`` skips the durable
-        check for projects already handled in this run, and the session meta
-        (:data:`VISITED_PROJECTS_META_KEY`) carries it across runs. ``candidate_paths``
-        are the absolute file-tool targets of this batch and ``projects`` the
-        registered-project list the caller resolved once per run, so this never
-        re-scans the project store mid-run.
-        """
-        metadata: JsonObject | None = None
-        visited_persisted: set[str] = set()
-        changed = False
-        for path in candidate_paths:
-            project = _project_containing_path(path, projects)
-            if project is None or project.project_id in visited_this_run:
-                continue
-            # First time this run reaches the project: consult the durable session
-            # meta so the rules are not re-shown on a later run for the same visit.
-            if metadata is None:
-                metadata = self._dependencies.sessions.get_metadata(run.agent_id, run.session_id)
-                raw_visited = metadata.get(VISITED_PROJECTS_META_KEY)
-                visited_persisted = set(raw_visited) if isinstance(raw_visited, list) else set()
-            visited_this_run.add(project.project_id)
-            if project.project_id in visited_persisted:
-                continue
-            self.inject_visiting_project_files(
-                session,
-                ProjectPromptContext.from_project(project.cwd, project.auto_load),
-                project_name=project.display_name,
-                project_skills=self._dependencies.list_project_skills(project.project_id),
-            )
-            visited_persisted.add(project.project_id)
-            changed = True
-
-        if changed and metadata is not None:
-            metadata[VISITED_PROJECTS_META_KEY] = sorted(visited_persisted)
-            self._dependencies.sessions.set_metadata(run.agent_id, run.session_id, metadata)
 
     async def _build_request_messages(
         self,
@@ -1787,25 +1660,6 @@ class ChatLoop:
                             injection,
                             target.wire_media_types,
                         )
-                    # A file tool that just reached into a registered project's
-                    # repo makes this a visit: inject that project's house-rules as
-                    # a reminder. Added inside the defer window so it lands after
-                    # the tool results and shows up on the model's next turn. The
-                    # project store is consulted only when the batch actually
-                    # targets an absolute path, and at most once per run.
-                    if project_id is None:
-                        candidate_paths = _visiting_candidate_paths(assistant_message.tool_calls)
-                        if candidate_paths:
-                            if context.visiting_projects is None:
-                                context.visiting_projects = self._dependencies.projects.list()
-                            if context.visiting_projects:
-                                self._inject_visiting_projects(
-                                    session,
-                                    run,
-                                    candidate_paths,
-                                    context.visiting_projects,
-                                    context.visited_projects_this_run,
-                                )
                     # Honored only after every sibling tool result is persisted, so
                     # this cooperative stop never itself dangles the assistant turn.
                     # It is not a full JSONL guarantee, though: the forceful

@@ -187,7 +187,7 @@ class RuntimeServices(Protocol):
         ...
 
     def project_own_skills(self, project_id: str) -> list[SkillMetadata]:
-        """Return a project's own scanned skills (name/description/path) for the visit reminder."""
+        """Return a Project's own scanned skills for explicit Project Context."""
         ...
 
     @property

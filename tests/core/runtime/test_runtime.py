@@ -40,6 +40,7 @@ CANONICAL_BUILTIN_TOOLS = [
     "image_generation",
     "memory",
     "process",
+    "project",
     "read",
     "session_search",
     "skill",
@@ -1002,7 +1003,7 @@ def test_skills_for_claude_project_reads_claude_skills_dir(config: Config, tmp_p
     assert "claude-skill" in names
     assert "opencode-skill" not in names
     assert runtime.project_skill_names(project.project_id) == frozenset({"claude-skill"})
-    # The visiting reminder's source sees the same format-scoped set.
+    # Explicit Project Context sees the same format-scoped set.
     assert [skill.name for skill in runtime.project_own_skills(project.project_id)] == [
         "claude-skill"
     ]

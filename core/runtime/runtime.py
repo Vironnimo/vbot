@@ -107,6 +107,7 @@ from core.tools import (
     register_image_generation_tool,
     register_memory_tool,
     register_process_tool,
+    register_project_tool,
     register_read_tool,
     register_session_search_tool,
     register_skill_manage_tool,
@@ -486,9 +487,9 @@ class Runtime:
         self._start_process_manager()
         self._tools = ToolRegistry()
         # Tool-owned System Prompt block declarations (D6): the tool side of the
-        # unified contributor path. The Sub-Agent tool contributes its dynamic
-        # target and delegation guidance here; the runtime hands declarations to
-        # the prompt manager without importing tool classes into the prompt domain.
+        # unified contributor path. Project and Sub-Agent contribute their dynamic
+        # catalogs/guidance here; the runtime hands declarations to the prompt
+        # manager without importing tool classes into the prompt domain.
         self._tool_prompt_blocks = ToolPromptBlockRegistry()
         self._memory_service = MemoryService()
         # One read-before-write guard shared by read/write/edit: read stamps each
@@ -568,6 +569,14 @@ class Runtime:
         self._chat_sessions = ChatSessionManager(self._storage.data_dir)
         register_history_tool(self._tools, self._chat_sessions)
         self._projects = ProjectStore(self._storage.data_dir)
+        register_project_tool(
+            self._tools,
+            self._projects,
+            lambda: self.system_prompts,
+            self.project_own_skills,
+            self._file_state,
+            self._tool_prompt_blocks,
+        )
         self._agent_resolver = build_agent_resolver(
             self._agents,
             self._projects,
@@ -625,7 +634,6 @@ class Runtime:
             get_system_prompts=lambda: self.system_prompts,
             get_adapter=self.get_adapter,
             resolve_skills=self.skills_for,
-            list_project_skills=self.project_own_skills,
             get_local_context_windows=self.local_context_windows,
         )
         self._chat_loop = ChatLoop(
@@ -1156,12 +1164,13 @@ class Runtime:
         return self._project_skill_bundle(project_id).registry
 
     def project_own_skills(self, project_id: str) -> list[SkillMetadata]:
-        """Return a project's own skills (name/description/path) for the visit reminder.
+        """Return a Project's own skills for explicit Project Context loading.
 
-        Scans only the project's own skill directory (its declared source format's
-        location), so the result is exactly the project-owned skills with their
-        ``SKILL.md`` paths — a visiting agent reads those files directly with the
-        ``read`` tool. A missing directory yields an empty list.
+        Scans only the Project's own Skill directory (its declared Source Format's
+        location), so the result is exactly the Project-owned Skills with their
+        ``SKILL.md`` paths. An Identity Agent reads those files directly because
+        loading Project Context does not change Skill scope. A missing directory
+        yields an empty list.
         """
         self._ensure_started()
         project = self.projects.get(project_id)

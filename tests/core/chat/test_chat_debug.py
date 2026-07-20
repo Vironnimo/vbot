@@ -197,7 +197,7 @@ class StubPrompts:
     def render_project_files(self, project_context: Any, *, on_read: Any = None) -> str:
         return "" if project_context is None else "RENDERED-PROJECT-FILES"
 
-    def render_visiting_project_skills(self, project_name: str, skills: Any) -> str:
+    def render_project_skills(self, project_name: str, skills: Any) -> str:
         return ""
 
     def render_skill_catalog(self, agent: StubAgent, skill_registry: Any = None) -> Any:

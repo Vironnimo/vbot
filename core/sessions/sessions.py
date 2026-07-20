@@ -70,15 +70,9 @@ SESSION_FORK_ALWAYS_STRIP_META_KEYS = frozenset(
 # same-agent fork (e.g. ``/reflect``) deliberately keeps them, so the fork stays
 # prompt-cache-warm against the source.
 SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS = frozenset({"pinned_skill_catalog", "seen_skills"})
-# Strip policy for the ``/agent`` move, which is cross-agent by definition (a
-# same-pair move is refused before any relocation): the cross-agent skill keys
-# above, plus the visited-projects record — the recorded visit injections were
-# made for the source agent's runs, so the destination agent must re-trigger
-# them fresh. Same literal-key rationale as the fork sets: ``visited_projects``
-# is owned by ``core/chat`` and importing it here would cycle.
-SESSION_MOVE_STRIP_META_KEYS = SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS | frozenset(
-    {"visited_projects"}
-)
+# A ``/agent`` move is cross-agent by definition, so it uses the same Agent-owned
+# Skill-catalog strip set as a cross-Agent fork.
+SESSION_MOVE_STRIP_META_KEYS = SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS
 SKILL_CONTEXT_NOTE_PREFIX = "[skill-context] "
 # The ``skill`` tool's message name and its fresh-activation status, matched as
 # literals when scanning tool-result carriers (same rationale as the strip-key
@@ -796,8 +790,8 @@ class ChatSessionManager:
         Storage-only: this neither resets any "current" pointer nor touches
         derived indexes — the caller owns those, so the sessions domain stays
         free of chat/recall imports. ``strip_meta_keys`` is taken as a parameter
-        for the same reason: the caller passes chat-owned keys (e.g. the
-        visited-projects key) without this module importing a chat constant.
+        for the same reason: callers can remove domain-owned keys without this
+        module importing those domains.
 
         Ordering is crash-safe. The transcript (``.jsonl``, which alone defines a
         session's existence to :meth:`list`) is relocated first with

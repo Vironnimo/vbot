@@ -49,6 +49,7 @@ Core terms such as Project, Agent, Session, Tool, Skill, and Provider live in `.
 - Change persisted Project fields, anchor layout, CRUD behavior, overrides, path normalization, or removal/archive behavior in `core/projects/projects.py`, `core/projects/store.py`, `core/projects/paths.py`, and the Project RPC boundary. Read `projects/configuration.md` first.
 - Change repository Agent discovery, supported source formats, format detection, collision handling, or scan findings in `core/projects/scanners/` and `core/projects/scan_report.py`; the Project entity only validates the selected `source_format`. Read `projects/scanning.md` first.
 - Change how a Project Agent becomes effective runtime configuration, including model fallback, provenance, Tool/Skill computation, or working-Project helpers, in `core/projects/resolver.py`. Read `projects/resolution.md` first.
+- Change explicit foreign Project Context loading for Identity Agents in `core/tools/project.py`; Projects owns the registered records and repository pointers it reads but does not infer context from arbitrary filesystem paths or own the Tool result (see `tools/project.md`).
 - Change central model availability or scalar-setting validation in Models, Providers, or Settings, not here. Projects consumes those contracts.
 - Change Session persistence, Run lifecycle, Chat behavior, or Tool/Skill implementation in their owning domains. Projects supplies identity, storage anchors, and capability/configuration inputs only.
 

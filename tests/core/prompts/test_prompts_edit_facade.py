@@ -266,6 +266,7 @@ def test_reset_layout_restores_bundled_default(tmp_path: Path) -> None:
         "memory:guidance",
         "core:runtime",
         "core:tools",
+        "tool:project",
         "tool:subagent",
         "core:tools_list",
         "core:channels",

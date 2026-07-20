@@ -237,7 +237,14 @@ def test_tool_list_exposes_default_project_tools() -> None:
 
 def test_tool_list_projects_server_owned_configurability_policy() -> None:
     runtime = SimpleNamespace(
-        tools=_ToolRegistry([_tool_stub("read"), _tool_stub("memory"), _tool_stub("skill_manage")])
+        tools=_ToolRegistry(
+            [
+                _tool_stub("read"),
+                _tool_stub("memory"),
+                _tool_stub("project"),
+                _tool_stub("skill_manage"),
+            ]
+        )
     )
     state = SimpleNamespace(runtime=runtime)
 
@@ -253,6 +260,7 @@ def test_tool_list_projects_server_owned_configurability_policy() -> None:
     assert policy_by_name == {
         "read": (True, None),
         "memory": (False, "controlled_by_agent_memory_mode"),
+        "project": (False, "requires_identity_agent"),
         "skill_manage": (False, "requires_identity_agent_workspace"),
     }
 

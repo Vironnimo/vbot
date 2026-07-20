@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from core.tools.availability import (
+    PROJECT_TOOL_NAME,
     apply_agent_target_tool_visibility,
     effective_agent_allowed_tools,
     subagent_allowed_agents,
@@ -95,6 +96,33 @@ def test_empty_additional_targets_do_not_remove_subagent_tools_from_dispatch() -
 
 def test_missing_subagent_tool_settings_defaults_to_wildcard() -> None:
     assert subagent_allowed_agents({}) == ["*"]
+
+
+def test_project_tool_is_available_only_with_identity_workspace() -> None:
+    registered = ["read", PROJECT_TOOL_NAME]
+
+    identity_allowed = effective_agent_allowed_tools(
+        ["*"],
+        "off",
+        registered_tool_names=registered,
+        workspace="workspace",
+    )
+    config_wildcard = effective_agent_allowed_tools(
+        ["*"],
+        "off",
+        registered_tool_names=registered,
+        workspace="",
+    )
+    config_explicit = effective_agent_allowed_tools(
+        [PROJECT_TOOL_NAME],
+        "off",
+        registered_tool_names=registered,
+        workspace="",
+    )
+
+    assert identity_allowed == ["project", "read"]
+    assert config_wildcard == ["read"]
+    assert config_explicit == []
 
 
 def test_nested_subagent_tool_settings_expose_explicit_targets() -> None:
