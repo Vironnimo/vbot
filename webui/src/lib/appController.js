@@ -77,7 +77,6 @@ export function createAppController({
   isDebugEnabled,
   isOperational,
   onAppError,
-  onClearOutageErrors,
   onLoadProjects,
   onReloadAgents,
   onSetOnboardingAside,
@@ -277,7 +276,6 @@ export function createAppController({
           if (state.connectionState.status !== CONNECTION_STATUS_DISCONNECTED) {
             return;
           }
-          onClearOutageErrors();
           state.serverNoticeState = SERVER_NOTICE_OFFLINE;
         }, unavailableNoticeDelayMs);
       }

@@ -52,7 +52,6 @@ export function createChatRunStream({
   subscribeRunEvents,
   syncSessionQueue,
   isDisplayedSession,
-  setActionError,
   updateSubAgentRunStatuses,
 }) {
   const activeSubscriptions = {};
@@ -84,6 +83,7 @@ export function createChatRunStream({
           // attempts accumulate across the whole run and a handful of drops
           // hours apart would permanently close the live stream.
           retryAttempt = 0;
+          sessionState.streamError = '';
           queueRunEvent(sessionState, data);
         },
         onError: (error) => {
@@ -215,9 +215,7 @@ export function createChatRunStream({
       if (!options.fromServerEvent || !activeSubscriptions[sessionState.key]) {
         closeRunSubscription(sessionState.key);
       }
-      if (event.type !== 'run_failed') {
-        setActionError('');
-      }
+      sessionState.streamError = '';
       void syncSessionQueue(sessionState);
     }
   }
@@ -328,11 +326,9 @@ export function createChatRunStream({
     }
 
     if (retryAttempt < MAX_SSE_RECONNECT_ATTEMPTS) {
-      setActionError(
-        t(
-          'errors.streamReconnecting',
-          'The live stream closed. Reconnecting...',
-        ),
+      sessionState.streamError = t(
+        'errors.streamReconnecting',
+        'The live stream closed. Reconnecting...',
       );
       if (pendingReconnects[sessionKey] !== undefined) {
         return;
@@ -356,12 +352,10 @@ export function createChatRunStream({
       return;
     }
 
-    setActionError(
-      `${t(
-        'errors.streamClosed',
-        'The live stream closed before the run finished. Waiting for server status.',
-      )} ${error?.message ?? ''}`,
-    );
+    sessionState.streamError = `${t(
+      'errors.streamClosed',
+      'The live stream closed before the run finished. Waiting for server status.',
+    )} ${error?.message ?? ''}`;
     closeRunSubscription(sessionState.key);
   }
 

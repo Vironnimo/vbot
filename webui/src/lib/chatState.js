@@ -57,6 +57,7 @@ export function createChatState() {
     loadingHistory: false,
     historyError: '',
     actionError: '',
+    commandsError: '',
     cancellingRun: false,
     continuationActionPending: '',
     availableSkills: [],
@@ -102,6 +103,7 @@ export function createChatController({
   let handledConnectionSnapshot = null;
   let handledQueueInvalidation = null;
   let activityRefreshVersion = 0;
+  let commandsLoadVersion = 0;
 
   function errorMessage(error) {
     return typeof error?.message === 'string' && error.message
@@ -120,7 +122,7 @@ export function createChatController({
       );
       syncQueueFromServer(sessionState, result?.items ?? []);
     } catch (error) {
-      chatState.actionError = `${translate('queue.syncError', 'Queued messages could not be synced.')} ${errorMessage(error)}`;
+      sessionState.actionError = `${translate('queue.syncError', 'Queued messages could not be synced.')} ${errorMessage(error)}`;
     }
   }
 
@@ -201,7 +203,6 @@ export function createChatController({
       if (isDisplayed()) {
         chatState.historyError = errorMessage(error);
       }
-      markSessionError(sessionState, error);
       return false;
     } finally {
       if (startedDisplayed && isDisplayed()) {
@@ -228,7 +229,7 @@ export function createChatController({
       return false;
     }
     sessionState.loadingOlderHistory = true;
-    chatState.actionError = '';
+    sessionState.actionError = '';
     try {
       const history = await operations.loadChatHistory({
         agent_id: sessionState.agentId,
@@ -241,7 +242,7 @@ export function createChatController({
       });
       return true;
     } catch (error) {
-      chatState.actionError = `${translate('chat.historyOlderLoadError', 'Older chat history could not be loaded.')} ${errorMessage(error)}`;
+      sessionState.actionError = `${translate('chat.historyOlderLoadError', 'Older chat history could not be loaded.')} ${errorMessage(error)}`;
       return false;
     } finally {
       sessionState.loadingOlderHistory = false;
@@ -249,9 +250,14 @@ export function createChatController({
   }
 
   async function loadCommands(agentAddress) {
+    const requestVersion = ++commandsLoadVersion;
+    chatState.commandsError = '';
     try {
       const params = agentAddress ? { agent_id: agentAddress } : {};
       const result = await operations.listChatCommands(params);
+      if (requestVersion !== commandsLoadVersion) {
+        return false;
+      }
       const items = Array.isArray(result?.items) ? result.items : [];
       chatState.availableSkills = items
         .filter(
@@ -268,9 +274,14 @@ export function createChatController({
           output: item.output,
         }))
         .filter((item) => item.name.length > 0);
+      return true;
     } catch (error) {
-      chatState.actionError = `${translate('chat.skillsLoadError', 'Command and skill suggestions could not be loaded.')} ${errorMessage(error)}`;
+      if (requestVersion !== commandsLoadVersion) {
+        return false;
+      }
+      chatState.commandsError = `${translate('chat.skillsLoadError', 'Command and skill suggestions could not be loaded.')} ${errorMessage(error)}`;
       chatState.availableSkills = [];
+      return false;
     }
   }
 
@@ -278,7 +289,7 @@ export function createChatController({
     if (!sessionState) {
       return { kind: 'ignored' };
     }
-    chatState.actionError = '';
+    sessionState.actionError = '';
     const retainedContinuation = sessionState.continuation;
     sessionState.continuation = null;
     try {
@@ -327,8 +338,7 @@ export function createChatController({
       return { kind: 'started', runId: run.run_id ?? '' };
     } catch (error) {
       sessionState.continuation = retainedContinuation;
-      chatState.actionError = `${translate('chat.sendError', 'Message could not be sent.')} ${errorMessage(error)}`;
-      markSessionError(sessionState, error);
+      sessionState.actionError = `${translate('chat.sendError', 'Message could not be sent.')} ${errorMessage(error)}`;
       return { kind: 'failed' };
     }
   }
@@ -339,25 +349,34 @@ export function createChatController({
       return;
     }
     chatState.cancellingRun = true;
-    chatState.actionError = '';
+    sessionState.actionError = '';
     try {
       await operations.cancelRun(runId, { reason: 'user' });
     } catch (error) {
-      chatState.actionError = `${translate('chat.cancelError', 'Run could not be cancelled.')} ${errorMessage(error)}`;
+      sessionState.actionError = `${translate('chat.cancelError', 'Run could not be cancelled.')} ${errorMessage(error)}`;
     } finally {
       chatState.cancellingRun = false;
     }
   }
 
-  async function cancelTool({ agentId = '', runId, toolCallId } = {}) {
+  async function cancelTool({
+    sessionState,
+    agentId = '',
+    runId,
+    toolCallId,
+  } = {}) {
     if (!runId || !toolCallId) {
       return;
     }
-    chatState.actionError = '';
+    if (sessionState) {
+      sessionState.actionError = '';
+    }
     try {
       await operations.cancelToolCall({ agentId, runId, toolCallId });
     } catch (error) {
-      chatState.actionError = `${translate('chat.cancelError', 'Run could not be cancelled.')} ${errorMessage(error)}`;
+      if (sessionState) {
+        sessionState.actionError = `${translate('chat.cancelError', 'Run could not be cancelled.')} ${errorMessage(error)}`;
+      }
     }
   }
 
@@ -365,7 +384,7 @@ export function createChatController({
     if (!sessionState || isRunActive(sessionState)) {
       return false;
     }
-    chatState.actionError = '';
+    sessionState.actionError = '';
     chatState.continuationActionPending = 'continue';
     sessionState.continuation = null;
     try {
@@ -379,7 +398,7 @@ export function createChatController({
       });
       return true;
     } catch (error) {
-      chatState.actionError = `${translate('chat.continueError', 'Continue failed.')} ${errorMessage(error)}`;
+      sessionState.actionError = `${translate('chat.continueError', 'Continue failed.')} ${errorMessage(error)}`;
       await loadHistoryForSession(sessionState.agentId, sessionState.sessionId);
       return false;
     } finally {
@@ -391,7 +410,7 @@ export function createChatController({
     if (!sessionState || isRunActive(sessionState)) {
       return;
     }
-    chatState.actionError = '';
+    sessionState.actionError = '';
     chatState.continuationActionPending = 'discard';
     try {
       await operations.discardContinuation(
@@ -400,7 +419,7 @@ export function createChatController({
       );
       sessionState.continuation = null;
     } catch (error) {
-      chatState.actionError = `${translate('chat.discardContinuationError', 'Discard failed.')} ${errorMessage(error)}`;
+      sessionState.actionError = `${translate('chat.discardContinuationError', 'Discard failed.')} ${errorMessage(error)}`;
     } finally {
       chatState.continuationActionPending = '';
     }
@@ -410,7 +429,7 @@ export function createChatController({
     if (!sessionState) {
       return;
     }
-    chatState.actionError = '';
+    sessionState.actionError = '';
     try {
       await operations.removeFromQueue(
         sessionState.agentId,
@@ -419,7 +438,7 @@ export function createChatController({
       );
       removeQueuedMessage(sessionState, queuedMessageId);
     } catch (error) {
-      chatState.actionError = `${translate('queue.removeError', 'Queued message could not be removed.')} ${errorMessage(error)}`;
+      sessionState.actionError = `${translate('queue.removeError', 'Queued message could not be removed.')} ${errorMessage(error)}`;
     }
   }
 
@@ -432,7 +451,7 @@ export function createChatController({
     if (!sessionState) {
       return;
     }
-    chatState.actionError = '';
+    sessionState.actionError = '';
     try {
       await operations.updateQueueItem(
         sessionState.agentId,
@@ -443,7 +462,7 @@ export function createChatController({
       );
       updateQueuedMessageContent(sessionState, queuedMessageId, newContent);
     } catch (error) {
-      chatState.actionError = `${translate('queue.editError', 'Queued message could not be edited.')} ${errorMessage(error)}`;
+      sessionState.actionError = `${translate('queue.editError', 'Queued message could not be edited.')} ${errorMessage(error)}`;
     }
   }
 
@@ -699,6 +718,8 @@ export function ensureSessionState(state, agentId, sessionId) {
       queue: [],
       status: CHAT_STATUS_IDLE,
       error: null,
+      actionError: '',
+      streamError: '',
       streamStatus: CHAT_STATUS_IDLE,
       usage: null,
       sessionUsage: null,
@@ -875,6 +896,7 @@ export function loadHistory(sessionState, messages, options = {}) {
   sessionState.error = null;
   if (!isRunActive(sessionState)) {
     sessionState.status = CHAT_STATUS_IDLE;
+    sessionState.streamError = '';
   }
   const lastUsage = findLastUsage(sessionState.messages);
   if (lastUsage) {
@@ -925,6 +947,7 @@ export function startRun(sessionState, run) {
   };
   sessionState.status = CHAT_STATUS_RUNNING;
   sessionState.error = null;
+  sessionState.streamError = '';
   sessionState.streamStatus = CHAT_STATUS_RUNNING;
   sessionState.continuation = null;
   sessionState.streamingRunEvents = [];
@@ -1033,6 +1056,7 @@ export function finishRun(sessionState, event) {
   }
   sessionState.status = status ?? terminalStatus(type);
   sessionState.streamStatus = CHAT_STATUS_IDLE;
+  sessionState.streamError = '';
   sessionState.streamingRunEvents = [];
   sessionState.streamingPhase = 0;
   sessionState.seenStreamingEventKeys = new Set();
@@ -1158,17 +1182,6 @@ function highestContiguousSequence(sequences) {
   return sequence;
 }
 
-export function markSessionError(sessionState, error) {
-  if (sessionState.currentRun) {
-    sessionState.currentRun.status = CHAT_STATUS_FAILED;
-  }
-  sessionState.status = CHAT_STATUS_FAILED;
-  sessionState.error = error?.message ?? String(error);
-  sessionState.streamStatus = CHAT_STATUS_IDLE;
-  sessionState.streamingRunEvents = [];
-  return sessionState;
-}
-
 function normalizeServerQueuedItem(item) {
   return {
     id: item.id,
@@ -1244,6 +1257,7 @@ export function resetStaleRun(sessionState) {
   }
   sessionState.status = CHAT_STATUS_IDLE;
   sessionState.streamStatus = CHAT_STATUS_IDLE;
+  sessionState.streamError = '';
   sessionState.currentRun = null;
   sessionState.streamingRunEvents = [];
   sessionState.streamingPhase = 0;
