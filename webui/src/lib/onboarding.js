@@ -7,7 +7,7 @@
 import {
   getAddProviderCandidates,
   getAddableConnections,
-  getConnectedProviderItems,
+  getUsableProviderItems,
   isOAuthDeviceFlowConnection,
 } from './settingsView.js';
 
@@ -28,11 +28,11 @@ export const PROVIDER_MODEL_SEARCH_PREFILL = Object.freeze({
   [ONBOARDING_HERO_PROVIDER_ID]: 'free',
 });
 
-// Operational ⇔ at least one provider carries usable credentials. This is the
-// live trigger the wizard hangs off: not operational means a fresh, unconnected
-// install; connecting anywhere flips it true.
+// Operational ⇔ at least one Connection is server-confirmed usable. This is the
+// live trigger the wizard hangs off: a configured but disabled keyless local
+// Connection must not skip setup; connecting or enabling one flips it true.
 export function isOperational(settings) {
-  return getConnectedProviderItems(settings).length > 0;
+  return getUsableProviderItems(settings).length > 0;
 }
 
 // Whether an agent has no model assigned yet (empty/whitespace). A model-less
@@ -44,9 +44,9 @@ export function agentNeedsModel(agent) {
 }
 
 // The connected provider that drives the model step's tip/prefill: the first
-// provider with usable credentials. On a fresh onboarding there is exactly one.
+// provider with a usable Connection. On a fresh onboarding there is exactly one.
 export function connectedProviderId(settings) {
-  const first = getConnectedProviderItems(settings)[0];
+  const first = getUsableProviderItems(settings)[0];
   return typeof first?.id === 'string' ? first.id : '';
 }
 

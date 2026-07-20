@@ -31,6 +31,8 @@ function settingsPayload(connected) {
               type: 'api_key',
               label: 'API Key',
               configured: connected,
+              enabled: true,
+              usable: connected,
               credential_key: 'OPENROUTER_API_KEY',
               accounts: connected
                 ? [{ id: 'default', usable: true, source: 'data_dir' }]
@@ -57,6 +59,21 @@ function settingsPayload(connected) {
               configured: false,
               connectable: true,
               accounts: [],
+            },
+          ],
+        },
+        {
+          id: 'ollama',
+          name: 'Ollama',
+          connections: [
+            {
+              id: 'ollama:local',
+              type: 'none',
+              label: 'Local',
+              configured: true,
+              enabled: false,
+              usable: false,
+              accounts: [{ id: 'default', usable: true, source: 'none' }],
             },
           ],
         },

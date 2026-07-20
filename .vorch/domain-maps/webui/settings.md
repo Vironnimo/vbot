@@ -25,7 +25,7 @@ Read this reference only for WebUI Settings, Provider, Extension, Skill, Agent, 
 
 ## Onboarding and appearance
 
-- `onboarding.js` derives operational readiness and the recommended next action from server-backed Settings, Provider connections, and the target Agent's model state. It does not persist a second readiness flag.
+- `onboarding.js` derives operational readiness and the recommended next action from server-backed Settings, Provider connections, and the target Agent's model state. Operational readiness requires at least one Connection whose server-projected `usable` value is true; a configured but disabled keyless Connection such as fresh-install `ollama:local` remains visible in Provider management but does not skip the Provider step or make Chat ask for a Model first. The frontend does not persist a second readiness flag or reconstruct usability from credentials, Account state, enablement, or reachability.
 - Automatic onboarding is a one-shot entry into the Settings surface; users can later reopen the flow explicitly. Completing one step refreshes the underlying resources before deciding the next step.
 - Provider recommendations and model-search prefills are presentation guidance. Availability and connectability still come from current backend data.
 - Appearance saves language and Chat width through Settings. Changing the active language updates i18n immediately while persisted state still reconciles to the save result.

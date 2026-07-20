@@ -42,7 +42,7 @@ API keys resolve from process environment first and data-dir `.env` second. Key 
 
 ## RPC and runtime projections
 
-- `connection.list` combines static Provider/Connection config with Account/configured/enabled/usable state and optional local reachability.
+- `connection.list` combines static Provider/Connection config with Account/configured/enabled/usable state and optional local reachability. The Provider projection inside `settings.get` preserves the same Connection-level `configured`, `enabled`, and server-owned `usable` distinction so management surfaces and behavior gates do not infer one state from another.
 - `connection.set_enabled` persists the explicit Connection override. Enabling an auto-refresh Connection forces an immediate local catalog attempt; enabled-but-unreachable remains a valid persisted state.
 - `provider.set_key`/`unset_key` address API-key Accounts through derived keys and never return secret values.
 - Provider connect/status/disconnect operate on OAuth Accounts and token-store state.
