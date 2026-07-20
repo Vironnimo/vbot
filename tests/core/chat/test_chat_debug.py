@@ -184,12 +184,14 @@ class StubPrompts:
         *,
         agent_body: str = "",
         project_context: Any = None,
+        agent_project_id: str | None = None,
         skill_registry: Any = None,
         skill_catalog: Any = None,
         read_paths: list[Path] | None = None,
         effective_tool_names: Any = None,
         session_tool_grants: Any = (),
     ) -> str:
+        del agent_project_id
         return f"System for {agent.id}"
 
     def render_project_files(self, project_context: Any, *, on_read: Any = None) -> str:

@@ -119,12 +119,14 @@ async def test_send_omits_empty_system_prompt(tmp_path: Path) -> None:
             *,
             agent_body: str = "",
             project_context: Any = None,
+            agent_project_id: str | None = None,
             skill_registry: Any = None,
             skill_catalog: Any = None,
             read_paths: list[Path] | None = None,
             effective_tool_names: Any = None,
             session_tool_grants: Any = (),
         ) -> str:
+            del agent_project_id
             return "\n"
 
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])

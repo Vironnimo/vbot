@@ -173,7 +173,7 @@ async def test_session_tool_grant_precedes_agent_and_run_dispatch_gates(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_empty_agent_targets_block_subagent_at_dispatch(tmp_path: Path) -> None:
+async def test_empty_additional_agent_targets_keep_subagent_dispatchable(tmp_path: Path) -> None:
     tools = ToolRegistry()
     tools.register(
         "subagent",
@@ -200,7 +200,7 @@ async def test_empty_agent_targets_block_subagent_at_dispatch(tmp_path: Path) ->
         base_allowed_tools=("subagent",),
     )
 
-    assert _decode_tool_result(messages[0].content)["error"]["code"] == "tool_not_allowed"
+    assert _decode_tool_result(messages[0].content) == tool_success({"ran": True})
 
 
 class TestDispatchCancelWiring:

@@ -655,7 +655,10 @@
     const currentItems = configuredAgentTargets;
     const hasWildcard = currentItems.includes(WILDCARD_ACCESS);
     const catalog = Array.isArray(availableAgentTargets)
-      ? availableAgentTargets
+      ? availableAgentTargets.filter(
+          (target) =>
+            target.kind !== 'identity' || target.name !== formValues.id,
+        )
       : [];
     const knownNames = new Set(catalog.map((target) => target.name));
     const missingTargets = hasWildcard
@@ -1440,7 +1443,7 @@
               <InfoHint
                 text={t(
                   'agents.form.allowedAgentsHelp',
-                  'Tool-specific settings for subagent and subagent_result. Project Agents use agent@project addresses. Rooting does not narrow this permission.',
+                  'Additional targets for subagent and subagent_result. The calling Agent is always available by omitting agent_id and is not listed here. Project Agents use agent@project ids. Rooting does not narrow this permission.',
                 )}
               />
             </span>
@@ -1449,16 +1452,16 @@
             items={agentTargetChipItems}
             emptyLabel={t(
               'agents.access.noAgentTargets',
-              'No Agent targets are available.',
+              'No additional Agent targets are available.',
             )}
             note={agentsAreWildcard && visibleAgentTargetItems.length > 0
               ? t(
                   'agents.form.agentWildcardNote',
-                  'Allowed agents: all Identity Agents and all Agents on every registered Project, including ones added later. Rooting does not narrow this.',
+                  'Additional Agents: all other Identity Agents and all Agents on every registered Project, including ones added later. The calling Agent remains implicit. Rooting does not narrow this.',
                 )
               : t(
                   'agents.form.agentAddressNote',
-                  'Allowed agents use bare Identity ids or agent@project addresses. Rooting does not change this list.',
+                  'Additional Agents use bare Identity ids or agent@project ids. The calling Agent remains implicit. Rooting does not change this list.',
                 )}
             ariaToggleLabel={(name) =>
               t('agents.access.toggleAgent', 'Toggle agent {name}', { name })}

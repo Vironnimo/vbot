@@ -1548,12 +1548,15 @@ export function projectAgentTargetSummary(member, team = []) {
   if (!Array.isArray(configured)) {
     return { mode: 'unavailable', agents: [] };
   }
-  const allowed = normalizeStringList(configured);
+  const callerAgentId = asText(member?.agent_id).trim();
+  const allowed = normalizeStringList(configured).filter(
+    (agentId) => agentId !== callerAgentId,
+  );
   const teamIds = (Array.isArray(team) ? team : [])
     .map((candidate) => asText(candidate?.agent_id).trim())
-    .filter(Boolean);
+    .filter((agentId) => agentId && agentId !== callerAgentId);
   if (allowed.length === 0) {
-    return { mode: 'none', agents: [] };
+    return { mode: 'self', agents: [] };
   }
   const allowedSet = new Set(allowed);
   if (

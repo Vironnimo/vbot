@@ -739,6 +739,7 @@ class ChatLoop:
                 wire_media_types=_resolve_wire_media_support(adapter, model_id),
                 agent_body=runtime_agent_body(agent),
                 project_context=prompt_context,
+                agent_project_id=project_id,
                 skill_registry=skill_registry,
                 skill_catalog=self._pinned_skill_catalog(
                     agent_id, session_id, agent, skill_registry, project_id
@@ -1032,6 +1033,7 @@ class ChatLoop:
                 wire_media_types=target.wire_media_types,
                 agent_body=runtime_agent_body(agent),
                 project_context=context.project_prompt_context,
+                agent_project_id=context.project_id,
                 skill_registry=context.skill_registry,
                 skill_catalog=context.skill_catalog,
             )
@@ -1457,6 +1459,7 @@ class ChatLoop:
         wire_media_types: frozenset[str] = frozenset(),
         agent_body: str = "",
         project_context: ProjectPromptContext | None = None,
+        agent_project_id: str | None = None,
         skill_registry: SkillRegistry | None = None,
         skill_catalog: PinnedSkillCatalog | None = None,
     ) -> list[JsonObject]:
@@ -1467,6 +1470,7 @@ class ChatLoop:
             wire_media_types=wire_media_types,
             agent_body=agent_body,
             project_context=project_context,
+            agent_project_id=agent_project_id,
             skill_registry=skill_registry,
             skill_catalog=skill_catalog,
         )
@@ -1481,6 +1485,7 @@ class ChatLoop:
         wire_media_types: frozenset[str] = frozenset(),
         agent_body: str = "",
         project_context: ProjectPromptContext | None = None,
+        agent_project_id: str | None = None,
         skill_registry: SkillRegistry | None = None,
         skill_catalog: PinnedSkillCatalog | None = None,
     ) -> _RequestState:
@@ -1507,6 +1512,7 @@ class ChatLoop:
             agent,
             agent_body=agent_body,
             project_context=project_context,
+            agent_project_id=agent_project_id,
             skill_registry=skill_registry,
             skill_catalog=skill_catalog,
             read_paths=prompt_read_paths,
@@ -2000,6 +2006,7 @@ class ChatLoop:
             wire_media_types=target.wire_media_types,
             agent_body=runtime_agent_body(agent),
             project_context=context.project_prompt_context,
+            agent_project_id=context.project_id,
             skill_registry=compaction_skill_registry,
             # Reuse the session's pinned snapshot so the rebuilt prompt's catalog is
             # byte-identical across the compaction checkpoint.

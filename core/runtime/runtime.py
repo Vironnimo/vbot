@@ -486,10 +486,9 @@ class Runtime:
         self._start_process_manager()
         self._tools = ToolRegistry()
         # Tool-owned System Prompt block declarations (D6): the tool side of the
-        # unified contributor path. No built-in tool declares a block today; the
-        # seam exists so a tool's register_* can contribute prompt content the
-        # runtime gathers and hands to the prompt manager (never importing tool
-        # classes into the prompts domain).
+        # unified contributor path. The Sub-Agent tool contributes its dynamic
+        # target and delegation guidance here; the runtime hands declarations to
+        # the prompt manager without importing tool classes into the prompt domain.
         self._tool_prompt_blocks = ToolPromptBlockRegistry()
         self._memory_service = MemoryService()
         # One read-before-write guard shared by read/write/edit: read stamps each
@@ -690,7 +689,11 @@ class Runtime:
         register_cron_tool(self._tools, self._cron_service)
         register_bash_tool(self._tools, self._process_manager, self._trigger_service)
         self._subagent_coordinator = SubAgentCoordinator(self, self._trigger_service)
-        register_subagent_tools(self._tools, self._subagent_coordinator)
+        register_subagent_tools(
+            self._tools,
+            self._subagent_coordinator,
+            self._tool_prompt_blocks,
+        )
         register_status_tool(
             self._tools,
             self._agent_resolver,
