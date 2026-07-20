@@ -49,10 +49,12 @@ async function startProjectChat(page, agentName) {
   const emptySessions = sessionDrawer.getByText("No sessions yet", {
     exact: true,
   });
-  const currentSession = sessionDrawer.getByText("Current", { exact: true });
+  const selectedSession = sessionDrawer.locator(
+    "button.session-row__select--active",
+  );
   await expect(async () => {
     expect(
-      (await emptySessions.isVisible()) || (await currentSession.isVisible()),
+      (await emptySessions.isVisible()) || (await selectedSession.isVisible()),
     ).toBe(true);
   }).toPass();
   const previousCount = await sessionItems.count();
