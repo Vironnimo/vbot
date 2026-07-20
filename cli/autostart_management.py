@@ -16,7 +16,8 @@ import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -73,7 +74,7 @@ def enable_autostart(
     task_name: str | None = None,
     service_name: str | None = None,
     unit_dir: Path | None = None,
-    vbot_path: str | None = None,
+    windows_launcher_path: str | None = None,
     python_executable: str = sys.executable,
     repo_root: Path | None = None,
 ) -> CommandResult:
@@ -82,7 +83,10 @@ def enable_autostart(
     run = runner or _default_runner
     if platform == "win32":
         registered = _windows_enable(
-            instance, run, task_name=task_name or DEFAULT_TASK_NAME, vbot_path=vbot_path
+            instance,
+            run,
+            task_name=task_name or DEFAULT_TASK_NAME,
+            launcher_path=windows_launcher_path,
         )
         started_by_service = False
     elif platform.startswith("linux"):
@@ -210,14 +214,21 @@ def autostart_status(
 
 
 def _windows_enable(
-    instance: ServerInstance, run: Runner, *, task_name: str, vbot_path: str | None
+    instance: ServerInstance, run: Runner, *, task_name: str, launcher_path: str | None
 ) -> _Step:
-    vbot = vbot_path or _resolve_vbot_path()
-    if vbot is None:
-        return _Step(False, "autostart: could not locate the vbot command to schedule")
-    action = (
-        f'"{vbot}" server start --host {instance.host} '
-        f'--port {instance.port} --data-dir "{instance.data_dir}"'
+    launcher = launcher_path or _resolve_windows_autostart_path()
+    if launcher is None:
+        return _Step(False, "autostart: could not locate the windowless vBot launcher")
+    action = subprocess.list2cmdline(
+        [
+            launcher,
+            "--host",
+            instance.host,
+            "--port",
+            str(instance.port),
+            "--data-dir",
+            str(instance.data_dir),
+        ]
     )
     created = run(["schtasks", "/Create", "/TN", task_name, "/TR", action, "/SC", "ONLOGON", "/F"])
     if created.returncode != 0:
@@ -372,21 +383,44 @@ def _systemd_user_dir() -> Path:
     return Path.home() / ".config" / "systemd" / "user"
 
 
-def _resolve_vbot_path() -> str | None:
+def _resolve_windows_autostart_path() -> str | None:
     import sysconfig
 
     # The active interpreter identifies the environment that owns this CLI.
     # Prefer its Scripts directory over PATH, which may contain another vBot
     # checkout and silently register the wrong executable for autostart.
     scripts_dir = Path(sysconfig.get_path("scripts"))
-    for name in ("vbot.exe", "vbot.cmd", "vbot"):
+    for name in ("vbot-autostart.exe", "vbot-autostart.cmd", "vbot-autostart"):
         candidate = scripts_dir / name
         if candidate.exists():
             return str(candidate)
-    found = shutil.which("vbot")
+    found = shutil.which("vbot-autostart")
     if found:
         return found
     return None
+
+
+def windows_autostart_main(
+    argv: Sequence[str] | None = None,
+    *,
+    run_cli: Callable[[Sequence[str]], int] | None = None,
+) -> None:
+    """Start the server through the Windows GUI entrypoint without a console."""
+
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    with (
+        open(os.devnull, "w", encoding="utf-8") as output,
+        redirect_stdout(output),
+        redirect_stderr(output),
+    ):
+        if run_cli is None:
+            # Import lazily to avoid the normal CLI's import of this module
+            # forming a cycle during startup.
+            from cli.main import run
+
+            run_cli = run
+        exit_code = run_cli(["server", "start", *arguments])
+    raise SystemExit(exit_code)
 
 
 def _repo_root() -> Path:
