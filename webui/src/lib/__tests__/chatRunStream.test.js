@@ -22,7 +22,6 @@ function makeStreamHarness({
     (agentId, sessionId) =>
       agentId === displayedAgentId && sessionId === displayedSessionId,
   );
-  const setActionError = vi.fn();
   const syncSessionQueue = vi.fn(async () => {});
 
   const stream = createChatRunStream({
@@ -34,7 +33,6 @@ function makeStreamHarness({
       })),
     syncSessionQueue,
     isDisplayedSession,
-    setActionError,
     updateSubAgentRunStatuses: (updates, { replaceActive = false } = {}) => {
       if (replaceActive) {
         for (const [key, value] of Object.entries(subAgentRunStatuses)) {
@@ -54,7 +52,6 @@ function makeStreamHarness({
     stream,
     subAgentRunStatuses,
     isDisplayedSession,
-    setActionError,
     syncSessionQueue,
   };
 }
@@ -202,11 +199,10 @@ describe('createChatRunStream().applyConnectionSnapshot()', () => {
 
     harness.stream.applyConnectionSnapshot(snapshot);
 
-    // The only way `setActionError` could be called here is via
-    // `recoverRunStream`, which only fires after a subscription error.
-    // No subscription was opened, so the action-error path is unreachable.
+    // Stream warnings belong to their Session and only appear after a
+    // subscription error. No subscription was opened here.
     expect(subscribeRunEvents).not.toHaveBeenCalled();
-    expect(harness.setActionError).not.toHaveBeenCalled();
+    expect(sessionState.streamError).toBe('');
     expect(harness.subAgentRunStatuses).toEqual({});
     expect(sessionState.status).toBe(CHAT_STATUS_IDLE);
     expect(sessionState.currentRun).toBeNull();
@@ -364,7 +360,12 @@ describe('createChatRunStream() SSE reconnect budget (regression for B2)', () =>
       ],
     });
     expect(subscriptions).toHaveLength(1);
-    return { subscriptions, harness };
+    const sessionState = ensureSessionState(
+      chatState,
+      DISPLAYED_AGENT_ID,
+      DISPLAYED_SESSION_ID,
+    );
+    return { subscriptions, harness, sessionState };
   }
 
   function runEvent(sequence) {
@@ -381,7 +382,7 @@ describe('createChatRunStream() SSE reconnect budget (regression for B2)', () =>
   }
 
   it('resets the reconnect budget once events flow again, so transient drops spread over a run never exhaust it', () => {
-    const { subscriptions } = setupRunningStream();
+    const { subscriptions, sessionState } = setupRunningStream();
 
     // More drops than MAX_SSE_RECONNECT_ATTEMPTS, each preceded by a
     // successfully delivered event. With the per-run accumulating counter
@@ -390,14 +391,16 @@ describe('createChatRunStream() SSE reconnect budget (regression for B2)', () =>
     for (let drop = 0; drop < 5; drop += 1) {
       const subscription = subscriptions[subscriptions.length - 1];
       subscription.handlers.onEvent(runEvent(drop + 1));
+      expect(sessionState.streamError).toBe('');
       subscription.handlers.onError(new Error('transient drop'));
+      expect(sessionState.streamError).toContain('Reconnecting');
       vi.advanceTimersByTime(500);
       expect(subscriptions).toHaveLength(drop + 2);
     }
   });
 
   it('gives up only after consecutive failed reconnects, with exponential backoff between attempts', () => {
-    const { subscriptions, harness } = setupRunningStream();
+    const { subscriptions, sessionState } = setupRunningStream();
 
     // Attempt 0 → 500ms delay.
     subscriptions[0].handlers.onError(new Error('drop'));
@@ -421,14 +424,13 @@ describe('createChatRunStream() SSE reconnect budget (regression for B2)', () =>
     expect(subscriptions).toHaveLength(4);
 
     // Attempt 3 hits MAX_SSE_RECONNECT_ATTEMPTS → permanent close.
-    harness.setActionError.mockClear();
     subscriptions[3].handlers.onError(new Error('drop'));
     vi.runAllTimers();
     expect(subscriptions).toHaveLength(4);
     expect(subscriptions[3].close).toHaveBeenCalled();
-    expect(harness.setActionError).toHaveBeenCalledTimes(1);
-    expect(harness.setActionError.mock.calls[0][0]).not.toContain(
-      'Reconnecting',
+    expect(sessionState.streamError).not.toContain('Reconnecting');
+    expect(sessionState.streamError).toContain(
+      'The live stream closed before the run finished',
     );
   });
 });

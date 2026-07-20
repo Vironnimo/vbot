@@ -23,7 +23,6 @@ function setup(overrides = {}) {
   };
   const actions = {
     onAppError: vi.fn(),
-    onClearOutageErrors: vi.fn(),
     onLoadProjects: vi.fn(),
     onReloadAgents: vi.fn(),
     onSetOnboardingAside: vi.fn(),
@@ -160,13 +159,12 @@ describe('App controller', () => {
 
   it('owns delayed offline and restored connection notices', async () => {
     vi.useFakeTimers();
-    const { actions, controller, state } = setup();
+    const { controller, state } = setup();
 
     state.connectionState.status = CONNECTION_STATUS_DISCONNECTED;
     controller.handleConnectionStatusChange();
     await vi.advanceTimersByTimeAsync(10);
     expect(state.serverNoticeState).toBe('offline');
-    expect(actions.onClearOutageErrors).toHaveBeenCalledOnce();
 
     state.connectionState.status = CONNECTION_STATUS_CONNECTED;
     controller.handleConnectionStatusChange();

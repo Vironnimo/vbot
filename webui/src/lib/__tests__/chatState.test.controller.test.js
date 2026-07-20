@@ -138,8 +138,26 @@ describe('chat controller', () => {
     await controller.syncSessionQueue(sessionState);
     controller.destroy();
 
-    expect(chatState.actionError).toContain('offline');
+    expect(sessionState.actionError).toContain('offline');
+    expect(chatState.actionError).toBe('');
     expect(runStream.closeSubscriptions).toHaveBeenCalledOnce();
+  });
+
+  it('keeps history transport failures separate from Run failures', async () => {
+    const loadChatHistory = vi.fn().mockRejectedValue(new Error('offline'));
+    const { chatState, controller } = setup({
+      isDisplayedSession: () => true,
+      operationOverrides: { loadChatHistory },
+    });
+
+    expect(await controller.loadHistoryForSession('alpha', 'session-one')).toBe(
+      false,
+    );
+
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    expect(chatState.historyError).toBe('offline');
+    expect(sessionState.error).toBeNull();
+    expect(sessionState.status).toBe('idle');
   });
 
   it('loads the roster, current history, Run truth, and Queue as one lifecycle', async () => {
@@ -191,6 +209,34 @@ describe('chat controller', () => {
     expect(listChatCommands).toHaveBeenCalledWith({ agent_id: 'alpha' });
     expect(chatState.availableSkills).toMatchObject([
       { name: 'help', type: 'command' },
+      { name: 'review', type: 'skill' },
+    ]);
+  });
+
+  it('ignores stale command errors after a newer Agent catalog loads', async () => {
+    let rejectOlderRequest;
+    const listChatCommands = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            rejectOlderRequest = reject;
+          }),
+      )
+      .mockResolvedValueOnce({
+        items: [{ name: 'review', type: 'skill', description: 'Review code' }],
+      });
+    const { chatState, controller } = setup({
+      operationOverrides: { listChatCommands },
+    });
+
+    const olderLoad = controller.loadCommands('alpha');
+    expect(await controller.loadCommands('beta')).toBe(true);
+    rejectOlderRequest(new Error('old Agent offline'));
+    expect(await olderLoad).toBe(false);
+
+    expect(chatState.commandsError).toBe('');
+    expect(chatState.availableSkills).toMatchObject([
       { name: 'review', type: 'skill' },
     ]);
   });
@@ -329,5 +375,24 @@ describe('chat controller', () => {
       '/events/run-one',
       { afterSequence: 0 },
     );
+  });
+
+  it('attaches send admission errors only to the addressed Session', async () => {
+    const startChatRun = vi.fn().mockRejectedValue(new Error('provider down'));
+    const { chatState, controller } = setup({
+      operationOverrides: { startChatRun },
+    });
+    const addressed = ensureSessionState(chatState, 'alpha', 'session-one');
+    const other = ensureSessionState(chatState, 'alpha', 'session-two');
+
+    expect(await controller.sendMessage(addressed, 'Hello')).toEqual({
+      kind: 'failed',
+    });
+
+    expect(addressed.actionError).toContain('provider down');
+    expect(addressed.error).toBeNull();
+    expect(addressed.status).toBe('idle');
+    expect(other.actionError).toBe('');
+    expect(chatState.actionError).toBe('');
   });
 });

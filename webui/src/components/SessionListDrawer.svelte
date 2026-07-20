@@ -26,7 +26,6 @@
   let {
     agentId = '',
     currentSessionId = '',
-    agentCurrentSessionId = '',
     // Bumped by ChatView on `resource_changed(kind:"sessions")` so a new or
     // switched session created in another window appears here automatically.
     reloadToken = 0,
@@ -487,11 +486,6 @@
                     ></span>
                     <span>{t('sessions.unreadCompletion', 'Unread')}</span>
                   </span>
-                {/if}
-                {#if session.id === asText(agentCurrentSessionId)}
-                  <Badge variant="success">
-                    {t('sessions.current', 'Current')}
-                  </Badge>
                 {/if}
                 {#if session.platform}
                   <Badge variant="info">

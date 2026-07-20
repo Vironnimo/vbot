@@ -84,6 +84,15 @@ describe('App', () => {
       expect(document.querySelector('.server-availability-notice')).toBeNull();
       const initialConnectionHandlers =
         subscribeServerEventsMock.mock.calls[0][0];
+      initialConnectionHandlers.onEvent({
+        type: 'app_error',
+        sequence: 1,
+        payload: { message: 'A saved operation failed.' },
+      });
+      flushSync();
+      const unrelatedErrorToast = document.querySelector('.toast.error');
+      expect(unrelatedErrorToast).toBeTruthy();
+
       initialConnectionHandlers.onClose();
       flushSync();
 
@@ -104,6 +113,9 @@ describe('App', () => {
       expect(offlineNotice).toBeTruthy();
       expect(offlineNotice.getAttribute('role')).toBe('alert');
       expect(offlineNotice.textContent).toContain('Server is not reachable');
+      // The offline notice replaces connection symptoms, not unrelated sticky
+      // errors the user has not dismissed.
+      expect(document.querySelector('.toast.error')).toBe(unrelatedErrorToast);
 
       const agentsNavigation = [
         ...document.querySelectorAll('.app-shell__nav-item'),
