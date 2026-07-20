@@ -90,11 +90,11 @@ async def test_channel_create_happy_path_calls_service_and_reload() -> None:
         },
     )
 
-    assert response == {"ok": True, "result": {"id": "tg-assistant"}}
     channel_service.create_channel.assert_called_once()
     created_config = channel_service.create_channel.call_args.args[0]
     assert isinstance(created_config, ChannelConfig)
     assert created_config.to_dict() == _channel_config(observe_unaddressed=True).to_dict()
+    assert response == {"ok": True, "result": created_config.to_dict()}
     state.runtime.agents.get.assert_called_once_with("assistant")
     state.runtime.reload_channel_tool.assert_called_once_with()
     assert state.event_bus.events[-1]["payload"] == {"kind": "channels"}
@@ -103,6 +103,17 @@ async def test_channel_create_happy_path_calls_service_and_reload() -> None:
 @pytest.mark.asyncio
 async def test_channel_update_happy_path_calls_service_and_reload() -> None:
     channel_service = Mock()
+    updated_config = ChannelConfig(
+        id="tg-assistant",
+        platform="telegram",
+        agent_id="assistant",
+        dm_scope="main",
+        allowed_chat_ids=["12345", "-100"],
+        token_env_var="TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
+        enabled=False,
+        observe_unaddressed=True,
+    )
+    channel_service.list_channels.return_value = [updated_config]
     state = _state(channel_service=channel_service)
 
     response = await dispatch_rpc(
@@ -119,7 +130,7 @@ async def test_channel_update_happy_path_calls_service_and_reload() -> None:
         },
     )
 
-    assert response == {"ok": True, "result": {"ok": True}}
+    assert response == {"ok": True, "result": updated_config.to_dict()}
     channel_service.update_channel.assert_called_once_with(
         "tg-assistant",
         dm_scope="main",
@@ -135,6 +146,8 @@ async def test_channel_update_happy_path_calls_service_and_reload() -> None:
 @pytest.mark.asyncio
 async def test_channel_update_validates_agent_when_agent_id_is_present() -> None:
     channel_service = Mock()
+    updated_config = _channel_config()
+    channel_service.list_channels.return_value = [updated_config]
     state = _state(channel_service=channel_service)
 
     response = await dispatch_rpc(
@@ -148,7 +161,7 @@ async def test_channel_update_validates_agent_when_agent_id_is_present() -> None
         },
     )
 
-    assert response == {"ok": True, "result": {"ok": True}}
+    assert response == {"ok": True, "result": updated_config.to_dict()}
     state.runtime.agents.get.assert_called_once_with("assistant")
     channel_service.update_channel.assert_called_once_with(
         "tg-assistant",
@@ -170,6 +183,8 @@ async def test_channel_mutation_methods_call_service_and_reload(
     service_method: str,
 ) -> None:
     channel_service = Mock()
+    config = _channel_config(enabled=method != "channel.disable")
+    channel_service.list_channels.return_value = [config]
     state = _state(channel_service=channel_service)
 
     response = await dispatch_rpc(
@@ -182,7 +197,8 @@ async def test_channel_mutation_methods_call_service_and_reload(
         },
     )
 
-    assert response == {"ok": True, "result": {"ok": True}}
+    expected_result = {"ok": True} if method == "channel.delete" else config.to_dict()
+    assert response == {"ok": True, "result": expected_result}
     getattr(channel_service, service_method).assert_called_once_with("tg-assistant")
     state.runtime.reload_channel_tool.assert_called_once_with()
     assert state.event_bus.events[-1]["payload"] == {"kind": "channels"}
@@ -559,8 +575,8 @@ async def test_channel_create_accepts_discord_platform() -> None:
         },
     )
 
-    assert response == {"ok": True, "result": {"id": "dc-assistant"}}
     created_config = state.runtime.channel_service.create_channel.call_args.args[0]
+    assert response == {"ok": True, "result": created_config.to_dict()}
     assert created_config.platform == "discord"
 
 

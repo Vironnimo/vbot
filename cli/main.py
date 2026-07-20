@@ -31,7 +31,13 @@ from cli.channel_management import (
     channel_status,
     channel_update,
 )
-from cli.config_management import coerce_config_value, config_get, config_set, config_show
+from cli.config_management import (
+    coerce_config_value,
+    config_effective,
+    config_get,
+    config_set,
+    config_show,
+)
 from cli.cron_management import (
     cron_create,
     cron_delete,
@@ -61,12 +67,23 @@ from cli.model_management import model_list, model_refresh
 from cli.parser import parse_args
 from cli.project_management import (
     project_add,
+    project_clear_override,
     project_list,
     project_remove,
     project_set,
+    project_set_override,
     project_show,
 )
-from cli.prompt_management import prompt_list, prompt_preview, prompt_reset, prompt_update
+from cli.prompt_management import (
+    prompt_create,
+    prompt_list,
+    prompt_preview,
+    prompt_remove,
+    prompt_reset,
+    prompt_reset_layout,
+    prompt_set_layout,
+    prompt_update,
+)
 from cli.provider_management import (
     provider_connect,
     provider_connect_status,
@@ -76,6 +93,7 @@ from cli.provider_management import (
     provider_set_key,
     provider_status,
     provider_unset_key,
+    provider_usage,
 )
 from cli.server_management import (
     DEFAULT_SERVICE_NAME,
@@ -90,10 +108,21 @@ from cli.server_management import (
 from cli.session_management import (
     session_create,
     session_delete,
+    session_fork,
     session_link_channel,
     session_list,
+    session_rename,
+    session_set_compaction_policy,
 )
-from cli.skill_management import skill_list
+from cli.skill_management import (
+    skill_create,
+    skill_delete,
+    skill_list,
+    skill_read,
+    skill_remove_file,
+    skill_update,
+    skill_write_file,
+)
 from cli.statistics_management import statistics_report
 from cli.task_model_management import (
     task_model_clear,
@@ -168,7 +197,20 @@ def run(
     update_agent: Callable[[ServerInstance, str, dict[str, Any]], CommandResult] = agent_update,
     delete_agent: Callable[[ServerInstance, str], CommandResult] = agent_delete,
     add_channel: Callable[
-        [ServerInstance, str, str, str, str, str, Sequence[str]], CommandResult
+        [
+            ServerInstance,
+            str,
+            str,
+            str,
+            str,
+            str,
+            Sequence[str],
+            str,
+            Sequence[str],
+            Sequence[str],
+            bool,
+        ],
+        CommandResult,
     ] = channel_add,
     list_channels: Callable[[ServerInstance], CommandResult] = channel_list,
     remove_channel: Callable[[ServerInstance, str], CommandResult] = channel_remove,
@@ -177,16 +219,19 @@ def run(
     disable_channel: Callable[[ServerInstance, str], CommandResult] = channel_disable,
     channel_status_fn: Callable[[ServerInstance, str], CommandResult] = channel_status,
     list_tools_fn: Callable[[ServerInstance], CommandResult] = tool_list,
-    list_prompts_fn: Callable[[ServerInstance], CommandResult] = prompt_list,
-    update_prompt_fn: Callable[[ServerInstance, str, str], CommandResult] = prompt_update,
-    reset_prompt_fn: Callable[[ServerInstance, str], CommandResult] = prompt_reset,
-    preview_prompt_fn: Callable[[ServerInstance, str], CommandResult] = prompt_preview,
+    list_prompts_fn: Callable[[ServerInstance, str], CommandResult] = prompt_list,
+    update_prompt_fn: Callable[[ServerInstance, str, str, str], CommandResult] = prompt_update,
+    reset_prompt_fn: Callable[[ServerInstance, str, str], CommandResult] = prompt_reset,
+    preview_prompt_fn: Callable[[ServerInstance, str, str], CommandResult] = prompt_preview,
     list_logs_fn: Callable[[ServerInstance], CommandResult] = log_list,
     read_log_fn: Callable[[ServerInstance, str], CommandResult] = log_read,
     list_providers: Callable[[ServerInstance], CommandResult] = provider_list,
     provider_status_fn: Callable[
         [ServerInstance, str, str | None], CommandResult
     ] = provider_status,
+    provider_usage_fn: Callable[
+        [ServerInstance, Sequence[str] | None], CommandResult
+    ] = provider_usage,
     set_provider_key: Callable[
         [ServerInstance, str, str, str | None, bool, str | None], CommandResult
     ] = provider_set_key,
@@ -203,6 +248,7 @@ def run(
     show_extension_fn: Callable[[ServerInstance, str], CommandResult] = extensions_show,
     set_extension_fn: Callable[[ServerInstance, str, str, str], CommandResult] = extensions_set,
     show_config_fn: Callable[[ServerInstance], CommandResult] = config_show,
+    effective_config_fn: Callable[[ServerInstance], CommandResult] = config_effective,
     get_config_fn: Callable[[ServerInstance, str], CommandResult] = config_get,
     set_config_fn: Callable[[ServerInstance, str, Any], CommandResult] = config_set,
     doctor_settings_fn: Callable[[str | Path | None], CommandResult] = doctor_settings,
@@ -345,6 +391,7 @@ def run(
             instance,
             list_providers=list_providers,
             provider_status_fn=provider_status_fn,
+            provider_usage_fn=provider_usage_fn,
             set_provider_key=set_provider_key,
         )
         print_management_command_result(result)
@@ -401,6 +448,7 @@ def run(
             args,
             instance,
             show_config_fn=show_config_fn,
+            effective_config_fn=effective_config_fn,
             get_config_fn=get_config_fn,
             set_config_fn=set_config_fn,
         )
@@ -444,9 +492,13 @@ def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
     changes: dict[str, Any] = {}
     if args.command == "update" and getattr(args, "name", None) is not None:
         changes["name"] = args.name
-    if args.model is not None:
+    if getattr(args, "clear_model", False):
+        changes["model"] = ""
+    elif args.model is not None:
         changes["model"] = args.model
-    if args.fallback_model is not None:
+    if getattr(args, "clear_fallback_model", False):
+        changes["fallback_model"] = ""
+    elif args.fallback_model is not None:
         changes["fallback_model"] = args.fallback_model
     if args.clear_temperature:
         changes["temperature"] = None
@@ -464,6 +516,12 @@ def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         changes["allowed_tools"] = list(args.allowed_tools)
     if args.allowed_skills is not None:
         changes["allowed_skills"] = list(args.allowed_skills)
+    if args.subagent_allow is not None:
+        changes["tools"] = {"subagent": {"allowed_agents": list(args.subagent_allow)}}
+    if getattr(args, "clear_compaction_policy", False):
+        changes["compaction_policy"] = None
+    elif args.compaction_policy is not None:
+        changes["compaction_policy"] = args.compaction_policy
     if getattr(args, "default_workspace", False):
         changes["workspace"] = None
     elif getattr(args, "workspace", None) is not None:
@@ -487,7 +545,13 @@ def dispatch_project_command(
     list_projects_fn: Callable[[ServerInstance], CommandResult] = project_list,
     show_project_fn: Callable[[ServerInstance, str], CommandResult] = project_show,
     set_project_fn: Callable[[ServerInstance, str, dict[str, Any]], CommandResult] = project_set,
-    remove_project_fn: Callable[[ServerInstance, str], CommandResult] = project_remove,
+    set_override_fn: Callable[
+        [ServerInstance, str, str, str, str], CommandResult
+    ] = project_set_override,
+    clear_override_fn: Callable[
+        [ServerInstance, str, str, str], CommandResult
+    ] = project_clear_override,
+    remove_project_fn: Callable[[ServerInstance, str, bool], CommandResult] = project_remove,
 ) -> CommandResult:
     """Dispatch one parsed project command against the server RPC client."""
 
@@ -499,8 +563,12 @@ def dispatch_project_command(
         return show_project_fn(instance, args.id)
     if args.command == "set":
         return set_project_fn(instance, args.id, _project_set_changes_from_args(args))
+    if args.command == "set-override":
+        return set_override_fn(instance, args.id, args.agent, args.field, args.value)
+    if args.command == "clear-override":
+        return clear_override_fn(instance, args.id, args.agent, args.field)
     if args.command == "rm":
-        return remove_project_fn(instance, args.id)
+        return remove_project_fn(instance, args.id, args.copy_rooted_agent_files)
     raise ValueError(f"Unsupported project command: {args.command}")
 
 
@@ -517,6 +585,7 @@ def _project_add_fields_from_args(args: argparse.Namespace) -> dict[str, Any]:
         fields["source_format"] = args.format
     if args.auto_load is not None:
         fields["auto_load"] = list(args.auto_load)
+    _apply_project_capability_fields(args, fields)
     return fields
 
 
@@ -539,7 +608,21 @@ def _project_set_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         changes["source_format"] = args.format
     if args.auto_load is not None:
         changes["auto_load"] = list(args.auto_load)
+    _apply_project_capability_fields(args, changes)
     return changes
+
+
+def _apply_project_capability_fields(args: argparse.Namespace, target: dict[str, Any]) -> None:
+    mappings = {
+        "allowed_tools": "allowed_tools",
+        "enabled_bundled_skills": "skills_bundled_enabled",
+        "enabled_global_skills": "skills_global_enabled",
+        "disabled_project_skills": "skills_project_disabled",
+    }
+    for argument, field in mappings.items():
+        value = getattr(args, argument, None)
+        if value is not None:
+            target[field] = list(value)
 
 
 def _apply_project_default_knobs(args: argparse.Namespace, target: dict[str, Any]) -> None:
@@ -572,6 +655,11 @@ def dispatch_session_command(
     link_session_fn: Callable[
         [ServerInstance, str, str, str, str], CommandResult
     ] = session_link_channel,
+    fork_session_fn: Callable[[ServerInstance, str, str, str | None], CommandResult] = session_fork,
+    rename_session_fn: Callable[[ServerInstance, str, str, str], CommandResult] = session_rename,
+    set_session_policy_fn: Callable[
+        [ServerInstance, str, str, dict[str, object] | None], CommandResult
+    ] = session_set_compaction_policy,
 ) -> CommandResult:
     """Dispatch one parsed session command against the server RPC client."""
 
@@ -581,6 +669,12 @@ def dispatch_session_command(
         return create_session_fn(instance, args.agent, args.id, args.make_current)
     if args.command == "delete":
         return delete_session_fn(instance, args.agent, args.session, args.yes)
+    if args.command == "fork":
+        return fork_session_fn(instance, args.agent, args.session, args.target_agent)
+    if args.command == "rename":
+        return rename_session_fn(instance, args.agent, args.session, args.title or "")
+    if args.command == "set-compaction-policy":
+        return set_session_policy_fn(instance, args.agent, args.session, args.policy)
     if args.command == "link-channel":
         return link_session_fn(instance, args.agent, args.session, args.channel, args.conversation)
     raise ValueError(f"Unsupported session command: {args.command}")
@@ -603,15 +697,23 @@ def dispatch_prompt_command(
     args: argparse.Namespace,
     instance: ServerInstance,
     *,
-    list_prompts_fn: Callable[[ServerInstance], CommandResult],
-    update_prompt_fn: Callable[[ServerInstance, str, str], CommandResult],
-    reset_prompt_fn: Callable[[ServerInstance, str], CommandResult],
-    preview_prompt_fn: Callable[[ServerInstance, str], CommandResult],
+    list_prompts_fn: Callable[[ServerInstance, str], CommandResult],
+    update_prompt_fn: Callable[[ServerInstance, str, str, str], CommandResult],
+    reset_prompt_fn: Callable[[ServerInstance, str, str], CommandResult],
+    preview_prompt_fn: Callable[[ServerInstance, str, str], CommandResult],
+    create_prompt_fn: Callable[
+        [ServerInstance, str, str | None, int | None, str], CommandResult
+    ] = prompt_create,
+    remove_prompt_fn: Callable[[ServerInstance, str, str], CommandResult] = prompt_remove,
+    set_prompt_layout_fn: Callable[
+        [ServerInstance, list[object], str], CommandResult
+    ] = prompt_set_layout,
+    reset_prompt_layout_fn: Callable[[ServerInstance, str], CommandResult] = prompt_reset_layout,
 ) -> CommandResult:
     """Dispatch one parsed prompt command against the server RPC client."""
 
     if args.command == "list":
-        return list_prompts_fn(instance)
+        return list_prompts_fn(instance, args.scope)
     if args.command == "update":
         try:
             content = _prompt_content_from_args(args)
@@ -621,11 +723,27 @@ def dispatch_prompt_command(
                 message=f"cannot read prompt content file: {exc}",
                 instance=instance,
             )
-        return update_prompt_fn(instance, args.block_id, content)
+        return update_prompt_fn(instance, args.block_id, content, args.scope)
     if args.command == "reset":
-        return reset_prompt_fn(instance, args.block_id)
+        return reset_prompt_fn(instance, args.block_id, args.scope)
+    if args.command == "create":
+        try:
+            create_content = _optional_content_from_args(args)
+        except OSError as exc:
+            return CommandResult(
+                ok=False,
+                message=f"cannot read prompt content file: {exc}",
+                instance=instance,
+            )
+        return create_prompt_fn(instance, args.slug, create_content, args.position, args.scope)
+    if args.command == "remove":
+        return remove_prompt_fn(instance, args.block_id, args.scope)
+    if args.command == "set-layout":
+        return set_prompt_layout_fn(instance, args.layout_json, args.scope)
+    if args.command == "reset-layout":
+        return reset_prompt_layout_fn(instance, args.scope)
     if args.command == "preview":
-        return preview_prompt_fn(instance, args.agent)
+        return preview_prompt_fn(instance, args.agent, args.scope)
     raise ValueError(f"Unsupported prompt command: {args.command}")
 
 
@@ -655,11 +773,36 @@ def _prompt_content_from_args(args: argparse.Namespace) -> str:
     return Path(content_file).read_text(encoding="utf-8")
 
 
+def _optional_content_from_args(args: argparse.Namespace) -> str | None:
+    content = getattr(args, "content", None)
+    if isinstance(content, str):
+        return content
+    content_file = getattr(args, "content_file", None)
+    if isinstance(content_file, str):
+        return Path(content_file).read_text(encoding="utf-8")
+    return None
+
+
 def dispatch_channel_command(
     args: argparse.Namespace,
     instance: ServerInstance,
     *,
-    add_channel: Callable[[ServerInstance, str, str, str, str, str, Sequence[str]], CommandResult],
+    add_channel: Callable[
+        [
+            ServerInstance,
+            str,
+            str,
+            str,
+            str,
+            str,
+            Sequence[str],
+            str,
+            Sequence[str],
+            Sequence[str],
+            bool,
+        ],
+        CommandResult,
+    ],
     list_channels: Callable[[ServerInstance], CommandResult],
     remove_channel: Callable[[ServerInstance, str], CommandResult],
     update_channel: Callable[[ServerInstance, str, dict[str, Any]], CommandResult],
@@ -678,6 +821,10 @@ def dispatch_channel_command(
             args.token_env,
             args.dm_scope,
             args.allow,
+            args.response_mode,
+            args.mention_patterns,
+            args.owner_user_ids,
+            args.observe_unaddressed == "true",
         )
     if args.command == "list":
         return list_channels(instance)
@@ -708,6 +855,14 @@ def _channel_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         changes["allowed_chat_ids"] = list(args.allow)
     if args.enabled is not None:
         changes["enabled"] = args.enabled == "true"
+    if args.response_mode is not None:
+        changes["response_mode"] = args.response_mode
+    if args.mention_patterns is not None:
+        changes["mention_patterns"] = list(args.mention_patterns)
+    if args.owner_user_ids is not None:
+        changes["owner_user_ids"] = list(args.owner_user_ids)
+    if args.observe_unaddressed is not None:
+        changes["observe_unaddressed"] = args.observe_unaddressed == "true"
     return changes
 
 
@@ -717,6 +872,7 @@ def dispatch_provider_command(
     *,
     list_providers: Callable[[ServerInstance], CommandResult],
     provider_status_fn: Callable[[ServerInstance, str, str | None], CommandResult],
+    provider_usage_fn: Callable[[ServerInstance, Sequence[str] | None], CommandResult],
     set_provider_key: Callable[
         [ServerInstance, str, str, str | None, bool, str | None], CommandResult
     ],
@@ -742,6 +898,8 @@ def dispatch_provider_command(
         return list_providers(instance)
     if args.command == "status":
         return provider_status_fn(instance, args.provider, args.connection)
+    if args.command == "usage":
+        return provider_usage_fn(instance, args.connection)
     if args.command in ("enable", "disable"):
         return set_enabled_fn(instance, args.provider, args.command == "enable", args.connection)
     if args.command == "set-key":
@@ -812,11 +970,45 @@ def dispatch_skill_command(
     instance: ServerInstance,
     *,
     list_skills_fn: Callable[[ServerInstance], CommandResult],
+    read_skills_fn: Callable[[ServerInstance, str], CommandResult] = skill_read,
+    create_skill_fn: Callable[
+        [ServerInstance, str, str, str, str | None], CommandResult
+    ] = skill_create,
+    update_skill_fn: Callable[
+        [ServerInstance, str, str, str, str | None], CommandResult
+    ] = skill_update,
+    delete_skill_fn: Callable[[ServerInstance, str, str, bool], CommandResult] = skill_delete,
+    write_skill_file_fn: Callable[
+        [ServerInstance, str, str, str, str], CommandResult
+    ] = skill_write_file,
+    remove_skill_file_fn: Callable[
+        [ServerInstance, str, str, str, bool], CommandResult
+    ] = skill_remove_file,
 ) -> CommandResult:
     """Dispatch one parsed skill command against the server RPC client."""
 
     if args.command == "list":
         return list_skills_fn(instance)
+    if args.command == "read":
+        return read_skills_fn(instance, args.scope)
+    if args.command in {"create", "update", "write-file"}:
+        try:
+            content = _prompt_content_from_args(args)
+        except (OSError, ValueError) as exc:
+            return CommandResult(
+                ok=False,
+                message=f"cannot read skill content file: {exc}",
+                instance=instance,
+            )
+        if args.command == "create":
+            return create_skill_fn(instance, args.scope, args.name, content, args.source)
+        if args.command == "update":
+            return update_skill_fn(instance, args.scope, args.name, content, args.source)
+        return write_skill_file_fn(instance, args.scope, args.name, args.path, content)
+    if args.command == "delete":
+        return delete_skill_fn(instance, args.scope, args.name, args.yes)
+    if args.command == "remove-file":
+        return remove_skill_file_fn(instance, args.scope, args.name, args.path, args.yes)
     raise ValueError(f"Unsupported skill command: {args.command}")
 
 
@@ -1029,6 +1221,7 @@ def dispatch_config_command(
     instance: ServerInstance,
     *,
     show_config_fn: Callable[[ServerInstance], CommandResult],
+    effective_config_fn: Callable[[ServerInstance], CommandResult],
     get_config_fn: Callable[[ServerInstance, str], CommandResult],
     set_config_fn: Callable[[ServerInstance, str, Any], CommandResult],
 ) -> CommandResult:
@@ -1036,6 +1229,8 @@ def dispatch_config_command(
 
     if args.command is None:
         return show_config_fn(instance)
+    if args.command == "effective":
+        return effective_config_fn(instance)
     if args.command == "get":
         return get_config_fn(instance, args.key)
     if args.command == "set":

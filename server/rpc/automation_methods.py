@@ -80,7 +80,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
             )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return {"id": job.id}
+    return _cron_job_response(state.runtime.cron_service, job)
 
 
 def _cron_list(state: Any, params: JsonObject) -> JsonObject:
@@ -153,16 +153,16 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
     if "agent_id" in updates:
         try:
             async with _agent_reference_lock(state):
-                state.runtime.cron_service.update_job(job_id, **updates)
+                job = state.runtime.cron_service.update_job(job_id, **updates)
         except Exception as exc:
             raise _map_expected_error(exc) from exc
-        return {"ok": True}
+        return _cron_job_response(state.runtime.cron_service, job)
 
     try:
-        state.runtime.cron_service.update_job(job_id, **updates)
+        job = state.runtime.cron_service.update_job(job_id, **updates)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return {"ok": True}
+    return _cron_job_response(state.runtime.cron_service, job)
 
 
 def _cron_delete(state: Any, params: JsonObject) -> JsonObject:
@@ -181,10 +181,10 @@ def _cron_enable(state: Any, params: JsonObject) -> JsonObject:
 
     job_id = _required_string(params, "id")
     try:
-        state.runtime.cron_service.enable_job(job_id)
+        job = state.runtime.cron_service.enable_job(job_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return {"ok": True}
+    return _cron_job_response(state.runtime.cron_service, job)
 
 
 def _cron_disable(state: Any, params: JsonObject) -> JsonObject:
@@ -192,10 +192,10 @@ def _cron_disable(state: Any, params: JsonObject) -> JsonObject:
 
     job_id = _required_string(params, "id")
     try:
-        state.runtime.cron_service.disable_job(job_id)
+        job = state.runtime.cron_service.disable_job(job_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return {"ok": True}
+    return _cron_job_response(state.runtime.cron_service, job)
 
 
 def _cron_job_response(cron_service: Any, job: Any) -> JsonObject:

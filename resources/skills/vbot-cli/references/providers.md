@@ -5,9 +5,12 @@
 ```bash
 vbot provider list
 vbot provider status <provider-id> [--connection <provider:connection-id>]
+vbot provider usage [--connection <provider:connection-id>]...
 ```
 
 `provider list` shows every connection with its enabled/usable state, accounts, credential source, and — for local endpoints — reachability. Run it before model or agent configuration work.
+
+`provider usage` probes live upstream subscription limits for every supported usable Connection, or only the Connection ids selected by repeated `--connection` flags. It reports the plan, percentage used and remaining, reset timestamps, and a per-Provider error without hiding successful siblings. This is live Provider state; use `statistics usage` for persisted Session token/cost totals.
 
 ## Enable / disable a connection
 

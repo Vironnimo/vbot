@@ -109,6 +109,23 @@ def test_parse_args_supports_provider_status_options() -> None:
     assert args.connection == "openrouter:api-key"
 
 
+def test_parse_args_supports_provider_usage_connection_filters() -> None:
+    args = cli_main.parse_args(
+        [
+            "provider",
+            "usage",
+            "--connection",
+            "openai:subscription",
+            "--connection",
+            "github-copilot:oauth",
+        ]
+    )
+
+    assert args.area == "provider"
+    assert args.command == "usage"
+    assert args.connection == ["openai:subscription", "github-copilot:oauth"]
+
+
 def test_provider_set_key_help_is_informative(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as exc_info:
         cli_main.parse_args(["provider", "set-key", "--help"])
@@ -367,6 +384,98 @@ def test_provider_status_not_found_includes_candidates_and_suggestion(
         ),
         instance=instance,
     )
+
+
+def test_provider_usage_posts_filter_and_formats_live_windows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        assert json == {
+            "method": "provider.usage",
+            "params": {"connections": ["openai:subscription"]},
+        }
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "generated_at": "2026-07-20T16:00:00Z",
+                    "providers": [
+                        {
+                            "connection": "openai:subscription",
+                            "display_name": "OpenAI",
+                            "plan": "Plus",
+                            "windows": [
+                                {
+                                    "label": "5h",
+                                    "used_percent": 42.5,
+                                    "reset_at": "2026-07-20T18:00:00Z",
+                                },
+                                {"label": "Week", "used_percent": 12.0, "reset_at": None},
+                            ],
+                            "error": None,
+                        }
+                    ],
+                },
+            },
+        )
+
+    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
+
+    result = provider_management.provider_usage(instance, ["openai:subscription"])
+
+    assert result.ok is True
+    assert result.message.splitlines() == [
+        "provider usage:",
+        "generated_at: 2026-07-20T16:00:00Z",
+        "- OpenAI (openai:subscription)  plan: Plus",
+        "  - 5h: used=42.5% remaining=57.5% reset_at=2026-07-20T18:00:00Z",
+        "  - Week: used=12% remaining=88% reset_at=-",
+    ]
+
+
+def test_provider_usage_reports_provider_error_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        assert json == {"method": "provider.usage", "params": {}}
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "generated_at": "2026-07-20T16:00:00Z",
+                    "providers": [
+                        {
+                            "connection": "github-copilot:oauth",
+                            "display_name": "GitHub Copilot",
+                            "plan": None,
+                            "windows": [],
+                            "error": "Network error",
+                        }
+                    ],
+                },
+            },
+        )
+
+    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
+
+    result = provider_management.provider_usage(instance)
+
+    assert result.message.splitlines()[-2:] == [
+        "- GitHub Copilot (github-copilot:oauth)  plan: -",
+        "  error: Network error",
+    ]
 
 
 def test_provider_set_key_posts_set_key_rpc_without_echoing_secret(

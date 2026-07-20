@@ -28,6 +28,123 @@ def skill_list(instance: ServerInstance) -> CommandResult:
     )
 
 
+def skill_read(instance: ServerInstance, scope: str) -> CommandResult:
+    """Read editable Skills and their complete SKILL.md content in one scope."""
+
+    payload = _rpc_call(instance, "skill.read", {"scope": scope})
+    if not payload.ok:
+        return payload.to_command_result()
+    skills = payload.data.get("skills")
+    if not isinstance(skills, list):
+        return CommandResult(ok=False, message="RPC result missing skills list", instance=instance)
+    return CommandResult(ok=True, message=_format_editable_skills(scope, skills), instance=instance)
+
+
+def skill_create(
+    instance: ServerInstance,
+    scope: str,
+    name: str,
+    content: str,
+    source: str | None,
+) -> CommandResult:
+    """Create a Skill in an editable scope."""
+
+    params = {"scope": scope, "name": name, "content": content}
+    if source is not None:
+        params["source"] = source
+    return _skill_write_result(instance, "skill.create", params)
+
+
+def skill_update(
+    instance: ServerInstance,
+    scope: str,
+    name: str,
+    content: str,
+    source: str | None,
+) -> CommandResult:
+    """Replace a Skill's SKILL.md in an editable scope."""
+
+    params = {"scope": scope, "name": name, "content": content}
+    if source is not None:
+        params["source"] = source
+    return _skill_write_result(instance, "skill.update", params)
+
+
+def skill_delete(instance: ServerInstance, scope: str, name: str, confirm: bool) -> CommandResult:
+    """Delete a Skill after explicit confirmation."""
+
+    if not confirm:
+        return CommandResult(
+            ok=False,
+            message=(
+                f"refusing to delete skill {name} from {scope} without confirmation; "
+                "re-run with --yes"
+            ),
+            instance=instance,
+        )
+    return _skill_write_result(instance, "skill.delete", {"scope": scope, "name": name})
+
+
+def skill_write_file(
+    instance: ServerInstance,
+    scope: str,
+    name: str,
+    path: str,
+    content: str,
+) -> CommandResult:
+    """Write one supporting file inside an editable Skill."""
+
+    return _skill_write_result(
+        instance,
+        "skill.write_file",
+        {"scope": scope, "name": name, "path": path, "content": content},
+    )
+
+
+def skill_remove_file(
+    instance: ServerInstance,
+    scope: str,
+    name: str,
+    path: str,
+    confirm: bool,
+) -> CommandResult:
+    """Remove one supporting file after explicit confirmation."""
+
+    if not confirm:
+        return CommandResult(
+            ok=False,
+            message=(
+                f"refusing to remove {path} from skill {name} in {scope} without confirmation; "
+                "re-run with --yes"
+            ),
+            instance=instance,
+        )
+    return _skill_write_result(
+        instance,
+        "skill.remove_file",
+        {"scope": scope, "name": name, "path": path},
+    )
+
+
+def _skill_write_result(
+    instance: ServerInstance, method: str, params: dict[str, str]
+) -> CommandResult:
+    payload = _rpc_call(instance, method, params)
+    if not payload.ok:
+        return payload.to_command_result()
+    name = _string_or_default(payload.data.get("name"), params.get("name", "?"))
+    operation = _string_or_default(payload.data.get("operation"), method.removeprefix("skill."))
+    warnings = _string_list(payload.data.get("warnings"))
+    warning_text = "; ".join(warnings) if warnings else "-"
+    return CommandResult(
+        ok=True,
+        message=(
+            f"{operation} skill {name}\nscope: {params.get('scope', '?')}\nwarnings: {warning_text}"
+        ),
+        instance=instance,
+    )
+
+
 def _format_skill_output(skills: Sequence[object], invalid_skills: Sequence[object]) -> str:
     parsed_invalid = invalid_skills if isinstance(invalid_skills, list) else []
     if not skills and not parsed_invalid:
@@ -45,6 +162,22 @@ def _format_skill_output(skills: Sequence[object], invalid_skills: Sequence[obje
         for diagnostic in parsed_invalid:
             lines.append(_format_invalid_skill_row(diagnostic))
 
+    return "\n".join(lines)
+
+
+def _format_editable_skills(scope: str, skills: Sequence[object]) -> str:
+    if not skills:
+        return f"no editable skills in {scope}"
+    lines = [f"editable skills in {scope}:"]
+    for skill in skills:
+        if not isinstance(skill, dict):
+            lines.append("- invalid skill entry")
+            continue
+        name = _string_or_default(skill.get("name"), "?")
+        description = _string_or_default(skill.get("description"), "?")
+        raw_content = skill.get("content")
+        content = raw_content if isinstance(raw_content, str) else ""
+        lines.extend([f"--- {name} ---", f"description: {description}", content])
     return "\n".join(lines)
 
 

@@ -61,6 +61,33 @@ def provider_status(
     )
 
 
+def provider_usage(
+    instance: ServerInstance,
+    connections: Sequence[str] | None = None,
+) -> CommandResult:
+    """Return live Provider subscription usage from `provider.usage` RPC."""
+
+    params: dict[str, Any] = {}
+    if connections is not None:
+        params["connections"] = list(connections)
+    payload = _rpc_call(instance, "provider.usage", params)
+    if not payload.ok:
+        return payload.to_command_result()
+
+    providers = payload.data.get("providers")
+    if not isinstance(providers, list):
+        return CommandResult(
+            ok=False,
+            message="RPC result missing providers list",
+            instance=instance,
+        )
+    return CommandResult(
+        ok=True,
+        message=_format_usage_report(payload.data.get("generated_at"), providers),
+        instance=instance,
+    )
+
+
 def provider_set_key(
     instance: ServerInstance,
     provider_id: str,
@@ -329,6 +356,51 @@ def _format_connection_rows(connections: Sequence[object]) -> str:
     for connection in connections:
         lines.append(_format_connection_row(connection))
     return "\n".join(lines)
+
+
+def _format_usage_report(generated_at: object, providers: Sequence[object]) -> str:
+    lines = [
+        "provider usage:",
+        f"generated_at: {_string_or_default(generated_at, '?')}",
+    ]
+    if not providers:
+        lines.append("no supported usable connections")
+        return "\n".join(lines)
+
+    for provider in providers:
+        if not isinstance(provider, dict):
+            lines.append("- invalid provider usage entry")
+            continue
+        connection = _string_or_default(provider.get("connection"), "?")
+        display_name = _string_or_default(provider.get("display_name"), connection)
+        plan = _string_or_default(provider.get("plan"), "-")
+        lines.append(f"- {display_name} ({connection})  plan: {plan}")
+        error = provider.get("error")
+        if isinstance(error, str) and error:
+            lines.append(f"  error: {error}")
+        windows = provider.get("windows")
+        if not isinstance(windows, list) or not windows:
+            if not error:
+                lines.append("  windows: none")
+            continue
+        for window in windows:
+            lines.append(_format_usage_window(window))
+    return "\n".join(lines)
+
+
+def _format_usage_window(window: object) -> str:
+    if not isinstance(window, dict):
+        return "  - invalid usage window"
+    label = _string_or_default(window.get("label"), "?")
+    used = window.get("used_percent")
+    if isinstance(used, (int, float)) and not isinstance(used, bool):
+        used_text = f"{float(used):g}%"
+        remaining_text = f"{max(0.0, 100.0 - float(used)):g}%"
+    else:
+        used_text = "?"
+        remaining_text = "?"
+    reset_at = _string_or_default(window.get("reset_at"), "-")
+    return f"  - {label}: used={used_text} remaining={remaining_text} reset_at={reset_at}"
 
 
 def _filter_connections(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 
 from cli.formatting import string_or_default as _string_or_default
@@ -116,6 +117,89 @@ def session_link_channel(
     )
 
 
+def session_fork(
+    instance: ServerInstance,
+    agent_id: str,
+    session_id: str,
+    target_agent_id: str | None,
+) -> CommandResult:
+    """Fork a session via ``session.fork`` RPC."""
+
+    params: dict[str, object] = {"agent_id": agent_id, "session_id": session_id}
+    if target_agent_id is not None:
+        params["target_agent_id"] = target_agent_id
+    payload = _rpc_call(instance, "session.fork", params)
+    if not payload.ok:
+        return payload.to_command_result()
+    session = payload.data.get("session")
+    if not isinstance(session, dict):
+        return CommandResult(
+            ok=False, message="RPC result missing forked session", instance=instance
+        )
+    fork_id = _string_or_default(session.get("id"), "?")
+    destination = _string_or_default(session.get("agent_id"), target_agent_id or agent_id)
+    source = _json_text(session.get("fork_source"))
+    return CommandResult(
+        ok=True,
+        message=(
+            f"forked session {session_id} to {fork_id} for {destination}\nfork_source: {source}"
+        ),
+        instance=instance,
+    )
+
+
+def session_rename(
+    instance: ServerInstance,
+    agent_id: str,
+    session_id: str,
+    title: str,
+) -> CommandResult:
+    """Set or clear a session title via ``session.rename`` RPC."""
+
+    payload = _rpc_call(
+        instance,
+        "session.rename",
+        {"agent_id": agent_id, "session_id": session_id, "title": title},
+    )
+    if not payload.ok:
+        return payload.to_command_result()
+    stored_title = payload.data.get("title")
+    title_text = stored_title if isinstance(stored_title, str) and stored_title else "(automatic)"
+    resolved_agent = _string_or_default(payload.data.get("agent_id"), agent_id)
+    return CommandResult(
+        ok=True,
+        message=f"renamed session {session_id} for {resolved_agent}\ntitle: {title_text}",
+        instance=instance,
+    )
+
+
+def session_set_compaction_policy(
+    instance: ServerInstance,
+    agent_id: str,
+    session_id: str,
+    policy: dict[str, object] | None,
+) -> CommandResult:
+    """Set or clear a Session Policy override and show effective provenance."""
+
+    payload = _rpc_call(
+        instance,
+        "session.set_compaction_policy",
+        {"agent_id": agent_id, "session_id": session_id, "policy": policy},
+    )
+    if not payload.ok:
+        return payload.to_command_result()
+    return CommandResult(
+        ok=True,
+        message=(
+            f"updated Session Policy for {session_id} ({agent_id})\n"
+            f"override: {_json_text(payload.data.get('override'))}\n"
+            f"effective: {_json_text(payload.data.get('effective'))}\n"
+            f"source: {_string_or_default(payload.data.get('source'), '?')}"
+        ),
+        instance=instance,
+    )
+
+
 def _format_session_rows(agent_id: str, sessions: Sequence[object]) -> str:
     if not sessions:
         return f"no sessions for {agent_id}"
@@ -134,7 +218,22 @@ def _format_session_row(session: object) -> str:
     created_at = _string_or_default(session.get("created_at"), "-")
     last_active_at = _string_or_default(session.get("last_active_at"), "-")
     line = f"- id={session_id} created_at={created_at} last_active_at={last_active_at}"
+    title = session.get("title")
+    if isinstance(title, str) and title:
+        line = f"{line} title={json.dumps(title, ensure_ascii=False)}"
     source_channel_id = session.get("source_channel_id")
     if isinstance(source_channel_id, str) and source_channel_id:
         line = f"{line} channel={source_channel_id}"
+    if "compaction_policy_override" in session:
+        line = f"{line} compaction_override={_json_text(session.get('compaction_policy_override'))}"
+    if "compaction_policy_effective" in session:
+        line = (
+            f"{line} compaction_effective={_json_text(session.get('compaction_policy_effective'))}"
+        )
     return line
+
+
+def _json_text(value: object) -> str:
+    if value is None:
+        return "-"
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

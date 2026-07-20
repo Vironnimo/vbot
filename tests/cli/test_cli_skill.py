@@ -235,3 +235,98 @@ def test_skill_list_returns_error_on_rpc_failure(
         message="rpc_error: server exploded",
         instance=instance,
     )
+
+
+def test_skill_editable_scope_crud_and_supporting_file_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        calls.append(json)
+        result: dict[str, Any]
+        if json["method"] == "skill.read":
+            result = {
+                "skills": [
+                    {
+                        "name": "librarian",
+                        "description": "Maintain the catalog",
+                        "content": "---\nname: librarian\n---\n",
+                    }
+                ]
+            }
+        else:
+            operation = {
+                "skill.create": "created",
+                "skill.update": "updated",
+                "skill.delete": "deleted",
+                "skill.write_file": "wrote_file",
+                "skill.remove_file": "removed_file",
+            }[json["method"]]
+            result = {"name": "librarian", "operation": operation, "warnings": []}
+        return httpx.Response(200, json={"ok": True, "result": result})
+
+    monkeypatch.setattr(skill_management.httpx, "post", fake_post)
+
+    read = skill_management.skill_read(instance, "agent:assistant")
+    created = skill_management.skill_create(
+        instance, "agent:assistant", "librarian", "# Librarian", "cli"
+    )
+    updated = skill_management.skill_update(
+        instance, "agent:assistant", "librarian", "# Updated", None
+    )
+    wrote = skill_management.skill_write_file(
+        instance, "agent:assistant", "librarian", "references/schema.md", "# Schema"
+    )
+    removed_file = skill_management.skill_remove_file(
+        instance, "agent:assistant", "librarian", "references/schema.md", True
+    )
+    deleted = skill_management.skill_delete(instance, "agent:assistant", "librarian", True)
+
+    assert "editable skills in agent:assistant" in read.message
+    assert created.message.startswith("created skill librarian")
+    assert updated.message.startswith("updated skill librarian")
+    assert wrote.message.startswith("wrote_file skill librarian")
+    assert removed_file.message.startswith("removed_file skill librarian")
+    assert deleted.message.startswith("deleted skill librarian")
+    assert [call["method"] for call in calls] == [
+        "skill.read",
+        "skill.create",
+        "skill.update",
+        "skill.write_file",
+        "skill.remove_file",
+        "skill.delete",
+    ]
+
+
+def test_skill_destructive_commands_require_confirmation(tmp_path: Path) -> None:
+    instance = make_instance(tmp_path)
+
+    assert skill_management.skill_delete(instance, "global", "librarian", False).ok is False
+    assert (
+        skill_management.skill_remove_file(
+            instance, "global", "librarian", "references/schema.md", False
+        ).ok
+        is False
+    )
+
+
+def test_parse_args_supports_private_skill_create() -> None:
+    args = cli_main.parse_args(
+        [
+            "skill",
+            "create",
+            "librarian",
+            "--scope",
+            "agent:assistant",
+            "--content",
+            "# Librarian",
+        ]
+    )
+
+    assert args.command == "create"
+    assert args.scope == "agent:assistant"
+    assert args.content == "# Librarian"

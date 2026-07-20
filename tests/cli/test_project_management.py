@@ -453,7 +453,11 @@ def test_project_set_posts_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     result = project_management.project_set(instance, "vbot", {"default_agent": "builder"})
 
     # Assert
-    assert result == CommandResult(ok=True, message="updated project vbot", instance=instance)
+    assert result.ok is True
+    assert result.instance == instance
+    assert result.message.splitlines()[0] == "updated project vbot"
+    assert "  default_agent: builder" in result.message
+    assert "  report: clean" in result.message
     assert calls == [
         {
             "method": "project.set",
@@ -593,8 +597,11 @@ def test_project_set_rejects_empty_changes(tmp_path: Path) -> None:
         ok=False,
         message=(
             "no project fields provided; use one of: "
-            "--cwd, --name, --default-agent, --default-model, "
-            "--default-temperature, --default-thinking-effort, --auto-load"
+            "--cwd, --name, --default-agent, --clear-default-agent, --default-model, "
+            "--clear-default-model, --default-temperature, --clear-default-temperature, "
+            "--default-thinking-effort, --clear-default-thinking-effort, --format, --auto-load, "
+            "--allowed-tools, --enabled-bundled-skills, --enabled-global-skills, "
+            "--disabled-project-skills"
         ),
         instance=instance,
     )
@@ -898,3 +905,105 @@ def test_cron_list_renders_project_target_address(
     rows = result.message.splitlines()
     assert "agent=builder@vbot" in rows[1]
     assert "agent=assistant" in rows[2]
+
+
+def test_project_set_maps_tool_and_skill_policy_flags() -> None:
+    args = cli_main.parse_args(
+        [
+            "project",
+            "set",
+            "vbot",
+            "--allowed-tools",
+            "read",
+            "bash",
+            "--enabled-bundled-skills",
+            "vbot-cli",
+            "--enabled-global-skills",
+            "glossary",
+            "--disabled-project-skills",
+            "unsafe-skill",
+        ]
+    )
+
+    assert cli_main._project_set_changes_from_args(args) == {
+        "allowed_tools": ["read", "bash"],
+        "skills_bundled_enabled": ["vbot-cli"],
+        "skills_global_enabled": ["glossary"],
+        "skills_project_disabled": ["unsafe-skill"],
+    }
+
+
+def test_project_set_override_coerces_value_and_returns_refreshed_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        calls.append(json)
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "project": _project_response(),
+                    "scan": {"team": [], "report": {"clean": True, "findings": []}},
+                },
+            },
+        )
+
+    monkeypatch.setattr(project_management.httpx, "post", fake_post)
+
+    result = project_management.project_set_override(
+        instance, "vbot", "builder", "temperature", "0.35"
+    )
+
+    assert result.ok is True
+    assert result.message.splitlines()[0] == "set builder.temperature override on project vbot"
+    assert calls == [
+        {
+            "method": "project.set_override",
+            "params": {
+                "project_id": "vbot",
+                "agent_id": "builder",
+                "field": "temperature",
+                "value": 0.35,
+            },
+        }
+    ]
+
+
+def test_project_remove_can_preserve_rooted_agent_files_and_reports_side_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        calls.append(json)
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "project_id": "vbot",
+                    "archive_path": "C:/data/projects/.archive/vbot",
+                    "affected_agent_ids": ["librarian"],
+                    "copied_files": {"librarian": ["SOUL.md", "MEMORY.md"]},
+                    "backed_up_files": {"librarian": ["SOUL.md"]},
+                },
+            },
+        )
+
+    monkeypatch.setattr(project_management.httpx, "post", fake_post)
+
+    result = project_management.project_remove(instance, "vbot", True)
+
+    assert result.ok is True
+    assert "affected_rooted_agents: librarian" in result.message
+    assert "  librarian: SOUL.md,MEMORY.md" in result.message
+    assert calls[0]["params"]["copy_rooted_agent_identity_files"] is True

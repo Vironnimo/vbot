@@ -12,6 +12,7 @@ vbot cron delete|enable|disable <job-id>
 - `create` requires exactly one of `--cron` (exactly five fields: minute, hour, day of month, month, weekday; minimum cadence one minute) or `--at` (one-time ISO 8601 datetime); the schedule type is derived from the flag.
 - `<agent>` (and `update --agent`) takes a bare identity agent or `agent@projekt`; a project-targeted job runs in that project.
 - `cron list` includes active, paused, failed, completed, and missed history, and shows id, target (same address form), status, schedule, next fire time, last outcome, and a prompt preview — read job ids from there.
+- `create`, `update`, `enable`, and `disable` return the saved Cron job with its id, target, schedule, status, and projected next fire time; use that output as the immediate verification result.
 - `--session` pins the job to an existing Session owned by the target. Without it, every fire creates a fresh Session.
 - A timestamp passed to `--at` without an offset is interpreted in `--timezone`; when no timezone is provided, the server's current IANA system timezone is used. A missed one-time job does not catch up after a restart and is recorded as `missed`.
 - A recurring job waits for its Run to finish before scheduling its next occurrence, so fires never overlap for the same job. Repeated Run failures are recorded and eventually stop the job as `failed`.

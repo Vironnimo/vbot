@@ -79,7 +79,7 @@ async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
-    return {"id": config.id}
+    return config.to_dict()
 
 
 async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
@@ -130,7 +130,7 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
         except Exception as exc:
             raise _map_expected_error(exc) from exc
         publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
-        return {"ok": True}
+        return _channel_config_by_id(state.runtime.channel_service, channel_id).to_dict()
 
     try:
         state.runtime.channel_service.update_channel(channel_id, **updates)
@@ -138,7 +138,7 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
-    return {"ok": True}
+    return _channel_config_by_id(state.runtime.channel_service, channel_id).to_dict()
 
 
 def _delete_channel(state: Any, params: JsonObject) -> JsonObject:
@@ -164,7 +164,7 @@ def _enable_channel(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
-    return {"ok": True}
+    return _channel_config_by_id(state.runtime.channel_service, channel_id).to_dict()
 
 
 def _disable_channel(state: Any, params: JsonObject) -> JsonObject:
@@ -177,7 +177,7 @@ def _disable_channel(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
-    return {"ok": True}
+    return _channel_config_by_id(state.runtime.channel_service, channel_id).to_dict()
 
 
 def _channel_status(state: Any, params: JsonObject) -> JsonObject:
