@@ -72,8 +72,8 @@ class WebviewModule(Protocol):
 
     pywebview requires the window to be created with initial content *before*
     the GUI loop starts; ``Window.load_url`` / ``load_html`` may only run after
-    ``start``. ``start`` therefore takes the post-loop entry callable (``func``)
-    and the optional ``icon``.
+    ``start``. Desktop therefore attaches its startup callback to the window's
+    ``shown`` event and uses ``start`` only to enter the native GUI loop.
     """
 
     def create_window(self, title: str, **kwargs: Any) -> Any:
@@ -188,10 +188,11 @@ def launch_desktop(
 
     Lifecycle (pywebview requires this order): create the window *before* the
     loop with the connection screen as neutral initial content and the bridge as
-    its single ``js_api``; hand the window to the controller; then start the loop
-    with a post-loop entry callable. The entry callable runs only after the loop
-    is live, so its ``load_url`` / ``load_html`` navigation is valid. No native
-    menu is attached; connected server management lives in Desktop app Settings.
+    its single ``js_api``; hand the window to the controller; attach visible
+    startup to the window's ``shown`` event; then start the loop. Server probing
+    and optional Voice startup therefore happen only after the native window is
+    visible. No native menu is attached; connected server management lives in
+    Desktop app Settings.
 
     Target selection: an explicit ``--host`` / ``--port`` override connects
     straight to that target; with no flags the controller auto-connects to the
@@ -211,6 +212,7 @@ def launch_desktop(
     override = _resolve_launch_override(args)
     server_url = _resolve_launch_server_url(override, controller)
     bridge = _create_wakeword_bridge(args, settings_file, controller, server_url)
+    wakeword_enabled = bool(read_wakeword_settings(settings_file).get("enabled", False))
     # Voice follows the window: every successful in-window connect retargets the
     # worker, so first-run connect and runtime server switches no longer leave
     # voice pointed at the launch-time (or empty) server.
@@ -234,10 +236,20 @@ def launch_desktop(
         # pywebview icon support varies by backend/platform, so custom icons are optional.
         start_kwargs["icon"] = str(resolved_icon_path)
 
-    entry_callable = _select_launch_entry(controller, override)
+    connection_entry = _select_launch_entry(controller, override)
+
+    def start_visible_services() -> None:
+        # The lightweight shell must become visible before any network probe or
+        # optional ML/audio initialization. Connect first so Voice follows the
+        # window's resolved target, then create its worker only when enabled.
+        connection_entry()
+        if wakeword_enabled:
+            bridge._start_worker()
+
+    window.events.shown += start_visible_services
 
     try:
-        webview.start(entry_callable, **start_kwargs)
+        webview.start(**start_kwargs)
     finally:
         bridge._stop_worker()
 
@@ -246,13 +258,13 @@ def _select_launch_entry(
     controller: ConnectionController,
     override: tuple[str, int] | None,
 ) -> Callable[[], Any]:
-    """Return the nullary post-loop entry callable and log the chosen branch.
+    """Return the nullary visible-window entry callable and log the chosen branch.
 
     An explicit CLI override connects straight to that target (the controller
     remembers it as a side effect of a successful connect); otherwise the
     controller auto-connects to last-used, or shows the connection screen on
-    first run. pywebview's ``func`` is nullary, so the override branch is wrapped
-    in a zero-argument closure.
+    first run. The callback is attached to pywebview's window ``shown`` event,
+    so the override branch is wrapped in a zero-argument closure.
     """
 
     if override is not None:
@@ -342,19 +354,16 @@ def _create_wakeword_bridge(
         WakewordWorker,
     )
 
-    voice_mode = (
-        "mock"
-        if bool(args.mock_wakeword)
-        else "real"
-        if _real_wakeword_available()
-        else "unavailable"
-    )
-
     def worker_factory(bridge: DesktopBridge) -> Any:
-        if voice_mode == "mock":
+        if bool(args.mock_wakeword):
             return MockWakewordWorker(bridge=bridge)
-        if voice_mode == "unavailable":
+        # openWakeWord pulls in the ONNX/numpy stack. Probe it only when Voice
+        # is actually starting, never on an ordinary Desktop launch with Voice
+        # disabled.
+        if not _real_wakeword_available():
+            bridge._set_mode("unavailable")
             return UnavailableWakewordWorker(bridge=bridge)
+        bridge._set_mode("real")
         wakeword_config = bridge.worker_config()
         engine = OpenWakeWordEngine(
             model_target=bridge.resolve_wakeword_model_target(),
@@ -375,14 +384,9 @@ def _create_wakeword_bridge(
         worker_factory=worker_factory,
         connection=controller,
         server_url=server_url,
-        mock=voice_mode == "mock",
-        mode=voice_mode,
+        mock=bool(args.mock_wakeword),
+        mode="mock" if bool(args.mock_wakeword) else "real",
     )
-
-    wakeword_config = read_wakeword_settings(settings_file)
-    if wakeword_config.get("enabled", False):
-        bridge._start_worker()
-
     return bridge
 
 
@@ -390,8 +394,9 @@ def _real_wakeword_available() -> bool:
     """Whether the on-device wakeword stack can be imported.
 
     Both openWakeWord and sounddevice must import for the real worker; a missing
-    dependency selects unavailable mode. Probed once up front so the WebUI can
-    explain the dependency failure without simulating microphone activity.
+    dependency selects unavailable mode. The worker factory calls this lazily
+    only when Voice is enabled or explicitly retried, keeping both dependencies
+    out of the normal Desktop startup path.
     """
 
     try:
