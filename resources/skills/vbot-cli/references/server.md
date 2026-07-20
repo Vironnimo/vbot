@@ -1,4 +1,4 @@
-# Server, Update, Uninstall, Autostart, Desktop, Doctor
+# Server, Paths, Update, Uninstall, Autostart, Desktop, Doctor
 
 These are the only CLI areas that work without a running server.
 
@@ -13,6 +13,14 @@ vbot server status
 
 - `start` refuses to launch over a non-vBot process on the target port. Don't kill the occupant — report the conflict or target a different port/data-dir.
 - On a systemd-managed Linux install, `restart` is routed through the service unit (default `vbot`, override with `--service-name`) so it does not fight the unit.
+
+## Paths
+
+```bash
+vbot home [--data-dir <path>]
+```
+
+Prints the absolute `app_dir` of the running checkout/install and the resolved `data_dir`. This is local and read-only; it does not report a Project cwd or Agent Workspace and needs no server.
 
 ## Update
 

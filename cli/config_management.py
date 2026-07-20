@@ -25,6 +25,19 @@ def config_show(instance: ServerInstance) -> CommandResult:
     return CommandResult(ok=True, message=json.dumps(settings, indent=2), instance=instance)
 
 
+def config_effective(instance: ServerInstance) -> CommandResult:
+    """Print the normalized live settings projection via ``settings.get`` RPC."""
+
+    payload = _rpc_call(instance, "settings.get", {})
+    if not payload.ok:
+        return payload.to_command_result()
+    return CommandResult(
+        ok=True,
+        message=json.dumps(payload.data, ensure_ascii=False, indent=2, sort_keys=True),
+        instance=instance,
+    )
+
+
 def config_get(instance: ServerInstance, key: str) -> CommandResult:
     """Get a single raw settings key via settings.get_raw RPC."""
 
@@ -50,8 +63,18 @@ def config_set(instance: ServerInstance, key: str, value: Any) -> CommandResult:
     payload = _rpc_call(instance, "settings.set_key", {"key": key, "value": value})
     if not payload.ok:
         return payload.to_command_result()
-
-    return CommandResult(ok=True, message=f"{key} = {json.dumps(value)}", instance=instance)
+    settings = payload.data.get("settings")
+    if not isinstance(settings, dict) or key not in settings:
+        return CommandResult(
+            ok=False,
+            message=f"RPC result missing saved settings key: {key}",
+            instance=instance,
+        )
+    return CommandResult(
+        ok=True,
+        message=f"{key} = {json.dumps(settings[key], ensure_ascii=False)}",
+        instance=instance,
+    )
 
 
 def coerce_config_value(raw: str) -> Any:

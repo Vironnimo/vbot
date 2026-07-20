@@ -397,7 +397,8 @@ def test_channel_update_rejects_empty_changes(tmp_path: Path) -> None:
         ok=False,
         message=(
             "no channel fields provided; use one of: --platform, --agent, --token-env, "
-            "--dm-scope, --allow, --enabled"
+            "--dm-scope, --allow, --enabled, --response-mode, --mention-pattern, "
+            "--owner-user, --observe-unaddressed"
         ),
         instance=instance,
     )
@@ -580,6 +581,10 @@ def test_run_dispatches_channel_commands(
         token_env: str,
         dm_scope: str,
         allowed_chat_ids: Sequence[str],
+        response_mode: str,
+        mention_patterns: Sequence[str],
+        owner_user_ids: Sequence[str],
+        observe_unaddressed: bool,
     ) -> CommandResult:
         calls.append(
             (
@@ -592,6 +597,10 @@ def test_run_dispatches_channel_commands(
                     "token_env": token_env,
                     "dm_scope": dm_scope,
                     "allowed_chat_ids": allowed_chat_ids,
+                    "response_mode": response_mode,
+                    "mention_patterns": mention_patterns,
+                    "owner_user_ids": owner_user_ids,
+                    "observe_unaddressed": observe_unaddressed,
                 },
             )
         )
@@ -693,3 +702,73 @@ def test_channel_command_exit_code_maps_failed_result_to_failure(tmp_path: Path)
     )
 
     assert exit_code == 1
+
+
+def test_channel_update_maps_group_response_policy_fields() -> None:
+    args = cli_main.parse_args(
+        [
+            "channel",
+            "update",
+            "tg-main",
+            "--response-mode",
+            "all",
+            "--mention-pattern",
+            "@vbot",
+            "bot please",
+            "--owner-user",
+            "42",
+            "--observe-unaddressed",
+            "true",
+        ]
+    )
+
+    assert cli_main._channel_changes_from_args(args) == {
+        "response_mode": "all",
+        "mention_patterns": ["@vbot", "bot please"],
+        "owner_user_ids": ["42"],
+        "observe_unaddressed": True,
+    }
+
+
+def test_channel_add_advanced_policy_is_sent_and_confirmed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        calls.append(json)
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    **json["params"],
+                    "enabled": True,
+                },
+            },
+        )
+
+    monkeypatch.setattr(channel_management.httpx, "post", fake_post)
+
+    result = channel_management.channel_add(
+        instance,
+        "tg-main",
+        "telegram",
+        "assistant",
+        "TELEGRAM_BOT_TOKEN",
+        "per_conversation",
+        ["123"],
+        "all",
+        ["@vbot"],
+        ["42"],
+        True,
+    )
+
+    assert result.ok is True
+    assert result.message.splitlines()[0] == "created channel tg-main"
+    assert "response_mode=all" in result.message
+    assert calls[0]["params"]["owner_user_ids"] == ["42"]
+    assert calls[0]["params"]["observe_unaddressed"] is True

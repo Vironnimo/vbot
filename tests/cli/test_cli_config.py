@@ -45,6 +45,13 @@ def test_parse_args_supports_config_get() -> None:
     assert args.key == "server_port"
 
 
+def test_parse_args_supports_config_effective() -> None:
+    args = cli_main.parse_args(["config", "effective"])
+
+    assert args.area == "config"
+    assert args.command == "effective"
+
+
 def test_parse_args_supports_config_set() -> None:
     args = cli_main.parse_args(["config", "set", "server_port", "9000"])
 
@@ -98,6 +105,38 @@ def test_config_show_returns_empty_object_when_settings_empty(
     result = config_management.config_show(instance)
 
     assert result == CommandResult(ok=True, message="{}", instance=instance)
+
+
+def test_config_effective_posts_settings_get_and_formats_projection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        assert json == {"method": "settings.get", "params": {}}
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "defaults": {"model": "openai/gpt-5"},
+                    "general": {"data_directory": "C:/data"},
+                },
+            },
+        )
+
+    monkeypatch.setattr(config_management.httpx, "post", fake_post)
+
+    result = config_management.config_effective(instance)
+
+    assert result.ok is True
+    assert result.message == (
+        '{\n  "defaults": {\n    "model": "openai/gpt-5"\n  },\n'
+        '  "general": {\n    "data_directory": "C:/data"\n  }\n}'
+    )
 
 
 def test_config_get_returns_json_value(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -190,6 +229,28 @@ def test_config_set_confirms_with_key_equals_value(
     result = config_management.config_set(instance, "x", 9000)
 
     assert result == CommandResult(ok=True, message="x = 9000", instance=instance)
+
+
+def test_config_set_rejects_response_without_saved_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, "result": {"settings": {}}})
+
+    monkeypatch.setattr(config_management.httpx, "post", fake_post)
+
+    result = config_management.config_set(instance, "x", 9000)
+
+    assert result == CommandResult(
+        ok=False,
+        message="RPC result missing saved settings key: x",
+        instance=instance,
+    )
 
 
 def test_coerce_config_value_parses_int() -> None:

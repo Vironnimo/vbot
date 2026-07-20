@@ -29,10 +29,35 @@ def _state_with_cron_service(
     )
 
 
+def _cron_job(**changes: Any) -> SimpleNamespace:
+    fields: dict[str, Any] = {
+        "id": "job-123",
+        "agent_id": "main",
+        "project_id": None,
+        "prompt": "Run status check",
+        "schedule_type": "cron",
+        "cron_expression": "*/5 * * * *",
+        "run_at": None,
+        "timezone": "UTC",
+        "session_id": "session-1",
+        "status": "active",
+        "last_fired_at": None,
+        "last_attempt_at": None,
+        "last_completed_at": None,
+        "last_run_id": None,
+        "last_outcome": None,
+        "last_error": None,
+        "consecutive_failures": 0,
+        "created_at": "2026-05-14T09:00:00+00:00",
+    }
+    fields.update(changes)
+    return SimpleNamespace(**fields)
+
+
 @pytest.mark.asyncio
 async def test_cron_create_happy_path() -> None:
     cron_service = Mock()
-    cron_service.create_job.return_value = SimpleNamespace(id="job-123")
+    cron_service.create_job.return_value = _cron_job()
     state = _state_with_cron_service(cron_service)
 
     response = await dispatch_rpc(
@@ -50,7 +75,10 @@ async def test_cron_create_happy_path() -> None:
         },
     )
 
-    assert response == {"ok": True, "result": {"id": "job-123"}}
+    assert response["ok"] is True
+    assert response["result"]["id"] == "job-123"
+    assert response["result"]["target"] == "main"
+    assert response["result"]["status"] == "active"
     cron_service.create_job.assert_called_once_with(
         agent_id="main",
         prompt="Run status check",
@@ -66,7 +94,9 @@ async def test_cron_create_happy_path() -> None:
 @pytest.mark.asyncio
 async def test_cron_create_parses_project_qualified_target() -> None:
     cron_service = Mock()
-    cron_service.create_job.return_value = SimpleNamespace(id="job-123")
+    cron_service.create_job.return_value = _cron_job(
+        agent_id="builder", project_id="vbot", timezone=None, session_id=None
+    )
     state = _state_with_cron_service(cron_service)
 
     response = await dispatch_rpc(
@@ -82,7 +112,9 @@ async def test_cron_create_parses_project_qualified_target() -> None:
         },
     )
 
-    assert response == {"ok": True, "result": {"id": "job-123"}}
+    assert response["ok"] is True
+    assert response["result"]["id"] == "job-123"
+    assert response["result"]["target"] == "builder@vbot"
     # The address form is split once at the edge: agent_id + project_id, never an
     # "@" string in agent_id. CronService owns target validation.
     cron_service.create_job.assert_called_once_with(
@@ -165,6 +197,7 @@ async def test_cron_list_happy_path_includes_canonical_service_projection() -> N
 @pytest.mark.asyncio
 async def test_cron_update_happy_path() -> None:
     cron_service = Mock()
+    cron_service.update_job.return_value = _cron_job(prompt="Updated prompt", status="paused")
     state = _state_with_cron_service(cron_service)
 
     response = await dispatch_rpc(
@@ -179,7 +212,9 @@ async def test_cron_update_happy_path() -> None:
         },
     )
 
-    assert response == {"ok": True, "result": {"ok": True}}
+    assert response["ok"] is True
+    assert response["result"]["id"] == "job-123"
+    assert response["result"]["status"] == "paused"
     cron_service.update_job.assert_called_once_with(
         "job-1",
         prompt="Updated prompt",
@@ -190,6 +225,7 @@ async def test_cron_update_happy_path() -> None:
 @pytest.mark.asyncio
 async def test_cron_update_parses_agent_address_when_agent_id_is_present() -> None:
     cron_service = Mock()
+    cron_service.update_job.return_value = _cron_job()
     state = _state_with_cron_service(cron_service)
 
     response = await dispatch_rpc(
@@ -203,7 +239,8 @@ async def test_cron_update_parses_agent_address_when_agent_id_is_present() -> No
         },
     )
 
-    assert response == {"ok": True, "result": {"ok": True}}
+    assert response["ok"] is True
+    assert response["result"]["target"] == "main"
     cron_service.update_job.assert_called_once_with("job-1", agent_id="main", project_id=None)
 
 
@@ -227,6 +264,7 @@ async def test_cron_delete_happy_path() -> None:
 @pytest.mark.asyncio
 async def test_cron_enable_happy_path() -> None:
     cron_service = Mock()
+    cron_service.enable_job.return_value = _cron_job(status="active")
     state = _state_with_cron_service(cron_service)
 
     response = await dispatch_rpc(
@@ -237,13 +275,15 @@ async def test_cron_enable_happy_path() -> None:
         },
     )
 
-    assert response == {"ok": True, "result": {"ok": True}}
+    assert response["ok"] is True
+    assert response["result"]["status"] == "active"
     cron_service.enable_job.assert_called_once_with("job-1")
 
 
 @pytest.mark.asyncio
 async def test_cron_disable_happy_path() -> None:
     cron_service = Mock()
+    cron_service.disable_job.return_value = _cron_job(status="paused")
     state = _state_with_cron_service(cron_service)
 
     response = await dispatch_rpc(
@@ -254,7 +294,8 @@ async def test_cron_disable_happy_path() -> None:
         },
     )
 
-    assert response == {"ok": True, "result": {"ok": True}}
+    assert response["ok"] is True
+    assert response["result"]["status"] == "paused"
     cron_service.disable_job.assert_called_once_with("job-1")
 
 

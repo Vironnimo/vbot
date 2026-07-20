@@ -16,7 +16,7 @@ The frozen serializable projection is:
 - `ProviderUsageSnapshot`: compositional Connection id, display name, optional plan, windows, and optional error.
 - `UsageReport`: generation timestamp and Provider snapshots.
 
-`report(connections=None)` supports an optional Connection filter. Only Connections with registered fetchers and `is_usable()` are targets; disabled or uncredentialed Connections are never probed. A snapshot with neither windows nor an error is omitted.
+`report(connections=None)` supports an optional Connection filter. Only Connections with registered fetchers and `is_usable()` are targets; disabled or uncredentialed Connections are never probed. A snapshot with neither windows nor an error is omitted. The CLI exposes this as `provider usage [--connection <provider:connection-id>]...`; repeated filters are passed as one `connections` list and output includes used and derived remaining percentages, reset timestamps, and per-Provider errors.
 
 ## Concurrency, cache, and failures
 

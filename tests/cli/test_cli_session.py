@@ -368,3 +368,90 @@ def test_session_delete_posts_rpc_when_confirmed(
             "params": {"agent_id": "assistant", "session_id": "session-one"},
         }
     ]
+
+
+def test_session_fork_rename_and_policy_commands_post_verifiable_payloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        calls.append(json)
+        method = json["method"]
+        result: dict[str, Any]
+        if method == "session.fork":
+            result = {
+                "session": {
+                    "id": "session-fork",
+                    "agent_id": "reviewer@vbot",
+                    "fork_source": {"session_id": "session-one"},
+                }
+            }
+        elif method == "session.rename":
+            result = {
+                "agent_id": "assistant",
+                "session_id": "session-one",
+                "title": "Research notes",
+            }
+        else:
+            result = {
+                "agent_id": "assistant",
+                "session_id": "session-one",
+                "override": {"enabled": False},
+                "effective": {"enabled": False},
+                "source": "session",
+            }
+        return httpx.Response(200, json={"ok": True, "result": result})
+
+    monkeypatch.setattr(session_management.httpx, "post", fake_post)
+
+    forked = session_management.session_fork(instance, "assistant", "session-one", "reviewer@vbot")
+    renamed = session_management.session_rename(
+        instance, "assistant", "session-one", "Research notes"
+    )
+    policy = session_management.session_set_compaction_policy(
+        instance, "assistant", "session-one", {"enabled": False}
+    )
+
+    assert "session-fork" in forked.message
+    assert "title: Research notes" in renamed.message
+    assert "source: session" in policy.message
+    assert calls == [
+        {
+            "method": "session.fork",
+            "params": {
+                "agent_id": "assistant",
+                "session_id": "session-one",
+                "target_agent_id": "reviewer@vbot",
+            },
+        },
+        {
+            "method": "session.rename",
+            "params": {
+                "agent_id": "assistant",
+                "session_id": "session-one",
+                "title": "Research notes",
+            },
+        },
+        {
+            "method": "session.set_compaction_policy",
+            "params": {
+                "agent_id": "assistant",
+                "session_id": "session-one",
+                "policy": {"enabled": False},
+            },
+        },
+    ]
+
+
+def test_parse_args_supports_session_policy_clear() -> None:
+    args = cli_main.parse_args(
+        ["session", "set-compaction-policy", "assistant", "session-one", "--clear"]
+    )
+
+    assert args.command == "set-compaction-policy"
+    assert args.policy is None
+    assert args.clear is True

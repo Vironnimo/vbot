@@ -3,11 +3,13 @@
 ## Raw settings
 
 ```bash
-vbot config                        # show all settings
+vbot config                        # show stored raw settings
+vbot config effective              # show normalized live settings
 vbot config get <key>
 vbot config set <key> <value>
 ```
 
+- `effective` includes normalized defaults and runtime-derived availability. A successful `config set` prints the value returned from the saved settings, not merely the requested input.
 - `<value>` is parsed as JSON first, falling back to a plain string. Pass JSON (arrays, objects, booleans, numbers) as one shell argument: `vbot config set skill_directories '["C:/skills"]'`.
 - Prefer `config set` over editing `settings.json` directly. After an unavoidable manual edit, run `vbot doctor settings` (or `vbot doctor config` for the full user-editable JSON bundle) — see `server.md`.
 - Enable debug mode with `vbot config set debug '{"enabled": true}'`.
@@ -18,12 +20,18 @@ vbot config set <key> <value>
 vbot prompt list
 vbot prompt update <block-id> (--content <text> | --file <path>)
 vbot prompt reset <block-id>
+vbot prompt create <slug> [--content <text> | --file <path>] [--position <index>]
+vbot prompt remove <user:block-id>
+vbot prompt set-layout --layout-json <json-array>
+vbot prompt reset-layout
 vbot prompt preview <agent>
 ```
 
-- `list` shows one row per block: id, owner, kind, enabled, editable, source, modified. `update`/`reset` target a block by id (e.g. `core:tools`) and work only on editable blocks.
+- Every command accepts `--scope default|agent:<id>` (default: `default`). An Agent scope exists only for a known Identity Agent with custom System Prompt enabled; it does not target a Project Agent.
+- `list` shows one row per block: id, owner, kind, enabled, editable, source, modified, plus the available scopes. `update`/`reset` target a block by id (e.g. `core:tools`) and work only on editable blocks.
+- `create` creates `user:<slug>` and optionally inserts it at a 0-based layout position. `remove` deletes only a custom `user:` block. `set-layout` takes the complete ordered `[ {"id": "...", "enabled": true} ]` array as one shell argument; `reset-layout` restores the bundled order and enabled states without resetting text overrides.
 - Prefer `--file` for multi-line content. Do not edit block override files directly when these commands can express the change.
-- `preview` renders one agent's complete System Prompt with token metadata; accepts `agent@projekt`.
+- `preview` renders one Agent's complete System Prompt with text-token and Tool-definition token metadata; its Agent positional accepts `agent@projekt` unless an Identity Agent scope is explicitly selected.
 
 ## Extensions
 

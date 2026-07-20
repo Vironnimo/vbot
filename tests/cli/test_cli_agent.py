@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from cli import agent_management
+from cli import main as cli_main
 from cli.server_management import CommandResult, ServerInstance
 from core.utils.logging import resolve_daily_log_path
 
@@ -201,10 +202,12 @@ def test_agent_update_rejects_empty_changes(tmp_path: Path) -> None:
     assert result == CommandResult(
         ok=False,
         message=(
-            "no agent fields provided; use one of: --name, --model, --fallback-model, "
+            "no agent fields provided; use one of: --name, --model, --clear-model, "
+            "--fallback-model, --clear-fallback-model, "
             "--temperature, --clear-temperature, --thinking-effort, --clear-thinking-effort, "
             "--memory-prompt-mode, --custom-system-prompt, "
-            "--allowed-tools, --allowed-skills, --workspace, --default-workspace, "
+            "--allowed-tools, --allowed-skills, --subagent-allow, --compaction-policy, "
+            "--clear-compaction-policy, --workspace, --default-workspace, "
             "--copy-workspace-files, --project, --clear-project, --current-session-id"
         ),
         instance=instance,
@@ -241,3 +244,76 @@ def test_agent_delete_posts_rpc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     result = agent_management.agent_delete(instance, "writer")
 
     assert result == CommandResult(ok=True, message="deleted writer", instance=instance)
+
+
+def test_agent_update_maps_clear_delegation_and_policy_flags() -> None:
+    args = cli_main.parse_args(
+        [
+            "agent",
+            "update",
+            "coder",
+            "--clear-model",
+            "--clear-fallback-model",
+            "--subagent-allow",
+            "reviewer",
+            "librarian",
+            "--compaction-policy",
+            '{"enabled":false}',
+        ]
+    )
+
+    assert cli_main._agent_changes_from_args(args) == {
+        "model": "",
+        "fallback_model": "",
+        "tools": {"subagent": {"allowed_agents": ["reviewer", "librarian"]}},
+        "compaction_policy": {"enabled": False},
+    }
+
+
+def test_agent_create_full_response_confirms_saved_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "id": "librarian",
+                    "name": "Librarian",
+                    "model": "openai/gpt-5",
+                    "fallback_model": "",
+                    "workspace": "C:/agents/librarian/workspace",
+                    "default_workspace": "C:/agents/librarian/workspace",
+                    "root_project_id": "second-brain",
+                    "temperature": 0.2,
+                    "thinking_effort": "high",
+                    "memory_prompt_mode": "full",
+                    "custom_system_prompt_enabled": True,
+                    "allowed_tools": ["read"],
+                    "allowed_skills": ["vbot-cli"],
+                    "tools": {"subagent": {"allowed_agents": []}},
+                    "compaction_policy": None,
+                    "effective_compaction_policy": {"enabled": True},
+                    "effective": {"model": {"value": "openai/gpt-5", "source": "agent"}},
+                    "current_session_id": "session-1",
+                    "context_window": 128000,
+                    "created_at": "now",
+                    "updated_at": "now",
+                },
+            },
+        )
+
+    monkeypatch.setattr(agent_management.httpx, "post", fake_post)
+
+    result = agent_management.agent_create(instance, "librarian", "Librarian", {})
+
+    assert result.ok is True
+    assert result.message.splitlines()[0] == "created agent librarian"
+    assert "workspace: C:/agents/librarian/workspace" in result.message
+    assert "project: second-brain" in result.message
+    assert 'effective_sources: {"model":"agent"}' in result.message

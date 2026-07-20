@@ -87,7 +87,7 @@ def test_prompt_list_posts_rpc_and_formats_rows(
     assert result == CommandResult(
         ok=True,
         message=(
-            "prompts:\n"
+            "scope: default\navailable_scopes: default\nprompts:\n"
             "- core:tools owner=always kind=text enabled=yes editable=yes "
             "source=core modified=no\n"
             "- user:my-rules owner=always kind=text enabled=yes editable=yes "
@@ -225,9 +225,18 @@ def test_run_dispatches_prompt_update_file(
         resolved_instance: ServerInstance,
         block_id: str,
         content: str,
+        scope: str,
     ) -> CommandResult:
         calls.append(
-            ("update", {"instance": resolved_instance, "block_id": block_id, "content": content})
+            (
+                "update",
+                {
+                    "instance": resolved_instance,
+                    "block_id": block_id,
+                    "content": content,
+                    "scope": scope,
+                },
+            )
         )
         return CommandResult(ok=True, message="updated core:tools", instance=resolved_instance)
 
@@ -239,6 +248,81 @@ def test_run_dispatches_prompt_update_file(
 
     assert exit_code == 0
     assert calls == [
-        ("update", {"instance": instance, "block_id": "core:tools", "content": "# Custom tools"})
+        (
+            "update",
+            {
+                "instance": instance,
+                "block_id": "core:tools",
+                "content": "# Custom tools",
+                "scope": "default",
+            },
+        )
     ]
     assert capsys.readouterr().out.splitlines() == ["updated core:tools"]
+
+
+def test_prompt_agent_scope_and_layout_mutations_post_scope_objects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        calls.append(json)
+        if json["method"] == "prompt.create_block":
+            result = {
+                "id": "user:catalog-rules",
+                "owner": "always",
+                "kind": "text",
+                "enabled": True,
+                "editable": True,
+                "source": "user",
+                "is_modified": True,
+            }
+        else:
+            result = {"layout": [{"id": "user:catalog-rules", "enabled": True, "source": "user"}]}
+        return httpx.Response(200, json={"ok": True, "result": result})
+
+    monkeypatch.setattr(prompt_management.httpx, "post", fake_post)
+
+    created = prompt_management.prompt_create(
+        instance,
+        "catalog-rules",
+        "Keep the index current.",
+        0,
+        "agent:librarian",
+    )
+    layout = prompt_management.prompt_set_layout(
+        instance,
+        [{"id": "user:catalog-rules", "enabled": True}],
+        "agent:librarian",
+    )
+    removed = prompt_management.prompt_remove(instance, "user:catalog-rules", "agent:librarian")
+
+    assert "created user:catalog-rules" in created.message
+    assert "updated prompt layout for agent:librarian" in layout.message
+    assert "removed user:catalog-rules" in removed.message
+    expected_scope = {"type": "agent", "agent_id": "librarian"}
+    assert calls[0] == {
+        "method": "prompt.create_block",
+        "params": {
+            "slug": "catalog-rules",
+            "scope": expected_scope,
+            "content": "Keep the index current.",
+            "position": 0,
+        },
+    }
+    assert calls[1]["params"]["scope"] == expected_scope
+    assert calls[2]["params"]["scope"] == expected_scope
+
+
+def test_parse_args_rejects_non_array_prompt_layout(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        cli_main.parse_args(["prompt", "set-layout", "--layout-json", '{"id":"core:tools"}'])
+
+    assert exc_info.value.code == 2
+    assert "JSON array" in capsys.readouterr().err

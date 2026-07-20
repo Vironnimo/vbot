@@ -7,9 +7,14 @@ user-facing help text. Command dispatch and output live in cli/main.py.
 from __future__ import annotations
 
 import argparse
+import json
 from collections.abc import Sequence
 
-from core.channels import ALLOWED_CHANNEL_DM_SCOPES, ALLOWED_CHANNEL_PLATFORMS
+from core.channels import (
+    ALLOWED_CHANNEL_DM_SCOPES,
+    ALLOWED_CHANNEL_PLATFORMS,
+    ALLOWED_CHANNEL_RESPONSE_MODES,
+)
 from core.memory import MEMORY_PROMPT_MODES
 from core.model_tasks import SUPPORTED_TASK_TYPES
 from core.providers.reasoning import THINKING_EFFORT_ORDER
@@ -22,6 +27,7 @@ THINKING_EFFORTS = ("", *THINKING_EFFORT_ORDER)
 # Argparse choices need a deterministic order; the canonical sets are unordered.
 CHANNEL_PLATFORMS = tuple(sorted(ALLOWED_CHANNEL_PLATFORMS))
 CHANNEL_DM_SCOPES = tuple(sorted(ALLOWED_CHANNEL_DM_SCOPES))
+CHANNEL_RESPONSE_MODES = tuple(sorted(ALLOWED_CHANNEL_RESPONSE_MODES))
 CRON_STATUSES = ("active", "paused")
 STATISTICS_SECTIONS = ("overview", "usage", "runs", "errors", "tools", "skills")
 TASK_TYPES = tuple(sorted(SUPPORTED_TASK_TYPES))
@@ -68,12 +74,17 @@ PROJECT_HELP = {
     "list": "List configured projects",
     "show": "Show one project's config, team, and scan report",
     "set": "Update one project's config",
+    "set-override": "Set one project-team agent override",
+    "clear-override": "Clear one project-team agent override",
     "rm": "Remove a project, archiving its anchor",
 }
 SESSION_HELP = {
     "list": "List one agent's chat sessions",
     "create": "Create a new chat session for one agent",
     "delete": "Delete (archive) one agent's chat session",
+    "fork": "Fork a session, optionally to another agent",
+    "rename": "Set or clear a session's display title",
+    "set-compaction-policy": "Set or clear a Session Policy override",
     "link-channel": "Link a session to a channel conversation for outbound replies",
 }
 CHANNEL_HELP = {
@@ -89,6 +100,10 @@ PROMPT_HELP = {
     "list": "List System Prompt blocks",
     "update": "Replace one editable prompt block's text",
     "reset": "Reset one editable prompt block to its inherited default",
+    "create": "Create a custom user prompt block",
+    "remove": "Remove a custom user prompt block",
+    "set-layout": "Replace a scope's prompt block order and enabled states",
+    "reset-layout": "Reset a scope's prompt layout to the bundled default",
     "preview": "Render one agent's complete system prompt",
 }
 LOG_HELP = {
@@ -98,6 +113,7 @@ LOG_HELP = {
 PROVIDER_HELP = {
     "list": "List provider connections and usability",
     "status": "Show one provider or connection status",
+    "usage": "Show live Provider subscription usage and reset windows",
     "set-key": "Set an API-key provider credential",
     "unset-key": "Remove an API-key provider credential",
     "enable": "Enable a provider connection (local providers start disabled)",
@@ -134,6 +150,7 @@ STATISTICS_HELP = {
     "skills": "Show the skills section: never-used skills and per-skill usage rates",
 }
 CONFIG_HELP = {
+    "effective": "Show the normalized live settings projection",
     "get": "Show one raw settings key",
     "set": "Set one raw settings key",
 }
@@ -154,7 +171,15 @@ AUTOSTART_HELP = {
     "status": "Show whether OS autostart is registered",
 }
 TOOL_HELP = {"list": "List public registered tools"}
-SKILL_HELP = {"list": "List skills and diagnostics"}
+SKILL_HELP = {
+    "list": "List effective skills and diagnostics",
+    "read": "Read editable skills in a global or private agent scope",
+    "create": "Create a skill in a global or private agent scope",
+    "update": "Replace a skill's SKILL.md in an editable scope",
+    "delete": "Delete a skill from an editable scope",
+    "write-file": "Write one supporting file inside an editable skill",
+    "remove-file": "Remove one supporting file from an editable skill",
+}
 EXTENSIONS_HELP = {
     "list": "List loaded, failed, and disabled extensions",
     "reload": "Reload all extensions from disk (applies code changes, applied live)",
@@ -200,6 +225,26 @@ def _add_target_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int)
     parser.add_argument("--data-dir")
+
+
+def _json_object_argument(raw: str) -> dict[str, object]:
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError(f"invalid JSON: {exc.msg}") from exc
+    if not isinstance(value, dict):
+        raise argparse.ArgumentTypeError("value must be a JSON object")
+    return value
+
+
+def _json_array_argument(raw: str) -> list[object]:
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError(f"invalid JSON: {exc.msg}") from exc
+    if not isinstance(value, list):
+        raise argparse.ArgumentTypeError("value must be a JSON array")
+    return value
 
 
 def _add_command_parser(
@@ -327,6 +372,13 @@ def _add_agent_change_arguments(
         parser.add_argument("--name", help="New display name")
     parser.add_argument("--model", help="Primary model as <provider>/<model-id>")
     parser.add_argument("--fallback-model", help="Fallback model as <provider>/<model-id>")
+    if include_name:
+        parser.add_argument(
+            "--clear-model", action="store_true", help="Clear the primary model override"
+        )
+        parser.add_argument(
+            "--clear-fallback-model", action="store_true", help="Clear the fallback model"
+        )
     parser.add_argument("--temperature", type=float, help="Sampling temperature (0.0-2.0)")
     parser.add_argument(
         "--clear-temperature",
@@ -355,6 +407,24 @@ def _add_agent_change_arguments(
     )
     parser.add_argument("--allowed-tools", nargs="*", help="Replace the full tool allowlist")
     parser.add_argument("--allowed-skills", nargs="*", help="Replace the full skill allowlist")
+    parser.add_argument(
+        "--subagent-allow",
+        nargs="*",
+        metavar="<agent-id>",
+        help="Replace the agents this agent may delegate to; empty denies all",
+    )
+    parser.add_argument(
+        "--compaction-policy",
+        type=_json_object_argument,
+        metavar="<json-object>",
+        help="Replace the full Agent Policy override as JSON",
+    )
+    if include_name:
+        parser.add_argument(
+            "--clear-compaction-policy",
+            action="store_true",
+            help="Clear the Agent Policy override and inherit the global policy",
+        )
     if include_location:
         parser.add_argument(
             "--workspace",
@@ -444,6 +514,7 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         metavar="<file>",
         help="Repo files auto-loaded into project agent prompts",
     )
+    _add_project_capability_arguments(add_parser)
 
     _add_command_parser(project_subparsers, "list", PROJECT_HELP["list"], example="project list")
 
@@ -516,11 +587,75 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         metavar="<file>",
         help="Replace the full auto-load file list",
     )
+    _add_project_capability_arguments(set_parser)
+
+    set_override_parser = _add_command_parser(
+        project_subparsers,
+        "set-override",
+        PROJECT_HELP["set-override"],
+        example="project set-override vbot builder model openrouter/openai/gpt-5",
+    )
+    set_override_parser.add_argument("id", metavar="<project-id>", help="Project id")
+    set_override_parser.add_argument("agent", metavar="<agent-id>", help="Team agent id")
+    set_override_parser.add_argument(
+        "field",
+        choices=("model", "temperature", "thinking_effort", "compaction_policy"),
+        help="Override field",
+    )
+    set_override_parser.add_argument(
+        "value", metavar="<value>", help="Field value; compaction_policy takes a JSON object"
+    )
+
+    clear_override_parser = _add_command_parser(
+        project_subparsers,
+        "clear-override",
+        PROJECT_HELP["clear-override"],
+        example="project clear-override vbot builder model",
+    )
+    clear_override_parser.add_argument("id", metavar="<project-id>", help="Project id")
+    clear_override_parser.add_argument("agent", metavar="<agent-id>", help="Team agent id")
+    clear_override_parser.add_argument(
+        "field",
+        choices=("model", "temperature", "thinking_effort", "compaction_policy"),
+        help="Override field to clear",
+    )
 
     rm_parser = _add_command_parser(
         project_subparsers, "rm", PROJECT_HELP["rm"], example="project rm vbot"
     )
     rm_parser.add_argument("id", metavar="<project-id>", help="Project id to remove")
+    rm_parser.add_argument(
+        "--copy-rooted-agent-files",
+        action="store_true",
+        help=(
+            "Copy SOUL.md, USER.md, and MEMORY.md from custom Workspaces before rooted "
+            "Identity Agents are reset to their default Workspace"
+        ),
+    )
+
+
+def _add_project_capability_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--allowed-tools", nargs="*", help="Replace the Project-wide tool allowlist"
+    )
+    parser.add_argument(
+        "--enabled-bundled-skills",
+        nargs="*",
+        metavar="<skill>",
+        help="Replace the bundled Skill allowlist; empty disables all bundled Skills",
+    )
+    parser.add_argument(
+        "--enabled-global-skills",
+        nargs="*",
+        metavar="<skill>",
+        help="Replace the global Skill allowlist; empty disables all global Skills",
+    )
+    parser.add_argument(
+        "--disabled-project-skills",
+        nargs="*",
+        metavar="<skill>",
+        help="Replace the denylist for Skills discovered in this Project",
+    )
 
 
 def _add_session_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -570,6 +705,50 @@ def _add_session_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         "--yes",
         action="store_true",
         help="Confirm deletion; the session is archived (recoverable), not erased",
+    )
+
+    fork_parser = _add_command_parser(
+        session_subparsers,
+        "fork",
+        SESSION_HELP["fork"],
+        example="session fork assistant <session-id> --target-agent reviewer@vbot",
+    )
+    fork_parser.add_argument("agent", metavar="<agent>", help="Source agent address")
+    fork_parser.add_argument("session", metavar="<session-id>", help="Source session id")
+    fork_parser.add_argument(
+        "--target-agent",
+        metavar="<agent>",
+        help="Destination agent address; omitted forks within the source agent",
+    )
+
+    rename_parser = _add_command_parser(
+        session_subparsers,
+        "rename",
+        SESSION_HELP["rename"],
+        example='session rename assistant <session-id> --title "Research notes"',
+    )
+    rename_parser.add_argument("agent", metavar="<agent>", help="Agent address")
+    rename_parser.add_argument("session", metavar="<session-id>", help="Session id")
+    rename_group = rename_parser.add_mutually_exclusive_group(required=True)
+    rename_group.add_argument("--title", help="New display title")
+    rename_group.add_argument(
+        "--clear-title", action="store_true", help="Clear the title and restore automatic display"
+    )
+
+    policy_parser = _add_command_parser(
+        session_subparsers,
+        "set-compaction-policy",
+        SESSION_HELP["set-compaction-policy"],
+        example='session set-compaction-policy assistant <session-id> --policy "{}"',
+    )
+    policy_parser.add_argument("agent", metavar="<agent>", help="Agent address")
+    policy_parser.add_argument("session", metavar="<session-id>", help="Session id")
+    policy_group = policy_parser.add_mutually_exclusive_group(required=True)
+    policy_group.add_argument(
+        "--policy", type=_json_object_argument, metavar="<json-object>", help="Session Policy"
+    )
+    policy_group.add_argument(
+        "--clear", action="store_true", help="Clear the override and resume live inheritance"
     )
 
     link_parser = _add_command_parser(
@@ -628,6 +807,7 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         metavar="<chat-id>",
         help="Allowed chat ids; empty denies all inbound chats",
     )
+    _add_channel_policy_arguments(add_parser, include_defaults=True)
 
     _add_command_parser(channel_subparsers, "list", CHANNEL_HELP["list"], example="channel list")
 
@@ -655,6 +835,7 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         help="Replace the full allowed chat-id list",
     )
     update_parser.add_argument("--enabled", choices=("true", "false"))
+    _add_channel_policy_arguments(update_parser, include_defaults=False)
 
     for command in ("enable", "disable", "status"):
         command_parser = _add_command_parser(
@@ -664,6 +845,39 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
             example=f"channel {command} tg-main",
         )
         command_parser.add_argument("id", metavar="<channel-id>", help=f"Channel id to {command}")
+
+
+def _add_channel_policy_arguments(
+    parser: argparse.ArgumentParser, *, include_defaults: bool
+) -> None:
+    parser.add_argument(
+        "--response-mode",
+        choices=CHANNEL_RESPONSE_MODES,
+        default="mention" if include_defaults else None,
+        help="When group messages trigger a response",
+    )
+    parser.add_argument(
+        "--mention-pattern",
+        dest="mention_patterns",
+        nargs="*",
+        default=[] if include_defaults else None,
+        metavar="<pattern>",
+        help="Replace explicit mention patterns",
+    )
+    parser.add_argument(
+        "--owner-user",
+        dest="owner_user_ids",
+        nargs="*",
+        default=[] if include_defaults else None,
+        metavar="<user-id>",
+        help="Replace platform user ids treated as the owner",
+    )
+    parser.add_argument(
+        "--observe-unaddressed",
+        choices=("true", "false"),
+        default="false" if include_defaults else None,
+        help="Let the agent observe group messages it does not answer",
+    )
 
 
 def _add_tool_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -726,7 +940,10 @@ def _add_prompt_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
     )
     prompt_subparsers = prompt_parser.add_subparsers(dest="command", required=True)
 
-    _add_command_parser(prompt_subparsers, "list", PROMPT_HELP["list"], example="prompt list")
+    list_parser = _add_command_parser(
+        prompt_subparsers, "list", PROMPT_HELP["list"], example="prompt list"
+    )
+    _add_prompt_scope_argument(list_parser)
 
     update_parser = _add_command_parser(
         prompt_subparsers,
@@ -742,6 +959,7 @@ def _add_prompt_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
     content_group.add_argument(
         "--file", dest="content_file", metavar="<path>", help="Read block content from a file"
     )
+    _add_prompt_scope_argument(update_parser)
 
     reset_parser = _add_command_parser(
         prompt_subparsers, "reset", PROMPT_HELP["reset"], example="prompt reset core:tools"
@@ -749,6 +967,56 @@ def _add_prompt_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
     reset_parser.add_argument(
         "block_id", metavar="<block-id>", help="Editable prompt block id, for example core:tools"
     )
+    _add_prompt_scope_argument(reset_parser)
+
+    create_parser = _add_command_parser(
+        prompt_subparsers,
+        "create",
+        PROMPT_HELP["create"],
+        example='prompt create project-rules --content "Follow the repo rules."',
+    )
+    create_parser.add_argument("slug", metavar="<slug>", help="Slug for the new user:<slug> block")
+    create_content = create_parser.add_mutually_exclusive_group()
+    create_content.add_argument("--content", help="Initial block content as inline text")
+    create_content.add_argument(
+        "--file", dest="content_file", metavar="<path>", help="Read initial content from a file"
+    )
+    create_parser.add_argument(
+        "--position", type=int, metavar="<index>", help="0-based layout insertion position"
+    )
+    _add_prompt_scope_argument(create_parser)
+
+    remove_parser = _add_command_parser(
+        prompt_subparsers,
+        "remove",
+        PROMPT_HELP["remove"],
+        example="prompt remove user:project-rules",
+    )
+    remove_parser.add_argument("block_id", metavar="<block-id>", help="Custom user: block id")
+    _add_prompt_scope_argument(remove_parser)
+
+    layout_parser = _add_command_parser(
+        prompt_subparsers,
+        "set-layout",
+        PROMPT_HELP["set-layout"],
+        example='prompt set-layout --layout-json \'[{"id":"core:tools","enabled":true}]\'',
+    )
+    layout_parser.add_argument(
+        "--layout-json",
+        required=True,
+        type=_json_array_argument,
+        metavar="<json-array>",
+        help="Ordered [{id, enabled}] layout",
+    )
+    _add_prompt_scope_argument(layout_parser)
+
+    reset_layout_parser = _add_command_parser(
+        prompt_subparsers,
+        "reset-layout",
+        PROMPT_HELP["reset-layout"],
+        example="prompt reset-layout --scope agent:assistant",
+    )
+    _add_prompt_scope_argument(reset_layout_parser)
 
     preview_parser = _add_command_parser(
         prompt_subparsers, "preview", PROMPT_HELP["preview"], example="prompt preview assistant"
@@ -757,6 +1025,16 @@ def _add_prompt_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
         "agent",
         metavar="<agent>",
         help="Agent whose system prompt to render, as agent or agent@projekt",
+    )
+    _add_prompt_scope_argument(preview_parser)
+
+
+def _add_prompt_scope_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--scope",
+        default="default",
+        metavar="<default|agent:id>",
+        help="Editable prompt scope (default: default)",
     )
 
 
@@ -792,6 +1070,19 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
         "--connection",
         metavar="<provider:connection-id>",
         help="Narrow to one compositional connection id, for example openai:api-key",
+    )
+
+    usage_parser = _add_command_parser(
+        provider_subparsers,
+        "usage",
+        PROVIDER_HELP["usage"],
+        example="provider usage --connection openai:subscription",
+    )
+    usage_parser.add_argument(
+        "--connection",
+        action="append",
+        metavar="<provider:connection-id>",
+        help="Probe only this connection; repeat to select multiple connections",
     )
 
     set_key_parser = _add_command_parser(
@@ -982,6 +1273,72 @@ def _add_skill_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     skill_subparsers = skill_parser.add_subparsers(dest="command", required=True)
     _add_command_parser(skill_subparsers, "list", SKILL_HELP["list"], example="skill list")
 
+    read_parser = _add_command_parser(
+        skill_subparsers, "read", SKILL_HELP["read"], example="skill read --scope global"
+    )
+    _add_skill_scope_argument(read_parser)
+
+    for command in ("create", "update"):
+        command_parser = _add_command_parser(
+            skill_subparsers,
+            command,
+            SKILL_HELP[command],
+            example=f"skill {command} librarian --scope agent:assistant --file SKILL.md",
+        )
+        command_parser.add_argument("name", metavar="<skill-name>", help="Skill directory name")
+        content_group = command_parser.add_mutually_exclusive_group(required=True)
+        content_group.add_argument("--content", help="Complete SKILL.md content as inline text")
+        content_group.add_argument(
+            "--file", dest="content_file", metavar="<path>", help="Read SKILL.md from a file"
+        )
+        command_parser.add_argument("--source", help="Optional provenance label")
+        _add_skill_scope_argument(command_parser)
+
+    delete_parser = _add_command_parser(
+        skill_subparsers,
+        "delete",
+        SKILL_HELP["delete"],
+        example="skill delete librarian --scope global --yes",
+    )
+    delete_parser.add_argument("name", metavar="<skill-name>", help="Skill directory name")
+    delete_parser.add_argument("--yes", action="store_true", help="Confirm deletion")
+    _add_skill_scope_argument(delete_parser)
+
+    write_parser = _add_command_parser(
+        skill_subparsers,
+        "write-file",
+        SKILL_HELP["write-file"],
+        example="skill write-file librarian references/schema.md --scope global --file schema.md",
+    )
+    write_parser.add_argument("name", metavar="<skill-name>", help="Skill directory name")
+    write_parser.add_argument("path", metavar="<relative-path>", help="Path inside the Skill")
+    write_content = write_parser.add_mutually_exclusive_group(required=True)
+    write_content.add_argument("--content", help="File content as inline text")
+    write_content.add_argument(
+        "--file", dest="content_file", metavar="<path>", help="Read content from a file"
+    )
+    _add_skill_scope_argument(write_parser)
+
+    remove_file_parser = _add_command_parser(
+        skill_subparsers,
+        "remove-file",
+        SKILL_HELP["remove-file"],
+        example="skill remove-file librarian references/schema.md --scope global --yes",
+    )
+    remove_file_parser.add_argument("name", metavar="<skill-name>", help="Skill directory name")
+    remove_file_parser.add_argument("path", metavar="<relative-path>", help="Path inside the Skill")
+    remove_file_parser.add_argument("--yes", action="store_true", help="Confirm removal")
+    _add_skill_scope_argument(remove_file_parser)
+
+
+def _add_skill_scope_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--scope",
+        required=True,
+        metavar="<global|agent:id>",
+        help="Editable global or private Identity Agent Skill scope",
+    )
+
 
 def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     cron_parser = subparsers.add_parser(
@@ -1103,6 +1460,13 @@ def _add_config_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
     )
     config_subparsers = config_parser.add_subparsers(dest="command")
     _add_target_arguments(config_parser)
+
+    _add_command_parser(
+        config_subparsers,
+        "effective",
+        CONFIG_HELP["effective"],
+        example="config effective",
+    )
 
     get_parser = _add_command_parser(
         config_subparsers, "get", CONFIG_HELP["get"], example="config get recall"

@@ -28,8 +28,9 @@ def cron_create(instance: ServerInstance, fields: Mapping[str, Any]) -> CommandR
     payload = _rpc_call(instance, "cron.create", dict(fields))
     if not payload.ok:
         return payload.to_command_result()
-    created_id = _string_or_default(payload.data.get("id"), "?")
-    return CommandResult(ok=True, message=f"created cron job {created_id}", instance=instance)
+    return CommandResult(
+        ok=True, message=_format_job_operation("created", payload.data), instance=instance
+    )
 
 
 def cron_list(instance: ServerInstance) -> CommandResult:
@@ -60,7 +61,11 @@ def cron_update(
     payload = _rpc_call(instance, "cron.update", {"id": job_id, **dict(changes)})
     if not payload.ok:
         return payload.to_command_result()
-    return CommandResult(ok=True, message=f"updated cron job {job_id}", instance=instance)
+    return CommandResult(
+        ok=True,
+        message=_format_job_operation("updated", payload.data, fallback_id=job_id),
+        instance=instance,
+    )
 
 
 def cron_delete(instance: ServerInstance, job_id: str) -> CommandResult:
@@ -78,7 +83,11 @@ def cron_enable(instance: ServerInstance, job_id: str) -> CommandResult:
     payload = _rpc_call(instance, "cron.enable", {"id": job_id})
     if not payload.ok:
         return payload.to_command_result()
-    return CommandResult(ok=True, message=f"enabled cron job {job_id}", instance=instance)
+    return CommandResult(
+        ok=True,
+        message=_format_job_operation("enabled", payload.data, fallback_id=job_id),
+        instance=instance,
+    )
 
 
 def cron_disable(instance: ServerInstance, job_id: str) -> CommandResult:
@@ -87,7 +96,11 @@ def cron_disable(instance: ServerInstance, job_id: str) -> CommandResult:
     payload = _rpc_call(instance, "cron.disable", {"id": job_id})
     if not payload.ok:
         return payload.to_command_result()
-    return CommandResult(ok=True, message=f"disabled cron job {job_id}", instance=instance)
+    return CommandResult(
+        ok=True,
+        message=_format_job_operation("disabled", payload.data, fallback_id=job_id),
+        instance=instance,
+    )
 
 
 def _format_job_rows(jobs: Sequence[object]) -> str:
@@ -123,6 +136,13 @@ def _format_job_row(job: object) -> str:
         f" last_outcome={last_outcome}"
         f" prompt={prompt}"
     )
+
+
+def _format_job_operation(action: str, job: Mapping[str, Any], *, fallback_id: str = "?") -> str:
+    job_id = _string_or_default(job.get("id"), fallback_id)
+    if set(job) <= {"id", "ok"}:
+        return f"{action} cron job {job_id}"
+    return f"{action} cron job {job_id}\n{_format_job_row(job)}"
 
 
 def _format_schedule(job: Mapping[str, Any]) -> str:

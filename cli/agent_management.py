@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -16,7 +17,9 @@ from cli.server_management import CommandResult, ServerInstance
 AGENT_UPDATE_FLAGS = (
     "--name",
     "--model",
+    "--clear-model",
     "--fallback-model",
+    "--clear-fallback-model",
     "--temperature",
     "--clear-temperature",
     "--thinking-effort",
@@ -25,6 +28,9 @@ AGENT_UPDATE_FLAGS = (
     "--custom-system-prompt",
     "--allowed-tools",
     "--allowed-skills",
+    "--subagent-allow",
+    "--compaction-policy",
+    "--clear-compaction-policy",
     "--workspace",
     "--default-workspace",
     "--copy-workspace-files",
@@ -67,8 +73,11 @@ def agent_create(
     payload = _rpc_call(instance, "agent.create", params)
     if not payload.ok:
         return payload.to_command_result()
-    created_id = _string_or_default(payload.data.get("id"), agent_id)
-    return CommandResult(ok=True, message=f"created {created_id}", instance=instance)
+    return CommandResult(
+        ok=True,
+        message=_format_agent_operation("created", payload.data, agent_id),
+        instance=instance,
+    )
 
 
 def agent_update(
@@ -94,8 +103,11 @@ def agent_update(
     payload = _rpc_call(instance, "agent.update", params)
     if not payload.ok:
         return payload.to_command_result()
-    updated_id = _string_or_default(payload.data.get("id"), agent_id)
-    return CommandResult(ok=True, message=f"updated {updated_id}", instance=instance)
+    return CommandResult(
+        ok=True,
+        message=_format_agent_operation("updated", payload.data, agent_id),
+        instance=instance,
+    )
 
 
 def agent_delete(instance: ServerInstance, agent_id: str) -> CommandResult:
@@ -144,24 +156,91 @@ def _format_agent_row(agent: object) -> str:
 
 def _format_agent_detail(agent: Mapping[str, Any]) -> str:
     custom_prompt_text = _bool_text(agent.get("custom_system_prompt_enabled"))
-    return "\n".join(
-        [
-            "agent:",
-            f"id: {_string_or_default(agent.get('id'), '?')}",
-            f"name: {_string_or_default(agent.get('name'), '?')}",
-            f"model: {_string_or_default(agent.get('model'), '-')}",
-            f"fallback_model: {_string_or_default(agent.get('fallback_model'), '-')}",
-            f"workspace: {_string_or_default(agent.get('workspace'), '-')}",
-            f"project: {_string_or_default(agent.get('root_project_id'), '-')}",
-            f"temperature: {_value_text(agent.get('temperature'))}",
-            f"thinking_effort: {_value_text(agent.get('thinking_effort'))}",
-            f"memory_prompt_mode: {_string_or_default(agent.get('memory_prompt_mode'), '-')}",
-            f"custom_system_prompt_enabled: {custom_prompt_text}",
-            f"allowed_tools: {_format_string_list(agent.get('allowed_tools'))}",
-            f"allowed_skills: {_format_string_list(agent.get('allowed_skills'))}",
-            f"current_session_id: {_string_or_default(agent.get('current_session_id'), '-')}",
-            f"context_window: {_value_text(agent.get('context_window'))}",
-            f"created_at: {_string_or_default(agent.get('created_at'), '-')}",
-            f"updated_at: {_string_or_default(agent.get('updated_at'), '-')}",
-        ]
+    lines = [
+        "agent:",
+        f"id: {_string_or_default(agent.get('id'), '?')}",
+        f"name: {_string_or_default(agent.get('name'), '?')}",
+        f"model: {_string_or_default(agent.get('model'), '-')}",
+        f"fallback_model: {_string_or_default(agent.get('fallback_model'), '-')}",
+        f"workspace: {_string_or_default(agent.get('workspace'), '-')}",
+        f"project: {_string_or_default(agent.get('root_project_id'), '-')}",
+        f"temperature: {_value_text(agent.get('temperature'))}",
+        f"thinking_effort: {_value_text(agent.get('thinking_effort'))}",
+        f"memory_prompt_mode: {_string_or_default(agent.get('memory_prompt_mode'), '-')}",
+        f"custom_system_prompt_enabled: {custom_prompt_text}",
+        f"allowed_tools: {_format_string_list(agent.get('allowed_tools'))}",
+        f"allowed_skills: {_format_string_list(agent.get('allowed_skills'))}",
+        f"current_session_id: {_string_or_default(agent.get('current_session_id'), '-')}",
+        f"context_window: {_value_text(agent.get('context_window'))}",
+        f"created_at: {_string_or_default(agent.get('created_at'), '-')}",
+        f"updated_at: {_string_or_default(agent.get('updated_at'), '-')}",
+    ]
+    project_index = next(index for index, line in enumerate(lines) if line.startswith("project:"))
+    if "default_workspace" in agent:
+        lines.insert(
+            project_index,
+            f"default_workspace: {_string_or_default(agent.get('default_workspace'), '-')}",
+        )
+    skills_index = next(
+        index for index, line in enumerate(lines) if line.startswith("allowed_skills:")
     )
+    policy_lines: list[str] = []
+    if "tools" in agent:
+        policy_lines.append(
+            f"subagent_allowed_agents: {_subagent_allowed_agents(agent.get('tools'))}"
+        )
+    if "compaction_policy" in agent:
+        policy_lines.append(f"compaction_policy: {_json_text(agent.get('compaction_policy'))}")
+    if "effective_compaction_policy" in agent:
+        policy_lines.append(
+            f"effective_compaction_policy: {_json_text(agent.get('effective_compaction_policy'))}"
+        )
+    if "effective" in agent:
+        policy_lines.append(f"effective_sources: {_effective_source_text(agent.get('effective'))}")
+    lines[skills_index + 1 : skills_index + 1] = policy_lines
+    return "\n".join(lines)
+
+
+def _format_agent_operation(action: str, agent: Mapping[str, Any], fallback_id: str) -> str:
+    agent_id = _string_or_default(agent.get("id"), fallback_id)
+    if set(agent) <= {"id"}:
+        return f"{action} {agent_id}"
+    lines = [f"{action} agent {agent_id}", _format_agent_detail(agent)]
+    relocation = agent.get("workspace_relocation")
+    if isinstance(relocation, dict):
+        lines.extend(
+            [
+                "workspace_relocation:",
+                f"copied_files: {_format_string_list(relocation.get('copied_files'))}",
+                f"backed_up_files: {_format_string_list(relocation.get('backed_up_files'))}",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def _subagent_allowed_agents(value: object) -> str:
+    if not isinstance(value, dict):
+        return "-"
+    subagent = value.get("subagent")
+    if not isinstance(subagent, dict):
+        return "-"
+    return _format_string_list(subagent.get("allowed_agents"))
+
+
+def _json_text(value: object) -> str:
+    if value is None:
+        return "-"
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _effective_source_text(value: object) -> str:
+    if not isinstance(value, dict):
+        return "-"
+    sources = {
+        field: detail.get("source")
+        for field, detail in value.items()
+        if isinstance(field, str) and isinstance(detail, dict)
+    }
+    if not sources:
+        return "-"
+    return _json_text(sources)

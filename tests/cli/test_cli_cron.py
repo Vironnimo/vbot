@@ -326,3 +326,49 @@ def test_run_dispatches_cron_update_schedule_change(
 
     assert exit_code == 0
     assert capsys.readouterr().out.splitlines() == ["updated cron job job-1"]
+
+
+def test_cron_create_full_response_confirms_schedule_and_next_fire(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "id": "job-1",
+                    "agent_id": "builder",
+                    "project_id": "vbot",
+                    "target": "builder@vbot",
+                    "prompt": "Check the build",
+                    "schedule_type": "cron",
+                    "cron_expression": "0 9 * * *",
+                    "run_at": None,
+                    "status": "active",
+                    "next_fire_at": "2026-07-21T07:00:00+00:00",
+                    "last_outcome": None,
+                },
+            },
+        )
+
+    monkeypatch.setattr(cron_management.httpx, "post", fake_post)
+
+    result = cron_management.cron_create(
+        instance,
+        {
+            "agent_id": "builder@vbot",
+            "prompt": "Check the build",
+            "schedule_type": "cron",
+            "cron_expression": "0 9 * * *",
+        },
+    )
+
+    assert result.ok is True
+    assert result.message.splitlines()[0] == "created cron job job-1"
+    assert "agent=builder@vbot" in result.message
+    assert "next_fire_at=2026-07-21T07:00:00+00:00" in result.message

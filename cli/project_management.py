@@ -15,6 +15,7 @@ a clean report — a valid Project, not an error.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -29,10 +30,19 @@ PROJECT_SET_FLAGS = (
     "--cwd",
     "--name",
     "--default-agent",
+    "--clear-default-agent",
     "--default-model",
+    "--clear-default-model",
     "--default-temperature",
+    "--clear-default-temperature",
     "--default-thinking-effort",
+    "--clear-default-thinking-effort",
+    "--format",
     "--auto-load",
+    "--allowed-tools",
+    "--enabled-bundled-skills",
+    "--enabled-global-skills",
+    "--disabled-project-skills",
 )
 
 
@@ -94,26 +104,93 @@ def project_set(
     payload = _rpc_call(instance, "project.set", params)
     if not payload.ok:
         return payload.to_command_result()
-    project = payload.data.get("project")
-    updated_id = project_id
-    if isinstance(project, dict):
-        updated_id = _string_or_default(project.get("project_id"), project_id)
-    return CommandResult(ok=True, message=f"updated project {updated_id}", instance=instance)
+    return CommandResult(
+        ok=True,
+        message=_format_project_operation("updated", payload.data, project_id),
+        instance=instance,
+    )
 
 
-def project_remove(instance: ServerInstance, project_id: str) -> CommandResult:
+def project_set_override(
+    instance: ServerInstance,
+    project_id: str,
+    agent_id: str,
+    field: str,
+    raw_value: str,
+) -> CommandResult:
+    """Set one Project Agent override and show the refreshed Project."""
+
+    try:
+        value = _coerce_override_value(field, raw_value)
+    except ValueError as exc:
+        return CommandResult(ok=False, message=str(exc), instance=instance)
+    payload = _rpc_call(
+        instance,
+        "project.set_override",
+        {"project_id": project_id, "agent_id": agent_id, "field": field, "value": value},
+    )
+    if not payload.ok:
+        return payload.to_command_result()
+    return CommandResult(
+        ok=True,
+        message=_format_project_operation(
+            f"set {agent_id}.{field} override on", payload.data, project_id
+        ),
+        instance=instance,
+    )
+
+
+def project_clear_override(
+    instance: ServerInstance,
+    project_id: str,
+    agent_id: str,
+    field: str,
+) -> CommandResult:
+    """Clear one Project Agent override and show the refreshed Project."""
+
+    payload = _rpc_call(
+        instance,
+        "project.clear_override",
+        {"project_id": project_id, "agent_id": agent_id, "field": field},
+    )
+    if not payload.ok:
+        return payload.to_command_result()
+    return CommandResult(
+        ok=True,
+        message=_format_project_operation(
+            f"cleared {agent_id}.{field} override on", payload.data, project_id
+        ),
+        instance=instance,
+    )
+
+
+def project_remove(
+    instance: ServerInstance,
+    project_id: str,
+    copy_rooted_agent_files: bool = False,
+) -> CommandResult:
     """Archive a project via ``project.rm`` RPC, or surface the block reason."""
 
-    payload = _rpc_call(instance, "project.rm", {"project_id": project_id})
+    params: dict[str, object] = {"project_id": project_id}
+    if copy_rooted_agent_files:
+        params["copy_rooted_agent_identity_files"] = True
+    payload = _rpc_call(instance, "project.rm", params)
     if not payload.ok:
         return payload.to_command_result()
     removed_id = _string_or_default(payload.data.get("project_id"), project_id)
     archive_path = _string_or_default(payload.data.get("archive_path"), "-")
-    return CommandResult(
-        ok=True,
-        message=f"removed project {removed_id} (archived to {archive_path})",
-        instance=instance,
-    )
+    lines = [f"removed project {removed_id} (archived to {archive_path})"]
+    if "affected_agent_ids" in payload.data:
+        lines.append(
+            f"affected_rooted_agents: {_format_string_list(payload.data.get('affected_agent_ids'))}"
+        )
+    if "copied_files" in payload.data:
+        lines.extend(_format_agent_file_effects("copied_files", payload.data.get("copied_files")))
+    if "backed_up_files" in payload.data:
+        lines.extend(
+            _format_agent_file_effects("backed_up_files", payload.data.get("backed_up_files"))
+        )
+    return CommandResult(ok=True, message="\n".join(lines), instance=instance)
 
 
 def _format_project_added(data: Mapping[str, Any]) -> str:
@@ -138,12 +215,25 @@ def _format_project_detail(data: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _format_project_operation(action: str, data: Mapping[str, Any], fallback_id: str) -> str:
+    project = data.get("project")
+    project_id = fallback_id
+    if isinstance(project, dict):
+        project_id = _string_or_default(project.get("project_id"), fallback_id)
+        if set(project) <= {"project_id"} and data.get("scan") is None:
+            return f"{action} project {project_id}"
+    lines = [f"{action} project {project_id}"]
+    lines.extend(_project_config_lines(project))
+    lines.extend(_scan_lines(data.get("scan")))
+    return "\n".join(lines)
+
+
 def _project_config_lines(project: object) -> list[str]:
     if not isinstance(project, dict):
         return ["  config: invalid project entry"]
     temperature = _number_or_default(project.get("default_temperature"), "-")
     thinking_effort = _thinking_effort_text(project.get("default_thinking_effort"))
-    return [
+    lines = [
         f"  display_name: {_string_or_default(project.get('display_name'), '-')}",
         f"  cwd: {_string_or_default(project.get('cwd'), '-')}",
         f"  cwd_exists: {_bool_text(project.get('cwd_exists'))}",
@@ -154,6 +244,16 @@ def _project_config_lines(project: object) -> list[str]:
         f"  format: {_string_or_default(project.get('source_format'), '-')}",
         f"  auto_load: {_format_string_list(project.get('auto_load'))}",
     ]
+    optional_fields = (
+        ("allowed_tools", "allowed_tools"),
+        ("skills_bundled_enabled", "enabled_bundled_skills"),
+        ("skills_global_enabled", "enabled_global_skills"),
+        ("skills_project_disabled", "disabled_project_skills"),
+    )
+    for field, label in optional_fields:
+        if field in project:
+            lines.append(f"  {label}: {_format_string_list(project.get(field))}")
+    return lines
 
 
 def _scan_lines(scan: object) -> list[str]:
@@ -180,7 +280,16 @@ def _team_member_line(member: object) -> str:
     agent_id = _string_or_default(member.get("agent_id"), "?")
     model = _string_or_default(member.get("model"), "-")
     description = _string_or_default(member.get("description"), "-")
-    return f"    - {agent_id} model={model} description={description}"
+    line = f"    - {agent_id} model={model} description={description}"
+    if "tools" in member:
+        line = f"{line} tools={_format_string_list(member.get('tools'))}"
+    if "denied_tools" in member:
+        line = f"{line} denied_tools={_format_string_list(member.get('denied_tools'))}"
+    if "overrides" in member:
+        line = f"{line} overrides={_json_or_default(member.get('overrides'))}"
+    if "effective" in member:
+        line = f"{line} effective_sources={_effective_sources(member.get('effective'))}"
+    return line
 
 
 def _report_lines(report: object) -> list[str]:
@@ -250,3 +359,48 @@ def _thinking_effort_text(value: object) -> str:
     if isinstance(value, str):
         return value
     return "-"
+
+
+def _coerce_override_value(field: str, raw_value: str) -> object:
+    if field == "temperature":
+        try:
+            return float(raw_value)
+        except ValueError as exc:
+            raise ValueError("temperature override must be a number") from exc
+    if field == "compaction_policy":
+        try:
+            value = json.loads(raw_value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"compaction_policy override is invalid JSON: {exc.msg}") from exc
+        if not isinstance(value, dict):
+            raise ValueError("compaction_policy override must be a JSON object")
+        return value
+    return raw_value
+
+
+def _json_or_default(value: object) -> str:
+    if value is None:
+        return "-"
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _effective_sources(value: object) -> str:
+    if not isinstance(value, dict):
+        return "-"
+    sources = {
+        field: detail.get("source")
+        for field, detail in value.items()
+        if isinstance(field, str) and isinstance(detail, dict)
+    }
+    if not sources:
+        return "-"
+    return _json_or_default(sources)
+
+
+def _format_agent_file_effects(label: str, value: object) -> list[str]:
+    if not isinstance(value, dict) or not value:
+        return [f"{label}: -"]
+    lines = [f"{label}:"]
+    for agent_id in sorted(value):
+        lines.append(f"  {agent_id}: {_format_string_list(value[agent_id])}")
+    return lines
