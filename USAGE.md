@@ -182,7 +182,7 @@ API keys resolve from the process environment first and `<data-dir>/.env` second
 
 ## Data directory and configuration
 
-The normal runtime data directory is `~/.vbot`. Select another target with `--data-dir` on server and RPC-backed CLI commands, or set `VBOT_DATA_DIR`. Important contents are:
+The normal runtime data directory is `~/.vbot`. Select another target with `--data-dir` on server and RPC-backed CLI commands, or set `VBOT_DATA_DIR`. Run `vbot home` to print the absolute application and currently selected data directories; pass `--data-dir` to inspect an explicit target. Important contents are:
 
 - `.env` — Provider keys, Channel bot tokens, and Extension secrets
 - `settings.json` — instance Settings
@@ -497,11 +497,12 @@ Home Assistant ships as a bundled Extension. In Settings → Extensions → Home
 
 ## CLI reference
 
-Installed commands use `vbot`. From a source checkout, `python cli/main.py` exposes the same parser. Most management commands call the running server through RPC and accept `--host`, `--port`, and `--data-dir` on the leaf command. Server lifecycle, update, autostart, and doctor include local work and do not merely proxy management RPC.
+Installed commands use `vbot`. From a source checkout, `python cli/main.py` exposes the same parser. Most management commands call the running server through RPC and accept `--host`, `--port`, and `--data-dir` on the leaf command. Server lifecycle, home, desktop, update, uninstall, autostart, and doctor include local work and do not merely proxy management RPC.
 
 | Area | Commands |
 |---|---|
 | Server | `server start`, `server stop`, `server restart`, `server status` |
+| Paths | `home [--data-dir ...]` |
 | Desktop | `desktop [--host ... --port ...]` |
 | Installation lifecycle | `update`, `uninstall`, `autostart enable`, `autostart disable`, `autostart status` |
 | Agents | `agent list`, `agent show`, `agent create`, `agent update`, `agent delete` |
