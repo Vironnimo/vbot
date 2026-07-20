@@ -317,3 +317,49 @@ def test_agent_create_full_response_confirms_saved_state(
     assert "workspace: C:/agents/librarian/workspace" in result.message
     assert "project: second-brain" in result.message
     assert 'effective_sources: {"model":"agent"}' in result.message
+    assert "warning: no effective Model" not in result.message
+
+
+def test_agent_create_warns_and_gives_recovery_when_no_model_is_effective(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "id": "librarian",
+                    "name": "Librarian",
+                    "model": "",
+                    "fallback_model": "",
+                    "workspace": "C:/agents/librarian/workspace",
+                    "root_project_id": None,
+                    "temperature": None,
+                    "thinking_effort": None,
+                    "memory_prompt_mode": "full",
+                    "custom_system_prompt_enabled": False,
+                    "allowed_tools": [],
+                    "allowed_skills": [],
+                    "current_session_id": "session-1",
+                    "context_window": None,
+                    "created_at": "now",
+                    "updated_at": "now",
+                },
+            },
+        )
+
+    monkeypatch.setattr(agent_management.httpx, "post", fake_post)
+
+    result = agent_management.agent_create(instance, "librarian", "Librarian", {})
+
+    assert result.ok is True
+    assert result.message.splitlines()[-3:] == [
+        "warning: no effective Model is configured; this Agent cannot run",
+        "next: vbot model list --task chat",
+        "next: vbot agent update librarian --model <model-id>",
+    ]

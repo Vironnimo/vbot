@@ -37,6 +37,38 @@ def test_parse_args_supports_model_list() -> None:
     assert args.data_dir == "dev"
 
 
+def test_parse_args_supports_model_list_filters() -> None:
+    args = cli_main.parse_args(
+        [
+            "model",
+            "list",
+            "--provider",
+            "openai",
+            "--capability",
+            "tools",
+            "--capability",
+            "reasoning",
+            "--task",
+            "chat",
+            "--input-modality",
+            "text",
+            "--output-modality",
+            "text",
+            "--min-context-window",
+            "128000",
+        ]
+    )
+
+    assert cli_main._model_filters_from_args(args) == {
+        "provider_id": "openai",
+        "capabilities": ["tools", "reasoning"],
+        "tasks": ["chat"],
+        "input_modalities": ["text"],
+        "output_modalities": ["text"],
+        "min_context_window": 128000,
+    }
+
+
 def test_parse_args_supports_model_refresh_no_provider() -> None:
     args = cli_main.parse_args(
         ["model", "refresh", "--host", "localhost", "--port", "8700", "--data-dir", "dev"]
@@ -129,6 +161,53 @@ def test_model_list_formats_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         "models:",
         "- id: openai/gpt-4o  name: GPT-4o  context_window: 128000",
         "- id: anthropic/claude-sonnet-4  name: Claude Sonnet 4  context_window: 200000",
+    ]
+
+
+def test_model_list_formats_effective_window_reachability_capabilities_and_tasks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        assert json == {"method": "model.list", "params": {"tasks": ["chat"]}}
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "models": [
+                        {
+                            "id": "ollama/qwen3",
+                            "name": "Qwen 3",
+                            "context_window": 262144,
+                            "effective_context_window": 32768,
+                            "reachable": False,
+                            "capabilities": {
+                                "vision": False,
+                                "tools": True,
+                                "json_mode": False,
+                                "reasoning": {"supported": True},
+                                "task_types": ["chat", "text_output"],
+                            },
+                        }
+                    ]
+                },
+            },
+        )
+
+    monkeypatch.setattr(model_management.httpx, "post", fake_post)
+
+    result = model_management.model_list(instance, {"tasks": ["chat"]})
+
+    assert result.message.splitlines() == [
+        "models:",
+        (
+            "- id: ollama/qwen3  name: Qwen 3  context_window: 32768  reachable: no  "
+            "capabilities: tools,reasoning  tasks: chat,text_output"
+        ),
     ]
 
 

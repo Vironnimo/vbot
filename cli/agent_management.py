@@ -198,6 +198,16 @@ def _format_agent_detail(agent: Mapping[str, Any]) -> str:
     if "effective" in agent:
         policy_lines.append(f"effective_sources: {_effective_source_text(agent.get('effective'))}")
     lines[skills_index + 1 : skills_index + 1] = policy_lines
+    model = agent.get("model")
+    if not isinstance(model, str) or not model:
+        agent_id = _string_or_default(agent.get("id"), "<agent-id>")
+        lines.extend(
+            [
+                "warning: no effective Model is configured; this Agent cannot run",
+                "next: vbot model list --task chat",
+                f"next: vbot agent update {agent_id} --model <model-id>",
+            ]
+        )
     return "\n".join(lines)
 
 

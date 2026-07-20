@@ -554,8 +554,10 @@ def test_run_model_list_dispatches_and_prints_plain_output(
         calls.append(("resolve", {"host": host, "port": port, "data_dir": data_dir}))
         return instance
 
-    def fake_list_models(resolved_instance: ServerInstance) -> CommandResult:
-        calls.append(("model.list", resolved_instance))
+    def fake_list_models(
+        resolved_instance: ServerInstance, filters: dict[str, Any]
+    ) -> CommandResult:
+        calls.append(("model.list", (resolved_instance, filters)))
         return result
 
     exit_code = cli_main.run(
@@ -567,7 +569,7 @@ def test_run_model_list_dispatches_and_prints_plain_output(
     assert exit_code == 0
     assert calls == [
         ("resolve", {"host": "localhost", "port": 8765, "data_dir": "data"}),
-        ("model.list", instance),
+        ("model.list", (instance, {})),
     ]
     assert capsys.readouterr().out.splitlines() == [
         "models:",
