@@ -226,11 +226,10 @@ def start_server_process(instance: ServerInstance) -> subprocess.Popen[bytes]:
         return _open_server_process(
             args,
             env=environment,
-            # A new process group only changes console-signal routing; it does
-            # not detach the child from the caller's console. Without
-            # DETACHED_PROCESS, closing the PowerShell window that ran `server
-            # start` also terminates the otherwise healthy server.
-            creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS),
+            # Keep the long-lived server independent from the invoking shell and
+            # explicitly suppress a console. DETACHED_PROCESS alone can still
+            # leave Python with a visible console host in installer launch paths.
+            creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW),
         )
     return _open_server_process(args, env=environment, start_new_session=True)
 
