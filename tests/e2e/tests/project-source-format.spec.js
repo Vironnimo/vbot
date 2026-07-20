@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
 
-import { sendChatMessage } from "./chat-run-support.js";
+import { getAgentTab, sendChatMessage } from "./chat-run-support.js";
 
 const projectPath = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -38,10 +38,9 @@ async function startProjectChat(page, agentName) {
   const team = chat.locator(
     '.chat-view__project-team[aria-label="Project team"]',
   );
-  await expect(
-    team.getByRole("button", { exact: true, name: agentName }),
-  ).toBeVisible();
-  await team.getByRole("button", { exact: true, name: agentName }).click();
+  const agentTab = getAgentTab(team, agentName);
+  await expect(agentTab).toBeVisible();
+  await agentTab.click();
 
   await chat.getByRole("button", { exact: true, name: "Sessions" }).click();
   const sessionDrawer = chat.getByRole("complementary", { name: "Sessions" });
