@@ -1,6 +1,6 @@
 ---
 name: vbot-cli
-description: Configure and operate vBot through the vbot CLI. Use when asked to start, stop, restart, or update the server, set up provider credentials (API key or OAuth), or list/add/edit/remove agents, projects, sessions, channels (Telegram, Discord), cron jobs, task-model bindings, prompts, extensions, or settings — or to inspect models, skills, tools, logs, debug traces, and usage statistics (tokens, runs, errors, tool and skill usage).
+description: Configure and operate vBot through the vbot CLI. Use when asked to start, stop, restart, update, or uninstall vBot, set up provider credentials (API key or OAuth), or list/add/edit/remove agents, projects, sessions, channels (Telegram, Discord), cron jobs, task-model bindings, prompts, extensions, or settings — or to inspect models, skills, tools, logs, debug traces, and usage statistics (tokens, runs, errors, tool and skill usage).
 ---
 
 # vBot CLI
@@ -10,7 +10,7 @@ The `vbot` CLI is the automation surface for configuring and operating a vBot in
 ## Rules
 
 - Primary identifiers are positional (`vbot agent show assistant`); secondary parameters are flags. `vbot <area> <command> --help` shows exact flags plus a usage example.
-- Only `server start|stop|restart|status`, `desktop`, `update`, `autostart`, and `doctor` work without a running server. Everything else needs one: check `vbot server status` first, start with `vbot server start` if needed.
+- Only `server start|stop|restart|status`, `desktop`, `update`, `uninstall`, `autostart`, and `doctor` work without a running server. Everything else needs one: check `vbot server status` first, start with `vbot server start` if needed.
 - Non-default instance: add `--host`, `--port`, `--data-dir` to every command.
 - Prefer CLI commands over direct file edits — settings, agents, channels, cron jobs, prompt blocks, and provider keys all have commands. If a manual JSON edit was unavoidable, validate with `vbot doctor config`.
 - Secrets never appear in output or chat. API keys go through `provider set-key`, extension secrets through `extensions <name> set <field> --stdin`, channel tokens by env-var name via `--token-env`.
@@ -33,6 +33,7 @@ Read the reference file before using an area's write commands — it has the exa
 |---|---|---|
 | `server` | `start` `stop` `restart` `status` | `references/server.md` |
 | `update` | update the install from git, restart | `references/server.md` |
+| `uninstall` | remove the application and Autostart, preserve data | `references/server.md` |
 | `autostart` | `enable` `disable` `status` | `references/server.md` |
 | `desktop` | open the desktop window | `references/server.md` |
 | `doctor` | `settings` `config` — validate config files locally | `references/server.md` |

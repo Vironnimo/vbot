@@ -10,6 +10,7 @@ import pytest
 
 from cli import main as cli_main
 from cli.server_management import CommandResult, HealthProbeResult, ServerInstance, WebUIProbeResult
+from cli.uninstall_management import UninstallResult
 from core.utils.logging import resolve_daily_log_path
 
 
@@ -52,6 +53,7 @@ def make_result(
         ["server", "restart"],
         ["server", "status"],
         ["desktop"],
+        ["uninstall"],
         ["agent"],
         ["agent", "list"],
         ["agent", "show"],
@@ -175,6 +177,39 @@ def test_parse_args_desktop_accepts_host_and_port() -> None:
 def test_parse_args_desktop_rejects_data_dir() -> None:
     with pytest.raises(SystemExit):
         cli_main.parse_args(["desktop", "--data-dir", "data"])
+
+
+def test_parse_args_uninstall_accepts_platform_autostart_names() -> None:
+    args = cli_main.parse_args(
+        ["uninstall", "--task-name", "My Task", "--service-name", "my-service"]
+    )
+
+    assert args.area == "uninstall"
+    assert args.task_name == "My Task"
+    assert args.service_name == "my-service"
+
+
+def test_run_uninstall_dispatches_without_resolving_server(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured: dict[str, str] = {}
+
+    def uninstall_fn(*, task_name: str, service_name: str) -> UninstallResult:
+        captured.update(task_name=task_name, service_name=service_name)
+        return UninstallResult(ok=True, message="uninstall launched")
+
+    def unexpected_resolve(**_kwargs: object) -> ServerInstance:
+        raise AssertionError("uninstall must not resolve a server")
+
+    exit_code = cli_main.run(
+        ["uninstall", "--task-name", "My Task", "--service-name", "my-service"],
+        resolve=unexpected_resolve,
+        uninstall_fn=uninstall_fn,
+    )
+
+    assert exit_code == 0
+    assert captured == {"task_name": "My Task", "service_name": "my-service"}
+    assert capsys.readouterr().out.splitlines() == ["uninstall launched"]
 
 
 def test_run_desktop_forwards_supplied_target_flags_to_injected_launcher(

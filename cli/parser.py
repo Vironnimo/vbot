@@ -29,6 +29,7 @@ AREA_HELP = {
     "server": "Start, stop, restart, and inspect the local server",
     "desktop": "Open the desktop window pointed at a local or remote server",
     "update": "Update the installation from git, refresh deps/WebUI, and restart",
+    "uninstall": "Remove vBot and autostart while preserving the data directory",
     "autostart": "Enable, disable, or inspect OS autostart for the server",
     "agent": "Inspect and manage agent configs",
     "project": "Inspect and manage projects and their scanned teams",
@@ -171,6 +172,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     _add_server_parsers(subparsers)
     _add_desktop_parsers(subparsers)
     _add_update_parsers(subparsers)
+    _add_uninstall_parser(subparsers)
     _add_autostart_parsers(subparsers)
     _add_agent_parsers(subparsers)
     _add_project_parsers(subparsers)
@@ -1125,6 +1127,22 @@ def _add_update_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
     update_parser.add_argument(
         "--service-name",
         help="systemd user unit to restart when the install is unit-managed (default: vbot)",
+    )
+
+
+def _add_uninstall_parser(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    uninstall_parser = subparsers.add_parser(
+        "uninstall",
+        help=AREA_HELP["uninstall"],
+        description=f"{AREA_HELP['uninstall']}. Example: vbot uninstall",
+    )
+    uninstall_parser.add_argument(
+        "--task-name", help="Windows Task Scheduler task name (default: vBot)"
+    )
+    uninstall_parser.add_argument(
+        "--service-name", help="Linux systemd user unit name without .service (default: vbot)"
     )
 
 

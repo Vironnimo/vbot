@@ -151,19 +151,13 @@ vbot update --no-restart
 
 ### Uninstalling
 
-Linux:
-
 ```bash
-~/vbot/scripts/uninstall.sh
+vbot uninstall
 ```
 
-Windows:
+`vbot uninstall` delegates to the platform Uninstaller bundled with the installation. It stops the recorded server best-effort, removes Autostart and launchers, and removes the managed application environment. A fresh managed install is removed wholesale; an install performed in an existing checkout removes the installer-owned `.venv` and launcher but preserves the checkout. On Windows the command requests elevation and launches a helper that waits for the calling `vbot.exe` to exit before deleting its environment; cancelling UAC leaves the installation unchanged. Custom Autostart names can be supplied with `--task-name` on Windows or `--service-name` on Linux.
 
-```powershell
-& "$HOME\vbot\scripts\uninstall.ps1"
-```
-
-A fresh managed install is removed wholesale: the Uninstaller stops the recorded server best-effort, removes autostart and launchers, and deletes the installer-owned source tree plus `.venv`. An install performed in an existing checkout removes the installer-owned `.venv` and launcher but preserves the checkout. Direct internal setup installs remain supported for development and CI; their Uninstaller path removes the Python package and preserves the checkout, with `--remove-autostart` on Linux or `-RemoveAutostart` on Windows when needed. The Linux Uninstaller also accepts `--package-name` and `--service-name`; the Windows Uninstaller accepts `-PackageName` and `-TaskName`.
+The underlying `scripts/uninstall.ps1` and `scripts/uninstall.sh` remain recovery and direct-setup entrypoints, but normal installations do not require locating them manually.
 
 Every uninstall mode preserves the vBot data directory. Remove `~/.vbot` separately only if you intentionally want to delete credentials, Agent identity, Sessions, and all other runtime state.
 
@@ -509,7 +503,7 @@ Installed commands use `vbot`. From a source checkout, `python cli/main.py` expo
 |---|---|
 | Server | `server start`, `server stop`, `server restart`, `server status` |
 | Desktop | `desktop [--host ... --port ...]` |
-| Installation lifecycle | `update`, `autostart enable`, `autostart disable`, `autostart status` |
+| Installation lifecycle | `update`, `uninstall`, `autostart enable`, `autostart disable`, `autostart status` |
 | Agents | `agent list`, `agent show`, `agent create`, `agent update`, `agent delete` |
 | Projects | `project add`, `project list`, `project show`, `project set`, `project rm` |
 | Sessions | `session list`, `session create`, `session delete`, `session link-channel` |

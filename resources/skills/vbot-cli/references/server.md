@@ -1,4 +1,4 @@
-# Server, Update, Autostart, Desktop, Doctor
+# Server, Update, Uninstall, Autostart, Desktop, Doctor
 
 These are the only CLI areas that work without a running server.
 
@@ -25,6 +25,14 @@ Updates the installation from the git checkout it was installed from, then resta
 - The track is auto-detected: a branch checkout pulls and rebuilds the WebUI locally (needs Node); a release-tag checkout fetches the latest release with its prebuilt WebUI (no Node, re-downloaded only when the tag changed).
 - With local changes to tracked files, `update` refuses. `--discard` drops them; `--stash` keeps them and reapplies after the update.
 - `--no-restart` updates the code without restarting.
+
+## Uninstall
+
+```bash
+vbot uninstall [--task-name <name>] [--service-name <name>]
+```
+
+Removes the application, managed environment, launchers, and Autostart while preserving the vBot data directory. Windows requests UAC and finishes in a separate PowerShell window because the running CLI cannot delete its own executable; cancelling elevation leaves the installation in place. Pass the matching custom Autostart name only when the installation did not use the default.
 
 ## Autostart
 
