@@ -2292,7 +2292,7 @@
     flex-shrink: 0;
     flex-direction: column;
     min-height: 0;
-    background: var(--surface);
+    background: var(--bg);
   }
 
   :global(.chat-view__state-banner) {
@@ -2448,7 +2448,7 @@
     flex-shrink: 0;
     width: 100%;
     max-width: var(--chat-measure);
-    margin-inline: auto;
+    margin: 0 auto 10px;
     padding: 9px 20px 9px 12px;
   }
 
