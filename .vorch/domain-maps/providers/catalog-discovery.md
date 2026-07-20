@@ -12,6 +12,7 @@ A discovery target is one usable Connection with an effective `models_endpoint`.
 
 - Primary catalog GET accepts top-level `data` or `models` lists and passes entries through the selected Adapter class's catalog filter/normalizer.
 - `discovery_headers()`, `discovery_params()`, and `supplementary_discovery_params()` let a Provider describe catalog auth/query variants without branching generic discovery by Provider id.
+- `resolve_discovery_params(fetch_json)` may replace time-sensitive query parameters from a public JSON source; failure is logged and keeps the static `discovery_params()` fallback. OpenAI Subscription uses the stable `@openai/codex` package version because `/codex/models` gates newly available Models by `client_version`; only a strict numeric `x.y.z` version is accepted.
 - `enrich_discovered_models(normalized_models, post_json)` supports bounded Provider detail calls after primary normalization; a per-Model enrichment failure keeps the conservative baseline.
 - `discover_task_models(normalized_models, fetch_json)` adds Provider task-capability feeds. A task-catalog failure degrades the task projection and does not fail the primary refresh.
 - Raw primary, supplementary, enrichment, and task responses are retained in refresh artifacts for later projection changes, while Runtime reads only normalized/assembled Model data.

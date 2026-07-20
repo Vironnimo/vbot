@@ -28,6 +28,7 @@ from core.models.models import (
 )
 from core.models.models_dev import ModelsDevCatalog, refresh_canonical_layer
 from core.providers.errors import CatalogEntrySkipped
+from core.providers.openai import CODEX_PACKAGE_METADATA_URL
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
@@ -76,6 +77,17 @@ def mock_openrouter_image_catalog(entries: list[dict[str, Any]] | None = None) -
     entries = entries or []
     respx.get(OPENROUTER_IMAGE_MODELS_URL).mock(
         return_value=httpx.Response(200, json={"data": entries})
+    )
+
+
+def mock_openai_codex_package(version: str = "0.144.6") -> None:
+    """Mock the official stable Codex package metadata used by discovery."""
+
+    respx.get(CODEX_PACKAGE_METADATA_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={"name": "@openai/codex", "version": version},
+        )
     )
 
 
@@ -287,6 +299,7 @@ __all__ = [
     "FIXTURES_DIR",
     "_simple_compatible_config",
     "mock_openrouter_image_catalog",
+    "mock_openai_codex_package",
     "_clear_registry_cache",
     "openrouter_config",
     "github_copilot_config",

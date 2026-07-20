@@ -28,6 +28,7 @@ from .discovery_test_support import (
     json,
     jwt_with_openai_account,
     logging,
+    mock_openai_codex_package,
     mock_openrouter_image_catalog,
     model_data,
     pytest,
@@ -63,6 +64,7 @@ class TestRefreshModels:
 
         resources_dir = tmp_path / "resources"
         access_token = jwt_with_openai_account("acct_openai")
+        mock_openai_codex_package()
         respx.get(OPENAI_SUBSCRIPTION_MODELS_URL).mock(
             return_value=httpx.Response(
                 200,
@@ -159,6 +161,7 @@ class TestRefreshModels:
         catalog_path.write_text(json.dumps(existing_data, indent=2), encoding="utf-8")
 
         access_token = jwt_with_openai_account("acct_openai")
+        mock_openai_codex_package()
         respx.get(OPENAI_SUBSCRIPTION_MODELS_URL).mock(
             return_value=httpx.Response(
                 200,
@@ -217,7 +220,8 @@ class TestRefreshModels:
 
         resources_dir = tmp_path / "resources"
         access_token = jwt_with_openai_account("acct_openai")
-        expected_url = f"{OPENAI_SUBSCRIPTION_MODELS_URL}?client_version=0.136.0"
+        mock_openai_codex_package()
+        expected_url = f"{OPENAI_SUBSCRIPTION_MODELS_URL}?client_version=0.144.6"
         route = respx.get(expected_url).mock(
             return_value=httpx.Response(
                 200,
@@ -244,11 +248,39 @@ class TestRefreshModels:
 
         request = route.calls.last.request
         assert str(request.url).split("?")[0] == OPENAI_SUBSCRIPTION_MODELS_URL
-        assert request.url.params["client_version"] == "0.136.0"
+        assert request.url.params["client_version"] == "0.144.6"
         assert request.headers["Authorization"] == f"Bearer {access_token}"
         assert request.headers["chatgpt-account-id"] == "acct_openai"
         assert request.headers["OpenAI-Beta"] == "responses=experimental"
         assert request.headers["originator"] == "vbot"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_models_uses_codex_version_fallback_for_bad_package_metadata(
+        self,
+        tmp_path: Path,
+        openai_subscription_connection_config: ProviderConfig,
+    ):
+        """Malformed package metadata cannot prevent Subscription discovery."""
+
+        access_token = jwt_with_openai_account("acct_openai")
+        mock_openai_codex_package("next")
+        expected_url = f"{OPENAI_SUBSCRIPTION_MODELS_URL}?client_version=0.144.0"
+        route = respx.get(expected_url).mock(
+            return_value=httpx.Response(
+                200,
+                json={"models": [{"slug": "gpt-5.6-sol", "display_name": "GPT-5.6 Sol"}]},
+            )
+        )
+
+        await refresh_models(
+            openai_subscription_connection_config,
+            access_token,
+            tmp_path / "resources",
+            credential_connection=openai_subscription_connection_config.connections[0],
+        )
+
+        assert route.called
 
     @respx.mock
     @pytest.mark.asyncio

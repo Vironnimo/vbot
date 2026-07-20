@@ -7,7 +7,8 @@ Handles both the OpenAI Platform ``/chat/completions`` endpoint (default
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping
+import re
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -62,7 +63,9 @@ DISCOVERY_JSON_PARAMETER_NAMES = frozenset({"response_format", "structured_outpu
 DISCOVERY_REASONING_PARAMETER_NAMES = frozenset(
     {"reasoning", "reasoning_effort", "include_reasoning", "thinking_effort"}
 )
-CODEX_CLIENT_VERSION = "0.136.0"
+CODEX_CLIENT_VERSION_FALLBACK = "0.144.0"
+CODEX_PACKAGE_METADATA_URL = "https://registry.npmjs.org/@openai%2Fcodex/latest"
+_CODEX_STABLE_VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+$")
 # Codex backend prompt-cache routing: the ChatGPT ``/codex/responses`` backend
 # routes the prompt cache by these request HEADERS scoped to the conversation —
 # NOT by the body-level ``prompt_cache_key`` (verified live 2026-07-09: the body
@@ -103,9 +106,24 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
 
     @classmethod
     def discovery_params(cls) -> dict[str, str]:
-        """Return query parameters required by ``/codex/models`` discovery."""
+        """Return safe fallback parameters required by ``/codex/models`` discovery."""
 
-        return {"client_version": CODEX_CLIENT_VERSION}
+        return {"client_version": CODEX_CLIENT_VERSION_FALLBACK}
+
+    @classmethod
+    async def resolve_discovery_params(
+        cls,
+        fetch_json: Callable[[str], Awaitable[Any]],
+    ) -> dict[str, str]:
+        """Resolve the current stable Codex version used to gate the model catalog."""
+
+        payload = await fetch_json(CODEX_PACKAGE_METADATA_URL)
+        if not isinstance(payload, Mapping) or payload.get("name") != "@openai/codex":
+            raise ValueError("Codex package metadata has an unexpected shape")
+        version = payload.get("version")
+        if not isinstance(version, str) or not _CODEX_STABLE_VERSION_PATTERN.fullmatch(version):
+            raise ValueError("Codex package metadata has no stable semantic version")
+        return {"client_version": version}
 
     @classmethod
     def normalize_catalog_entry(
