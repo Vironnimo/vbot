@@ -17,6 +17,7 @@ Shared create/update flags: `--model`, `--fallback-model`, `--temperature <0..2>
 Gotchas:
 
 - `--model`/`--fallback-model` take `<provider>/<model-id>`, optionally pinned `::<connection>[:<account>]` (e.g. `openai/gpt-5.2::api-key:work`).
+- An Identity Agent may be created without `--model` so onboarding can finish before Provider setup. If neither the Agent nor global defaults supply an effective Model, the saved result warns that the Agent cannot run and prints the recovery commands. Run `vbot model list --task chat`, then `vbot agent update <agent-id> --model <model-id>` using an id from that output.
 - `--allowed-tools`/`--allowed-skills` replace the whole allowlist; the flag with no values sets an empty list; quote `'*'` in shells that expand it.
 - `--subagent-allow` replaces `tools.subagent.allowed_agents`; use bare Identity Agent ids or qualified `agent@project` addresses, and pass the flag with no values to deny every target.
 - `--compaction-policy` replaces the full Agent Policy object. Pass JSON as one shell argument. `--clear-compaction-policy` resumes live inheritance from global Compaction settings.
@@ -33,7 +34,7 @@ vbot agent update coder --temperature 0.4 --thinking-effort high
 vbot agent update librarian --project second-brain
 ```
 
-`create` and `update` return the saved Agent, including id, Workspace, selected Project, delegation targets, Agent Policy, effective Policy, and configuration provenance. A Workspace relocation also reports copied and backed-up files. `show` returns the same verification fields.
+`create` and `update` return the saved Agent, including id, Workspace, selected Project, effective Model, delegation targets, Agent Policy, effective Policy, and configuration provenance. A Workspace relocation also reports copied and backed-up files. `show` returns the same verification fields. Treat the no-effective-Model warning as incomplete setup, not a successful runnable Agent.
 
 ### Choosing the agent kind
 

@@ -302,7 +302,7 @@ vbot agent update coder --thinking-effort high
 
 `agent update --project <project-id>` selects the Project used for relative file and shell work without moving the Agent's Workspace or Memory; `--clear-project` removes that selection. Workspace relocation is a separate operation: use `--workspace <absolute-path>` or `--default-workspace`, optionally with `--copy-workspace-files` to copy `SOUL.md`, `USER.md`, and `MEMORY.md` into the destination.
 
-Agent create/update also expose delegation policy through `--subagent-allow <agent> ...` and Agent Policy through `--compaction-policy <json-object>` / `--clear-compaction-policy`. `--clear-model` and `--clear-fallback-model` restore global-default inheritance. Create/update output includes the saved id, Workspace, selected Project, effective Policy, and provenance; Workspace moves also report copied and backed-up files.
+Agent create/update also expose delegation policy through `--subagent-allow <agent> ...` and Agent Policy through `--compaction-policy <json-object>` / `--clear-compaction-policy`. `--clear-model` and `--clear-fallback-model` restore global-default inheritance. Create/update output includes the saved id, Workspace, selected Project, effective Model, effective Policy, and provenance; Workspace moves also report copied and backed-up files. Creating an Agent without an Agent or global-default Model is allowed for onboarding, but the result explicitly warns that it cannot run and points to `vbot model list --task chat` followed by `agent update --model`.
 
 ### Projects and Project Agents
 
@@ -411,6 +411,15 @@ Settings centralizes validated runtime policy. Major areas include:
 - trusted Extensions and Extension settings
 - Session title generation, local-model context, Appearance, Logs, and Debug behavior
 - Desktop-local Voice settings when running inside Desktop
+
+For an Agent's primary chat Model, list the currently selectable catalog through the running server:
+
+```bash
+vbot model list --task chat
+vbot model list --provider openai --task chat --capability tools
+```
+
+The result contains only Models with at least one enabled, credentialed Connection and prints the exact id accepted by `agent create --model` or `agent update --model`. It also includes the effective context window, capabilities/task types, and `reachable: no` for a local Model whose service is currently down. Additional repeatable filters are `--capability`, `--task`, `--input-modality`, and `--output-modality`; `--min-context-window` applies a token floor.
 
 ### Recall
 

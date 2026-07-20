@@ -1189,7 +1189,39 @@ def _add_model_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         description=AREA_HELP["model"],
     )
     model_subparsers = model_parser.add_subparsers(dest="command", required=True)
-    _add_command_parser(model_subparsers, "list", MODEL_HELP["list"], example="model list")
+    list_parser = _add_command_parser(
+        model_subparsers,
+        "list",
+        MODEL_HELP["list"],
+        example="model list --task chat",
+    )
+    list_parser.add_argument("--provider", dest="provider_id", help="Filter by Provider id")
+    list_parser.add_argument(
+        "--capability",
+        action="append",
+        help="Require a capability; repeat for multiple requirements",
+    )
+    list_parser.add_argument(
+        "--task",
+        action="append",
+        help="Require a task type; repeat for multiple requirements",
+    )
+    list_parser.add_argument(
+        "--input-modality",
+        action="append",
+        help="Require an input modality; repeat for multiple requirements",
+    )
+    list_parser.add_argument(
+        "--output-modality",
+        action="append",
+        help="Require an output modality; repeat for multiple requirements",
+    )
+    list_parser.add_argument(
+        "--min-context-window",
+        type=int,
+        metavar="<tokens>",
+        help="Require at least this many context tokens",
+    )
     refresh_parser = _add_command_parser(
         model_subparsers, "refresh", MODEL_HELP["refresh"], example="model refresh openrouter"
     )

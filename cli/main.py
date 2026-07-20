@@ -235,7 +235,7 @@ def run(
     set_provider_key: Callable[
         [ServerInstance, str, str, str | None, bool, str | None], CommandResult
     ] = provider_set_key,
-    list_models_fn: Callable[[ServerInstance], CommandResult] = model_list,
+    list_models_fn: Callable[[ServerInstance, dict[str, Any]], CommandResult] = model_list,
     refresh_models_fn: Callable[[ServerInstance, str | None], CommandResult] = model_refresh,
     list_skills_fn: Callable[[ServerInstance], CommandResult] = skill_list,
     statistics_report_fn: Callable[
@@ -926,16 +926,32 @@ def dispatch_model_command(
     args: argparse.Namespace,
     instance: ServerInstance,
     *,
-    list_models_fn: Callable[[ServerInstance], CommandResult],
+    list_models_fn: Callable[[ServerInstance, dict[str, Any]], CommandResult],
     refresh_models_fn: Callable[[ServerInstance, str | None], CommandResult],
 ) -> CommandResult:
     """Dispatch one parsed model command against the server RPC client."""
 
     if args.command == "list":
-        return list_models_fn(instance)
+        return list_models_fn(instance, _model_filters_from_args(args))
     if args.command == "refresh":
         return refresh_models_fn(instance, args.provider)
     raise ValueError(f"Unsupported model command: {args.command}")
+
+
+def _model_filters_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    filters: dict[str, Any] = {}
+    for argument, rpc_field in (
+        ("provider_id", "provider_id"),
+        ("capability", "capabilities"),
+        ("task", "tasks"),
+        ("input_modality", "input_modalities"),
+        ("output_modality", "output_modalities"),
+        ("min_context_window", "min_context_window"),
+    ):
+        value = getattr(args, argument, None)
+        if value is not None:
+            filters[rpc_field] = value
+    return filters
 
 
 def dispatch_task_model_command(

@@ -65,6 +65,7 @@ The most common single commands:
 
 ```bash
 vbot provider set-key <provider-id> <api-key> --refresh-models  # activate a provider with a user-supplied key
+vbot model list --task chat                                    # exact runnable Model ids for an Agent
 vbot agent update <agent-id> --model <provider>/<model-id>      # switch an agent's model
 vbot config set <key> <value>                                   # change a settings key (JSON or string)
 vbot channel status <channel-id>                                # channel health + denied inbound chats

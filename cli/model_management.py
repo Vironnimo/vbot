@@ -11,10 +11,13 @@ from cli.rpc_client import rpc_call as _rpc_call
 from cli.server_management import CommandResult, ServerInstance
 
 
-def model_list(instance: ServerInstance) -> CommandResult:
+def model_list(
+    instance: ServerInstance,
+    filters: Mapping[str, Any] | None = None,
+) -> CommandResult:
     """List available models via `model.list` RPC."""
 
-    payload = _rpc_call(instance, "model.list", {})
+    payload = _rpc_call(instance, "model.list", dict(filters or {}))
     if not payload.ok:
         return payload.to_command_result()
     models = payload.data.get("models")
@@ -55,8 +58,38 @@ def _format_model_row(model: object) -> str:
 
     model_id = _string_or_default(model.get("id"), "?")
     name = _string_or_default(model.get("name"), "?")
-    context_window = _stringify_or_default(model.get("context_window"), "?")
-    return f"- id: {model_id}  name: {name}  context_window: {context_window}"
+    context_window = _stringify_or_default(
+        model.get("effective_context_window", model.get("context_window")), "?"
+    )
+    fields = [f"- id: {model_id}", f"name: {name}", f"context_window: {context_window}"]
+    if "reachable" in model:
+        fields.append(f"reachable: {'yes' if model.get('reachable') else 'no'}")
+    capabilities = _capability_names(model.get("capabilities"))
+    if capabilities:
+        fields.append(f"capabilities: {','.join(capabilities)}")
+    tasks = _string_items(model.get("capabilities"), "task_types")
+    if tasks:
+        fields.append(f"tasks: {','.join(tasks)}")
+    return "  ".join(fields)
+
+
+def _capability_names(value: object) -> list[str]:
+    if not isinstance(value, dict):
+        return []
+    names = [name for name in ("vision", "tools", "json_mode") if value.get(name) is True]
+    reasoning = value.get("reasoning")
+    if isinstance(reasoning, dict) and reasoning.get("supported") is True:
+        names.append("reasoning")
+    return names
+
+
+def _string_items(value: object, key: str) -> list[str]:
+    if not isinstance(value, dict):
+        return []
+    items = value.get(key)
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, str) and item]
 
 
 def _format_refresh_result(data: Mapping[str, Any], provider_id: str | None) -> str:
