@@ -145,7 +145,7 @@ describe('SessionListDrawer', () => {
     expect(buttonByText('Refresh')).toBeNull();
   });
 
-  it('identifies the concrete Session with an unread completion', async () => {
+  it('identifies an unread Session unless it is already displayed', async () => {
     listSessionsMock.mockResolvedValue({
       sessions: [
         {
@@ -155,6 +155,14 @@ describe('SessionListDrawer', () => {
           unread_run_id: 'run-one',
           unread_run_status: 'completed',
           unread_run_at: '2026-07-20T10:00:00+00:00',
+        },
+        {
+          id: 'session-2',
+          created_at: '2026-05-10T00:00:00+00:00',
+          has_unread_completion: true,
+          unread_run_id: 'run-two',
+          unread_run_status: 'completed',
+          unread_run_at: '2026-07-20T10:05:00+00:00',
         },
       ],
     });
@@ -175,6 +183,11 @@ describe('SessionListDrawer', () => {
     expect(
       document.querySelector('.session-row__unread')?.textContent,
     ).toContain('Unread');
+    expect(
+      document
+        .querySelector('.session-row__select--active')
+        ?.querySelector('.session-row__unread'),
+    ).toBeNull();
   });
 
   it('renames a session through the row menu and reloads the list', async () => {

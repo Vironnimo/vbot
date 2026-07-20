@@ -208,6 +208,85 @@ describe('ChatView', () => {
     expect(selectedBetaTab.querySelector('.tab-indicator--unread')).toBeNull();
   });
 
+  it('keeps a displayed terminal result idle before read acknowledgement returns', async () => {
+    let resolveMarkRead;
+    const defaultRpc = createChatRpcMock();
+    rpcMock.mockImplementation((method, params) => {
+      if (method === 'session.mark_read') {
+        return new Promise((resolve) => {
+          resolveMarkRead = () =>
+            resolve({
+              agent_id: params.agent_id,
+              session_id: params.session_id,
+              has_unread_completion: false,
+              unread_run_id: null,
+              unread_run_status: null,
+              unread_run_at: null,
+              marked_read: true,
+            });
+        });
+      }
+      return defaultRpc(method, params);
+    });
+
+    chatViewTest.mount({
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent()],
+        sharedSelectedAgentId: 'alpha',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(() => testRunStreamRefs.length === 1, 100);
+    testRunStreamRefs[0].handleServerEvents({
+      type: 'run_started',
+      payload: {
+        run_id: 'run-visible',
+        agent_id: 'alpha',
+        project_id: null,
+        session_id: 'session-1',
+        run_event_type: 'run_started',
+        run_event_sequence: 1,
+        run_event_timestamp: '2026-07-20T10:00:00+00:00',
+        output: { status: 'running' },
+      },
+    });
+    testRunStreamRefs[0].handleServerEvents({
+      type: 'run_completed',
+      payload: {
+        run_id: 'run-visible',
+        agent_id: 'alpha',
+        project_id: null,
+        session_id: 'session-1',
+        run_event_type: 'run_completed',
+        run_event_sequence: 2,
+        run_event_timestamp: '2026-07-20T10:00:01+00:00',
+        status: 'completed',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.some(
+          ([method, params]) =>
+            method === 'session.mark_read' &&
+            params?.agent_id === 'alpha' &&
+            params?.session_id === 'session-1' &&
+            params?.run_id === 'run-visible',
+        ),
+      100,
+    );
+    flushSync();
+
+    const alphaTab = activeAgentTab();
+    expect(alphaTab?.querySelector('.tab-indicator--unread')).toBeNull();
+
+    resolveMarkRead();
+    await Promise.resolve();
+  });
+
   it('shows the combined input and output usage in the token badge', async () => {
     rpcMock.mockImplementation(
       createChatRpcMock({

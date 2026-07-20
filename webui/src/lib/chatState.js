@@ -729,14 +729,20 @@ export function applySessionCompletionActivity(sessionState, source) {
   return sessionState;
 }
 
-export function agentActivityStatus(state, agentId) {
+export function agentActivityStatus(state, agentId, displayedSessionKey = '') {
   const sessions = Object.values(state?.sessions ?? {}).filter(
     (sessionState) => sessionState.agentId === agentId,
   );
   if (sessions.some((sessionState) => isRunActive(sessionState))) {
     return AGENT_ACTIVITY_RUNNING;
   }
-  if (sessions.some((sessionState) => sessionState.hasUnreadCompletion)) {
+  if (
+    sessions.some(
+      (sessionState) =>
+        sessionState.key !== displayedSessionKey &&
+        sessionState.hasUnreadCompletion,
+    )
+  ) {
     return AGENT_ACTIVITY_UNREAD;
   }
   return AGENT_ACTIVITY_IDLE;

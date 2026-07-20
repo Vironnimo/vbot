@@ -5,6 +5,7 @@ import {
   CHAT_STATUS_FAILED,
   CHAT_STATUS_IDLE,
   CHAT_STATUS_RUNNING,
+  AGENT_ACTIVITY_IDLE,
   AGENT_ACTIVITY_RUNNING,
   AGENT_ACTIVITY_UNREAD,
   agentActivityStatus,
@@ -95,6 +96,26 @@ describe('chat state helpers', () => {
       AGENT_ACTIVITY_RUNNING,
     );
     expect(newestUnreadSessionForAgent(chatState, 'alpha')).toBe(newerUnread);
+  });
+
+  it('does not project the displayed Session unread while preserving other unread results', () => {
+    const chatState = createChatState();
+    const displayed = ensureSessionState(chatState, 'alpha', 'session-shown');
+    const background = ensureSessionState(
+      chatState,
+      'alpha',
+      'session-background',
+    );
+    displayed.hasUnreadCompletion = true;
+
+    expect(agentActivityStatus(chatState, 'alpha', displayed.key)).toBe(
+      AGENT_ACTIVITY_IDLE,
+    );
+
+    background.hasUnreadCompletion = true;
+    expect(agentActivityStatus(chatState, 'alpha', displayed.key)).toBe(
+      AGENT_ACTIVITY_UNREAD,
+    );
   });
 
   it('updates token usage after a completed model step while the run stays active', () => {

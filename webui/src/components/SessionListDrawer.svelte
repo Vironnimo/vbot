@@ -474,7 +474,7 @@
                 >
                   {session.display_name || sessionDisplayName(session)}
                 </p>
-                {#if session.has_unread_completion}
+                {#if session.has_unread_completion && session.id !== currentSessionId}
                   <span
                     class="session-row__unread"
                     use:tooltip={t(
