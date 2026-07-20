@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-07-02T20:35:14.013992+00:00",
+  "fetched_at": "2026-07-20T17:31:50.597850+00:00",
   "models": {
     "deepseek-v4-flash": {
       "capabilities": {
@@ -186,6 +186,42 @@
       },
       "name": "glm-5.2"
     },
+    "grok-4.5": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 500000,
+      "family": "grok",
+      "max_output_tokens": 500000,
+      "name": "grok-4.5"
+    },
     "hy3-preview": {
       "capabilities": {
         "input_modalities": [
@@ -321,6 +357,46 @@
         }
       },
       "name": "kimi-k2.7-code"
+    },
+    "kimi-k3": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "family": "kimi-k3",
+      "max_output_tokens": 131072,
+      "metadata": {
+        "opencode_go": {
+          "reasoning_response_field": "reasoning_content"
+        }
+      },
+      "name": "kimi-k3"
     },
     "mimo-v2-omni": {
       "capabilities": {

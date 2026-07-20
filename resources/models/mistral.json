@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-07-02T20:35:12.755102+00:00",
+  "fetched_at": "2026-07-20T17:31:48.998806+00:00",
   "models": {
     "codestral-2508": {
       "capabilities": {
@@ -1366,66 +1366,6 @@
       "context_window": 131072,
       "max_output_tokens": null,
       "name": "open-mistral-nemo"
-    },
-    "voxtral-mini-2507": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "response_format"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": false,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 32768,
-      "max_output_tokens": null,
-      "name": "voxtral-mini-2507"
-    },
-    "voxtral-mini-latest": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": true,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": false
-        },
-        "supported_parameters": [
-          "response_format"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": false,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 32768,
-      "max_output_tokens": null,
-      "name": "voxtral-mini-2507"
     },
     "voxtral-small-2507": {
       "capabilities": {

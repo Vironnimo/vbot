@@ -977,7 +977,6 @@
           "text"
         ],
         "reasoning": {
-          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -993,6 +992,35 @@
       "max_output_tokens": 64000,
       "name": "Claude Sonnet 3.7",
       "release_date": "2025-02-19",
+      "temperature": true
+    },
+    "anthropic/claude-3-haiku-20240307": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 200000,
+      "family": "claude-haiku",
+      "knowledge": "2023-08-31",
+      "last_updated": "2024-03-13",
+      "max_output_tokens": 4096,
+      "name": "Claude Haiku 3",
+      "release_date": "2024-03-13",
       "temperature": true
     },
     "anthropic/claude-fable-5": {
@@ -1101,7 +1129,6 @@
           "text"
         ],
         "reasoning": {
-          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -1191,7 +1218,6 @@
           "text"
         ],
         "reasoning": {
-          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -1237,7 +1263,7 @@
       },
       "context_window": 200000,
       "family": "claude-opus",
-      "knowledge": "2025-03-31",
+      "knowledge": "2025-05",
       "last_updated": "2025-11-24",
       "max_output_tokens": 64000,
       "name": "Claude Opus 4.5 (latest)",
@@ -1272,7 +1298,7 @@
       },
       "context_window": 200000,
       "family": "claude-opus",
-      "knowledge": "2025-03-31",
+      "knowledge": "2025-05",
       "last_updated": "2025-11-01",
       "max_output_tokens": 64000,
       "name": "Claude Opus 4.5",
@@ -1376,6 +1402,7 @@
       },
       "context_window": 1000000,
       "family": "claude-opus",
+      "knowledge": "2026-01",
       "last_updated": "2026-05-28",
       "max_output_tokens": 128000,
       "name": "Claude Opus 4.8",
@@ -1394,7 +1421,6 @@
           "text"
         ],
         "reasoning": {
-          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -1424,7 +1450,6 @@
           "text"
         ],
         "reasoning": {
-          "control": "budget",
           "supported": true
         },
         "supported_parameters": [
@@ -1572,6 +1597,108 @@
       "release_date": "2026-06-30",
       "temperature": false
     },
+    "cohere/c4ai-aya-expanse-32b": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 128000,
+      "last_updated": "2024-10-24",
+      "max_output_tokens": 4000,
+      "name": "Aya Expanse 32B",
+      "release_date": "2024-10-24",
+      "temperature": true
+    },
+    "cohere/c4ai-aya-expanse-8b": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 8000,
+      "last_updated": "2024-10-24",
+      "max_output_tokens": 4000,
+      "name": "Aya Expanse 8B",
+      "release_date": "2024-10-24",
+      "temperature": true
+    },
+    "cohere/c4ai-aya-vision-32b": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 16000,
+      "last_updated": "2025-05-14",
+      "max_output_tokens": 4000,
+      "name": "Aya Vision 32B",
+      "release_date": "2025-03-04",
+      "temperature": true
+    },
+    "cohere/c4ai-aya-vision-8b": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 16000,
+      "last_updated": "2025-05-14",
+      "max_output_tokens": 4000,
+      "name": "Aya Vision 8B",
+      "release_date": "2025-03-04",
+      "temperature": true
+    },
     "cohere/command-a-03-2025": {
       "capabilities": {
         "input_modalities": [
@@ -1626,6 +1753,89 @@
       "max_output_tokens": 64000,
       "name": "Command A Plus",
       "release_date": "2026-05-20",
+      "temperature": true
+    },
+    "cohere/command-a-reasoning-08-2025": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "budget",
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 256000,
+      "family": "command-a",
+      "knowledge": "2024-06-01",
+      "last_updated": "2025-08-21",
+      "max_output_tokens": 32000,
+      "name": "Command A Reasoning",
+      "release_date": "2025-08-21",
+      "temperature": true
+    },
+    "cohere/command-a-translate-08-2025": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 8000,
+      "family": "command-a",
+      "knowledge": "2024-06-01",
+      "last_updated": "2025-08-28",
+      "max_output_tokens": 8000,
+      "name": "Command A Translate",
+      "release_date": "2025-08-28",
+      "temperature": true
+    },
+    "cohere/command-a-vision-07-2025": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 128000,
+      "family": "command-a",
+      "knowledge": "2024-06-01",
+      "last_updated": "2025-07-31",
+      "max_output_tokens": 8000,
+      "name": "Command A Vision",
+      "release_date": "2025-07-31",
       "temperature": true
     },
     "cohere/command-r-08-2024": {
@@ -1707,6 +1917,33 @@
       "max_output_tokens": 4000,
       "name": "Command R7B",
       "release_date": "2024-12-02",
+      "temperature": true
+    },
+    "cohere/command-r7b-arabic-02-2025": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 128000,
+      "family": "command-r",
+      "knowledge": "2024-06-01",
+      "last_updated": "2025-02-27",
+      "max_output_tokens": 4000,
+      "name": "Command R7B Arabic",
+      "release_date": "2025-02-27",
       "temperature": true
     },
     "cohere/north-mini-code-1-0": {
@@ -2111,7 +2348,7 @@
       },
       "context_window": 32768,
       "family": "gemini-flash",
-      "knowledge": "2025-06",
+      "knowledge": "2024-06",
       "last_updated": "2025-08-26",
       "max_output_tokens": 32768,
       "name": "Nano Banana",
@@ -2273,6 +2510,35 @@
       "release_date": "2025-12-17",
       "temperature": true
     },
+    "google/gemini-3-pro-image": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text",
+          "image"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 65536,
+      "family": "gemini-pro",
+      "knowledge": "2025-01",
+      "last_updated": "2026-05-28",
+      "max_output_tokens": 32768,
+      "name": "Nano Banana Pro",
+      "release_date": "2026-05-28",
+      "temperature": true
+    },
     "google/gemini-3-pro-image-preview": {
       "capabilities": {
         "input_modalities": [
@@ -2336,6 +2602,37 @@
       "max_output_tokens": 65536,
       "name": "Gemini 3 Pro Preview",
       "release_date": "2025-11-18",
+      "temperature": true
+    },
+    "google/gemini-3.1-flash-image": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text",
+          "image"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 131072,
+      "family": "gemini-flash",
+      "knowledge": "2025-01",
+      "last_updated": "2026-05-28",
+      "max_output_tokens": 32768,
+      "name": "Nano Banana 2",
+      "release_date": "2026-05-28",
       "temperature": true
     },
     "google/gemini-3.1-flash-image-preview": {
@@ -2590,8 +2887,8 @@
         "input_modalities": [
           "text",
           "image",
-          "audio",
           "video",
+          "audio",
           "pdf"
         ],
         "json_mode": true,
@@ -2599,8 +2896,13 @@
           "text"
         ],
         "reasoning": {
-          "budget_max": 24576,
-          "control": "budget",
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -2612,10 +2914,10 @@
       "context_window": 1048576,
       "family": "gemini-flash",
       "knowledge": "2025-01",
-      "last_updated": "2025-09-25",
+      "last_updated": "2026-05-19",
       "max_output_tokens": 65536,
       "name": "Gemini Flash Latest",
-      "release_date": "2025-09-25",
+      "release_date": "2026-05-19",
       "temperature": true
     },
     "google/gemini-flash-lite-latest": {
@@ -2623,8 +2925,8 @@
         "input_modalities": [
           "text",
           "image",
-          "audio",
           "video",
+          "audio",
           "pdf"
         ],
         "json_mode": true,
@@ -2632,8 +2934,13 @@
           "text"
         ],
         "reasoning": {
-          "budget_max": 24576,
-          "control": "budget",
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -2645,11 +2952,35 @@
       "context_window": 1048576,
       "family": "gemini-flash-lite",
       "knowledge": "2025-01",
-      "last_updated": "2025-09-25",
+      "last_updated": "2026-05-07",
       "max_output_tokens": 65536,
       "name": "Gemini Flash-Lite Latest",
-      "release_date": "2025-09-25",
+      "release_date": "2026-05-07",
       "temperature": true
+    },
+    "google/gemini-omni-flash-preview": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 1048576,
+      "family": "gemini",
+      "last_updated": "2026-06-30",
+      "max_output_tokens": 57920,
+      "name": "Gemini Omni Flash Preview",
+      "release_date": "2026-06-30"
     },
     "google/gemma-4-26b-a4b-it": {
       "capabilities": {
@@ -2763,6 +3094,32 @@
       "release_date": "2026-04-02",
       "temperature": true
     },
+    "meituan/longcat-2.0": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 1000000,
+      "family": "longcat",
+      "last_updated": "2026-06-30",
+      "max_output_tokens": 131072,
+      "name": "LongCat-2.0",
+      "release_date": "2026-06-30",
+      "temperature": true
+    },
     "meta/llama-3.3-70b-instruct": {
       "capabilities": {
         "input_modalities": [
@@ -2844,6 +3201,43 @@
       "max_output_tokens": 16384,
       "name": "Llama 4 Scout 17B Instruct",
       "release_date": "2025-04-05",
+      "temperature": true
+    },
+    "meta/muse-spark-1.1": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf",
+          "video"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "family": "muse",
+      "last_updated": "2026-07-09",
+      "max_output_tokens": 32000,
+      "name": "Muse Spark 1.1",
+      "release_date": "2026-04-08",
       "temperature": true
     },
     "microsoft/mai-code-1-flash": {
@@ -3369,12 +3763,17 @@
           "text",
           "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
         "reasoning": {
-          "supported": false
+          "control": "levels",
+          "levels": [
+            "none",
+            "high"
+          ],
+          "supported": true
         },
         "supported_parameters": [
           "temperature"
@@ -3384,11 +3783,10 @@
       },
       "context_window": 262144,
       "family": "mistral-medium",
-      "knowledge": "2025-05",
-      "last_updated": "2025-08-12",
+      "last_updated": "2026-04-29",
       "max_output_tokens": 262144,
       "name": "Mistral Medium (latest)",
-      "release_date": "2025-08-12",
+      "release_date": "2026-04-29",
       "temperature": true
     },
     "mistral/mistral-nemo": {
@@ -3729,6 +4127,37 @@
       "max_output_tokens": 262144,
       "name": "Kimi K2.7 Code Highspeed",
       "release_date": "2026-06-12",
+      "temperature": false
+    },
+    "moonshotai/kimi-k3": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1048576,
+      "family": "kimi-k3",
+      "last_updated": "2026-07-16",
+      "max_output_tokens": 131072,
+      "name": "Kimi K3",
+      "release_date": "2026-07-16",
       "temperature": false
     },
     "nvidia/llama-3.1-nemotron-70b-instruct": {
@@ -5307,6 +5736,111 @@
       "release_date": "2026-04-23",
       "temperature": false
     },
+    "openai/gpt-5.6-luna": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1050000,
+      "family": "gpt-luna",
+      "knowledge": "2026-02-16",
+      "last_updated": "2026-07-09",
+      "max_output_tokens": 128000,
+      "name": "GPT-5.6 Luna",
+      "release_date": "2026-07-09",
+      "temperature": false
+    },
+    "openai/gpt-5.6-sol": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1050000,
+      "family": "gpt-sol",
+      "knowledge": "2026-02-16",
+      "last_updated": "2026-07-09",
+      "max_output_tokens": 128000,
+      "name": "GPT-5.6 Sol",
+      "release_date": "2026-07-09",
+      "temperature": false
+    },
+    "openai/gpt-5.6-terra": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1050000,
+      "family": "gpt-terra",
+      "knowledge": "2026-02-16",
+      "last_updated": "2026-07-09",
+      "max_output_tokens": 128000,
+      "name": "GPT-5.6 Terra",
+      "release_date": "2026-07-09",
+      "temperature": false
+    },
     "openai/gpt-image-1": {
       "capabilities": {
         "input_modalities": [
@@ -5406,6 +5940,32 @@
       "release_date": "2025-08-05",
       "temperature": true
     },
+    "openai/gpt-oss-20b": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 131072,
+      "family": "gpt-oss",
+      "last_updated": "2025-08-05",
+      "max_output_tokens": 32768,
+      "name": "GPT OSS 20B",
+      "release_date": "2025-08-05",
+      "temperature": true
+    },
     "openai/gpt-oss-safeguard-120b": {
       "capabilities": {
         "input_modalities": [
@@ -5430,6 +5990,67 @@
       "max_output_tokens": 32768,
       "name": "GPT OSS Safeguard 120B",
       "release_date": "2025-10-29",
+      "temperature": true
+    },
+    "openai/gpt-realtime-2.1": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "audio",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text",
+          "audio"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 128000,
+      "family": "gpt",
+      "knowledge": "2024-09-30",
+      "last_updated": "2026-07-06",
+      "max_output_tokens": 32000,
+      "name": "GPT-Realtime-2.1",
+      "release_date": "2026-07-06",
+      "temperature": false
+    },
+    "openai/gpt-realtime-whisper": {
+      "capabilities": {
+        "input_modalities": [
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 0,
+      "family": "whisper",
+      "last_updated": "2026-05-07",
+      "max_output_tokens": 0,
+      "name": "GPT Realtime Whisper",
+      "release_date": "2026-05-07",
       "temperature": true
     },
     "openai/o1": {
@@ -5811,6 +6432,84 @@
       "release_date": "2024-01-01",
       "temperature": true
     },
+    "poolside/laguna-m.1": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 262144,
+      "family": "laguna",
+      "last_updated": "2026-06-13",
+      "max_output_tokens": 32768,
+      "name": "Laguna M.1",
+      "release_date": "2026-04-28",
+      "temperature": true
+    },
+    "poolside/laguna-xs-2.1": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 262144,
+      "family": "laguna",
+      "last_updated": "2026-07-02",
+      "max_output_tokens": 32768,
+      "name": "Laguna XS 2.1",
+      "release_date": "2026-07-02",
+      "temperature": true
+    },
+    "poolside/laguna-xs.2": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 262144,
+      "family": "laguna",
+      "last_updated": "2026-06-13",
+      "max_output_tokens": 32768,
+      "name": "Laguna XS.2",
+      "release_date": "2026-04-28",
+      "temperature": true
+    },
     "sakana/fugu": {
       "capabilities": {
         "input_modalities": [
@@ -5943,6 +6642,11 @@
           "text"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -5994,7 +6698,8 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image"
+          "image",
+          "video"
         ],
         "json_mode": false,
         "output_modalities": [
@@ -6016,7 +6721,7 @@
         "vision": true
       },
       "context_window": 256000,
-      "knowledge": "2026-01-01",
+      "knowledge": "2026-03-01",
       "last_updated": "2026-05-29",
       "max_output_tokens": 256000,
       "name": "Step 3.7 Flash",
@@ -6047,6 +6752,44 @@
       "max_output_tokens": 64000,
       "name": "Hy3 preview",
       "release_date": "2026-04-20",
+      "temperature": true
+    },
+    "thinkingmachines/inkling": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 256000,
+      "family": "ling",
+      "last_updated": "2026-07-15",
+      "max_output_tokens": 256000,
+      "name": "Inkling",
+      "release_date": "2026-07-15",
       "temperature": true
     },
     "xai/grok-4.20-0309-non-reasoning": {
@@ -6138,6 +6881,39 @@
       "max_output_tokens": 30000,
       "name": "Grok 4.3",
       "release_date": "2026-04-17",
+      "temperature": true
+    },
+    "xai/grok-4.5": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 500000,
+      "family": "grok",
+      "last_updated": "2026-07-08",
+      "max_output_tokens": 500000,
+      "name": "Grok 4.5",
+      "release_date": "2026-07-08",
       "temperature": true
     },
     "xai/grok-build-0.1": {

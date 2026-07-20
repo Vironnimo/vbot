@@ -127,9 +127,10 @@ async def refresh_models(
     fetched_at = datetime.now(UTC).isoformat()
     try:
         adapter_class = _adapter_class_for_discovery(provider_config.adapter)
+        discovery_params = await _resolve_discovery_params(adapter_class)
         url = _append_query_params(
             _join_url(base_url, models_endpoint),
-            _get_discovery_params(adapter_class),
+            discovery_params,
         )
 
         raw_payload, raw_models = await _fetch_raw_models(
@@ -817,6 +818,39 @@ def _get_discovery_params(adapter_class: Any) -> dict[str, str]:
         result: dict[str, str] = method()
         return result
     return {}
+
+
+async def _resolve_discovery_params(adapter_class: Any) -> dict[str, str]:
+    """Let an adapter refresh time-sensitive catalog parameters, fail-soft."""
+
+    params = _get_discovery_params(adapter_class)
+    method = getattr(adapter_class, "resolve_discovery_params", None)
+    if not callable(method):
+        return params
+
+    async def _fetch_public_json(url: str) -> Any:
+        return await _fetch_json_payload(url, {})
+
+    try:
+        resolved = await method(_fetch_public_json)
+        if not isinstance(resolved, Mapping):
+            raise ValueError("resolved discovery parameters must be an object")
+        dynamic_params = {
+            key: value
+            for key, value in resolved.items()
+            if isinstance(key, str) and isinstance(value, str)
+        }
+        if len(dynamic_params) != len(resolved):
+            raise ValueError("resolved discovery parameters must contain only strings")
+    except (httpx.HTTPError, ProviderError, NetworkError, json.JSONDecodeError, ValueError) as exc:
+        _LOGGER.warning(
+            "Dynamic discovery parameters failed for adapter '%s'; using fallbacks: %s",
+            adapter_class.__name__,
+            exc,
+        )
+        return params
+
+    return {**params, **dynamic_params}
 
 
 def _append_query_params(url: str, params: dict[str, str]) -> str:
