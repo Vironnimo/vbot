@@ -272,7 +272,7 @@ async def test_run_prefix_tap_wakes_agent_and_bypasses_dispatcher(
         allowed_chat_ids=[12345],
     )
     adapter._interaction_dispatcher = dispatcher
-    wake = AsyncMock(return_value=True)
+    wake = AsyncMock(return_value="enqueued")
     adapter._engine.trigger_interaction_reply = wake  # type: ignore[method-assign]
 
     update = make_callback_update(
@@ -311,7 +311,7 @@ async def test_run_prefix_tap_denied_does_not_close_keyboard(
     )
     # Engine reports the tap unauthorized (a non-owner group tap): the adapter still
     # acks the spinner but must NOT close the shared message's keyboard.
-    wake = AsyncMock(return_value=False)
+    wake = AsyncMock(return_value="denied")
     adapter._engine.trigger_interaction_reply = wake  # type: ignore[method-assign]
 
     update = make_callback_update(chat_id=12345, user_id=99, data="run:done")
@@ -320,6 +320,42 @@ async def test_run_prefix_tap_denied_does_not_close_keyboard(
     bot.answer_callback_query.assert_awaited_once()
     wake.assert_called_once()
     bot.edit_message_reply_markup.assert_not_awaited()
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outcome", "expected_text", "expected_alert"),
+    [
+        ("already_handled", "This action was already handled.", False),
+        ("unavailable", "This action is no longer available.", True),
+    ],
+)
+async def test_terminal_run_button_outcome_closes_keyboard_with_clear_ack(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
+    expected_text: str,
+    expected_alert: bool,
+) -> None:
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[12345],
+    )
+    adapter._engine.trigger_interaction_reply = AsyncMock(  # type: ignore[method-assign]
+        return_value=outcome
+    )
+
+    update = make_callback_update(chat_id=12345, user_id=50, data="run:done")
+    await adapter._handle_callback_query(update, SimpleNamespace())
+
+    bot.answer_callback_query.assert_awaited_once_with(
+        callback_query_id="cb1",
+        text=expected_text,
+        show_alert=expected_alert,
+    )
+    bot.edit_message_reply_markup.assert_awaited_once()
     await adapter.stop()
 
 

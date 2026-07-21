@@ -19,6 +19,7 @@ from core.channels.adapter import (
     DeniedChatLog,
     FileData,
     RouteFacts,
+    RunButtonBindingRegistry,
     content_blocks_for_attachment,
 )
 from core.channels.channels import ChannelConfig, ChannelConfigError, ChannelError
@@ -63,6 +64,8 @@ _CHAT_MIGRATED_REPLY = (
     "This group was upgraded by Telegram and has a new chat id. "
     "I've updated my configuration; the conversation continues here."
 )
+_INTERACTION_ALREADY_HANDLED_REPLY = "This action was already handled."
+_INTERACTION_UNAVAILABLE_REPLY = "This action is no longer available."
 # Retries for a send that Telegram answers with RetryAfter (flood control), honoring the
 # server-provided delay — the project convention of max 3 retries for transient errors.
 _SEND_MAX_RETRIES = 3
@@ -94,6 +97,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         interaction_dispatcher: (
             Callable[[InteractionEvent, InteractionResponder], Awaitable[bool]] | None
         ) = None,
+        run_button_binding_registry: RunButtonBindingRegistry | None = None,
     ) -> None:
         self._config = config
         self._attachment_store = attachment_store
@@ -111,6 +115,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             chat_sessions,
             self,
             command_dispatcher=command_dispatcher,
+            run_button_binding_registry=run_button_binding_registry,
         )
 
         token = credential_resolver(config.token_env_var)
@@ -840,13 +845,12 @@ class TelegramChannelAdapter(ChannelAdapter):
     async def _handle_callback_query(self, update: Any, _context: Any) -> None:
         """Turn a Telegram button tap (callback_query) into a dispatched interaction.
 
-        This path is owned entirely by the adapter: it does **not** go through the
-        conversation engine, ``should_respond``, ``TriggerService``, or the
-        per-conversation FIFO — a tap is handled deterministically in-process by an
-        extension, not by waking the agent (an LLM run per tap would be slow and
-        costly). Identity and the allowlist gate reuse the same inbound plumbing as
-        messages. Every tap is acknowledged exactly once — by the extension handler
-        or by the fallback here — so the tapper's spinner always stops.
+        Extension-owned taps stay deterministic and in-process. The reserved
+        ``run:`` prefix instead enters the conversation engine and its per-chat FIFO
+        because it deliberately wakes the agent. Identity and the allowlist gate
+        reuse the same inbound plumbing as messages. Every tap is acknowledged
+        exactly once — by the Run path, extension handler, or fallback here — so the
+        tapper's spinner always stops.
         """
         callback = getattr(update, "callback_query", None)
         if callback is None:
@@ -893,15 +897,36 @@ class TelegramChannelAdapter(ChannelAdapter):
         )
 
         if data.split(":", 1)[0] == RUN_TRIGGER_PREFIX:
-            # A reserved-prefix tap wakes the agent instead of an extension: ack now
-            # so the spinner stops immediately, then hand the tap to the engine, which
-            # gates it (group owner) and enqueues an internal Run carrying the current
-            # keyboard state. On an authorized tap, best-effort close the keyboard so
-            # the message reads as "submitted" and cannot be re-triggered. The
-            # extension dispatcher is intentionally bypassed.
+            # A reserved-prefix tap wakes the agent instead of an extension. Bound
+            # buttons first claim their durable origin and repoint the conversation;
+            # legacy buttons keep the current Channel route. Only accepted or terminal
+            # taps close the keyboard, while busy/denied taps remain retryable.
+            try:
+                outcome = await self._engine.trigger_interaction_reply(conversation, event)
+            except Exception as error:
+                _LOGGER.error(
+                    "Telegram Run-button handling failed (channel=%s): %s",
+                    self._config.id,
+                    error,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+                with contextlib.suppress(ChannelError):
+                    await responder.answer(_INTERACTION_UNAVAILABLE_REPLY, alert=True)
+                return
+
+            answer_text = None
+            answer_alert = False
+            close_keyboard = outcome == "enqueued"
+            if outcome == "already_handled":
+                answer_text = _INTERACTION_ALREADY_HANDLED_REPLY
+                close_keyboard = True
+            elif outcome == "unavailable":
+                answer_text = _INTERACTION_UNAVAILABLE_REPLY
+                answer_alert = True
+                close_keyboard = True
             with contextlib.suppress(ChannelError):
-                await responder.answer()
-            if await self._engine.trigger_interaction_reply(conversation, event):
+                await responder.answer(answer_text, alert=answer_alert)
+            if close_keyboard:
                 with contextlib.suppress(ChannelError):
                     await responder.edit(buttons=[])
             return

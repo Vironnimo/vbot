@@ -235,6 +235,8 @@ the only platform with interactive support today; callback data is capped at 64
 bytes. The bundled **checklist** extension (prefix `chk`) is a ready reference
 handler that flips a leading ⬜↔✅ on the tapped button.
 
+The prefix `run` is reserved for waking the agent rather than an extension. Emit only the public form `run:<payload>`. When an Identity Agent Session sends that button through `channel_send`, vBot durably binds it to the sending Session: the tap starts at most one Run there, the Run's reply is delivered to Telegram, and later Telegram messages continue in that Session until `/new`. The private callback value placed on the Telegram message is an implementation detail; do not parse or construct it. If the origin Session was deleted, the tap reports that it is unavailable instead of recreating or falling back to another Session. Project Sessions keep the legacy behavior and route the tap to the Channel's current Identity Session.
+
 ## Settings schema
 
 An extension can declare a **settings schema** so the WebUI renders a real form for it (Settings → Extensions), instead of the raw-JSON editor. Declare it at register time — the same declaration pattern as hooks, tools, and recall backends — so single-file extensions (which carry no manifest) can use it too:

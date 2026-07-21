@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from core.chat.content_blocks import ContentBlock, FileBlock, MediaBlock
 from core.extensions import InteractionButton
@@ -16,6 +16,64 @@ if TYPE_CHECKING:
 # Denied inbound chats are kept for operator visibility only; the bound keeps the
 # in-memory log small under spam while still covering every realistic setup flow.
 DENIED_CHAT_LOG_LIMIT = 20
+
+BOUND_RUN_CALLBACK_VERSION = "v1"
+BOUND_RUN_CALLBACK_PREFIX = f"run:{BOUND_RUN_CALLBACK_VERSION}:"
+
+
+@dataclass(frozen=True)
+class RunButtonBinding:
+    """Durable origin for one outbound message's collectively one-shot Run buttons."""
+
+    id: str
+    platform_target: str
+    thread_id: str | None
+    origin_session_id: str
+    original_button_data: tuple[str, ...]
+    created_at: str
+    consumed: bool = False
+
+
+RunButtonClaimStatus = Literal["claimed", "consumed", "missing", "target_mismatch"]
+
+
+@dataclass(frozen=True)
+class RunButtonClaim:
+    """Result of atomically claiming one persisted Run-button binding."""
+
+    status: RunButtonClaimStatus
+    binding: RunButtonBinding | None = None
+
+
+class RunButtonBindingRegistry(Protocol):
+    """Persistence seam used by the engine without importing Channel storage."""
+
+    def claim_run_button_binding(
+        self,
+        channel_id: str,
+        binding_id: str,
+        *,
+        platform_target: str,
+        thread_id: str | None,
+    ) -> RunButtonClaim: ...
+
+    def restore_run_button_binding(self, channel_id: str, binding_id: str) -> None: ...
+
+
+def bound_run_callback_data(binding_id: str, button_index: int) -> str:
+    """Return the private callback value for one origin-bound ``run:*`` button."""
+    return f"{BOUND_RUN_CALLBACK_PREFIX}{binding_id}:{button_index}"
+
+
+def parse_bound_run_callback_data(data: str) -> tuple[str, int] | None:
+    """Parse the private bound callback form; ordinary ``run:<payload>`` stays unbound."""
+    if not data.startswith(BOUND_RUN_CALLBACK_PREFIX):
+        return None
+    remainder = data[len(BOUND_RUN_CALLBACK_PREFIX) :]
+    binding_id, separator, raw_index = remainder.partition(":")
+    if not binding_id or not separator or not raw_index.isascii() or not raw_index.isdigit():
+        return None
+    return binding_id, int(raw_index)
 
 
 @dataclass(frozen=True)

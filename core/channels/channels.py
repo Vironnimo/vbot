@@ -6,14 +6,25 @@ import asyncio
 import json
 import re
 import shutil
+import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
+from uuid import uuid4
 
 from core.attachments import AttachmentStore
-from core.channels.adapter import ChannelAdapter, DeniedChatFacts, FileData, RouteFacts
+from core.channels.adapter import (
+    ChannelAdapter,
+    DeniedChatFacts,
+    FileData,
+    RouteFacts,
+    RunButtonBinding,
+    RunButtonClaim,
+    bound_run_callback_data,
+)
 from core.config_validation import (
     JsonConfigValidationError,
     JsonDiagnostic,
@@ -42,6 +53,8 @@ if TYPE_CHECKING:
 _LOGGER = get_logger("channels")
 
 _CHANNEL_CONFIG_FILENAME = "channel.json"
+_RUN_BUTTON_BINDINGS_FILENAME = "run-button-bindings.json"
+_RUN_BUTTON_BINDINGS_VERSION = 1
 _DEFAULT_DM_SCOPE = "per_conversation"
 ALLOWED_CHANNEL_DM_SCOPES = frozenset(
     ("per_conversation", "main", "per_peer", "per_account_channel_peer")
@@ -323,6 +336,7 @@ class ChannelStorage:
     def __init__(self, data_root: str | Path) -> None:
         self._data_root = Path(data_root).expanduser()
         self._channels_dir = self._data_root / "channels"
+        self._run_button_bindings_lock = threading.RLock()
 
     def load_all(self) -> list[ChannelConfig]:
         """Load all valid persisted channel configs in stable id-order.
@@ -385,8 +399,106 @@ class ChannelStorage:
             raise ChannelNotFoundError(f"Channel not found: {normalized_id}")
         return self._read_config(config_path)
 
+    def save_run_button_binding(self, channel_id: str, binding: RunButtonBinding) -> None:
+        """Persist one pending origin binding before its Telegram message is sent."""
+        normalized_id = _normalize_channel_id(channel_id)
+        with self._run_button_bindings_lock:
+            bindings = self._load_run_button_bindings(normalized_id)
+            bindings[binding.id] = binding
+            self._write_run_button_bindings(normalized_id, bindings)
+
+    def discard_run_button_binding(self, channel_id: str, binding_id: str) -> None:
+        """Remove a binding whose outbound platform send failed."""
+        normalized_id = _normalize_channel_id(channel_id)
+        with self._run_button_bindings_lock:
+            bindings = self._load_run_button_bindings(normalized_id)
+            if bindings.pop(binding_id, None) is not None:
+                self._write_run_button_bindings(normalized_id, bindings)
+
+    def claim_run_button_binding(
+        self,
+        channel_id: str,
+        binding_id: str,
+        *,
+        platform_target: str,
+        thread_id: str | None,
+    ) -> RunButtonClaim:
+        """Atomically consume a binding when its original target taps a Run button."""
+        normalized_id = _normalize_channel_id(channel_id)
+        with self._run_button_bindings_lock:
+            bindings = self._load_run_button_bindings(normalized_id)
+            binding = bindings.get(binding_id)
+            if binding is None:
+                return RunButtonClaim(status="missing")
+            if binding.platform_target != platform_target or binding.thread_id != thread_id:
+                return RunButtonClaim(status="target_mismatch", binding=binding)
+            if binding.consumed:
+                return RunButtonClaim(status="consumed", binding=binding)
+            claimed = replace(binding, consumed=True)
+            bindings[binding_id] = claimed
+            self._write_run_button_bindings(normalized_id, bindings)
+            return RunButtonClaim(status="claimed", binding=claimed)
+
+    def restore_run_button_binding(self, channel_id: str, binding_id: str) -> None:
+        """Make a claimed binding retryable when Queue admission was rejected."""
+        normalized_id = _normalize_channel_id(channel_id)
+        with self._run_button_bindings_lock:
+            bindings = self._load_run_button_bindings(normalized_id)
+            binding = bindings.get(binding_id)
+            if binding is None or not binding.consumed:
+                return
+            bindings[binding_id] = replace(binding, consumed=False)
+            self._write_run_button_bindings(normalized_id, bindings)
+
     def _channel_dir(self, channel_id: str) -> Path:
         return self._channels_dir / channel_id
+
+    def _load_run_button_bindings(self, channel_id: str) -> dict[str, RunButtonBinding]:
+        path = self._channel_dir(channel_id) / _RUN_BUTTON_BINDINGS_FILENAME
+        if not path.is_file():
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if (
+                not isinstance(payload, dict)
+                or payload.get("version") != _RUN_BUTTON_BINDINGS_VERSION
+            ):
+                raise ValueError("unsupported binding-store version")
+            raw_bindings = payload.get("bindings")
+            if not isinstance(raw_bindings, dict):
+                raise ValueError("bindings must be an object")
+            return {
+                binding_id: _run_button_binding_from_dict(binding_id, raw_binding)
+                for binding_id, raw_binding in raw_bindings.items()
+                if isinstance(binding_id, str)
+            }
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError, TypeError) as error:
+            raise ChannelError(
+                f"Cannot read Run-button bindings for {channel_id}: {error}"
+            ) from error
+
+    def _write_run_button_bindings(
+        self,
+        channel_id: str,
+        bindings: dict[str, RunButtonBinding],
+    ) -> None:
+        path = self._channel_dir(channel_id) / _RUN_BUTTON_BINDINGS_FILENAME
+        payload = {
+            "version": _RUN_BUTTON_BINDINGS_VERSION,
+            "bindings": {
+                binding_id: _run_button_binding_to_dict(binding)
+                for binding_id, binding in sorted(bindings.items())
+            },
+        }
+        try:
+            atomic_write_text(
+                path,
+                json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            )
+        except OSError as error:
+            raise ChannelError(
+                f"Cannot write Run-button bindings for {channel_id}: {error}"
+            ) from error
 
     def _read_config(self, config_path: Path) -> ChannelConfig:
         payload = load_validated_channel_json(config_path)
@@ -613,6 +725,7 @@ class ChannelService:
         files: list[FileData] | None = None,
         thread_id: str | None = None,
         buttons: list[list[InteractionButton]] | None = None,
+        run_origin: RouteFacts | None = None,
     ) -> None:
         """Delegate an outbound send to a running channel adapter."""
         normalized_id = _normalize_channel_id(channel_id)
@@ -642,18 +755,59 @@ class ChannelService:
                 normalized_files.append(file_data)
 
         normalized_buttons = _normalize_outbound_buttons(buttons)
+        if run_origin is not None and not isinstance(run_origin, RouteFacts):
+            raise ChannelConfigError("run_origin must be RouteFacts when provided")
 
         if normalized_message is None and not normalized_files:
             raise ChannelConfigError("at least one of message or files must be provided")
 
         adapter = self._active_adapter(normalized_id)
-        await adapter.send(
-            normalized_message,
-            platform_target,
-            files=normalized_files,
-            thread_id=thread_id,
-            buttons=normalized_buttons,
-        )
+        binding: RunButtonBinding | None = None
+        outbound_buttons = normalized_buttons
+        if run_origin is not None and normalized_buttons is not None:
+            config = self._storage.get(normalized_id)
+            if run_origin.agent_id != config.agent_id:
+                raise ChannelConfigError(
+                    f"Run-button origin agent {run_origin.agent_id} does not own Channel "
+                    f"{normalized_id}"
+                )
+            if not self._chat_sessions.exists(run_origin.agent_id, run_origin.session_id):
+                raise ChannelConfigError(
+                    f"Run-button origin Session does not exist: {run_origin.session_id}"
+                )
+            outbound_buttons, binding = _bind_outbound_run_buttons(
+                normalized_buttons,
+                platform_target=platform_target,
+                thread_id=thread_id,
+                origin_session_id=run_origin.session_id,
+            )
+            if binding is not None:
+                self._storage.save_run_button_binding(normalized_id, binding)
+
+        try:
+            await adapter.send(
+                normalized_message,
+                platform_target,
+                files=normalized_files,
+                thread_id=thread_id,
+                buttons=outbound_buttons,
+            )
+        except BaseException:
+            if binding is not None:
+                try:
+                    self._storage.discard_run_button_binding(normalized_id, binding.id)
+                except Exception as cleanup_error:
+                    _LOGGER.warning(
+                        "Could not discard unsent Run-button binding (channel=%s): %s",
+                        normalized_id,
+                        cleanup_error,
+                        exc_info=(
+                            type(cleanup_error),
+                            cleanup_error,
+                            cleanup_error.__traceback__,
+                        ),
+                    )
+            raise
 
     def ensure_outbound_session(self, channel_id: str, platform_target: str) -> RouteFacts:
         """Ensure the Session mirroring an outbound target chat exists and return its route."""
@@ -842,6 +996,7 @@ class ChannelService:
                 command_dispatcher=self._command_dispatcher,
                 chat_migration_persister=partial(self.record_chat_id_migration, config.id),
                 interaction_dispatcher=self._interaction_dispatcher,
+                run_button_binding_registry=self._storage,
             )
 
         raise ChannelConfigError(f"Unsupported channel platform: {config.platform}")
@@ -1180,6 +1335,93 @@ def _normalize_outbound_buttons(
             normalized.append(normalized_row)
 
     return normalized or None
+
+
+def _bind_outbound_run_buttons(
+    rows: list[list[InteractionButton]],
+    *,
+    platform_target: str,
+    thread_id: str | None,
+    origin_session_id: str,
+) -> tuple[list[list[InteractionButton]], RunButtonBinding | None]:
+    binding_id = uuid4().hex
+    original_data: list[str] = []
+    bound_rows: list[list[InteractionButton]] = []
+    for row in rows:
+        bound_row: list[InteractionButton] = []
+        for button in row:
+            if button.data.split(":", 1)[0] != "run":
+                bound_row.append(button)
+                continue
+            button_index = len(original_data)
+            original_data.append(button.data)
+            bound_row.append(
+                InteractionButton(
+                    label=button.label,
+                    data=bound_run_callback_data(binding_id, button_index),
+                )
+            )
+        bound_rows.append(bound_row)
+    if not original_data:
+        return rows, None
+    return bound_rows, RunButtonBinding(
+        id=binding_id,
+        platform_target=platform_target,
+        thread_id=thread_id,
+        origin_session_id=origin_session_id,
+        original_button_data=tuple(original_data),
+        created_at=datetime.now(UTC).isoformat(),
+    )
+
+
+def _run_button_binding_to_dict(binding: RunButtonBinding) -> dict[str, Any]:
+    return {
+        "platform_target": binding.platform_target,
+        "thread_id": binding.thread_id,
+        "origin_session_id": binding.origin_session_id,
+        "original_button_data": list(binding.original_button_data),
+        "created_at": binding.created_at,
+        "consumed": binding.consumed,
+    }
+
+
+def _run_button_binding_from_dict(binding_id: str, payload: Any) -> RunButtonBinding:
+    if not isinstance(payload, dict):
+        raise ValueError(f"binding {binding_id!r} must be an object")
+    platform_target = payload.get("platform_target")
+    thread_id = payload.get("thread_id")
+    origin_session_id = payload.get("origin_session_id")
+    original_button_data = payload.get("original_button_data")
+    created_at = payload.get("created_at")
+    consumed = payload.get("consumed")
+    if not isinstance(platform_target, str) or not platform_target:
+        raise ValueError(f"binding {binding_id!r} has invalid platform_target")
+    if thread_id is not None and not isinstance(thread_id, str):
+        raise ValueError(f"binding {binding_id!r} has invalid thread_id")
+    if not isinstance(origin_session_id, str) or not origin_session_id:
+        raise ValueError(f"binding {binding_id!r} has invalid origin_session_id")
+    if (
+        not isinstance(original_button_data, list)
+        or not original_button_data
+        or not all(
+            isinstance(item, str) and item.split(":", 1)[0] == "run"
+            for item in original_button_data
+        )
+    ):
+        raise ValueError(f"binding {binding_id!r} has invalid original_button_data")
+    if not isinstance(created_at, str) or not created_at:
+        raise ValueError(f"binding {binding_id!r} has invalid created_at")
+    if not isinstance(consumed, bool):
+        raise ValueError(f"binding {binding_id!r} has invalid consumed state")
+    return RunButtonBinding(
+        id=binding_id,
+        platform_target=platform_target,
+        thread_id=thread_id,
+        origin_session_id=origin_session_id,
+        original_button_data=tuple(original_button_data),
+        created_at=created_at,
+        consumed=consumed,
+    )
 
 
 def _normalize_channel_id(channel_id: str) -> str:

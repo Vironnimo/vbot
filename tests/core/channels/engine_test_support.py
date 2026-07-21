@@ -21,6 +21,7 @@ from core.channels.adapter import (
     MessageFacts,
     ReplyPlanFacts,
     RouteFacts,
+    RunButtonBindingRegistry,
 )
 from core.channels.channels import ChannelConfig
 from core.channels.engine import ChannelConversationEngine
@@ -261,6 +262,7 @@ def make_engine(
     command_dispatcher: object | None = None,
     transport: FakeTransport | None = None,
     waiting_work_manager: ChatRunManager | None = None,
+    run_button_binding_registry: RunButtonBindingRegistry | None = None,
 ) -> tuple[ChannelConversationEngine, ChatSessionManager, AsyncMock, FakeTransport]:
     chat_sessions = ChatSessionManager(tmp_path)
     trigger_mock = trigger_run or AsyncMock()
@@ -312,6 +314,7 @@ def make_engine(
         cast(Any, chat_sessions),
         cast(Any, resolved_transport),
         command_dispatcher=cast(Any, resolved_dispatcher),
+        run_button_binding_registry=run_button_binding_registry,
     )
     return engine, chat_sessions, trigger_mock, resolved_transport
 
