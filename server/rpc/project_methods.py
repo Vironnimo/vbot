@@ -51,6 +51,7 @@ from core.settings import (
     validate_thinking_effort,
 )
 from core.skills import SKILL_ORIGIN_GLOBAL
+from core.utils.logging import get_logger
 from server.events import RESOURCE_KIND_AGENTS, RESOURCE_KIND_PROJECTS
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
@@ -71,6 +72,8 @@ from server.rpc.validation import (
 )
 
 JsonObject = dict[str, Any]
+_LOGGER = get_logger("server.rpc.projects")
+_MISSING = object()
 
 # A bare cwd is a valid Project (GLOSSARY → Project; plan: "Minimal-Projekt = nur
 # eine cwd"): the chosen format location's presence is surfaced in the scan
@@ -180,6 +183,11 @@ def _add_project(state: Any, params: JsonObject) -> JsonObject:
 
     scan = _scan_preview(state, project)
     publish_resource_changed(state, RESOURCE_KIND_PROJECTS)
+    _LOGGER.info(
+        "Project added (project=%s source_format=%s)",
+        project.project_id,
+        project.source_format,
+    )
     return {"project": _project_response(project), "scan": scan}
 
 
@@ -242,14 +250,19 @@ def _set_project(state: Any, params: JsonObject) -> JsonObject:
         )
 
     try:
+        current_project = _projects(state).get(project_id)
         if "allowed_tools" in changes:
-            current_project = _projects(state).get(project_id)
             _validate_project_tool_change(
                 state,
                 current_project,
                 changes["allowed_tools"],
             )
         project = _projects(state).update(project_id, **changes)
+        changed_fields = sorted(
+            field
+            for field in changes
+            if getattr(current_project, field, None) != getattr(project, field, None)
+        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -263,6 +276,12 @@ def _set_project(state: Any, params: JsonObject) -> JsonObject:
         _invalidate_project_caches(state, project_id)
     scan = _scan_preview(state, project)
     publish_resource_changed(state, RESOURCE_KIND_PROJECTS)
+    if changed_fields:
+        _LOGGER.info(
+            "Project updated (project=%s fields=%s)",
+            project_id,
+            ",".join(changed_fields),
+        )
     return {"project": _project_response(project), "scan": scan}
 
 
@@ -287,6 +306,7 @@ def _set_override(state: Any, params: JsonObject) -> JsonObject:
     try:
         value = _validate_override_value(state, field, params.get("value"))
         current_project = _projects(state).get(project_id)
+        previous_value = current_project.overrides.get(agent_id, {}).get(field, _MISSING)
         team = _agent_resolver(state).scan_project_report(current_project).team
         if agent_id not in {member.agent_id for member in team}:
             raise RpcError(
@@ -297,6 +317,13 @@ def _set_override(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
+    if previous_value is _MISSING or previous_value != value:
+        _LOGGER.info(
+            "Project Agent override set (project=%s agent=%s field=%s)",
+            project_id,
+            agent_id,
+            field,
+        )
     return _override_result(state, project)
 
 
@@ -313,10 +340,19 @@ def _clear_override(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "agent_id")
     field = _required_override_field(params)
     try:
+        current_project = _projects(state).get(project_id)
+        had_override = field in current_project.overrides.get(agent_id, {})
         project = _projects(state).clear_override(project_id, agent_id, field)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
+    if had_override:
+        _LOGGER.info(
+            "Project Agent override cleared (project=%s agent=%s field=%s)",
+            project_id,
+            agent_id,
+            field,
+        )
     return _override_result(state, project)
 
 
@@ -434,6 +470,11 @@ async def _remove_project(state: Any, params: JsonObject) -> JsonObject:
     _invalidate_project_caches(state, project_id)
     publish_resource_changed(state, RESOURCE_KIND_AGENTS)
     publish_resource_changed(state, RESOURCE_KIND_PROJECTS)
+    _LOGGER.info(
+        "Project archived (project=%s affected_agents=%s)",
+        project_id,
+        len(affected_agents),
+    )
     return {
         "project_id": project_id,
         "archived": True,

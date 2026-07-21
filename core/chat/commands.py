@@ -93,6 +93,7 @@ SUBAGENT_SESSION_METADATA_FLAG = "is_subagent_session"
 SUBAGENT_PARENT_METADATA_KEY = "subagent_parent"
 AGENT_TAKEOVER_NOTE = "This session was just moved to you from {source}."
 MODEL_RESET_TOKEN = "reset"
+_MISSING = object()
 
 
 @dataclass(frozen=True)
@@ -299,6 +300,27 @@ def _require_dependency(value: Any, name: str) -> Any:
     if value is None:
         raise RuntimeError(f"CommandDispatcher requires {name} for this command")
     return value
+
+
+def _stored_agent_model(agents: Any, agent_id: str) -> object:
+    getter = getattr(agents, "get_raw", None) or getattr(agents, "get", None)
+    if not callable(getter):
+        return _MISSING
+    return getattr(getter(agent_id), "model", _MISSING)
+
+
+def _stored_project_override(projects: Any, project_id: str, agent_id: str, field: str) -> object:
+    getter = getattr(projects, "get", None)
+    if not callable(getter):
+        return _MISSING
+    project = getter(project_id)
+    overrides = getattr(project, "overrides", {})
+    if not isinstance(overrides, Mapping):
+        return None
+    agent_override = overrides.get(agent_id, {})
+    if not isinstance(agent_override, Mapping):
+        return None
+    return agent_override.get(field)
 
 
 @dataclass(frozen=True)
@@ -595,6 +617,14 @@ class CommandDispatcher:
             internal=False,
             reply_surface=context.reply_surface,
         )
+        _LOGGER.info(
+            "Session handoff created "
+            "(source_agent=%s source_session=%s target_agent=%s target_session=%s)",
+            format_agent_address(context.agent_id, context.project_id),
+            context.session_id,
+            target_display,
+            target_session.id,
+        )
         return CommandOutcome(
             command="handoff",
             feedback=CommandFeedback(
@@ -775,6 +805,13 @@ class CommandDispatcher:
         for change in changes:
             context.report_change(change)
 
+        _LOGGER.info(
+            "Session moved between Agents (session=%s source_agent=%s target_agent=%s)",
+            context.session_id,
+            source_display,
+            target_display,
+        )
+
         runs: tuple[CommandRun, ...] = ()
         if parsed.task is not None:
             trigger_service = _require_dependency(self._trigger_service, "TriggerService")
@@ -833,15 +870,32 @@ class CommandDispatcher:
         model = "" if is_reset else raw
         if not is_reset:
             resolver.require_model_configured(model)
+        changed = True
         if context.project_id is None:
             agents = _require_dependency(self._agents, "AgentStore")
+            previous_model = _stored_agent_model(agents, context.agent_id)
             agents.update(context.agent_id, model=model)
+            changed = previous_model is _MISSING or previous_model != model
         elif is_reset:
             projects = _require_dependency(self._projects, "ProjectStore")
+            previous_model = _stored_project_override(
+                projects, context.project_id, context.agent_id, "model"
+            )
             projects.clear_override(context.project_id, context.agent_id, "model")
+            changed = previous_model is _MISSING or previous_model is not None
         else:
             projects = _require_dependency(self._projects, "ProjectStore")
+            previous_model = _stored_project_override(
+                projects, context.project_id, context.agent_id, "model"
+            )
             projects.set_override(context.project_id, context.agent_id, "model", model)
+            changed = previous_model is _MISSING or previous_model != model
+        if changed:
+            _LOGGER.info(
+                "Agent model configuration %s (agent=%s field=model)",
+                "reset" if is_reset else "updated",
+                format_agent_address(context.agent_id, context.project_id),
+            )
         return CommandOutcome(
             command="model",
             feedback=CommandFeedback(

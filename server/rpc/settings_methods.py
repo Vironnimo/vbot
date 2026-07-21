@@ -22,6 +22,7 @@ from server.rpc.validation import (
 
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("server.rpc.settings")
+_MISSING = object()
 SUBAGENT_SETTING_FIELDS = (
     "max_subagent_depth",
     "max_subagents_per_turn",
@@ -46,8 +47,11 @@ def _set_settings_key(state: Any, params: JsonObject) -> JsonObject:
 
     key = _required_string(params, "key")
     value = params["value"]
+    previous_value: Any = _MISSING
 
     def set_key(settings: JsonObject) -> JsonObject:
+        nonlocal previous_value
+        previous_value = settings.get(key, _MISSING)
         settings[key] = value
         _validate_raw_settings(settings)
         return dict(settings)
@@ -57,6 +61,8 @@ def _set_settings_key(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
+    if key != "appearance" and (previous_value is _MISSING or previous_value != value):
+        _LOGGER.info("Settings key updated (key=%s)", key)
     return {"settings": settings}
 
 
@@ -88,6 +94,7 @@ async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
 
     storage = state.runtime.storage
+    previous_settings = storage.load_settings()
     should_reload_recall_backend = "recall" in settings_update
     should_reload_skills = "skills" in settings_update
 
@@ -121,9 +128,29 @@ async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
             if callable(reload_recall_backend):
                 reload_recall_backend()
         await _apply_extension_delta(state.runtime, newly_enabled, newly_disabled)
-        return _settings_response(state)
+        response = _settings_response(state)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+
+    saved_settings = storage.load_settings()
+    changed_sections = sorted(
+        section
+        for section in settings_update
+        if previous_settings.get(section, _MISSING) != saved_settings.get(section, _MISSING)
+    )
+    logged_sections = [section for section in changed_sections if section != "appearance"]
+    if logged_sections:
+        details = ""
+        if newly_enabled:
+            details += f" extensions_enabled={','.join(sorted(newly_enabled))}"
+        if newly_disabled:
+            details += f" extensions_disabled={','.join(sorted(newly_disabled))}"
+        _LOGGER.info(
+            "Settings updated (sections=%s%s)",
+            ",".join(logged_sections),
+            details,
+        )
+    return response
 
 
 async def _apply_extension_delta(
@@ -250,9 +277,17 @@ def _task_model_update(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
 
     try:
+        previous = state.runtime.model_tasks.settings()
         model_tasks = state.runtime.model_tasks.update(settings_update["model_tasks"])
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    changed_tasks = sorted(
+        task_type
+        for task_type in set(previous) | set(model_tasks)
+        if previous.get(task_type) != model_tasks.get(task_type)
+    )
+    if changed_tasks:
+        _LOGGER.info("Task Model bindings updated (tasks=%s)", ",".join(changed_tasks))
     return {"model_tasks": model_tasks}
 
 

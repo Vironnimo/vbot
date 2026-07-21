@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any, cast
 
@@ -70,15 +71,23 @@ def _context(agent_id: str) -> ToolContext:
     )
 
 
-def test_create_in_empty_home_and_invalidates(tmp_path: Path) -> None:
+def test_create_in_empty_home_and_invalidates(tmp_path: Path, caplog: Any) -> None:
     harness = _Harness(tmp_path)
 
-    result = harness.run({"operation": "create", "name": "demo", "content": _skill_md()})
+    with caplog.at_level(logging.INFO, logger="vbot.tools.skill_manage"):
+        result = harness.run(
+            {"operation": "create", "name": "demo", "content": _skill_md(body="private body")}
+        )
 
     assert result["ok"] is True
     assert cast(dict[str, Any], result["data"])["operation"] == "create"
     assert (harness.home("main") / "demo" / "SKILL.md").is_file()
     assert harness.invalidated == ["main"]
+    messages = [
+        record.getMessage() for record in caplog.records if record.name == "vbot.tools.skill_manage"
+    ]
+    assert messages == ["Skill mutated (skill=demo scope=own operation=create actor_agent=main)"]
+    assert "private body" not in caplog.text
 
 
 def test_created_skill_is_loadable_in_same_session(tmp_path: Path) -> None:

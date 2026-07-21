@@ -12,6 +12,7 @@ from core.channels import (
     ChannelConfigError,
     ChannelNotFoundError,
 )
+from core.utils.logging import get_logger
 from server.events import RESOURCE_KIND_CHANNELS
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
@@ -28,6 +29,7 @@ from server.rpc.validation import (
 )
 
 JsonObject = dict[str, Any]
+_LOGGER = get_logger("server.rpc.channels")
 
 
 def _list_channels(state: Any, params: JsonObject) -> JsonObject:
@@ -79,6 +81,12 @@ async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
+    _LOGGER.info(
+        "Channel created (channel=%s platform=%s enabled=%s)",
+        config.id,
+        config.platform,
+        config.enabled,
+    )
     return config.to_dict()
 
 
@@ -121,6 +129,8 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
     if "observe_unaddressed" in params:
         updates["observe_unaddressed"] = _required_bool(params, "observe_unaddressed")
 
+    previous_config = _channel_config_if_available(state.runtime.channel_service, channel_id)
+
     if "agent_id" in updates:
         try:
             async with _agent_reference_lock(state):
@@ -130,7 +140,9 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
         except Exception as exc:
             raise _map_expected_error(exc) from exc
         publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
-        return _channel_config_by_id(state.runtime.channel_service, channel_id).to_dict()
+        saved_config = _channel_config_by_id(state.runtime.channel_service, channel_id)
+        _log_channel_update(channel_id, previous_config, saved_config, updates)
+        return saved_config.to_dict()
 
     try:
         state.runtime.channel_service.update_channel(channel_id, **updates)
@@ -138,7 +150,9 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
-    return _channel_config_by_id(state.runtime.channel_service, channel_id).to_dict()
+    saved_config = _channel_config_by_id(state.runtime.channel_service, channel_id)
+    _log_channel_update(channel_id, previous_config, saved_config, updates)
+    return saved_config.to_dict()
 
 
 def _delete_channel(state: Any, params: JsonObject) -> JsonObject:
@@ -151,6 +165,7 @@ def _delete_channel(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
+    _LOGGER.info("Channel deleted (channel=%s)", channel_id)
     return {"ok": True}
 
 
@@ -159,12 +174,18 @@ def _enable_channel(state: Any, params: JsonObject) -> JsonObject:
 
     channel_id = _required_string(params, "id")
     try:
-        state.runtime.channel_service.enable_channel(channel_id)
+        channel_service = state.runtime.channel_service
+        previous_config = _channel_config_by_id(channel_service, channel_id)
+        was_running = bool(channel_service.is_running(channel_id))
+        channel_service.enable_channel(channel_id)
         state.runtime.reload_channel_tool()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
-    return _channel_config_by_id(state.runtime.channel_service, channel_id).to_dict()
+    saved_config = _channel_config_by_id(state.runtime.channel_service, channel_id)
+    if not previous_config.enabled or not was_running:
+        _LOGGER.info("Channel enabled (channel=%s)", channel_id)
+    return saved_config.to_dict()
 
 
 def _disable_channel(state: Any, params: JsonObject) -> JsonObject:
@@ -172,12 +193,47 @@ def _disable_channel(state: Any, params: JsonObject) -> JsonObject:
 
     channel_id = _required_string(params, "id")
     try:
-        state.runtime.channel_service.disable_channel(channel_id)
+        channel_service = state.runtime.channel_service
+        previous_config = _channel_config_by_id(channel_service, channel_id)
+        was_running = bool(channel_service.is_running(channel_id))
+        channel_service.disable_channel(channel_id)
         state.runtime.reload_channel_tool()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
-    return _channel_config_by_id(state.runtime.channel_service, channel_id).to_dict()
+    saved_config = _channel_config_by_id(state.runtime.channel_service, channel_id)
+    if previous_config.enabled or was_running:
+        _LOGGER.info("Channel disabled (channel=%s)", channel_id)
+    return saved_config.to_dict()
+
+
+def _log_channel_update(
+    channel_id: str,
+    previous_config: ChannelConfig | None,
+    saved_config: ChannelConfig,
+    updates: JsonObject,
+) -> None:
+    if previous_config is None:
+        return
+    changed_fields = sorted(
+        field
+        for field in updates
+        if getattr(previous_config, field, None) != getattr(saved_config, field, None)
+    )
+    if changed_fields:
+        _LOGGER.info(
+            "Channel updated (channel=%s fields=%s)",
+            channel_id,
+            ",".join(changed_fields),
+        )
+
+
+def _channel_config_if_available(channel_service: Any, channel_id: str) -> ChannelConfig | None:
+    """Best-effort pre-mutation snapshot used only to suppress no-op audit logs."""
+    try:
+        return _channel_config_by_id(channel_service, channel_id)
+    except (ChannelConfigError, ChannelNotFoundError, TypeError):
+        return None
 
 
 def _channel_status(state: Any, params: JsonObject) -> JsonObject:

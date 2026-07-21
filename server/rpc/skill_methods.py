@@ -17,6 +17,7 @@ from typing import Any, cast
 
 from core.settings import is_valid_agent_id
 from core.skills import SkillAuthoringError, SkillRegistry, SkillWriteResult
+from core.utils.logging import get_logger
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.validation import _optional_string, _required_string
@@ -26,6 +27,7 @@ JsonObject = dict[str, Any]
 _GLOBAL_SCOPE = "global"
 _AGENT_SCOPE_PREFIX = "agent:"
 _HUMAN_AUTHOR = "human"
+_LOGGER = get_logger("server.rpc.skills")
 
 
 def _validated_scope(state: Any, params: JsonObject) -> str:
@@ -81,6 +83,12 @@ def _write(state: Any, scope: str, write: Callable[[Path], SkillWriteResult]) ->
     except OSError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     _invalidate_scope(state, scope)
+    _LOGGER.info(
+        "Skill mutated (skill=%s scope=%s operation=%s)",
+        result.name,
+        scope,
+        result.operation,
+    )
     return {"name": result.name, "operation": result.operation, "warnings": list(result.warnings)}
 
 

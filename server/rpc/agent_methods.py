@@ -29,6 +29,7 @@ from core.settings import (
 )
 from core.settings.normalizers import normalize_compaction_settings
 from core.utils.errors import StorageError
+from core.utils.logging import get_logger
 from server.events import RESOURCE_KIND_AGENTS, RESOURCE_KIND_SESSIONS
 from server.rpc.agent_refs import _agent_reference_ids, _agent_reference_lock
 from server.rpc.channel_methods import _channel_config_by_id
@@ -55,6 +56,7 @@ from server.rpc.validation import (
 )
 
 JsonObject = dict[str, Any]
+_LOGGER = get_logger("server.rpc.agents")
 
 __all__ = ["ALLOWED_THINKING_EFFORTS", "MAX_TEMPERATURE", "MIN_TEMPERATURE"]
 
@@ -94,6 +96,7 @@ def _create_agent(state: Any, params: JsonObject) -> JsonObject:
     # Agent CRUD rides the generic reload-on-change channel ("one app system"):
     # the signal carries no agent data, open windows re-fetch agent.list.
     publish_resource_changed(state, RESOURCE_KIND_AGENTS)
+    _LOGGER.info("Agent created (agent=%s)", agent_id)
     return response
 
 
@@ -121,6 +124,13 @@ def _update_agent(state: Any, params: JsonObject) -> JsonObject:
             **changes,
         )
         agent = update_result.agent
+        changed_fields = sorted(
+            field
+            for field in changes
+            if getattr(previous_agent, field, None) != getattr(agent, field, None)
+        )
+        if update_result.copied_files or update_result.backed_up_files:
+            changed_fields.append("workspace_identity_files")
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     response = _agent_response(state, agent)
@@ -130,6 +140,12 @@ def _update_agent(state: Any, params: JsonObject) -> JsonObject:
         "backup_created": update_result.backup_dir is not None,
     }
     publish_resource_changed(state, RESOURCE_KIND_AGENTS)
+    if changed_fields:
+        _LOGGER.info(
+            "Agent updated (agent=%s fields=%s)",
+            agent_id,
+            ",".join(changed_fields),
+        )
     return response
 
 
@@ -187,6 +203,7 @@ async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
         "remaining_agents": [_agent_response(state, agent) for agent in remaining_agents],
     }
     publish_resource_changed(state, RESOURCE_KIND_AGENTS)
+    _LOGGER.info("Agent archived (agent=%s)", agent_id)
     return result
 
 
@@ -273,6 +290,11 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
     # agent state in other windows (the current marking + return-to-current path).
     if deleting_current:
         publish_resource_changed(state, RESOURCE_KIND_AGENTS)
+    _LOGGER.info(
+        "Session archived (agent=%s session=%s)",
+        format_agent_address(agent_id, project_id),
+        session_id,
+    )
     return {"agent_id": agent_id, "session_id": session_id, "next_session_id": next_session_id}
 
 
@@ -416,6 +438,13 @@ async def _fork_session(state: Any, params: JsonObject) -> JsonObject:
     # Same emit point as session.create: other windows on the *target* agent
     # refresh their session list so the fork shows immediately.
     publish_resource_changed(state, RESOURCE_KIND_SESSIONS, scope={"agent_id": target_agent_id})
+    _LOGGER.info(
+        "Session forked (source_agent=%s source_session=%s target_agent=%s target_session=%s)",
+        format_agent_address(source_agent_id, source_project_id),
+        session_id,
+        format_agent_address(target_agent_id, target_project_id),
+        fork.id,
+    )
     return {
         "session": {
             "id": fork.id,
@@ -460,6 +489,11 @@ async def _link_session_to_channel(state: Any, params: JsonObject) -> JsonObject
             )
         state.runtime.chat_sessions.get(agent_id, session_id)
         metadata = dict(state.runtime.chat_sessions.get_metadata(agent_id, session_id))
+        previous_link = (
+            metadata.get("source_channel_id"),
+            metadata.get("platform"),
+            metadata.get("platform_conv_id"),
+        )
         metadata.update(
             {
                 "source_channel_id": channel_id,
@@ -474,6 +508,13 @@ async def _link_session_to_channel(state: Any, params: JsonObject) -> JsonObject
         state.runtime.chat_sessions.set_metadata(agent_id, session_id, metadata)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    if previous_link != (channel_id, channel_config.platform, platform_conv_id):
+        _LOGGER.info(
+            "Session linked to Channel (agent=%s session=%s channel=%s)",
+            agent_id,
+            session_id,
+            channel_id,
+        )
     return {"ok": True}
 
 
@@ -517,6 +558,7 @@ def _set_session_compaction_policy(state: Any, params: JsonObject) -> JsonObject
         normalized = normalize_compaction_policy(policy) if policy is not None else None
         state.runtime.chat_sessions.get(agent_id, session_id, project_id)
         metadata = state.runtime.chat_sessions.get_metadata(agent_id, session_id, project_id)
+        previous_override = metadata.get(COMPACTION_POLICY_META_KEY)
         if normalized is None:
             metadata.pop(COMPACTION_POLICY_META_KEY, None)
         else:
@@ -535,6 +577,13 @@ def _set_session_compaction_policy(state: Any, params: JsonObject) -> JsonObject
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_SESSIONS, scope={"agent_id": agent_id})
+    if previous_override != normalized:
+        _LOGGER.info(
+            "Session compaction policy %s (agent=%s session=%s)",
+            "set" if normalized is not None else "cleared",
+            format_agent_address(agent_id, project_id),
+            session_id,
+        )
     return {
         "agent_id": format_agent_address(agent_id, project_id),
         "session_id": session_id,

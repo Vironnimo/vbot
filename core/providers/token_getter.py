@@ -91,11 +91,9 @@ class OAuthTokenGetter:
             )
             if token is None:
                 _LOGGER.warning(
-                    "No usable OAuth token for provider=%s connection=%s account=%s — "
-                    "reconnect required",
+                    "No usable OAuth token (provider=%s connection=%s) — reconnect required",
                     self._provider_id,
                     self._local_connection_id,
-                    self._account_id,
                 )
                 raise ProviderAuthError("No OAuth token — please connect this provider first")
             if not _is_expiring(token):
@@ -110,11 +108,10 @@ class OAuthTokenGetter:
         if token.refresh_token:
             return await self._refresh_oauth_token(token)
         _LOGGER.warning(
-            "OAuth token expired with no refresh path for provider=%s connection=%s account=%s — "
+            "OAuth token expired with no refresh path (provider=%s connection=%s) — "
             "reconnect required",
             self._provider_id,
             self._local_connection_id,
-            self._account_id,
         )
         raise ProviderAuthError("OAuth token expired — please reconnect")
 
@@ -153,11 +150,10 @@ class OAuthTokenGetter:
     async def _refresh_oauth_token(self, token: OAuthToken) -> str:
         if not token.refresh_token:
             _LOGGER.warning(
-                "OAuth refresh requested without a refresh token for provider=%s "
-                "connection=%s account=%s — reconnect required",
+                "OAuth refresh requested without a refresh token "
+                "(provider=%s connection=%s) — reconnect required",
                 self._provider_id,
                 self._local_connection_id,
-                self._account_id,
             )
             raise ProviderAuthError("OAuth token expired — please reconnect")
         now = datetime.now(UTC)
@@ -188,18 +184,16 @@ class OAuthTokenGetter:
 
     def _log_refresh_success(self) -> None:
         _LOGGER.info(
-            "Refreshed OAuth token for provider=%s connection=%s account=%s",
+            "Refreshed OAuth token (provider=%s connection=%s)",
             self._provider_id,
             self._local_connection_id,
-            self._account_id,
         )
 
     def _log_refresh_failure(self, exc: Exception) -> None:
         _LOGGER.warning(
-            "OAuth token refresh failed for provider=%s connection=%s account=%s: %s",
+            "OAuth token refresh failed (provider=%s connection=%s): %s",
             self._provider_id,
             self._local_connection_id,
-            self._account_id,
             exc,
         )
 

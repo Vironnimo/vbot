@@ -32,6 +32,7 @@ from core.tools.tools import (
     tool_failure,
     tool_success,
 )
+from core.utils.logging import get_logger
 
 SKILL_MANAGE_TOOL_DESCRIPTION = (
     "Author skills: create, edit, patch, or delete a skill (and its "
@@ -50,6 +51,7 @@ _OWN_SCOPE = "own"
 _GLOBAL_SCOPE = "global"
 _SCOPES = (_OWN_SCOPE, _GLOBAL_SCOPE)
 _SCOPE_LOCATIONS = {_OWN_SCOPE: "your private home", _GLOBAL_SCOPE: "the global pool"}
+_LOGGER = get_logger("tools.skill_manage")
 
 SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -158,6 +160,13 @@ def make_skill_manage_handler(
             reload_skills()
         else:
             invalidate_agent_skills(context.agent_id)
+        _LOGGER.info(
+            "Skill mutated (skill=%s scope=%s operation=%s actor_agent=%s)",
+            result.name,
+            scope,
+            result.operation,
+            context.agent_id,
+        )
         return tool_success(
             {
                 "name": result.name,

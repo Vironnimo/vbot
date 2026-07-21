@@ -163,6 +163,7 @@ async def test_oauth_token_getter_refreshes_expired_token_with_exchange_url(
 async def test_oauth_token_getter_refresh_saves_under_the_same_account(
     tmp_path: Path,
     oauth_config: OAuthConfig,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A refresh for a named account loads and saves only that account's token."""
 
@@ -199,7 +200,8 @@ async def test_oauth_token_getter_refresh_saves_under_the_same_account(
         account_id="work",
     )
 
-    token = await getter()
+    with caplog.at_level(logging.INFO, logger="vbot.providers.token_getter"):
+        token = await getter()
 
     assert token == "fresh-work-token"
     stored_work = token_store.load(PROVIDER_ID, CONNECTION_ID, account_id="work")
@@ -208,6 +210,15 @@ async def test_oauth_token_getter_refresh_saves_under_the_same_account(
     stored_default = token_store.load(PROVIDER_ID, CONNECTION_ID)
     assert stored_default is not None
     assert stored_default.access_token == "default-copilot-token"
+    refresh_logs = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "vbot.providers.token_getter"
+    ]
+    assert refresh_logs == [
+        f"Refreshed OAuth token (provider={PROVIDER_ID} connection={CONNECTION_ID})"
+    ]
+    assert "work" not in " ".join(refresh_logs)
 
 
 @respx.mock

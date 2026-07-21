@@ -216,17 +216,25 @@ def _set_extension_secret(state: Any, params: JsonObject) -> JsonObject:
 
     try:
         runtime = state.runtime
+        previous_value = runtime.storage.load_environment().get(env_key)
         if value == "":
-            runtime.storage.remove_data_dir_credential(env_key)
+            changed = runtime.storage.remove_data_dir_credential(env_key)
             new_state = False
         else:
             runtime.storage.set_data_dir_credential(env_key, value)
+            changed = previous_value != value
             new_state = True
         runtime.reload_provider_credentials()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
-    _LOGGER.info("Extension %r secret %r %s", name, key, "set" if new_state else "cleared")
+    if changed:
+        _LOGGER.info(
+            "Extension secret %s (extension=%s field=%s)",
+            "saved" if new_state else "removed",
+            name,
+            key,
+        )
     return {"name": name, "key": key, "set": new_state}
 
 

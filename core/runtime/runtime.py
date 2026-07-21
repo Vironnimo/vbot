@@ -2197,13 +2197,30 @@ class Runtime:
                 except ModelDiscoveryError as error:
                     # Expected when the local server is not running — keep the
                     # last known catalog, never block or error the caller.
+                    previous_reachability = self._connection_reachability.get(connection_id)
                     self._connection_reachability[connection_id] = False
                     if self.logger is not None:
-                        self.logger.debug(
-                            f"Local catalog refresh failed for {connection_id}: {error}"
-                        )
+                        if previous_reachability is True:
+                            self.logger.warning(
+                                "Local provider connection became unreachable "
+                                "(provider=%s connection=%s): %s",
+                                provider_id,
+                                connection.id,
+                                error,
+                            )
+                        else:
+                            self.logger.debug(
+                                f"Local catalog refresh failed for {connection_id}: {error}"
+                            )
                     continue
+                previous_reachability = self._connection_reachability.get(connection_id)
                 self._connection_reachability[connection_id] = True
+                if previous_reachability is False and self.logger is not None:
+                    self.logger.info(
+                        "Local provider connection recovered (provider=%s connection=%s)",
+                        provider_id,
+                        connection.id,
+                    )
                 refreshed_any = True
 
             if refreshed_any:

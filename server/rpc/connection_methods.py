@@ -261,6 +261,9 @@ async def _set_connection_enabled(state: Any, params: JsonObject) -> JsonObject:
             )
         connection = _provider_connection(runtime, provider_id, connection_id)
         public_connection_id = compose_connection_id(provider_id, connection.id)
+        was_enabled = runtime.provider_credentials.is_connection_enabled(
+            provider_id, public_connection_id
+        )
         runtime.storage.set_provider_connection_enabled(public_connection_id, enabled)
 
         reachable: bool | None = None
@@ -268,6 +271,7 @@ async def _set_connection_enabled(state: Any, params: JsonObject) -> JsonObject:
             await runtime.maybe_refresh_local_catalogs(force=True)
             reachable = _connection_reachability(runtime, public_connection_id)
         configured = runtime.provider_credentials.has_credentials(provider_id, public_connection_id)
+        usable = runtime.provider_credentials.is_usable(provider_id, public_connection_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -281,6 +285,16 @@ async def _set_connection_enabled(state: Any, params: JsonObject) -> JsonObject:
     }
     if getattr(connection, "auto_refresh", False):
         response["reachable"] = reachable
+    if was_enabled != enabled:
+        _LOGGER.info(
+            "Provider connection %s (provider=%s connection=%s configured=%s usable=%s%s)",
+            "enabled" if enabled else "disabled",
+            provider_id,
+            connection.id,
+            configured,
+            usable,
+            f" reachable={reachable}" if reachable is not None else "",
+        )
     return response
 
 
@@ -357,13 +371,23 @@ def _set_provider_key(state: Any, params: JsonObject) -> JsonObject:
         account_id = _effective_account_id(provider_id, connection_id, account)
         public_connection_id = compose_connection_id(provider_id, connection.id)
         credential_key = derive_credential_key(connection.auth.credential_key, account_id)
+        previous_value = runtime.storage.load_environment().get(credential_key)
         runtime.storage.set_data_dir_credential(credential_key, value)
         runtime.reload_provider_credentials()
+        account_connection_id = compose_connection_id(provider_id, connection.id, account_id)
+        usable = runtime.provider_credentials.is_usable(provider_id, account_connection_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
     # A credential change immediately alters which models are selectable.
     publish_resource_changed(state, RESOURCE_KIND_PROVIDERS)
+    if previous_value != value:
+        _LOGGER.info(
+            "Provider credential saved (provider=%s connection=%s configured=true usable=%s)",
+            provider_id,
+            connection.id,
+            usable,
+        )
     return {
         "provider_id": provider_id,
         "connection_id": public_connection_id,
@@ -395,11 +419,23 @@ def _unset_provider_key(state: Any, params: JsonObject) -> JsonObject:
             provider_id,
             compose_connection_id(provider_id, connection.id, account_id),
         )
+        usable = runtime.provider_credentials.is_usable(
+            provider_id,
+            compose_connection_id(provider_id, connection.id, account_id),
+        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
     # A credential change immediately alters which models are selectable.
     publish_resource_changed(state, RESOURCE_KIND_PROVIDERS)
+    if removed:
+        _LOGGER.info(
+            "Provider credential removed (provider=%s connection=%s configured=%s usable=%s)",
+            provider_id,
+            connection.id,
+            configured,
+            usable,
+        )
     return {
         "provider_id": provider_id,
         "connection_id": public_connection_id,
@@ -419,14 +455,29 @@ async def _refresh_model_db(state: Any, params: JsonObject) -> JsonObject:
         if "provider_id" in params:
             provider_id = _required_string(params, "provider_id")
             result = await _refresh_provider_model_db(runtime, provider_id, resources_dir)
+            scope = provider_id
+            provider_count = 1
+            model_count = _model_count(result)
         else:
             result = await _refresh_global_model_db(runtime, resources_dir)
+            scope = "all"
+            provider_count = int(result.get("refreshed_count", 0))
+            model_count = int(result.get("model_count", 0))
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     # Both refresh paths reloaded the registry in place; tell open windows to
     # reload their model lists. Single tail emit so the per-provider early
     # return cannot skip the signal.
     publish_resource_changed(state, RESOURCE_KIND_MODELS)
+    errors = result.get("errors")
+    error_count = len(errors) if isinstance(errors, list) else 0
+    _LOGGER.info(
+        "Model database refreshed (scope=%s providers=%s models=%s errors=%s)",
+        scope,
+        provider_count,
+        model_count,
+        error_count,
+    )
     return result
 
 
@@ -508,10 +559,11 @@ def _disconnect_provider(state: Any, params: JsonObject) -> JsonObject:
     try:
         connection = _oauth_connection(state.runtime, provider_id, connection_id)
         account_id = _effective_account_id(provider_id, connection_id, account)
-        _runtime_token_store(state.runtime).delete(
-            provider_id, connection.id, account_id=account_id
-        )
+        token_store = _runtime_token_store(state.runtime)
+        had_token = token_store.load(provider_id, connection.id, account_id=account_id) is not None
         engine = getattr(state, "device_flow_engine", None)
+        flow_active = _device_flow_active(engine, provider_id, connection.id, account_id)
+        token_store.delete(provider_id, connection.id, account_id=account_id)
         if engine is not None:
             engine.cancel_flow(provider_id, connection.id, account_id)
     except Exception as exc:
@@ -519,6 +571,12 @@ def _disconnect_provider(state: Any, params: JsonObject) -> JsonObject:
 
     # Dropping a connection immediately alters which models are selectable.
     publish_resource_changed(state, RESOURCE_KIND_PROVIDERS)
+    if had_token or flow_active:
+        _LOGGER.info(
+            "OAuth provider disconnected (provider=%s connection=%s)",
+            provider_id,
+            connection.id,
+        )
     return {
         "provider_id": provider_id,
         "connection_id": compose_connection_id(provider_id, connection.id),

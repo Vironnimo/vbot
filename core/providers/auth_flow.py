@@ -79,10 +79,9 @@ class DeviceFlowEngine:
 
         session = self._device_session_from_response(oauth_config, response.json())
         _LOGGER.info(
-            "Started OAuth device flow for provider '%s' connection '%s' account '%s'",
+            "Started OAuth device flow (provider=%s connection=%s)",
             provider_id,
             local_connection_id,
-            account_id,
         )
         return session
 
@@ -120,32 +119,34 @@ class DeviceFlowEngine:
             raise
         except DeviceFlowTerminalError as error:
             _LOGGER.warning(
-                "OAuth device flow failed for provider '%s' connection '%s' account '%s': %s",
+                "OAuth device flow failed (provider=%s connection=%s): %s",
                 provider_id,
                 local_connection_id,
-                account_id,
                 error,
             )
             await self._notify_complete(on_complete, success=False)
         except ProviderError as error:
             _LOGGER.warning(
-                "OAuth device flow failed for provider '%s' connection '%s' account '%s': %s",
+                "OAuth device flow failed (provider=%s connection=%s): %s",
                 provider_id,
                 local_connection_id,
-                account_id,
                 error.__class__.__name__,
             )
             await self._notify_complete(on_complete, success=False)
         except Exception:
             _LOGGER.error(
-                "OAuth device flow crashed for provider '%s' connection '%s' account '%s'",
+                "OAuth device flow crashed (provider=%s connection=%s)",
                 provider_id,
                 local_connection_id,
-                account_id,
             )
             await self._notify_complete(on_complete, success=False)
             raise
         else:
+            _LOGGER.info(
+                "OAuth provider connected (provider=%s connection=%s)",
+                provider_id,
+                local_connection_id,
+            )
             await self._notify_complete(on_complete, success=True)
         finally:
             if self._active_flows.get(flow_key) is current_task:

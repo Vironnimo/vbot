@@ -74,21 +74,23 @@ def test_trace_count_logger_name() -> None:
 @pytest.mark.asyncio
 async def test_session_title_settings_round_trip_and_validate_model_connection(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     state = make_state(tmp_path, StubAdapter())
 
-    result = await dispatch_rpc(
-        state,
-        {
-            "method": "settings.update",
-            "params": {
-                "session_titles": {
-                    "enabled": True,
-                    "model": "openai/gpt-4.1-mini::api-key",
-                }
+    with caplog.at_level(logging.INFO, logger="vbot.server.rpc.settings"):
+        result = await dispatch_rpc(
+            state,
+            {
+                "method": "settings.update",
+                "params": {
+                    "session_titles": {
+                        "enabled": True,
+                        "model": "openai/gpt-4.1-mini::api-key",
+                    }
+                },
             },
-        },
-    )
+        )
 
     assert result["ok"] is True
     assert result["result"]["session_titles"] == {
@@ -96,6 +98,31 @@ async def test_session_title_settings_round_trip_and_validate_model_connection(
         "model": "openai/gpt-4.1-mini::api-key",
     }
     assert state.runtime.storage.load_session_title_settings() == result["result"]["session_titles"]
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "vbot.server.rpc.settings"
+    ]
+    assert messages == ["Settings updated (sections=session_titles)"]
+
+
+@pytest.mark.asyncio
+async def test_appearance_only_update_does_not_log(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    with caplog.at_level(logging.INFO, logger="vbot.server.rpc.settings"):
+        result = await dispatch_rpc(
+            state,
+            {
+                "method": "settings.update",
+                "params": {"appearance": {"language": "en", "chat_width": "wide"}},
+            },
+        )
+
+    assert result["ok"] is True
+    assert not [record for record in caplog.records if record.name == "vbot.server.rpc.settings"]
 
 
 # --- Extensions section: schema validation + restart-required split ----------

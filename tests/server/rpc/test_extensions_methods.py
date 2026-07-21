@@ -55,6 +55,9 @@ class _Storage:
     def load_extensions_settings(self) -> JsonObject:
         return {"disabled": [], "config": self._config}
 
+    def load_environment(self) -> dict[str, str]:
+        return dict(self.credentials)
+
     def set_data_dir_credential(self, key: str, value: str) -> None:
         self.credentials[key] = value
 
@@ -436,6 +439,31 @@ async def test_set_secret_does_not_log_the_value(caplog: pytest.LogCaptureFixtur
     )
 
     assert all("super-secret-value" not in record.getMessage() for record in caplog.records)
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "vbot.server.rpc.extensions"
+    ]
+    assert messages == ["Extension secret saved (extension=homeassistant field=token)"]
+
+
+@pytest.mark.asyncio
+async def test_set_secret_same_value_does_not_log(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    state = _state_with_records([_schemed_record()])
+    state.runtime.storage.credentials["HASS_TOKEN"] = "unchanged"
+    caplog.set_level(logging.INFO, logger="vbot.server.rpc.extensions")
+
+    await dispatch_rpc(
+        state,
+        {
+            "method": "extensions.set_secret",
+            "params": {"name": "homeassistant", "key": "token", "value": "unchanged"},
+        },
+    )
+
+    assert not [record for record in caplog.records if record.name == "vbot.server.rpc.extensions"]
 
 
 @pytest.mark.asyncio

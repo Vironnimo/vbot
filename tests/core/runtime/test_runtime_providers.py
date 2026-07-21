@@ -6,6 +6,7 @@ registries contain the expected data.
 """
 
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -1001,6 +1002,41 @@ async def test_maybe_refresh_records_reachability_on_success(
 
     # Assert
     assert runtime.connection_reachability("ollama:local") is True
+
+
+@pytest.mark.asyncio
+async def test_local_provider_health_logs_only_transitions(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import core.models.discovery as discovery_module
+    from core.models.discovery import ModelDiscoveryError
+
+    runtime.storage.set_provider_connection_enabled("ollama:local", True)
+    outcomes: list[Exception | None] = [
+        None,
+        ModelDiscoveryError("connection refused"),
+        ModelDiscoveryError("connection refused"),
+        None,
+    ]
+
+    async def _fake_refresh(provider, credential, resources_dir, **kwargs):
+        outcome = outcomes.pop(0)
+        if outcome is not None:
+            raise outcome
+        return {"provider_id": provider.id, "model_count": 1}
+
+    monkeypatch.setattr(discovery_module, "refresh_models", _fake_refresh)
+    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir: None)
+    logger = Mock()
+    runtime.logger = logger
+
+    for _ in range(4):
+        await runtime.maybe_refresh_local_catalogs(force=True)
+
+    assert logger.warning.call_count == 1
+    assert logger.info.call_count == 1
+    assert "became unreachable" in logger.warning.call_args.args[0]
+    assert "recovered" in logger.info.call_args.args[0]
 
 
 @pytest.mark.asyncio
