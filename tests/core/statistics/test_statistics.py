@@ -148,7 +148,8 @@ def test_empty_data_returns_zeroed_report(tmp_path: Path) -> None:
     assert report.overview.total_sessions == 0
     assert report.overview.total_runs == 0
     assert report.overview.last_activity is None
-    assert report.overview.messages_by_role["assistant"] == 0
+    assert report.overview.chat_messages_by_role["assistant"] == 0
+    assert report.overview.session_records_by_role["agent_takeover"] == 0
     assert report.usage.providers == []
     assert report.runs.duration.p95_ms is None
     assert report.errors.total_errors == 0
@@ -170,7 +171,7 @@ def test_agent_with_no_sessions_counts_agent_only(tmp_path: Path) -> None:
     assert report.overview.agents[0].sessions == 0
 
 
-def test_messages_by_role_and_last_activity(tmp_path: Path) -> None:
+def test_chat_messages_and_session_records_are_separate(tmp_path: Path) -> None:
     service, manager = _service(tmp_path, ["main"])
     _write_session(
         manager,
@@ -192,14 +193,19 @@ def test_messages_by_role_and_last_activity(tmp_path: Path) -> None:
 
     report = service.report()
 
-    assert report.overview.messages_by_role["user"] == 1
-    assert report.overview.messages_by_role["assistant"] == 1
-    assert report.overview.messages_by_role["note"] == 1
-    assert report.overview.messages_by_role["run_summary"] == 1
-    assert report.overview.total_messages == 4
+    assert report.overview.chat_messages_by_role == {"user": 1, "assistant": 1}
+    assert report.overview.total_chat_messages == 2
+    assert report.overview.session_records_by_role["user"] == 1
+    assert report.overview.session_records_by_role["assistant"] == 1
+    assert report.overview.session_records_by_role["note"] == 1
+    assert report.overview.session_records_by_role["run_summary"] == 1
+    assert report.overview.session_records_by_role["agent_takeover"] == 0
+    assert report.overview.total_session_records == 4
     assert report.overview.total_sessions == 1
     assert report.overview.last_activity is not None
     assert report.overview.agents[0].runs == 1
+    assert report.overview.agents[0].chat_messages == 2
+    assert report.overview.agents[0].session_records == 4
 
 
 def test_run_segmentation_status_and_tool_calls(tmp_path: Path) -> None:

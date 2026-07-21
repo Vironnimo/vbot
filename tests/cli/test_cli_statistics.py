@@ -222,8 +222,15 @@ def test_statistics_overview_formats_from_report(
             "total_sessions": 5,
             "total_runs": 12,
             "open_run_groups": 1,
-            "total_messages": 200,
-            "messages_by_role": {"user": 40, "assistant": 45},
+            "total_chat_messages": 85,
+            "chat_messages_by_role": {"user": 40, "assistant": 45},
+            "total_session_records": 200,
+            "session_records_by_role": {
+                "user": 40,
+                "assistant": 45,
+                "note": 55,
+                "run_summary": 60,
+            },
             "last_activity": "2026-07-01T10:00:00+00:00",
             "run_status": {"completed": 10, "failed": 1, "cancelled": 1},
             "average_run_duration_ms": 1234.5,
@@ -235,7 +242,8 @@ def test_statistics_overview_formats_from_report(
                     "agent_id": "assistant",
                     "sessions": 5,
                     "runs": 12,
-                    "messages": 200,
+                    "chat_messages": 85,
+                    "session_records": 200,
                     "errors": 2,
                     "last_activity": "2026-07-01T10:00:00+00:00",
                 }
@@ -253,9 +261,15 @@ def test_statistics_overview_formats_from_report(
     assert result.ok is True
     assert "overview:" in result.message
     assert "agents: 2" in result.message
+    assert "chat messages: 85" in result.message
+    assert "stored session records: 200" in result.message
+    assert "chat messages by role:\n  user: 40\n  assistant: 45" in result.message
+    assert "stored session records by role:" in result.message
+    assert "  note: 55" in result.message
+    assert "  run_summary: 60" in result.message
     assert "run status: completed=10 failed=1 cancelled=1" in result.message
     assert (
-        "  assistant: sessions=5 runs=12 messages=200 errors=2 "
+        "  assistant: sessions=5 runs=12 chat_messages=85 session_records=200 errors=2 "
         "last_activity=2026-07-01T10:00:00+00:00"
     ) in result.message
 

@@ -46,9 +46,13 @@ from core.tools import is_tool_result_envelope
 
 JsonObject = dict[str, Any]
 
-# Canonical message roles in stable display order. Reported even when zero so the
-# Overview tab never has to guess which roles exist.
-MESSAGE_ROLES = (
+# Human conversation roles stay separate from the full persisted Session record
+# vocabulary so the Overview never presents internal bookkeeping as Chat messages.
+CHAT_MESSAGE_ROLES = (
+    "user",
+    "assistant",
+)
+SESSION_RECORD_ROLES = (
     "system",
     "user",
     "assistant",
@@ -57,6 +61,7 @@ MESSAGE_ROLES = (
     "error",
     "compaction_checkpoint",
     "run_summary",
+    "agent_takeover",
 )
 
 UNKNOWN_MODEL_KEY = "unknown"
@@ -173,7 +178,8 @@ class AgentActivity:
     agent_id: str
     sessions: int
     runs: int
-    messages: int
+    chat_messages: int
+    session_records: int
     errors: int
     last_activity: str | None
 
@@ -191,8 +197,10 @@ class OverviewSection:
     total_sessions: int
     total_runs: int
     open_run_groups: int
-    total_messages: int
-    messages_by_role: dict[str, int]
+    total_chat_messages: int
+    chat_messages_by_role: dict[str, int]
+    total_session_records: int
+    session_records_by_role: dict[str, int]
     last_activity: str | None
     run_status: RunStatusCounts
     average_run_duration_ms: float | None
@@ -466,7 +474,8 @@ class _AgentAcc:
     agent_id: str
     sessions: int = 0
     runs: int = 0
-    messages: int = 0
+    chat_messages: int = 0
+    session_records: int = 0
     errors: int = 0
     last_activity: str | None = None
 
@@ -741,7 +750,9 @@ class _Aggregator:
 
         for message in in_window:
             self._role_counts[message.role] += 1
-            agent.messages += 1
+            agent.session_records += 1
+            if message.role in CHAT_MESSAGE_ROLES:
+                agent.chat_messages += 1
             cache_tracker.observe(message)
             if message.role == "run_summary":
                 self._record_run(agent, agent_id, session_id, current, message)
@@ -998,7 +1009,8 @@ class _Aggregator:
                 agent_id=accumulator.agent_id,
                 sessions=accumulator.sessions,
                 runs=accumulator.runs,
-                messages=accumulator.messages,
+                chat_messages=accumulator.chat_messages,
+                session_records=accumulator.session_records,
                 errors=accumulator.errors,
                 last_activity=accumulator.last_activity,
             )
@@ -1009,8 +1021,16 @@ class _Aggregator:
             total_sessions=self._total_sessions,
             total_runs=self._total_runs,
             open_run_groups=self._open_run_groups,
-            total_messages=int(sum(self._role_counts.values())),
-            messages_by_role={role: int(self._role_counts.get(role, 0)) for role in MESSAGE_ROLES},
+            total_chat_messages=int(
+                sum(self._role_counts.get(role, 0) for role in CHAT_MESSAGE_ROLES)
+            ),
+            chat_messages_by_role={
+                role: int(self._role_counts.get(role, 0)) for role in CHAT_MESSAGE_ROLES
+            },
+            total_session_records=int(sum(self._role_counts.values())),
+            session_records_by_role={
+                role: int(self._role_counts.get(role, 0)) for role in SESSION_RECORD_ROLES
+            },
             last_activity=self._last_activity,
             run_status=self._build_status(),
             average_run_duration_ms=_mean(durations),
