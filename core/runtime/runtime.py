@@ -34,6 +34,10 @@ from core.extensions import (
 )
 from core.memory import MemoryService
 from core.model_tasks import EmbeddingService, ImageService, SpeechService, TaskModelService
+from core.models.database import (
+    MODEL_DATABASE_DIRECTORY_NAME,
+    begin_runtime_model_database_refresh,
+)
 from core.models.models import Model, ModelRegistry
 from core.projects import AgentResolver, ProjectStore, build_agent_resolver
 from core.prompts import (
@@ -468,7 +472,10 @@ class Runtime:
             token_store=self._token_store,
             enabled_overrides_loader=self._provider_connection_enabled_overrides,
         )
-        self._models = ModelRegistry.load(resources_path)
+        self._models = ModelRegistry.load(
+            resources_path,
+            runtime_models_dir=self._storage.data_dir / MODEL_DATABASE_DIRECTORY_NAME,
+        )
         self._model_tasks = TaskModelService(
             self._providers,
             self._models,
@@ -2191,60 +2198,86 @@ class Runtime:
             # module load; importing it lazily here keeps runtime import time flat.
             from core.models.discovery import ModelDiscoveryError, refresh_models
 
-            resources_dir = self._resolve_resources_path()
+            system_resources_dir = self._resolve_resources_path()
+            database_refresh = None
+            refresh_resources_dir = None
             refreshed_any = False
-            for provider_id, provider, connection in targets:
-                connection_id = f"{provider_id}:{connection.id}"
-                try:
-                    credential_value = self.provider_credentials.get_credentials(
-                        provider_id, connection_id
-                    )
-                except ConfigError as error:
-                    if self.logger is not None:
-                        self.logger.debug(
-                            f"Skipping local catalog refresh for {connection_id}: {error}"
+            try:
+                database_refresh = begin_runtime_model_database_refresh(
+                    system_resources_dir,
+                    self.storage.data_dir,
+                )
+                refresh_resources_dir = database_refresh.resources_dir
+                for provider_id, provider, connection in targets:
+                    connection_id = f"{provider_id}:{connection.id}"
+                    try:
+                        credential_value = self.provider_credentials.get_credentials(
+                            provider_id, connection_id
                         )
-                    continue
-                try:
-                    await refresh_models(
-                        provider,
-                        credential_value,
-                        resources_dir,
-                        credential_connection=connection,
-                    )
-                except ModelDiscoveryError as error:
-                    # Expected when the local server is not running — keep the
-                    # last known catalog, never block or error the caller.
-                    previous_reachability = self._connection_reachability.get(connection_id)
-                    self._connection_reachability[connection_id] = False
-                    if self.logger is not None:
-                        if previous_reachability is True:
-                            self.logger.warning(
-                                "Local provider connection became unreachable "
-                                "(provider=%s connection=%s): %s",
-                                provider_id,
-                                connection.id,
-                                error,
-                            )
-                        else:
+                    except ConfigError as error:
+                        if self.logger is not None:
                             self.logger.debug(
-                                f"Local catalog refresh failed for {connection_id}: {error}"
+                                f"Skipping local catalog refresh for {connection_id}: {error}"
                             )
-                    continue
-                previous_reachability = self._connection_reachability.get(connection_id)
-                self._connection_reachability[connection_id] = True
-                if previous_reachability is False and self.logger is not None:
-                    self.logger.info(
-                        "Local provider connection recovered (provider=%s connection=%s)",
-                        provider_id,
-                        connection.id,
-                    )
-                refreshed_any = True
+                        continue
+                    try:
+                        await refresh_models(
+                            provider,
+                            credential_value,
+                            refresh_resources_dir,
+                            credential_connection=connection,
+                        )
+                    except ModelDiscoveryError as error:
+                        # Expected when the local server is not running — keep the
+                        # last known catalog, never block or error the caller.
+                        previous_reachability = self._connection_reachability.get(connection_id)
+                        self._connection_reachability[connection_id] = False
+                        if self.logger is not None:
+                            if previous_reachability is True:
+                                self.logger.warning(
+                                    "Local provider connection became unreachable "
+                                    "(provider=%s connection=%s): %s",
+                                    provider_id,
+                                    connection.id,
+                                    error,
+                                )
+                            else:
+                                self.logger.debug(
+                                    f"Local catalog refresh failed for {connection_id}: {error}"
+                                )
+                        continue
+                    previous_reachability = self._connection_reachability.get(connection_id)
+                    self._connection_reachability[connection_id] = True
+                    if previous_reachability is False and self.logger is not None:
+                        self.logger.info(
+                            "Local provider connection recovered (provider=%s connection=%s)",
+                            provider_id,
+                            connection.id,
+                        )
+                    refreshed_any = True
 
-            if refreshed_any:
-                # In-place reload so services holding the registry instance
-                # (task targets, status, recall) see the fresh catalog.
-                self.models.reload(resources_dir)
+                if refreshed_any:
+                    ModelRegistry.invalidate(refresh_resources_dir)
+                    ModelRegistry.load(refresh_resources_dir)
+                    ModelRegistry.invalidate(refresh_resources_dir)
+                    database_refresh.commit()
+                    # In-place reload so services holding the registry instance
+                    # (task targets, status, recall) see the fresh catalog.
+                    self.models.reload(
+                        system_resources_dir,
+                        runtime_models_dir=self.storage.data_dir / MODEL_DATABASE_DIRECTORY_NAME,
+                    )
+            except Exception as error:
+                # This background convenience path is deliberately fail-soft:
+                # an unpublished staging failure must not disturb runtime or the
+                # last complete Model DB.
+                if self.logger is not None:
+                    self.logger.warning("Local catalog refresh could not be published: %s", error)
+            finally:
+                if refresh_resources_dir is not None:
+                    ModelRegistry.invalidate(refresh_resources_dir)
+                if database_refresh is not None:
+                    database_refresh.discard()
 
     def connection_reachability(self, connection_id: str) -> bool | None:
         """Return the last catalog-probe outcome for one auto-refresh connection.

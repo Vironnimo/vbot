@@ -25,6 +25,10 @@ from core.models.assembly import (
     assemble_provider_model,
     load_canonical_layer,
 )
+from core.models.database import (
+    MODEL_DATABASE_MANIFEST_FILE_NAME,
+    select_model_database_dir,
+)
 
 if TYPE_CHECKING:
     from core.models.query import ModelQuery
@@ -37,16 +41,23 @@ if TYPE_CHECKING:
 # so the offline validator shares one definition of "what is a provider file".
 RAW_FILE_SUFFIX = ".raw.json"
 OVERRIDES_FILE_SUFFIX = ".overrides.json"
-_NON_PROVIDER_FILE_NAMES = frozenset({CANONICAL_FILE_NAME, CANONICAL_OVERRIDES_FILE_NAME})
+_NON_PROVIDER_FILE_NAMES = frozenset(
+    {
+        CANONICAL_FILE_NAME,
+        CANONICAL_OVERRIDES_FILE_NAME,
+        MODEL_DATABASE_MANIFEST_FILE_NAME,
+    }
+)
 
 
 def is_provider_file(file_name: str) -> bool:
     """Return whether ``file_name`` is a provider-layer ``<provider>.json``.
 
     Excludes the inspection ``*.raw.json`` dump, the ``*.overrides.json`` hand
-    layer (applied during assembly, not its own provider file), and the canonical
-    ``models.json`` / ``models.overrides.json`` (loaded separately). Shared by the
-    registry loader and the offline validator so the classification can't drift.
+    layer (applied during assembly, not its own provider file), the database
+    ``manifest.json``, and the canonical ``models.json`` /
+    ``models.overrides.json`` (loaded separately). Shared by the registry loader
+    and the offline validator so the classification can't drift.
     """
 
     if file_name.endswith(RAW_FILE_SUFFIX) or file_name.endswith(OVERRIDES_FILE_SUFFIX):
@@ -307,17 +318,23 @@ class ModelRegistry:
     effective model at load time from the canonical, provider, and override
     layers (see :mod:`core.models.assembly`); ``get()`` / ``list_for_provider()``
     / ``query()`` read the assembled result. Caches after first load —
-    subsequent calls with the same ``resources_dir`` return the cached instance
-    until ``invalidate()`` clears it (e.g. after a refresh writes new layer data).
+    subsequent calls with the same system/runtime root pair return the cached
+    instance until ``invalidate()`` clears it (e.g. after a refresh publishes a
+    new complete database).
     """
 
-    _cache: ClassVar[dict[Path, ModelRegistry]] = {}
+    _cache: ClassVar[dict[tuple[Path, Path | None], ModelRegistry]] = {}
 
     def __init__(self, models: dict[tuple[str, str], Model]) -> None:
         self._models = models
 
     @classmethod
-    def load(cls, resources_dir: Path) -> ModelRegistry:
+    def load(
+        cls,
+        resources_dir: Path,
+        *,
+        runtime_models_dir: Path | None = None,
+    ) -> ModelRegistry:
         """Assemble the registry from the canonical, provider, and override layers.
 
         Each effective model is built at load time from up to three layers — the
@@ -328,21 +345,33 @@ class ModelRegistry:
         data alone. No network and no key are involved.
 
         Args:
-            resources_dir: Path to the resources directory containing a
-                ``models/`` subdirectory with the layer JSON files.
+            resources_dir: Path to the system resources directory containing
+                the bundled complete ``models/`` database.
+            runtime_models_dir: Optional complete data-dir Model DB. When it
+                has a newer compatible refresh manifest than the system DB,
+                this whole root is loaded instead; files are never mixed.
 
         Returns:
             A populated ModelRegistry instance.
         """
         resolved = resources_dir.resolve()
-        if resolved in cls._cache:
-            return cls._cache[resolved]
+        resolved_runtime = runtime_models_dir.resolve() if runtime_models_dir is not None else None
+        cache_key = (resolved, resolved_runtime)
+        if cache_key in cls._cache:
+            return cls._cache[cache_key]
 
-        registry = cls(cls._assemble_models(resolved))
-        cls._cache[resolved] = registry
+        models_dir = select_model_database_dir(resolved, resolved_runtime)
+        registry = cls(cls._assemble_models(models_dir))
+        registry._active_models_dir = models_dir
+        cls._cache[cache_key] = registry
         return registry
 
-    def reload(self, resources_dir: Path) -> None:
+    def reload(
+        self,
+        resources_dir: Path,
+        *,
+        runtime_models_dir: Path | None = None,
+    ) -> None:
         """Re-assemble the registry in place from disk, keeping object identity.
 
         ``load`` rebinds nothing here: refresh writes new layer files, then
@@ -354,18 +383,21 @@ class ModelRegistry:
         """
 
         resolved = resources_dir.resolve()
-        self._models = self._assemble_models(resolved)
-        type(self)._cache[resolved] = self
+        resolved_runtime = runtime_models_dir.resolve() if runtime_models_dir is not None else None
+        models_dir = select_model_database_dir(resolved, resolved_runtime)
+        self._models = self._assemble_models(models_dir)
+        self._active_models_dir = models_dir
+        type(self)._cache[(resolved, resolved_runtime)] = self
 
     @classmethod
-    def _assemble_models(cls, resolved: Path) -> dict[tuple[str, str], Model]:
+    def _assemble_models(cls, models_dir: Path) -> dict[tuple[str, str], Model]:
         """Assemble every effective model from the on-disk layers (no cache).
 
-        ``resolved`` must already be a resolved path. Shared by ``load`` (first
-        build) and ``reload`` (in-place refresh) so both paths assemble identically.
+        ``models_dir`` is one already-selected complete database root. Shared
+        by ``load`` and ``reload`` so both paths assemble identically without
+        combining system and runtime files.
         """
 
-        models_dir = resolved / "models"
         canonical_layer = load_canonical_layer(models_dir)
         models: dict[tuple[str, str], Model] = {}
 
@@ -421,10 +453,22 @@ class ModelRegistry:
         return override_models
 
     @classmethod
-    def invalidate(cls, resources_dir: Path) -> None:
-        """Remove the cached registry for ``resources_dir`` if present."""
+    def invalidate(
+        cls,
+        resources_dir: Path,
+        *,
+        runtime_models_dir: Path | None = None,
+    ) -> None:
+        """Remove cached registries that use the supplied system/runtime root."""
 
-        cls._cache.pop(resources_dir.resolve(), None)
+        resolved = resources_dir.resolve()
+        if runtime_models_dir is not None:
+            cls._cache.pop((resolved, runtime_models_dir.resolve()), None)
+            return
+        for cache_key in list(cls._cache):
+            system_root, cached_runtime = cache_key
+            if system_root == resolved or cached_runtime in {resolved, resolved / "models"}:
+                cls._cache.pop(cache_key, None)
 
     def get(self, provider_id: str, model_id: str) -> Model:
         """Look up a model by provider ID and model ID.

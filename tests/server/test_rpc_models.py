@@ -9,6 +9,11 @@ from typing import Any
 import pytest
 
 from core.models import Capabilities, Model, ModelQuery, ReasoningCapabilities
+from core.models.database import (
+    MODEL_DATABASE_SOURCE_RUNTIME,
+    MODEL_DATABASE_SOURCE_SYSTEM,
+    read_model_database_manifest,
+)
 from core.models.discovery import ModelDiscoveryError
 from server.rpc import (
     connection_methods,
@@ -507,6 +512,92 @@ async def test_model_refresh_db_refreshes_provider_models_and_runtime_registry(
     assert FAKE_REFRESH_MODEL_CALLS == ["openrouter-key"]
     refreshed_model = state.runtime.models.get("openrouter", "fresh-model")
     assert refreshed_model.name == "Fresh Model"
+
+
+@pytest.mark.asyncio
+async def test_normal_model_refresh_copies_complete_system_db_to_runtime_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+    system_models_dir = state.runtime.resources_dir / "models"
+    system_models_dir.mkdir(parents=True)
+    override_text = '{"models": {"fresh-model": {"name": "Manual"}}}\n'
+    system_models_dir.joinpath("openrouter.overrides.json").write_text(
+        override_text,
+        encoding="utf-8",
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "model.refresh_db", "params": {"provider_id": "openrouter"}},
+    )
+
+    assert response["ok"] is True, response
+    runtime_models_dir = tmp_path / "models"
+    assert (
+        runtime_models_dir.joinpath("openrouter.overrides.json").read_text(encoding="utf-8")
+        == override_text
+    )
+    assert runtime_models_dir.joinpath("openrouter.json").is_file()
+    assert not system_models_dir.joinpath("openrouter.json").exists()
+    manifest = read_model_database_manifest(runtime_models_dir)
+    assert manifest is not None
+    assert manifest.source == MODEL_DATABASE_SOURCE_RUNTIME
+
+
+@pytest.mark.asyncio
+async def test_explicit_system_refresh_writes_only_serving_checkout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.setattr(connection_methods, "refresh_models", fake_refresh_models)
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "model.refresh_db",
+            "params": {
+                "provider_id": "openrouter",
+                "target": "system",
+                "expected_resources_dir": str(state.runtime.resources_dir),
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    system_models_dir = state.runtime.resources_dir / "models"
+    assert system_models_dir.joinpath("openrouter.json").is_file()
+    assert not (tmp_path / "models").exists()
+    manifest = read_model_database_manifest(system_models_dir)
+    assert manifest is not None
+    assert manifest.source == MODEL_DATABASE_SOURCE_SYSTEM
+
+
+@pytest.mark.asyncio
+async def test_system_refresh_rejects_a_different_serving_checkout(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "model.refresh_db",
+            "params": {
+                "target": "system",
+                "expected_resources_dir": str(tmp_path / "other-resources"),
+            },
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert "serving checkout does not match" in response["error"]["message"]
 
 
 @pytest.mark.asyncio

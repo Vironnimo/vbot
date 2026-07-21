@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 from cli.formatting import string_or_default as _string_or_default
@@ -26,12 +27,22 @@ def model_list(
     return CommandResult(ok=True, message=_format_model_rows(models), instance=instance)
 
 
-def model_refresh(instance: ServerInstance, provider_id: str | None = None) -> CommandResult:
+def model_refresh(
+    instance: ServerInstance,
+    provider_id: str | None = None,
+    *,
+    target: str | None = None,
+    expected_resources_dir: Path | None = None,
+) -> CommandResult:
     """Refresh model database via `model.refresh_db` RPC."""
 
     params: dict[str, Any] = {}
     if provider_id is not None:
         params["provider_id"] = provider_id
+    if target is not None:
+        params["target"] = target
+    if expected_resources_dir is not None:
+        params["expected_resources_dir"] = str(expected_resources_dir.resolve())
     payload = _rpc_call(instance, "model.refresh_db", params)
     if not payload.ok:
         return payload.to_command_result()

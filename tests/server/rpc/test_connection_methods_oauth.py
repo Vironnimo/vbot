@@ -144,7 +144,7 @@ class StubModelRegistry:
     def list_for_provider(self, _provider_id: str) -> list[Any]:
         return []
 
-    def reload(self, _resources_dir: Any) -> None:
+    def reload(self, _resources_dir: Any, **_kwargs: Any) -> None:
         # refresh_db reloads the registry in place after writing layer files; the
         # stub has nothing to re-assemble, so this is a no-op.
         pass
@@ -218,6 +218,7 @@ def make_state(tmp_path: Any, provider: ProviderConfig) -> SimpleNamespace:
             provider_credentials=StubProviderCredentials(
                 {f"{provider.id}:{connection.id}" for connection in provider.connections}
             ),
+            storage=SimpleNamespace(data_dir=tmp_path),
             models=StubModelRegistry(),
             _resolve_resources_path=lambda: tmp_path / "resources",
         ),

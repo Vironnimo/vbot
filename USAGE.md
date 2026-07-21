@@ -208,6 +208,7 @@ The normal runtime data directory is `~/.vbot`. Select another target with `--da
 - `attachments/`, `speech/`, and `images/` — uploaded and generated artifacts
 - `recall/` — disposable Recall indexes
 - `oauth/` — OAuth Account tokens
+- `models/` — the complete runtime Model DB after the first successful `model refresh`, including generated catalogs and their matching Overrides
 - `prompts/` — persisted System Prompt layout and overrides
 - `debug/` and `logs/` — Debug traces and daily Logs
 - `temp/bash/` and `temp/subagents/` — retained Bash output and Sub-Agent activity files

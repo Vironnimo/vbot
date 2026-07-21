@@ -4,7 +4,19 @@ How to cut a tagged GitHub release of vBot. Releases are how end users install: 
 
 ## Steps
 
-### 1. Bump the version
+### 1. Refresh the tracked Model DB
+
+With this branch checkout's development server running and the required Provider credentials configured, refresh the complete tracked release database and review the result before committing:
+
+```bash
+python scripts/refresh_model_db.py
+python scripts/validate_model_db.py --resources resources
+git status --short resources/models
+```
+
+The maintainer script explicitly targets this checkout's `resources/models/` and the server rejects the request if it is serving a different checkout. Normal `vbot model refresh` is not a release command: it writes the complete runtime database under the server data directory and intentionally leaves tracked files unchanged. Resolve any reported Provider failures before continuing.
+
+### 2. Bump the version
 
 The version lives in exactly **one** place: `pyproject.toml` → `version`. Bump it (semver):
 
@@ -12,19 +24,19 @@ The version lives in exactly **one** place: `pyproject.toml` → `version`. Bump
 version = "X.Y.Z"
 ```
 
-### 2. Do not run local quality gates
+### 3. Do not run local quality gates
 
 Release tasks are explicitly exempt from the repository's normal local quality-gate passes. Do not run `scripts/quality.py` or `scripts/quality-frontend.py` before a release: the dispatched GitHub Release workflow calls the complete reusable CI workflow against the pushed `main` commit and blocks tag and Release creation until every required Backend, Frontend, and Installer job passes. If that CI fails, fix the reported problem on `main`, push it, and dispatch the Release workflow again.
 
-### 3. Commit and push
+### 4. Commit and push
 
 ```bash
-git add pyproject.toml
+git add pyproject.toml resources/models
 git commit -m "chore(release): bump version to X.Y.Z"
 git push origin main
 ```
 
-### 4. Dispatch the gated release workflow
+### 5. Dispatch the gated release workflow
 
 Dispatch `.github/workflows/release.yml` from `main`. Pass the version without the leading `v`:
 
@@ -45,7 +57,7 @@ gh workflow run release-smoke.yml --ref main -f tag=vX.Y.Z
 The workflow validates that `X.Y.Z` is SemVer, equals `pyproject.toml` → `version`, and does not already exist as a tag. It creates auto-generated notes; never replace them with hand-written notes. The house style is the single auto-generated line GitHub produces:
 `**Full Changelog**: https://github.com/Vironnimo/vbot/compare/<prev>...vX.Y.Z` (the previous tag is selected automatically).
 
-### 5. Verify the workflow ran and the asset attached
+### 6. Verify the workflow ran and the asset attached
 
 Wait for the dispatched workflow and confirm the release and asset landed. The Installer and `vbot update` fail without the asset:
 
@@ -70,6 +82,6 @@ gh api repos/Vironnimo/vbot/releases/generate-notes \
 ## Gotchas
 
 - **Notes**: only the auto-generated Full Changelog line — no custom prose. A custom `--notes` replaces it and breaks the convention every prior release follows.
-- **Asset is mandatory**: a release without `webui-dist.tar.gz` cannot be installed by the public Installer or reached by `vbot update`. Never skip step 5.
+- **Asset is mandatory**: a release without `webui-dist.tar.gz` cannot be installed by the public Installer or reached by `vbot update`. Never skip step 6.
 - **Tag = version**: `vX.Y.Z` must equal the `pyproject.toml` version, with a leading `v`.
 - **Publication is last**: never create the tag or GitHub Release manually. The workflow publishes both only after the full CI gate and WebUI packaging succeed.

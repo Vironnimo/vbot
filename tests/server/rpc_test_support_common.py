@@ -500,7 +500,12 @@ class StubModels:
                     matches.append((provider_id, model))
         return sorted(matches, key=lambda item: (item[0], item[1].model_id))
 
-    def reload(self, resources_dir: Path) -> None:
+    def reload(
+        self,
+        resources_dir: Path,
+        *,
+        runtime_models_dir: Path | None = None,
+    ) -> None:
         """Mirror ``ModelRegistry.reload``: swap contents in place from disk.
 
         Refresh writes new ``<provider>.json`` layer files; an in-place swap keeps
@@ -509,8 +514,8 @@ class StubModels:
         files are assembled through the real registry and regrouped here.
         """
 
-        ModelRegistry.invalidate(resources_dir)
-        loaded = ModelRegistry.load(resources_dir)
+        ModelRegistry.invalidate(resources_dir, runtime_models_dir=runtime_models_dir)
+        loaded = ModelRegistry.load(resources_dir, runtime_models_dir=runtime_models_dir)
         regrouped: dict[str, list[Model]] = {}
         for provider_id, model in loaded.query(ModelQuery.from_filters({})):
             regrouped.setdefault(provider_id, []).append(model)
