@@ -152,21 +152,19 @@ remove_systemd_unit() {
 
 # --- managed installs --------------------------------------------------------
 
-stop_server_best_effort() {
+stop_vbot_server() {
     local vbot_path="${PROJECT_ROOT}/.venv/bin/vbot"
     if [ ! -x "$vbot_path" ]; then
         vbot_path="$(command -v vbot 2>/dev/null || true)"
     fi
     if [ -z "$vbot_path" ]; then
-        if [ "$REMOVE_DATA" -eq 1 ]; then
-            fail "Could not locate vbot to stop the server before deleting data."
-        fi
-        return
+        fail "Could not locate vbot to stop the server before removing the application."
     fi
     if [ -n "$SERVER_HOST" ] && [ "$SERVER_PORT" -ne 0 ]; then
         if ! "$vbot_path" server stop --host "$SERVER_HOST" --port "$SERVER_PORT" --data-dir "$DATA_DIR" >/dev/null 2>&1; then
-            [ "$REMOVE_DATA" -eq 0 ] || fail "vbot server stop failed; data was not deleted."
+            fail "Could not stop the vBot server; no files were removed."
         fi
+        echo "Verified that the vBot server target is stopped."
         return
     fi
 
@@ -197,25 +195,26 @@ completed = subprocess.run(
 )
 raise SystemExit(completed.returncode)
 PY
-        if [ "$stop_status" -ne 0 ] && [ "$REMOVE_DATA" -eq 1 ]; then
-            fail "vbot server stop failed; data was not deleted."
+        if [ "$stop_status" -ne 0 ]; then
+            fail "Could not stop the vBot server; no files were removed."
         fi
     else
         if ! "$vbot_path" server stop --data-dir "$DATA_DIR" >/dev/null 2>&1; then
-            [ "$REMOVE_DATA" -eq 0 ] || fail "vbot server stop failed; data was not deleted."
+            fail "Could not stop the vBot server; no files were removed."
         fi
     fi
+    echo "Verified that the vBot server target is stopped."
 }
 
 managed_cleanup() {
+    # Removing an active environment is unsafe. The stop is mandatory and runs
+    # before any launcher, unit, package, or application file is removed.
+    stop_vbot_server
+
     if [ -f "$UNIT_FILE" ] || [ -L "$UNIT_WANTS_LINK" ]; then
         step "Removing systemd user unit '${SERVICE_NAME}'"
         remove_systemd_unit
     fi
-
-    # Stop any server still holding files in the venv (no-op if already stopped
-    # above or never running).
-    stop_server_best_effort
 
     # Remove the ~/.local/bin/vbot launcher only if it points into this install.
     local launcher="${HOME}/.local/bin/vbot"
@@ -276,9 +275,7 @@ managed_venv_uninstall() {
 # --- manual/editable install: uninstall the pip package -----------------------
 
 manual_uninstall() {
-    if [ "$REMOVE_DATA" -eq 1 ]; then
-        stop_server_best_effort
-    fi
+    stop_vbot_server
     if command -v python3 >/dev/null 2>&1; then
         PYTHON="python3"
     elif command -v python >/dev/null 2>&1; then

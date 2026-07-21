@@ -287,36 +287,32 @@ function Get-RecordedServerStopArguments {
         }
     }
     catch {
-        Write-Warning "Could not read the recorded server target; stopping the default instance instead: $($_.Exception.Message)"
+        throw "Could not read the recorded server target; no files were removed: $($_.Exception.Message)"
     }
     return $stopArguments
 }
 
-function Stop-VbotServerBestEffort {
+function Stop-VbotServer {
     $vbotCommand = Join-Path $ProjectRoot ".venv\Scripts\vbot.exe"
     if (-not (Test-Path -LiteralPath $vbotCommand -PathType Leaf)) {
         $resolved = Get-Command vbot -ErrorAction SilentlyContinue
         if ($null -eq $resolved) {
-            if ($RemoveData) {
-                throw "Could not locate vbot to stop the server before deleting data."
-            }
-            return
+            throw "Could not locate vbot to stop the server before removing the application."
         }
         $vbotCommand = $resolved.Source
     }
-    try {
-        $stopArguments = Get-RecordedServerStopArguments
-        & $vbotCommand @stopArguments *> $null
-        if ($LASTEXITCODE -ne 0 -and $RemoveData) {
-            throw "vbot server stop failed with exit code $LASTEXITCODE."
+
+    $stopArguments = Get-RecordedServerStopArguments
+    $stopOutput = @(& $vbotCommand @stopArguments 2>&1)
+    $stopExitCode = $LASTEXITCODE
+    if ($stopExitCode -ne 0) {
+        $detail = ($stopOutput | Out-String).Trim()
+        if ([string]::IsNullOrWhiteSpace($detail)) {
+            $detail = "exit code $stopExitCode"
         }
+        throw "Could not stop the vBot server; no files were removed: $detail"
     }
-    catch {
-        if ($RemoveData) {
-            throw
-        }
-        # Application-only removal keeps the historical best-effort stop behavior.
-    }
+    Write-Host "Verified that the vBot server target is stopped."
 }
 
 function Invoke-ManagedUninstall {
@@ -339,6 +335,10 @@ function Invoke-ManagedUninstall {
         Write-Step "Removing managed install at $ProjectRoot"
     }
 
+    # The server owns files inside the environment on Windows. Stopping it is a
+    # mandatory precondition: never report success for a partially removed app.
+    Stop-VbotServer
+
     if (Test-RunningOnWindows) {
         try {
             $task = Get-VbotAutostartTask
@@ -357,9 +357,6 @@ function Invoke-ManagedUninstall {
             }
         }
     }
-
-    # Stop a running server so the venv unlocks before removal (best-effort).
-    Stop-VbotServerBestEffort
 
     # The shim itself lives inside ProjectRoot; drop its PATH entry.
     Remove-FromUserPath -PathToRemove (Join-Path $ProjectRoot "bin")
@@ -403,9 +400,7 @@ function Invoke-ManagedUninstall {
 }
 
 function Invoke-ManualUninstall {
-    if ($RemoveData) {
-        Stop-VbotServerBestEffort
-    }
+    Stop-VbotServer
     Write-Step "Uninstalling pip package: $PackageName"
     $python = Resolve-UninstallPython
     Invoke-External $python @("-m", "pip", "uninstall", "-y", $PackageName)

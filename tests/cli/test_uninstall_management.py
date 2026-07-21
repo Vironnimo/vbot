@@ -75,6 +75,8 @@ def test_windows_launches_elevated_helper_outside_install(tmp_path: Path) -> Non
 
     assert result.ok
     assert "elevated PowerShell window" in result.message
+    assert str(root) in result.message
+    assert "not that removal completed" in result.message
     assert calls[0][1] == tmp_path
     command = calls[0][0]
     assert command[0].endswith("powershell.exe")
@@ -324,16 +326,25 @@ def test_app_only_preserves_data_and_all_forwards_data_to_launcher(tmp_path: Pat
     root = _install_root(tmp_path)
     instance = _instance(tmp_path)
     launches: list[dict[str, object]] = []
+    calls: list[str] = []
 
     def launcher(**kwargs: object) -> UninstallResult:
+        calls.append("launch")
         launches.append(kwargs)
         return UninstallResult(ok=True, message="launched")
+
+    def stop(_instance: ServerInstance) -> CommandResult:
+        calls.append("stop")
+        return _command_result(instance, message="stopped")
 
     app_result = run_uninstall(
         mode=UninstallMode.APP_ONLY,
         assume_yes=True,
         root=root,
         resolve=lambda **_kwargs: instance,
+        probe=lambda _instance: HealthProbeResult(reachable=True, is_vbot=True),
+        stop=stop,
+        systemd_managed=lambda _name: False,
         launcher=launcher,
     )
     all_result = run_uninstall(
@@ -341,18 +352,81 @@ def test_app_only_preserves_data_and_all_forwards_data_to_launcher(tmp_path: Pat
         assume_yes=True,
         root=root,
         resolve=lambda **_kwargs: instance,
+        probe=lambda _instance: HealthProbeResult(reachable=True, is_vbot=True),
+        stop=stop,
+        systemd_managed=lambda _name: False,
         launcher=launcher,
         working_directory=tmp_path,
         home_directory=tmp_path,
     )
 
     assert app_result.ok and all_result.ok
+    assert calls == ["stop", "launch", "stop", "launch"]
     assert launches[0]["remove_data"] is False
     assert launches[0]["data_directory"] == instance.data_dir
     assert launches[1]["remove_data"] is True
     assert launches[1]["data_directory"] == instance.data_dir
     assert launches[1]["server_host"] == instance.host
     assert launches[1]["server_port"] == instance.port
+
+
+def test_application_removal_aborts_before_launcher_when_server_stop_fails(
+    tmp_path: Path,
+) -> None:
+    root = _install_root(tmp_path)
+    instance = _instance(tmp_path)
+    launched = False
+
+    def launcher(**_kwargs: object) -> UninstallResult:
+        nonlocal launched
+        launched = True
+        return UninstallResult(ok=True, message="launched")
+
+    result = run_uninstall(
+        mode=UninstallMode.APP_ONLY,
+        assume_yes=True,
+        root=root,
+        resolve=lambda **_kwargs: instance,
+        probe=lambda _instance: HealthProbeResult(reachable=True, is_vbot=True),
+        stop=lambda _instance: _command_result(instance, ok=False, message="locked"),
+        systemd_managed=lambda _name: False,
+        launcher=launcher,
+    )
+
+    assert not result.ok
+    assert "server could not be stopped: locked" in result.message
+    assert f"application directory preserved: {root}" in result.message
+    assert not launched
+
+
+def test_application_removal_stops_systemd_owned_server_before_launcher(
+    tmp_path: Path,
+) -> None:
+    root = _install_root(tmp_path)
+    instance = _instance(tmp_path)
+    calls: list[str] = []
+
+    def launcher(**_kwargs: object) -> UninstallResult:
+        calls.append("launch")
+        return UninstallResult(ok=True, message="launched")
+
+    result = run_uninstall(
+        mode=UninstallMode.APP_ONLY,
+        assume_yes=True,
+        root=root,
+        service_name="custom-vbot",
+        resolve=lambda **_kwargs: instance,
+        probe=lambda _instance: HealthProbeResult(reachable=True, is_vbot=True),
+        stop=lambda _instance: _record_command(calls, "unexpected-stop", instance),
+        systemd_managed=lambda name: name == "custom-vbot",
+        stop_systemd=lambda _instance, name: _record_command(
+            calls, f"systemd-stop:{name}", instance
+        ),
+        launcher=launcher,
+    )
+
+    assert result.ok
+    assert calls == ["systemd-stop:custom-vbot", "launch"]
 
 
 def test_uninstall_requires_explicit_mode_and_confirmation_without_tty(tmp_path: Path) -> None:
@@ -407,6 +481,8 @@ def test_uninstall_defaults_to_recorded_installation_target(tmp_path: Path) -> N
         assume_yes=True,
         root=root,
         resolve=resolve,
+        probe=lambda _instance: HealthProbeResult(reachable=False, is_vbot=False),
+        systemd_managed=lambda _name: False,
         launcher=lambda **_kwargs: UninstallResult(ok=True, message="launched"),
     )
 
