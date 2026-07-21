@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import os
+import shlex
 import shutil
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -204,6 +207,7 @@ def test_server_install_manifest_records_lifecycle_target(script_name: str) -> N
 def test_managed_uninstaller_uses_recorded_lifecycle_target(script_name: str) -> None:
     script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
 
+    assert "python_executable" in script
     assert "server_host" in script
     assert "server_port" in script
     assert "server_data_directory" in script
@@ -272,6 +276,65 @@ def test_linux_managed_uninstaller_preserves_app_when_server_stop_fails(
 
     assert result.returncode != 0
     assert "no files were removed" in result.stderr
+    assert install_root.is_dir()
+
+
+def test_linux_uninstaller_resolves_vbot_from_recorded_python_environment(
+    tmp_path: Path,
+) -> None:
+    if os.name != "posix":
+        pytest.skip("POSIX launcher integration requires a POSIX host")
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is unavailable")
+
+    install_root = tmp_path / "install"
+    scripts_dir = install_root / "scripts"
+    scripts_dir.mkdir(parents=True)
+    shutil.copy2(PROJECT_ROOT / "scripts" / "uninstall.sh", scripts_dir / "uninstall.sh")
+    (install_root / ".vbot-install-venv").write_text("managed\n", encoding="utf-8")
+
+    recorded_bin = tmp_path / "recorded-environment" / "bin"
+    recorded_bin.mkdir(parents=True)
+    recorded_python = recorded_bin / "python"
+    recorded_python.write_text(
+        f'#!/usr/bin/env bash\nexec {shlex.quote(sys.executable)} "$@"\n',
+        encoding="utf-8",
+    )
+    recorded_python.chmod(0o755)
+    stop_log = tmp_path / "server-stop.txt"
+    recorded_vbot = recorded_bin / "vbot"
+    recorded_vbot.write_text(
+        f"#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" > {shlex.quote(str(stop_log))}\n",
+        encoding="utf-8",
+    )
+    recorded_vbot.chmod(0o755)
+
+    data_dir = tmp_path / "data"
+    manifest = {
+        "python_executable": str(recorded_python),
+        "server_host": "127.0.0.1",
+        "server_port": 8420,
+        "server_data_directory": str(data_dir),
+    }
+    (install_root / ".vbot-install.json").write_text(json.dumps(manifest), encoding="utf-8")
+    home = tmp_path / "home"
+    home.mkdir()
+
+    result = subprocess.run(
+        [bash, str(scripts_dir / "uninstall.sh")],
+        cwd=tmp_path,
+        env={**os.environ, "HOME": str(home)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert stop_log.read_text(encoding="utf-8").strip() == (
+        f"server stop --host 127.0.0.1 --port 8420 --data-dir {data_dir}"
+    )
+    assert not (install_root / ".vbot-install.json").exists()
     assert install_root.is_dir()
 
 

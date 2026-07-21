@@ -292,16 +292,39 @@ function Get-RecordedServerStopArguments {
     return $stopArguments
 }
 
-function Stop-VbotServer {
-    $vbotCommand = Join-Path $ProjectRoot ".venv\Scripts\vbot.exe"
-    if (-not (Test-Path -LiteralPath $vbotCommand -PathType Leaf)) {
-        $resolved = Get-Command vbot -ErrorAction SilentlyContinue
-        if ($null -eq $resolved) {
-            throw "Could not locate vbot to stop the server before removing the application."
+function Resolve-VbotCommandPath {
+    if (Test-Path -LiteralPath $InstallManifest -PathType Leaf) {
+        try {
+            $state = Get-Content -Raw -LiteralPath $InstallManifest | ConvertFrom-Json
+            $recordedPython = $state.python_executable
+            if (-not [string]::IsNullOrWhiteSpace($recordedPython)) {
+                $scriptsDirectory = Split-Path -Parent $recordedPython
+                foreach ($candidateName in @("vbot.exe", "vbot.cmd", "vbot")) {
+                    $candidate = Join-Path $scriptsDirectory $candidateName
+                    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                        return $candidate
+                    }
+                }
+            }
         }
-        $vbotCommand = $resolved.Source
+        catch {
+            throw "Could not read the recorded Python environment; no files were removed: $($_.Exception.Message)"
+        }
     }
 
+    $conventionalVbot = Join-Path $ProjectRoot ".venv\Scripts\vbot.exe"
+    if (Test-Path -LiteralPath $conventionalVbot -PathType Leaf) {
+        return $conventionalVbot
+    }
+    $resolved = Get-Command vbot -ErrorAction SilentlyContinue
+    if ($null -ne $resolved) {
+        return $resolved.Source
+    }
+    throw "Could not locate vbot to stop the server before removing the application."
+}
+
+function Stop-VbotServer {
+    $vbotCommand = Resolve-VbotCommandPath
     $stopArguments = Get-RecordedServerStopArguments
     $stopOutput = @(& $vbotCommand @stopArguments 2>&1)
     $stopExitCode = $LASTEXITCODE
