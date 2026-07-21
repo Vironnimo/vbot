@@ -17,6 +17,20 @@ export const STATISTICS_SUB_VIEWS = Object.freeze([
 
 export const DAILY_GRANULARITIES = Object.freeze(['day', 'week', 'month']);
 
+export const ACTIVITY_BUCKET_COUNTS = Object.freeze({
+  day: 30,
+  week: 16,
+  month: 12,
+});
+
+const ACTIVITY_FIELDS = Object.freeze([
+  'runs',
+  'completed',
+  'failed',
+  'cancelled',
+]);
+const CHART_SCALE_STEPS = Object.freeze([1, 1.5, 2, 2.5, 5, 10]);
+
 // Percent-used thresholds at which a provider usage window turns warn / critical.
 const USAGE_SEVERITY_THRESHOLDS = Object.freeze({
   warn: 75,
@@ -35,6 +49,12 @@ function toFiniteNumber(value) {
 export function formatInteger(value, locale = 'en') {
   return new Intl.NumberFormat(locale).format(
     Math.round(toFiniteNumber(value)),
+  );
+}
+
+export function formatChartTick(value, locale = 'en') {
+  return new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(
+    toFiniteNumber(value),
   );
 }
 
@@ -268,6 +288,94 @@ export function rollupDaily(points, granularity = 'day') {
   );
 }
 
+// Produce a fixed, calendar-correct activity window ending at `anchorIso`.
+// The report intentionally emits only dates that contain persisted activity;
+// filling absent buckets here prevents inactive days or weeks from collapsing
+// out of the visual timeline. Fixed windows keep the chart legible as Session
+// history grows without adding a second backend paging contract.
+export function buildActivityTimeline(
+  points,
+  granularity = 'day',
+  anchorIso = null,
+) {
+  const period = DAILY_GRANULARITIES.includes(granularity)
+    ? granularity
+    : 'day';
+  const rolled = rollupDaily(points, period);
+  const anchorDay = isoDayKey(anchorIso) ?? lastSeriesDay(rolled);
+  const endKey = bucketKeyFor(anchorDay, period);
+  if (endKey === null) {
+    return [];
+  }
+
+  const byDate = new Map(rolled.map((point) => [point.date, point]));
+  const count = ACTIVITY_BUCKET_COUNTS[period];
+  return Array.from({ length: count }, (_, index) => {
+    const offset = index - count + 1;
+    const date = shiftBucketKey(endKey, period, offset);
+    const source = byDate.get(date);
+    return Object.fromEntries([
+      ['date', date],
+      ...ACTIVITY_FIELDS.map((field) => [
+        field,
+        toFiniteNumber(source?.[field]),
+      ]),
+    ]);
+  });
+}
+
+export function activitySummary(points) {
+  const series = Array.isArray(points) ? points : [];
+  const totals = {
+    totalRuns: 0,
+    completed: 0,
+    failed: 0,
+    cancelled: 0,
+  };
+  let peak = null;
+  for (const point of series) {
+    const runs = toFiniteNumber(point?.runs);
+    totals.totalRuns += runs;
+    totals.completed += toFiniteNumber(point?.completed);
+    totals.failed += toFiniteNumber(point?.failed);
+    totals.cancelled += toFiniteNumber(point?.cancelled);
+    if (peak === null || runs > peak.runs) {
+      peak = { date: point?.date ?? '', runs };
+    }
+  }
+  return {
+    ...totals,
+    completionRate:
+      totals.totalRuns > 0 ? totals.completed / totals.totalRuns : null,
+    peak,
+    scaleMax: niceScaleMax(peak?.runs ?? 0),
+  };
+}
+
+export function formatActivityDate(
+  dateKey,
+  granularity,
+  locale = 'en',
+  { long = false } = {},
+) {
+  const date = bucketDate(dateKey);
+  if (date === null) {
+    return EM_DASH;
+  }
+  const options =
+    granularity === 'month'
+      ? long
+        ? { month: 'long', year: 'numeric' }
+        : { month: 'short' }
+      : long
+        ? { dateStyle: 'medium' }
+        : { month: 'short', day: 'numeric' };
+  return new Intl.DateTimeFormat(locale, {
+    ...options,
+    timeZone: 'UTC',
+  }).format(date);
+}
+
 function bucketKeyFor(dateString, granularity) {
   if (typeof dateString !== 'string' || dateString.length < 7) {
     return null;
@@ -275,14 +383,67 @@ function bucketKeyFor(dateString, granularity) {
   if (granularity === 'month') {
     return dateString.slice(0, 7);
   }
-  // week → the Monday of that ISO week, as a 'YYYY-MM-DD' string.
   const date = new Date(`${dateString}T00:00:00Z`);
   if (Number.isNaN(date.getTime())) {
     return null;
   }
+  if (granularity === 'day') {
+    return date.toISOString().slice(0, 10);
+  }
+  // week → the Monday of that ISO week, as a 'YYYY-MM-DD' string.
   const dayOfWeek = (date.getUTCDay() + 6) % 7; // Monday = 0
   date.setUTCDate(date.getUTCDate() - dayOfWeek);
   return date.toISOString().slice(0, 10);
+}
+
+function isoDayKey(isoString) {
+  const date = parseIso(isoString);
+  return date === null ? null : date.toISOString().slice(0, 10);
+}
+
+function lastSeriesDay(points) {
+  const date = points.at(-1)?.date;
+  if (typeof date !== 'string') {
+    return null;
+  }
+  return date.length === 7 ? `${date}-01` : date;
+}
+
+function shiftBucketKey(dateKey, granularity, offset) {
+  const date = bucketDate(dateKey);
+  if (date === null) {
+    return '';
+  }
+  if (granularity === 'month') {
+    date.setUTCMonth(date.getUTCMonth() + offset);
+    return date.toISOString().slice(0, 7);
+  }
+  date.setUTCDate(
+    date.getUTCDate() + offset * (granularity === 'week' ? 7 : 1),
+  );
+  return date.toISOString().slice(0, 10);
+}
+
+function bucketDate(dateKey) {
+  if (typeof dateKey !== 'string') {
+    return null;
+  }
+  const normalized = dateKey.length === 7 ? `${dateKey}-01` : dateKey;
+  const date = new Date(`${normalized}T00:00:00Z`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function niceScaleMax(value) {
+  const numeric = Math.max(0, toFiniteNumber(value));
+  if (numeric === 0) {
+    return 0;
+  }
+  const magnitude = 10 ** Math.floor(Math.log10(numeric));
+  const normalized = numeric / magnitude;
+  const ceiling =
+    CHART_SCALE_STEPS.find((step) => normalized <= step) ??
+    CHART_SCALE_STEPS.at(-1);
+  return ceiling * magnitude;
 }
 
 // Build a `points="x,y …"` attribute for an SVG sparkline polyline. Values map
@@ -399,35 +560,4 @@ export function rollupSkillActivationsByAgent(skills) {
             ? 1
             : 0,
     );
-}
-
-// Donut segments for the run-status ring: each segment carries its fraction of
-// the whole and the cumulative fraction before it (for stroke-dashoffset). Zero
-// total yields no segments so the component can render an empty ring.
-export function donutSegments(parts) {
-  const entries = Array.isArray(parts) ? parts : [];
-  const total = entries.reduce(
-    (sum, part) => sum + toFiniteNumber(part?.value),
-    0,
-  );
-  if (total <= 0) {
-    return [];
-  }
-  let cumulative = 0;
-  const segments = [];
-  for (const part of entries) {
-    const value = toFiniteNumber(part?.value);
-    if (value <= 0) {
-      continue;
-    }
-    const fraction = value / total;
-    segments.push({
-      key: part?.key ?? '',
-      value,
-      fraction,
-      offset: cumulative,
-    });
-    cumulative += fraction;
-  }
-  return segments;
 }

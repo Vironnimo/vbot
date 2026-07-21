@@ -188,7 +188,9 @@ class AgentActivity:
 class DailyTrendPoint:
     date: str
     runs: int
-    errors: int
+    completed: int
+    failed: int
+    cancelled: int
 
 
 @dataclass(frozen=True)
@@ -520,6 +522,9 @@ class _ProviderAcc:
 @dataclass
 class _DailyAcc:
     runs: int = 0
+    completed: int = 0
+    failed: int = 0
+    cancelled: int = 0
     errors: int = 0
     measured_input_tokens: int = 0
     measured_output_tokens: int = 0
@@ -970,7 +975,14 @@ class _Aggregator:
 
         day = _date_key(summary.timestamp)
         if day is not None:
-            self._daily_bucket(day).runs += 1
+            bucket = self._daily_bucket(day)
+            bucket.runs += 1
+            if status == "completed":
+                bucket.completed += 1
+            elif status == "failed":
+                bucket.failed += 1
+            elif status == "cancelled":
+                bucket.cancelled += 1
 
     # -- build -------------------------------------------------------------
 
@@ -1039,7 +1051,13 @@ class _Aggregator:
             total_tool_calls=self._tool_total_calls,
             agents=agents,
             daily_trend=[
-                DailyTrendPoint(date=date, runs=bucket.runs, errors=bucket.errors)
+                DailyTrendPoint(
+                    date=date,
+                    runs=bucket.runs,
+                    completed=bucket.completed,
+                    failed=bucket.failed,
+                    cancelled=bucket.cancelled,
+                )
                 for date, bucket in self._sorted_daily()
             ],
         )

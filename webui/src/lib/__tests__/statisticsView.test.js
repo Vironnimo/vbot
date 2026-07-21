@@ -3,11 +3,14 @@ import { describe, expect, it } from 'vitest';
 import {
   DAILY_GRANULARITIES,
   STATISTICS_SUB_VIEWS,
+  activitySummary,
   agentDisplay,
   barFractions,
+  buildActivityTimeline,
   cacheHitRate,
   clampUsagePercent,
-  donutSegments,
+  formatActivityDate,
+  formatChartTick,
   formatDurationMs,
   formatHourLabel,
   formatInteger,
@@ -43,6 +46,7 @@ describe('statisticsView formatting', () => {
     expect(formatInteger(1200, 'en')).toBe('1,200');
     expect(formatTokens(1234567, 'en')).toBe('1,234,567');
     expect(formatInteger(undefined, 'en')).toBe('0');
+    expect(formatChartTick(12.5, 'en')).toBe('12.5');
   });
 
   it('formats percentages and shares', () => {
@@ -158,9 +162,27 @@ describe('statisticsView selection and grouping', () => {
 
 describe('statisticsView rollupDaily', () => {
   const series = [
-    { date: '2026-06-01', runs: 1, errors: 0 },
-    { date: '2026-06-02', runs: 2, errors: 1 },
-    { date: '2026-06-08', runs: 4, errors: 2 },
+    {
+      date: '2026-06-01',
+      runs: 1,
+      completed: 1,
+      failed: 0,
+      cancelled: 0,
+    },
+    {
+      date: '2026-06-02',
+      runs: 2,
+      completed: 1,
+      failed: 1,
+      cancelled: 0,
+    },
+    {
+      date: '2026-06-08',
+      runs: 4,
+      completed: 2,
+      failed: 1,
+      cancelled: 1,
+    },
   ];
 
   it('returns a copy for day granularity', () => {
@@ -173,23 +195,131 @@ describe('statisticsView rollupDaily', () => {
     // 2026-06-01 is a Monday; 06-02 same week; 06-08 the next Monday.
     const result = rollupDaily(series, 'week');
     expect(result).toEqual([
-      { date: '2026-06-01', runs: 3, errors: 1 },
-      { date: '2026-06-08', runs: 4, errors: 2 },
+      {
+        date: '2026-06-01',
+        runs: 3,
+        completed: 2,
+        failed: 1,
+        cancelled: 0,
+      },
+      {
+        date: '2026-06-08',
+        runs: 4,
+        completed: 2,
+        failed: 1,
+        cancelled: 1,
+      },
     ]);
   });
 
   it('rolls up into month buckets', () => {
     const result = rollupDaily(
       [
-        { date: '2026-06-30', runs: 1, errors: 0 },
-        { date: '2026-07-01', runs: 5, errors: 3 },
+        { date: '2026-06-30', runs: 1, completed: 1 },
+        { date: '2026-07-01', runs: 5, completed: 3, failed: 2 },
       ],
       'month',
     );
     expect(result).toEqual([
-      { date: '2026-06', runs: 1, errors: 0 },
-      { date: '2026-07', runs: 5, errors: 3 },
+      { date: '2026-06', runs: 1, completed: 1 },
+      { date: '2026-07', runs: 5, completed: 3, failed: 2 },
     ]);
+  });
+});
+
+describe('statisticsView activity timeline', () => {
+  it('fills inactive calendar days and keeps a fixed 30-day window', () => {
+    const result = buildActivityTimeline(
+      [
+        {
+          date: '2026-06-11',
+          runs: 2,
+          completed: 1,
+          failed: 1,
+          cancelled: 0,
+        },
+        {
+          date: '2026-06-13',
+          runs: 1,
+          completed: 1,
+          failed: 0,
+          cancelled: 0,
+        },
+      ],
+      'day',
+      '2026-06-13T10:00:00Z',
+    );
+
+    expect(result).toHaveLength(30);
+    expect(result.at(-3)).toMatchObject({ date: '2026-06-11', runs: 2 });
+    expect(result.at(-2)).toEqual({
+      date: '2026-06-12',
+      runs: 0,
+      completed: 0,
+      failed: 0,
+      cancelled: 0,
+    });
+    expect(result.at(-1)).toMatchObject({ date: '2026-06-13', runs: 1 });
+  });
+
+  it('rolls outcomes into ISO weeks before filling the 16-week window', () => {
+    const result = buildActivityTimeline(
+      [
+        {
+          date: '2026-06-01',
+          runs: 1,
+          completed: 1,
+          failed: 0,
+          cancelled: 0,
+        },
+        {
+          date: '2026-06-02',
+          runs: 1,
+          completed: 0,
+          failed: 1,
+          cancelled: 0,
+        },
+      ],
+      'week',
+      '2026-06-08T12:00:00Z',
+    );
+
+    expect(result).toHaveLength(16);
+    expect(result.at(-2)).toEqual({
+      date: '2026-06-01',
+      runs: 2,
+      completed: 1,
+      failed: 1,
+      cancelled: 0,
+    });
+    expect(result.at(-1)).toMatchObject({ date: '2026-06-08', runs: 0 });
+  });
+
+  it('summarizes outcomes, completion rate, peak, and a readable scale', () => {
+    expect(
+      activitySummary([
+        { date: '2026-06-12', runs: 3, completed: 2, failed: 1 },
+        { date: '2026-06-13', runs: 11, completed: 9, cancelled: 2 },
+      ]),
+    ).toEqual({
+      totalRuns: 14,
+      completed: 11,
+      failed: 1,
+      cancelled: 2,
+      completionRate: 11 / 14,
+      peak: { date: '2026-06-13', runs: 11 },
+      scaleMax: 15,
+    });
+    expect(activitySummary([{ date: '2026-06-13', runs: 24 }]).scaleMax).toBe(
+      25,
+    );
+  });
+
+  it('formats day and month bucket labels in UTC', () => {
+    expect(formatActivityDate('2026-06-13', 'day', 'en')).toBe('Jun 13');
+    expect(formatActivityDate('2026-06', 'month', 'en', { long: true })).toBe(
+      'June 2026',
+    );
   });
 });
 
@@ -213,29 +343,6 @@ describe('statisticsView chart geometry', () => {
   it('scales bars to fractions of the max', () => {
     expect(barFractions([0, 5, 10])).toEqual([0, 0.5, 1]);
     expect(barFractions([])).toEqual([]);
-  });
-
-  it('builds donut segments with cumulative offsets', () => {
-    const segments = donutSegments([
-      { key: 'completed', value: 3 },
-      { key: 'failed', value: 1 },
-      { key: 'cancelled', value: 0 },
-    ]);
-    expect(segments).toHaveLength(2);
-    expect(segments[0]).toMatchObject({
-      key: 'completed',
-      fraction: 0.75,
-      offset: 0,
-    });
-    expect(segments[1]).toMatchObject({
-      key: 'failed',
-      fraction: 0.25,
-      offset: 0.75,
-    });
-  });
-
-  it('returns no donut segments when the total is zero', () => {
-    expect(donutSegments([{ key: 'completed', value: 0 }])).toEqual([]);
   });
 });
 

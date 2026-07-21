@@ -60,8 +60,20 @@ function makeReport(overrides = {}) {
         },
       ],
       daily_trend: [
-        { date: '2026-06-12', runs: 2, errors: 1 },
-        { date: '2026-06-13', runs: 2, errors: 0 },
+        {
+          date: '2026-06-12',
+          runs: 2,
+          completed: 1,
+          failed: 1,
+          cancelled: 0,
+        },
+        {
+          date: '2026-06-13',
+          runs: 2,
+          completed: 2,
+          failed: 0,
+          cancelled: 0,
+        },
       ],
     },
     usage: {
@@ -363,7 +375,16 @@ describe('StatisticsView', () => {
     );
 
     expect(rpcMock).toHaveBeenCalledWith('statistics.report');
-    expect(document.body.textContent).toContain('Run status');
+    expect(document.body.textContent).toContain('Run health');
+    expect(document.body.textContent).toContain('75.0%');
+    expect(document.body.textContent).toContain('Activity & reliability');
+    expect(document.body.textContent).toContain('Last 30 days');
+    expect(document.querySelectorAll('.stats-activity__col')).toHaveLength(30);
+    expect(document.querySelectorAll('.stats-health__segment')).toHaveLength(3);
+    expect(document.querySelector('.stats-donut')).toBeNull();
+    expect(
+      document.querySelector('.stats-activity__legend').textContent,
+    ).not.toContain('Errors');
     const chatMessagesCard = [...document.querySelectorAll('.stats-card')].find(
       (card) => card.textContent.includes('Chat messages'),
     );
@@ -385,6 +406,68 @@ describe('StatisticsView', () => {
     expect(
       document.querySelector('.stats-view .view-toolbar__actions'),
     ).toBeTruthy();
+  });
+
+  it('switches the calendar-correct activity window with the granularity', async () => {
+    rpcMock.mockResolvedValue(makeReport());
+
+    mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForCondition(() =>
+      document.body.textContent.includes('Activity & reliability'),
+    );
+
+    const weekButton = [
+      ...document.querySelectorAll('.stats-toggle__option'),
+    ].find((button) => button.textContent.trim() === 'Week');
+    weekButton.click();
+    flushSync();
+
+    expect(document.body.textContent).toContain('Last 16 weeks');
+    expect(document.querySelectorAll('.stats-activity__col')).toHaveLength(16);
+  });
+
+  it('shows a period-specific empty state when all Runs are older than the selected window', async () => {
+    const report = makeReport();
+    report.overview.daily_trend = [
+      {
+        date: '2026-04-01',
+        runs: 4,
+        completed: 3,
+        failed: 1,
+        cancelled: 0,
+      },
+    ];
+    rpcMock.mockResolvedValue(report);
+
+    mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForCondition(() =>
+      document.body.textContent.includes('No Runs in this period.'),
+    );
+
+    expect(document.querySelector('.stats-activity')).toBeNull();
+    expect(document.body.textContent).toContain('Last 30 days');
+  });
+
+  it('renders unavailable outcome shares instead of a misleading zero percent with no Runs', async () => {
+    const report = makeReport();
+    report.overview.total_runs = 0;
+    report.overview.run_status = { completed: 0, failed: 0, cancelled: 0 };
+    report.overview.daily_trend = [];
+    rpcMock.mockResolvedValue(report);
+
+    mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForCondition(() =>
+      document.body.textContent.includes('No activity recorded yet.'),
+    );
+
+    expect(
+      document.querySelector('.stats-health__hero strong').textContent,
+    ).toBe('—');
+    expect(
+      [...document.querySelectorAll('.stats-health__share')].map((share) =>
+        share.textContent.trim(),
+      ),
+    ).toEqual(['—', '—', '—']);
   });
 
   it('switches to the usage sub-view and badges estimated tokens', async () => {
