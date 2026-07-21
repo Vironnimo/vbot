@@ -9,6 +9,7 @@ vbot agent list
 vbot agent show <agent-id>
 vbot agent create <agent-id> <display-name> [flags]
 vbot agent update <agent-id> [flags]
+vbot agent rename <current-agent-id> <new-agent-id>
 vbot agent delete <agent-id>
 ```
 
@@ -27,11 +28,13 @@ Gotchas:
 - `--project` roots the Identity Agent in a registered Project: relative file and shell work uses the Project cwd, while Workspace, SOUL, Memory, Sessions, private Skills, and permissions remain the Agent's own. Use this when the user says an Agent should work in, point at, or use a Project; do not move its Workspace to the repo for that outcome.
 - `--workspace` relocates only the Identity Agent's SOUL/Memory home. Use it only when the user explicitly wants those identity files stored at another path. `--copy-workspace-files` copies `SOUL.md`, `USER.md`, and `MEMORY.md` to the destination; without it, the Agent points at the destination and seeds a missing `SOUL.md`. `--default-workspace` moves it back to its data-dir home. Neither flag selects a Project.
 - `--clear-project` removes the Project selection without changing Workspace or Memory.
+- `rename` moves the complete Identity Agent tree and retargets live server-owned references (Channels, non-terminal Cron jobs, bare Identity Agent delegation entries, and functional Sub-Agent parent links). It preserves external custom Workspace paths and historical provenance, refuses collisions or busy old/new ids, and rolls back if a reference update fails.
 
 ```bash
 vbot agent create coder Coder --model openai/gpt-5.2 --allowed-tools '*' --allowed-skills '*'
 vbot agent update coder --temperature 0.4 --thinking-effort high
 vbot agent update librarian --project second-brain
+vbot agent rename coder researcher
 ```
 
 `create` and `update` return the saved Agent, including id, Workspace, selected Project, effective Model, delegation targets, Agent Policy, effective Policy, and configuration provenance. A Workspace relocation also reports copied and backed-up files. `show` returns the same verification fields. Treat the no-effective-Model warning as incomplete setup, not a successful runnable Agent.

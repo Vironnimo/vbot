@@ -16,6 +16,7 @@
     createAgent,
     deleteAgent,
     listPrompts,
+    renameAgent,
     updateAgent,
   } from '$lib/api.js';
   import {
@@ -23,6 +24,7 @@
     AGENT_FORM_MODE_CREATE,
     AGENT_FORM_MODE_EDIT,
     MEMORY_TOOL_NAME,
+    agentIdValidationError,
     createAgentFormValues,
     effortOptionsForReasoning,
     normalizeAgentForm,
@@ -65,6 +67,7 @@
     projectCatalogError = '',
     loadError = '',
     onAgentUpdated = () => {},
+    onAgentRenamed = () => {},
     onAgentCreated = async () => {},
     onAgentDeleted = async () => {},
     onToast = () => {},
@@ -93,6 +96,10 @@
   // has_customizations; the toggle is reverted first and re-applied on confirm.
   let disableCustomPromptConfirmOpen = $state(false);
   let workspaceDecisionOpen = $state(false);
+  let renameDialogOpen = $state(false);
+  let renameValue = $state('');
+  let renameError = $state('');
+  let isRenaming = $state(false);
 
   let canDeleteSelectedAgent = $derived(Boolean(agent) && agentsCount > 1);
   // The agent points at a custom identity/Memory home rather than its
@@ -275,7 +282,7 @@
       clearAgentAutoSaveTimer();
     }
 
-    if (isSaving || isDeleting || workspaceDecisionOpen) {
+    if (isSaving || isDeleting || workspaceDecisionOpen || renameDialogOpen) {
       return;
     }
 
@@ -370,6 +377,7 @@
       isSaving ||
       isDeleting ||
       workspaceDecisionOpen ||
+      renameDialogOpen ||
       destroyed
     ) {
       return false;
@@ -518,6 +526,67 @@
       errorMessage = viewErrorMessage(error, t('agents.deleteError'));
     } finally {
       isDeleting = false;
+    }
+  }
+
+  function openRenameDialog() {
+    if (!agent || isSaving || isDeleting) {
+      return;
+    }
+    clearAgentAutoSaveTimer();
+    renameValue = agent.id;
+    renameError = '';
+    renameDialogOpen = true;
+  }
+
+  function closeRenameDialog() {
+    if (isRenaming) {
+      return;
+    }
+    renameDialogOpen = false;
+    renameError = '';
+  }
+
+  async function renameSelectedAgent(event = null) {
+    event?.preventDefault?.();
+    if (!agent || isRenaming) {
+      return;
+    }
+    const nextId = renameValue.trim();
+    const validationError = agentIdValidationError(nextId);
+    if (validationError) {
+      renameError =
+        validationError === 'required'
+          ? t('agents.form.required', 'This field is required.')
+          : t(
+              'agents.rename.invalidId',
+              'Use 1–64 letters, numbers, hyphens, or underscores, starting with a letter or number.',
+            );
+      return;
+    }
+    if (nextId === agent.id) {
+      renameError = t(
+        'agents.rename.sameId',
+        'Enter an ID different from the current one.',
+      );
+      return;
+    }
+
+    isRenaming = true;
+    renameError = '';
+    const oldId = agent.id;
+    try {
+      const renamedAgent = await renameAgent(oldId, nextId);
+      renameDialogOpen = false;
+      showAgentToast(t('agents.renamed', 'Agent ID changed.'));
+      onAgentRenamed(renamedAgent, { oldId, newId: renamedAgent.id ?? nextId });
+    } catch (error) {
+      renameError = viewErrorMessage(
+        error,
+        t('agents.renameError', 'Could not change Agent ID.'),
+      );
+    } finally {
+      isRenaming = false;
     }
   }
 
@@ -1035,7 +1104,7 @@
           required
           help={t(
             'agents.form.idHelp',
-            'Agent IDs are immutable after creation.',
+            'Used to address this Identity Agent in Sessions, Channels, Cron jobs, and delegation.',
           )}
           error={formErrors.id ? fieldError('id') : ''}
         >
@@ -1048,6 +1117,17 @@
               disabled={formMode === AGENT_FORM_MODE_EDIT}
               aria-describedby={field.describedBy}
             />
+          {/snippet}
+          {#snippet actions()}
+            {#if formMode === AGENT_FORM_MODE_EDIT}
+              <Button
+                variant="tertiary"
+                onClick={openRenameDialog}
+                disabled={isSaving || isDeleting}
+              >
+                {t('agents.rename.action', 'Change ID')}
+              </Button>
+            {/if}
           {/snippet}
         </FormField>
 
@@ -1606,6 +1686,65 @@
     onConfirm={confirmDisableCustomPrompt}
     onCancel={cancelDisableCustomPrompt}
   />
+{/if}
+
+{#if renameDialogOpen}
+  <Modal
+    title={t('agents.rename.title', 'Change Agent ID?')}
+    closeDisabled={isRenaming}
+    onClose={closeRenameDialog}
+  >
+    {#snippet body()}
+      <form id="agent-rename-form" onsubmit={renameSelectedAgent}>
+        <p>
+          {t(
+            'agents.rename.body',
+            'The complete Identity Agent moves to the new ID, including Sessions, Memory, prompts, private Skills, and its internal Workspace. Live Channels, Cron jobs, delegation policies, and Sub-Agent navigation links are updated. Historical records keep the ID they were created with.',
+          )}
+        </p>
+        <FormField
+          controlId="agent-rename-id"
+          label={t('agents.rename.newId', 'New Agent ID')}
+          required
+          error={renameError}
+        >
+          {#snippet children(field)}
+            <TextField
+              id={field.controlId}
+              value={renameValue}
+              onInput={(next) => {
+                renameValue = next;
+                renameError = '';
+              }}
+              invalid={field.invalid}
+              disabled={isRenaming}
+              aria-describedby={field.describedBy}
+              autofocus
+            />
+          {/snippet}
+        </FormField>
+      </form>
+    {/snippet}
+    {#snippet footer()}
+      <Button
+        variant="secondary"
+        onClick={closeRenameDialog}
+        disabled={isRenaming}
+      >
+        {t('common.cancel', 'Cancel')}
+      </Button>
+      <Button
+        variant="primary"
+        type="submit"
+        form="agent-rename-form"
+        loading={isRenaming}
+      >
+        {isRenaming
+          ? t('common.saving', 'Saving…')
+          : t('agents.rename.confirm', 'Change ID')}
+      </Button>
+    {/snippet}
+  </Modal>
 {/if}
 
 {#if workspaceDecisionOpen}

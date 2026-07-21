@@ -520,6 +520,120 @@ def test_workspace_copy_rolls_back_destination_when_agent_write_fails(
     assert agent_json["workspace"] == "agents/coder/workspace"
 
 
+def test_rename_moves_complete_agent_tree_and_rebases_internal_workspace(
+    store: AgentStore,
+) -> None:
+    created = store.create("coder", "Coder Agent")
+    old_dir = store.data_dir / "agents" / "coder"
+    custom_workspace = old_dir / "homes" / "primary"
+    store.update("coder", workspace=custom_workspace)
+    (old_dir / "prompts").mkdir()
+    (old_dir / "prompts" / "runtime.md").write_text("custom prompt", encoding="utf-8")
+    (old_dir / "skills" / "private-skill").mkdir(parents=True)
+    (old_dir / "skills" / "private-skill" / "SKILL.md").write_text("# Private\n", encoding="utf-8")
+    ChatSessionManager(store.data_dir).create("coder", session_id="kept-session")
+
+    result = store.rename("coder", "researcher")
+
+    new_dir = store.data_dir / "agents" / "researcher"
+    assert not old_dir.exists()
+    assert result.agent.id == "researcher"
+    assert result.agent.name == "Coder Agent"
+    assert result.agent.created_at == created.created_at
+    assert result.agent.updated_at != created.updated_at
+    assert result.agent.workspace == str((new_dir / "homes" / "primary").resolve())
+    assert (new_dir / "sessions" / "kept-session.jsonl").is_file()
+    assert (new_dir / "prompts" / "runtime.md").read_text(encoding="utf-8") == "custom prompt"
+    assert (new_dir / "skills" / "private-skill" / "SKILL.md").is_file()
+    persisted = json.loads((new_dir / "agent.json").read_text(encoding="utf-8"))
+    assert persisted["id"] == "researcher"
+    assert persisted["workspace"] == "agents/researcher/homes/primary"
+
+
+def test_rename_preserves_external_workspace(store: AgentStore, tmp_path: Path) -> None:
+    workspace = tmp_path / "external-workspace"
+    store.create("coder", "Coder Agent", workspace=workspace)
+
+    renamed = store.rename("coder", "researcher").agent
+
+    assert renamed.workspace == str(workspace.resolve())
+    assert workspace.is_dir()
+    assert (workspace / "SOUL.md").is_file()
+
+
+def test_rename_supports_case_only_id_change(store: AgentStore) -> None:
+    store.create("coder", "Coder Agent")
+
+    renamed = store.rename("coder", "Coder").agent
+
+    assert renamed.id == "Coder"
+    assert store.get("Coder").id == "Coder"
+    assert [path.name for path in (store.data_dir / "agents").iterdir()] == ["Coder"]
+
+
+def test_rename_rejects_existing_destination(store: AgentStore) -> None:
+    store.create("coder", "Coder Agent")
+    store.create("researcher", "Researcher Agent")
+
+    with pytest.raises(AgentAlreadyExistsError, match="researcher"):
+        store.rename("coder", "researcher")
+
+    assert store.get("coder").name == "Coder Agent"
+    assert store.get("researcher").name == "Researcher Agent"
+
+
+def test_rename_rolls_tree_back_when_config_write_fails(
+    store: AgentStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store.create("coder", "Coder Agent")
+    original_write = store._write_agent
+
+    def fail_new_config(agent: Agent) -> None:
+        if agent.id == "researcher":
+            raise OSError("disk full")
+        original_write(agent)
+
+    monkeypatch.setattr(store, "_write_agent", fail_new_config)
+
+    with pytest.raises(OSError, match="disk full"):
+        store.rename("coder", "researcher")
+
+    assert store.get("coder").id == "coder"
+    assert not (store.data_dir / "agents" / "researcher").exists()
+
+
+def test_retarget_allowed_agent_references_is_exact_and_reversible(store: AgentStore) -> None:
+    store.create(
+        "coder",
+        "Coder Agent",
+        tools={"subagent": {"allowed_agents": ["coder", "coder@project"]}},
+    )
+    store.create(
+        "manager",
+        "Manager Agent",
+        tools={"subagent": {"allowed_agents": ["coder", "researcher", "coder@project"]}},
+    )
+    store.rename("coder", "researcher")
+    manager_before = store.get_raw("manager")
+
+    update = store.retarget_allowed_agent_references("coder", "researcher")
+
+    assert update.agent_ids == ("manager", "researcher")
+    assert store.get("manager").tools["subagent"]["allowed_agents"] == [
+        "researcher",
+        "coder@project",
+    ]
+    assert store.get("researcher").tools["subagent"]["allowed_agents"] == [
+        "researcher",
+        "coder@project",
+    ]
+
+    store.restore_allowed_agent_references(update)
+
+    assert store.get_raw("manager") == manager_before
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [

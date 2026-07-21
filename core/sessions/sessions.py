@@ -12,13 +12,14 @@ import threading
 import uuid
 from collections import deque
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from core.chat.errors import ChatMessageValidationError, ChatSessionError
 from core.projects.store import project_sessions_dir
-from core.settings import is_valid_agent_id
+from core.settings import is_valid_agent_id, is_valid_project_id
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -84,6 +85,16 @@ CHANNEL_MESSAGE_NOTE_PREFIX = "[channel-message] "
 SKILL_AVAILABLE_NOTE_PREFIX = "[skill-available] "
 _TAIL_CHUNK_SIZE = 8192
 _LOGGER = get_logger("sessions")
+
+
+@dataclass(frozen=True)
+class SessionIdentityReferenceUpdate:
+    """Exact sidecar snapshot changed by an Identity Agent rename."""
+
+    agent_id: str
+    session_id: str
+    project_id: str | None
+    previous_metadata: JsonObject
 
 
 class ChatSession:
@@ -618,6 +629,81 @@ class ChatSessionManager:
             raise ChatSessionError(f"failed to write metadata for session: {session_id}") from exc
         finally:
             temp_path.unlink(missing_ok=True)
+
+    def retarget_identity_agent_references(
+        self,
+        old_agent_id: str,
+        new_agent_id: str,
+    ) -> tuple[SessionIdentityReferenceUpdate, ...]:
+        """Retarget live ``subagent_parent`` navigation links across all Sessions.
+
+        Only an unqualified parent (``project_id is None``) names an Identity
+        Agent. Fork provenance and transcript records remain immutable history.
+        Exact sidecar snapshots make the multi-file mutation reversible.
+        """
+        _validate_agent_id(old_agent_id)
+        _validate_agent_id(new_agent_id)
+        updates: list[SessionIdentityReferenceUpdate] = []
+        try:
+            for agent_id, session_id, project_id in self._all_session_owners():
+                metadata = self.get_metadata(agent_id, session_id, project_id)
+                parent = metadata.get("subagent_parent")
+                if (
+                    not isinstance(parent, dict)
+                    or parent.get("project_id") is not None
+                    or parent.get("agent_id") != old_agent_id
+                ):
+                    continue
+                previous_metadata = dict(metadata)
+                updated_parent = dict(parent)
+                updated_parent["agent_id"] = new_agent_id
+                metadata["subagent_parent"] = updated_parent
+                update = SessionIdentityReferenceUpdate(
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    project_id=project_id,
+                    previous_metadata=previous_metadata,
+                )
+                updates.append(update)
+                self.set_metadata(agent_id, session_id, metadata, project_id)
+        except Exception:
+            self.restore_identity_agent_references(tuple(updates))
+            raise
+        return tuple(updates)
+
+    def restore_identity_agent_references(
+        self,
+        updates: tuple[SessionIdentityReferenceUpdate, ...],
+    ) -> None:
+        """Restore exact sidecars changed by a reference retarget."""
+        for update in reversed(updates):
+            self.set_metadata(
+                update.agent_id,
+                update.session_id,
+                update.previous_metadata,
+                update.project_id,
+            )
+
+    def _all_session_owners(self) -> builtins.list[tuple[str, str, str | None]]:
+        """Enumerate canonical live Session transcripts in both storage layouts."""
+        owners: builtins.list[tuple[str, str, str | None]] = []
+        for path in sorted((self.data_dir / "agents").glob("*/sessions/*.jsonl")):
+            agent_id = path.parent.parent.name
+            if is_valid_agent_id(agent_id) and _is_valid_session_id(path.stem):
+                owners.append((agent_id, path.stem, None))
+
+        projects_root = self.data_dir / "projects"
+        if projects_root.exists():
+            for path in sorted(projects_root.glob("*/agents/*/sessions/*.jsonl")):
+                project_id = path.parents[3].name
+                agent_id = path.parent.parent.name
+                if (
+                    is_valid_project_id(project_id)
+                    and is_valid_agent_id(agent_id)
+                    and _is_valid_session_id(path.stem)
+                ):
+                    owners.append((agent_id, path.stem, project_id))
+        return owners
 
     def record_terminal_run(
         self,

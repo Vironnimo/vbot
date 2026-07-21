@@ -189,6 +189,63 @@ def test_agent_crud_minimum_one_and_new_current_session(tmp_path: Path) -> None:
     assert delete_response.json()["result"]["agent_id"] == "coder"
 
 
+def test_agent_rename_keeps_complete_identity_tree_usable_through_real_runtime(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    runtime = StubRuntime(Config(data_dir=data_dir))
+    app = create_app(runtime=runtime)
+
+    with TestClient(app) as client:
+        client.post(
+            "/api/rpc",
+            json={"method": "agent.create", "params": {"id": "coder", "name": "Coder"}},
+        )
+        client.post(
+            "/api/rpc",
+            json={
+                "method": "session.create",
+                "params": {
+                    "agent_id": "coder",
+                    "session_id": "kept-session",
+                    "make_current": True,
+                },
+            },
+        )
+        prompts_dir = data_dir / "agents" / "coder" / "prompts"
+        prompts_dir.mkdir()
+        (prompts_dir / "runtime.md").write_text("custom", encoding="utf-8")
+        private_skill = data_dir / "agents" / "coder" / "skills" / "private" / "SKILL.md"
+        private_skill.parent.mkdir(parents=True)
+        private_skill.write_text("# Private\n", encoding="utf-8")
+
+        rename_response = client.post(
+            "/api/rpc",
+            json={
+                "method": "agent.rename",
+                "params": {"id": "coder", "new_id": "researcher"},
+            },
+        )
+        history_response = client.post(
+            "/api/rpc",
+            json={
+                "method": "chat.history",
+                "params": {"agent_id": "researcher", "session_id": "kept-session"},
+            },
+        )
+        old_agent_response = client.post(
+            "/api/rpc",
+            json={"method": "agent.get", "params": {"id": "coder"}},
+        )
+
+    assert rename_response.json()["result"]["id"] == "researcher"
+    assert history_response.json()["result"]["session_id"] == "kept-session"
+    assert old_agent_response.json()["error"]["code"] == "domain_error"
+    assert (data_dir / "agents" / "researcher" / "prompts" / "runtime.md").is_file()
+    assert (data_dir / "agents" / "researcher" / "skills" / "private" / "SKILL.md").is_file()
+    assert not (data_dir / "agents" / "coder").exists()
+
+
 def test_agent_update_rpc_accepts_workspace_mutation(tmp_path: Path) -> None:
     runtime = StubRuntime(Config(data_dir=tmp_path / "data"))
     app = create_app(runtime=runtime)

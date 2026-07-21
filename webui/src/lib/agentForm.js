@@ -93,6 +93,12 @@ export function createAgentFormValues(agent = {}) {
   };
 }
 
+export function agentIdValidationError(value) {
+  const errors = {};
+  validateAgentId(asText(value).trim(), errors);
+  return errors.id ?? '';
+}
+
 export function normalizeAgentForm(values, options = {}) {
   const mode = options.mode ?? AGENT_FORM_MODE_CREATE;
   const errors = {};

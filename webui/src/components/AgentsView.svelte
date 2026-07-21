@@ -295,6 +295,15 @@
     }
   }
 
+  function handleAgentRenamed(nextAgent, { oldId, newId }) {
+    agents = agents.map((agent) => (agent.id === oldId ? nextAgent : agent));
+    if (selectedAgentId === oldId) {
+      selectedAgentId = newId;
+      onAgentSelected?.(nextAgent);
+    }
+    notifyAgentsChanged();
+  }
+
   async function openCreateModal() {
     // Fetch the global agent defaults so the modal can label its inherit options.
     // Best-effort: an empty object (fetch failure) makes the modal render the
@@ -358,6 +367,7 @@
         {projectCatalogError}
         {loadError}
         onAgentUpdated={handleAgentUpdated}
+        onAgentRenamed={handleAgentRenamed}
         onAgentCreated={handleAgentCreated}
         onAgentDeleted={handleAgentDeleted}
         {onToast}

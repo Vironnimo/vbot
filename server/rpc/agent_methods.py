@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+from contextlib import AsyncExitStack
 from typing import Any, cast
 
 from core.channels import ChannelConfigError
@@ -30,8 +32,18 @@ from core.settings import (
 from core.settings.normalizers import normalize_compaction_settings
 from core.utils.errors import StorageError
 from core.utils.logging import get_logger
-from server.events import RESOURCE_KIND_AGENTS, RESOURCE_KIND_SESSIONS
-from server.rpc.agent_refs import _agent_reference_ids, _agent_reference_lock
+from server.events import (
+    RESOURCE_KIND_AGENTS,
+    RESOURCE_KIND_CHANNELS,
+    RESOURCE_KIND_CRON,
+    RESOURCE_KIND_SESSIONS,
+)
+from server.rpc.agent_refs import (
+    _agent_reference_ids,
+    _agent_reference_lock,
+    _rename_agent_and_retarget_references,
+    _subagents_reference_identity_agent,
+)
 from server.rpc.channel_methods import _channel_config_by_id
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -147,6 +159,117 @@ def _update_agent(state: Any, params: JsonObject) -> JsonObject:
             ",".join(changed_fields),
         )
     return response
+
+
+async def _rename_agent(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"id", "new_id"}, "agent.rename")
+    agent_id = _required_string(params, "id")
+    new_agent_id = _required_string(params, "new_id")
+    if agent_id == new_agent_id:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.new_id must differ from params.id",
+        )
+
+    try:
+        async with _agent_reference_lock(state):
+            try:
+                async with AsyncExitStack() as guards:
+                    for guarded_agent_id in sorted((agent_id, new_agent_id)):
+                        await guards.enter_async_context(
+                            _state_chat_runs(state).agent_admission_guard(
+                                guarded_agent_id,
+                                project_id=None,
+                            )
+                        )
+                    busy_subagent_ids = [
+                        guarded_agent_id
+                        for guarded_agent_id in sorted((agent_id, new_agent_id))
+                        if _subagents_reference_identity_agent(state, guarded_agent_id)
+                    ]
+                    if busy_subagent_ids:
+                        raise RpcError(
+                            RPC_ERROR_AGENT_BUSY,
+                            (
+                                "cannot rename agent while the old or new id has open "
+                                f"Sub-Agent activity: {', '.join(busy_subagent_ids)}"
+                            ),
+                        )
+                    result = _rename_agent_and_retarget_references(
+                        state,
+                        agent_id,
+                        new_agent_id,
+                    )
+                    invalidate_agent_skills = getattr(
+                        state.runtime,
+                        "invalidate_agent_skills",
+                        None,
+                    )
+                    if callable(invalidate_agent_skills):
+                        invalidate_agent_skills(agent_id)
+                        invalidate_agent_skills(new_agent_id)
+            except RunAdmissionBlockedError as exc:
+                raise RpcError(
+                    RPC_ERROR_AGENT_BUSY,
+                    (
+                        "cannot rename agent while the old or new id has active "
+                        f"or queued runs: {agent_id} -> {new_agent_id}"
+                    ),
+                ) from exc
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    await _remove_renamed_sessions_from_recall(state, agent_id, result.session_ids)
+
+    response = _agent_response(state, result.agent)
+    response["rename"] = {
+        "old_id": agent_id,
+        "new_id": new_agent_id,
+        "channels_updated": list(result.channel_ids),
+        "cron_jobs_updated": list(result.cron_job_ids),
+        "agent_policies_updated": list(result.policy_agent_ids),
+        "session_links_updated": result.session_reference_count,
+    }
+    rename_scope = {"old_agent_id": agent_id, "new_agent_id": new_agent_id}
+    publish_resource_changed(state, RESOURCE_KIND_AGENTS, scope=rename_scope)
+    publish_resource_changed(state, RESOURCE_KIND_SESSIONS, scope=rename_scope)
+    if result.channel_ids:
+        publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
+    if result.cron_job_ids:
+        publish_resource_changed(state, RESOURCE_KIND_CRON)
+    _LOGGER.info(
+        "Agent renamed (agent=%s new_agent=%s channels=%s cron=%s policies=%s session_links=%s)",
+        agent_id,
+        new_agent_id,
+        len(result.channel_ids),
+        len(result.cron_job_ids),
+        len(result.policy_agent_ids),
+        result.session_reference_count,
+    )
+    return response
+
+
+async def _remove_renamed_sessions_from_recall(
+    state: Any,
+    old_agent_id: str,
+    session_ids: tuple[str, ...],
+) -> None:
+    """Best-effort cleanup of disposable old-address recall index rows."""
+    remove_session = getattr(state.runtime, "remove_session_from_recall", None)
+    if not callable(remove_session):
+        return
+    for session_id in session_ids:
+        try:
+            cleanup = remove_session(old_agent_id, session_id, None)
+            if inspect.isawaitable(cleanup):
+                await cleanup
+        except Exception as error:
+            _LOGGER.warning(
+                "Recall cleanup failed after Agent rename (agent=%s session=%s): %s",
+                old_agent_id,
+                session_id,
+                error,
+            )
 
 
 def _seed_agent_custom_prompt(state: Any, agent_id: str) -> None:
@@ -781,6 +904,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "agent.get": _get_agent,
         "agent.create": _create_agent,
         "agent.update": _update_agent,
+        "agent.rename": _rename_agent,
         "agent.delete": _delete_agent,
         "session.create": _create_session,
         "session.list": _list_sessions,

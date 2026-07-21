@@ -14,6 +14,36 @@ from .subagent_test_support import (
 pytestmark = pytest.mark.asyncio
 
 
+async def test_batch_tracker_reports_open_identity_parent_and_child_references() -> None:
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    tracker.reserve_slot(("parent", "session", "run"), 2, project_id=None)
+    tracker.register(
+        ("project-parent", "session", "run"),
+        "child",
+        "child-session",
+        "child-run",
+        project_id=None,
+    )
+    tracker.reserve_slot(
+        ("qualified-parent", "session", "run"),
+        2,
+        project_id="vbot",
+    )
+    tracker.register_reserved(
+        ("qualified-parent", "session", "run"),
+        "qualified-child",
+        "qualified-session",
+        "qualified-run",
+        project_id="vbot",
+    )
+
+    assert tracker.references_identity_agent("parent") is True
+    assert tracker.references_identity_agent("child") is True
+    assert tracker.references_identity_agent("qualified-parent") is False
+    assert tracker.references_identity_agent("qualified-child") is False
+    assert tracker.references_identity_agent("missing") is False
+
+
 async def test_batch_tracker_triggers_once_when_all_sub_agents_complete() -> None:
     # Arrange
     trigger_service = RecordingTriggerService()

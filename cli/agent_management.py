@@ -110,6 +110,33 @@ def agent_update(
     )
 
 
+def agent_rename(
+    instance: ServerInstance,
+    agent_id: str,
+    new_agent_id: str,
+) -> CommandResult:
+    """Rename an Identity Agent via ``agent.rename`` RPC."""
+    if agent_id == new_agent_id:
+        return CommandResult(
+            ok=False,
+            message="new agent id must differ from the current id",
+            instance=instance,
+        )
+    payload = _rpc_call(
+        instance,
+        "agent.rename",
+        {"id": agent_id, "new_id": new_agent_id},
+    )
+    if not payload.ok:
+        return payload.to_command_result()
+    resolved_id = _string_or_default(payload.data.get("id"), new_agent_id)
+    return CommandResult(
+        ok=True,
+        message=f"renamed {agent_id} -> {resolved_id}",
+        instance=instance,
+    )
+
+
 def agent_delete(instance: ServerInstance, agent_id: str) -> CommandResult:
     """Delete an agent via `agent.delete` RPC."""
 

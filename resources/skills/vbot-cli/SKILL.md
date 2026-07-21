@@ -43,7 +43,7 @@ Read the reference file before using an area's write commands — it has the exa
 | `provider` | `list` `status` `usage` `enable` `disable` `set-key` `unset-key` `connect` `connect-status` `disconnect` | `references/providers.md` |
 | `model` | `list` `refresh [<provider>]` | `references/providers.md` |
 | `task-model` | `list` `targets` `options` `set` `clear` | `references/providers.md` |
-| `agent` | `list` `show` `create` `update` `delete` | `references/agents-projects.md` |
+| `agent` | `list` `show` `create` `update` `rename` `delete` | `references/agents-projects.md` |
 | `project` | `add` `list` `show` `set` `set-override` `clear-override` `rm` | `references/agents-projects.md` |
 | `session` | `list` `create` `fork` `rename` `set-compaction-policy` `delete` `link-channel` | `references/agents-projects.md` |
 | `channel` | `add` `list` `status` `update` `enable` `disable` `remove` | `references/channels.md` |

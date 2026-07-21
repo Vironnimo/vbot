@@ -298,11 +298,14 @@ vbot agent list
 vbot agent create coder "Coding Agent" --model openrouter/anthropic/claude-sonnet-4
 vbot agent show coder
 vbot agent update coder --thinking-effort high
+vbot agent rename coder researcher
 ```
 
 `agent update --project <project-id>` selects the Project used for relative file and shell work without moving the Agent's Workspace or Memory; `--clear-project` removes that selection. Workspace relocation is a separate operation: use `--workspace <absolute-path>` or `--default-workspace`, optionally with `--copy-workspace-files` to copy `SOUL.md`, `USER.md`, and `MEMORY.md` into the destination.
 
 Agent create/update also expose delegation policy through `--subagent-allow <agent> ...` and Agent Policy through `--compaction-policy <json-object>` / `--clear-compaction-policy`. `--clear-model` and `--clear-fallback-model` restore global-default inheritance. Create/update output includes the saved id, Workspace, selected Project, effective Model, effective Policy, and provenance; Workspace moves also report copied and backed-up files. Creating an Agent without an Agent or global-default Model is allowed for onboarding, but the result explicitly warns that it cannot run and points to `vbot model list --task chat` followed by `agent update --model`.
+
+`agent rename <current-id> <new-id>` moves the complete Identity Agent tree, including Sessions, the internal Workspace, Memory, prompts, and private Skills. Live Channel targets, non-terminal Cron jobs, bare Identity Agent delegation entries, and functional Sub-Agent parent links are retargeted; historical provenance remains unchanged. The operation refuses collisions and runs while either id is busy, and rolls back server-owned changes if a reference cannot be updated.
 
 ### Projects and Project Agents
 
@@ -547,7 +550,7 @@ Installed commands use `vbot`. From a source checkout, `python cli/main.py` expo
 | Paths | `home [--data-dir ...]` |
 | Desktop | `desktop [--host ... --port ...]` |
 | Installation lifecycle | `update`, `uninstall`, `autostart enable`, `autostart disable`, `autostart status` |
-| Agents | `agent list`, `agent show`, `agent create`, `agent update`, `agent delete` |
+| Agents | `agent list`, `agent show`, `agent create`, `agent update`, `agent rename`, `agent delete` |
 | Projects | `project add`, `project list`, `project show`, `project set`, `project set-override`, `project clear-override`, `project rm` |
 | Sessions | `session list`, `session create`, `session fork`, `session rename`, `session set-compaction-policy`, `session delete`, `session link-channel` |
 | Channels | `channel add`, `channel list`, `channel update`, `channel enable`, `channel disable`, `channel status`, `channel remove` |

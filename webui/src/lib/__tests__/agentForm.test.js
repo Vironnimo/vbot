@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   AGENT_FORM_MODE_EDIT,
   THINKING_EFFORT_OPTIONS,
+  agentIdValidationError,
   buildAgentTargetCatalog,
   createAgentFormValues,
   effortOptionsForReasoning,
@@ -12,6 +13,12 @@ import {
 } from '../agentForm.js';
 
 describe('agent form helpers', () => {
+  it('validates an ID independently for the rename flow', () => {
+    expect(agentIdValidationError('')).toBe('required');
+    expect(agentIdValidationError('../unsafe')).toBe('invalid_id');
+    expect(agentIdValidationError('researcher')).toBe('');
+  });
+
   it('creates default values for a new agent form', () => {
     expect(createAgentFormValues()).toEqual({
       id: '',

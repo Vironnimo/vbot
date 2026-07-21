@@ -1873,6 +1873,14 @@ class Runtime:
         return self._chat_sessions
 
     @property
+    def subagents(self) -> SubAgentCoordinator:
+        """Access to live Sub-Agent coordination and batch tracking."""
+        self._ensure_started()
+        if self._subagent_coordinator is None:
+            raise RuntimeError("Sub-agent coordinator is not available")
+        return self._subagent_coordinator
+
+    @property
     def projects(self) -> ProjectStore:
         """Access to persisted project anchors (cwd, defaults, sessions)."""
         self._ensure_started()
