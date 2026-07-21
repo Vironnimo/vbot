@@ -246,6 +246,41 @@ def test_agent_delete_posts_rpc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert result == CommandResult(ok=True, message="deleted writer", instance=instance)
 
 
+def test_agent_rename_posts_rpc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        assert json == {
+            "method": "agent.rename",
+            "params": {"id": "writer", "new_id": "researcher"},
+        }
+        return httpx.Response(200, json={"ok": True, "result": {"id": "researcher"}})
+
+    monkeypatch.setattr(agent_management.httpx, "post", fake_post)
+
+    result = agent_management.agent_rename(instance, "writer", "researcher")
+
+    assert result == CommandResult(
+        ok=True,
+        message="renamed writer -> researcher",
+        instance=instance,
+    )
+
+
+def test_agent_rename_rejects_same_id_without_rpc(tmp_path: Path) -> None:
+    instance = make_instance(tmp_path)
+
+    result = agent_management.agent_rename(instance, "writer", "writer")
+
+    assert result == CommandResult(
+        ok=False,
+        message="new agent id must differ from the current id",
+        instance=instance,
+    )
+
+
 def test_agent_update_maps_clear_delegation_and_policy_flags() -> None:
     args = cli_main.parse_args(
         [

@@ -6,6 +6,7 @@ import asyncio
 import json
 from collections.abc import Callable
 from contextlib import suppress
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,7 +14,7 @@ from typing import Any, TypeVar, cast
 
 import pytest
 
-from core.agents import default_workspace_dir
+from core.agents import AgentAlreadyExistsError, default_workspace_dir
 from core.memory import DEFAULT_MEMORY_PROMPT_MODE
 from core.models import Capabilities, Model, ModelQuery, ReasoningCapabilities
 from core.models.models import ModelRegistry
@@ -169,6 +170,44 @@ class StubAgents:
             backed_up_files=(),
             backup_dir=None,
         )
+
+    def rename(self, agent_id: str, new_agent_id: str) -> Any:
+        if new_agent_id in self._agents:
+            raise AgentAlreadyExistsError(f"Agent already exists: {new_agent_id}")
+        previous = self._get_raw(agent_id)
+        renamed = StubAgent(**{**previous.__dict__, "id": new_agent_id})
+        del self._agents[agent_id]
+        self._agents[new_agent_id] = renamed
+        return SimpleNamespace(agent=self.get(new_agent_id), previous_agent=previous)
+
+    def restore_rename(self, result: Any) -> None:
+        del self._agents[result.agent.id]
+        self._agents[result.previous_agent.id] = result.previous_agent
+
+    def retarget_allowed_agent_references(
+        self,
+        old_agent_id: str,
+        new_agent_id: str,
+    ) -> Any:
+        previous_agents: list[StubAgent] = []
+        for agent_id, agent in list(self._agents.items()):
+            tools = deepcopy(agent.tools or {})
+            allowed = tools.get("subagent", {}).get("allowed_agents")
+            if not isinstance(allowed, list) or old_agent_id not in allowed:
+                continue
+            previous_agents.append(agent)
+            tools["subagent"]["allowed_agents"] = list(
+                dict.fromkeys(new_agent_id if item == old_agent_id else item for item in allowed)
+            )
+            self._agents[agent_id] = StubAgent(**{**agent.__dict__, "tools": tools})
+        return SimpleNamespace(
+            previous_agents=tuple(previous_agents),
+            agent_ids=tuple(agent.id for agent in previous_agents),
+        )
+
+    def restore_allowed_agent_references(self, result: Any) -> None:
+        for agent in result.previous_agents:
+            self._agents[agent.id] = agent
 
     def delete(self, agent_id: str) -> Path:
         self._get_raw(agent_id)

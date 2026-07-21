@@ -15,6 +15,7 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     getAgent: (id) => call('agent.get', { id }),
     createAgent: (params) => call('agent.create', params),
     updateAgent: (params) => call('agent.update', params),
+    renameAgent: (id, newId) => call('agent.rename', { id, new_id: newId }),
     deleteAgent: (id) => call('agent.delete', { id }),
     listModels: (params = {}) =>
       Object.keys(params).length === 0

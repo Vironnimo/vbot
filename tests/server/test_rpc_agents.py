@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from core.channels import ChannelConfigError
 from core.models import Capabilities, Model, ReasoningCapabilities
 from core.prompts import LayoutEntry, load_bundled_default_layout
 from core.runs import Run
@@ -698,6 +699,217 @@ async def test_agent_update_rpc_accepts_workspace_mutation(tmp_path: Path) -> No
     assert response["ok"] is True
     assert response["result"]["workspace"] == str(workspace.resolve())
     assert state.runtime.agents.get("coder").workspace == str(workspace.resolve())
+
+
+@pytest.mark.asyncio
+async def test_agent_rename_retargets_live_references_and_publishes_mapping(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.update(
+        "coder",
+        tools={"subagent": {"allowed_agents": ["coder", "coder@vbot"]}},
+    )
+    state.runtime.agents.create(
+        "manager",
+        "Manager",
+        tools={"subagent": {"allowed_agents": ["coder"]}},
+    )
+    state.runtime.chat_sessions.create("child", session_id="child-session")
+    state.runtime.chat_sessions.set_metadata(
+        "child",
+        "child-session",
+        {
+            "subagent_parent": {
+                "agent_id": "coder",
+                "session_id": "parent-session",
+                "run_id": "parent-run",
+                "project_id": None,
+            },
+            "fork_source": {"agent_id": "coder", "session_id": "historical"},
+        },
+    )
+    channels = [SimpleNamespace(id="telegram", agent_id="coder")]
+    jobs = [
+        SimpleNamespace(id="active", agent_id="coder", project_id=None, status="active"),
+        SimpleNamespace(id="history", agent_id="coder", project_id=None, status="completed"),
+        SimpleNamespace(id="project", agent_id="coder", project_id="vbot", status="active"),
+    ]
+
+    def update_channel(channel_id: str, **fields: Any) -> None:
+        channel = next(item for item in channels if item.id == channel_id)
+        channel.agent_id = fields["agent_id"]
+
+    def update_job(job_id: str, **fields: Any) -> Any:
+        job = next(item for item in jobs if item.id == job_id)
+        job.agent_id = fields["agent_id"]
+        return job
+
+    state.runtime.channel_service = SimpleNamespace(
+        list_channels=lambda: channels,
+        update_channel=update_channel,
+    )
+    state.runtime.cron_service = SimpleNamespace(
+        list_jobs=lambda: jobs,
+        update_job=update_job,
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "agent.rename", "params": {"id": "coder", "new_id": "researcher"}},
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["id"] == "researcher"
+    assert response["result"]["rename"] == {
+        "old_id": "coder",
+        "new_id": "researcher",
+        "channels_updated": ["telegram"],
+        "cron_jobs_updated": ["active"],
+        "agent_policies_updated": ["manager", "researcher"],
+        "session_links_updated": 1,
+    }
+    assert channels[0].agent_id == "researcher"
+    assert jobs[0].agent_id == "researcher"
+    assert jobs[1].agent_id == "coder"
+    assert jobs[2].agent_id == "coder"
+    assert state.runtime.agents.get("researcher").tools["subagent"]["allowed_agents"] == [
+        "researcher",
+        "coder@vbot",
+    ]
+    assert state.runtime.agents.get("manager").tools["subagent"]["allowed_agents"] == ["researcher"]
+    child_metadata = state.runtime.chat_sessions.get_metadata("child", "child-session")
+    assert child_metadata["subagent_parent"]["agent_id"] == "researcher"
+    assert child_metadata["fork_source"]["agent_id"] == "coder"
+    events = [event["payload"] for event in state.event_bus.events]
+    assert events == [
+        {
+            "kind": "agents",
+            "scope": {"old_agent_id": "coder", "new_agent_id": "researcher"},
+        },
+        {
+            "kind": "sessions",
+            "scope": {"old_agent_id": "coder", "new_agent_id": "researcher"},
+        },
+        {"kind": "channels"},
+        {"kind": "cron"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_agent_rename_rejects_active_run(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    release = asyncio.Event()
+    coder = state.runtime.agents.get("coder")
+
+    async def hold_run(_run: Run) -> str:
+        await release.wait()
+        return "done"
+
+    run = await state.chat_runs.start(
+        agent_id="coder",
+        session_id=coder.current_session_id,
+        executor=hold_run,
+        project_id=None,
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "agent.rename", "params": {"id": "coder", "new_id": "researcher"}},
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "agent_busy"
+    assert state.runtime.agents.get("coder").id == "coder"
+    release.set()
+    assert await run.wait() == "done"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("busy_agent_id", ["coder", "researcher"])
+async def test_agent_rename_rejects_open_subagent_relation(
+    tmp_path: Path,
+    busy_agent_id: str,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.subagents = SimpleNamespace(
+        batch_tracker=SimpleNamespace(
+            references_identity_agent=lambda agent_id: agent_id == busy_agent_id
+        )
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "agent.rename", "params": {"id": "coder", "new_id": "researcher"}},
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "agent_busy"
+    assert state.runtime.agents.get("coder").id == "coder"
+
+
+@pytest.mark.asyncio
+async def test_agent_rename_rolls_back_all_changes_when_reference_update_fails(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.create(
+        "manager",
+        "Manager",
+        tools={"subagent": {"allowed_agents": ["coder"]}},
+    )
+    state.runtime.chat_sessions.create("child", session_id="child-session")
+    original_metadata = {
+        "subagent_parent": {
+            "agent_id": "coder",
+            "session_id": "parent-session",
+            "run_id": "parent-run",
+            "project_id": None,
+        }
+    }
+    state.runtime.chat_sessions.set_metadata("child", "child-session", original_metadata)
+    channels = [
+        SimpleNamespace(id="first", agent_id="coder"),
+        SimpleNamespace(id="second", agent_id="coder"),
+    ]
+
+    def update_channel(channel_id: str, **fields: Any) -> None:
+        if channel_id == "second" and fields["agent_id"] == "researcher":
+            raise ChannelConfigError("adapter preflight failed")
+        channel = next(item for item in channels if item.id == channel_id)
+        channel.agent_id = fields["agent_id"]
+
+    state.runtime.channel_service = SimpleNamespace(
+        list_channels=lambda: channels,
+        update_channel=update_channel,
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "agent.rename", "params": {"id": "coder", "new_id": "researcher"}},
+    )
+
+    assert response["ok"] is False
+    assert state.runtime.agents.get("coder").id == "coder"
+    assert all(channel.agent_id == "coder" for channel in channels)
+    assert state.runtime.agents.get("manager").tools["subagent"]["allowed_agents"] == ["coder"]
+    assert state.runtime.chat_sessions.get_metadata("child", "child-session") == original_metadata
+    assert state.event_bus.events == []
+
+
+@pytest.mark.asyncio
+async def test_agent_rename_rejects_existing_destination(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.agents.create("researcher", "Researcher")
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "agent.rename", "params": {"id": "coder", "new_id": "researcher"}},
+    )
+
+    assert response["ok"] is False
+    assert state.runtime.agents.get("coder").id == "coder"
+    assert state.runtime.agents.get("researcher").name == "Researcher"
 
 
 @pytest.mark.asyncio

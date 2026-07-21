@@ -34,6 +34,7 @@ import {
   listLogs,
   normalizeRpcError,
   readLogFile,
+  renameAgent,
   removeFromQueue,
   rpc,
   transcribeSpeech,
@@ -294,6 +295,27 @@ describe('rpc()', () => {
         item_id: 'queue-1',
         content: 'Updated content',
       },
+    });
+  });
+});
+
+describe('agent API', () => {
+  it('posts the explicit Agent rename contract', async () => {
+    const fetchFunction = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ ok: true, result: { id: 'researcher' } }),
+      );
+
+    const result = await renameAgent('coder', 'researcher', {
+      baseUrl: 'http://localhost:8420',
+      fetch: fetchFunction,
+    });
+
+    expect(result).toEqual({ id: 'researcher' });
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'agent.rename',
+      params: { id: 'coder', new_id: 'researcher' },
     });
   });
 });

@@ -29,6 +29,60 @@ from core.tools.skill import SKILL_STATUS_LOADED, SKILL_TOOL_NAME
 FIXED_TIMESTAMP = datetime(2026, 5, 3, 14, 30, tzinfo=UTC)
 
 
+def test_identity_agent_reference_retarget_updates_only_live_unqualified_parent_links(
+    tmp_path,
+) -> None:
+    manager = ChatSessionManager(tmp_path)
+    manager.create("child", session_id="identity-child")
+    manager.set_metadata(
+        "child",
+        "identity-child",
+        {
+            "subagent_parent": {
+                "agent_id": "coder",
+                "session_id": "parent-session",
+                "run_id": "parent-run",
+                "project_id": None,
+            },
+            FORK_SOURCE_META_KEY: {
+                "agent_id": "coder",
+                "session_id": "historical-source",
+            },
+        },
+    )
+    manager.create("project-child", session_id="qualified-parent", project_id="vbot")
+    manager.set_metadata(
+        "project-child",
+        "qualified-parent",
+        {
+            "subagent_parent": {
+                "agent_id": "coder",
+                "session_id": "project-parent",
+                "run_id": "project-run",
+                "project_id": "vbot",
+            }
+        },
+        project_id="vbot",
+    )
+
+    updates = manager.retarget_identity_agent_references("coder", "researcher")
+
+    assert len(updates) == 1
+    identity_metadata = manager.get_metadata("child", "identity-child")
+    assert identity_metadata["subagent_parent"]["agent_id"] == "researcher"
+    assert identity_metadata[FORK_SOURCE_META_KEY]["agent_id"] == "coder"
+    assert (
+        manager.get_metadata("project-child", "qualified-parent", project_id="vbot")[
+            "subagent_parent"
+        ]["agent_id"]
+        == "coder"
+    )
+
+    manager.restore_identity_agent_references(updates)
+
+    assert manager.get_metadata("child", "identity-child") == updates[0].previous_metadata
+
+
 class TestChatSession:
     def test_create_writes_empty_jsonl_file(self, tmp_path):
         session = ChatSession.create(tmp_path, session_id="session-one")

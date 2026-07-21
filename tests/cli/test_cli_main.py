@@ -61,6 +61,7 @@ def make_result(
         ["agent", "show"],
         ["agent", "create"],
         ["agent", "update"],
+        ["agent", "rename"],
         ["agent", "delete"],
         ["session"],
         ["session", "list"],
@@ -380,6 +381,15 @@ def test_parse_args_supports_agent_update_fields() -> None:
     assert args.current_session_id == "session-one"
 
 
+def test_parse_args_supports_agent_rename() -> None:
+    args = cli_main.parse_args(["agent", "rename", "coder", "researcher"])
+
+    assert args.area == "agent"
+    assert args.command == "rename"
+    assert args.id == "coder"
+    assert args.new_id == "researcher"
+
+
 @pytest.mark.parametrize(
     ("command", "called_service"),
     [("start", "start"), ("stop", "stop"), ("status", "status")],
@@ -536,6 +546,40 @@ def test_run_agent_update_dispatches_changes_and_prints_plain_output(
         ),
     ]
     assert capsys.readouterr().out.splitlines() == ["updated coder"]
+
+
+def test_run_agent_rename_dispatches_ids_and_prints_plain_output(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[tuple[str, Any]] = []
+    instance = make_instance(tmp_path)
+    result = CommandResult(ok=True, message="renamed coder -> researcher", instance=instance)
+
+    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
+        calls.append(("resolve", {"host": host, "port": port, "data_dir": data_dir}))
+        return instance
+
+    def fake_rename_agent(
+        resolved_instance: ServerInstance,
+        agent_id: str,
+        new_agent_id: str,
+    ) -> CommandResult:
+        calls.append(("agent.rename", (resolved_instance, agent_id, new_agent_id)))
+        return result
+
+    exit_code = cli_main.run(
+        ["agent", "rename", "coder", "researcher"],
+        resolve=fake_resolve,
+        rename_agent=fake_rename_agent,
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        ("resolve", {"host": "127.0.0.1", "port": None, "data_dir": None}),
+        ("agent.rename", (instance, "coder", "researcher")),
+    ]
+    assert capsys.readouterr().out == "renamed coder -> researcher\n"
 
 
 def test_run_model_list_dispatches_and_prints_plain_output(

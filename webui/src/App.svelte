@@ -520,6 +520,16 @@
       typeof agentOrId === 'string' ? agentOrId : (agentOrId?.id ?? '');
   };
 
+  const remapIdentityAgentId = (oldAgentId, newAgentId) => {
+    if (selectedAgentId === oldAgentId) {
+      selectedAgentId = newAgentId;
+    }
+    if (promptScopeTarget === oldAgentId) {
+      promptScopeTarget = newAgentId;
+      promptScopeTargetRequestId += 1;
+    }
+  };
+
   const navigateToSubAgent = (targetOrAgentId, maybeSessionId) =>
     appController.navigateToSubAgent(targetOrAgentId, maybeSessionId);
 
@@ -670,6 +680,7 @@
       });
     },
     onLoadProjects: loadProjects,
+    onAgentIdChanged: remapIdentityAgentId,
     onReloadAgents: reloadAgentsFromServer,
     onSetOnboardingAside: () => {
       onboardingActive = false;

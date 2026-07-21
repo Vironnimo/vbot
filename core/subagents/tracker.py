@@ -348,6 +348,24 @@ class SubAgentBatchTracker:
             return 0
         return self._spawn_count(batch)
 
+    def references_identity_agent(self, agent_id: str) -> bool:
+        """Return whether an open batch still addresses an Identity Agent.
+
+        A batch can outlive its parent Run while child work is queued or active;
+        its completion callback still needs the parent's original address. Both
+        the parent and child sides therefore block an Identity Agent rename until
+        the relation has been fully delivered and pruned.
+        """
+        for parent_key, batch in self._batches.items():
+            if batch.project_id is None and parent_key[0] == agent_id:
+                return True
+            if any(
+                entry.project_id is None and entry.agent_id == agent_id
+                for entry in batch.entries.values()
+            ):
+                return True
+        return False
+
     @staticmethod
     def _all_complete(batch: _SubAgentBatch) -> bool:
         return (

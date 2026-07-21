@@ -271,6 +271,26 @@ class AgentUpdateResult:
     destination: str | None = field(default=None, repr=False)
 
 
+@dataclass(frozen=True)
+class AgentRenameResult:
+    """A completed Identity Agent tree rename and its rollback snapshot."""
+
+    agent: Agent
+    previous_agent: Agent = field(repr=False)
+
+
+@dataclass(frozen=True)
+class AgentReferenceUpdateResult:
+    """Exact Agent-config snapshots changed by an Identity Agent rename."""
+
+    previous_agents: tuple[Agent, ...] = field(repr=False)
+
+    @property
+    def agent_ids(self) -> tuple[str, ...]:
+        """Return the Identity Agent configs whose policies changed."""
+        return tuple(agent.id for agent in self.previous_agents)
+
+
 class AgentStore:
     """CRUD store for persisted agent configs and workspaces."""
 
@@ -582,6 +602,103 @@ class AgentStore:
             relocation.rollback()
         self._write_agent(previous_agent)
 
+    def rename(self, agent_id: str, new_agent_id: str) -> AgentRenameResult:
+        """Rename one complete Identity Agent tree as a rollback-capable mutation.
+
+        Sessions, prompts, private Skills, the default Workspace, and every other
+        Agent-owned file live below the same directory, so moving that directory
+        preserves the whole identity. A Workspace anywhere inside the tree is
+        rebased to the same relative location; an external Workspace is unchanged.
+        """
+        self._validate_agent_id(agent_id)
+        self._validate_agent_id(new_agent_id)
+        if agent_id == new_agent_id:
+            raise AgentError("new agent id must differ from the current id")
+
+        source_dir = self._agent_dir(agent_id)
+        destination_dir = self._agent_dir(new_agent_id)
+        if not self._agent_path(agent_id).is_file():
+            raise AgentNotFoundError(f"Agent not found: {agent_id}")
+        if destination_dir.exists() and not _paths_are_same_location(source_dir, destination_dir):
+            raise AgentAlreadyExistsError(f"Agent already exists: {new_agent_id}")
+
+        previous_agent = self._load_raw_agent(self._agent_path(agent_id))
+        renamed_workspace = _rebase_path_with_tree(
+            previous_agent.workspace,
+            source_dir,
+            destination_dir,
+        )
+        renamed_agent = replace(
+            previous_agent,
+            id=new_agent_id,
+            workspace=str(renamed_workspace),
+            updated_at=_utc_now(),
+        )
+
+        self._move_agent_tree(source_dir, destination_dir)
+        try:
+            self._write_agent(renamed_agent)
+        except Exception:
+            self._move_agent_tree(destination_dir, source_dir)
+            raise
+
+        return AgentRenameResult(
+            agent=self._apply_defaults(renamed_agent, self._agent_defaults()),
+            previous_agent=previous_agent,
+        )
+
+    def restore_rename(self, result: AgentRenameResult) -> None:
+        """Restore the exact pre-rename Agent tree and config snapshot."""
+        self._move_agent_tree(
+            self._agent_dir(result.agent.id),
+            self._agent_dir(result.previous_agent.id),
+        )
+        self._write_agent(result.previous_agent)
+
+    def retarget_allowed_agent_references(
+        self,
+        old_agent_id: str,
+        new_agent_id: str,
+    ) -> AgentReferenceUpdateResult:
+        """Retarget bare Identity Agent ids in every delegation allow-list.
+
+        Project-qualified addresses such as ``builder@project`` name Config
+        Agents and are a separate address space, so they are deliberately left
+        untouched. Exact config snapshots make this mutation reversible without
+        reconstructing prior list order or timestamps.
+        """
+        self._validate_agent_id(old_agent_id)
+        self._validate_agent_id(new_agent_id)
+        previous_agents: list[Agent] = []
+        try:
+            for listed_agent in self.list():
+                agent = self.get_raw(listed_agent.id)
+                tools = deepcopy(agent.tools)
+                subagent = tools.get("subagent")
+                if not isinstance(subagent, dict):
+                    continue
+                allowed_agents = subagent.get("allowed_agents")
+                if not isinstance(allowed_agents, list) or old_agent_id not in allowed_agents:
+                    continue
+                retargeted = _replace_list_item_once(
+                    allowed_agents,
+                    old_agent_id,
+                    new_agent_id,
+                )
+                subagent["allowed_agents"] = retargeted
+                previous_agents.append(agent)
+                self._write_agent(replace(agent, tools=tools, updated_at=_utc_now()))
+        except Exception:
+            for previous_agent in reversed(previous_agents):
+                self._write_agent(previous_agent)
+            raise
+        return AgentReferenceUpdateResult(previous_agents=tuple(previous_agents))
+
+    def restore_allowed_agent_references(self, result: AgentReferenceUpdateResult) -> None:
+        """Restore exact Agent configs changed by a reference retarget."""
+        for previous_agent in reversed(result.previous_agents):
+            self._write_agent(previous_agent)
+
     def agents_rooted_in(self, project_id: str) -> builtins.list[Agent]:
         """Return Identity Agents explicitly referencing one Project."""
         return [
@@ -692,6 +809,22 @@ class AgentStore:
 
     def _agent_dir(self, agent_id: str) -> Path:
         return self._data_dir / "agents" / agent_id
+
+    @staticmethod
+    def _move_agent_tree(source: Path, destination: Path) -> None:
+        """Move one Agent tree, including a Windows-safe case-only rename."""
+        if _paths_are_same_location(source, destination):
+            temporary = source.with_name(f".{source.name}.rename-{uuid.uuid4().hex}.tmp")
+            os.replace(source, temporary)
+            try:
+                os.replace(temporary, destination)
+            except Exception:
+                os.replace(temporary, source)
+                raise
+            return
+        if destination.exists():
+            raise AgentAlreadyExistsError(f"Agent already exists: {destination.name}")
+        os.replace(source, destination)
 
     def _agent_path(self, agent_id: str) -> Path:
         return self._agent_dir(agent_id) / "agent.json"
@@ -945,6 +1078,32 @@ def _workspace_for_storage(workspace: str | Path, *, data_dir: str | Path) -> st
         return workspace_path.relative_to(data_root).as_posix()
     except ValueError:
         return str(workspace_path)
+
+
+def _paths_are_same_location(left: Path, right: Path) -> bool:
+    """Return whether two path spellings differ only by platform case rules."""
+    return os.path.normcase(os.path.abspath(left)) == os.path.normcase(os.path.abspath(right))
+
+
+def _rebase_path_with_tree(value: str | Path, source: Path, destination: Path) -> Path:
+    """Keep an in-tree path at the same relative location after a tree move."""
+    path = Path(value).expanduser().resolve()
+    source_root = source.resolve(strict=False)
+    try:
+        relative = path.relative_to(source_root)
+    except ValueError:
+        return path
+    return (destination / relative).resolve(strict=False)
+
+
+def _replace_list_item_once(items: list[str], old: str, new: str) -> list[str]:
+    """Replace an exact list item and preserve order without creating duplicates."""
+    replaced: list[str] = []
+    for item in items:
+        candidate = new if item == old else item
+        if candidate not in replaced:
+            replaced.append(candidate)
+    return replaced
 
 
 def _validate_root_project_id(project_id: Any) -> str | None:

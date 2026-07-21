@@ -101,6 +101,43 @@ describe('App controller', () => {
     expect(actions.onReloadAgents).toHaveBeenCalledOnce();
   });
 
+  it('applies an Agent rename mapping before reloading and remaps old history entries', async () => {
+    const onAgentIdChanged = vi.fn();
+    const { actions, controller, state } = setup({ onAgentIdChanged });
+    controller.applyNavigationState({
+      view: 'chat',
+      session: { agentId: 'alpha', sessionId: 'session-one' },
+      selection: { agentId: 'alpha', projectId: '', projectAgentId: null },
+    });
+
+    await controller.handleServerEvent({
+      type: 'resource_changed',
+      payload: {
+        kind: 'agents',
+        scope: { old_agent_id: 'alpha', new_agent_id: 'researcher' },
+      },
+    });
+
+    expect(onAgentIdChanged).toHaveBeenCalledWith('alpha', 'researcher');
+    expect(actions.onReloadAgents).toHaveBeenCalledOnce();
+    expect(state.pendingSessionNavigation).toMatchObject({
+      agentId: 'researcher',
+      selection: { agentId: 'researcher' },
+    });
+
+    controller.applyNavigationState({
+      view: 'chat',
+      session: { agentId: 'alpha', sessionId: 'older-session' },
+      selection: { agentId: 'alpha', projectId: '', projectAgentId: null },
+    });
+
+    expect(state.pendingSessionNavigation).toMatchObject({
+      agentId: 'researcher',
+      sessionId: 'older-session',
+      selection: { agentId: 'researcher' },
+    });
+  });
+
   it.each(['gap', 'epoch_changed'])(
     'fully invalidates resource-backed projections after replay status %s',
     async (replayStatus) => {

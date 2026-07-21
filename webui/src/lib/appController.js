@@ -78,6 +78,7 @@ export function createAppController({
   isOperational,
   onAppError,
   onLoadProjects,
+  onAgentIdChanged = () => {},
   onReloadAgents,
   onSetOnboardingAside,
   browserHistory = globalThis.history,
@@ -89,6 +90,70 @@ export function createAppController({
   let sessionNavigationRequestId = 0;
   let unavailableNoticeTimer = null;
   let restoredNoticeTimer = null;
+  const identityAgentRedirects = new Map();
+
+  function resolvedIdentityAgentId(agentId) {
+    let resolved = agentId;
+    const visited = new Set();
+    while (
+      typeof resolved === 'string' &&
+      identityAgentRedirects.has(resolved) &&
+      !visited.has(resolved)
+    ) {
+      visited.add(resolved);
+      resolved = identityAgentRedirects.get(resolved);
+    }
+    return resolved;
+  }
+
+  function remapNavigationState(navState) {
+    const selection = navState.selection
+      ? {
+          ...navState.selection,
+          agentId: resolvedIdentityAgentId(navState.selection.agentId),
+        }
+      : null;
+    const session = navState.session
+      ? {
+          ...navState.session,
+          agentId: navState.session.projectId
+            ? navState.session.agentId
+            : resolvedIdentityAgentId(navState.session.agentId),
+        }
+      : null;
+    return { ...navState, selection, session };
+  }
+
+  function applyIdentityAgentRename(oldAgentId, newAgentId) {
+    for (const [source, target] of identityAgentRedirects) {
+      if (target === oldAgentId) {
+        identityAgentRedirects.set(source, newAgentId);
+      }
+    }
+    identityAgentRedirects.set(oldAgentId, newAgentId);
+    if (chatSessionOverride && !chatSessionOverride.projectId) {
+      chatSessionOverride = {
+        ...chatSessionOverride,
+        agentId: resolvedIdentityAgentId(chatSessionOverride.agentId),
+      };
+    }
+    if (state.pendingSessionNavigation) {
+      const pending = state.pendingSessionNavigation;
+      state.pendingSessionNavigation = {
+        ...pending,
+        agentId: pending.projectId
+          ? pending.agentId
+          : resolvedIdentityAgentId(pending.agentId),
+        selection: pending.selection
+          ? {
+              ...pending.selection,
+              agentId: resolvedIdentityAgentId(pending.selection.agentId),
+            }
+          : pending.selection,
+      };
+    }
+    onAgentIdChanged(oldAgentId, newAgentId);
+  }
 
   function pushNavigationState() {
     try {
@@ -133,6 +198,7 @@ export function createAppController({
   }
 
   function applyNavigationState(navState) {
+    navState = remapNavigationState(navState);
     let viewId = knownViewIds.includes(navState.view)
       ? navState.view
       : defaultViewId;
@@ -338,6 +404,17 @@ export function createAppController({
     }
 
     const kind = event.payload?.kind;
+    if (kind === 'agents') {
+      const scope = event.payload?.scope ?? {};
+      if (
+        typeof scope.old_agent_id === 'string' &&
+        scope.old_agent_id &&
+        typeof scope.new_agent_id === 'string' &&
+        scope.new_agent_id
+      ) {
+        applyIdentityAgentRename(scope.old_agent_id, scope.new_agent_id);
+      }
+    }
     const tokenKeys = tokenKeysForKind(kind);
     if (tokenKeys.includes(RESOURCE_TOKEN_MODELS)) {
       state.modelsRefreshToken += 1;

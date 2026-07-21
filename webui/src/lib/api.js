@@ -179,6 +179,20 @@ export function updateAgent(params = {}, options = {}) {
   return rpc('agent.update', params, options);
 }
 
+export function renameAgent(id, newId, options = {}) {
+  requireNonEmptyString(
+    id,
+    'Agent id must be a non-empty string',
+    'agent.rename',
+  );
+  requireNonEmptyString(
+    newId,
+    'New agent id must be a non-empty string',
+    'agent.rename',
+  );
+  return rpc('agent.rename', { id, new_id: newId }, options);
+}
+
 export function deleteAgent(id, options = {}) {
   requireNonEmptyString(
     id,

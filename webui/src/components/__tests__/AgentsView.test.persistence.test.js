@@ -17,11 +17,13 @@ import {
   selectSimpleOption,
   setTextInputValue,
   getButton,
+  getDialog,
   getAgentButton,
   submitAgentForm,
   getAgentUpdateCalls,
   flushAsyncUpdates,
   textInputValue,
+  setTextInputValueWithin,
   createAgentsRpcMock,
   usableConnection,
   baseAgent,
@@ -56,6 +58,43 @@ describe('AgentsView', () => {
 
     document.body.innerHTML = '';
     vi.useRealTimers();
+  });
+
+  it('renames through an explicit confirmation flow and keeps the renamed Agent selected', async () => {
+    const onAgentSelected = vi.fn();
+    const onAgentsChanged = vi.fn();
+    rpcMock.mockImplementation(createAgentsRpcMock());
+
+    mountedComponent = mount(AgentsView, {
+      target: document.body,
+      props: { onAgentSelected, onAgentsChanged },
+    });
+    flushSync();
+    await waitForCondition(() => textInputValue(1) === 'Alpha', 100);
+    onAgentSelected.mockClear();
+    onAgentsChanged.mockClear();
+
+    getButton('Change ID').click();
+    flushSync();
+    const dialog = getDialog('Change Agent ID?');
+    expect(dialog.textContent).toContain('Historical records keep the ID');
+    setTextInputValueWithin(dialog, 0, 'researcher');
+    dialog
+      .querySelector('form')
+      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await flushAsyncUpdates();
+
+    expect(rpcMock).toHaveBeenCalledWith('agent.rename', {
+      id: 'alpha',
+      new_id: 'researcher',
+    });
+    expect(textInputValue(0)).toBe('researcher');
+    expect(onAgentSelected).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'researcher' }),
+    );
+    expect(onAgentsChanged).toHaveBeenCalledWith([
+      expect.objectContaining({ id: 'researcher' }),
+    ]);
   });
 
   it('auto-saves model changes 800 ms after the last edit', async () => {

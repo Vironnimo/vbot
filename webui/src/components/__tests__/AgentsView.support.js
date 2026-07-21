@@ -325,6 +325,14 @@ export function createAgentsRpcMock(options = {}) {
       return { ...params, current_session_id: 'session-saved' };
     }
 
+    if (method === 'agent.rename') {
+      if (typeof options.agentRename === 'function') {
+        return options.agentRename(params);
+      }
+      const source = agents.find((agent) => agent.id === params.id) ?? {};
+      return { ...source, id: params.new_id };
+    }
+
     throw new Error(`Unexpected RPC method: ${method}`);
   };
 }

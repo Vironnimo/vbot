@@ -67,6 +67,7 @@ AGENT_HELP = {
     "show": "Show one agent config",
     "create": "Create an agent config",
     "update": "Update an agent config",
+    "rename": "Change an Identity Agent id and retarget live references",
     "delete": "Delete an agent config",
 }
 PROJECT_HELP = {
@@ -353,6 +354,19 @@ def _add_agent_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         include_name=True,
         include_session=True,
         include_location=True,
+    )
+
+    rename_parser = _add_command_parser(
+        agent_subparsers,
+        "rename",
+        AGENT_HELP["rename"],
+        example="agent rename assistant researcher",
+    )
+    rename_parser.add_argument("id", metavar="<agent-id>", help="Current Identity Agent id")
+    rename_parser.add_argument(
+        "new_id",
+        metavar="<new-agent-id>",
+        help="New Identity Agent id",
     )
 
     delete_parser = _add_command_parser(

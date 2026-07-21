@@ -13,6 +13,7 @@ from cli.agent_management import (
     agent_create,
     agent_delete,
     agent_list,
+    agent_rename,
     agent_show,
     agent_update,
 )
@@ -195,6 +196,7 @@ def run(
         [ServerInstance, str, str, dict[str, Any]], CommandResult
     ] = agent_create,
     update_agent: Callable[[ServerInstance, str, dict[str, Any]], CommandResult] = agent_update,
+    rename_agent: Callable[[ServerInstance, str, str], CommandResult] = agent_rename,
     delete_agent: Callable[[ServerInstance, str], CommandResult] = agent_delete,
     add_channel: Callable[
         [
@@ -328,6 +330,7 @@ def run(
             show_agent=show_agent,
             create_agent=create_agent,
             update_agent=update_agent,
+            rename_agent=rename_agent,
             delete_agent=delete_agent,
         )
         print_management_command_result(result)
@@ -471,6 +474,7 @@ def dispatch_agent_command(
     show_agent: Callable[[ServerInstance, str], CommandResult],
     create_agent: Callable[[ServerInstance, str, str, dict[str, Any]], CommandResult],
     update_agent: Callable[[ServerInstance, str, dict[str, Any]], CommandResult],
+    rename_agent: Callable[[ServerInstance, str, str], CommandResult],
     delete_agent: Callable[[ServerInstance, str], CommandResult],
 ) -> CommandResult:
     """Dispatch one parsed agent command against the server RPC client."""
@@ -483,6 +487,8 @@ def dispatch_agent_command(
         return create_agent(instance, args.id, args.name, _agent_changes_from_args(args))
     if args.command == "update":
         return update_agent(instance, args.id, _agent_changes_from_args(args))
+    if args.command == "rename":
+        return rename_agent(instance, args.id, args.new_id)
     if args.command == "delete":
         return delete_agent(instance, args.id)
     raise ValueError(f"Unsupported agent command: {args.command}")
