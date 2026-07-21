@@ -289,6 +289,22 @@ export const visibleRunChildren = (assistantRun) =>
     return Boolean(child.content);
   });
 
+// `streaming` means a text section still comes from transient deltas and may
+// later be replaced by its stable message. It does not mean that section is
+// still the Run's current activity: once a later visible child exists, the
+// stream has advanced and only that later child may carry the working caret.
+export function isRunChildWorking(assistantRun, child) {
+  if (assistantRun?.status !== 'running' || !child?.streaming || !child?.id) {
+    return false;
+  }
+
+  const children = visibleRunChildren(assistantRun);
+  const childIndex = children.findIndex(
+    (candidate) => candidate.id === child.id,
+  );
+  return childIndex >= 0 && childIndex === children.length - 1;
+}
+
 export const runMetaParts = (assistantRun) => {
   const parts = [labelForRunIterations(assistantRun)];
   const duration = formatRunDuration(assistantRun);

@@ -4,6 +4,7 @@ import {
   compactToolValue,
   errorMessagePresentation,
   isRowCancellable,
+  isRunChildWorking,
   isToolPreparing,
   labelForEvent,
   labelForMessage,
@@ -612,6 +613,49 @@ describe('chatTimelinePresentation', () => {
     };
 
     expect(visibleRunChildren(assistantRun)).toHaveLength(1);
+  });
+
+  it('marks only the latest visible streaming child as the active work', () => {
+    const reasoning = {
+      id: 'reasoning-one',
+      type: 'reasoning',
+      content: 'Inspect the request.',
+      streaming: true,
+    };
+    const answer = {
+      id: 'answer-one',
+      type: 'assistant_output',
+      content: 'I will inspect it.',
+      streaming: true,
+    };
+    const tool = {
+      id: 'tool-one',
+      type: 'tool_call',
+      name: 'read',
+      streaming: true,
+      status: 'preparing',
+    };
+    const assistantRun = {
+      status: 'running',
+      items: [reasoning, answer, tool],
+    };
+
+    expect(isRunChildWorking(assistantRun, reasoning)).toBe(false);
+    expect(isRunChildWorking(assistantRun, answer)).toBe(false);
+    expect(isRunChildWorking(assistantRun, tool)).toBe(true);
+  });
+
+  it('does not expose working text after the Run becomes terminal', () => {
+    const answer = {
+      id: 'answer-one',
+      type: 'assistant_output',
+      content: 'Done.',
+      streaming: true,
+    };
+
+    expect(
+      isRunChildWorking({ status: 'completed', items: [answer] }, answer),
+    ).toBe(false);
   });
 
   it('does not mark non-bash tool rows as cancellable', () => {

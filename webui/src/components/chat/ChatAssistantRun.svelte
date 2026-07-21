@@ -12,6 +12,7 @@
     compactToolValue,
     formatTime,
     isRowCancellable,
+    isRunChildWorking,
     isStartingForegroundSubAgent,
     isSubAgentTool,
     isTextToSpeechTool,
@@ -223,19 +224,17 @@
   <div class="msg-content assistant-run-content">
     {#each visibleRunChildren(item) as child (child.id)}
       {#if child.type === 'reasoning'}
+        {@const working = isRunChildWorking(item, child)}
         <details
           class="reasoning-block"
           open={isReasoningOpen(child.id)}
           ontoggle={(event) =>
             onReasoningOpenChange(child.id, event.currentTarget.open)}
         >
-          {@render reasoningSummary(
-            Boolean(child.streaming),
-            isReasoningOpen(child.id),
-          )}
+          {@render reasoningSummary(working, isReasoningOpen(child.id))}
           <div class="reasoning-body">
             <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-            {@html child.streaming
+            {@html working
               ? renderReasoningMarkdownStreaming(child.content ?? '')
               : renderReasoningMarkdown(child.content ?? '')}
           </div>
@@ -442,12 +441,13 @@
           {/if}
         {/if}
       {:else if child.type === 'assistant_output'}
-        <div class="msg-markdown" class:streaming-text={child.streaming}>
+        {@const working = isRunChildWorking(item, child)}
+        <div class="msg-markdown" class:streaming-text={working}>
           <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-          {@html child.streaming
+          {@html working
             ? renderMarkdownStreaming(child.content ?? '')
             : renderMarkdown(child.content ?? '')}
-          {#if child.streaming}<span class="streaming-caret" aria-hidden="true"
+          {#if working}<span class="streaming-caret" aria-hidden="true"
             ></span>{/if}
         </div>
       {:else if child.type === 'model_fallback'}

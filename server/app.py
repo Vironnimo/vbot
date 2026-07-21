@@ -98,6 +98,7 @@ DEFAULT_SERVER_HOST = "127.0.0.1"
 DEFAULT_SERVER_PORT = 8420
 DEFAULT_SERVER_PORT_SOURCE = "default"
 UPLOAD_READ_CHUNK_SIZE_BYTES = 1_048_576
+SSE_HEARTBEAT_INTERVAL_SECONDS = 10.0
 REPLAY_STATUS_FRESH = "fresh"
 REPLAY_STATUS_RESUMED = "resumed"
 REPLAY_STATUS_GAP = "gap"
@@ -872,12 +873,43 @@ def _safe_webui_file_path(webui_dist_dir: Path, requested_path: str) -> Path | N
     return None
 
 
-async def _sse_run_events(run: Any, *, after_sequence: int = 0) -> AsyncGenerator[str, None]:
+async def _sse_run_events(
+    run: Any,
+    *,
+    after_sequence: int = 0,
+    heartbeat_interval_seconds: float = SSE_HEARTBEAT_INTERVAL_SECONDS,
+) -> AsyncGenerator[str, None]:
     async with aclosing(run.subscribe(after_sequence=after_sequence)) as events:
-        async for event in events:
-            data = remove_opaque_provider_metadata(event.to_dict())
-            yield (
-                f"id: {event.sequence}\n"
-                f"event: {event.type}\n"
-                f"data: {json.dumps(data, separators=(',', ':'))}\n\n"
-            )
+        event_iterator = events.__aiter__()
+        event_task: asyncio.Task[Any] | None = None
+        try:
+            while True:
+                if event_task is None:
+                    event_task = asyncio.create_task(anext(event_iterator))
+                done, _pending = await asyncio.wait(
+                    {event_task},
+                    timeout=heartbeat_interval_seconds,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if not done:
+                    # A named transport-only event keeps quiet Tool calls from
+                    # looking like a dead connection. It has no Run sequence and
+                    # never enters timeline or replay state.
+                    yield "event: heartbeat\ndata: {}\n\n"
+                    continue
+                try:
+                    event = event_task.result()
+                except StopAsyncIteration:
+                    break
+                event_task = None
+                data = remove_opaque_provider_metadata(event.to_dict())
+                yield (
+                    f"id: {event.sequence}\n"
+                    f"event: {event.type}\n"
+                    f"data: {json.dumps(data, separators=(',', ':'))}\n\n"
+                )
+        finally:
+            if event_task is not None and not event_task.done():
+                event_task.cancel()
+                with suppress(asyncio.CancelledError, StopAsyncIteration):
+                    await event_task

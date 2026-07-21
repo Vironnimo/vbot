@@ -4,6 +4,7 @@ import {
   createChatController,
   createChatState,
   ensureSessionState,
+  startRun,
 } from '../chatState.js';
 
 function setup({
@@ -158,6 +159,101 @@ describe('chat controller', () => {
     expect(chatState.historyError).toBe('offline');
     expect(sessionState.error).toBeNull();
     expect(sessionState.status).toBe('idle');
+  });
+
+  it('reconciles a stalled Run to its durable final assistant answer without re-executing it', async () => {
+    const loadChatHistory = vi.fn().mockResolvedValue({
+      active_run: null,
+      has_more: false,
+      messages: [
+        { id: 'message-user', role: 'user', content: 'Do the work' },
+        {
+          id: 'message-final',
+          role: 'assistant',
+          content: 'The work is complete.',
+        },
+      ],
+    });
+    const { chatState, controller, runStream } = setup({
+      isDisplayedSession: () => true,
+      operationOverrides: { loadChatHistory },
+    });
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    startRun(sessionState, {
+      run_id: 'run-stalled',
+      status: 'running',
+      sse_url: '/api/runs/run-stalled/events',
+    });
+
+    expect(
+      await controller.reconcileRunSession(sessionState, 'run-stalled'),
+    ).toBe(true);
+
+    expect(loadChatHistory).toHaveBeenCalledWith({
+      agent_id: 'alpha',
+      session_id: 'session-one',
+      limit: 100,
+    });
+    expect(sessionState.messages.at(-1)).toMatchObject({
+      id: 'message-final',
+      content: 'The work is complete.',
+    });
+    expect(sessionState.status).toBe('idle');
+    expect(sessionState.currentRun).toBeNull();
+    expect(runStream.closeSubscriptionFor).toHaveBeenCalledWith(
+      sessionState.key,
+    );
+  });
+
+  it('reattaches a Run that durable history still reports as active', async () => {
+    const activeRun = {
+      run_id: 'run-active',
+      status: 'running',
+      sse_url: '/api/runs/run-active/events',
+      events: [],
+    };
+    const loadChatHistory = vi.fn().mockResolvedValue({
+      active_run: activeRun,
+      has_more: false,
+      messages: [],
+    });
+    const { chatState, controller, runStream } = setup({
+      isDisplayedSession: () => true,
+      operationOverrides: { loadChatHistory },
+    });
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    startRun(sessionState, activeRun);
+
+    expect(
+      await controller.reconcileRunSession(sessionState, 'run-active'),
+    ).toBe(true);
+    expect(runStream.attachRunStream).toHaveBeenCalledWith(
+      sessionState,
+      activeRun,
+    );
+    expect(runStream.closeSubscriptionFor).not.toHaveBeenCalled();
+  });
+
+  it('keeps failed background reconciliation silent for the next retry', async () => {
+    const loadChatHistory = vi.fn().mockRejectedValue(new Error('offline'));
+    const { chatState, controller } = setup({
+      isDisplayedSession: () => true,
+      operationOverrides: { loadChatHistory },
+    });
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    startRun(sessionState, {
+      run_id: 'run-stalled',
+      status: 'running',
+      sse_url: '/api/runs/run-stalled/events',
+    });
+    chatState.historyError = 'existing visible error';
+
+    expect(
+      await controller.reconcileRunSession(sessionState, 'run-stalled'),
+    ).toBe(false);
+    expect(chatState.historyError).toBe('existing visible error');
+    expect(sessionState.status).toBe('running');
+    expect(sessionState.currentRun?.runId).toBe('run-stalled');
   });
 
   it('loads the roster, current history, Run truth, and Queue as one lifecycle', async () => {

@@ -1893,6 +1893,8 @@
     subscribeRunEvents,
     syncSessionQueue: (sessionState) =>
       chatController.syncSessionQueue(sessionState),
+    reconcileRunSession: (sessionState, expectedRunId) =>
+      chatController.reconcileRunSession(sessionState, expectedRunId),
     isDisplayedSession,
     updateSubAgentRunStatuses: applySubAgentRunStatusUpdates,
   });

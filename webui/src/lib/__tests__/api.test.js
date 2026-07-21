@@ -12,6 +12,7 @@ import {
   RUN_EVENT_TOOL_CALL_DELTA,
   RUN_EVENT_TOOL_CALL_STDERR,
   RUN_EVENT_TOOL_CALL_STDOUT,
+  RUN_STREAM_HEARTBEAT_EVENT,
   RUN_EVENT_TYPES,
   WEBSOCKET_ERROR_RESPONSE,
   addProject,
@@ -899,6 +900,21 @@ describe('subscribeRunEvents()', () => {
     });
     expect(connection.source.closeCount).toBe(1);
     expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('delivers transport heartbeats without adding timeline events', () => {
+    const onEvent = vi.fn();
+    const onHeartbeat = vi.fn();
+    const connection = subscribeRunEvents(
+      '/api/runs/run-heartbeat/events',
+      { onEvent, onHeartbeat },
+      { EventSource: MockEventSource },
+    );
+
+    connection.source.emit(RUN_STREAM_HEARTBEAT_EVENT, { data: '{}' });
+
+    expect(onHeartbeat).toHaveBeenCalledOnce();
+    expect(onEvent).not.toHaveBeenCalled();
   });
 
   it('subscribes to delta SSE run events', () => {
