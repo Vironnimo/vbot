@@ -755,9 +755,17 @@ def test_multiple_agents_and_daily_trend(tmp_path: Path) -> None:
 
     assert report.overview.total_agents == 2
     assert {entry.agent_id for entry in report.runs.runs_per_agent} == {"main", "research"}
-    trend = {point.date: (point.runs, point.errors) for point in report.overview.daily_trend}
-    assert trend["2026-06-01"] == (1, 1)
-    assert trend["2026-06-02"] == (1, 0)
+    trend = {
+        point.date: (
+            point.runs,
+            point.completed,
+            point.failed,
+            point.cancelled,
+        )
+        for point in report.overview.daily_trend
+    }
+    assert trend["2026-06-01"] == (1, 0, 1, 0)
+    assert trend["2026-06-02"] == (1, 1, 0, 0)
 
 
 def test_project_session_appears_under_address_form(tmp_path: Path) -> None:

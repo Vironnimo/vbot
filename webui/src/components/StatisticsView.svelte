@@ -13,11 +13,14 @@
   import {
     STATISTICS_SUB_VIEWS,
     DAILY_GRANULARITIES,
+    activitySummary,
     agentDisplay,
     barFractions,
+    buildActivityTimeline,
     cacheHitRate,
     clampUsagePercent,
-    donutSegments,
+    formatActivityDate,
+    formatChartTick,
     formatDateTime,
     formatDurationMs,
     formatHourLabel,
@@ -50,7 +53,6 @@
     'agent_takeover',
   ];
   const STATUS_KEYS = ['completed', 'failed', 'cancelled'];
-  const DONUT_CIRCUMFERENCE = 2 * Math.PI * 16;
   const USAGE_REFRESH_INTERVAL_MS = 10_000;
 
   let report = $state(null);
@@ -104,21 +106,43 @@
     };
   });
 
-  const statusSegments = $derived(
+  const statusTotal = $derived(
     overview
-      ? donutSegments(
-          STATUS_KEYS.map((key) => ({ key, value: overview.run_status[key] })),
+      ? STATUS_KEYS.reduce(
+          (total, key) => total + (overview.run_status[key] ?? 0),
+          0,
         )
+      : 0,
+  );
+  const statusRows = $derived(
+    overview
+      ? STATUS_KEYS.map((key) => ({
+          key,
+          value: overview.run_status[key] ?? 0,
+          fraction: statusTotal
+            ? (overview.run_status[key] ?? 0) / statusTotal
+            : 0,
+        }))
       : [],
   );
   const dailyTrend = $derived(
-    overview ? rollupDaily(overview.daily_trend, granularity) : [],
+    overview
+      ? buildActivityTimeline(
+          overview.daily_trend,
+          granularity,
+          report.generated_at,
+        )
+      : [],
   );
-  const dailyRunFractions = $derived(
-    barFractions(dailyTrend.map((point) => point.runs)),
-  );
-  const dailyErrorFractions = $derived(
-    barFractions(dailyTrend.map((point) => point.errors)),
+  const activityMetrics = $derived(activitySummary(dailyTrend));
+  const activityTicks = $derived(
+    dailyTrend.length
+      ? [
+          dailyTrend[0],
+          dailyTrend[Math.floor((dailyTrend.length - 1) / 2)],
+          dailyTrend[dailyTrend.length - 1],
+        ]
+      : [],
   );
   const usageDaily = $derived(
     usage ? rollupDaily(usage.daily, granularity) : [],
@@ -253,6 +277,44 @@
 
   function statusLabel(key) {
     return t(`statistics.status.${key}`, key);
+  }
+
+  function activityWindowLabel() {
+    return t(
+      `statistics.overview.activityWindow.${granularity}`,
+      granularity === 'month'
+        ? 'Last 12 months'
+        : granularity === 'week'
+          ? 'Last 16 weeks'
+          : 'Last 30 days',
+    );
+  }
+
+  function activityPeriodLabel(dateKey, long = false) {
+    const formatted = formatActivityDate(dateKey, granularity, locale, {
+      long,
+    });
+    return granularity === 'week' && long
+      ? t('statistics.overview.weekOf', 'Week of {date}', { date: formatted })
+      : formatted;
+  }
+
+  function activityTooltip(point) {
+    return t(
+      'statistics.overview.activityTooltip',
+      '{period} · {runs} Runs · {completed} completed · {failed} failed · {cancelled} cancelled',
+      {
+        period: activityPeriodLabel(point.date, true),
+        runs: formatInteger(point.runs, locale),
+        completed: formatInteger(point.completed, locale),
+        failed: formatInteger(point.failed, locale),
+        cancelled: formatInteger(point.cancelled, locale),
+      },
+    );
+  }
+
+  function activityHeight(value, total) {
+    return total > 0 ? `${(Math.max(0, value) / total) * 100}%` : '0%';
   }
 
   function roleLabel(role) {
@@ -444,36 +506,103 @@
   </div>
 {/snippet}
 
-{#snippet trendBars(points, runFractions, errorFractions)}
-  {#if points.length === 0}
+{#snippet activityChart()}
+  {#if overview.total_runs === 0}
     <EmptyState
       density="compact"
       description={t('statistics.empty', 'No activity recorded yet.')}
     />
+  {:else if activityMetrics.totalRuns === 0}
+    <EmptyState
+      density="compact"
+      description={t(
+        'statistics.overview.noActivityPeriod',
+        'No Runs in this period.',
+      )}
+    />
   {:else}
-    <div class="stats-trend">
-      {#each points as point, index (point.date)}
-        <div
-          class="stats-trend__col"
-          use:tooltip={`${point.date} · ${formatInteger(point.runs, locale)} / ${formatInteger(point.errors, locale)}`}
-        >
-          <span
-            class="stats-trend__bar stats-trend__bar--runs"
-            style={`height: ${Math.round((runFractions[index] ?? 0) * 100)}%`}
-          ></span>
-          <span
-            class="stats-trend__bar stats-trend__bar--errors"
-            style={`height: ${Math.round((errorFractions[index] ?? 0) * 100)}%`}
-          ></span>
+    <dl class="stats-activity-summary">
+      <div>
+        <dt>{t('statistics.overview.periodRuns', 'Runs')}</dt>
+        <dd>{formatInteger(activityMetrics.totalRuns, locale)}</dd>
+      </div>
+      <div>
+        <dt>{t('statistics.overview.completionRate', 'Completion')}</dt>
+        <dd>{formatPercent(activityMetrics.completionRate)}</dd>
+      </div>
+      <div>
+        <dt>{t('statistics.overview.peak', 'Peak')}</dt>
+        <dd>
+          {formatInteger(activityMetrics.peak?.runs, locale)}
+          <span>{activityPeriodLabel(activityMetrics.peak?.date, true)}</span>
+        </dd>
+      </div>
+    </dl>
+
+    <div
+      class="stats-activity"
+      role="img"
+      aria-label={t(
+        'statistics.overview.activityAria',
+        '{runs} Runs in this period; {completion} completed.',
+        {
+          runs: formatInteger(activityMetrics.totalRuns, locale),
+          completion: formatPercent(activityMetrics.completionRate),
+        },
+      )}
+    >
+      <div class="stats-activity__y-axis" aria-hidden="true">
+        <span>{formatChartTick(activityMetrics.scaleMax, locale)}</span>
+        <span>
+          {activityMetrics.scaleMax > 1
+            ? formatChartTick(activityMetrics.scaleMax / 2, locale)
+            : ''}
+        </span>
+        <span>0</span>
+      </div>
+      <div class="stats-activity__plot" aria-hidden="true">
+        <div class="stats-activity__grid">
+          <span></span>
+          <span></span>
+          <span></span>
         </div>
-      {/each}
+        <div class="stats-activity__bars">
+          {#each dailyTrend as point (point.date)}
+            <div
+              class="stats-activity__col"
+              use:tooltip={activityTooltip(point)}
+            >
+              <div
+                class="stats-activity__bar"
+                class:stats-activity__bar--visible={point.runs > 0}
+                style={`height: ${activityHeight(point.runs, activityMetrics.scaleMax)}`}
+              >
+                {#each STATUS_KEYS as key (key)}
+                  <span
+                    class={`stats-activity__segment stats-activity__segment--${key}`}
+                    style={`height: ${activityHeight(point[key], point.runs)}`}
+                  ></span>
+                {/each}
+              </div>
+            </div>
+          {/each}
+        </div>
+      </div>
+      <div class="stats-activity__x-axis" aria-hidden="true">
+        {#each activityTicks as point (point.date)}
+          <span>{activityPeriodLabel(point.date)}</span>
+        {/each}
+      </div>
     </div>
-    <div class="stats-trend__legend">
-      <span class="stats-legend stats-legend--runs"
-        >{t('statistics.col.runs', 'Runs')}</span
+    <div class="stats-activity__legend">
+      <span class="stats-legend stats-legend--completed"
+        >{statusLabel('completed')}</span
       >
-      <span class="stats-legend stats-legend--errors"
-        >{t('statistics.col.errors', 'Errors')}</span
+      <span class="stats-legend stats-legend--failed"
+        >{statusLabel('failed')}</span
+      >
+      <span class="stats-legend stats-legend--cancelled"
+        >{statusLabel('cancelled')}</span
       >
     </div>
   {/if}
@@ -506,40 +635,79 @@
 
     <div class="stats-columns">
       <div class="stats-block">
-        <h3 class="stats-block__title">
-          {t('statistics.overview.runStatus', 'Run status')}
-        </h3>
-        <div class="stats-donut-wrap">
-          <svg
-            class="stats-donut"
-            viewBox="0 0 40 40"
-            role="img"
-            aria-label={t('statistics.overview.runStatus', 'Run status')}
-          >
-            <circle class="stats-donut__track" cx="20" cy="20" r="16" />
-            {#each statusSegments as segment (segment.key)}
-              <circle
-                class={`stats-donut__seg stats-donut__seg--${segment.key}`}
-                cx="20"
-                cy="20"
-                r="16"
-                stroke-dasharray={`${segment.fraction * DONUT_CIRCUMFERENCE} ${DONUT_CIRCUMFERENCE}`}
-                stroke-dashoffset={`${-segment.offset * DONUT_CIRCUMFERENCE}`}
-              />
-            {/each}
-          </svg>
-          <ul class="stats-legend-list">
-            {#each STATUS_KEYS as key (key)}
-              <li>
-                <span class={`stats-dot stats-dot--${key}`}></span>
-                {statusLabel(key)}
-                <strong
-                  >{formatInteger(overview.run_status[key], locale)}</strong
-                >
-              </li>
-            {/each}
-          </ul>
+        <div class="stats-health__head">
+          <h3 class="stats-block__title">
+            {t('statistics.overview.runHealth', 'Run health')}
+          </h3>
+          <span class="stats-health__total">
+            {t('statistics.overview.totalRuns', '{count} total Runs', {
+              count: formatInteger(statusTotal, locale),
+            })}
+          </span>
         </div>
+        <div class="stats-health__hero">
+          <strong
+            >{statusTotal
+              ? formatShare(overview.run_status.completed, statusTotal)
+              : formatPercent(null)}</strong
+          >
+          <span>{t('statistics.overview.completedLabel', 'completed')}</span>
+        </div>
+        <div
+          class="stats-health__track"
+          role="img"
+          aria-label={t(
+            'statistics.overview.statusAria',
+            '{completed} completed, {failed} failed, {cancelled} cancelled.',
+            {
+              completed: formatInteger(overview.run_status.completed, locale),
+              failed: formatInteger(overview.run_status.failed, locale),
+              cancelled: formatInteger(overview.run_status.cancelled, locale),
+            },
+          )}
+        >
+          {#each statusRows as status (status.key)}
+            <span
+              class={`stats-health__segment stats-health__segment--${status.key}`}
+              style={`width: ${status.fraction * 100}%`}
+              use:tooltip={`${statusLabel(status.key)} · ${formatInteger(status.value, locale)} · ${formatPercent(status.fraction)}`}
+            ></span>
+          {/each}
+        </div>
+        <ul class="stats-health__outcomes">
+          {#each statusRows as status (status.key)}
+            <li>
+              <span
+                class={`stats-health__marker stats-health__marker--${status.key}`}
+              ></span>
+              <span class="stats-health__label">{statusLabel(status.key)}</span>
+              <strong>{formatInteger(status.value, locale)}</strong>
+              <span class="stats-health__share"
+                >{statusTotal
+                  ? formatPercent(status.fraction)
+                  : formatPercent(null)}</span
+              >
+            </li>
+          {/each}
+        </ul>
+        {#if statusTotal > 0}
+          <p class="stats-health__note">
+            {t(
+              'statistics.overview.nonCompleted',
+              '{count} Runs ({share}) did not complete.',
+              {
+                count: formatInteger(
+                  overview.run_status.failed + overview.run_status.cancelled,
+                  locale,
+                ),
+                share: formatShare(
+                  overview.run_status.failed + overview.run_status.cancelled,
+                  statusTotal,
+                ),
+              },
+            )}
+          </p>
+        {/if}
       </div>
 
       <div class="stats-block">
@@ -606,12 +774,18 @@
 
     <div class="stats-block">
       <div class="stats-block__head">
-        <h3 class="stats-block__title">
-          {t('statistics.overview.dailyTrend', 'Daily activity')}
-        </h3>
+        <div class="stats-block__heading">
+          <h3 class="stats-block__title">
+            {t(
+              'statistics.overview.activityReliability',
+              'Activity & reliability',
+            )}
+          </h3>
+          <p>{activityWindowLabel()}</p>
+        </div>
         {@render granularityToggle()}
       </div>
-      {@render trendBars(dailyTrend, dailyRunFractions, dailyErrorFractions)}
+      {@render activityChart()}
     </div>
 
     <div class="stats-block">
@@ -1516,6 +1690,15 @@
     align-items: center;
     gap: 12px;
   }
+  .stats-block__heading .stats-block__title {
+    margin-bottom: 4px;
+  }
+  .stats-block__heading p {
+    margin: 0;
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-xs);
+  }
   .stats-block__title,
   .stats-section-title {
     font-size: 13px;
@@ -1652,64 +1835,115 @@
     font-size: 11px;
     color: var(--text-lo);
   }
-  .stats-donut-wrap {
+  .stats-health__head {
     display: flex;
+    justify-content: space-between;
     align-items: center;
-    gap: 18px;
+    gap: 12px;
   }
-  .stats-donut {
-    width: 96px;
-    height: 96px;
-    transform: rotate(-90deg);
+  .stats-health__head .stats-block__title {
+    margin-bottom: 0;
   }
-  .stats-donut__track {
-    fill: none;
-    stroke: var(--surface-3);
-    stroke-width: 5;
+  .stats-health__total {
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-xs);
   }
-  .stats-donut__seg {
-    fill: none;
-    stroke-width: 5;
+  .stats-health__hero {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-top: 16px;
   }
-  .stats-donut__seg--completed {
-    stroke: var(--green);
+  .stats-health__hero strong {
+    color: var(--text-hi);
+    font-family: var(--font-mono);
+    font-size: var(--fs-display);
+    font-weight: 500;
+    letter-spacing: -0.03em;
   }
-  .stats-donut__seg--failed {
-    stroke: var(--red);
+  .stats-health__hero span {
+    color: var(--text-med);
+    font-size: var(--fs-body-sm);
   }
-  .stats-donut__seg--cancelled {
-    stroke: var(--text-lo);
+  .stats-health__track {
+    display: flex;
+    height: 12px;
+    margin: 14px 0;
+    overflow: hidden;
+    background: var(--surface-3);
+    border-radius: var(--r-sm);
   }
-  .stats-legend-list {
+  .stats-health__segment {
+    display: block;
+    height: 100%;
+  }
+  .stats-health__segment--completed,
+  .stats-health__marker--completed,
+  .stats-activity__segment--completed {
+    background: var(--green);
+  }
+  .stats-health__segment--failed,
+  .stats-health__marker--failed,
+  .stats-activity__segment--failed {
+    background: var(--red);
+  }
+  .stats-health__segment--cancelled,
+  .stats-health__marker--cancelled,
+  .stats-activity__segment--cancelled {
+    background: var(--text-lo);
+  }
+  .stats-health__outcomes {
     list-style: none;
     margin: 0;
     padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    font-size: 12px;
-    color: var(--text-med);
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
   }
-  .stats-legend-list strong {
-    color: var(--text-hi);
-    font-family: var(--font-mono);
-    margin-left: 4px;
+  .stats-health__outcomes li {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 4px 6px;
+    min-width: 0;
+    padding: 10px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
   }
-  .stats-dot {
-    display: inline-block;
+  .stats-health__marker {
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    margin-right: 6px;
   }
-  .stats-dot--completed {
-    background: var(--green);
+  .stats-health__label {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-med);
+    font-size: var(--fs-body-sm);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .stats-dot--failed {
-    background: var(--red);
+  .stats-health__outcomes strong {
+    grid-column: 2;
+    color: var(--text-hi);
+    font-family: var(--font-mono);
+    font-size: var(--fs-heading-md);
+    font-weight: 500;
   }
-  .stats-dot--cancelled {
-    background: var(--text-lo);
+  .stats-health__share {
+    grid-column: 3;
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-sm);
+  }
+  .stats-health__note {
+    margin: 14px 0 0;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+    color: var(--text-med);
+    font-size: var(--fs-body-sm);
   }
   .stats-facts {
     margin: 0 0 12px;
@@ -1730,31 +1964,121 @@
     font-family: var(--font-mono);
     color: var(--text-hi);
   }
-  .stats-trend {
+  .stats-activity-summary {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    margin: 14px 0 16px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+  }
+  .stats-activity-summary div {
+    min-width: 0;
+    padding: 10px 12px;
+  }
+  .stats-activity-summary div + div {
+    border-left: 1px solid var(--border);
+  }
+  .stats-activity-summary dt {
+    margin-bottom: 6px;
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-xs);
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+  .stats-activity-summary dd {
+    margin: 0;
+    overflow: hidden;
+    color: var(--text-hi);
+    font-family: var(--font-mono);
+    font-size: var(--fs-heading-sm);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .stats-activity-summary dd span {
+    margin-left: 6px;
+    color: var(--text-med);
+    font-family: var(--font-sans);
+    font-size: var(--fs-body-sm);
+  }
+  .stats-activity {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr);
+    grid-template-rows: 132px auto;
+    gap: 6px 8px;
+    margin-top: 4px;
+  }
+  .stats-activity__y-axis {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    align-items: flex-end;
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-xs);
+  }
+  .stats-activity__plot {
+    position: relative;
+    min-width: 0;
+    border-bottom: 1px solid var(--border-2);
+  }
+  .stats-activity__grid,
+  .stats-activity__bars {
+    position: absolute;
+    inset: 0;
+  }
+  .stats-activity__grid {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    pointer-events: none;
+  }
+  .stats-activity__grid span {
+    width: 100%;
+    border-top: 1px solid var(--border);
+  }
+  .stats-activity__bars {
     display: flex;
     align-items: flex-end;
     gap: 3px;
-    height: 80px;
   }
-  .stats-trend__col {
-    flex: 1 1 0;
+  .stats-activity__col {
     display: flex;
+    flex: 1 1 0;
     align-items: flex-end;
     justify-content: center;
-    gap: 1px;
     height: 100%;
-    min-width: 4px;
+    min-width: 0;
   }
-  .stats-trend__bar {
-    width: 5px;
+  .stats-activity__bar {
+    display: flex;
+    flex-direction: column-reverse;
+    width: min(70%, 14px);
+    overflow: hidden;
     border-radius: var(--r-sm) var(--r-sm) 0 0;
-    min-height: 1px;
   }
-  .stats-trend__bar--runs {
-    background: var(--accent);
+  .stats-activity__bar--visible {
+    min-height: 2px;
   }
-  .stats-trend__bar--errors {
-    background: var(--red);
+  .stats-activity__segment {
+    display: block;
+    flex-shrink: 0;
+    width: 100%;
+  }
+  .stats-activity__x-axis {
+    grid-column: 2;
+    display: flex;
+    justify-content: space-between;
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-xs);
+  }
+  .stats-activity__legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 12px 0 0 42px;
   }
   .stats-trend__legend,
   .stats-toggle {
@@ -1776,11 +2100,14 @@
     border-radius: 2px;
     display: inline-block;
   }
-  .stats-legend--runs::before {
-    background: var(--accent);
+  .stats-legend--completed::before {
+    background: var(--green);
   }
-  .stats-legend--errors::before {
+  .stats-legend--failed::before {
     background: var(--red);
+  }
+  .stats-legend--cancelled::before {
+    background: var(--text-lo);
   }
   .stats-legend--measured::before {
     background: var(--accent);
@@ -1938,5 +2265,37 @@
     font-family: var(--font-mono);
     font-size: 11px;
     color: var(--text-lo);
+  }
+
+  @media (max-width: 640px) {
+    .stats-block__head {
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+    .stats-health__outcomes {
+      grid-template-columns: 1fr;
+    }
+    .stats-activity-summary {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .stats-activity-summary div:last-child {
+      grid-column: 1 / -1;
+      border-top: 1px solid var(--border);
+      border-left: 0;
+    }
+    .stats-activity {
+      grid-template-columns: 28px minmax(0, 1fr);
+      grid-template-rows: 120px auto;
+      gap: 6px;
+    }
+    .stats-activity__bars {
+      gap: 2px;
+    }
+    .stats-activity__legend {
+      margin-left: 34px;
+    }
+    .stats-toggle__option {
+      padding-inline: 8px;
+    }
   }
 </style>

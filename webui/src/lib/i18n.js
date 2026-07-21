@@ -1443,7 +1443,13 @@ export const englishCatalog = Object.freeze({
   'statistics.overview.runs': 'Runs',
   'statistics.overview.chatMessages': 'Chat messages',
   'statistics.overview.toolCalls': 'Tool calls',
-  'statistics.overview.runStatus': 'Run status',
+  'statistics.overview.runHealth': 'Run health',
+  'statistics.overview.totalRuns': '{count} total Runs',
+  'statistics.overview.completedLabel': 'completed',
+  'statistics.overview.statusAria':
+    '{completed} completed, {failed} failed, {cancelled} cancelled.',
+  'statistics.overview.nonCompleted':
+    '{count} Runs ({share}) did not complete.',
   'statistics.overview.facts': 'At a glance',
   'statistics.overview.avgDuration': 'Average run',
   'statistics.overview.medianDuration': 'Median run',
@@ -1452,7 +1458,19 @@ export const englishCatalog = Object.freeze({
   'statistics.overview.sessionRecords': 'Stored Session records',
   'statistics.overview.sessionRecordsHint':
     'Every persisted Session entry, including Chat messages and internal execution or context records.',
-  'statistics.overview.dailyTrend': 'Daily activity',
+  'statistics.overview.activityReliability': 'Activity & reliability',
+  'statistics.overview.activityWindow.day': 'Last 30 days',
+  'statistics.overview.activityWindow.week': 'Last 16 weeks',
+  'statistics.overview.activityWindow.month': 'Last 12 months',
+  'statistics.overview.noActivityPeriod': 'No Runs in this period.',
+  'statistics.overview.periodRuns': 'Runs',
+  'statistics.overview.completionRate': 'Completion',
+  'statistics.overview.peak': 'Peak',
+  'statistics.overview.weekOf': 'Week of {date}',
+  'statistics.overview.activityTooltip':
+    '{period} · {runs} Runs · {completed} completed · {failed} failed · {cancelled} cancelled',
+  'statistics.overview.activityAria':
+    '{runs} Runs in this period; {completion} completed.',
   'statistics.overview.agentsTable': 'Per agent',
   'statistics.col.runs': 'Runs',
   'statistics.col.errors': 'Errors',
