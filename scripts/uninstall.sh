@@ -152,11 +152,55 @@ remove_systemd_unit() {
 
 # --- managed installs --------------------------------------------------------
 
-stop_vbot_server() {
-    local vbot_path="${PROJECT_ROOT}/.venv/bin/vbot"
-    if [ ! -x "$vbot_path" ]; then
-        vbot_path="$(command -v vbot 2>/dev/null || true)"
+resolve_manifest_python() {
+    local parser="${PROJECT_ROOT}/.venv/bin/python"
+    if [ ! -x "$parser" ]; then
+        if command -v python3 >/dev/null 2>&1; then
+            parser="$(command -v python3)"
+        elif command -v python >/dev/null 2>&1; then
+            parser="$(command -v python)"
+        else
+            return 1
+        fi
     fi
+    "$parser" - "$INSTALL_MANIFEST" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as manifest_file:
+    state = json.load(manifest_file)
+python_executable = state.get("python_executable")
+if not isinstance(python_executable, str) or not python_executable.strip():
+    raise SystemExit(1)
+print(python_executable)
+PY
+}
+
+resolve_vbot_path() {
+    local recorded_python=""
+    if [ -f "$INSTALL_MANIFEST" ]; then
+        recorded_python="$(resolve_manifest_python 2>/dev/null || true)"
+    fi
+    if [ -n "$recorded_python" ]; then
+        local recorded_vbot
+        recorded_vbot="$(dirname "$recorded_python")/vbot"
+        if [ -x "$recorded_vbot" ]; then
+            echo "$recorded_vbot"
+            return
+        fi
+    fi
+
+    local conventional_vbot="${PROJECT_ROOT}/.venv/bin/vbot"
+    if [ -x "$conventional_vbot" ]; then
+        echo "$conventional_vbot"
+        return
+    fi
+    command -v vbot 2>/dev/null || true
+}
+
+stop_vbot_server() {
+    local vbot_path
+    vbot_path="$(resolve_vbot_path)"
     if [ -z "$vbot_path" ]; then
         fail "Could not locate vbot to stop the server before removing the application."
     fi
@@ -168,10 +212,13 @@ stop_vbot_server() {
         return
     fi
 
-    local venv_python="${PROJECT_ROOT}/.venv/bin/python"
-    if [ -x "$venv_python" ] && [ -f "$INSTALL_MANIFEST" ]; then
+    local manifest_python=""
+    if [ -f "$INSTALL_MANIFEST" ]; then
+        manifest_python="$(resolve_manifest_python 2>/dev/null || true)"
+    fi
+    if [ -x "$manifest_python" ] && [ -f "$INSTALL_MANIFEST" ]; then
         local stop_status=0
-        "$venv_python" - "$INSTALL_MANIFEST" "$vbot_path" <<'PY' >/dev/null 2>&1 || stop_status=$?
+        "$manifest_python" - "$INSTALL_MANIFEST" "$vbot_path" <<'PY' >/dev/null 2>&1 || stop_status=$?
 import json
 import subprocess
 import sys
