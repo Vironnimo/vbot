@@ -233,8 +233,9 @@ def _launch_windows_uninstaller(
     return UninstallResult(
         ok=True,
         message=(
-            "uninstall: launched in an elevated PowerShell window; removal continues after "
-            "this command exits; "
+            f"uninstall: application removal started for {script.parent.parent} in an "
+            "elevated PowerShell window; this confirms only that the helper launched, not "
+            "that removal completed; completion or failure will be reported in that window; "
             + (
                 "the selected vBot data directory will also be deleted"
                 if remove_data
@@ -377,6 +378,18 @@ def run_uninstall(
             remove_directory=remove_directory or _remove_data_directory,
         )
 
+    stop_error = _stop_application_server(
+        instance,
+        install_root=install_root,
+        service_name=service_name,
+        probe=probe,
+        stop=stop,
+        systemd_managed=systemd_managed,
+        stop_systemd=stop_systemd,
+    )
+    if stop_error is not None:
+        return stop_error
+
     return launcher(
         task_name=task_name,
         service_name=service_name,
@@ -388,6 +401,34 @@ def run_uninstall(
         root=install_root,
         working_directory=current_directory,
         home_directory=home,
+    )
+
+
+def _stop_application_server(
+    instance: ServerInstance,
+    *,
+    install_root: Path,
+    service_name: str,
+    probe: ProbeHealth,
+    stop: ServerLifecycle,
+    systemd_managed: SystemdManaged,
+    stop_systemd: SystemdLifecycle,
+) -> UninstallResult | None:
+    """Stop the selected application's server before handing its files to a remover."""
+
+    health = probe(instance)
+    unit_owned = systemd_managed(service_name)
+    if unit_owned:
+        stopped = stop_systemd(instance, service_name)
+    elif health.is_vbot:
+        stopped = stop(instance)
+    else:
+        return None
+    if stopped.ok:
+        return None
+    return _fail(
+        "uninstall: application removal aborted because the server could not be stopped: "
+        f"{stopped.message}; application directory preserved: {install_root}"
     )
 
 

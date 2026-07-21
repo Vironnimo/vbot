@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tomllib
@@ -206,6 +207,72 @@ def test_managed_uninstaller_uses_recorded_lifecycle_target(script_name: str) ->
     assert "server_host" in script
     assert "server_port" in script
     assert "server_data_directory" in script
+
+
+@pytest.mark.parametrize("script_name", ["uninstall.sh", "uninstall.ps1"])
+def test_application_uninstaller_treats_server_stop_as_mandatory(script_name: str) -> None:
+    script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+
+    assert "best_effort" not in script.lower()
+    assert "besteffort" not in script.lower()
+    assert "no files were removed" in script
+    if script_name.endswith(".sh"):
+        stop_body = script[script.index("stop_vbot_server()") : script.index("managed_cleanup()")]
+        assert 'if [ "$stop_status" -ne 0 ]' in stop_body
+        assert '&& [ "$REMOVE_DATA" -eq 1 ]' not in stop_body
+    else:
+        stop_body = script[
+            script.index("function Stop-VbotServer") : script.index(
+                "function Invoke-ManagedUninstall"
+            )
+        ]
+        assert "if ($stopExitCode -ne 0)" in stop_body
+        assert "if ($RemoveData)" not in stop_body
+
+
+def test_linux_managed_uninstaller_preserves_app_when_server_stop_fails(
+    tmp_path: Path,
+) -> None:
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is unavailable")
+    install_root = tmp_path / "install"
+    scripts_dir = install_root / "scripts"
+    scripts_dir.mkdir(parents=True)
+    shutil.copy2(PROJECT_ROOT / "scripts" / "uninstall.sh", scripts_dir / "uninstall.sh")
+    (install_root / ".vbot-install-root").write_text("managed\n", encoding="utf-8")
+    vbot_path = install_root / ".venv" / "bin" / "vbot"
+    vbot_path.parent.mkdir(parents=True)
+    vbot_path.write_text(
+        "#!/usr/bin/env bash\nexit 19\n",
+        encoding="utf-8",
+    )
+    vbot_path.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    environment = {**os.environ, "HOME": "home"}
+
+    result = subprocess.run(
+        [
+            bash,
+            "install/scripts/uninstall.sh",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8420",
+            "--data-dir",
+            "data",
+        ],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode != 0
+    assert "no files were removed" in result.stderr
+    assert install_root.is_dir()
 
 
 @pytest.mark.parametrize("script_name", ["uninstall.sh", "uninstall.ps1"])
