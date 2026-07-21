@@ -8,7 +8,7 @@ canonical join, **live at load, with no network and no key**.
 
 ``ModelRegistry.load()`` stays the single public read surface; everything here is
 hidden behind it. The two public entry points are :func:`load_canonical_layer`
-(reads the provider-agnostic base once per ``resources_dir``) and
+(reads the provider-agnostic base once per selected Model DB root) and
 :func:`assemble_provider_model` (builds one effective per-model record from the
 layers + the join). Callers outside ``core/models/`` should not import this module.
 
@@ -16,7 +16,7 @@ layers + the join). Callers outside ``core/models/`` should not import this modu
 THE ON-DISK FILE-FORMAT CONTRACT  (Phase 3 must produce exactly this shape)
 ================================================================================
 
-All files live under ``<resources_dir>/models/``.
+All files live together inside one already-selected complete ``models/`` root.
 
 Three layers, each a different home with a clear responsibility:
 
@@ -126,7 +126,7 @@ from typing import Any
 # attribute, never on the wire (GLOSSARY: canonical id "geht nie auf den Draht").
 CANONICAL_POINTER_KEY = "canonical"
 
-# Canonical layer files under ``<resources_dir>/models/``. Both may be absent
+# Canonical layer files inside one complete Model DB root. Both may be absent
 # (Phase 3 generates them); an absent file contributes an empty layer.
 CANONICAL_FILE_NAME = "models.json"
 CANONICAL_OVERRIDES_FILE_NAME = "models.overrides.json"
@@ -148,7 +148,7 @@ def load_canonical_layer(models_dir: Path) -> dict[str, dict[str, Any]]:
     files, and assembly must still load every provider model without error.
 
     Args:
-        models_dir: The ``<resources_dir>/models`` directory.
+        models_dir: The already-selected complete Model DB directory.
 
     Returns:
         A mapping ``canonical_id -> canonical record`` (plain dicts). Empty when

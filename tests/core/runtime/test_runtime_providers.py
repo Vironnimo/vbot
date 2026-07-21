@@ -915,7 +915,7 @@ async def test_maybe_refresh_local_catalogs_throttles_within_ttl(
 
     monkeypatch.setattr(discovery_module, "refresh_models", _fake_refresh)
     reloads: list[object] = []
-    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir: reloads.append(1))
+    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir, **kwargs: reloads.append(1))
 
     # Act
     await runtime.maybe_refresh_local_catalogs()
@@ -941,7 +941,7 @@ async def test_maybe_refresh_local_catalogs_refreshes_again_after_ttl(
         return {"provider_id": provider.id, "model_count": 0}
 
     monkeypatch.setattr(discovery_module, "refresh_models", _fake_refresh)
-    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir: None)
+    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir, **kwargs: None)
 
     # Act — expire the throttle between the calls.
     await runtime.maybe_refresh_local_catalogs()
@@ -969,7 +969,7 @@ async def test_maybe_refresh_local_catalogs_degrades_when_server_down(
 
     monkeypatch.setattr(discovery_module, "refresh_models", _fake_refresh)
     reloads: list[object] = []
-    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir: reloads.append(1))
+    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir, **kwargs: reloads.append(1))
 
     # Act — must not raise.
     await runtime.maybe_refresh_local_catalogs()
@@ -979,6 +979,33 @@ async def test_maybe_refresh_local_catalogs_degrades_when_server_down(
     assert reloads == []
     assert runtime._local_catalog_refresh_at is not None
     assert runtime.connection_reachability("ollama:local") is False
+
+
+@pytest.mark.asyncio
+async def test_maybe_refresh_local_catalogs_degrades_when_staged_db_is_invalid(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A validation failure leaves the published runtime database untouched."""
+    import core.models.discovery as discovery_module
+
+    runtime.storage.set_provider_connection_enabled("ollama:local", True)
+
+    async def _fake_refresh(provider, credential, resources_dir, **kwargs):
+        return {"provider_id": provider.id, "model_count": 1}
+
+    def _fail_validation(cls, resources_dir, **kwargs):
+        raise ValueError("invalid staged Model DB")
+
+    monkeypatch.setattr(discovery_module, "refresh_models", _fake_refresh)
+    monkeypatch.setattr(ModelRegistry, "load", classmethod(_fail_validation))
+    reloads: list[object] = []
+    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir, **kwargs: reloads.append(1))
+
+    await runtime.maybe_refresh_local_catalogs()
+
+    assert reloads == []
+    assert not (runtime.storage.data_dir / "models").exists()
+    assert runtime.connection_reachability("ollama:local") is True
 
 
 @pytest.mark.asyncio
@@ -995,7 +1022,7 @@ async def test_maybe_refresh_records_reachability_on_success(
         return {"provider_id": provider.id, "model_count": 1}
 
     monkeypatch.setattr(discovery_module, "refresh_models", _fake_refresh)
-    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir: None)
+    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir, **kwargs: None)
 
     # Act
     await runtime.maybe_refresh_local_catalogs()
@@ -1026,7 +1053,7 @@ async def test_local_provider_health_logs_only_transitions(
         return {"provider_id": provider.id, "model_count": 1}
 
     monkeypatch.setattr(discovery_module, "refresh_models", _fake_refresh)
-    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir: None)
+    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir, **kwargs: None)
     logger = Mock()
     runtime.logger = logger
 
@@ -1055,7 +1082,7 @@ async def test_maybe_refresh_force_bypasses_throttle(
         return {"provider_id": provider.id, "model_count": 0}
 
     monkeypatch.setattr(discovery_module, "refresh_models", _fake_refresh)
-    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir: None)
+    monkeypatch.setattr(runtime.models, "reload", lambda resources_dir, **kwargs: None)
 
     # Act
     await runtime.maybe_refresh_local_catalogs()

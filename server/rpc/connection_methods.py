@@ -9,7 +9,14 @@ from typing import Any
 
 import httpx
 
+from core.models.database import (
+    MODEL_DATABASE_DIRECTORY_NAME,
+    ModelDatabaseRefresh,
+    begin_runtime_model_database_refresh,
+    begin_system_model_database_refresh,
+)
 from core.models.discovery import ModelDiscoveryError, refresh_models
+from core.models.models import ModelRegistry
 from core.models.models_dev import (
     ModelsDevCatalog,
     ModelsDevError,
@@ -68,6 +75,9 @@ MODEL_LIST_FILTER_FIELDS = frozenset(
         "min_context_window",
     )
 )
+_MODEL_REFRESH_TARGET_RUNTIME = "runtime"
+_MODEL_REFRESH_TARGET_SYSTEM = "system"
+_MODEL_REFRESH_TARGETS = frozenset({_MODEL_REFRESH_TARGET_RUNTIME, _MODEL_REFRESH_TARGET_SYSTEM})
 
 
 async def _list_models(state: Any, params: JsonObject) -> JsonObject:
@@ -447,24 +457,71 @@ def _unset_provider_key(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _refresh_model_db(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"provider_id"}, "model refresh")
+    _reject_unsupported(
+        params,
+        {"expected_resources_dir", "provider_id", "target"},
+        "model refresh",
+    )
 
+    database_refresh: ModelDatabaseRefresh | None = None
+    refresh_resources_dir: Path | None = None
     try:
         runtime = state.runtime
-        resources_dir = _runtime_resources_dir(runtime)
+        target = params.get("target", _MODEL_REFRESH_TARGET_RUNTIME)
+        if not isinstance(target, str) or target not in _MODEL_REFRESH_TARGETS:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                "model refresh target must be 'runtime' or 'system'",
+            )
+        system_resources_dir = _runtime_resources_dir(runtime)
+        data_dir = Path(runtime.storage.data_dir)
+        if target == _MODEL_REFRESH_TARGET_RUNTIME:
+            if "expected_resources_dir" in params:
+                raise RpcError(
+                    RPC_ERROR_INVALID_REQUEST,
+                    "expected_resources_dir is only valid for a system Model DB refresh",
+                )
+            database_refresh = begin_runtime_model_database_refresh(
+                system_resources_dir,
+                data_dir,
+            )
+            refresh_resources_dir = database_refresh.resources_dir
+        else:
+            expected_resources_dir = _required_string(params, "expected_resources_dir")
+            if Path(expected_resources_dir).resolve() != system_resources_dir.resolve():
+                raise RpcError(
+                    RPC_ERROR_INVALID_REQUEST,
+                    "the serving checkout does not match the requested system Model DB",
+                )
+            database_refresh = begin_system_model_database_refresh(system_resources_dir)
+            refresh_resources_dir = database_refresh.resources_dir
         if "provider_id" in params:
             provider_id = _required_string(params, "provider_id")
-            result = await _refresh_provider_model_db(runtime, provider_id, resources_dir)
+            result = await _refresh_provider_model_db(
+                runtime,
+                provider_id,
+                refresh_resources_dir,
+            )
             scope = provider_id
             provider_count = 1
             model_count = _model_count(result)
         else:
-            result = await _refresh_global_model_db(runtime, resources_dir)
+            result = await _refresh_global_model_db(runtime, refresh_resources_dir)
             scope = "all"
             provider_count = int(result.get("refreshed_count", 0))
             model_count = int(result.get("model_count", 0))
+        ModelRegistry.invalidate(refresh_resources_dir)
+        ModelRegistry.load(refresh_resources_dir)
+        ModelRegistry.invalidate(refresh_resources_dir)
+        database_refresh.commit()
+        _reload_runtime_model_registry(runtime, system_resources_dir)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    finally:
+        if refresh_resources_dir is not None:
+            ModelRegistry.invalidate(refresh_resources_dir)
+        if database_refresh is not None:
+            database_refresh.discard()
     # Both refresh paths reloaded the registry in place; tell open windows to
     # reload their model lists. Single tail emit so the per-provider early
     # return cannot skip the signal.
@@ -472,8 +529,9 @@ async def _refresh_model_db(state: Any, params: JsonObject) -> JsonObject:
     errors = result.get("errors")
     error_count = len(errors) if isinstance(errors, list) else 0
     _LOGGER.info(
-        "Model database refreshed (scope=%s providers=%s models=%s errors=%s)",
+        "Model database refreshed (scope=%s target=%s providers=%s models=%s errors=%s)",
         scope,
+        target,
         provider_count,
         model_count,
         error_count,
@@ -654,7 +712,6 @@ async def _refresh_global_model_db(runtime: Any, resources_dir: Path) -> JsonObj
         refresh_errors.extend(errors)
 
     canonical_result = await _refresh_canonical_layer_if_possible(catalog, resources_dir)
-    _reload_runtime_model_registry(runtime, resources_dir)
     provider_count, model_count = _summarize_refreshed_providers(refreshed_providers)
     result: JsonObject = {
         "providers": refreshed_providers,
@@ -713,7 +770,6 @@ async def _refresh_provider_model_db(
             f"Provider credentials not found for provider '{provider_id}'",
         )
     await _refresh_canonical_layer_if_possible(catalog, resources_dir)
-    _reload_runtime_model_registry(runtime, resources_dir)
     result = dict(successes[0])
     if errors:
         result["errors"] = errors
@@ -812,12 +868,15 @@ async def _refresh_provider_connections(
     return successes, errors
 
 
-def _reload_runtime_model_registry(runtime: Any, resources_dir: Path) -> None:
+def _reload_runtime_model_registry(runtime: Any, system_resources_dir: Path) -> None:
     # Reload in place rather than rebinding ``runtime._models``: services that
     # captured the registry at construction (task-model targets for
     # speech/image/embeddings, the status display, the recall backend) hold the
     # same instance, so an in-place swap reaches all of them without re-wiring.
-    runtime.models.reload(resources_dir)
+    runtime.models.reload(
+        system_resources_dir,
+        runtime_models_dir=Path(runtime.storage.data_dir) / MODEL_DATABASE_DIRECTORY_NAME,
+    )
 
 
 def _model_count(result: JsonObject) -> int:

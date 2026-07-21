@@ -340,7 +340,7 @@ async def refresh_canonical_layer(
     (model count + how many models lift a ladder vs. fall to the hand path).
 
     Args:
-        resources_dir: The resources root (a ``models/`` subdir is created).
+        resources_dir: The refresh output root (a ``models/`` subdir is created).
         client: Optional injected HTTP client (tests pass a mock transport).
         catalog: Optional pre-fetched catalog to reuse instead of fetching
             (e.g. when a per-provider refresh already fetched it this run).

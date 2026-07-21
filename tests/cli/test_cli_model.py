@@ -290,6 +290,46 @@ def test_model_refresh_posts_refresh_db_with_provider(
     ]
 
 
+def test_model_refresh_can_target_the_expected_system_database(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    resources_dir = tmp_path / "checkout" / "resources"
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: Any, trust_env: bool
+    ) -> httpx.Response:
+        del timeout
+        calls.append({"url": url, "json": json})
+        return httpx.Response(200, json={"ok": True, "result": {"provider_id": "openai"}})
+
+    monkeypatch.setattr(model_management.httpx, "post", fake_post)
+
+    result = model_management.model_refresh(
+        instance,
+        provider_id="openai",
+        target="system",
+        expected_resources_dir=resources_dir,
+    )
+
+    assert result.ok is True
+    assert calls == [
+        {
+            "url": f"{instance.url}/api/rpc",
+            "json": {
+                "method": "model.refresh_db",
+                "params": {
+                    "provider_id": "openai",
+                    "target": "system",
+                    "expected_resources_dir": str(resources_dir.resolve()),
+                },
+            },
+        }
+    ]
+
+
 def test_model_refresh_formats_global_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
