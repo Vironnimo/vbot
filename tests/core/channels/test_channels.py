@@ -22,6 +22,7 @@ from core.channels import (
     ChannelNotFoundError,
     ChannelService,
     ChannelStorage,
+    managed_channel_token_env_var,
 )
 from core.channels.adapter import DeniedChatLog, FileData, RouteFacts
 from core.channels.channels import _normalize_channel_id
@@ -78,6 +79,12 @@ def make_config(
         token_env_var=token_env_var,
         enabled=enabled,
     )
+
+
+def test_managed_channel_token_env_var_is_safe_and_collision_free() -> None:
+    assert managed_channel_token_env_var("tg-main") == "VBOT_CHANNEL_TOKEN__74672D6D61696E"
+    assert managed_channel_token_env_var("a-b") != managed_channel_token_env_var("a_b")
+    assert managed_channel_token_env_var("main") != managed_channel_token_env_var("MAIN")
 
 
 class BlockingAdapter(ChannelAdapter):
@@ -1010,6 +1017,42 @@ async def test_channel_service_update_waits_for_adapter_stop_before_restart(
     service.update_channel(config.id, token_env_var="TELEGRAM_BOT_TOKEN_OTHER")
     await wait_until(lambda: "stop:old:begin" in lifecycle_events)
 
+    assert "start:new" not in lifecycle_events
+
+    stop_gate.set()
+    await wait_until(lambda: "start:new" in lifecycle_events)
+    assert lifecycle_events.index("stop:old:end") < lifecycle_events.index("start:new")
+
+    service.stop()
+
+
+@pytest.mark.asyncio
+async def test_channel_service_restart_rebuilds_only_after_adapter_stop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    config = make_config(enabled=True)
+    storage.save(config)
+
+    service = make_service(tmp_path)
+    stop_gate = asyncio.Event()
+    lifecycle_events: list[str] = []
+    created: list[DelayedStopAdapter] = []
+
+    def create_adapter(_config: ChannelConfig) -> ChannelAdapter:
+        label = "old" if not created else "new"
+        adapter = DelayedStopAdapter(label=label, stop_gate=stop_gate, events=lifecycle_events)
+        created.append(adapter)
+        return adapter
+
+    monkeypatch.setattr(service, "_create_adapter", create_adapter)
+
+    service.start()
+    await asyncio.wait_for(created[0].started.wait(), timeout=1)
+
+    assert service.restart_channel(config.id) is True
+    await wait_until(lambda: "stop:old:begin" in lifecycle_events)
     assert "start:new" not in lifecycle_events
 
     stop_gate.set()

@@ -749,7 +749,7 @@ def test_provider_credential_reload_reaches_existing_chat_and_agent_resolvers(
             _resolve_agent_connection(runtime.chat_loop._dependencies, agent)
 
         runtime.storage.set_data_dir_credential("OPENCODE_GO_API_KEY", "test-secret")
-        runtime.reload_provider_credentials()
+        runtime.reload_environment_credentials()
 
         assert runtime.provider_credentials is injected_resolver
         assert _resolve_agent_connection(runtime.chat_loop._dependencies, agent) == (
@@ -757,6 +757,27 @@ def test_provider_credential_reload_reaches_existing_chat_and_agent_resolvers(
             "opencode-go:api-key",
         )
         runtime.agent_resolver.require_model_configured(model)
+    finally:
+        runtime.stop()
+
+
+def test_environment_credential_source_reports_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    config: Config,
+) -> None:
+    monkeypatch.delenv("CHANNEL_TOKEN_TEST", raising=False)
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        assert runtime.environment_credential_source("CHANNEL_TOKEN_TEST") is None
+
+        runtime.storage.set_data_dir_credential("CHANNEL_TOKEN_TEST", "data-token")
+        runtime.reload_environment_credentials()
+        assert runtime.environment_credential_source("CHANNEL_TOKEN_TEST") == "data_dir"
+
+        monkeypatch.setenv("CHANNEL_TOKEN_TEST", "process-token")
+        assert runtime.environment_credential_source("CHANNEL_TOKEN_TEST") == "process_environment"
+        assert runtime.resolve_environment_credential("CHANNEL_TOKEN_TEST") == "process-token"
     finally:
         runtime.stop()
 

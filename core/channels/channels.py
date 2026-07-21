@@ -49,6 +49,7 @@ ALLOWED_CHANNEL_DM_SCOPES = frozenset(
 _DEFAULT_RESPONSE_MODE = "mention"
 ALLOWED_CHANNEL_RESPONSE_MODES = frozenset(("mention", "all"))
 ALLOWED_CHANNEL_PLATFORMS = frozenset(("discord", "telegram"))
+MANAGED_CHANNEL_TOKEN_ENV_PREFIX = "VBOT_CHANNEL_TOKEN__"
 _CHANNEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _ADAPTER_RESTART_INITIAL_DELAY_SECONDS = 1.0
 _ADAPTER_RESTART_MAX_DELAY_SECONDS = 30.0
@@ -583,6 +584,25 @@ class ChannelService:
                 stop_task.add_done_callback(on_stop_done)
 
         self._notify_tool_registration_if_changed(had_active_channels)
+
+    def restart_channel(self, channel_id: str) -> bool:
+        """Rebuild one enabled channel adapter from its current config and credentials.
+
+        Returns whether the channel is enabled and therefore received a start
+        request. Disabled channels keep the updated credential for their next
+        normal enable without creating an adapter.
+        """
+        normalized_id = _normalize_channel_id(channel_id)
+        config = self._storage.get(normalized_id)
+        self._validate_agent_exists(config.agent_id)
+        self._preflight_adapter_start(config)
+
+        if not config.enabled:
+            return False
+
+        self.stop_channel(normalized_id)
+        self.start_channel(normalized_id, config_override=config)
+        return True
 
     async def send(
         self,
@@ -1176,6 +1196,13 @@ def _normalize_channel_id(channel_id: str) -> str:
             "channel_id must contain only letters, numbers, underscore, and hyphen"
         )
     return normalized
+
+
+def managed_channel_token_env_var(channel_id: str) -> str:
+    """Return a collision-free, environment-safe key for a managed Channel token."""
+    normalized_id = _normalize_channel_id(channel_id)
+    encoded_id = normalized_id.encode("utf-8").hex().upper()
+    return f"{MANAGED_CHANNEL_TOKEN_ENV_PREFIX}{encoded_id}"
 
 
 def _get_running_loop_or_none() -> asyncio.AbstractEventLoop | None:

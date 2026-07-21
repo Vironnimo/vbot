@@ -224,7 +224,7 @@ def _set_extension_secret(state: Any, params: JsonObject) -> JsonObject:
             runtime.storage.set_data_dir_credential(env_key, value)
             changed = previous_value != value
             new_state = True
-        runtime.reload_provider_credentials()
+        runtime.reload_environment_credentials()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 

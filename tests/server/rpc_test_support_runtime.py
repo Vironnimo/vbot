@@ -899,7 +899,7 @@ class StubRuntime:
     async def apply_extension_disabled_change(self, newly_disabled: set[str]) -> None:
         self.extension_disabled_changes.append(set(newly_disabled))
 
-    def reload_provider_credentials(self) -> None:
+    def reload_environment_credentials(self) -> None:
         return None
 
 

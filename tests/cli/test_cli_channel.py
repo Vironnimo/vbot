@@ -58,11 +58,57 @@ def test_parse_args_supports_channel_add_options() -> None:
     assert args.platform == "telegram"
     assert args.agent == "assistant"
     assert args.token_env == "TELEGRAM_BOT_TOKEN_TG_ASSISTANT"
+    assert args.token_stdin is False
     assert args.dm_scope == "per_peer"
     assert args.allow == ["100", "101"]
     assert args.host == "localhost"
     assert args.port == 8500
     assert args.data_dir == "dev-data"
+
+
+def test_parse_args_supports_managed_channel_token_from_stdin() -> None:
+    args = cli_main.parse_args(
+        [
+            "channel",
+            "add",
+            "tg-assistant",
+            "--platform",
+            "telegram",
+            "--agent",
+            "assistant",
+            "--token-stdin",
+        ]
+    )
+
+    assert args.token_env is None
+    assert args.token_stdin is True
+
+
+def test_parse_args_rejects_multiple_channel_token_sources() -> None:
+    with pytest.raises(SystemExit):
+        cli_main.parse_args(
+            [
+                "channel",
+                "add",
+                "tg-assistant",
+                "--platform",
+                "telegram",
+                "--agent",
+                "assistant",
+                "--token-stdin",
+                "--token-env",
+                "TELEGRAM_BOT_TOKEN",
+            ]
+        )
+
+
+def test_parse_args_supports_channel_set_token() -> None:
+    args = cli_main.parse_args(["channel", "set-token", "tg-assistant", "--stdin"])
+
+    assert args.area == "channel"
+    assert args.command == "set-token"
+    assert args.id == "tg-assistant"
+    assert args.stdin is True
 
 
 @pytest.mark.parametrize("command", ["remove", "enable", "disable", "status"])
@@ -171,6 +217,108 @@ def test_channel_add_posts_create_rpc(tmp_path: Path, monkeypatch: pytest.Monkey
             "timeout": 10.0,
         }
     ]
+
+
+def test_channel_add_posts_managed_token_without_echoing_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        calls.append(json)
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "id": "tg-main",
+                    "platform": "telegram",
+                    "agent_id": "assistant",
+                    "dm_scope": "per_conversation",
+                    "enabled": True,
+                    "allowed_chat_ids": [],
+                    "token_env_var": "VBOT_CHANNEL_TOKEN__74672D6D61696E",
+                    "credential": {
+                        "key": "VBOT_CHANNEL_TOKEN__74672D6D61696E",
+                        "effective_source": "data_dir",
+                        "applied": True,
+                    },
+                    "running": True,
+                    "failed": False,
+                    "failure_reason": None,
+                },
+            },
+        )
+
+    monkeypatch.setattr(channel_management.httpx, "post", fake_post)
+
+    result = channel_management.channel_add(
+        instance,
+        "tg-main",
+        "telegram",
+        "assistant",
+        None,
+        "per_conversation",
+        [],
+        token="super-secret-token",
+    )
+
+    assert calls[0]["params"]["token"] == "super-secret-token"
+    assert "token_env_var" not in calls[0]["params"]
+    assert "super-secret-token" not in result.message
+    assert "effective_source=data_dir applied=yes" in result.message
+    assert "enabled=yes running=yes failed=no" in result.message
+
+
+def test_channel_set_token_posts_rpc_and_reports_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        calls.append(json)
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "id": "tg-main",
+                    "token_env_var": "TELEGRAM_BOT_TOKEN",
+                    "credential": {
+                        "key": "TELEGRAM_BOT_TOKEN",
+                        "effective_source": "process_environment",
+                        "applied": False,
+                    },
+                    "adapter_restart_requested": False,
+                    "enabled": True,
+                    "running": True,
+                    "failed": False,
+                    "failure_reason": None,
+                },
+            },
+        )
+
+    monkeypatch.setattr(channel_management.httpx, "post", fake_post)
+
+    result = channel_management.channel_set_token(instance, "tg-main", "rotated-secret")
+
+    assert calls == [
+        {
+            "method": "channel.set_token",
+            "params": {"id": "tg-main", "token": "rotated-secret"},
+        }
+    ]
+    assert "rotated-secret" not in result.message
+    assert "effective_source=process_environment applied=no" in result.message
+    assert "process environment still overrides" in result.message
 
 
 @pytest.mark.parametrize(
@@ -578,13 +726,14 @@ def test_run_dispatches_channel_commands(
         channel_id: str,
         platform: str,
         agent_id: str,
-        token_env: str,
+        token_env: str | None,
         dm_scope: str,
         allowed_chat_ids: Sequence[str],
         response_mode: str,
         mention_patterns: Sequence[str],
         owner_user_ids: Sequence[str],
         observe_unaddressed: bool,
+        token: str | None,
     ) -> CommandResult:
         calls.append(
             (
@@ -601,6 +750,7 @@ def test_run_dispatches_channel_commands(
                     "mention_patterns": mention_patterns,
                     "owner_user_ids": owner_user_ids,
                     "observe_unaddressed": observe_unaddressed,
+                    "token": token,
                 },
             )
         )
@@ -655,6 +805,9 @@ def test_run_dispatches_channel_commands(
         enable_channel=fake_enable,
         disable_channel=fake_disable,
         channel_status_fn=fake_status,
+        set_channel_token=lambda resolved_instance, channel_id, token: CommandResult(
+            ok=True, message=f"saved token for channel {channel_id}", instance=resolved_instance
+        ),
     )
 
     assert exit_code == 0
@@ -665,6 +818,42 @@ def test_run_dispatches_channel_commands(
     assert expected_output_line in output_lines
     assert output_lines[-2] == "url: http://127.0.0.1:8765"
     assert output_lines[-1] == f"data_dir: {tmp_path / 'data'}"
+
+
+def test_run_channel_set_token_reads_utf8_stdin_without_echoing_secret(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import io
+
+    instance = make_instance(tmp_path)
+    calls: list[tuple[str, str]] = []
+
+    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
+        return instance
+
+    def fake_set_token(
+        resolved_instance: ServerInstance, channel_id: str, token: str
+    ) -> CommandResult:
+        calls.append((channel_id, token))
+        return CommandResult(
+            ok=True,
+            message=f"saved token for channel {channel_id}",
+            instance=resolved_instance,
+        )
+
+    monkeypatch.setattr(cli_main.sys, "stdin", io.StringIO("rotated-secret\n"))
+
+    exit_code = cli_main.run(
+        ["channel", "set-token", "tg-main", "--stdin"],
+        resolve=fake_resolve,
+        set_channel_token=fake_set_token,
+    )
+
+    assert exit_code == 0
+    assert calls == [("tg-main", "rotated-secret")]
+    assert "rotated-secret" not in capsys.readouterr().out
 
 
 def test_print_channel_command_result_is_deterministic(

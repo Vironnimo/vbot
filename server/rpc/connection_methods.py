@@ -373,7 +373,7 @@ def _set_provider_key(state: Any, params: JsonObject) -> JsonObject:
         credential_key = derive_credential_key(connection.auth.credential_key, account_id)
         previous_value = runtime.storage.load_environment().get(credential_key)
         runtime.storage.set_data_dir_credential(credential_key, value)
-        runtime.reload_provider_credentials()
+        runtime.reload_environment_credentials()
         account_connection_id = compose_connection_id(provider_id, connection.id, account_id)
         usable = runtime.provider_credentials.is_usable(provider_id, account_connection_id)
     except Exception as exc:
@@ -414,7 +414,7 @@ def _unset_provider_key(state: Any, params: JsonObject) -> JsonObject:
         public_connection_id = compose_connection_id(provider_id, connection.id)
         credential_key = derive_credential_key(connection.auth.credential_key, account_id)
         removed = bool(runtime.storage.remove_data_dir_credential(credential_key))
-        runtime.reload_provider_credentials()
+        runtime.reload_environment_credentials()
         configured = runtime.provider_credentials.has_credentials(
             provider_id,
             compose_connection_id(provider_id, connection.id, account_id),
