@@ -12,14 +12,9 @@ The version lives in exactly **one** place: `pyproject.toml` → `version`. Bump
 version = "X.Y.Z"
 ```
 
-### 2. Green gates on `main`
+### 2. Do not run local quality gates
 
-Run both full quality gates (no args) and make them green before tagging — see `.vorch/PROJECT.md` → Quality gates:
-
-```bash
-python scripts/quality.py
-python scripts/quality-frontend.py
-```
+Release tasks are explicitly exempt from the repository's normal local quality-gate passes. Do not run `scripts/quality.py` or `scripts/quality-frontend.py` before a release: the dispatched GitHub Release workflow calls the complete reusable CI workflow against the pushed `main` commit and blocks tag and Release creation until every required Backend, Frontend, and Installer job passes. If that CI fails, fix the reported problem on `main`, push it, and dispatch the Release workflow again.
 
 ### 3. Commit and push
 
