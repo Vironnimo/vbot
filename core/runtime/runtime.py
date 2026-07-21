@@ -1682,12 +1682,7 @@ class Runtime:
         self._ensure_started()
         data_dir_credentials = self.storage.load_environment()
         self._fallback_environment = dict(data_dir_credentials)
-        self._provider_credentials = ProviderCredentialResolver(
-            self.providers,
-            fallback_credentials=data_dir_credentials,
-            token_store=self.token_store,
-            enabled_overrides_loader=self._provider_connection_enabled_overrides,
-        )
+        self.provider_credentials.reload_fallback_credentials(data_dir_credentials)
 
     # ------------------------------------------------------------------
     # Read-only registry access

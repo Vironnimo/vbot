@@ -63,6 +63,27 @@ def _registry() -> ProviderRegistry:
     return ProviderRegistry({"openai": provider_config})
 
 
+class TestReloadFallbackCredentials:
+    def test_reloads_data_dir_accounts_on_the_existing_resolver(self, tmp_path: Path) -> None:
+        """Credential reloads become visible without replacing the injected resolver."""
+        resolver = ProviderCredentialResolver(
+            _registry(), process_env={}, token_store=TokenStore(tmp_path)
+        )
+        original_resolver = resolver
+
+        assert resolver.is_usable("openai", "openai:api-key") is False
+
+        resolver.reload_fallback_credentials({"OPENAI_API_KEY": "data-dir-secret"})
+
+        assert resolver is original_resolver
+        assert resolver.is_usable("openai", "openai:api-key") is True
+        assert resolver.get_credentials("openai", "openai:api-key") == "data-dir-secret"
+
+        resolver.reload_fallback_credentials({})
+
+        assert resolver.is_usable("openai", "openai:api-key") is False
+
+
 class TestListAccounts:
     def test_orders_default_first_then_alphabetical(self, tmp_path: Path) -> None:
         """Environment accounts list default first, then sorted account ids."""

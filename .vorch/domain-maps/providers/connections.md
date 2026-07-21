@@ -34,7 +34,7 @@ Model listing, task targets, catalog auto-refresh, usage probes, Chat's unpinned
 
 ## Credential and OAuth lifecycle
 
-API keys resolve from process environment first and data-dir `.env` second. Key set/unset RPCs can mutate only the data-dir value, so removing it can still leave the Account configured through process environment. `none` Connections reject key mutation.
+API keys resolve from process environment first and data-dir `.env` second. Key set/unset RPCs can mutate only the data-dir value, so removing it can still leave the Account configured through process environment. They reload the fallback snapshot into the existing `ProviderCredentialResolver`; its stable identity ensures every already-injected consumer sees the new credential state on its next check. `none` Connections reject key mutation.
 
 `StaticTokenGetter` wraps fixed API-key/keyless values. `OAuthTokenGetter` reads the Account token, refreshes near expiry, stores refreshed values under the same Account, and coalesces concurrent refresh. Adapters and task/usage clients ask the getter inside each request attempt rather than retaining raw access tokens.
 
