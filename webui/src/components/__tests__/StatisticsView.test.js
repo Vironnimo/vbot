@@ -25,8 +25,13 @@ function makeReport(overrides = {}) {
       total_sessions: 3,
       total_runs: 4,
       open_run_groups: 1,
-      total_messages: 20,
-      messages_by_role: {
+      total_chat_messages: 11,
+      chat_messages_by_role: {
+        user: 5,
+        assistant: 6,
+      },
+      total_session_records: 20,
+      session_records_by_role: {
         system: 1,
         user: 5,
         assistant: 6,
@@ -35,6 +40,7 @@ function makeReport(overrides = {}) {
         error: 1,
         compaction_checkpoint: 0,
         run_summary: 2,
+        agent_takeover: 0,
       },
       last_activity: '2026-06-13T09:00:00+00:00',
       run_status: { completed: 3, failed: 1, cancelled: 0 },
@@ -47,7 +53,8 @@ function makeReport(overrides = {}) {
           agent_id: 'main',
           sessions: 2,
           runs: 3,
-          messages: 15,
+          chat_messages: 9,
+          session_records: 15,
           errors: 1,
           last_activity: '2026-06-13T09:00:00+00:00',
         },
@@ -357,6 +364,14 @@ describe('StatisticsView', () => {
 
     expect(rpcMock).toHaveBeenCalledWith('statistics.report');
     expect(document.body.textContent).toContain('Run status');
+    const chatMessagesCard = [...document.querySelectorAll('.stats-card')].find(
+      (card) => card.textContent.includes('Chat messages'),
+    );
+    expect(chatMessagesCard.textContent).toContain('11');
+    expect(document.body.textContent).toContain('Chat messages by role');
+    expect(document.body.textContent).toContain('Stored Session records');
+    expect(document.body.textContent).toContain('System reminder');
+    expect(document.body.textContent).toContain('Run summary');
     // "Open run groups" lives on the Runs & errors tab now, not the overview.
     expect(document.body.textContent).not.toContain('Open run');
     expect(document.body.textContent).toContain('main');

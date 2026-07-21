@@ -86,7 +86,8 @@ def _format_overview(section: Mapping[str, Any], window: object) -> str:
     lines.append(f"sessions: {_int(section.get('total_sessions'))}")
     lines.append(f"runs: {_int(section.get('total_runs'))}")
     lines.append(f"open run groups: {_int(section.get('open_run_groups'))}")
-    lines.append(f"messages: {_int(section.get('total_messages'))}")
+    lines.append(f"chat messages: {_int(section.get('total_chat_messages'))}")
+    lines.append(f"stored session records: {_int(section.get('total_session_records'))}")
     lines.append(f"last activity: {_timestamp(section.get('last_activity'))}")
 
     status = section.get("run_status")
@@ -103,8 +104,12 @@ def _format_overview(section: Mapping[str, Any], window: object) -> str:
     lines.append(f"total tool calls: {_int(section.get('total_tool_calls'))}")
 
     lines.append("")
-    lines.append("messages by role:")
-    lines.extend(_messages_by_role_lines(section.get("messages_by_role")))
+    lines.append("chat messages by role:")
+    lines.extend(_role_count_lines(section.get("chat_messages_by_role")))
+
+    lines.append("")
+    lines.append("stored session records by role:")
+    lines.extend(_role_count_lines(section.get("session_records_by_role")))
 
     lines.append("")
     lines.append("agents:")
@@ -112,9 +117,9 @@ def _format_overview(section: Mapping[str, Any], window: object) -> str:
     return "\n".join(lines)
 
 
-def _messages_by_role_lines(roles: object) -> list[str]:
+def _role_count_lines(roles: object) -> list[str]:
     if not isinstance(roles, dict) or not roles:
-        return ["  no messages recorded"]
+        return ["  no records"]
     return [f"  {role}: {_int(count)}" for role, count in roles.items()]
 
 
@@ -128,7 +133,8 @@ def _agent_activity_lines(agents: object) -> list[str]:
             f"  {_text(agent.get('agent_id'))}: "
             f"sessions={_int(agent.get('sessions'))} "
             f"runs={_int(agent.get('runs'))} "
-            f"messages={_int(agent.get('messages'))} "
+            f"chat_messages={_int(agent.get('chat_messages'))} "
+            f"session_records={_int(agent.get('session_records'))} "
             f"errors={_int(agent.get('errors'))} "
             f"last_activity={_timestamp(agent.get('last_activity'))}"
         )

@@ -37,7 +37,8 @@
     usageSeverity,
   } from '$lib/statisticsView.js';
 
-  const MESSAGE_ROLES = [
+  const CHAT_MESSAGE_ROLES = ['user', 'assistant'];
+  const SESSION_RECORD_ROLES = [
     'user',
     'assistant',
     'tool',
@@ -46,6 +47,7 @@
     'run_summary',
     'system',
     'compaction_checkpoint',
+    'agent_takeover',
   ];
   const STATUS_KEYS = ['completed', 'failed', 'cancelled'];
   const DONUT_CIRCUMFERENCE = 2 * Math.PI * 16;
@@ -493,8 +495,8 @@
         formatInteger(overview.total_runs, locale),
       )}
       {@render statCard(
-        t('statistics.overview.messages', 'Messages'),
-        formatInteger(overview.total_messages, locale),
+        t('statistics.overview.chatMessages', 'Chat messages'),
+        formatInteger(overview.total_chat_messages, locale),
       )}
       {@render statCard(
         t('statistics.overview.toolCalls', 'Tool calls'),
@@ -559,21 +561,47 @@
           </div>
         </dl>
         <h3 class="stats-block__title">
-          {t('statistics.overview.messagesByRole', 'Messages by role')}
+          {t('statistics.overview.chatMessagesByRole', 'Chat messages by role')}
         </h3>
         {@render barRows(
-          MESSAGE_ROLES.filter(
-            (role) => overview.messages_by_role[role] > 0,
+          CHAT_MESSAGE_ROLES.filter(
+            (role) => overview.chat_messages_by_role[role] > 0,
           ).map((role) => ({
             label: roleLabel(role),
-            value: overview.messages_by_role[role],
-            fraction: overview.total_messages
-              ? overview.messages_by_role[role] / overview.total_messages
+            value: overview.chat_messages_by_role[role],
+            fraction: overview.total_chat_messages
+              ? overview.chat_messages_by_role[role] /
+                overview.total_chat_messages
               : 0,
           })),
-          overview.total_messages,
+          overview.total_chat_messages,
         )}
       </div>
+    </div>
+
+    <div class="stats-block">
+      <h3 class="stats-block__title">
+        {t('statistics.overview.sessionRecords', 'Stored Session records')}
+        <InfoHint
+          text={t(
+            'statistics.overview.sessionRecordsHint',
+            'Every persisted Session entry, including Chat messages and internal execution or context records.',
+          )}
+        />
+      </h3>
+      {@render barRows(
+        SESSION_RECORD_ROLES.filter(
+          (role) => overview.session_records_by_role[role] > 0,
+        ).map((role) => ({
+          label: roleLabel(role),
+          value: overview.session_records_by_role[role],
+          fraction: overview.total_session_records
+            ? overview.session_records_by_role[role] /
+              overview.total_session_records
+            : 0,
+        })),
+        overview.total_session_records,
+      )}
     </div>
 
     <div class="stats-block">
