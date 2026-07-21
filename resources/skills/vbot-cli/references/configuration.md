@@ -1,18 +1,46 @@
 # Settings, Prompts, Extensions
 
-## Raw settings
+## Settings
 
 ```bash
-vbot config                        # show stored raw settings
-vbot config effective              # show normalized live settings
-vbot config get <key>
-vbot config set <key> <value>
+vbot config                                      # list the public Settings catalog
+vbot config list [<path-prefix>]                 # filter catalog paths, values, types, lifecycle, and source
+vbot config describe <path>                      # show type, constraints, default, source, and lifecycle
+vbot config get <path> [--details]               # show the effective value, optionally with metadata
+vbot config set <path> <value>                    # atomically set one path
+vbot config unset <path>                          # remove one override and restore inherited/default behavior
+vbot config patch --set <path> <value> ...        # apply every repeated --set/--unset as one atomic change
+vbot config effective                             # show the complete normalized public Settings document
+vbot config raw                                   # diagnostic-only internal settings.json document
 ```
 
-- `effective` includes normalized defaults and runtime-derived availability. A successful `config set` prints the value returned from the saved settings, not merely the requested input.
-- `<value>` is parsed as JSON first, falling back to a plain string. Pass JSON (arrays, objects, booleans, numbers) as one shell argument: `vbot config set skill_directories '["C:/skills"]'`.
-- Prefer `config set` over editing `settings.json` directly. After an unavoidable manual edit, run `vbot doctor settings` (or `vbot doctor config` for the full user-editable JSON bundle) — see `server.md`.
-- Enable debug mode with `vbot config set debug '{"enabled": true}'`.
+- Use cataloged public paths, never raw storage-key names. Fixed segments are dotted (`web_search.searxng.base_url`); user-controlled map keys are bracketed JSON strings (`'local_models.context_windows["ollama/qwen2.5:7b"]'`, `'providers.connections["openai:api-key"]'`). Quote the whole path whenever it contains brackets so the shell passes it unchanged.
+- `<value>` is parsed as JSON first, falling back to a plain string. Numbers, booleans, arrays, objects, and `null` therefore use JSON syntax; pass arrays and objects as one shell argument, for example `vbot config set skills.directories '["C:/skills"]'`.
+- `unset` is not the same as setting `null`: `unset` removes the configured override and restores the default/inherited value, while `null` is an explicit value accepted only by nullable paths. `describe` reports whether a path is nullable and unsettable.
+- `patch` is the right command when fields must change together. Every operation is validated first; an invalid value, unknown path, duplicate path, or parent/child overlap persists nothing. A successful mutation reports each active value, any pending next-start value, whether the setting applies live or on restart, and an aggregate `restart_required` result.
+- `effective` includes normalized defaults and active runtime values. `raw` exposes the internal persistence shape only for diagnosis; do not derive paths from it and do not edit `settings.json` when a public command can express the change. After an unavoidable manual edit, run `vbot doctor settings` (or `vbot doctor config` for the full user-editable JSON bundle) — see `server.md`.
+- Secrets are not Settings paths. Use `provider set-key`, `extensions <name> set <field> --stdin`, or the Channel token commands so credentials never enter `settings.json` or normal command output.
+
+Switch `web_search` to SearXNG in one atomic live change:
+
+```bash
+vbot config patch \
+  --set web_search.provider searxng \
+  --set web_search.searxng.base_url https://searxng.example/
+vbot config get web_search.provider --details
+vbot config get web_search.searxng.base_url --details
+```
+
+Both paths are read by the `web_search` Tool for each call, so this change needs no server restart.
+
+Other examples:
+
+```bash
+vbot config set debug.enabled true
+vbot config unset defaults.agent.temperature
+vbot config patch --set compaction.trigger.type input_tokens --set compaction.trigger.tokens 120000
+vbot config set 'local_models.context_windows["ollama/qwen2.5:7b"]' 32768
+```
 
 ## System Prompt blocks
 

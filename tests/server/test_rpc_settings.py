@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,7 +10,6 @@ import pytest
 from server.rpc.methods import dispatch_rpc
 from tests.server.rpc_test_support import (
     EmptyStubModels,
-    JsonObject,
     StubAdapter,
     _no_models_dev_fetch,
     make_state,
@@ -349,82 +347,313 @@ async def test_settings_get_raw_returns_raw_settings_payload(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_settings_set_key_updates_settings_and_returns_raw_payload(tmp_path: Path) -> None:
+async def test_settings_catalog_exposes_public_paths_and_lifecycle(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
-    state.runtime.storage.save_settings({"server_host": "127.0.0.1"})
 
     response = await dispatch_rpc(
         state,
-        {"method": "settings.set_key", "params": {"key": "server_port", "value": 9000}},
+        {"method": "settings.catalog", "params": {"prefix": "web_search"}},
     )
 
-    assert response == {
-        "ok": True,
-        "result": {
-            "settings": {
-                "server_host": "127.0.0.1",
-                "server_port": 9000,
-            }
+    assert response["ok"] is True, response
+    entries = {entry["path"]: entry for entry in response["result"]["settings"]}
+    provider = entries["web_search.provider"]
+    assert provider["value"] == "brave"
+    assert provider["source"] == "default"
+    assert provider["allowed_values"] == ["brave", "searxng"]
+    assert provider["application"] == "live"
+
+
+@pytest.mark.asyncio
+async def test_settings_catalog_filters_to_concrete_dynamic_path(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    path = 'local_models.context_windows["ollama/qwen2.5:7b"]'
+    state.runtime.storage.save_settings(
+        {"local_models": {"context_windows": {"ollama/qwen2.5:7b": 32768}}}
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "settings.catalog", "params": {"prefix": path}},
+    )
+
+    assert response["ok"] is True, response
+    assert response["result"]["settings"] == [
+        {
+            "path": path,
+            "template": 'local_models.context_windows["<model>"]',
+            "type": "integer",
+            "description": "Effective context window override for one local Model.",
+            "application": "live",
+            "nullable": False,
+            "unsettable": True,
+            "has_default": False,
+            "minimum": 1,
+            "exclusive_minimum": False,
+            "configured": True,
+            "source": "configured",
+            "restart_required": False,
+            "value": 32768,
+            "configured_value": 32768,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_settings_get_path_returns_effective_value_and_details(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {"method": "settings.get_path", "params": {"path": "web_search.provider"}},
+    )
+
+    assert response["ok"] is True, response
+    setting = response["result"]["setting"]
+    assert setting["value"] == "brave"
+    assert setting["default"] == "brave"
+    assert setting["configured"] is False
+    assert setting["source"] == "default"
+    assert setting["restart_required"] is False
+
+
+@pytest.mark.asyncio
+async def test_settings_patch_applies_searxng_configuration_atomically(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.patch",
+            "params": {
+                "operations": [
+                    {"op": "set", "path": "web_search.provider", "value": "searxng"},
+                    {
+                        "op": "set",
+                        "path": "web_search.searxng.base_url",
+                        "value": "https://search.example/",
+                    },
+                ]
+            },
         },
-    }
-    assert state.runtime.storage.load_settings() == {
-        "server_host": "127.0.0.1",
-        "server_port": 9000,
+    )
+
+    assert response["ok"] is True, response
+    assert response["result"]["changed"] == [
+        "web_search.provider",
+        "web_search.searxng.base_url",
+    ]
+    assert response["result"]["restart_required"] is False
+    assert state.runtime.storage.load_web_search_settings() == {
+        "provider": "searxng",
+        "default_count": 12,
+        "searxng": {"base_url": "https://search.example/"},
     }
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("params", "message"),
-    [
-        (
-            {"key": "compaction", "value": "hello"},
-            r"\$\.compaction: must be an object",
-        ),
-        (
-            {"key": "attachment_max_size_bytes", "value": -1},
-            r"\$\.attachment_max_size_bytes: must be a positive integer",
-        ),
-        (
-            {"key": "server_port", "value": 0},
-            r"\$\.server_port: must be between 1 and 65535",
-        ),
-    ],
-)
-async def test_settings_set_key_rejects_invalid_raw_settings_without_partial_write(
-    tmp_path: Path,
-    params: JsonObject,
-    message: str,
-) -> None:
+async def test_settings_patch_is_all_or_nothing_on_invalid_value(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
-    original_settings = {"server_port": 9000, "feature_flags": {"logs": True}}
-    state.runtime.storage.save_settings(original_settings)
+    state.runtime.storage.save_settings({"web_search": {"provider": "brave"}})
 
-    response = await dispatch_rpc(state, {"method": "settings.set_key", "params": params})
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.patch",
+            "params": {
+                "operations": [
+                    {"op": "set", "path": "web_search.provider", "value": "searxng"},
+                    {"op": "set", "path": "debug.trace_limit", "value": 0},
+                ]
+            },
+        },
+    )
 
     assert response["ok"] is False
     assert response["error"]["code"] == "invalid_request"
-    assert re.search(message, response["error"]["message"])
-    assert state.runtime.storage.load_settings() == original_settings
+    assert state.runtime.storage.load_settings() == {"web_search": {"provider": "brave"}}
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "params",
-    [
-        {},
-        {"key": "server_port"},
-        {"value": 9000},
-    ],
-)
-async def test_settings_set_key_rejects_missing_key_or_value(
+async def test_settings_patch_reports_restart_pending_against_active_port(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.server_bind = {
+        "listen_host": "127.0.0.1",
+        "listen_port": 8420,
+        "port_source": "default",
+    }
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.patch",
+            "params": {"operations": [{"op": "set", "path": "server.port", "value": 9000}]},
+        },
+    )
+
+    assert response["ok"] is True, response
+    change = response["result"]["changes"][0]
+    assert change["value"] == 8420
+    assert change["configured_value"] == 9000
+    assert change["application"] == "restart"
+    assert change["restart_required"] is True
+    assert state.runtime.storage.load_settings()["server_port"] == 9000
+
+
+@pytest.mark.asyncio
+async def test_settings_patch_unset_restart_setting_reports_default_pending(
     tmp_path: Path,
-    params: JsonObject,
 ) -> None:
     state = make_state(tmp_path, StubAdapter())
+    state.runtime.storage.save_settings({"server_port": 9000})
+    state.server_bind = {
+        "listen_host": "127.0.0.1",
+        "listen_port": 9000,
+        "port_source": "settings.server_port",
+    }
 
-    response = await dispatch_rpc(state, {"method": "settings.set_key", "params": params})
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.patch",
+            "params": {"operations": [{"op": "unset", "path": "server.port"}]},
+        },
+    )
 
-    assert response["ok"] is False
-    assert response["error"]["code"] == "invalid_request"
-    assert response["error"]["message"] == "settings.set_key requires 'key' and 'value'"
+    assert response["ok"] is True, response
+    change = response["result"]["changes"][0]
+    assert change["value"] == 9000
+    assert change["pending_value"] == 8420
+    assert change["configured"] is False
+    assert change["restart_required"] is True
+    assert response["result"]["restart_required"] is True
+
+
+@pytest.mark.asyncio
+async def test_settings_patch_unset_restores_default(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.storage.save_settings({"web_search": {"provider": "searxng"}})
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.patch",
+            "params": {"operations": [{"op": "unset", "path": "web_search.provider"}]},
+        },
+    )
+
+    assert response["ok"] is True, response
+    change = response["result"]["changes"][0]
+    assert change["value"] == "brave"
+    assert change["configured"] is False
+    assert change["source"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_settings_patch_supports_quoted_dynamic_model_key(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    path = 'local_models.context_windows["ollama/qwen2.5:7b"]'
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.patch",
+            "params": {"operations": [{"op": "set", "path": path, "value": 32768}]},
+        },
+    )
+
+    assert response["ok"] is True, response
+    assert state.runtime.storage.load_local_models_settings() == {
+        "context_windows": {"ollama/qwen2.5:7b": 32768}
+    }
+
+
+@pytest.mark.asyncio
+async def test_settings_patch_ignores_unrelated_runtime_semantic_setting(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.storage.save_settings({"recall": {"backend": "extension_backend"}})
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.patch",
+            "params": {
+                "operations": [{"op": "set", "path": "web_search.provider", "value": "searxng"}]
+            },
+        },
+    )
+
+    assert response["ok"] is True, response
+    assert state.runtime.storage.load_settings()["recall"] == {"backend": "extension_backend"}
+    assert state.runtime.recall_reload_count == 0
+
+
+@pytest.mark.asyncio
+async def test_settings_patch_reloads_extension_directories_live(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    extension_dir = tmp_path / "extra-extensions"
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.patch",
+            "params": {
+                "operations": [
+                    {
+                        "op": "set",
+                        "path": "extensions.directories",
+                        "value": [str(extension_dir)],
+                    }
+                ]
+            },
+        },
+    )
+
+    assert response["ok"] is True, response
+    assert state.runtime.extension_reload_count == 1
+
+
+@pytest.mark.asyncio
+async def test_settings_patch_reloads_skill_directories_live(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    previous_skills = state.runtime.skills
+    skill_dir = tmp_path / "extra-skills"
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.patch",
+            "params": {
+                "operations": [
+                    {
+                        "op": "set",
+                        "path": "skills.directories",
+                        "value": [str(skill_dir)],
+                    }
+                ]
+            },
+        },
+    )
+
+    assert response["ok"] is True, response
+    assert state.runtime.skills is not previous_skills
+
+
+@pytest.mark.asyncio
+async def test_settings_patch_reloads_recall_backend_live(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.patch",
+            "params": {
+                "operations": [{"op": "set", "path": "recall.backend", "value": "sqlite_fts"}]
+            },
+        },
+    )
+
+    assert response["ok"] is True, response
+    assert state.runtime.recall_reload_count == 1

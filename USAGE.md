@@ -215,17 +215,19 @@ The normal runtime data directory is `~/.vbot`. Select another target with `--da
 
 Desktop owns separate per-user settings because it can connect to different servers. On Windows they live under `%APPDATA%\vbot`; on Linux they live under `$XDG_CONFIG_HOME/vbot` or `~/.config/vbot`. Remembered servers, wakeword configuration, and imported wakeword Models are Desktop-local and are not server Settings.
 
-Use the WebUI Settings view for validated changes. Raw CLI access remains available:
+Use the WebUI Settings view or the cataloged CLI Settings paths for validated changes:
 
 ```bash
-vbot config
-vbot config get server_port
-vbot config set server_port 9000
+vbot config list
+vbot config describe server.port
+vbot config set server.port 9000
+vbot config patch --set web_search.provider searxng --set web_search.searxng.base_url https://searxng.example/
+vbot config raw
 vbot doctor settings
 vbot doctor config
 ```
 
-`doctor settings` strictly validates the target `settings.json`; `doctor config` checks all user-editable JSON files. At runtime, malformed root Settings fall back safely, invalid top-level Settings sections are omitted while valid siblings remain active, and invalid individual Agent or Project records are skipped. The source file is not silently rewritten, and mutations that could overwrite invalid source state are blocked until it is repaired.
+Bare `vbot config` is equivalent to `config list`; `config get`, `set`, `unset`, and atomic multi-operation `patch` use public paths rather than internal `settings.json` keys. `config effective` shows the normalized public document, while `config raw` is diagnostic only. `doctor settings` strictly validates the target `settings.json`; `doctor config` checks all user-editable JSON files. At runtime, malformed root Settings fall back safely, invalid top-level Settings sections are omitted while valid siblings remain active, and invalid individual Agent or Project records are skipped. The source file is not silently rewritten, and mutations that could overwrite invalid source state are blocked until it is repaired.
 
 ## Running the server
 
@@ -561,7 +563,7 @@ Installed commands use `vbot`. From a source checkout, `python cli/main.py` expo
 | Extensions | `extensions list`, `extensions reload`, `extensions enable`, `extensions disable`, `extensions <name>`, `extensions <name> set` |
 | Cron | `cron list`, `cron create`, `cron update`, `cron delete`, `cron enable`, `cron disable` |
 | Statistics | `statistics overview`, `statistics usage`, `statistics runs`, `statistics errors`, `statistics tools`, `statistics skills` |
-| Configuration | `config`, `config effective`, `config get`, `config set`, `doctor settings`, `doctor config` |
+| Configuration | `config list`, `config describe`, `config effective`, `config raw`, `config get`, `config set`, `config unset`, `config patch`, `doctor settings`, `doctor config` |
 | Diagnostics | `log list`, `log read`, `debug status`, `debug traces`, `debug trace`, `debug clear`, `debug probe` |
 
 Representative syntax:

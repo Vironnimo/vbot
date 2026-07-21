@@ -1,4 +1,4 @@
-"""Tests for config CLI parsing and RPC-backed config commands."""
+"""Tests for public Settings path CLI parsing and RPC commands."""
 
 from __future__ import annotations
 
@@ -25,43 +25,47 @@ def make_instance(tmp_path: Path, *, port: int = 8420) -> ServerInstance:
     )
 
 
-def test_parse_args_supports_config_no_subcommand() -> None:
+def test_parse_args_supports_public_config_commands() -> None:
+    get_args = cli_main.parse_args(["config", "get", "web_search.provider", "--details"])
+    unset_args = cli_main.parse_args(["config", "unset", "defaults.agent.temperature"])
+    list_args = cli_main.parse_args(["config", "list", "web_search"])
+
+    assert (get_args.command, get_args.path, get_args.details) == (
+        "get",
+        "web_search.provider",
+        True,
+    )
+    assert (unset_args.command, unset_args.path) == (
+        "unset",
+        "defaults.agent.temperature",
+    )
+    assert (list_args.command, list_args.prefix) == ("list", "web_search")
+
+
+def test_parse_args_supports_atomic_config_patch() -> None:
     args = cli_main.parse_args(
-        ["config", "--host", "localhost", "--port", "8700", "--data-dir", "dev"]
+        [
+            "config",
+            "patch",
+            "--set",
+            "web_search.provider",
+            "searxng",
+            "--set",
+            "web_search.searxng.base_url",
+            "https://search.example",
+            "--unset",
+            "defaults.agent.temperature",
+        ]
     )
 
-    assert args.area == "config"
-    assert args.command is None
-    assert args.host == "localhost"
-    assert args.port == 8700
-    assert args.data_dir == "dev"
+    assert args.set_values == [
+        ["web_search.provider", "searxng"],
+        ["web_search.searxng.base_url", "https://search.example"],
+    ]
+    assert args.unset_paths == ["defaults.agent.temperature"]
 
 
-def test_parse_args_supports_config_get() -> None:
-    args = cli_main.parse_args(["config", "get", "server_port"])
-
-    assert args.area == "config"
-    assert args.command == "get"
-    assert args.key == "server_port"
-
-
-def test_parse_args_supports_config_effective() -> None:
-    args = cli_main.parse_args(["config", "effective"])
-
-    assert args.area == "config"
-    assert args.command == "effective"
-
-
-def test_parse_args_supports_config_set() -> None:
-    args = cli_main.parse_args(["config", "set", "server_port", "9000"])
-
-    assert args.area == "config"
-    assert args.command == "set"
-    assert args.key == "server_port"
-    assert args.value == "9000"
-
-
-def test_config_show_posts_get_raw_rpc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_config_raw_posts_get_raw_rpc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
@@ -73,7 +77,7 @@ def test_config_show_posts_get_raw_rpc(tmp_path: Path, monkeypatch: pytest.Monke
 
     monkeypatch.setattr(config_management.httpx, "post", fake_post)
 
-    result = config_management.config_show(instance)
+    result = config_management.config_raw(instance)
 
     assert result == CommandResult(
         ok=True,
@@ -89,43 +93,18 @@ def test_config_show_posts_get_raw_rpc(tmp_path: Path, monkeypatch: pytest.Monke
     ]
 
 
-def test_config_show_returns_empty_object_when_settings_empty(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def test_config_effective_posts_settings_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     instance = make_instance(tmp_path)
 
     def fake_post(
         url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
     ) -> httpx.Response:
-        return httpx.Response(200, json={"ok": True, "result": {"settings": {}}})
-
-    monkeypatch.setattr(config_management.httpx, "post", fake_post)
-
-    result = config_management.config_show(instance)
-
-    assert result == CommandResult(ok=True, message="{}", instance=instance)
-
-
-def test_config_effective_posts_settings_get_and_formats_projection(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        assert json == {"method": "settings.get", "params": {}}
+        assert json == {"method": "settings.values", "params": {}}
         return httpx.Response(
             200,
-            json={
-                "ok": True,
-                "result": {
-                    "defaults": {"model": "openai/gpt-5"},
-                    "general": {"data_directory": "C:/data"},
-                },
-            },
+            json={"ok": True, "result": {"settings": {"web_search": {"provider": "brave"}}}},
         )
 
     monkeypatch.setattr(config_management.httpx, "post", fake_post)
@@ -133,60 +112,114 @@ def test_config_effective_posts_settings_get_and_formats_projection(
     result = config_management.config_effective(instance)
 
     assert result.ok is True
-    assert result.message == (
-        '{\n  "defaults": {\n    "model": "openai/gpt-5"\n  },\n'
-        '  "general": {\n    "data_directory": "C:/data"\n  }\n}'
-    )
+    assert result.message == '{\n  "web_search": {\n    "provider": "brave"\n  }\n}'
 
 
-def test_config_get_returns_json_value(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={"ok": True, "result": {"settings": {"server_port": 8420}}},
-        )
-
-    monkeypatch.setattr(config_management.httpx, "post", fake_post)
-
-    result = config_management.config_get(instance, "server_port")
-
-    assert result == CommandResult(ok=True, message="8420", instance=instance)
-
-
-def test_config_get_exits_with_error_when_key_missing(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def test_config_list_formats_catalog_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     instance = make_instance(tmp_path)
 
     def fake_post(
         url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
     ) -> httpx.Response:
+        assert json == {"method": "settings.catalog", "params": {"prefix": "web_search"}}
         return httpx.Response(
             200,
-            json={"ok": True, "result": {"settings": {"other": 1, "server_port": 8420}}},
+            json={
+                "ok": True,
+                "result": {
+                    "settings": [
+                        {
+                            "path": "web_search.provider",
+                            "type": "string",
+                            "application": "live",
+                            "value": "brave",
+                            "source": "default",
+                        }
+                    ]
+                },
+            },
         )
 
     monkeypatch.setattr(config_management.httpx, "post", fake_post)
 
-    result = config_management.config_get(instance, "server_por")
+    result = config_management.config_list(instance, "web_search")
 
-    assert result == CommandResult(
-        ok=False,
-        message=(
-            "key 'server_por' not found\n"
-            "available keys: other, server_port\n"
-            "did you mean: server_port"
-        ),
-        instance=instance,
-    )
+    assert result.message == 'web_search.provider = "brave" (string, live, source=default)'
 
 
-def test_config_set_posts_set_key_rpc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_config_get_returns_effective_json_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        assert json == {"method": "settings.get_path", "params": {"path": "server.port"}}
+        return httpx.Response(
+            200,
+            json={"ok": True, "result": {"setting": {"path": "server.port", "value": 8420}}},
+        )
+
+    monkeypatch.setattr(config_management.httpx, "post", fake_post)
+
+    result = config_management.config_get(instance, "server.port")
+
+    assert result == CommandResult(ok=True, message="8420", instance=instance)
+
+
+def test_config_describe_formats_source_default_and_lifecycle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        assert json == {
+            "method": "settings.get_path",
+            "params": {"path": "web_search.provider", "allow_missing": True},
+        }
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "setting": {
+                        "path": "web_search.provider",
+                        "value": "searxng",
+                        "configured": True,
+                        "configured_value": "searxng",
+                        "source": "configured",
+                        "default": "brave",
+                        "type": "string",
+                        "allowed_values": ["brave", "searxng"],
+                        "nullable": False,
+                        "unsettable": True,
+                        "application": "live",
+                        "restart_required": False,
+                        "description": "Provider used by web_search.",
+                    }
+                },
+            },
+        )
+
+    monkeypatch.setattr(config_management.httpx, "post", fake_post)
+
+    result = config_management.config_describe(instance, "web_search.provider")
+
+    assert "value: searxng" in result.message
+    assert "source: configured" in result.message
+    assert "default: brave" in result.message
+    assert "application: live" in result.message
+    assert "restart_required: false" in result.message
+
+
+def test_config_set_posts_single_atomic_patch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     instance = make_instance(tmp_path)
     calls: list[dict[str, Any]] = []
 
@@ -194,82 +227,90 @@ def test_config_set_posts_set_key_rpc(tmp_path: Path, monkeypatch: pytest.Monkey
         url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
     ) -> httpx.Response:
         calls.append({"url": url, "json": json, "timeout": timeout})
-        return httpx.Response(200, json={"ok": True, "result": {"settings": {"x": 9000}}})
-
-    monkeypatch.setattr(config_management.httpx, "post", fake_post)
-
-    result = config_management.config_set(instance, "x", 9000)
-
-    assert result.ok is True
-    assert calls == [
-        {
-            "url": f"{instance.url}/api/rpc",
-            "json": {
-                "method": "settings.set_key",
-                "params": {"key": "x", "value": 9000},
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "changed": ["web_search.provider"],
+                    "changes": [
+                        {
+                            "path": "web_search.provider",
+                            "value": "searxng",
+                            "configured": True,
+                            "configured_value": "searxng",
+                            "application": "live",
+                        }
+                    ],
+                    "restart_required": False,
+                },
             },
-            "timeout": 10.0,
-        }
-    ]
-
-
-def test_config_set_confirms_with_key_equals_value(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        return httpx.Response(200, json={"ok": True, "result": {"settings": {"x": 9000}}})
+        )
 
     monkeypatch.setattr(config_management.httpx, "post", fake_post)
 
-    result = config_management.config_set(instance, "x", 9000)
+    result = config_management.config_set(instance, "web_search.provider", "searxng")
 
-    assert result == CommandResult(ok=True, message="x = 9000", instance=instance)
-
-
-def test_config_set_rejects_response_without_saved_key(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    instance = make_instance(tmp_path)
-
-    def fake_post(
-        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
-    ) -> httpx.Response:
-        return httpx.Response(200, json={"ok": True, "result": {"settings": {}}})
-
-    monkeypatch.setattr(config_management.httpx, "post", fake_post)
-
-    result = config_management.config_set(instance, "x", 9000)
-
-    assert result == CommandResult(
-        ok=False,
-        message="RPC result missing saved settings key: x",
-        instance=instance,
+    assert calls[0]["json"] == {
+        "method": "settings.patch",
+        "params": {
+            "operations": [{"op": "set", "path": "web_search.provider", "value": "searxng"}]
+        },
+    }
+    assert result.message == (
+        'updated: web_search.provider = "searxng"\n  application: live\nrestart_required: no'
     )
 
 
-def test_coerce_config_value_parses_int() -> None:
-    assert config_management.coerce_config_value("42") == 42
+def test_config_patch_reports_pending_restart_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "changed": ["server.port"],
+                    "changes": [
+                        {
+                            "path": "server.port",
+                            "value": 8420,
+                            "configured": True,
+                            "configured_value": 9000,
+                            "pending_value": 9000,
+                            "application": "restart",
+                        }
+                    ],
+                    "restart_required": True,
+                },
+            },
+        )
+
+    monkeypatch.setattr(config_management.httpx, "post", fake_post)
+
+    result = config_management.config_patch(
+        instance, [{"op": "set", "path": "server.port", "value": 9000}]
+    )
+
+    assert "pending: 9000" in result.message
+    assert "application: restart" in result.message
+    assert "restart_required: yes" in result.message
 
 
-def test_coerce_config_value_parses_bool() -> None:
-    assert config_management.coerce_config_value("true") is True
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("42", 42), ("true", True), ('{"a":1}', {"a": 1}), ("hello world", "hello world")],
+)
+def test_coerce_config_value(raw: str, expected: Any) -> None:
+    assert config_management.coerce_config_value(raw) == expected
 
 
-def test_coerce_config_value_parses_json_object() -> None:
-    assert config_management.coerce_config_value('{"a":1}') == {"a": 1}
-
-
-def test_coerce_config_value_falls_back_to_string() -> None:
-    assert config_management.coerce_config_value("hello world") == "hello world"
-
-
-def test_config_show_returns_error_on_rpc_failure(
+def test_config_raw_returns_error_on_rpc_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -285,7 +326,7 @@ def test_config_show_returns_error_on_rpc_failure(
 
     monkeypatch.setattr(config_management.httpx, "post", fake_post)
 
-    result = config_management.config_show(instance)
+    result = config_management.config_raw(instance)
 
     assert result == CommandResult(
         ok=False,

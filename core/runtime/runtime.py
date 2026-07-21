@@ -82,6 +82,10 @@ from core.runtime.interfaces import (
 )
 from core.sessions import ChatSessionManager
 from core.sessions.titles import SessionTitleService
+from core.settings.paths import (
+    DEFAULT_ATTACHMENT_MAX_SIZE_BYTES,
+    DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES,
+)
 from core.skills.authoring import SkillAuthoringService
 from core.skills.skills import (
     SKILL_ORIGIN_AGENT,
@@ -134,8 +138,6 @@ _PROJECT_ROOT = APP_DIR
 _DEFAULT_RESOURCES_DIR = _PROJECT_ROOT / "resources"
 _PACKAGE_NAME = "vbot"
 _UNKNOWN_APP_VERSION = "0.0.0+unknown"
-_DEFAULT_ATTACHMENT_MAX_SIZE_BYTES = 20_971_520
-_DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES = 20_971_520
 _SKILLS_DIRNAME = "skills"
 _AGENTS_DIRNAME = "agents"
 
@@ -366,7 +368,7 @@ class Runtime:
         self._embeddings: EmbeddingService | None = None
         self._storage: StorageManager | None = None
         self._attachment_store: AttachmentStore | None = None
-        self._speech_upload_max_size_bytes = _DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES
+        self._speech_upload_max_size_bytes = DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES
         self._agents: AgentStore | None = None
         self._tools: ToolRegistry | None = None
         self._tool_prompt_blocks: ToolPromptBlockRegistry | None = None
@@ -444,12 +446,12 @@ class Runtime:
         attachment_max_size_bytes = self._positive_size_setting(
             settings,
             key="attachment_max_size_bytes",
-            default=_DEFAULT_ATTACHMENT_MAX_SIZE_BYTES,
+            default=DEFAULT_ATTACHMENT_MAX_SIZE_BYTES,
         )
         self._speech_upload_max_size_bytes = self._positive_size_setting(
             settings,
             key="speech_upload_max_size_bytes",
-            default=_DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES,
+            default=DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES,
         )
         self._attachment_store = AttachmentStore(
             self._storage.data_dir,
