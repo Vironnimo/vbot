@@ -35,10 +35,14 @@ from cli.channel_management import (
 )
 from cli.config_management import (
     coerce_config_value,
+    config_describe,
     config_effective,
     config_get,
+    config_list,
+    config_patch,
+    config_raw,
     config_set,
-    config_show,
+    config_unset,
 )
 from cli.cron_management import (
     cron_create,
@@ -252,10 +256,14 @@ def run(
     disable_extension_fn: Callable[[ServerInstance, str], CommandResult] = extensions_disable,
     show_extension_fn: Callable[[ServerInstance, str], CommandResult] = extensions_show,
     set_extension_fn: Callable[[ServerInstance, str, str, str], CommandResult] = extensions_set,
-    show_config_fn: Callable[[ServerInstance], CommandResult] = config_show,
+    raw_config_fn: Callable[[ServerInstance], CommandResult] = config_raw,
+    list_config_fn: Callable[[ServerInstance, str | None], CommandResult] = config_list,
+    describe_config_fn: Callable[[ServerInstance, str], CommandResult] = config_describe,
     effective_config_fn: Callable[[ServerInstance], CommandResult] = config_effective,
     get_config_fn: Callable[[ServerInstance, str], CommandResult] = config_get,
     set_config_fn: Callable[[ServerInstance, str, Any], CommandResult] = config_set,
+    unset_config_fn: Callable[[ServerInstance, str], CommandResult] = config_unset,
+    patch_config_fn: Callable[[ServerInstance, list[dict[str, Any]]], CommandResult] = config_patch,
     doctor_settings_fn: Callable[[str | Path | None], CommandResult] = doctor_settings,
     doctor_config_fn: Callable[[str | Path | None], CommandResult] = doctor_config,
     launch_desktop_fn: Callable[[Sequence[str]], None] = _launch_desktop,
@@ -454,10 +462,14 @@ def run(
         result = dispatch_config_command(
             args,
             instance,
-            show_config_fn=show_config_fn,
+            raw_config_fn=raw_config_fn,
+            list_config_fn=list_config_fn,
+            describe_config_fn=describe_config_fn,
             effective_config_fn=effective_config_fn,
             get_config_fn=get_config_fn,
             set_config_fn=set_config_fn,
+            unset_config_fn=unset_config_fn,
+            patch_config_fn=patch_config_fn,
         )
         print_config_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
@@ -1269,22 +1281,49 @@ def dispatch_config_command(
     args: argparse.Namespace,
     instance: ServerInstance,
     *,
-    show_config_fn: Callable[[ServerInstance], CommandResult],
+    raw_config_fn: Callable[[ServerInstance], CommandResult],
+    list_config_fn: Callable[[ServerInstance, str | None], CommandResult],
+    describe_config_fn: Callable[[ServerInstance, str], CommandResult],
     effective_config_fn: Callable[[ServerInstance], CommandResult],
     get_config_fn: Callable[[ServerInstance, str], CommandResult],
     set_config_fn: Callable[[ServerInstance, str, Any], CommandResult],
+    unset_config_fn: Callable[[ServerInstance, str], CommandResult],
+    patch_config_fn: Callable[[ServerInstance, list[dict[str, Any]]], CommandResult],
 ) -> CommandResult:
     """Dispatch one parsed config command against the server RPC client."""
 
     if args.command is None:
-        return show_config_fn(instance)
+        return list_config_fn(instance, None)
+    if args.command == "list":
+        return list_config_fn(instance, args.prefix)
+    if args.command == "describe":
+        return describe_config_fn(instance, args.path)
     if args.command == "effective":
         return effective_config_fn(instance)
+    if args.command == "raw":
+        return raw_config_fn(instance)
     if args.command == "get":
-        return get_config_fn(instance, args.key)
+        if args.details:
+            return describe_config_fn(instance, args.path)
+        return get_config_fn(instance, args.path)
     if args.command == "set":
         coerced = coerce_config_value(args.value)
-        return set_config_fn(instance, args.key, coerced)
+        return set_config_fn(instance, args.path, coerced)
+    if args.command == "unset":
+        return unset_config_fn(instance, args.path)
+    if args.command == "patch":
+        operations = [
+            {"op": "set", "path": path, "value": coerce_config_value(value)}
+            for path, value in args.set_values
+        ]
+        operations.extend({"op": "unset", "path": path} for path in args.unset_paths)
+        if not operations:
+            return CommandResult(
+                ok=False,
+                message="config patch requires at least one --set or --unset operation",
+                instance=instance,
+            )
+        return patch_config_fn(instance, operations)
     raise ValueError(f"Unsupported config command: {args.command}")
 
 

@@ -383,16 +383,17 @@ def _validate_compaction_trigger(diagnostics: list[JsonDiagnostic], value: Any, 
     if not isinstance(value, Mapping):
         _error(diagnostics, path, "must be an object")
         return
-    trigger_type = value.get("type")
+    trigger_type = value.get("type", "context_ratio")
     if trigger_type == "context_ratio":
         _warn_unknown_keys(
             diagnostics, path, value, frozenset({"type", "threshold"}), "trigger field"
         )
-        threshold = value.get("threshold")
-        if isinstance(threshold, bool) or not isinstance(threshold, int | float):
-            _error(diagnostics, f"{path}.threshold", "must be a number")
-        elif not 0 < float(threshold) <= 1:
-            _error(diagnostics, f"{path}.threshold", "must be in (0, 1]")
+        if "threshold" in value:
+            threshold = value["threshold"]
+            if isinstance(threshold, bool) or not isinstance(threshold, int | float):
+                _error(diagnostics, f"{path}.threshold", "must be a number")
+            elif not 0 < float(threshold) <= 1:
+                _error(diagnostics, f"{path}.threshold", "must be in (0, 1]")
         return
     if trigger_type == "input_tokens":
         _warn_unknown_keys(diagnostics, path, value, frozenset({"type", "tokens"}), "trigger field")
@@ -409,7 +410,7 @@ def _validate_compaction_strategy(diagnostics: list[JsonDiagnostic], value: Any,
     if not isinstance(value, Mapping):
         _error(diagnostics, path, "must be an object")
         return
-    strategy_type = value.get("type")
+    strategy_type = value.get("type", "summary_tail")
     if strategy_type == "summary_tail":
         _warn_unknown_keys(
             diagnostics,

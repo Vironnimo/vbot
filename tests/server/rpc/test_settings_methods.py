@@ -190,6 +190,34 @@ async def test_extensions_update_rejects_invalid_schema_config(
 
 
 @pytest.mark.asyncio
+async def test_settings_path_rejects_extension_secret_with_safe_command_hint(
+    tmp_path: Path,
+) -> None:
+    state = _state_with_schema(tmp_path)
+
+    result = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.patch",
+            "params": {
+                "operations": [
+                    {
+                        "op": "set",
+                        "path": 'extensions.config["homeassistant"]["token"]',
+                        "value": "must-not-be-stored",
+                    }
+                ]
+            },
+        },
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_request"
+    assert "vbot extensions homeassistant set token --stdin" in result["error"]["message"]
+    assert state.runtime.storage.load_extensions_settings() == {"disabled": [], "config": {}}
+
+
+@pytest.mark.asyncio
 async def test_extensions_update_passes_schemaless_config(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())  # no registry → no schemas
 

@@ -2,13 +2,29 @@
 
 from __future__ import annotations
 
+import json
+from contextlib import suppress
+from copy import deepcopy
 from typing import Any
 
 from core.debug.store import DebugTraceStore
 from core.extensions import validate_extension_config
+from core.model_tasks import SUPPORTED_TASK_TYPES
 from core.recall.recall import FIRST_PARTY_RECALL_BACKENDS
 from core.search_config import FIRST_PARTY_WEB_SEARCH_PROVIDERS
-from core.settings import SettingsValidationError, parse_settings_update, validate_settings_data
+from core.settings import (
+    APPLICATION_RESTART,
+    SettingsPatchOperation,
+    SettingsPathError,
+    SettingsValidationError,
+    apply_settings_patch,
+    build_effective_settings,
+    catalog_payload,
+    parse_patch_operations,
+    parse_settings_path,
+    parse_settings_update,
+    setting_details,
+)
 from core.utils.logging import get_logger
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -38,44 +54,110 @@ def _get_settings_raw(state: Any, params: JsonObject) -> JsonObject:
     return {"settings": dict(settings)}
 
 
-def _set_settings_key(state: Any, params: JsonObject) -> JsonObject:
-    if "key" not in params or "value" not in params:
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            "settings.set_key requires 'key' and 'value'",
-        )
-
-    key = _required_string(params, "key")
-    value = params["value"]
-    previous_value: Any = _MISSING
-
-    def set_key(settings: JsonObject) -> JsonObject:
-        nonlocal previous_value
-        previous_value = settings.get(key, _MISSING)
-        settings[key] = value
-        _validate_raw_settings(settings)
-        return dict(settings)
-
+def _get_public_settings(state: Any, params: JsonObject) -> JsonObject:
+    if params:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "settings.values does not accept params")
     try:
-        settings = state.runtime.storage.update_settings(set_key)
+        values = build_effective_settings(state.runtime.storage.load_settings())
+        _apply_runtime_values(state, values)
+        return {"settings": values}
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
-    if key != "appearance" and (previous_value is _MISSING or previous_value != value):
-        _LOGGER.info("Settings key updated (key=%s)", key)
-    return {"settings": settings}
+
+def _settings_catalog(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"prefix"}, "settings.catalog")
+    prefix = params.get("prefix")
+    if prefix is not None and not isinstance(prefix, str):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.prefix must be a string")
+    try:
+        entries = catalog_payload(prefix)
+        raw_settings = state.runtime.storage.load_settings()
+        for entry in entries:
+            if "<" in str(entry.get("path", "")):
+                continue
+            details = _runtime_setting_details(state, raw_settings, str(entry["path"]), True)
+            entry.update(
+                {
+                    key: value
+                    for key, value in details.items()
+                    if key
+                    in {
+                        "value",
+                        "configured",
+                        "configured_value",
+                        "source",
+                        "restart_required",
+                    }
+                }
+            )
+        entries.extend(_dynamic_catalog_entries(state, raw_settings, prefix))
+        if prefix and not entries:
+            raise SettingsPathError(f"no settings paths match {prefix!r}")
+        return {"settings": entries}
+    except SettingsPathError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
 
 
-def _validate_raw_settings(settings: JsonObject) -> None:
-    errors = [
-        diagnostic
-        for diagnostic in validate_settings_data(settings)
-        if diagnostic.severity == "error"
-    ]
-    if not errors:
-        return
-    details = "; ".join(f"{diagnostic.path}: {diagnostic.message}" for diagnostic in errors)
-    raise RpcError(RPC_ERROR_INVALID_REQUEST, f"invalid settings: {details}")
+def _get_setting_path(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"path", "allow_missing"}, "settings.get_path")
+    path = _required_string(params, "path")
+    allow_missing = params.get("allow_missing", False)
+    if not isinstance(allow_missing, bool):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.allow_missing must be a boolean")
+    try:
+        return {
+            "setting": _runtime_setting_details(
+                state,
+                state.runtime.storage.load_settings(),
+                path,
+                allow_missing,
+            )
+        }
+    except SettingsPathError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+
+async def _patch_setting_paths(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"operations"}, "settings.patch")
+    try:
+        operations = parse_patch_operations(params.get("operations"))
+    except SettingsPathError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+
+    storage = state.runtime.storage
+
+    def mutate(raw_settings: JsonObject) -> tuple[JsonObject, JsonObject, tuple[str, ...]]:
+        previous = deepcopy(raw_settings)
+        candidate, changed_paths = apply_settings_patch(raw_settings, operations)
+        _validate_public_settings_candidate(state.runtime, candidate, operations)
+        raw_settings.clear()
+        raw_settings.update(candidate)
+        return previous, candidate, changed_paths
+
+    try:
+        previous, saved, changed_paths = storage.update_settings(mutate)
+        await _apply_public_settings_delta(state.runtime, previous, saved)
+        changes = [
+            _runtime_setting_details(state, saved, operation.resolved.canonical_path, True)
+            for operation in operations
+        ]
+    except SettingsPathError as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    if changed_paths:
+        _LOGGER.info("Settings paths updated (paths=%s)", ",".join(changed_paths))
+    return {
+        "changed": list(changed_paths),
+        "changes": changes,
+        "restart_required": any(change.get("restart_required") is True for change in changes),
+    }
 
 
 def _get_settings(state: Any, params: JsonObject) -> JsonObject:
@@ -95,10 +177,8 @@ async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
 
     storage = state.runtime.storage
     previous_settings = storage.load_settings()
-    should_reload_recall_backend = "recall" in settings_update
-    should_reload_skills = "skills" in settings_update
 
-    if should_reload_recall_backend:
+    if "recall" in settings_update:
         _validate_recall_backend_known(state.runtime, settings_update["recall"]["backend"])
 
     _validate_model_connections(state.runtime.models, settings_update)
@@ -119,20 +199,17 @@ async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
 
     try:
         storage.update_settings_sections(settings_update)
-        if should_reload_skills:
-            reload_skills = getattr(state.runtime, "reload_skills", None)
-            if callable(reload_skills):
-                reload_skills()
-        if should_reload_recall_backend:
-            reload_recall_backend = getattr(state.runtime, "reload_recall_backend", None)
-            if callable(reload_recall_backend):
-                reload_recall_backend()
-        await _apply_extension_delta(state.runtime, newly_enabled, newly_disabled)
+        saved_settings = storage.load_settings()
+        await _apply_public_settings_delta(
+            state.runtime,
+            previous_settings,
+            saved_settings,
+            force_roots=set(settings_update),
+        )
         response = _settings_response(state)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
-    saved_settings = storage.load_settings()
     changed_sections = sorted(
         section
         for section in settings_update
@@ -155,7 +232,7 @@ async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
 
 async def _apply_extension_delta(
     runtime: Any, newly_enabled: set[str], newly_disabled: set[str]
-) -> None:
+) -> bool:
     """Apply the extensions disabled-set delta live after the write is persisted.
 
     Enabling any name rebuilds the whole extension layer (``reload_extensions``),
@@ -170,11 +247,290 @@ async def _apply_extension_delta(
         reload_extensions = getattr(runtime, "reload_extensions", None)
         if callable(reload_extensions):
             await reload_extensions()
-        return
+            return True
+        return False
     if newly_disabled:
         apply_disabled = getattr(runtime, "apply_extension_disabled_change", None)
         if callable(apply_disabled):
             await apply_disabled(newly_disabled)
+    return False
+
+
+def _validate_public_settings_candidate(
+    runtime: Any,
+    candidate: JsonObject,
+    operations: list[SettingsPatchOperation],
+) -> None:
+    """Apply runtime-aware validation before a public path patch is persisted."""
+
+    for operation in operations:
+        _reject_secret_extension_path(
+            runtime,
+            operation.resolved.path.values,
+            operation.resolved.canonical_path,
+        )
+    effective = build_effective_settings(candidate)
+    changed_roots = {operation.resolved.path.values[0] for operation in operations}
+    if "recall" in changed_roots:
+        _validate_recall_backend_known(runtime, effective["recall"]["backend"])
+    model_sections = changed_roots & {"defaults", "compaction", "session_titles"}
+    if model_sections:
+        _validate_model_connections(
+            runtime.models,
+            {section: effective[section] for section in model_sections},
+        )
+    if any(
+        operation.resolved.path.values[:2] == ("extensions", "config") for operation in operations
+    ):
+        _validate_extension_configs(runtime, {"config": effective["extensions"]["config"]})
+    _validate_changed_provider_connections(runtime, operations)
+
+
+def _validate_changed_provider_connections(
+    runtime: Any,
+    operations: list[SettingsPatchOperation],
+) -> None:
+    known = {
+        f"{provider_id}:{connection.id}"
+        for provider_id in runtime.providers.list_ids()
+        for connection in runtime.providers.get(provider_id).connections
+    }
+    for operation in operations:
+        values = operation.resolved.path.values
+        if values[:2] != ("providers", "connections"):
+            continue
+        connection_key = values[2]
+        if connection_key not in known:
+            available = ", ".join(sorted(known)) or "none"
+            raise SettingsPathError(
+                f"unknown Provider Connection {connection_key!r}; available: {available}"
+            )
+
+
+async def _apply_public_settings_delta(
+    runtime: Any,
+    previous: JsonObject,
+    current: JsonObject,
+    *,
+    force_roots: set[str] | None = None,
+) -> None:
+    """Apply the live lifecycle effects owned by changed Settings roots."""
+
+    forced = force_roots or set()
+    extension_directories_changed = previous.get("extension_directories") != current.get(
+        "extension_directories"
+    )
+    extensions_changed = previous.get("extensions") != current.get("extensions")
+    skill_directories_changed = "skills" in forced or previous.get(
+        "skill_directories"
+    ) != current.get("skill_directories")
+
+    extension_layer_reloaded = False
+    if extension_directories_changed:
+        reload_extensions = getattr(runtime, "reload_extensions", None)
+        if callable(reload_extensions):
+            await reload_extensions()
+            extension_layer_reloaded = True
+    elif extensions_changed:
+        old_disabled = _normalized_disabled(previous)
+        new_disabled = _normalized_disabled(current)
+        extension_layer_reloaded = await _apply_extension_delta(
+            runtime, old_disabled - new_disabled, new_disabled - old_disabled
+        )
+
+    if skill_directories_changed and not extension_layer_reloaded:
+        reload_skills = getattr(runtime, "reload_skills", None)
+        if callable(reload_skills):
+            reload_skills()
+
+    recall_changed = "recall" in forced or previous.get("recall") != current.get("recall")
+    if recall_changed and not extension_layer_reloaded:
+        reload_recall_backend = getattr(runtime, "reload_recall_backend", None)
+        if callable(reload_recall_backend):
+            reload_recall_backend()
+
+
+def _normalized_disabled(settings: JsonObject) -> set[str]:
+    extensions = settings.get("extensions")
+    if not isinstance(extensions, dict):
+        return set()
+    disabled = extensions.get("disabled")
+    if not isinstance(disabled, list):
+        return set()
+    return {name for name in disabled if isinstance(name, str)}
+
+
+def _apply_runtime_values(state: Any, values: JsonObject) -> None:
+    """Replace restart-applied configured values with the active runtime values."""
+
+    server_bind = getattr(state, "server_bind", {})
+    active_port = server_bind.get("listen_port")
+    if isinstance(active_port, int):
+        values["server"]["port"] = active_port
+
+    runtime = state.runtime
+    with suppress(AttributeError, RuntimeError):
+        values["attachments"]["max_size_bytes"] = runtime.attachment_store.max_size_bytes
+    with suppress(AttributeError, RuntimeError):
+        values["speech"]["upload_max_size_bytes"] = runtime.speech_upload_max_size_bytes
+
+
+def _runtime_setting_details(
+    state: Any,
+    raw_settings: JsonObject,
+    path: str,
+    allow_missing: bool,
+) -> JsonObject:
+    parsed = parse_settings_path(path)
+    values = parsed.values
+    _reject_secret_extension_path(state.runtime, values, path)
+    details = setting_details(raw_settings, parsed, allow_missing=allow_missing)
+
+    if values == ("server", "port"):
+        desired = details.get("value")
+        active = getattr(state, "server_bind", {}).get("listen_port", details.get("value"))
+        details["value"] = active
+        details["source"] = getattr(state, "server_bind", {}).get(
+            "port_source", details.get("source", "default")
+        )
+        _set_restart_state(details, active, desired)
+    elif values == ("attachments", "max_size_bytes"):
+        desired = details.get("value")
+        try:
+            active = state.runtime.attachment_store.max_size_bytes
+        except (AttributeError, RuntimeError):
+            active = details.get("value")
+        details["value"] = active
+        _set_restart_state(details, active, desired)
+    elif values == ("speech", "upload_max_size_bytes"):
+        desired = details.get("value")
+        try:
+            active = state.runtime.speech_upload_max_size_bytes
+        except (AttributeError, RuntimeError):
+            active = details.get("value")
+        details["value"] = active
+        _set_restart_state(details, active, desired)
+    elif values[:2] == ("providers", "connections"):
+        connection_key = values[2]
+        provider_id = connection_key.split(":", 1)[0]
+        details["value"] = bool(
+            state.runtime.provider_credentials.is_connection_enabled(provider_id, connection_key)
+        )
+        if not details.get("configured"):
+            details["source"] = "provider_default"
+
+    details["restart_required"] = bool(
+        details.get("restart_required")
+        or (
+            details.get("application") == APPLICATION_RESTART
+            and details.get("configured")
+            and details.get("configured_value") != details.get("value")
+        )
+    )
+    return _apply_extension_field_metadata(state.runtime, details, values)
+
+
+def _set_restart_state(details: JsonObject, active: Any, desired: Any) -> None:
+    """Expose the normalized next-start value when it differs from active state."""
+
+    details["restart_required"] = active != desired
+    if active != desired:
+        details["pending_value"] = deepcopy(desired)
+    else:
+        details.pop("pending_value", None)
+
+
+def _extension_field(runtime: Any, values: tuple[str, ...]) -> Any | None:
+    if len(values) != 4 or values[:2] != ("extensions", "config"):
+        return None
+    extension_name, field_name = values[2], values[3]
+    registry = getattr(runtime, "extensions", None)
+    if registry is None:
+        return None
+    record = next((item for item in registry.records() if item.name == extension_name), None)
+    schema = record.declarations.settings_schema if record is not None else None
+    return next((item for item in schema or [] if item.key == field_name), None)
+
+
+def _reject_secret_extension_path(
+    runtime: Any,
+    values: tuple[str, ...],
+    rendered_path: str,
+) -> None:
+    field = _extension_field(runtime, values)
+    if field is None or field.type != "secret":
+        return
+    extension_name, field_name = values[2], values[3]
+    raise SettingsPathError(
+        f"{rendered_path} is a secret; use 'vbot extensions {extension_name} "
+        f"set {field_name} --stdin'"
+    )
+
+
+def _apply_extension_field_metadata(
+    runtime: Any,
+    details: JsonObject,
+    values: tuple[str, ...],
+) -> JsonObject:
+    if len(values) != 4 or values[:2] != ("extensions", "config"):
+        return details
+    field = _extension_field(runtime, values)
+    if field is None:
+        return details
+    details["type"] = {"text": "string", "number": "number", "toggle": "boolean"}.get(
+        field.type, details["type"]
+    )
+    details["description"] = field.description or field.label
+    if field.default is not None:
+        details["has_default"] = True
+        details["default"] = field.default
+        if not details.get("configured"):
+            details["value"] = field.default
+    return details
+
+
+def _dynamic_catalog_entries(
+    state: Any,
+    raw_settings: JsonObject,
+    prefix: str | None,
+) -> list[JsonObject]:
+    paths: set[str] = set()
+    for provider_id in state.runtime.providers.list_ids():
+        provider = state.runtime.providers.get(provider_id)
+        for connection in provider.connections:
+            key = f"{provider_id}:{connection.id}"
+            paths.add(f"providers.connections[{json.dumps(key, ensure_ascii=False)}]")
+
+    effective = build_effective_settings(raw_settings)
+    for model in effective["local_models"]["context_windows"]:
+        paths.add(f"local_models.context_windows[{json.dumps(model, ensure_ascii=False)}]")
+    for task in set(SUPPORTED_TASK_TYPES) | set(effective["model_tasks"]):
+        encoded_task = json.dumps(task, ensure_ascii=False)
+        paths.add(f"model_tasks[{encoded_task}].target")
+        paths.add(f"model_tasks[{encoded_task}].options")
+    for model in effective["providers"]["openrouter"]["routing"]["models"]:
+        paths.add(f"providers.openrouter.routing.models[{json.dumps(model, ensure_ascii=False)}]")
+
+    registry = getattr(state.runtime, "extensions", None)
+    if registry is not None:
+        for record in registry.records():
+            for field in record.declarations.settings_schema or []:
+                if field.type == "secret":
+                    continue
+                extension_name = json.dumps(record.name, ensure_ascii=False)
+                field_name = json.dumps(field.key, ensure_ascii=False)
+                paths.add(f"extensions.config[{extension_name}][{field_name}]")
+
+    entries: list[JsonObject] = []
+    normalized_prefix = (prefix or "").strip()
+    for path in sorted(paths):
+        if normalized_prefix and not path.startswith(normalized_prefix):
+            continue
+        try:
+            entries.append(_runtime_setting_details(state, raw_settings, path, True))
+        except SettingsPathError:
+            continue
+    return entries
 
 
 def _validate_extension_configs(runtime: Any, extensions_update: JsonObject) -> None:
@@ -435,8 +791,11 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
 
     return {
         "settings.get_raw": _get_settings_raw,
-        "settings.set_key": _set_settings_key,
         "settings.get": _get_settings,
+        "settings.values": _get_public_settings,
+        "settings.catalog": _settings_catalog,
+        "settings.get_path": _get_setting_path,
+        "settings.patch": _patch_setting_paths,
         "settings.update": _update_settings,
         "task_model.settings": _task_model_settings,
         "task_model.update": _task_model_update,

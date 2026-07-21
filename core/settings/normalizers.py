@@ -210,7 +210,7 @@ def _normalize_compaction_trigger(value: Any) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise StorageError("Compaction Policy trigger must be an object")
     trigger = dict(value)
-    trigger_type = trigger.get("type")
+    trigger_type = trigger.get("type", "context_ratio")
     if trigger_type == "context_ratio":
         unsupported = sorted(set(trigger) - {"type", "threshold"})
         if unsupported:
@@ -236,7 +236,7 @@ def _normalize_compaction_trigger(value: Any) -> dict[str, Any]:
 
 def _normalize_compaction_threshold(value: Any) -> float:
     if value is None:
-        return cast("float", COMPACTION_SETTING_DEFAULTS["threshold"])
+        return cast("float", COMPACTION_SETTING_DEFAULTS["trigger"]["threshold"])
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise StorageError("Compaction setting threshold must be a number")
 
@@ -262,7 +262,7 @@ def _normalize_compaction_strategy(value: Any) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise StorageError("Compaction Policy strategy must be an object")
     strategy = dict(value)
-    strategy_type = strategy.get("type")
+    strategy_type = strategy.get("type", "summary_tail")
     if strategy_type == "summary_tail":
         unsupported = sorted(set(strategy) - {"type", "tail_tokens", "summary_model"})
         if unsupported:

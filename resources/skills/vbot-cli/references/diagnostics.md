@@ -21,7 +21,7 @@ vbot debug trace <trace-id>
 vbot debug clear
 ```
 
-- `probe`, `traces`, and `trace` need debug mode enabled server-side: `vbot config set debug '{"enabled": true}'`. `status` and `clear` always work.
+- `probe`, `traces`, and `trace` need debug mode enabled server-side: `vbot config set debug.enabled true`. `status` and `clear` always work.
 - `probe` fetches the provider's models endpoint with the connection's credentials and prints status, duration, and a model preview; the full raw response is stored as a trace and read with `debug trace <trace-id>`.
 
 ## Statistics — usage aggregated from persisted sessions

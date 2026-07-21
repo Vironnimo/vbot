@@ -52,7 +52,7 @@ AREA_HELP = {
     "extensions": "Inspect and toggle loaded extensions",
     "cron": "Inspect and manage scheduled cron jobs",
     "statistics": "Inspect usage statistics computed from persisted sessions",
-    "config": "Inspect and update raw settings",
+    "config": "Inspect and update public Settings paths",
     "debug": "Inspect debug mode state and stored traces",
     "doctor": "Run local configuration health checks",
 }
@@ -152,9 +152,14 @@ STATISTICS_HELP = {
     "skills": "Show the skills section: never-used skills and per-skill usage rates",
 }
 CONFIG_HELP = {
-    "effective": "Show the normalized live settings projection",
-    "get": "Show one raw settings key",
-    "set": "Set one raw settings key",
+    "list": "List public Settings paths and metadata",
+    "describe": "Describe one public Settings path",
+    "effective": "Show all normalized public Settings values",
+    "raw": "Show the internal settings.json document for diagnostics",
+    "get": "Show one effective public Settings value",
+    "set": "Set one public Settings path",
+    "unset": "Remove one configured Settings override",
+    "patch": "Apply multiple Settings changes atomically",
 }
 DEBUG_HELP = {
     "status": "Show debug mode state and trace count",
@@ -1531,17 +1536,90 @@ def _add_config_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
         example="config effective",
     )
 
-    get_parser = _add_command_parser(
-        config_subparsers, "get", CONFIG_HELP["get"], example="config get recall"
+    _add_command_parser(
+        config_subparsers,
+        "raw",
+        CONFIG_HELP["raw"],
+        example="config raw",
     )
-    get_parser.add_argument("key", metavar="<key>", help="Top-level settings key to show")
+
+    list_parser = _add_command_parser(
+        config_subparsers,
+        "list",
+        CONFIG_HELP["list"],
+        example="config list web_search",
+    )
+    list_parser.add_argument(
+        "prefix",
+        nargs="?",
+        help="Optional public path prefix, for example web_search",
+    )
+
+    describe_parser = _add_command_parser(
+        config_subparsers,
+        "describe",
+        CONFIG_HELP["describe"],
+        example="config describe web_search.provider",
+    )
+    describe_parser.add_argument("path", metavar="<path>", help="Public Settings path")
+
+    get_parser = _add_command_parser(
+        config_subparsers,
+        "get",
+        CONFIG_HELP["get"],
+        example="config get web_search.provider",
+    )
+    get_parser.add_argument("path", metavar="<path>", help="Public Settings path")
+    get_parser.add_argument(
+        "--details",
+        action="store_true",
+        help="Include configured value, source, default, type, and application lifecycle",
+    )
 
     set_parser = _add_command_parser(
-        config_subparsers, "set", CONFIG_HELP["set"], example="config set port 8500"
+        config_subparsers,
+        "set",
+        CONFIG_HELP["set"],
+        example="config set web_search.provider searxng",
     )
-    set_parser.add_argument("key", metavar="<key>", help="Top-level settings key to set")
+    set_parser.add_argument("path", metavar="<path>", help="Public Settings path")
     set_parser.add_argument(
         "value", metavar="<value>", help="New value; parsed as JSON, falling back to plain text"
+    )
+
+    unset_parser = _add_command_parser(
+        config_subparsers,
+        "unset",
+        CONFIG_HELP["unset"],
+        example="config unset defaults.agent.temperature",
+    )
+    unset_parser.add_argument("path", metavar="<path>", help="Public Settings path")
+
+    patch_parser = _add_command_parser(
+        config_subparsers,
+        "patch",
+        CONFIG_HELP["patch"],
+        example=(
+            "config patch --set web_search.provider searxng "
+            "--set web_search.searxng.base_url https://searxng.example"
+        ),
+    )
+    patch_parser.add_argument(
+        "--set",
+        dest="set_values",
+        action="append",
+        nargs=2,
+        default=[],
+        metavar=("<path>", "<value>"),
+        help="Set one path; repeat for multiple atomic changes",
+    )
+    patch_parser.add_argument(
+        "--unset",
+        dest="unset_paths",
+        action="append",
+        default=[],
+        metavar="<path>",
+        help="Unset one path; repeat for multiple atomic changes",
     )
 
 
