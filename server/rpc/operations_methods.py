@@ -12,6 +12,7 @@ from core.projects import (
 )
 from core.prompts import ProjectPromptContext, PromptError, SystemPromptManager
 from core.utils.log_viewer import LogViewer
+from core.utils.logging import get_logger
 from core.utils.tokens import estimate_json_tokens, estimate_tokens
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -24,6 +25,7 @@ from server.rpc.validation import (
 )
 
 JsonObject = dict[str, Any]
+_LOGGER = get_logger("server.rpc.prompts")
 
 
 def _list_logs(state: Any, params: JsonObject) -> JsonObject:
@@ -64,22 +66,32 @@ def _update_prompt(state: Any, params: JsonObject) -> JsonObject:
     if not isinstance(content, str):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.content must be a string")
     try:
-        return _prompt_manager(state).update_block(block_id, content, params.get("scope"))
+        manager = _prompt_manager(state)
+        before = _find_prompt_block(manager, block_id, params.get("scope"))
+        result = manager.update_block(block_id, content, params.get("scope"))
     except PromptError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    if before is None or before.get("text") != result.get("text"):
+        _log_prompt_mutation("updated", block_id, params.get("scope"))
+    return result
 
 
 def _reset_prompt(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"id", "scope"}, "prompt.reset")
     block_id = _required_string(params, "id")
     try:
-        return _prompt_manager(state).reset_block(block_id, params.get("scope"))
+        manager = _prompt_manager(state)
+        before = _find_prompt_block(manager, block_id, params.get("scope"))
+        result = manager.reset_block(block_id, params.get("scope"))
     except PromptError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    if before is not None and before.get("is_modified"):
+        _log_prompt_mutation("reset", block_id, params.get("scope"))
+    return result
 
 
 def _set_prompt_layout(state: Any, params: JsonObject) -> JsonObject:
@@ -88,11 +100,17 @@ def _set_prompt_layout(state: Any, params: JsonObject) -> JsonObject:
     if not isinstance(layout, list):
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.layout must be a list")
     try:
-        return _prompt_manager(state).set_layout(layout, params.get("scope"))
+        manager = _prompt_manager(state)
+        before = _prompt_layout_signature(manager, params.get("scope"))
+        result = manager.set_layout(layout, params.get("scope"))
+        after = _prompt_layout_signature(manager, params.get("scope"))
     except PromptError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    if before != after:
+        _log_prompt_mutation("layout_updated", None, params.get("scope"))
+    return result
 
 
 def _create_prompt_block(state: Any, params: JsonObject) -> JsonObject:
@@ -103,34 +121,74 @@ def _create_prompt_block(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.content must be a string")
     position = _optional_layout_position(params)
     try:
-        return _prompt_manager(state).create_block(
+        result = _prompt_manager(state).create_block(
             slug, content, params.get("scope"), position=position
         )
     except PromptError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    _log_prompt_mutation("created", result.get("id"), params.get("scope"))
+    return result
 
 
 def _remove_prompt_block(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"id", "scope"}, "prompt.remove_block")
     block_id = _required_string(params, "id")
     try:
-        return _prompt_manager(state).remove_block(block_id, params.get("scope"))
+        manager = _prompt_manager(state)
+        existed = _find_prompt_block(manager, block_id, params.get("scope")) is not None
+        result = manager.remove_block(block_id, params.get("scope"))
     except PromptError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    if existed:
+        _log_prompt_mutation("removed", block_id, params.get("scope"))
+    return result
 
 
 def _reset_prompt_layout(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"scope"}, "prompt.reset_layout")
     try:
-        return _prompt_manager(state).reset_layout(params.get("scope"))
+        manager = _prompt_manager(state)
+        before = _prompt_layout_signature(manager, params.get("scope"))
+        result = manager.reset_layout(params.get("scope"))
+        after = _prompt_layout_signature(manager, params.get("scope"))
     except PromptError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    if before != after:
+        _log_prompt_mutation("layout_reset", None, params.get("scope"))
+    return result
+
+
+def _find_prompt_block(
+    manager: SystemPromptManager, block_id: str, scope: Any
+) -> JsonObject | None:
+    return next(
+        (block for block in manager.list_blocks(scope) if block.get("id") == block_id), None
+    )
+
+
+def _prompt_layout_signature(
+    manager: SystemPromptManager, scope: Any
+) -> tuple[tuple[str, bool], ...]:
+    return tuple(
+        (str(block.get("id", "")), bool(block.get("enabled", False)))
+        for block in manager.list_blocks(scope)
+    )
+
+
+def _log_prompt_mutation(operation: str, block_id: object, scope: Any) -> None:
+    scope_name = "default"
+    if isinstance(scope, dict) and scope.get("type") == "agent":
+        scope_name = f"agent:{scope.get('agent_id', '')}"
+    fields = [f"operation={operation}", f"scope={scope_name}"]
+    if isinstance(block_id, str) and block_id:
+        fields.append(f"block={block_id}")
+    _LOGGER.info("Prompt mutated (%s)", " ".join(fields))
 
 
 def _optional_layout_position(params: JsonObject) -> int | None:

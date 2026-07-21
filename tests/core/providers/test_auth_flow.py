@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -517,7 +518,9 @@ async def test_cancel_flow_cancels_in_flight_polling_task(tmp_path: Path) -> Non
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_poll_loop_saves_token_under_named_account(tmp_path: Path) -> None:
+async def test_poll_loop_saves_token_under_named_account(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """A poll loop for a named account stores its token under that account only."""
     # Arrange
     token_store = TokenStore(tmp_path)
@@ -528,16 +531,17 @@ async def test_poll_loop_saves_token_under_named_account(tmp_path: Path) -> None
     )
 
     # Act
-    await engine._poll_for_token(
-        "github-copilot",
-        "oauth",
-        _oauth_config(),
-        "device-code",
-        1,
-        900,
-        on_complete,
-        account_id="work",
-    )
+    with caplog.at_level(logging.INFO, logger="vbot.providers.auth_flow"):
+        await engine._poll_for_token(
+            "github-copilot",
+            "oauth",
+            _oauth_config(),
+            "device-code",
+            1,
+            900,
+            on_complete,
+            account_id="work",
+        )
 
     # Assert
     work_token = token_store.load("github-copilot", "oauth", account_id="work")
@@ -545,6 +549,14 @@ async def test_poll_loop_saves_token_under_named_account(tmp_path: Path) -> None
     assert work_token.access_token == "work-access-secret"
     assert token_store.load("github-copilot", "oauth") is None
     on_complete.assert_awaited_once_with(success=True)
+    auth_logs = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "vbot.providers.auth_flow"
+    ]
+    assert auth_logs == ["OAuth provider connected (provider=github-copilot connection=oauth)"]
+    assert "work" not in " ".join(auth_logs)
+    assert "work-access-secret" not in " ".join(auth_logs)
 
 
 @respx.mock

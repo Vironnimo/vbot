@@ -10,9 +10,6 @@ from pathlib import Path
 
 from core.providers.accounts import ACCOUNT_ID_PATTERN, DEFAULT_ACCOUNT_ID, sorted_account_ids
 from core.utils.atomic import atomic_write_text
-from core.utils.logging import get_logger
-
-_LOGGER = get_logger("providers.token_store")
 
 TOKEN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _ACCOUNT_FILE_SEPARATOR = "--"
@@ -51,12 +48,6 @@ class TokenStore:
             json.dumps(self._token_to_dict(token), sort_keys=True),
             data_dir=self._data_dir,
         )
-        _LOGGER.info(
-            "Saved OAuth token for provider '%s' connection '%s' account '%s'",
-            provider_id,
-            local_connection_id,
-            account_id,
-        )
 
     def load(
         self,
@@ -93,12 +84,6 @@ class TokenStore:
             token_path.unlink()
         except FileNotFoundError:
             return
-        _LOGGER.info(
-            "Deleted OAuth token for provider '%s' connection '%s' account '%s'",
-            provider_id,
-            local_connection_id,
-            account_id,
-        )
 
     def has_valid_token(
         self,

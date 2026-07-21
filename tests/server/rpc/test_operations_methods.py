@@ -11,6 +11,7 @@ full block path (extension blocks included).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -268,16 +269,34 @@ def test_list_rejects_disabled_agent_scope(tmp_path: Path) -> None:
 # --- prompt.update / prompt.reset --------------------------------------------
 
 
-def test_update_edits_block_by_id(tmp_path: Path) -> None:
+def test_update_edits_block_by_id(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     store = StubBlockStore()
     state = _state(_manager(tmp_path, store=store))
 
-    result = _update_prompt(state, {"id": "core:tools", "content": "## Custom"})
+    with caplog.at_level(logging.INFO, logger="vbot.server.rpc.prompts"):
+        result = _update_prompt(state, {"id": "core:tools", "content": "## Custom"})
 
     assert result["id"] == "core:tools"
     assert result["text"] == "## Custom"
     assert result["is_modified"] is True
     assert store.read_block_override("default", "core:tools") == "## Custom"
+    prompt_logs = [
+        record.getMessage() for record in caplog.records if record.name == "vbot.server.rpc.prompts"
+    ]
+    assert prompt_logs == ["Prompt mutated (operation=updated scope=default block=core:tools)"]
+    assert "## Custom" not in caplog.text
+
+
+def test_update_same_prompt_content_does_not_log(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    store = StubBlockStore(overrides={("default", "core:tools"): "same"})
+    state = _state(_manager(tmp_path, store=store))
+
+    with caplog.at_level(logging.INFO, logger="vbot.server.rpc.prompts"):
+        _update_prompt(state, {"id": "core:tools", "content": "same"})
+
+    assert not [record for record in caplog.records if record.name == "vbot.server.rpc.prompts"]
 
 
 def test_update_rejects_non_string_content(tmp_path: Path) -> None:

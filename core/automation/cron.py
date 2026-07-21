@@ -403,6 +403,14 @@ class CronService:
         if self._started and job.status == "active":
             self._start_job_task(job)
 
+        _LOGGER.info(
+            "Cron job created (job=%s agent=%s%s schedule_type=%s status=%s)",
+            job.id,
+            job.agent_id,
+            f" project={job.project_id}" if job.project_id else "",
+            job.schedule_type,
+            job.status,
+        )
         return self._clone_job(job)
 
     def list_jobs(self) -> list[CronJob]:
@@ -479,6 +487,14 @@ class CronService:
         if fields.get("status") == "active" and job.status == "failed":
             candidate.consecutive_failures = 0
 
+        changed_fields = sorted(
+            field_name
+            for field_name in fields
+            if getattr(job, field_name) != getattr(candidate, field_name)
+        )
+        if not changed_fields:
+            return self._clone_job(job)
+
         self._validate_job(candidate)
         self._validate_capacity(candidate, replacing_id=job_id)
         self._jobs[job_id] = candidate
@@ -492,6 +508,18 @@ class CronService:
         if self._started and restart_task:
             self._restart_job_task(candidate)
 
+        if changed_fields == ["status"] and candidate.status in {"active", "paused"}:
+            _LOGGER.info(
+                "Cron job %s (job=%s)",
+                "enabled" if candidate.status == "active" else "disabled",
+                job_id,
+            )
+        else:
+            _LOGGER.info(
+                "Cron job updated (job=%s fields=%s)",
+                job_id,
+                ",".join(changed_fields),
+            )
         return self._clone_job(candidate)
 
     def delete_job(self, job_id: str) -> None:
@@ -509,6 +537,7 @@ class CronService:
         self._notify_changed()
         self._remove_once_fire_claim(job_id)
         self._cancel_job_task(job_id)
+        _LOGGER.info("Cron job deleted (job=%s)", job_id)
 
     def enable_job(self, job_id: str) -> CronJob:
         """Set a cron job status to active."""

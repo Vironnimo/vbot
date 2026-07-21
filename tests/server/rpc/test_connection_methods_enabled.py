@@ -40,6 +40,12 @@ class StubCredentials:
     def has_credentials(self, provider_id: str, connection_id: str | None = None) -> bool:
         return connection_id in self._configured
 
+    def is_connection_enabled(self, provider_id: str, connection_id: str | None = None) -> bool:
+        return False
+
+    def is_usable(self, provider_id: str, connection_id: str | None = None) -> bool:
+        return False
+
 
 def make_ollama_provider() -> ProviderConfig:
     return ProviderConfig(

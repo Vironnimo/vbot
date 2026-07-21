@@ -40,34 +40,62 @@ def make_service(
     return service, trigger_service
 
 
-def test_cron_service_crud_operations(tmp_path: Path) -> None:
+def test_cron_service_crud_operations(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     # Arrange
     service, _trigger_service = make_service(tmp_path)
     run_at = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
 
     # Act
-    created = service.create_job(
-        agent_id="agent-one",
-        prompt="Run once",
-        schedule_type="once",
-        run_at=run_at,
-    )
-    listed = service.list_jobs()
-    loaded = service.get_job(created.id)
-    updated = service.update_job(created.id, prompt="Run once updated")
-    paused = service.disable_job(created.id)
-    enabled = service.enable_job(created.id)
-    service.delete_job(created.id)
+    with caplog.at_level(logging.INFO, logger="vbot.automation.cron"):
+        created = service.create_job(
+            agent_id="agent-one",
+            prompt="private cron prompt",
+            schedule_type="once",
+            run_at=run_at,
+        )
+        listed = service.list_jobs()
+        loaded = service.get_job(created.id)
+        updated = service.update_job(created.id, prompt="private updated prompt")
+        paused = service.disable_job(created.id)
+        enabled = service.enable_job(created.id)
+        service.delete_job(created.id)
 
     # Assert
     assert [job.id for job in listed] == [created.id]
-    assert loaded.prompt == "Run once"
-    assert updated.prompt == "Run once updated"
+    assert loaded.prompt == "private cron prompt"
+    assert updated.prompt == "private updated prompt"
     assert paused.status == "paused"
     assert enabled.status == "active"
     assert service.list_jobs() == []
     with pytest.raises(CronJobNotFoundError, match=created.id):
         service.get_job(created.id)
+    messages = [
+        record.getMessage() for record in caplog.records if record.name == "vbot.automation.cron"
+    ]
+    assert any(message.startswith("Cron job created") for message in messages)
+    assert any("fields=prompt" in message for message in messages)
+    assert any(message.startswith("Cron job disabled") for message in messages)
+    assert any(message.startswith("Cron job enabled") for message in messages)
+    assert any(message.startswith("Cron job deleted") for message in messages)
+    assert "private cron prompt" not in " ".join(messages)
+    assert "private updated prompt" not in " ".join(messages)
+
+
+def test_cron_no_op_update_does_not_log(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    service, _trigger_service = make_service(tmp_path)
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="unchanged",
+        schedule_type="cron",
+        cron_expression="0 9 * * *",
+    )
+    caplog.clear()
+
+    with caplog.at_level(logging.INFO, logger="vbot.automation.cron"):
+        result = service.update_job(job.id, prompt="unchanged")
+
+    assert result.prompt == "unchanged"
+    assert not [record for record in caplog.records if record.name == "vbot.automation.cron"]
 
 
 def test_jobs_json_is_created_on_demand(tmp_path: Path) -> None:
