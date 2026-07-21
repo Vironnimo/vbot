@@ -10,6 +10,8 @@ import os
 
 import pytest
 
+from core.chat.errors import ChatError
+from core.chat.model_resolution import _resolve_agent_connection
 from core.model_tasks import EmbeddingService
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.credentials import ProviderCredentialResolver
@@ -727,6 +729,36 @@ def test_runtime_start_idempotent_with_registries(config: Config) -> None:
     assert runtime.models is models_first
     assert runtime.storage is storage_first
     assert runtime.agents is agents_first
+
+
+def test_provider_credential_reload_reaches_existing_chat_and_agent_resolvers(
+    monkeypatch: pytest.MonkeyPatch,
+    config: Config,
+) -> None:
+    """A post-start API key enables bare-model resolution without a restart or pin."""
+    monkeypatch.delenv("OPENCODE_GO_API_KEY", raising=False)
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        injected_resolver = runtime.chat_loop._dependencies.provider_credentials
+        model = "opencode-go/deepseek-v4-pro"
+        agent = runtime.agents.update("main", model=model)
+
+        assert runtime.provider_credentials is injected_resolver
+        with pytest.raises(ChatError, match="no usable connection"):
+            _resolve_agent_connection(runtime.chat_loop._dependencies, agent)
+
+        runtime.storage.set_data_dir_credential("OPENCODE_GO_API_KEY", "test-secret")
+        runtime.reload_provider_credentials()
+
+        assert runtime.provider_credentials is injected_resolver
+        assert _resolve_agent_connection(runtime.chat_loop._dependencies, agent) == (
+            "opencode-go",
+            "opencode-go:api-key",
+        )
+        runtime.agent_resolver.require_model_configured(model)
+    finally:
+        runtime.stop()
 
 
 def test_runtime_start_preserves_existing_agents(config: Config) -> None:

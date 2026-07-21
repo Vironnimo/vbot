@@ -69,6 +69,10 @@ class ConfigProtocol(Protocol):
 class ProviderCredentialResolverProtocol(Protocol):
     """Protocol for centralized provider credential access."""
 
+    def reload_fallback_credentials(self, fallback_credentials: Mapping[str, str]) -> None:
+        """Replace the data-dir credential snapshot while preserving resolver identity."""
+        ...
+
     def has_credentials(self, provider_id: str, connection_id: str | None = None) -> bool:
         """Return whether *provider_id* or *connection_id* has a non-empty credential."""
         ...

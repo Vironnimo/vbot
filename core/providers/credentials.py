@@ -58,6 +58,17 @@ class ProviderCredentialResolver:
         # means "no overrides" — type defaults apply.
         self._enabled_overrides_loader = enabled_overrides_loader
 
+    def reload_fallback_credentials(self, fallback_credentials: Mapping[str, str]) -> None:
+        """Replace the data-dir credential snapshot without replacing this resolver.
+
+        Runtime services receive this resolver through dependency injection at
+        startup. Preserving its identity makes a credential reload visible to
+        every already-wired consumer instead of leaving some of them with a
+        stale pre-reload instance.
+        """
+
+        self._fallback_credentials = dict(fallback_credentials)
+
     def has_credentials(self, provider_id: str, connection_id: str | None = None) -> bool:
         """Return whether a provider, connection, or account has credentials.
 
