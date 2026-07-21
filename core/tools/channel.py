@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from core.attachments.attachments import _sniff_mime
-from core.channels.adapter import FileData
+from core.channels.adapter import FileData, RouteFacts
 from core.channels.channels import (
     ChannelConfig,
     ChannelConfigError,
@@ -104,7 +104,9 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
                 "registered for '<prefix>' handles taps. The reserved prefix 'run' wakes you "
                 "instead: a tap on a 'run:<payload>' button starts a run carrying the tap "
                 "context — the tapped button and the message's current button state — so you "
-                "can act on it and reply. Telegram only; cannot be combined with file_paths."
+                "can act on it and reply. When sent from an Identity Agent Session, the tap "
+                "and later Telegram messages continue in this Session until the user sends "
+                "'/new'. Telegram only; cannot be combined with file_paths."
             ),
         },
     },
@@ -180,14 +182,19 @@ async def _handle_channel_send_tool(
             channel_id,
             channel_config,
         )
-        await channel_service.send(
-            channel_id,
-            message,
-            platform_target,
-            files=files or None,
-            thread_id=thread_id,
-            buttons=buttons,
-        )
+        send_options: dict[str, Any] = {
+            "files": files or None,
+            "thread_id": thread_id,
+            "buttons": buttons,
+        }
+        # Channels route Identity Sessions. A Project Session keeps the legacy raw
+        # callback instead of pretending its same-named Session lives in identity storage.
+        if _contains_run_button(buttons) and context.project_id is None:
+            send_options["run_origin"] = RouteFacts(
+                agent_id=context.agent_id,
+                session_id=context.session_id,
+            )
+        await channel_service.send(channel_id, message, platform_target, **send_options)
     except ValueError as error:
         return tool_failure("invalid_arguments", str(error))
     except ChannelNotFoundError as error:
@@ -210,6 +217,12 @@ async def _handle_channel_send_tool(
     if thread_id is not None:
         result["thread_id"] = thread_id
     return tool_success(result)
+
+
+def _contains_run_button(buttons: list[list[InteractionButton]] | None) -> bool:
+    return bool(
+        buttons and any(button.data.split(":", 1)[0] == "run" for row in buttons for button in row)
+    )
 
 
 async def _record_outbound_message_note(

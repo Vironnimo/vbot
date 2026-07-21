@@ -18,7 +18,7 @@ from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 from uuid import uuid4
 
 from core.attachments import AttachmentTooLargeError, AttachmentTypeNotAllowedError
@@ -27,6 +27,9 @@ from core.channels.adapter import (
     MessageFacts,
     ReplyPlanFacts,
     RouteFacts,
+    RunButtonBinding,
+    RunButtonBindingRegistry,
+    parse_bound_run_callback_data,
 )
 from core.chat.commands import (
     CommandDispatcher,
@@ -77,6 +80,13 @@ ACTIVE_SESSION_METADATA_KEY = "active_session_id"
 _NEW_SESSION_STARTED_REPLY = (
     "Started a new session. Your previous conversation has been saved and is still available."
 )
+InteractionTriggerStatus = Literal[
+    "enqueued",
+    "denied",
+    "busy",
+    "already_handled",
+    "unavailable",
+]
 
 
 class ConversationTransport(Protocol):
@@ -178,12 +188,14 @@ class ChannelConversationEngine:
         transport: ConversationTransport,
         *,
         command_dispatcher: CommandDispatcher,
+        run_button_binding_registry: RunButtonBindingRegistry | None = None,
     ) -> None:
         self._config = config
         self._trigger_service = trigger_service
         self._chat_sessions = chat_sessions
         self._transport = transport
         self._command_dispatcher = command_dispatcher
+        self._run_button_binding_registry = run_button_binding_registry
         self._owner_user_ids = frozenset(config.owner_user_ids)
         # Config validation guarantees the patterns compile.
         self._mention_patterns = tuple(
@@ -359,17 +371,13 @@ class ChannelConversationEngine:
         self,
         conversation: ConversationFacts,
         event: InteractionEvent,
-    ) -> bool:
+    ) -> InteractionTriggerStatus:
         """Wake the agent from a run-triggering button tap (reserved ``run:`` prefix).
 
-        Enqueues an internal note-driven Run (the same path as
-        :meth:`trigger_internal_reply`) carrying the tap context — the tapped
-        button plus the message's current keyboard state — so the agent can act on
-        it and confirm in the chat. Group taps are gated by ``owner_user_ids``
-        exactly like group commands. Returns ``True`` when the tap was authorized
-        and enqueued, ``False`` when a non-owner group tap was logged and dropped;
-        the adapter has already acked the tap, and closes the keyboard only on a
-        ``True`` (an unauthorized tapper must not close the shared message).
+        A ``channel_send``-bound tap atomically claims its durable origin, points
+        the Channel conversation at that Session, then enters the same per-chat
+        FIFO as following messages. Legacy unbound ``run:<payload>`` buttons keep
+        routing to the Channel's current active Session.
         """
         if not self._command_sender_authorized(conversation):
             _LOGGER.info(
@@ -378,10 +386,59 @@ class ChannelConversationEngine:
                 conversation.chat_id,
                 conversation.user_id,
             )
-            return False
-        return await self.trigger_internal_reply(
-            conversation, _format_interaction_note(conversation, event)
+            return "denied"
+
+        parsed_binding = parse_bound_run_callback_data(event.data)
+        if parsed_binding is None:
+            enqueued = await self.trigger_internal_reply(
+                conversation, _format_interaction_note(conversation, event)
+            )
+            return "enqueued" if enqueued else "busy"
+
+        registry = self._run_button_binding_registry
+        if registry is None:
+            return "unavailable"
+        binding_id, button_index = parsed_binding
+        claim = registry.claim_run_button_binding(
+            self._config.id,
+            binding_id,
+            platform_target=conversation.chat_id,
+            thread_id=conversation.thread_id,
         )
+        if claim.status == "consumed":
+            return "already_handled"
+        if claim.status != "claimed" or claim.binding is None:
+            return "unavailable"
+
+        binding = claim.binding
+        restored_event = _restore_bound_interaction_event(binding, event, button_index)
+        if restored_event is None or not self._chat_sessions.exists(
+            self._config.agent_id, binding.origin_session_id
+        ):
+            return "unavailable"
+
+        try:
+            previous_anchor_metadata = self._point_conversation_at_session(
+                conversation,
+                binding.origin_session_id,
+            )
+        except Exception:
+            registry.restore_run_button_binding(self._config.id, binding.id)
+            raise
+        queued = self._enqueue_chat_work(
+            conversation.chat_id,
+            _QueuedInternalPrompt(
+                conversation=conversation,
+                prompt=_format_interaction_note(conversation, restored_event),
+            ),
+        )
+        if queued:
+            return "enqueued"
+
+        self._restore_conversation_pointer(conversation, previous_anchor_metadata)
+        registry.restore_run_button_binding(self._config.id, binding.id)
+        await self._reject_overflow(conversation)
+        return "busy"
 
     def prepare_inbound_route(
         self,
@@ -1023,6 +1080,32 @@ class ChannelConversationEngine:
         metadata[ACTIVE_SESSION_METADATA_KEY] = new_session_id
         self._chat_sessions.set_metadata(agent_id, anchor, metadata)
 
+    def _point_conversation_at_session(
+        self,
+        conversation: ConversationFacts,
+        session_id: str,
+    ) -> dict[str, Any]:
+        """Persist a new active Session and return the exact prior anchor metadata."""
+        anchor = self._derive_session_id(conversation)
+        try:
+            metadata = self._chat_sessions.get_metadata(self._config.agent_id, anchor)
+        except ChatSessionError:
+            self._chat_sessions.get_or_create(self._config.agent_id, anchor)
+            metadata = {}
+        previous = dict(metadata)
+        metadata[ACTIVE_SESSION_METADATA_KEY] = session_id
+        self._chat_sessions.set_metadata(self._config.agent_id, anchor, metadata)
+        return previous
+
+    def _restore_conversation_pointer(
+        self,
+        conversation: ConversationFacts,
+        metadata: dict[str, Any],
+    ) -> None:
+        """Restore the anchor when a bound tap could not enter the Queue."""
+        anchor = self._derive_session_id(conversation)
+        self._chat_sessions.set_metadata(self._config.agent_id, anchor, metadata)
+
     def _log_command_failure(
         self,
         command_name: str,
@@ -1085,6 +1168,36 @@ def _format_interaction_note(conversation: ConversationFacts, event: Interaction
     lines.extend(f'- "{button.label}" ({button.data})' for row in event.buttons for button in row)
     lines.append("Act on the current button state, then confirm in this chat.")
     return "\n".join(lines)
+
+
+def _restore_bound_interaction_event(
+    binding: RunButtonBinding,
+    event: InteractionEvent,
+    tapped_index: int,
+) -> InteractionEvent | None:
+    """Hide the private binding envelope and restore the agent-authored ``run:*`` data."""
+    if tapped_index >= len(binding.original_button_data):
+        return None
+
+    restored_rows = []
+    for row in event.buttons:
+        restored_row = []
+        for button in row:
+            parsed = parse_bound_run_callback_data(button.data)
+            if parsed is None or parsed[0] != binding.id:
+                restored_row.append(button)
+                continue
+            button_index = parsed[1]
+            if button_index >= len(binding.original_button_data):
+                return None
+            restored_row.append(replace(button, data=binding.original_button_data[button_index]))
+        restored_rows.append(tuple(restored_row))
+
+    return replace(
+        event,
+        data=binding.original_button_data[tapped_index],
+        buttons=tuple(restored_rows),
+    )
 
 
 def _tapped_button_label(event: InteractionEvent) -> str:

@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
+from core.channels.adapter import RunButtonBinding, bound_run_callback_data
+from core.channels.channels import ChannelStorage
+
 from .engine_test_support import (
     CHANNEL_REPLY_SURFACE,
     SESSION_ID,
     AsyncMock,
+    ChatRunManager,
     InteractionButton,
     InteractionEvent,
     Path,
@@ -18,6 +24,7 @@ from .engine_test_support import (
     make_empty_completed_run,
     make_engine,
     make_failed_run,
+    make_new_only_dispatcher,
     pytest,
 )
 
@@ -205,12 +212,12 @@ async def test_interaction_tap_enqueues_internal_run_with_state(tmp_path: Path) 
     trigger_mock = AsyncMock(return_value=make_completed_run(output_text="synced"))
     engine, _sessions, _trigger, _transport = make_engine(tmp_path, trigger_run=trigger_mock)
 
-    authorized = await engine.trigger_interaction_reply(
+    outcome = await engine.trigger_interaction_reply(
         make_conversation(kind="direct", user_id=50), _interaction_event()
     )
     await drain(engine, 12345)
 
-    assert authorized is True
+    assert outcome == "enqueued"
     trigger_mock.assert_awaited_once()
     await_args = trigger_mock.await_args
     assert await_args is not None
@@ -229,12 +236,12 @@ async def test_group_owner_interaction_tap_enqueues(tmp_path: Path) -> None:
         tmp_path, owner_user_ids=["50"], trigger_run=trigger_mock
     )
 
-    authorized = await engine.trigger_interaction_reply(
+    outcome = await engine.trigger_interaction_reply(
         make_conversation(kind="group", user_id=50, message_id="777"), _interaction_event()
     )
     await drain(engine, 12345)
 
-    assert authorized is True
+    assert outcome == "enqueued"
     trigger_mock.assert_awaited_once()
     await engine.stop()
 
@@ -249,12 +256,217 @@ async def test_group_non_owner_interaction_tap_is_dropped(
     )
 
     caplog.set_level(logging.INFO, logger="vbot.channels.engine")
-    authorized = await engine.trigger_interaction_reply(
+    outcome = await engine.trigger_interaction_reply(
         make_conversation(kind="group", user_id=99, message_id="777"), _interaction_event()
     )
     await drain(engine, 12345)
 
-    assert authorized is False
+    assert outcome == "denied"
     trigger_mock.assert_not_awaited()
     assert any("denied for non-owner" in record.getMessage() for record in caplog.records)
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_bound_tap_repoints_conversation_and_orders_followup_in_origin_session(
+    tmp_path: Path,
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    trigger_mock = AsyncMock(
+        side_effect=[
+            make_completed_run(output_text="synced", session_id="origin-session"),
+            make_completed_run(output_text="deleted", session_id="origin-session"),
+        ]
+    )
+    engine, sessions, _trigger, transport = make_engine(
+        tmp_path,
+        trigger_run=trigger_mock,
+        run_button_binding_registry=storage,
+    )
+    sessions.create("assistant", session_id="origin-session")
+    binding = RunButtonBinding(
+        id="binding-1",
+        platform_target="12345",
+        thread_id=None,
+        origin_session_id="origin-session",
+        original_button_data=("run:done",),
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    storage.save_run_button_binding("tg-assistant", binding)
+    internal_data = bound_run_callback_data(binding.id, 0)
+    event = InteractionEvent(
+        platform="telegram",
+        channel_id="tg-assistant",
+        chat_id="12345",
+        user_id="50",
+        message_id="777",
+        data=internal_data,
+        buttons=(
+            (InteractionButton(label="✅ Milk", data="chk:milk"),),
+            (InteractionButton(label="Fertig", data=internal_data),),
+        ),
+    )
+    conversation = make_conversation(kind="direct", user_id=50)
+
+    outcome = await engine.trigger_interaction_reply(conversation, event)
+    await engine.handle_inbound_text(conversation, "den rest kannst du löschen")
+    await drain(engine, 12345)
+
+    assert outcome == "enqueued"
+    assert len(trigger_mock.await_args_list) == 2
+    first_call, second_call = trigger_mock.await_args_list
+    assert first_call.args[2] == "origin-session"
+    assert "run:done" in first_call.args[1]
+    assert internal_data not in first_call.args[1]
+    assert second_call.args[:3] == (
+        "assistant",
+        "den rest kannst du löschen",
+        "origin-session",
+    )
+    anchor_metadata = sessions.get_metadata("assistant", SESSION_ID)
+    assert anchor_metadata[engine_module.ACTIVE_SESSION_METADATA_KEY] == "origin-session"
+    assert transport.sent_texts == ["synced", "deleted"]
+
+    duplicate = await engine.trigger_interaction_reply(conversation, event)
+    assert duplicate == "already_handled"
+    assert len(trigger_mock.await_args_list) == 2
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_bound_tap_does_not_recreate_missing_origin_session(tmp_path: Path) -> None:
+    storage = ChannelStorage(tmp_path)
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="unexpected"))
+    engine, sessions, _trigger, _transport = make_engine(
+        tmp_path,
+        trigger_run=trigger_mock,
+        run_button_binding_registry=storage,
+    )
+    binding = RunButtonBinding(
+        id="binding-missing",
+        platform_target="12345",
+        thread_id=None,
+        origin_session_id="deleted-session",
+        original_button_data=("run:done",),
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    storage.save_run_button_binding("tg-assistant", binding)
+    internal_data = bound_run_callback_data(binding.id, 0)
+    event = InteractionEvent(
+        platform="telegram",
+        channel_id="tg-assistant",
+        chat_id="12345",
+        user_id="50",
+        message_id="777",
+        data=internal_data,
+        buttons=((InteractionButton(label="Fertig", data=internal_data),),),
+    )
+
+    outcome = await engine.trigger_interaction_reply(make_conversation(), event)
+
+    assert outcome == "unavailable"
+    assert not sessions.exists("assistant", "deleted-session")
+    trigger_mock.assert_not_awaited()
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_new_detaches_telegram_after_bound_tap(tmp_path: Path) -> None:
+    storage = ChannelStorage(tmp_path)
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="synced"))
+    engine, sessions, _trigger, _transport = make_engine(
+        tmp_path,
+        trigger_run=trigger_mock,
+        command_dispatcher=make_new_only_dispatcher(),
+        run_button_binding_registry=storage,
+    )
+    sessions.create("assistant", session_id="origin-session")
+    binding = RunButtonBinding(
+        id="binding-new",
+        platform_target="12345",
+        thread_id=None,
+        origin_session_id="origin-session",
+        original_button_data=("run:done",),
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    storage.save_run_button_binding("tg-assistant", binding)
+    internal_data = bound_run_callback_data(binding.id, 0)
+    event = InteractionEvent(
+        platform="telegram",
+        channel_id="tg-assistant",
+        chat_id="12345",
+        user_id="50",
+        message_id="777",
+        data=internal_data,
+        buttons=((InteractionButton(label="Fertig", data=internal_data),),),
+    )
+    conversation = make_conversation()
+
+    assert await engine.trigger_interaction_reply(conversation, event) == "enqueued"
+    await drain(engine, 12345)
+    await engine.handle_inbound_text(conversation, "/new")
+    await drain(engine, 12345)
+
+    detached_session_id = sessions.get_metadata("assistant", SESSION_ID)[
+        engine_module.ACTIVE_SESSION_METADATA_KEY
+    ]
+    assert detached_session_id not in {SESSION_ID, "origin-session"}
+    assert sessions.exists("assistant", detached_session_id)
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_busy_bound_tap_restores_binding_and_previous_conversation_pointer(
+    tmp_path: Path,
+) -> None:
+    storage = ChannelStorage(tmp_path)
+    waiting_work = ChatRunManager(waiting_work_limit=1)
+    held_admission = waiting_work.reserve_waiting_work(scope="already-busy", scope_limit=1)
+    engine, sessions, trigger_mock, transport = make_engine(
+        tmp_path,
+        waiting_work_manager=waiting_work,
+        run_button_binding_registry=storage,
+    )
+    sessions.create("assistant", session_id=SESSION_ID)
+    sessions.create("assistant", session_id="prior-session")
+    sessions.create("assistant", session_id="origin-session")
+    previous_metadata = {
+        "existing": "preserved",
+        engine_module.ACTIVE_SESSION_METADATA_KEY: "prior-session",
+    }
+    sessions.set_metadata("assistant", SESSION_ID, previous_metadata)
+    binding = RunButtonBinding(
+        id="binding-busy",
+        platform_target="12345",
+        thread_id=None,
+        origin_session_id="origin-session",
+        original_button_data=("run:done",),
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    storage.save_run_button_binding("tg-assistant", binding)
+    internal_data = bound_run_callback_data(binding.id, 0)
+    event = InteractionEvent(
+        platform="telegram",
+        channel_id="tg-assistant",
+        chat_id="12345",
+        user_id="50",
+        message_id="777",
+        data=internal_data,
+        buttons=((InteractionButton(label="Fertig", data=internal_data),),),
+    )
+
+    outcome = await engine.trigger_interaction_reply(make_conversation(), event)
+
+    assert outcome == "busy"
+    assert sessions.get_metadata("assistant", SESSION_ID) == previous_metadata
+    retry_claim = storage.claim_run_button_binding(
+        "tg-assistant",
+        binding.id,
+        platform_target="12345",
+        thread_id=None,
+    )
+    assert retry_claim.status == "claimed"
+    trigger_mock.assert_not_awaited()
+    assert transport.sent_texts == [engine_module._BUSY_REPLY]
+    waiting_work.release_waiting_work(held_admission)
     await engine.stop()

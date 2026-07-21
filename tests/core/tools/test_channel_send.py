@@ -56,6 +56,7 @@ def make_context(
     workspace: Path,
     tool_name: str = CHANNEL_SEND_TOOL_NAME,
     cwd: Path | None = None,
+    project_id: str | None = None,
 ) -> ToolContext:
     return ToolContext(
         agent_id="agent-1",
@@ -68,6 +69,7 @@ def make_context(
         app_root=workspace.parent,
         data_root=workspace.parent / "data",
         cwd=cwd,
+        project_id=project_id,
     )
 
 
@@ -197,6 +199,86 @@ def test_channel_send_passes_buttons_to_service(tmp_path: Path) -> None:
                 InteractionButton(label="Eggs ⬜", data="chk:eggs"),
             ]
         ],
+    )
+
+
+def test_channel_send_binds_run_buttons_to_calling_session(tmp_path: Path) -> None:
+    channel_service = Mock()
+    channel_service.send = AsyncMock()
+    channel_service.list_channels.return_value = [make_channel_config()]
+    channel_service.ensure_outbound_session.return_value = RouteFacts(
+        agent_id="agent-1",
+        session_id="telegram-session",
+    )
+    chat_sessions = make_chat_sessions()
+    chat_sessions.get_or_create.return_value = Mock()
+    registry = ToolRegistry()
+    register_channel_send_tool(
+        registry,
+        channel_service,
+        chat_sessions,
+        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
+    )
+
+    result = asyncio.run(
+        dispatch(
+            registry,
+            tmp_path,
+            {
+                "channel_id": "tg-assistant",
+                "message": "Shopping list",
+                "platform_target": "12345",
+                "buttons": [[{"label": "Fertig", "data": "run:done"}]],
+            },
+        )
+    )
+
+    assert_success_envelope(result)
+    channel_service.send.assert_awaited_once_with(
+        "tg-assistant",
+        "Shopping list",
+        "12345",
+        files=None,
+        thread_id=None,
+        buttons=[[InteractionButton(label="Fertig", data="run:done")]],
+        run_origin=RouteFacts(agent_id="agent-1", session_id="session-1"),
+    )
+
+
+def test_project_channel_send_keeps_legacy_unbound_run_button_behavior(tmp_path: Path) -> None:
+    channel_service = Mock()
+    channel_service.send = AsyncMock()
+    channel_service.list_channels.return_value = [make_channel_config()]
+    chat_sessions = make_chat_sessions()
+    registry = ToolRegistry()
+    register_channel_send_tool(
+        registry,
+        channel_service,
+        chat_sessions,
+        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
+    )
+
+    result = asyncio.run(
+        registry.dispatch(
+            make_context(tmp_path, project_id="project-1"),
+            {
+                "channel_id": "tg-assistant",
+                "message": "Project approval",
+                "platform_target": "12345",
+                "buttons": [[{"label": "Approve", "data": "run:approve"}]],
+            },
+            [CHANNEL_SEND_TOOL_NAME],
+        )
+    )
+
+    assert_success_envelope(result)
+    channel_service.send.assert_awaited_once_with(
+        "tg-assistant",
+        "Project approval",
+        "12345",
+        files=None,
+        thread_id=None,
+        buttons=[[InteractionButton(label="Approve", data="run:approve")]],
     )
 
 
