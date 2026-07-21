@@ -10,7 +10,7 @@ The `vbot` CLI is the automation surface for configuring and operating a vBot in
 ## Rules
 
 - Primary identifiers are positional (`vbot agent show assistant`); secondary parameters are flags. `vbot <area> <command> --help` shows exact flags plus a usage example.
-- Only `server start|stop|restart|status`, `desktop`, `update`, `uninstall`, `autostart`, and `doctor` work without a running server. Everything else needs one: check `vbot server status` first, start with `vbot server start` if needed.
+- Only `server start|stop|restart|status`, `desktop`, `update`, `uninstall`, `autostart`, and `doctor` work without a running target server. Everything else needs one. When operating the vBot instance hosting the current Run, execute the requested command directly — the Run already proves that server is available. Check `vbot server status` and start with `vbot server start` only when targeting another instance or troubleshooting connectivity.
 - Non-default instance: add `--host`, `--port`, `--data-dir` to every command.
 - Prefer CLI commands over direct file edits — settings, agents, channels, cron jobs, prompt blocks, and provider keys all have commands. If a manual JSON edit was unavoidable, validate with `vbot doctor config`.
 - Secrets never appear in output or chat. API keys go through `provider set-key`, extension secrets through `extensions <name> set <field> --stdin`, channel tokens by env-var name via `--token-env`.
