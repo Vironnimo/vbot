@@ -8,6 +8,7 @@ import {
   addServerQueuedMessage,
   createChatState,
   ensureSessionState,
+  resetStaleRun,
   setAgents,
 } from '../chatState.js';
 
@@ -16,6 +17,7 @@ function makeStreamHarness({
   displayedAgentId,
   displayedSessionId,
   subscribeRunEvents,
+  reconcileRunSession = vi.fn(async () => true),
 } = {}) {
   const subAgentRunStatuses = {};
   const isDisplayedSession = vi.fn(
@@ -32,6 +34,7 @@ function makeStreamHarness({
         close: vi.fn(),
       })),
     syncSessionQueue,
+    reconcileRunSession,
     isDisplayedSession,
     updateSubAgentRunStatuses: (updates, { replaceActive = false } = {}) => {
       if (replaceActive) {
@@ -52,6 +55,7 @@ function makeStreamHarness({
     stream,
     subAgentRunStatuses,
     isDisplayedSession,
+    reconcileRunSession,
     syncSessionQueue,
   };
 }
@@ -208,18 +212,23 @@ describe('createChatRunStream().applyConnectionSnapshot()', () => {
     expect(sessionState.currentRun).toBeNull();
   });
 
-  it('clears a locally running Run that is absent from the authoritative reconnect snapshot', () => {
+  it('reconciles a locally running Run that is absent from the authoritative reconnect snapshot against durable history', async () => {
     const subscriptions = [];
     const subscribeRunEvents = vi.fn(() => {
       const subscription = { close: vi.fn() };
       subscriptions.push(subscription);
       return subscription;
     });
+    const reconcileRunSession = vi.fn(async (staleSessionState) => {
+      resetStaleRun(staleSessionState);
+      return true;
+    });
     const harness = makeStreamHarness({
       chatState,
       displayedAgentId: DISPLAYED_AGENT_ID,
       displayedSessionId: DISPLAYED_SESSION_ID,
       subscribeRunEvents,
+      reconcileRunSession,
     });
     const sessionState = ensureSessionState(
       chatState,
@@ -246,6 +255,12 @@ describe('createChatRunStream().applyConnectionSnapshot()', () => {
       active_runs: [],
     });
 
+    await vi.waitFor(() => {
+      expect(reconcileRunSession).toHaveBeenCalledWith(
+        sessionState,
+        'run-before-restart',
+      );
+    });
     expect(sessionState.status).toBe(CHAT_STATUS_IDLE);
     expect(sessionState.currentRun).toBeNull();
     expect(subscriptions[0].close).toHaveBeenCalledOnce();
@@ -332,7 +347,7 @@ describe('createChatRunStream() SSE reconnect budget (regression for B2)', () =>
     vi.restoreAllMocks();
   });
 
-  function setupRunningStream() {
+  function setupRunningStream({ reconcileRunSession } = {}) {
     const subscriptions = [];
     const subscribeRunEvents = vi.fn((sseUrl, handlers, options) => {
       const subscription = { sseUrl, handlers, options, close: vi.fn() };
@@ -344,6 +359,7 @@ describe('createChatRunStream() SSE reconnect budget (regression for B2)', () =>
       displayedAgentId: DISPLAYED_AGENT_ID,
       displayedSessionId: DISPLAYED_SESSION_ID,
       subscribeRunEvents,
+      reconcileRunSession,
     });
     harness.stream.applyConnectionSnapshot({
       type: 'connection_ready',
@@ -399,8 +415,35 @@ describe('createChatRunStream() SSE reconnect budget (regression for B2)', () =>
     }
   });
 
-  it('gives up only after consecutive failed reconnects, with exponential backoff between attempts', () => {
+  it('uses transport heartbeats to detect a silently stalled EventSource connection', () => {
     const { subscriptions, sessionState } = setupRunningStream();
+
+    vi.advanceTimersByTime(25_000);
+
+    expect(subscriptions[0].close).toHaveBeenCalledOnce();
+    expect(sessionState.streamError).toContain('Reconnecting');
+    vi.advanceTimersByTime(500);
+    expect(subscriptions).toHaveLength(2);
+  });
+
+  it('refreshes the stall watchdog when a heartbeat arrives', () => {
+    const { subscriptions } = setupRunningStream();
+
+    vi.advanceTimersByTime(20_000);
+    subscriptions[0].handlers.onHeartbeat();
+    vi.advanceTimersByTime(20_000);
+    expect(subscriptions).toHaveLength(1);
+    expect(subscriptions[0].close).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(5_000);
+    expect(subscriptions[0].close).toHaveBeenCalledOnce();
+  });
+
+  it('falls back to durable history after consecutive failed reconnects, with exponential backoff between attempts', async () => {
+    const reconcileRunSession = vi.fn(async () => true);
+    const { subscriptions, sessionState } = setupRunningStream({
+      reconcileRunSession,
+    });
 
     // Attempt 0 → 500ms delay.
     subscriptions[0].handlers.onError(new Error('drop'));
@@ -423,15 +466,40 @@ describe('createChatRunStream() SSE reconnect budget (regression for B2)', () =>
     vi.advanceTimersByTime(1);
     expect(subscriptions).toHaveLength(4);
 
-    // Attempt 3 hits MAX_SSE_RECONNECT_ATTEMPTS → permanent close.
+    // Attempt 3 hits MAX_SSE_RECONNECT_ATTEMPTS → durable reconciliation.
     subscriptions[3].handlers.onError(new Error('drop'));
-    vi.runAllTimers();
+    await vi.runAllTimersAsync();
     expect(subscriptions).toHaveLength(4);
     expect(subscriptions[3].close).toHaveBeenCalled();
     expect(sessionState.streamError).not.toContain('Reconnecting');
     expect(sessionState.streamError).toContain(
       'The live stream closed before the run finished',
     );
+    expect(reconcileRunSession).toHaveBeenCalledWith(sessionState, RUN_ID);
+  });
+
+  it('keeps retrying durable reconciliation while history is temporarily unavailable', async () => {
+    const reconcileRunSession = vi
+      .fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const { subscriptions, sessionState } = setupRunningStream({
+      reconcileRunSession,
+    });
+
+    subscriptions[0].handlers.onError(new Error('drop'));
+    vi.advanceTimersByTime(500);
+    subscriptions[1].handlers.onError(new Error('drop'));
+    vi.advanceTimersByTime(1_000);
+    subscriptions[2].handlers.onError(new Error('drop'));
+    vi.advanceTimersByTime(2_000);
+    subscriptions[3].handlers.onError(new Error('drop'));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(reconcileRunSession).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(reconcileRunSession).toHaveBeenCalledTimes(2);
+    expect(reconcileRunSession).toHaveBeenLastCalledWith(sessionState, RUN_ID);
   });
 });
 

@@ -26,6 +26,7 @@ export const RUN_EVENT_REASONING_DELTA = 'reasoning_delta';
 export const RUN_EVENT_TOOL_CALL_DELTA = 'tool_call_delta';
 export const RUN_EVENT_TOOL_CALL_STDOUT = 'tool_call_stdout';
 export const RUN_EVENT_TOOL_CALL_STDERR = 'tool_call_stderr';
+export const RUN_STREAM_HEARTBEAT_EVENT = 'heartbeat';
 
 export const RUN_EVENT_TYPES = [
   'run_started',
@@ -1240,6 +1241,12 @@ export function subscribeRunEvents(sseUrl, handlers = {}, options = {}) {
 
   addListener(source, 'open', handlers.onOpen, cleanupCallbacks);
   addListener(source, 'error', handlers.onError, cleanupCallbacks);
+
+  const heartbeatListener = (event) => handlers.onHeartbeat?.(event);
+  source.addEventListener(RUN_STREAM_HEARTBEAT_EVENT, heartbeatListener);
+  cleanupCallbacks.push(() =>
+    source.removeEventListener(RUN_STREAM_HEARTBEAT_EVENT, heartbeatListener),
+  );
 
   for (const eventType of options.eventTypes ?? RUN_EVENT_TYPES) {
     const listener = (event) => {

@@ -196,12 +196,33 @@ async def test_sse_stream_close_removes_run_subscriber() -> None:
     stream = _sse_run_events(run)
     next_event = asyncio.create_task(_read_next_sse_event(stream))
 
-    await asyncio.sleep(0)
+    # The heartbeat-capable stream owns the blocking event read in a child
+    # task, so allow the nested Run subscriber to enter before asserting its
+    # lifecycle rather than depending on one exact scheduler turn.
+    for _ in range(10):
+        if run.subscriber_count == 1:
+            break
+        await asyncio.sleep(0)
     assert run.subscriber_count == 1
 
     run.emit("visible", {"content": "hello"})
     rendered_event = await next_event
     assert "event: visible" in rendered_event
+    assert run.subscriber_count == 1
+
+    await stream.aclose()
+
+    assert run.subscriber_count == 0
+
+
+@pytest.mark.asyncio
+async def test_sse_stream_emits_heartbeat_while_run_is_quiet() -> None:
+    run = Run(run_id="run-heartbeat", agent_id="coder", session_id="session-one")
+    stream = _sse_run_events(run, heartbeat_interval_seconds=0.001)
+
+    heartbeat = await asyncio.wait_for(anext(stream), timeout=1)
+
+    assert heartbeat == "event: heartbeat\ndata: {}\n\n"
     assert run.subscriber_count == 1
 
     await stream.aclose()

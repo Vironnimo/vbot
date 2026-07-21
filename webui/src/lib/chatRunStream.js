@@ -16,6 +16,8 @@ import {
 
 const SSE_RECONNECT_DELAY_MS = 500;
 const MAX_SSE_RECONNECT_ATTEMPTS = 3;
+const SSE_HEARTBEAT_TIMEOUT_MS = 25_000;
+const SSE_RECOVERY_RETRY_DELAY_MS = 5_000;
 // Dedup only has to cover events that can still be re-delivered through
 // App.svelte's bounded `runServerEvents` list (500 entries), so the cap just
 // needs to comfortably exceed that window; everything older can be forgotten
@@ -51,42 +53,69 @@ export function createChatRunStream({
   chatState,
   subscribeRunEvents,
   syncSessionQueue,
+  reconcileRunSession = async () => false,
   isDisplayedSession,
   updateSubAgentRunStatuses,
 }) {
   const activeSubscriptions = {};
   const pendingReconnects = {};
+  const pendingHeartbeatWatchdogs = {};
+  const pendingRecoveryRetries = {};
+  const pendingReconciliations = {};
   const pendingRunEventQueues = {};
   const pendingRunEventFlushes = {};
+  let destroyed = false;
   const handledRunServerEventKeys = createBoundedKeySet(
     MAX_HANDLED_RUN_SERVER_EVENT_KEYS,
   );
 
   function subscribeToRun(sessionState, sseUrl, options = {}) {
-    if (!sseUrl) {
+    if (!sseUrl || destroyed) {
       return;
     }
     if (sessionState.currentRun) {
       sessionState.currentRun.sseUrl = sseUrl;
     }
-    activeSubscriptions[sessionState.key]?.close();
+    closeRunSubscription(sessionState.key);
     clearPendingReconnect(sessionState.key);
+    clearPendingRecoveryRetry(sessionState.key);
     const afterSequence =
       options.afterSequence ?? highestContiguousRunEventSequence(sessionState);
     let retryAttempt = options.retryAttempt ?? 0;
-    const subscription = subscribeRunEvents(
+    let subscription;
+    const markStreamAlive = ({ resetRetryBudget = false } = {}) => {
+      if (
+        subscription &&
+        activeSubscriptions[sessionState.key] !== subscription
+      ) {
+        return;
+      }
+      // Only a heartbeat or Run event proves the complete data path is
+      // flowing. `open` alone can still be followed by a blackholed stream, so
+      // it starts the watchdog without resetting consecutive failures.
+      if (resetRetryBudget) {
+        retryAttempt = 0;
+      }
+      sessionState.streamError = '';
+      if (resetRetryBudget) {
+        clearPendingRecoveryRetry(sessionState.key);
+      }
+      armHeartbeatWatchdog(sessionState, sseUrl, () => retryAttempt);
+    };
+    const markStreamHealthy = () => markStreamAlive({ resetRetryBudget: true });
+    subscription = subscribeRunEvents(
       sseUrl,
       {
+        onOpen: markStreamAlive,
+        onHeartbeat: markStreamHealthy,
         onEvent: ({ data }) => {
-          // Events are flowing, so a later drop is a fresh transient failure,
-          // not a continuation of earlier ones. Without this reset the
-          // attempts accumulate across the whole run and a handful of drops
-          // hours apart would permanently close the live stream.
-          retryAttempt = 0;
-          sessionState.streamError = '';
+          markStreamHealthy();
           queueRunEvent(sessionState, data);
         },
         onError: (error) => {
+          if (activeSubscriptions[sessionState.key] !== subscription) {
+            return;
+          }
           recoverRunStream(sessionState, sseUrl, retryAttempt, error);
         },
       },
@@ -95,6 +124,7 @@ export function createChatRunStream({
       },
     );
     activeSubscriptions[sessionState.key] = subscription;
+    armHeartbeatWatchdog(sessionState, sseUrl, () => retryAttempt);
   }
 
   function attachRunStream(sessionState, run, options = {}) {
@@ -212,6 +242,7 @@ export function createChatRunStream({
     }
     if (TERMINAL_RUN_EVENTS.has(event.type)) {
       clearPendingReconnect(sessionState.key);
+      clearPendingRecoveryRetry(sessionState.key);
       if (!options.fromServerEvent || !activeSubscriptions[sessionState.key]) {
         closeRunSubscription(sessionState.key);
       }
@@ -357,6 +388,82 @@ export function createChatRunStream({
       'The live stream closed before the run finished. Waiting for server status.',
     )} ${error?.message ?? ''}`;
     closeRunSubscription(sessionState.key);
+    void reconcileAfterStreamFailure(sessionState, currentRun.runId);
+  }
+
+  function armHeartbeatWatchdog(sessionState, sseUrl, retryAttempt) {
+    const sessionKey = sessionState.key;
+    clearHeartbeatWatchdog(sessionKey);
+    const runId = sessionState.currentRun?.runId;
+    if (!runId || sessionState.currentRun?.status !== 'running') {
+      return;
+    }
+    pendingHeartbeatWatchdogs[sessionKey] = setTimeout(() => {
+      delete pendingHeartbeatWatchdogs[sessionKey];
+      if (sessionState.currentRun?.runId !== runId) {
+        return;
+      }
+      recoverRunStream(
+        sessionState,
+        sseUrl,
+        retryAttempt(),
+        new Error('No stream heartbeat received.'),
+      );
+    }, SSE_HEARTBEAT_TIMEOUT_MS);
+  }
+
+  function reconcileAfterStreamFailure(sessionState, expectedRunId) {
+    const sessionKey = sessionState.key;
+    const reconciliationKey = `${sessionKey}::${expectedRunId}`;
+    if (pendingReconciliations[reconciliationKey]) {
+      return pendingReconciliations[reconciliationKey];
+    }
+
+    const reconciliation = Promise.resolve()
+      .then(() => reconcileRunSession(sessionState, expectedRunId))
+      .catch(() => false)
+      .then((reconciled) => {
+        if (destroyed) {
+          return;
+        }
+        if (
+          sessionState.currentRun?.runId !== expectedRunId ||
+          sessionState.currentRun?.status !== 'running'
+        ) {
+          clearPendingRecoveryRetry(sessionKey);
+          return;
+        }
+        if (reconciled) {
+          if (activeSubscriptions[sessionKey]) {
+            sessionState.streamError = '';
+          }
+          return;
+        }
+        scheduleRecoveryRetry(sessionState, expectedRunId);
+      })
+      .finally(() => {
+        if (pendingReconciliations[reconciliationKey] === reconciliation) {
+          delete pendingReconciliations[reconciliationKey];
+        }
+      });
+    pendingReconciliations[reconciliationKey] = reconciliation;
+    return reconciliation;
+  }
+
+  function scheduleRecoveryRetry(sessionState, expectedRunId) {
+    const sessionKey = sessionState.key;
+    if (pendingRecoveryRetries[sessionKey] !== undefined) {
+      return;
+    }
+    pendingRecoveryRetries[sessionKey] = setTimeout(() => {
+      delete pendingRecoveryRetries[sessionKey];
+      if (
+        sessionState.currentRun?.runId === expectedRunId &&
+        sessionState.currentRun?.status === 'running'
+      ) {
+        void reconcileAfterStreamFailure(sessionState, expectedRunId);
+      }
+    }, SSE_RECOVERY_RETRY_DELAY_MS);
   }
 
   function handleServerEvents(singleEvent, events) {
@@ -464,20 +571,27 @@ export function createChatRunStream({
   function closeRunSubscription(sessionKey) {
     activeSubscriptions[sessionKey]?.close();
     delete activeSubscriptions[sessionKey];
+    clearHeartbeatWatchdog(sessionKey);
   }
 
   function closeSubscriptionFor(sessionKey) {
     closeRunSubscription(sessionKey);
     clearPendingReconnect(sessionKey);
+    clearPendingRecoveryRetry(sessionKey);
   }
 
   function closeSubscriptionsExcept(sessionKey) {
-    for (const key of Object.keys(activeSubscriptions)) {
+    const subscriptionKeys = new Set([
+      ...Object.keys(activeSubscriptions),
+      ...Object.keys(pendingReconnects),
+      ...Object.keys(pendingHeartbeatWatchdogs),
+      ...Object.keys(pendingRecoveryRetries),
+    ]);
+    for (const key of subscriptionKeys) {
       if (key === sessionKey) {
         continue;
       }
-      closeRunSubscription(key);
-      clearPendingReconnect(key);
+      closeSubscriptionFor(key);
     }
   }
 
@@ -499,6 +613,34 @@ export function createChatRunStream({
     }
   }
 
+  function clearHeartbeatWatchdog(sessionKey) {
+    const timeoutId = pendingHeartbeatWatchdogs[sessionKey];
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+      delete pendingHeartbeatWatchdogs[sessionKey];
+    }
+  }
+
+  function clearHeartbeatWatchdogs() {
+    for (const key of Object.keys(pendingHeartbeatWatchdogs)) {
+      clearHeartbeatWatchdog(key);
+    }
+  }
+
+  function clearPendingRecoveryRetry(sessionKey) {
+    const timeoutId = pendingRecoveryRetries[sessionKey];
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+      delete pendingRecoveryRetries[sessionKey];
+    }
+  }
+
+  function clearPendingRecoveryRetries() {
+    for (const key of Object.keys(pendingRecoveryRetries)) {
+      clearPendingRecoveryRetry(key);
+    }
+  }
+
   function clearPendingRunEventFlush(sessionKey) {
     const timeoutId = pendingRunEventFlushes[sessionKey];
     if (timeoutId !== undefined) {
@@ -517,6 +659,7 @@ export function createChatRunStream({
   }
 
   function closeSubscriptions() {
+    destroyed = true;
     for (const subscription of Object.values(activeSubscriptions)) {
       subscription.close();
     }
@@ -524,6 +667,8 @@ export function createChatRunStream({
       delete activeSubscriptions[key];
     }
     clearPendingReconnects();
+    clearHeartbeatWatchdogs();
+    clearPendingRecoveryRetries();
     clearPendingRunEventFlushes();
   }
 
@@ -545,8 +690,16 @@ export function createChatRunStream({
         currentRunId &&
         !activeRunIds.has(currentRunId)
       ) {
-        resetStaleRun(sessionState);
         closeSubscriptionFor(sessionState.key);
+        if (isDisplayedSession(sessionState.agentId, sessionState.sessionId)) {
+          sessionState.streamError = t(
+            'errors.streamClosed',
+            'The live stream closed before the run finished. Waiting for server status.',
+          );
+          void reconcileAfterStreamFailure(sessionState, currentRunId);
+        } else {
+          resetStaleRun(sessionState);
+        }
       }
     }
 

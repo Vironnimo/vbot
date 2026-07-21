@@ -205,6 +205,47 @@ export function createChatController({
     }
   }
 
+  async function reconcileRunSession(sessionState, expectedRunId) {
+    if (!sessionState?.agentId || !sessionState?.sessionId || !expectedRunId) {
+      return false;
+    }
+
+    try {
+      const history = await operations.loadChatHistory({
+        agent_id: sessionState.agentId,
+        session_id: sessionState.sessionId,
+        limit: HISTORY_INITIAL_LIMIT,
+      });
+      // A new Run may have started while durable history was loading. That
+      // newer Run owns the Session now, so this recovery response must not
+      // replace its optimistic state or subscription.
+      if (sessionState.currentRun?.runId !== expectedRunId) {
+        return true;
+      }
+
+      loadHistory(sessionState, history?.messages ?? [], {
+        hasMore: history?.has_more === true,
+        sessionUsage: history?.session_usage,
+      });
+      sessionState.markReadFailedRunId = '';
+      if (history?.active_run) {
+        if (isDisplayedSession(sessionState.agentId, sessionState.sessionId)) {
+          runStream.attachRunStream(sessionState, history.active_run);
+        }
+      } else {
+        resetStaleRun(sessionState);
+        runStream.closeSubscriptionFor(sessionState.key);
+      }
+      await syncSessionQueue(sessionState);
+      return true;
+    } catch {
+      // Recovery is deliberately silent and retried by chatRunStream. A
+      // transient history failure must not replace a real Run failure or the
+      // user's current global history error.
+      return false;
+    }
+  }
+
   async function loadOlderHistory(sessionState) {
     if (
       !sessionState?.agentId ||
@@ -575,6 +616,7 @@ export function createChatController({
     loadOlderHistory,
     loadProject: (projectId) => operations.showProject(projectId),
     markSessionCompletionRead,
+    reconcileRunSession,
     refreshAgentActivity,
     removeQueueItem: (agentAddress, sessionId, queuedMessageId) =>
       operations.removeFromQueue(agentAddress, sessionId, queuedMessageId),

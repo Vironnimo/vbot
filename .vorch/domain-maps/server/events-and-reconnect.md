@@ -50,7 +50,7 @@ The exact emitters remain source-of-truth in `server/rpc/*_methods.py`, `server/
 
 ## SSE and log WebSocket
 
-`GET /api/runs/{run_id}/events` streams the complete provider-agnostic Run timeline over SSE. It replays after an explicit `after_sequence` query value or, when absent, `Last-Event-ID`; invalid/negative values clamp to zero. Every frame uses the Run event sequence as SSE `id`, the Run event type as `event`, and sanitized event JSON as `data`, then follows until terminal state.
+`GET /api/runs/{run_id}/events` streams the complete provider-agnostic Run timeline over SSE. It replays after an explicit `after_sequence` query value or, when absent, `Last-Event-ID`; invalid/negative values clamp to zero. Every Run frame uses the Run event sequence as SSE `id`, the Run event type as `event`, and sanitized event JSON as `data`, then follows until terminal state. While a running Run is quiet, the server emits transport-only `heartbeat` events without a Run sequence; clients use them for liveness but never add them to timeline or replay state.
 
 `/ws/logs` is separate from the shared bus. It subscribes to one log file using the cursor returned by `log.read`, preventing the read-to-subscribe gap, and emits file append/reset plus catalog updates. Log transport behavior belongs in `logs.md`; it has no bus epoch or Run semantics.
 

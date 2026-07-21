@@ -514,7 +514,7 @@ describe('ChatTimeline', () => {
 
     const assistantRuns = document.querySelectorAll('.assistant-run');
     expect(assistantRuns).toHaveLength(1);
-    expect(document.querySelectorAll('.streaming-caret')).toHaveLength(1);
+    expect(document.querySelectorAll('.streaming-caret')).toHaveLength(0);
     expect(document.body.textContent).toContain('The file says A.');
     expect(document.body.textContent).toContain('Checking');
   });
