@@ -13,6 +13,7 @@ from core.channels.channels import (
     ALLOWED_CHANNEL_DM_SCOPES,
     ALLOWED_CHANNEL_PLATFORMS,
     ALLOWED_CHANNEL_RESPONSE_MODES,
+    MANAGED_CHANNEL_TOKEN_ENV_PREFIX,
     ChannelConfig,
     ChannelConfigError,
     ChannelError,
@@ -20,6 +21,7 @@ from core.channels.channels import (
     ChannelService,
     ChannelStorage,
     load_validated_channel_json,
+    managed_channel_token_env_var,
     validate_channel_data,
     validate_channel_file,
 )
@@ -28,6 +30,7 @@ __all__ = [
     "ALLOWED_CHANNEL_DM_SCOPES",
     "ALLOWED_CHANNEL_PLATFORMS",
     "ALLOWED_CHANNEL_RESPONSE_MODES",
+    "MANAGED_CHANNEL_TOKEN_ENV_PREFIX",
     "ChannelAdapter",
     "ChannelConfig",
     "ChannelConfigError",
@@ -42,6 +45,7 @@ __all__ = [
     "ReplyPlanFacts",
     "RouteFacts",
     "load_validated_channel_json",
+    "managed_channel_token_env_var",
     "validate_channel_data",
     "validate_channel_file",
 ]

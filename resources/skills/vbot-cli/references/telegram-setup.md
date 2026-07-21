@@ -11,34 +11,34 @@ The user creates the bot in their Telegram app — walk them through it:
 3. Choose a display name (free text) and then a username (must be unique and end in `bot`, e.g. `julian_assistant_bot`).
 4. BotFather replies with the **bot token** (format `123456789:AA...`). Treat it as a secret.
 
-## 2. Store the token
+## 2. Create the Channel with a managed token
 
-Put the token into the data-dir `.env` (default `~/.vbot/.env`) under a descriptive variable name:
-
-```text
-TELEGRAM_BOT_TOKEN=123456789:AA...
-```
-
-The user can paste it there themselves, or hand it to you to write. Never echo the token back into chat, and never pass the token value on the command line — channels reference the **variable name** via `--token-env`.
-
-The data-dir `.env` is read at server startup, so a newly added token needs a restart before the channel can use it:
+Pass the token to the CLI over UTF-8 stdin, never as a command-line argument:
 
 ```bash
-vbot server restart
+vbot channel add tg-main --platform telegram --agent assistant --token-stdin
 ```
 
-(A variable set in the process environment before server start works too and takes precedence over `.env`.)
+Supply the token through the caller's stdin mechanism. The server stores it atomically under a Channel-specific managed key in the data-dir `.env`, reloads Credentials live, and starts only this Channel adapter. Never echo the token, include it in a shell argument, or edit `.env` directly.
+
+The command result shows the saved Channel, credential source, and whether the managed value is effective. No server restart is needed. If an external process-environment value already owns the derived key, it remains authoritative and the result reports `effective_source=process_environment applied=no`.
+
+For an externally managed deployment secret, use `--token-env <ENV_VAR>` instead of `--token-stdin`; the variable must already be present in the server process environment.
 
 ## 3. Create and verify the channel
 
-Create the channel with the env-var name. The allowlist can start empty — an empty allowlist denies all inbound chats, which is safe and is exactly what the discovery flow in step 4 expects:
+The Channel was created in step 2. Its allowlist starts empty — an empty allowlist denies all inbound chats, which is safe and is exactly what the discovery flow in step 4 expects:
 
 ```bash
-vbot channel add tg-main --platform telegram --agent assistant --token-env TELEGRAM_BOT_TOKEN
 vbot channel status tg-main
 ```
 
-`status` should report `running=yes`. `failed=yes` with a token-related failure reason usually means the env var is missing or the server was not restarted after editing `.env`.
+`status` should report `running=yes`. `failed=yes` with a token-related failure reason means the token is missing, malformed, or rejected by Telegram. Rotate it without a server restart:
+
+```bash
+vbot channel set-token tg-main --stdin
+vbot channel status tg-main
+```
 
 ## 4. Discover and allow chat ids
 
@@ -81,6 +81,6 @@ Group gating fields (`response_mode`, `mention_patterns`, `owner_user_ids`, `obs
 ## Troubleshooting
 
 - **Bot does not react at all in a direct chat** → chat not on the allowlist. Check `vbot channel status` for the denied entry and allow it.
-- **Channel `failed=yes`** → read the `failure_reason`; token env var missing, `.env` not reloaded (restart), or the token is invalid/revoked.
+- **Channel `failed=yes`** → read the `failure_reason`; use `channel set-token <id> --stdin` when the token is missing, invalid, or revoked, then check `channel status` again.
 - **Bot ignores plain group messages** → expected in `mention` mode; address it with @username or a reply. If a wake word or passive observation is configured and still nothing arrives, privacy mode is still on (step 5).
 - **Group commands ignored** → group slash commands require the sender to be in `owner_user_ids`; an empty list means nobody may use them.

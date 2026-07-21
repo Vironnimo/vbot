@@ -13,7 +13,7 @@ The `vbot` CLI is the automation surface for configuring and operating a vBot in
 - Only `server start|stop|restart|status`, `desktop`, `update`, `uninstall`, `autostart`, and `doctor` work without a running target server. Everything else needs one. When operating the vBot instance hosting the current Run, execute the requested command directly — the Run already proves that server is available. Check `vbot server status` and start with `vbot server start` only when targeting another instance or troubleshooting connectivity.
 - Non-default instance: add `--host`, `--port`, `--data-dir` to every command.
 - Prefer CLI commands over direct file edits — settings, agents, channels, cron jobs, prompt blocks, and provider keys all have commands. If a manual JSON edit was unavoidable, validate with `vbot doctor config`.
-- Secrets never appear in output or chat. API keys go through `provider set-key`, extension secrets through `extensions <name> set <field> --stdin`, channel tokens by env-var name via `--token-env`.
+- Never echo secrets in output. API keys go through `provider set-key`, extension secrets through `extensions <name> set <field> --stdin`, and managed channel tokens through `channel add ... --token-stdin` or `channel set-token ... --stdin`. Channel tokens never belong in shell arguments; use `--token-env` only when an external deployment environment already owns the variable.
 - Inspect before changing; verify after with the matching list/show/status command.
 - Mutation output is a verification result, not merely an acknowledgement: Agent, Project, Channel, and Cron create/update commands print the saved resource; Project removal prints affected rooted Agents and file-copy/backup effects. Read it before issuing a separate verification call, then use `show`/`list` when the requested outcome depends on live discovery or runtime health.
 - Keep Identity Agent, Project Agent, Workspace, and Project cwd separate. A generic request to create an Agent means an Identity Agent; root it in a Project when its file/shell work should run there. A Project Agent is a repo-discovered Config Agent with no Workspace, SOUL, or Memory and is created only when the user explicitly asks for a Project Team profile. See `references/agents-projects.md`.
@@ -46,7 +46,7 @@ Read the reference file before using an area's write commands — it has the exa
 | `agent` | `list` `show` `create` `update` `rename` `delete` | `references/agents-projects.md` |
 | `project` | `add` `list` `show` `set` `set-override` `clear-override` `rm` | `references/agents-projects.md` |
 | `session` | `list` `create` `fork` `rename` `set-compaction-policy` `delete` `link-channel` | `references/agents-projects.md` |
-| `channel` | `add` `list` `status` `update` `enable` `disable` `remove` | `references/channels.md` |
+| `channel` | `add` `list` `status` `update` `set-token` `enable` `disable` `remove` | `references/channels.md` |
 | `cron` | `list` `create` `update` `delete` `enable` `disable` | `references/cron.md` |
 | `config` | show raw settings, `effective`, `get`, `set` | `references/configuration.md` |
 | `prompt` | `list` `update` `reset` `create` `remove` `set-layout` `reset-layout` `preview` | `references/configuration.md` |
@@ -69,5 +69,5 @@ vbot model list --task chat                                    # exact runnable 
 vbot agent update <agent-id> --model <provider>/<model-id>      # switch an agent's model
 vbot config set <key> <value>                                   # change a settings key (JSON or string)
 vbot channel status <channel-id>                                # channel health + denied inbound chats
-vbot server restart                                             # apply .env edits or code changes
+vbot server restart                                             # apply code or unavoidable manual config edits
 ```

@@ -96,6 +96,7 @@ CHANNEL_HELP = {
     "enable": "Enable a channel listener",
     "disable": "Disable a channel listener",
     "status": "Show one channel listener status",
+    "set-token": "Set or rotate a channel bot token from stdin",
 }
 PROMPT_HELP = {
     "list": "List System Prompt blocks",
@@ -796,21 +797,23 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         channel_subparsers,
         "add",
         CHANNEL_HELP["add"],
-        example=(
-            "channel add tg-main --platform telegram --agent assistant "
-            "--token-env TELEGRAM_BOT_TOKEN_MAIN"
-        ),
+        example=("channel add tg-main --platform telegram --agent assistant --token-stdin"),
     )
     add_parser.add_argument("id", metavar="<channel-id>", help="Id for the new channel")
     add_parser.add_argument("--platform", required=True, choices=CHANNEL_PLATFORMS)
     add_parser.add_argument(
         "--agent", required=True, metavar="<agent-id>", help="Agent that handles channel messages"
     )
-    add_parser.add_argument(
+    token_group = add_parser.add_mutually_exclusive_group(required=True)
+    token_group.add_argument(
         "--token-env",
-        required=True,
         metavar="<env-var>",
-        help="Environment variable holding the bot token",
+        help="Existing environment variable holding the bot token",
+    )
+    token_group.add_argument(
+        "--token-stdin",
+        action="store_true",
+        help="Read and manage the bot token from UTF-8 stdin",
     )
     add_parser.add_argument("--dm-scope", default="per_conversation", choices=CHANNEL_DM_SCOPES)
     add_parser.add_argument(
@@ -850,6 +853,20 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     )
     update_parser.add_argument("--enabled", choices=("true", "false"))
     _add_channel_policy_arguments(update_parser, include_defaults=False)
+
+    set_token_parser = _add_command_parser(
+        channel_subparsers,
+        "set-token",
+        CHANNEL_HELP["set-token"],
+        example="channel set-token tg-main --stdin",
+    )
+    set_token_parser.add_argument("id", metavar="<channel-id>", help="Channel id to update")
+    set_token_parser.add_argument(
+        "--stdin",
+        action="store_true",
+        required=True,
+        help="Read the new bot token from UTF-8 stdin",
+    )
 
     for command in ("enable", "disable", "status"):
         command_parser = _add_command_parser(

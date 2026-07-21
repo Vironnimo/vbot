@@ -29,6 +29,7 @@ from cli.channel_management import (
     channel_enable,
     channel_list,
     channel_remove,
+    channel_set_token,
     channel_status,
     channel_update,
 )
@@ -211,6 +212,7 @@ def run(
             Sequence[str],
             Sequence[str],
             bool,
+            str | None,
         ],
         CommandResult,
     ] = channel_add,
@@ -220,6 +222,7 @@ def run(
     enable_channel: Callable[[ServerInstance, str], CommandResult] = channel_enable,
     disable_channel: Callable[[ServerInstance, str], CommandResult] = channel_disable,
     channel_status_fn: Callable[[ServerInstance, str], CommandResult] = channel_status,
+    set_channel_token: Callable[[ServerInstance, str, str], CommandResult] = channel_set_token,
     list_tools_fn: Callable[[ServerInstance], CommandResult] = tool_list,
     list_prompts_fn: Callable[[ServerInstance, str], CommandResult] = prompt_list,
     update_prompt_fn: Callable[[ServerInstance, str, str, str], CommandResult] = prompt_update,
@@ -357,6 +360,7 @@ def run(
             enable_channel=enable_channel,
             disable_channel=disable_channel,
             channel_status_fn=channel_status_fn,
+            set_channel_token=set_channel_token,
         )
         print_channel_command_result(args.command, result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
@@ -806,6 +810,7 @@ def dispatch_channel_command(
             Sequence[str],
             Sequence[str],
             bool,
+            str | None,
         ],
         CommandResult,
     ],
@@ -815,10 +820,21 @@ def dispatch_channel_command(
     enable_channel: Callable[[ServerInstance, str], CommandResult],
     disable_channel: Callable[[ServerInstance, str], CommandResult],
     channel_status_fn: Callable[[ServerInstance, str], CommandResult],
+    set_channel_token: Callable[[ServerInstance, str, str], CommandResult],
 ) -> CommandResult:
     """Dispatch one parsed channel command against the server RPC client."""
 
     if args.command == "add":
+        token: str | None = None
+        if args.token_stdin:
+            try:
+                token = _read_stdin_utf8()
+            except (OSError, UnicodeError) as exc:
+                return CommandResult(
+                    ok=False,
+                    message=f"cannot read --token-stdin value as UTF-8: {exc}",
+                    instance=instance,
+                )
         return add_channel(
             instance,
             args.id,
@@ -831,6 +847,7 @@ def dispatch_channel_command(
             args.mention_patterns,
             args.owner_user_ids,
             args.observe_unaddressed == "true",
+            token,
         )
     if args.command == "list":
         return list_channels(instance)
@@ -844,6 +861,16 @@ def dispatch_channel_command(
         return disable_channel(instance, args.id)
     if args.command == "status":
         return channel_status_fn(instance, args.id)
+    if args.command == "set-token":
+        try:
+            token = _read_stdin_utf8()
+        except (OSError, UnicodeError) as exc:
+            return CommandResult(
+                ok=False,
+                message=f"cannot read --stdin token as UTF-8: {exc}",
+                instance=instance,
+            )
+        return set_channel_token(instance, args.id, token)
     raise ValueError(f"Unsupported channel command: {args.command}")
 
 
@@ -1116,7 +1143,7 @@ def _dispatch_extensions_set(
 
 
 def _read_stdin_utf8() -> str:
-    """Read a piped extension value through an explicit UTF-8 contract."""
+    """Read a piped secret or setting value through an explicit UTF-8 contract."""
 
     buffer = getattr(sys.stdin, "buffer", None)
     if buffer is None:

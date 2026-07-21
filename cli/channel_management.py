@@ -30,13 +30,14 @@ def channel_add(
     channel_id: str,
     platform: str,
     agent_id: str,
-    token_env: str,
+    token_env: str | None,
     dm_scope: str,
     allowed_chat_ids: Sequence[str],
     response_mode: str = "mention",
     mention_patterns: Sequence[str] = (),
     owner_user_ids: Sequence[str] = (),
     observe_unaddressed: bool = False,
+    token: str | None = None,
 ) -> CommandResult:
     """Create a channel configuration via `channel.create` RPC."""
 
@@ -44,10 +45,23 @@ def channel_add(
         "id": channel_id,
         "platform": platform,
         "agent_id": agent_id,
-        "token_env_var": token_env,
         "dm_scope": dm_scope,
         "allowed_chat_ids": list(allowed_chat_ids),
     }
+    if token is not None:
+        if not token:
+            return CommandResult(
+                ok=False, message="token from stdin must not be empty", instance=instance
+            )
+        params["token"] = token
+    elif token_env:
+        params["token_env_var"] = token_env
+    else:
+        return CommandResult(
+            ok=False,
+            message="channel add requires --token-stdin or --token-env",
+            instance=instance,
+        )
     if response_mode != "mention":
         params["response_mode"] = response_mode
     if mention_patterns:
@@ -163,6 +177,31 @@ def channel_status(instance: ServerInstance, channel_id: str) -> CommandResult:
     return CommandResult(ok=True, message="\n".join(lines), instance=instance)
 
 
+def channel_set_token(
+    instance: ServerInstance,
+    channel_id: str,
+    token: str,
+) -> CommandResult:
+    """Persist a channel token through RPC and report its live application state."""
+    if not token:
+        return CommandResult(
+            ok=False, message="token from stdin must not be empty", instance=instance
+        )
+
+    payload = _rpc_call(
+        instance,
+        "channel.set_token",
+        {"id": channel_id, "token": token},
+    )
+    if not payload.ok:
+        return payload.to_command_result()
+    return CommandResult(
+        ok=True,
+        message=_format_channel_token_result(payload.data, channel_id),
+        instance=instance,
+    )
+
+
 def _format_denied_chats(channel_id: str, value: object) -> list[str]:
     if not isinstance(value, list) or not value:
         return []
@@ -245,4 +284,54 @@ def _format_channel_operation(action: str, channel: Mapping[str, Any], fallback_
     channel_id = _string_or_default(channel.get("id"), fallback_id)
     if set(channel) <= {"id", "ok"}:
         return f"{action} {channel_id}"
-    return f"{action} channel {channel_id}\n{_format_channel_row(channel)}"
+    lines = [f"{action} channel {channel_id}", _format_channel_row(channel)]
+    credential = channel.get("credential")
+    lines.extend(_format_credential_lines(credential))
+    if isinstance(credential, Mapping):
+        lines.extend(_format_channel_health_lines(channel))
+        lines.extend(_format_credential_warning_lines(credential))
+        lines.append(f"verify: vbot channel status {channel_id}")
+    return "\n".join(lines)
+
+
+def _format_channel_token_result(result: Mapping[str, Any], fallback_id: str) -> str:
+    channel_id = _string_or_default(result.get("id"), fallback_id)
+    lines = [f"saved token for channel {channel_id}"]
+    lines.extend(_format_credential_lines(result.get("credential")))
+    lines.append(f"adapter_restart_requested={_bool_text(result.get('adapter_restart_requested'))}")
+    lines.extend(_format_channel_health_lines(result))
+    credential = result.get("credential")
+    lines.extend(_format_credential_warning_lines(credential))
+    lines.append(f"verify: vbot channel status {channel_id}")
+    return "\n".join(lines)
+
+
+def _format_credential_lines(value: object) -> list[str]:
+    if not isinstance(value, Mapping):
+        return []
+    credential_key = _string_or_default(value.get("key"), "?")
+    effective_source = _string_or_default(value.get("effective_source"), "none")
+    return [
+        f"credential_key={credential_key}",
+        f"effective_source={effective_source} applied={_bool_text(value.get('applied'))}",
+    ]
+
+
+def _format_channel_health_lines(value: Mapping[str, Any]) -> list[str]:
+    lines = [
+        f"enabled={_bool_text(value.get('enabled'))} "
+        f"running={_bool_text(value.get('running'))} "
+        f"failed={_bool_text(value.get('failed'))}"
+    ]
+    failure_reason = value.get("failure_reason")
+    if isinstance(failure_reason, str) and failure_reason:
+        lines.append(f"failure_reason={failure_reason}")
+    return lines
+
+
+def _format_credential_warning_lines(value: object) -> list[str]:
+    if not isinstance(value, Mapping):
+        return []
+    if value.get("effective_source") != "process_environment":
+        return []
+    return ["warning: the process environment still overrides the saved data-dir token"]

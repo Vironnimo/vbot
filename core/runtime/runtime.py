@@ -1040,6 +1040,14 @@ class Runtime:
             return os.environ[key]
         return self._fallback_environment.get(key, "")
 
+    def environment_credential_source(self, key: str) -> str | None:
+        """Return the effective source for one environment credential key."""
+        if key in os.environ:
+            return "process_environment"
+        if key in self._fallback_environment:
+            return "data_dir"
+        return None
+
     def _global_agent_defaults(self) -> dict[str, Any]:
         """Return the instance-wide ``defaults.agent`` map, or ``{}`` when unset.
 
@@ -1676,8 +1684,8 @@ class Runtime:
             self._loaded_extension_names(),
         )
 
-    def reload_provider_credentials(self) -> None:
-        """Reload provider credential fallback values from the data-dir `.env`."""
+    def reload_environment_credentials(self) -> None:
+        """Reload shared credential fallback values from the data-dir `.env`."""
 
         self._ensure_started()
         data_dir_credentials = self.storage.load_environment()

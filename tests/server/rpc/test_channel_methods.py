@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -20,6 +21,23 @@ class _NullAsyncContext:
 
     async def __aexit__(self, *exc_info: object) -> None:
         return None
+
+
+class _CredentialStorage:
+    def __init__(self) -> None:
+        self.credentials: dict[str, str] = {}
+
+    def load_environment(self) -> dict[str, str]:
+        return dict(self.credentials)
+
+    def set_data_dir_credential(self, key: str, value: str) -> None:
+        self.credentials[key] = value
+
+    def remove_data_dir_credential(self, key: str) -> bool:
+        return self.credentials.pop(key, None) is not None
+
+    def load_compaction_settings(self) -> dict[str, object]:
+        return {}
 
 
 def _channel_config(
@@ -45,14 +63,34 @@ def _state(
     channel_service: object | None = None,
     chat_sessions: object | None = None,
     agents: object | None = None,
+    process_credentials: dict[str, str] | None = None,
 ) -> SimpleNamespace:
     agent_store = agents if agents is not None else Mock()
     if isinstance(agent_store, Mock):
         agent_store.get.return_value = SimpleNamespace(id="assistant")
 
+    storage = _CredentialStorage()
+    process_values = dict(process_credentials or {})
+
+    def resolve_environment_credential(key: str) -> str:
+        if key in process_values:
+            return process_values[key]
+        return storage.credentials.get(key, "")
+
+    def environment_credential_source(key: str) -> str | None:
+        if key in process_values:
+            return "process_environment"
+        if key in storage.credentials:
+            return "data_dir"
+        return None
+
     runtime = SimpleNamespace(
         channel_service=channel_service if channel_service is not None else Mock(),
         reload_channel_tool=Mock(),
+        reload_environment_credentials=Mock(),
+        resolve_environment_credential=resolve_environment_credential,
+        environment_credential_source=environment_credential_source,
+        storage=storage,
         chat_sessions=chat_sessions if chat_sessions is not None else Mock(),
         agents=agent_store,
     )
@@ -98,6 +136,93 @@ async def test_channel_create_happy_path_calls_service_and_reload() -> None:
     state.runtime.agents.get.assert_called_once_with("assistant")
     state.runtime.reload_channel_tool.assert_called_once_with()
     assert state.event_bus.events[-1]["payload"] == {"kind": "channels"}
+
+
+@pytest.mark.asyncio
+async def test_channel_create_with_managed_token_stores_secret_without_returning_it() -> None:
+    channel_service = Mock()
+    channel_service.is_running.return_value = True
+    channel_service.is_failed.return_value = False
+    channel_service.failure_reason.return_value = None
+    state = _state(channel_service=channel_service)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "channel.create",
+            "params": {
+                "id": "tg-main",
+                "platform": "telegram",
+                "agent_id": "assistant",
+                "token": "super-secret-token",
+            },
+        },
+    )
+
+    credential_key = "VBOT_CHANNEL_TOKEN__74672D6D61696E"
+    assert response["ok"] is True
+    assert "super-secret-token" not in repr(response)
+    assert response["result"]["token_env_var"] == credential_key
+    assert response["result"]["credential"] == {
+        "key": credential_key,
+        "saved": True,
+        "changed": True,
+        "effective_source": "data_dir",
+        "applied": True,
+    }
+    assert response["result"]["running"] is True
+    assert response["result"]["failed"] is False
+    assert state.runtime.storage.credentials[credential_key] == "super-secret-token"
+    state.runtime.reload_environment_credentials.assert_called_once_with()
+    created_config = channel_service.create_channel.call_args.args[0]
+    assert created_config.token_env_var == credential_key
+
+
+@pytest.mark.asyncio
+async def test_channel_create_rejects_ambiguous_token_inputs() -> None:
+    state = _state()
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "channel.create",
+            "params": {
+                "id": "tg-main",
+                "platform": "telegram",
+                "agent_id": "assistant",
+                "token": "secret",
+                "token_env_var": "TELEGRAM_BOT_TOKEN",
+            },
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert "exactly one" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_channel_create_rolls_back_managed_token_when_create_fails() -> None:
+    channel_service = Mock()
+    channel_service.create_channel.side_effect = ChannelConfigError("create failed")
+    state = _state(channel_service=channel_service)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "channel.create",
+            "params": {
+                "id": "tg-main",
+                "platform": "telegram",
+                "agent_id": "assistant",
+                "token": "super-secret-token",
+            },
+        },
+    )
+
+    assert response["ok"] is False
+    assert state.runtime.storage.credentials == {}
+    assert state.runtime.reload_environment_credentials.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -202,6 +327,109 @@ async def test_channel_mutation_methods_call_service_and_reload(
     getattr(channel_service, service_method).assert_called_once_with("tg-assistant")
     state.runtime.reload_channel_tool.assert_called_once_with()
     assert state.event_bus.events[-1]["payload"] == {"kind": "channels"}
+
+
+@pytest.mark.asyncio
+async def test_channel_set_token_reloads_credentials_and_restarts_only_channel(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    config = _channel_config()
+    channel_service = Mock()
+    channel_service.list_channels.return_value = [config]
+    channel_service.restart_channel.return_value = True
+    channel_service.is_running.return_value = True
+    channel_service.is_failed.return_value = False
+    channel_service.failure_reason.return_value = None
+    state = _state(channel_service=channel_service)
+    caplog.set_level(logging.INFO, logger="vbot.server.rpc.channels")
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "channel.set_token",
+            "params": {"id": "tg-assistant", "token": "rotated-super-secret"},
+        },
+    )
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "id": "tg-assistant",
+            "token_env_var": "TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
+            "credential": {
+                "key": "TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
+                "saved": True,
+                "changed": True,
+                "effective_source": "data_dir",
+                "applied": True,
+            },
+            "adapter_restart_requested": True,
+            "enabled": True,
+            "running": True,
+            "failed": False,
+            "failure_reason": None,
+        },
+    }
+    assert state.runtime.storage.credentials == {
+        "TELEGRAM_BOT_TOKEN_TG_ASSISTANT": "rotated-super-secret"
+    }
+    state.runtime.reload_environment_credentials.assert_called_once_with()
+    channel_service.restart_channel.assert_called_once_with("tg-assistant")
+    state.runtime.reload_channel_tool.assert_called_once_with()
+    assert state.event_bus.events[-1]["payload"] == {"kind": "channels"}
+    assert all("rotated-super-secret" not in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_channel_set_token_reports_process_environment_override_without_restart() -> None:
+    config = _channel_config()
+    channel_service = Mock()
+    channel_service.list_channels.return_value = [config]
+    channel_service.is_running.return_value = True
+    channel_service.is_failed.return_value = False
+    channel_service.failure_reason.return_value = None
+    state = _state(
+        channel_service=channel_service,
+        process_credentials={"TELEGRAM_BOT_TOKEN_TG_ASSISTANT": "process-token"},
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "channel.set_token",
+            "params": {"id": "tg-assistant", "token": "saved-fallback-token"},
+        },
+    )
+
+    assert response["ok"] is True
+    result = response["result"]
+    assert result["credential"]["effective_source"] == "process_environment"
+    assert result["credential"]["applied"] is False
+    assert result["adapter_restart_requested"] is False
+    channel_service.restart_channel.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_channel_set_token_rolls_back_credential_when_restart_fails() -> None:
+    config = _channel_config()
+    channel_service = Mock()
+    channel_service.list_channels.return_value = [config]
+    channel_service.restart_channel.side_effect = [ChannelConfigError("restart failed"), True]
+    state = _state(channel_service=channel_service)
+    state.runtime.storage.credentials[config.token_env_var] = "old-token"
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "channel.set_token",
+            "params": {"id": "tg-assistant", "token": "new-token"},
+        },
+    )
+
+    assert response["ok"] is False
+    assert state.runtime.storage.credentials[config.token_env_var] == "old-token"
+    assert channel_service.restart_channel.call_count == 2
+    assert state.runtime.reload_environment_credentials.call_count == 2
 
 
 @pytest.mark.asyncio

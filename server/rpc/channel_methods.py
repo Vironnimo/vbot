@@ -11,6 +11,7 @@ from core.channels import (
     ChannelConfig,
     ChannelConfigError,
     ChannelNotFoundError,
+    managed_channel_token_env_var,
 )
 from core.utils.logging import get_logger
 from server.events import RESOURCE_KIND_CHANNELS
@@ -51,6 +52,7 @@ async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
         "dm_scope",
         "allowed_chat_ids",
         "token_env_var",
+        "token",
         "enabled",
         "response_mode",
         "mention_patterns",
@@ -59,13 +61,15 @@ async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
     }
     _reject_unsupported(params, supported_fields, "channel.create")
 
+    channel_id = _required_string(params, "id")
+    token_env_var, managed_token = _channel_token_input(params, channel_id)
     config = ChannelConfig(
-        id=_required_string(params, "id"),
+        id=channel_id,
         platform=_required_channel_platform(params, "platform"),
         agent_id=_required_string(params, "agent_id"),
         dm_scope=_optional_channel_dm_scope(params, "dm_scope", default="per_conversation"),
         allowed_chat_ids=_optional_platform_id_list(params, "allowed_chat_ids", default=[]),
-        token_env_var=_required_string(params, "token_env_var"),
+        token_env_var=token_env_var,
         enabled=_optional_bool(params, "enabled", default=True),
         response_mode=_optional_channel_response_mode(params, "response_mode"),
         mention_patterns=_optional_string_list(params, "mention_patterns", default=[]),
@@ -73,10 +77,24 @@ async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
         observe_unaddressed=_optional_bool(params, "observe_unaddressed", default=False),
     )
 
+    credential_result: JsonObject | None = None
     try:
         async with _agent_reference_lock(state):
             _validate_channel_agent_exists(state, config.agent_id)
-            state.runtime.channel_service.create_channel(config)
+            if managed_token is None:
+                state.runtime.channel_service.create_channel(config)
+            else:
+                previous_value = state.runtime.storage.load_environment().get(token_env_var)
+                try:
+                    credential_result = _store_channel_token(
+                        state.runtime,
+                        token_env_var,
+                        managed_token,
+                    )
+                    state.runtime.channel_service.create_channel(config)
+                except Exception:
+                    _restore_channel_token(state.runtime, token_env_var, previous_value)
+                    raise
             state.runtime.reload_channel_tool()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
@@ -87,7 +105,11 @@ async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
         config.platform,
         config.enabled,
     )
-    return config.to_dict()
+    result = config.to_dict()
+    if credential_result is not None:
+        result["credential"] = credential_result
+        result.update(_channel_health(state.runtime.channel_service, config))
+    return result
 
 
 async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
@@ -207,6 +229,66 @@ def _disable_channel(state: Any, params: JsonObject) -> JsonObject:
     return saved_config.to_dict()
 
 
+def _set_channel_token(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"id", "token"}, "channel.set_token")
+
+    channel_id = _required_string(params, "id")
+    token = _required_string(params, "token")
+    channel_service = state.runtime.channel_service
+    config = _channel_config_by_id(channel_service, channel_id)
+    credential_key = config.token_env_var
+    previous_value = state.runtime.storage.load_environment().get(credential_key)
+    previous_effective_value = state.runtime.resolve_environment_credential(credential_key)
+    credential_result: JsonObject
+    adapter_restart_requested = False
+    adapter_restart_attempted = False
+
+    try:
+        credential_result = _store_channel_token(state.runtime, credential_key, token)
+        effective_value = state.runtime.resolve_environment_credential(credential_key)
+        if previous_effective_value != effective_value:
+            adapter_restart_attempted = True
+            adapter_restart_requested = bool(channel_service.restart_channel(channel_id))
+        state.runtime.reload_channel_tool()
+    except Exception as exc:
+        _restore_channel_token(state.runtime, credential_key, previous_value)
+        if adapter_restart_attempted:
+            try:
+                channel_service.restart_channel(channel_id)
+            except Exception as rollback_error:
+                _LOGGER.error(
+                    "Channel token rollback could not restore the adapter "
+                    "(channel=%s credential_key=%s): %s",
+                    channel_id,
+                    credential_key,
+                    rollback_error,
+                    exc_info=(
+                        type(rollback_error),
+                        rollback_error,
+                        rollback_error.__traceback__,
+                    ),
+                )
+        raise _map_expected_error(exc) from exc
+
+    if credential_result["changed"] or adapter_restart_requested:
+        _LOGGER.info(
+            "Channel token saved (channel=%s credential_key=%s effective_source=%s)",
+            channel_id,
+            credential_key,
+            credential_result["effective_source"],
+        )
+    if credential_result["changed"] or adapter_restart_requested:
+        publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
+
+    return {
+        "id": config.id,
+        "token_env_var": credential_key,
+        "credential": credential_result,
+        "adapter_restart_requested": adapter_restart_requested,
+        **_channel_health(channel_service, config),
+    }
+
+
 def _log_channel_update(
     channel_id: str,
     previous_config: ChannelConfig | None,
@@ -243,21 +325,69 @@ def _channel_status(state: Any, params: JsonObject) -> JsonObject:
     try:
         channel_service = state.runtime.channel_service
         config = _channel_config_by_id(channel_service, channel_id)
-        running = bool(channel_service.is_running(channel_id))
-        failed = bool(channel_service.is_failed(channel_id))
-        failure_reason = channel_service.failure_reason(channel_id)
+        health = _channel_health(channel_service, config)
         denied_chats = [entry.to_dict() for entry in channel_service.denied_chats(channel_id)]
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {
         "id": config.id,
+        **health,
+        "denied_chats": denied_chats,
+    }
+
+
+def _channel_token_input(params: JsonObject, channel_id: str) -> tuple[str, str | None]:
+    has_env_var = "token_env_var" in params
+    has_managed_token = "token" in params
+    if has_env_var == has_managed_token:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "channel.create requires exactly one of 'token_env_var' or 'token'",
+        )
+    if has_managed_token:
+        return managed_channel_token_env_var(channel_id), _required_string(params, "token")
+    return _required_string(params, "token_env_var"), None
+
+
+def _store_channel_token(runtime: Any, credential_key: str, token: str) -> JsonObject:
+    previous_value = runtime.storage.load_environment().get(credential_key)
+    runtime.storage.set_data_dir_credential(credential_key, token)
+    runtime.reload_environment_credentials()
+    effective_source = runtime.environment_credential_source(credential_key)
+    return {
+        "key": credential_key,
+        "saved": True,
+        "changed": previous_value != token,
+        "effective_source": effective_source,
+        "applied": effective_source == "data_dir",
+    }
+
+
+def _restore_channel_token(runtime: Any, credential_key: str, previous_value: str | None) -> None:
+    try:
+        if previous_value is None:
+            runtime.storage.remove_data_dir_credential(credential_key)
+        else:
+            runtime.storage.set_data_dir_credential(credential_key, previous_value)
+        runtime.reload_environment_credentials()
+    except Exception as rollback_error:
+        _LOGGER.error(
+            "Channel token rollback failed (credential_key=%s): %s",
+            credential_key,
+            rollback_error,
+            exc_info=(type(rollback_error), rollback_error, rollback_error.__traceback__),
+        )
+
+
+def _channel_health(channel_service: Any, config: ChannelConfig) -> JsonObject:
+    failure_reason = channel_service.failure_reason(config.id)
+    return {
         "enabled": config.enabled,
-        "running": running,
-        "failed": failed,
+        "running": bool(channel_service.is_running(config.id)),
+        "failed": bool(channel_service.is_failed(config.id)),
         "failure_reason": (
             failure_reason if isinstance(failure_reason, str) and failure_reason else None
         ),
-        "denied_chats": denied_chats,
     }
 
 
@@ -391,5 +521,6 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "channel.delete": _delete_channel,
         "channel.enable": _enable_channel,
         "channel.disable": _disable_channel,
+        "channel.set_token": _set_channel_token,
         "channel.status": _channel_status,
     }

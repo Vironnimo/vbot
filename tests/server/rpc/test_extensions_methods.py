@@ -97,7 +97,7 @@ class _Runtime(SimpleNamespace):
         value: str = self.storage.credentials.get(key, "")
         return value
 
-    def reload_provider_credentials(self) -> None:
+    def reload_environment_credentials(self) -> None:
         self.reloaded += 1
 
 
