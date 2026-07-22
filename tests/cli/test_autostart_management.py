@@ -44,7 +44,7 @@ def _err(stderr: str = "Access is denied") -> CommandRun:
     return CommandRun(returncode=1, stdout="", stderr=stderr)
 
 
-def _windows_task_script_and_payload(command: list[str]) -> tuple[str, dict[str, str]]:
+def _windows_task_script_and_payload(command: list[str]) -> tuple[str, dict[str, str | int]]:
     assert command[0] == "powershell.exe"
     assert command[-2] == "-EncodedCommand"
     script = base64.b64decode(command[-1]).decode("utf-16-le")
@@ -134,10 +134,14 @@ def test_enable_windows_creates_task_and_starts() -> None:
         "task_name": "vBot",
         "launcher": r"C:\Program Files\vbot\vbot-autostart.exe",
         "arguments": f"--host 127.0.0.1 --port 8420 --data-dir {inst.data_dir}",
+        "restart_count": 3,
+        "restart_interval": "PT1M",
     }
     assert "$definition.Principal.LogonType = 3" in script
     assert "$definition.Principal.RunLevel = 0" in script
     assert "$trigger.UserId = $userId" in script
+    assert "$definition.Settings.RestartCount = [int]$payload.restart_count" in script
+    assert "$definition.Settings.RestartInterval = [string]$payload.restart_interval" in script
     assert "$root.RegisterTaskDefinition(" in script
 
 
@@ -217,6 +221,24 @@ def test_windows_autostart_launcher_runs_server_start_without_output(
         r"C:\vBot Data",
     ]
     assert capsys.readouterr().out == ""
+
+
+def test_windows_autostart_server_gets_cold_start_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[tuple[ServerInstance, float]] = []
+    instance = _instance()
+
+    def start_server(target: ServerInstance, *, startup_timeout_seconds: float) -> CommandResult:
+        captured.append((target, startup_timeout_seconds))
+        return CommandResult(ok=True, message="started", instance=target)
+
+    monkeypatch.setattr(autostart_management, "start_server", start_server)
+
+    result = autostart_management._start_windows_autostart_server(instance)
+
+    assert result.ok
+    assert captured == [(instance, 60.0)]
 
 
 def test_enable_linux_writes_unit_and_enables(tmp_path: Path) -> None:
