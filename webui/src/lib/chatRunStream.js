@@ -147,6 +147,9 @@ export function createChatRunStream({
     } else {
       currentRun.status = run.status ?? currentRun.status;
       currentRun.sseUrl = sseUrl;
+      if (run.contributes_to_agent_activity === false) {
+        currentRun.contributesToAgentActivity = false;
+      }
     }
     mergeRetainedRunEvents(sessionState, run.events, {
       fromServerEvent: true,
@@ -225,7 +228,9 @@ export function createChatRunStream({
     if (!event) {
       return;
     }
-    trackSubAgentRunStatus(event);
+    if (event.contributes_to_agent_activity !== false) {
+      trackSubAgentRunStatus(event);
+    }
     if (event.type === 'compaction_completed' && event.payload?.message) {
       appendCompactionCheckpoint(sessionState, event.payload.message);
     }
@@ -501,6 +506,9 @@ export function createChatRunStream({
           run_id: event.run_id,
           status: 'running',
           sse_url: sseUrlForRun(event.run_id),
+          ...(event.contributes_to_agent_activity === false
+            ? { contributes_to_agent_activity: false }
+            : {}),
           events: [],
         },
         { afterSequence: highestContiguousRunEventSequence(sessionState) },
@@ -551,6 +559,9 @@ export function createChatRunStream({
       // id unchanged, keeping the identity path byte-identical.
       agent_id: formatAgentAddress(payload.agent_id, payload.project_id),
       session_id: payload.session_id,
+      ...(payload.contributes_to_agent_activity === false
+        ? { contributes_to_agent_activity: false }
+        : {}),
       sequence: payload.run_event_sequence,
       timestamp: payload.run_event_timestamp,
       payload: runPayload,
@@ -705,7 +716,10 @@ export function createChatRunStream({
 
     const subAgentUpdates = {};
     for (const activeRun of activeRuns) {
-      if (!activeRun?.run_id) {
+      if (
+        !activeRun?.run_id ||
+        activeRun.contributes_to_agent_activity === false
+      ) {
         continue;
       }
       subAgentUpdates[`run:${activeRun.run_id}`] = 'running';
@@ -737,6 +751,9 @@ export function createChatRunStream({
           run_id: activeRun.run_id,
           status: 'running',
           sse_url: activeRun.sse_url,
+          ...(activeRun.contributes_to_agent_activity === false
+            ? { contributes_to_agent_activity: false }
+            : {}),
           events: [],
         });
       }
@@ -747,6 +764,9 @@ export function createChatRunStream({
         run_id: activeRun.run_id,
         status: 'running',
         sse_url: activeRun.sse_url,
+        ...(activeRun.contributes_to_agent_activity === false
+          ? { contributes_to_agent_activity: false }
+          : {}),
         events: [],
       });
     }

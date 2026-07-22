@@ -119,6 +119,51 @@ describe('chat state helpers', () => {
     );
   });
 
+  it.each([
+    ['run_completed', 'completed'],
+    ['run_failed', 'failed'],
+    ['run_cancelled', 'cancelled'],
+  ])(
+    'keeps an excluded Run out of Agent activity through %s while retaining its timeline',
+    (terminalType, terminalStatus) => {
+      const chatState = createChatState();
+      const sessionState = ensureSessionState(
+        chatState,
+        'alpha',
+        'session-system',
+      );
+
+      appendRunEvent(sessionState, {
+        type: 'run_started',
+        run_id: 'run-system',
+        sequence: 1,
+        contributes_to_agent_activity: false,
+        payload: { status: CHAT_STATUS_RUNNING },
+      });
+
+      expect(isRunActive(sessionState)).toBe(true);
+      expect(sessionState.currentRun?.contributesToAgentActivity).toBe(false);
+      expect(agentActivityStatus(chatState, 'alpha')).toBe(AGENT_ACTIVITY_IDLE);
+
+      appendRunEvent(sessionState, {
+        type: terminalType,
+        run_id: 'run-system',
+        sequence: 2,
+        contributes_to_agent_activity: false,
+        payload: { status: terminalStatus },
+      });
+
+      expect(sessionState.status).toBe(terminalStatus);
+      expect(sessionState.hasUnreadCompletion).toBe(false);
+      expect(sessionState.latestCompletionRunId).toBe('');
+      expect(agentActivityStatus(chatState, 'alpha')).toBe(AGENT_ACTIVITY_IDLE);
+      expect(sessionState.runEvents.map((event) => event.type)).toEqual([
+        'run_started',
+        terminalType,
+      ]);
+    },
+  );
+
   it('accepts the exact backend read state after a terminal event is replayed', () => {
     const chatState = createChatState();
     const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');

@@ -124,6 +124,41 @@ describe('createChatRunStream().applyConnectionSnapshot()', () => {
     );
   });
 
+  it('reattaches an excluded active Run without projecting Agent activity', () => {
+    const subscribeRunEvents = vi.fn(() => ({ close: vi.fn() }));
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: DISPLAYED_AGENT_ID,
+      displayedSessionId: DISPLAYED_SESSION_ID,
+      subscribeRunEvents,
+    });
+
+    harness.stream.applyConnectionSnapshot({
+      type: 'connection_ready',
+      active_runs: [
+        {
+          run_id: 'run-system',
+          agent_id: DISPLAYED_AGENT_ID,
+          session_id: DISPLAYED_SESSION_ID,
+          status: 'running',
+          sse_url: '/api/runs/run-system/events',
+          contributes_to_agent_activity: false,
+        },
+      ],
+    });
+
+    const sessionState = ensureSessionState(
+      chatState,
+      DISPLAYED_AGENT_ID,
+      DISPLAYED_SESSION_ID,
+    );
+    expect(subscribeRunEvents).toHaveBeenCalledOnce();
+    expect(sessionState.status).toBe(CHAT_STATUS_RUNNING);
+    expect(sessionState.currentRun?.contributesToAgentActivity).toBe(false);
+    expect(agentActivityStatus(chatState, DISPLAYED_AGENT_ID)).toBe('idle');
+    expect(harness.subAgentRunStatuses).toEqual({});
+  });
+
   it('records sub-agent run/session running entries without opening any SSE stream when active runs are in other sessions only', () => {
     const subscribeRunEvents = vi.fn(() => ({ close: vi.fn() }));
     const harness = makeStreamHarness({
@@ -318,6 +353,52 @@ describe('createChatRunStream().applyConnectionSnapshot()', () => {
       DISPLAYED_SESSION_ID,
     );
     expect(sessionState.error).toBe('Provider request failed');
+  });
+
+  it('keeps excluded WebSocket lifecycle events out of Agent activity', () => {
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: DISPLAYED_AGENT_ID,
+      displayedSessionId: DISPLAYED_SESSION_ID,
+    });
+    const basePayload = {
+      run_id: 'run-system',
+      agent_id: DISPLAYED_AGENT_ID,
+      session_id: DISPLAYED_SESSION_ID,
+      contributes_to_agent_activity: false,
+    };
+
+    harness.stream.handleServerEvents({
+      type: 'run_started',
+      payload: {
+        ...basePayload,
+        run_event_type: 'run_started',
+        run_event_sequence: 1,
+        output: { status: 'running' },
+      },
+    });
+
+    const sessionState = ensureSessionState(
+      chatState,
+      DISPLAYED_AGENT_ID,
+      DISPLAYED_SESSION_ID,
+    );
+    expect(sessionState.currentRun?.contributesToAgentActivity).toBe(false);
+    expect(agentActivityStatus(chatState, DISPLAYED_AGENT_ID)).toBe('idle');
+
+    harness.stream.handleServerEvents({
+      type: 'run_completed',
+      payload: {
+        ...basePayload,
+        run_event_type: 'run_completed',
+        run_event_sequence: 2,
+        status: 'completed',
+      },
+    });
+
+    expect(sessionState.hasUnreadCompletion).toBe(false);
+    expect(agentActivityStatus(chatState, DISPLAYED_AGENT_ID)).toBe('idle');
+    expect(harness.subAgentRunStatuses).toEqual({});
   });
 });
 

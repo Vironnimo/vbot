@@ -117,6 +117,21 @@ def test_server_event_keeps_project_id_none_for_identity_run() -> None:
     assert summary["payload"]["project_id"] is None
 
 
+def test_server_event_forwards_agent_activity_exclusion() -> None:
+    event = RunEvent(
+        sequence=1,
+        run_id="run-system",
+        agent_id="builder",
+        session_id="sess-system",
+        contributes_to_agent_activity=False,
+        type=RUN_STARTED_EVENT,
+    )
+
+    summary = _server_event_from_run_event(event)
+
+    assert summary["payload"]["contributes_to_agent_activity"] is False
+
+
 def test_server_event_forwards_session_usage_on_terminal_events() -> None:
     """Terminal events carry the end-of-run session usage totals so clients can
     refresh their session-level token/cache display without re-fetching
@@ -282,6 +297,31 @@ async def test_terminal_run_event_invalidates_debug_traces_and_sessions() -> Non
 
     await _publish_run_events(event_bus, run)
 
+    assert [event["payload"] for event in event_bus.events[-2:]] == [
+        {"kind": "debug_traces"},
+        {"kind": "sessions", "scope": {"agent_id": "agent-1"}},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_excluded_run_still_invalidates_debug_traces_and_sessions() -> None:
+    event_bus = ServerEventBus()
+    run = Run(
+        run_id="run-system",
+        agent_id="agent-1",
+        session_id="session-1",
+        contributes_to_agent_activity=False,
+    )
+    run.emit(RUN_STARTED_EVENT, {"status": "running"})
+    run.emit(RUN_COMPLETED_EVENT, {"status": "completed"})
+
+    await _publish_run_events(event_bus, run)
+
+    lifecycle_events = [event for event in event_bus.events if event["type"].startswith("run_")]
+    assert lifecycle_events
+    assert all(
+        event["payload"]["contributes_to_agent_activity"] is False for event in lifecycle_events
+    )
     assert [event["payload"] for event in event_bus.events[-2:]] == [
         {"kind": "debug_traces"},
         {"kind": "sessions", "scope": {"agent_id": "agent-1"}},

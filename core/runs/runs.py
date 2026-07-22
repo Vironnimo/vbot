@@ -54,6 +54,7 @@ RUN_COMPLETED_EVENT = "run_completed"
 RUN_FAILED_EVENT = "run_failed"
 RUN_CANCELLED_EVENT = "run_cancelled"
 TERMINAL_EVENT_TYPES = {RUN_COMPLETED_EVENT, RUN_FAILED_EVENT, RUN_CANCELLED_EVENT}
+RUN_AGENT_ACTIVITY_FIELD = "contributes_to_agent_activity"
 
 
 class RunStatus(StrEnum):
@@ -112,6 +113,7 @@ class QueuedRunItem:
     executor: RunExecutor
     internal: bool
     future: asyncio.Future[Run]
+    contributes_to_agent_activity: bool = field(default=True, repr=False)
     working_project_id: str | None = field(default=None, repr=False)
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     waiting_scope: str | None = field(default=None, repr=False)
@@ -139,12 +141,13 @@ class RunEvent:
     # identity run). ``agent_id`` stays bare; the project rides as a sibling
     # field so a consumer can rebuild the outside ``agent@projekt`` address.
     project_id: str | None = None
+    contributes_to_agent_activity: bool = True
     payload: JsonObject = field(default_factory=dict)
     timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def to_dict(self) -> JsonObject:
         """Return a JSON-compatible event dictionary."""
-        return {
+        data: JsonObject = {
             "sequence": self.sequence,
             "run_id": self.run_id,
             "agent_id": self.agent_id,
@@ -154,6 +157,9 @@ class RunEvent:
             "payload": dict(self.payload),
             "timestamp": self.timestamp,
         }
+        if not self.contributes_to_agent_activity:
+            data[RUN_AGENT_ACTIVITY_FIELD] = False
+        return data
 
 
 class _CancelledToolCallSentinel:
@@ -174,6 +180,7 @@ class Run:
         session_id: str,
         project_id: str | None = None,
         working_project_id: str | None = None,
+        contributes_to_agent_activity: bool = True,
         event_retention_limit: int = DEFAULT_RUN_EVENT_RETENTION_LIMIT,
         subscriber_queue_limit: int = DEFAULT_RUN_SUBSCRIBER_QUEUE_LIMIT,
     ) -> None:
@@ -187,6 +194,9 @@ class Run:
         # Internal working context. This never participates in Session identity,
         # public addressing, events, or queue keys.
         self.working_project_id = working_project_id
+        # Accessors may exclude system work from Agent/Session status while the
+        # Run remains fully executable, observable, and persisted.
+        self.contributes_to_agent_activity = contributes_to_agent_activity
         self.status = RunStatus.RUNNING
         self.created_at = datetime.now(UTC).isoformat()
         self.updated_at = self.created_at
@@ -315,6 +325,7 @@ class Run:
             agent_id=self.agent_id,
             session_id=self.session_id,
             project_id=self.project_id,
+            contributes_to_agent_activity=self.contributes_to_agent_activity,
             type=event_type,
             payload=dict(payload or {}),
         )
@@ -588,6 +599,7 @@ class ChatRunManager:
         executor: RunExecutor,
         project_id: str | None,
         working_project_id: str | None = None,
+        contributes_to_agent_activity: bool = True,
     ) -> Run:
         """Start one run if the session has no active run.
 
@@ -605,6 +617,7 @@ class ChatRunManager:
                 session_key=session_key,
                 executor=executor,
                 working_project_id=working_project_id,
+                contributes_to_agent_activity=contributes_to_agent_activity,
             )
 
     async def enqueue(
@@ -617,6 +630,7 @@ class ChatRunManager:
         internal: bool = False,
         project_id: str | None,
         working_project_id: str | None = None,
+        contributes_to_agent_activity: bool = True,
         waiting_work_admission: WaitingWorkAdmission | None = None,
     ) -> QueuedRunItem:
         """Start immediately when idle or append one item to the session queue."""
@@ -628,6 +642,7 @@ class ChatRunManager:
             executor=executor,
             internal=internal,
             future=future,
+            contributes_to_agent_activity=contributes_to_agent_activity,
             working_project_id=working_project_id,
         )
 
@@ -659,6 +674,7 @@ class ChatRunManager:
                     executor=item.executor,
                     working_project_id=item.working_project_id,
                     queue_item_id=item.item_id,
+                    contributes_to_agent_activity=item.contributes_to_agent_activity,
                 )
                 item.future.set_result(run)
                 return item
@@ -1005,6 +1021,7 @@ class ChatRunManager:
                     executor=item.executor,
                     queue_item_id=item.item_id,
                     working_project_id=item.working_project_id,
+                    contributes_to_agent_activity=item.contributes_to_agent_activity,
                 )
                 item.future.set_result(run)
                 return
@@ -1018,6 +1035,7 @@ class ChatRunManager:
         executor: RunExecutor,
         queue_item_id: str | None = None,
         working_project_id: str | None = None,
+        contributes_to_agent_activity: bool = True,
     ) -> Run:
         # The key is the single source of the run's identity: the project anchor,
         # agent, and session all come from it, so a drained queue item can never
@@ -1029,6 +1047,7 @@ class ChatRunManager:
             session_id=session_id,
             project_id=project_id,
             working_project_id=working_project_id,
+            contributes_to_agent_activity=contributes_to_agent_activity,
             event_retention_limit=self._run_event_retention_limit,
         )
         run._started_from_queue_item_id = queue_item_id  # noqa: SLF001 - run carries its own start origin.

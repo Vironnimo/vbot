@@ -27,7 +27,7 @@ from core.model_tasks import (
     SpeechExecutionError,
     SpeechUnsupportedTargetError,
 )
-from core.runs import ChatRunManager, RunNotFoundError, RunStatus
+from core.runs import RUN_AGENT_ACTIVITY_FIELD, ChatRunManager, RunNotFoundError, RunStatus
 from core.settings import SettingsValidationError, load_runtime_settings_json
 from core.utils.config import Config
 from core.utils.log_viewer import LogViewer
@@ -808,18 +808,19 @@ def _active_runs_snapshot(state: Any) -> list[JsonObject]:
     for run in active_runs():
         if run.status != RunStatus.RUNNING:
             continue
-        snapshot.append(
-            {
-                "run_id": run.id,
-                "agent_id": run.agent_id,
-                # Bare ``agent_id`` plus project so a reconnecting client can
-                # rebuild the address-keyed session and re-attach the run.
-                "project_id": run.project_id,
-                "session_id": run.session_id,
-                "status": RunStatus.RUNNING.value,
-                "sse_url": f"/api/runs/{run.id}/events",
-            }
-        )
+        item: JsonObject = {
+            "run_id": run.id,
+            "agent_id": run.agent_id,
+            # Bare ``agent_id`` plus project so a reconnecting client can
+            # rebuild the address-keyed session and re-attach the run.
+            "project_id": run.project_id,
+            "session_id": run.session_id,
+            "status": RunStatus.RUNNING.value,
+            "sse_url": f"/api/runs/{run.id}/events",
+        }
+        if not getattr(run, "contributes_to_agent_activity", True):
+            item[RUN_AGENT_ACTIVITY_FIELD] = False
+        snapshot.append(item)
     return snapshot
 
 

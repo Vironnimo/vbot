@@ -197,6 +197,38 @@ async def test_enqueue_when_session_is_busy_queues_and_drains_after_completion()
     assert await queued_run.wait() == "queued"
 
 
+async def test_queued_run_keeps_agent_activity_projection_policy_when_drained() -> None:
+    manager = ChatRunManager()
+    active_release = asyncio.Event()
+
+    async def active_execute(_run: Run) -> str:
+        await active_release.wait()
+        return "active"
+
+    async def queued_execute(_run: Run) -> str:
+        return "queued"
+
+    active_run = await manager.start(
+        agent_id="coder", session_id="session-one", executor=active_execute, project_id=None
+    )
+    item = await manager.enqueue(
+        agent_id="coder",
+        session_id="session-one",
+        executor=queued_execute,
+        project_id=None,
+        contributes_to_agent_activity=False,
+    )
+
+    assert item.contributes_to_agent_activity is False
+    active_release.set()
+    assert await active_run.wait() == "active"
+
+    queued_run = await asyncio.wait_for(item.future, timeout=1)
+    assert await queued_run.wait() == "queued"
+    assert queued_run.contributes_to_agent_activity is False
+    assert all(event.contributes_to_agent_activity is False for event in queued_run.events)
+
+
 async def test_all_queued_returns_fresh_cross_session_snapshot_in_fifo_order() -> None:
     manager = ChatRunManager()
     release = asyncio.Event()

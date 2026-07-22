@@ -5,6 +5,7 @@ from __future__ import annotations
 from .runs_test_support import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     REASONING_DELTA_EVENT,
+    RUN_AGENT_ACTIVITY_FIELD,
     RUN_STARTED_EVENT,
     TOOL_CALL_DELTA_EVENT,
     Any,
@@ -36,6 +37,32 @@ async def test_replays_events_to_late_subscriber() -> None:
 
     assert [event.type for event in events] == ["run_started", "visible", "run_completed"]
     assert events[1].payload == {"content": "hello"}
+
+
+async def test_run_activity_projection_policy_is_carried_by_every_event() -> None:
+    manager = ChatRunManager()
+
+    async def execute(run: Run) -> str:
+        run.emit("visible", {"content": "system work"})
+        return "done"
+
+    run = await manager.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=execute,
+        project_id=None,
+        contributes_to_agent_activity=False,
+    )
+    assert await run.wait() == "done"
+
+    assert run.contributes_to_agent_activity is False
+    assert [event.type for event in run.events] == [
+        "run_started",
+        "visible",
+        "run_completed",
+    ]
+    assert all(event.contributes_to_agent_activity is False for event in run.events)
+    assert all(event.to_dict()[RUN_AGENT_ACTIVITY_FIELD] is False for event in run.events)
 
 
 async def test_allows_parallel_runs_for_different_sessions() -> None:
