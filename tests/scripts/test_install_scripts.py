@@ -195,6 +195,60 @@ def test_linux_install_manifest_records_selected_environment_interpreter() -> No
 
 
 @pytest.mark.parametrize("script_name", ["setup.sh", "setup.ps1"])
+def test_fresh_server_install_seeds_global_agent_defaults(script_name: str) -> None:
+    script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+
+    if script_name.endswith(".sh"):
+        assert 'DEFAULT_AGENT_TEMPERATURE="0.1"' in script
+        assert 'DEFAULT_AGENT_THINKING_EFFORT="high"' in script
+        creation = script[
+            script.index('if [ ! -f "$SETTINGS_PATH" ]') : script.index(
+                'elif [ "$PORT_PROVIDED" -eq 1 ]'
+            )
+        ]
+        assert '"defaults"' in creation
+        assert '"temperature": %s' in creation
+        assert '"thinking_effort": "%s"' in creation
+        assert '"$DEFAULT_AGENT_TEMPERATURE"' in creation
+        assert '"$DEFAULT_AGENT_THINKING_EFFORT"' in creation
+    else:
+        assert "$DefaultAgentTemperature = 0.1" in script
+        assert '$DefaultAgentThinkingEffort = "high"' in script
+        creation = script[
+            script.index("if (-not (Test-Path $settingsPath))") : script.index(
+                "elseif ($SyncPortIntoSettings)"
+            )
+        ]
+        assert "defaults = [ordered]@{" in creation
+        assert "temperature = $DefaultAgentTemperature" in creation
+        assert "thinking_effort = $DefaultAgentThinkingEffort" in creation
+
+
+@pytest.mark.parametrize("script_name", ["setup.sh", "setup.ps1"])
+def test_existing_settings_do_not_receive_fresh_install_agent_defaults(
+    script_name: str,
+) -> None:
+    script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+
+    if script_name.endswith(".sh"):
+        existing_settings_path = script[
+            script.index('elif [ "$PORT_PROVIDED" -eq 1 ]') : script.index(
+                'ENV_PATH="${DATA_DIR}/.env"'
+            )
+        ]
+        assert "DEFAULT_AGENT_TEMPERATURE" not in existing_settings_path
+        assert "DEFAULT_AGENT_THINKING_EFFORT" not in existing_settings_path
+    else:
+        existing_settings_path = script[
+            script.index("elseif ($SyncPortIntoSettings)") : script.index(
+                '$envPath = Join-Path $ResolvedDataDir ".env"'
+            )
+        ]
+        assert "DefaultAgentTemperature" not in existing_settings_path
+        assert "DefaultAgentThinkingEffort" not in existing_settings_path
+
+
+@pytest.mark.parametrize("script_name", ["setup.sh", "setup.ps1"])
 def test_server_install_manifest_records_lifecycle_target(script_name: str) -> None:
     script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
 

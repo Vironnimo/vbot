@@ -23,6 +23,8 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $WebUiDir = Join-Path $ProjectRoot "webui"
 $RecoverableProblemExitCode = 2
+$DefaultAgentTemperature = 0.1
+$DefaultAgentThinkingEffort = "high"
 
 if ($Desktop -and $DesktopClient) {
     throw "-Desktop and -DesktopClient are mutually exclusive: -Desktop adds the accessor to a full server install, -DesktopClient installs the accessor with no server stack."
@@ -286,9 +288,17 @@ function Initialize-DataDirectory {
     $settingsPath = Join-Path $ResolvedDataDir "settings.json"
     Assert-ValidSettingsJson $settingsPath
     if (-not (Test-Path $settingsPath)) {
-        $settings = [ordered]@{ server_port = $ResolvedPort } | ConvertTo-Json
+        $settings = [ordered]@{
+            server_port = $ResolvedPort
+            defaults = [ordered]@{
+                agent = [ordered]@{
+                    temperature = $DefaultAgentTemperature
+                    thinking_effort = $DefaultAgentThinkingEffort
+                }
+            }
+        } | ConvertTo-Json -Depth 4
         Write-Utf8NoBomFile -Path $settingsPath -Content ($settings + [Environment]::NewLine)
-        Write-Host "Created settings.json with server_port $ResolvedPort."
+        Write-Host "Created settings.json with server_port $ResolvedPort and fresh-install Agent defaults."
     }
     elseif ($SyncPortIntoSettings) {
         $updatedKey = Invoke-Capture $Python @("-c", $SyncSettingsPortScript, $settingsPath, "$ResolvedPort")
