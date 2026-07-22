@@ -705,7 +705,11 @@ class Runtime:
         self._start_cron_service()
         register_cron_tool(self._tools, self._cron_service)
         register_bash_tool(self._tools, self._process_manager, self._trigger_service)
-        self._subagent_coordinator = SubAgentCoordinator(self, self._trigger_service)
+        self._subagent_coordinator = SubAgentCoordinator(
+            self,
+            self._trigger_service,
+            sessions=self._chat_sessions,
+        )
         register_subagent_tools(
             self._tools,
             self._subagent_coordinator,

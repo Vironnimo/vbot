@@ -36,6 +36,7 @@ describe('sessionListView helpers', () => {
       {
         id: 'plain-session',
         last_active_at: '2026-05-15T11:00:00+00:00',
+        latest_completion_run_id: 'run-one',
         has_unread_completion: true,
         unread_run_id: 'run-one',
         unread_run_status: 'completed',
@@ -53,6 +54,7 @@ describe('sessionListView helpers', () => {
     expect(next.sessions[0]).toMatchObject({
       display_name: 'plain-session',
       is_channel_session: false,
+      latest_completion_run_id: 'run-one',
       has_unread_completion: true,
       unread_run_id: 'run-one',
       unread_run_status: 'completed',

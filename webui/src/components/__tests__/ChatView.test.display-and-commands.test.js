@@ -208,6 +208,71 @@ describe('ChatView', () => {
     expect(selectedBetaTab.querySelector('.tab-indicator--unread')).toBeNull();
   });
 
+  it('does not resurrect a read result when retained events replay after remount', async () => {
+    const beta = createAgent({
+      id: 'beta',
+      name: 'Beta',
+      current_session_id: 'session-beta',
+    });
+    rpcMock.mockImplementation(
+      createChatRpcMock({ agents: [createAgent(), beta] }),
+    );
+    listSessionsMock.mockImplementation(async (agentId) => ({
+      sessions:
+        agentId === 'beta'
+          ? [
+              {
+                id: 'session-beta',
+                last_active_at: '2026-07-20T10:00:00+00:00',
+                latest_completion_run_id: 'run-beta',
+                has_unread_completion: false,
+                unread_run_id: null,
+                unread_run_status: null,
+                unread_run_at: null,
+              },
+            ]
+          : [],
+    }));
+
+    chatViewTest.mount({
+      target: document.body,
+      props: {
+        sharedAgents: [createAgent(), beta],
+        runServerEvents: [
+          {
+            type: 'run_completed',
+            payload: {
+              run_id: 'run-beta',
+              agent_id: 'beta',
+              project_id: null,
+              session_id: 'session-beta',
+              run_event_type: 'run_completed',
+              run_event_sequence: 2,
+              run_event_timestamp: '2026-07-20T10:00:00+00:00',
+              status: 'completed',
+            },
+          },
+        ],
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        testChatStateRefs[0]?.sessions['beta::session-beta']
+          ?.latestCompletionRunId === 'run-beta',
+      100,
+    );
+    flushSync();
+
+    expect(
+      testChatStateRefs[0].sessions['beta::session-beta'].hasUnreadCompletion,
+    ).toBe(false);
+    expect(
+      findButtonByText('Beta')?.querySelector('.tab-indicator--unread'),
+    ).toBeNull();
+  });
+
   it('keeps a displayed terminal result idle before read acknowledgement returns', async () => {
     let resolveMarkRead;
     const defaultRpc = createChatRpcMock();
@@ -218,6 +283,7 @@ describe('ChatView', () => {
             resolve({
               agent_id: params.agent_id,
               session_id: params.session_id,
+              latest_completion_run_id: params.run_id,
               has_unread_completion: false,
               unread_run_id: null,
               unread_run_status: null,

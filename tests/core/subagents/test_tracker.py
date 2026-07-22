@@ -6,6 +6,7 @@ import asyncio
 
 import pytest
 
+from core.chat import ChatSessionManager
 from core.subagents.subagents import SubAgentBatchTracker
 from core.subagents.tracker import _entry_result_text, _entry_status, _SubAgentEntry
 
@@ -16,6 +17,8 @@ class RecordingTriggerService:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, str | None, bool, str | None]] = []
         self.error: BaseException | None = None
+        self.defer_input_persisted = False
+        self.input_persisted_hooks: list[object] = []
 
     async def trigger_run(
         self,
@@ -25,10 +28,15 @@ class RecordingTriggerService:
         *,
         internal: bool = False,
         project_id: str | None = None,
+        input_persisted_hook: object | None = None,
     ) -> object:
         if self.error is not None:
             raise self.error
         self.calls.append((agent_id, message, session_id, internal, project_id))
+        if callable(input_persisted_hook):
+            self.input_persisted_hooks.append(input_persisted_hook)
+            if not self.defer_input_persisted:
+                input_persisted_hook()
         return object()
 
 
@@ -169,6 +177,58 @@ async def test_batch_is_pruned_after_completion_note_for_unfetched_entries() -> 
     assert "first output" in trigger_service.calls[0][1]
     assert "second output" in trigger_service.calls[0][1]
     assert parent_key not in tracker._batches  # noqa: SLF001 - leak regression check.
+
+
+async def test_background_result_is_read_only_after_parent_note_persists(tmp_path) -> None:
+    trigger_service = RecordingTriggerService()
+    trigger_service.defer_input_persisted = True
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("worker", session_id="session-one")
+    sessions.record_terminal_run(
+        "worker",
+        "session-one",
+        "run-one",
+        "completed",
+        "2026-07-22T10:00:00+00:00",
+    )
+    tracker = SubAgentBatchTracker(trigger_service, sessions=sessions)
+    parent_key = ("parent", "parent-session", "parent-run")
+    tracker.register(parent_key, "worker", "session-one", "run-one")
+
+    tracker.on_sub_agent_complete(parent_key, "run-one", {"result": "done"})
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert sessions.list_with_metadata("worker")[0]["has_unread_completion"] is True
+    assert len(trigger_service.input_persisted_hooks) == 1
+    input_persisted_hook = trigger_service.input_persisted_hooks[0]
+    assert callable(input_persisted_hook)
+    input_persisted_hook()
+
+    assert sessions.list_with_metadata("worker")[0]["has_unread_completion"] is False
+
+
+async def test_background_delivery_failure_leaves_child_unread(tmp_path) -> None:
+    trigger_service = RecordingTriggerService()
+    trigger_service.error = RuntimeError("parent unavailable")
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("worker", session_id="session-one")
+    sessions.record_terminal_run(
+        "worker",
+        "session-one",
+        "run-one",
+        "completed",
+        "2026-07-22T10:00:00+00:00",
+    )
+    tracker = SubAgentBatchTracker(trigger_service, sessions=sessions)
+    parent_key = ("parent", "parent-session", "parent-run")
+    tracker.register(parent_key, "worker", "session-one", "run-one")
+
+    tracker.on_sub_agent_complete(parent_key, "run-one", {"result": "done"})
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert sessions.list_with_metadata("worker")[0]["has_unread_completion"] is True
 
 
 async def test_completion_trigger_carries_parent_project_id() -> None:
