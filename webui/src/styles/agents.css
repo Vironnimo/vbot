@@ -193,6 +193,7 @@
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
+  background: var(--surface);
 }
 
 .agents-view .agents-view__model-group,
