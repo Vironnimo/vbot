@@ -78,6 +78,7 @@ def test_vector_store_pins_provider_model_and_dimension_in_header(tmp_path: Path
         dimension=4,
         space_fingerprint="space-a",
         index_policy="passage-v1",
+        response_model_id="served/model-a-202607",
     )
     _upsert_one(store, header=header, record=_record("sess-1"), vector=[0.1, 0.2, 0.3, 0.4])
 
@@ -88,6 +89,7 @@ def test_vector_store_pins_provider_model_and_dimension_in_header(tmp_path: Path
     assert stored.dimension == 4
     assert stored.space_fingerprint == "space-a"
     assert stored.index_policy == "passage-v1"
+    assert stored.response_model_id == "served/model-a-202607"
 
 
 def test_vector_store_creates_vec0_table_lazily_on_first_insert(tmp_path: Path) -> None:
@@ -147,6 +149,27 @@ def test_vector_store_drops_and_rebuilds_on_provider_change(tmp_path: Path) -> N
     assert stored is not None
     assert stored.provider_id == "openai"
     assert set(store.list_indexed_sessions("coder")) == {"s2"}
+
+
+def test_vector_store_drops_and_rebuilds_on_response_model_change(tmp_path: Path) -> None:
+    store = VectorStore(tmp_path)
+    header_a = VectorHeader(
+        provider_id="openrouter",
+        model_id="router/alias",
+        dimension=4,
+        response_model_id="served/model-a",
+    )
+    header_b = VectorHeader(
+        provider_id="openrouter",
+        model_id="router/alias",
+        dimension=4,
+        response_model_id="served/model-b",
+    )
+    _upsert_one(store, header=header_a, record=_record("a"), vector=[0.1, 0.2, 0.3, 0.4])
+    _upsert_one(store, header=header_b, record=_record("b"), vector=[0.4, 0.3, 0.2, 0.1])
+
+    assert set(store.list_indexed_sessions("coder")) == {"b"}
+    assert store.read_header() == header_b
 
 
 def test_vector_store_rebuilds_on_schema_version_mismatch(tmp_path: Path) -> None:

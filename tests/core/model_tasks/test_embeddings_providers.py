@@ -107,6 +107,17 @@ def test_build_payload_keeps_input_as_array_even_for_single_text() -> None:
     assert payload["input"] == ["only"]
 
 
+def test_build_payload_sets_system_owned_input_type() -> None:
+    payload = _build_embeddings_payload(
+        "google/gemini-embedding-2",
+        ["query"],
+        {},
+        input_type="search_query",
+    )
+
+    assert payload["input_type"] == "search_query"
+
+
 # ---------------------------------------------------------------------------
 # Response parsing — vectors are returned in input order
 # ---------------------------------------------------------------------------
@@ -125,9 +136,12 @@ def test_parse_response_returns_vectors_in_input_order() -> None:
         "usage": {"prompt_tokens": 2, "total_tokens": 2},
     }
 
-    vectors = _parse_embeddings_response(payload, expected_count=2)
+    response = _parse_embeddings_response(payload, expected_count=2)
 
-    assert vectors == [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+    assert response.vectors == ([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    assert response.model_id == "google/gemini-embedding-2"
+    assert response.usage.input_tokens == 2
+    assert response.usage.total_tokens == 2
 
 
 def test_parse_response_sorts_by_index_when_out_of_order() -> None:
@@ -147,9 +161,9 @@ def test_parse_response_sorts_by_index_when_out_of_order() -> None:
         ],
     }
 
-    vectors = _parse_embeddings_response(payload, expected_count=2)
+    response = _parse_embeddings_response(payload, expected_count=2)
 
-    assert vectors == [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+    assert response.vectors == ([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
 
 
 def test_parse_response_coerces_int_values_to_floats() -> None:
@@ -163,10 +177,10 @@ def test_parse_response_coerces_int_values_to_floats() -> None:
 
     payload = {"data": [{"index": 0, "embedding": [1, 2, 3]}]}
 
-    vectors = _parse_embeddings_response(payload, expected_count=1)
+    response = _parse_embeddings_response(payload, expected_count=1)
 
-    assert vectors == [[1.0, 2.0, 3.0]]
-    assert all(isinstance(component, float) for component in vectors[0])
+    assert response.vectors == ([1.0, 2.0, 3.0],)
+    assert all(isinstance(component, float) for component in response.vectors[0])
 
 
 def test_parse_response_rejects_booleans_inside_embedding() -> None:
@@ -338,10 +352,10 @@ def test_parse_response_accepts_all_entries_without_indices_in_wire_order() -> N
         ]
     }
 
-    assert _parse_embeddings_response(payload, expected_count=2) == [
+    assert _parse_embeddings_response(payload, expected_count=2).vectors == (
         [0.1, 0.2],
         [0.3, 0.4],
-    ]
+    )
 
 
 def test_parse_response_rejects_mixed_index_presence() -> None:
@@ -373,6 +387,52 @@ def test_parse_response_rejects_non_finite_vector_values(value: float) -> None:
     with pytest.raises(ProviderError, match="non-finite"):
         _parse_embeddings_response(
             {"data": [{"index": 0, "embedding": [value]}]},
+            expected_count=1,
+        )
+
+
+def test_parse_response_normalizes_cost_and_token_usage() -> None:
+    response = _parse_embeddings_response(
+        {
+            "data": [{"index": 0, "embedding": [0.1]}],
+            "model": "served/model-v2",
+            "usage": {
+                "prompt_tokens": 7,
+                "total_tokens": 7,
+                "cost": "0.00014",
+            },
+        },
+        expected_count=1,
+    )
+
+    assert response.model_id == "served/model-v2"
+    assert response.usage.requests == 1
+    assert response.usage.token_reports == 1
+    assert response.usage.cost_reports == 1
+    assert response.usage.input_tokens == 7
+    assert response.usage.total_tokens == 7
+    assert response.usage.cost == pytest.approx(0.00014)
+
+
+def test_parse_response_marks_missing_usage_as_unreported() -> None:
+    response = _parse_embeddings_response(
+        {"data": [{"index": 0, "embedding": [0.1]}]},
+        expected_count=1,
+    )
+
+    assert response.usage.requests == 1
+    assert response.usage.token_reports == 0
+    assert response.usage.cost_reports == 0
+
+
+@pytest.mark.parametrize("model", ["", 123, False])
+def test_parse_response_rejects_invalid_advertised_model(model: object) -> None:
+    with pytest.raises(ProviderError, match="model must be a non-empty string"):
+        _parse_embeddings_response(
+            {
+                "data": [{"index": 0, "embedding": [0.1]}],
+                "model": model,
+            },
             expected_count=1,
         )
 
@@ -412,7 +472,7 @@ async def test_openrouter_embed_posts_to_api_v1_embeddings() -> None:
     )
     client = _openrouter_embedding_client("google/gemini-embedding-2")
 
-    vectors = await client.embed(["alpha", "beta"], options={})
+    response = await client.embed(["alpha", "beta"], options={})
 
     payload = json.loads(route.calls[0].request.content)
     assert payload == {
@@ -421,7 +481,11 @@ async def test_openrouter_embed_posts_to_api_v1_embeddings() -> None:
         "encoding_format": "float",
     }
     assert route.calls[0].request.headers["authorization"] == "Bearer sk-test"
-    assert vectors == [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+    assert response.vectors == ([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
+    assert response.model_id == "google/gemini-embedding-2"
+    assert response.usage.requests == 1
+    assert response.usage.token_reports == 1
+    assert response.usage.input_tokens == 4
 
 
 @pytest.mark.asyncio
@@ -449,6 +513,49 @@ async def test_openrouter_embed_forwards_dimensions_when_set() -> None:
     assert isinstance(payload["dimensions"], int)
 
 
+@pytest.mark.parametrize(
+    ("purpose", "input_type"),
+    [("query", "search_query"), ("document", "search_document")],
+)
+@pytest.mark.asyncio
+@respx.mock
+async def test_openrouter_embed_maps_recall_purpose_to_input_type(
+    purpose: str,
+    input_type: str,
+) -> None:
+    route = respx.post("https://openrouter.ai/api/v1/embeddings").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [{"index": 0, "embedding": [0.1]}]},
+        )
+    )
+    client = _openrouter_embedding_client("google/gemini-embedding-2")
+
+    await client.embed(["alpha"], options={}, purpose=purpose)
+
+    assert json.loads(route.calls[0].request.content)["input_type"] == input_type
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_non_openrouter_embed_omits_unverified_input_type() -> None:
+    route = respx.post("https://example.test/v1/embeddings").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [{"index": 0, "embedding": [0.1]}]},
+        )
+    )
+    client = _embedding_client(
+        provider_id="generic",
+        base_url="https://example.test/v1",
+        model_id="vendor/embed",
+    )
+
+    await client.embed(["alpha"], options={}, purpose="query")
+
+    assert "input_type" not in json.loads(route.calls[0].request.content)
+
+
 @pytest.mark.asyncio
 @respx.mock
 async def test_openrouter_embed_retries_529_overload() -> None:
@@ -463,9 +570,9 @@ async def test_openrouter_embed_retries_529_overload() -> None:
     client = _openrouter_embedding_client("google/gemini-embedding-2")
 
     with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
-        vectors = await client.embed(["alpha"], options={})
+        response = await client.embed(["alpha"], options={})
 
-    assert vectors == [[0.1, 0.2]]
+    assert response.vectors == ([0.1, 0.2],)
     assert route.call_count == 2
 
 
@@ -509,9 +616,9 @@ async def test_openrouter_embed_reorders_vectors_by_index() -> None:
     )
     client = _openrouter_embedding_client("google/gemini-embedding-2")
 
-    vectors = await client.embed(["alpha", "beta"], options={})
+    response = await client.embed(["alpha", "beta"], options={})
 
-    assert vectors == [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+    assert response.vectors == ([0.1, 0.2, 0.3], [0.4, 0.5, 0.6])
 
 
 @pytest.mark.asyncio
@@ -572,11 +679,25 @@ def test_embeddings_endpoint_is_api_v1_embeddings() -> None:
 def _openrouter_embedding_client(model_id: str) -> ProviderEmbeddingClient:
     """Build a ``ProviderEmbeddingClient`` wired to a mockable OpenRouter endpoint."""
 
-    provider = ProviderConfig(
-        id="openrouter",
-        name="OpenRouter",
-        adapter="openrouter",
+    return _embedding_client(
+        provider_id="openrouter",
         base_url="https://openrouter.ai/api/v1",
+        model_id=model_id,
+    )
+
+
+def _embedding_client(
+    *,
+    provider_id: str,
+    base_url: str,
+    model_id: str,
+) -> ProviderEmbeddingClient:
+
+    provider = ProviderConfig(
+        id=provider_id,
+        name=provider_id,
+        adapter=provider_id,
+        base_url=base_url,
         connections=[],
         extra_headers={"X-Title": "vBot"},
     )
@@ -612,7 +733,10 @@ def test_build_payload_merges_non_reserved_extra_options() -> None:
     assert "extra_options" not in payload
 
 
-@pytest.mark.parametrize("field", ["model", "input", "encoding_format", "dimensions"])
+@pytest.mark.parametrize(
+    "field",
+    ["model", "input", "encoding_format", "dimensions", "input_type"],
+)
 def test_build_payload_rejects_reserved_extra_option(field: str) -> None:
     with pytest.raises(ProviderError, match="cannot override reserved fields"):
         _build_embeddings_payload(

@@ -45,7 +45,9 @@ _SQLITE_BUSY_TIMEOUT_MS = 1000
 #      inside KNN instead of starving an eligible scope after global retrieval.
 # v6 → a singleton header pins the complete embedding-space fingerprint and
 #      index policy, preventing cross-connection/options/policy vector reuse.
-_SCHEMA_VERSION = 6
+# v7 → the header also pins the provider-reported model id, preventing a router
+#      alias or fallback from mixing vectors produced by different real models.
+_SCHEMA_VERSION = 7
 _VECTOR_TABLE_NAME = "session_vectors"
 _CHUNK_TABLE_NAME = "chunks"
 _HEADER_TABLE_NAME = "store_header"
@@ -84,6 +86,7 @@ class VectorHeader:
     dimension: int
     space_fingerprint: str = ""
     index_policy: str = ""
+    response_model_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -207,6 +210,7 @@ class VectorStore:
               singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
               provider_id TEXT NOT NULL,
               model_id TEXT NOT NULL,
+              response_model_id TEXT NOT NULL,
               space_fingerprint TEXT NOT NULL,
               index_policy TEXT NOT NULL,
               dimension INTEGER NOT NULL,
@@ -262,13 +266,14 @@ class VectorStore:
         connection.execute(
             f"""
             INSERT INTO {_HEADER_TABLE_NAME} (
-              singleton, provider_id, model_id, space_fingerprint,
-              index_policy, dimension, schema_version
-            ) VALUES (1, ?, ?, ?, ?, ?, ?)
+              singleton, provider_id, model_id, response_model_id,
+              space_fingerprint, index_policy, dimension, schema_version
+            ) VALUES (1, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 expected_header.provider_id,
                 expected_header.model_id,
+                expected_header.response_model_id,
                 expected_header.space_fingerprint,
                 expected_header.index_policy,
                 expected_header.dimension,
@@ -281,6 +286,7 @@ class VectorStore:
         return (
             stored.provider_id == expected.provider_id
             and stored.model_id == expected.model_id
+            and stored.response_model_id == expected.response_model_id
             and stored.space_fingerprint == expected.space_fingerprint
             and stored.index_policy == expected.index_policy
             and stored.dimension == expected.dimension
@@ -298,7 +304,8 @@ class VectorStore:
             return None
         row = connection.execute(
             f"""
-            SELECT provider_id, model_id, space_fingerprint, index_policy, dimension
+            SELECT provider_id, model_id, response_model_id,
+                   space_fingerprint, index_policy, dimension
             FROM {_HEADER_TABLE_NAME} WHERE singleton = 1
             """
         ).fetchone()
@@ -307,6 +314,7 @@ class VectorStore:
         return VectorHeader(
             provider_id=str(row["provider_id"]),
             model_id=str(row["model_id"]),
+            response_model_id=str(row["response_model_id"]),
             dimension=int(row["dimension"]),
             space_fingerprint=str(row["space_fingerprint"]),
             index_policy=str(row["index_policy"]),

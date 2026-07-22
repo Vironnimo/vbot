@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import dataclass
 from typing import Any, cast
 
 from core.model_tasks.options import (
@@ -34,6 +35,50 @@ JsonObject = dict[str, Any]
 EMBEDDINGS_ENDPOINT = "/embeddings"
 DEFAULT_EMBEDDING_TIMEOUT = 60.0
 _PAYLOAD_DETAIL_LIMIT = 500
+_OPENROUTER_PROVIDER_ID = "openrouter"
+_OPENROUTER_INPUT_TYPES = {
+    "query": "search_query",
+    "document": "search_document",
+}
+
+
+@dataclass(frozen=True)
+class EmbeddingUsage:
+    """Normalized usage reported by one or more embedding requests.
+
+    Report counters distinguish a real zero from unavailable telemetry. This
+    matters when Recall combines several provider calls after batching: summing
+    the known values is useful, but it must stay visible when one provider
+    response omitted token or cost data.
+    """
+
+    requests: int = 0
+    token_reports: int = 0
+    cost_reports: int = 0
+    input_tokens: int = 0
+    total_tokens: int = 0
+    cost: float = 0.0
+
+    def combined(self, other: EmbeddingUsage) -> EmbeddingUsage:
+        """Return the additive aggregate of two normalized usage records."""
+
+        return EmbeddingUsage(
+            requests=self.requests + other.requests,
+            token_reports=self.token_reports + other.token_reports,
+            cost_reports=self.cost_reports + other.cost_reports,
+            input_tokens=self.input_tokens + other.input_tokens,
+            total_tokens=self.total_tokens + other.total_tokens,
+            cost=math.fsum((self.cost, other.cost)),
+        )
+
+
+@dataclass(frozen=True)
+class ProviderEmbeddingResponse:
+    """Validated embedding vectors plus provider response metadata."""
+
+    vectors: tuple[list[float], ...]
+    model_id: str | None
+    usage: EmbeddingUsage
 
 
 class ProviderEmbeddingClient(ProviderTaskClient):
@@ -41,7 +86,13 @@ class ProviderEmbeddingClient(ProviderTaskClient):
 
     EXTRA_RETRYABLE_STATUS_CODES = frozenset({529})
 
-    async def embed(self, inputs: list[str], *, options: JsonObject) -> list[list[float]]:
+    async def embed(
+        self,
+        inputs: list[str],
+        *,
+        options: JsonObject,
+        purpose: str | None = None,
+    ) -> ProviderEmbeddingResponse:
         """Call the provider's ``/api/v1/embeddings`` endpoint.
 
         *inputs* is forwarded verbatim as the ``input`` array — the
@@ -53,7 +104,15 @@ class ProviderEmbeddingClient(ProviderTaskClient):
         fields.
         """
 
-        payload = _build_embeddings_payload(self._model_id, inputs, options)
+        input_type: str | None = None
+        if getattr(self._provider, "id", None) == _OPENROUTER_PROVIDER_ID:
+            input_type = _input_type_for_purpose(purpose)
+        payload = _build_embeddings_payload(
+            self._model_id,
+            inputs,
+            options,
+            input_type=input_type,
+        )
         return await self.post_and_parse(
             EMBEDDINGS_ENDPOINT,
             timeout=DEFAULT_EMBEDDING_TIMEOUT,
@@ -68,6 +127,8 @@ def _build_embeddings_payload(
     model_id: str,
     inputs: list[str],
     options: JsonObject,
+    *,
+    input_type: str | None = None,
 ) -> JsonObject:
     """Build the OpenAI/OpenRouter ``/api/v1/embeddings`` request payload.
 
@@ -94,10 +155,16 @@ def _build_embeddings_payload(
     if isinstance(dimensions, int) and not isinstance(dimensions, bool):
         payload["dimensions"] = dimensions
     merge_extra_options(payload, options)
+    if input_type is not None:
+        payload["input_type"] = input_type
     return payload
 
 
-def _parse_embeddings_response(payload: Any, *, expected_count: int) -> list[list[float]]:
+def _parse_embeddings_response(
+    payload: Any,
+    *,
+    expected_count: int,
+) -> ProviderEmbeddingResponse:
     """Normalize ``data[].embedding`` into vectors in input order.
 
     The OpenAI/OpenRouter response shape is
@@ -180,8 +247,81 @@ def _parse_embeddings_response(payload: Any, *, expected_count: int) -> list[lis
                 retryable=False,
             )
         indexed.sort(key=lambda pair: cast(int, pair[0]))
-    vectors = [vector for _, vector in indexed]
-    return vectors
+    vectors = tuple(vector for _, vector in indexed)
+    return ProviderEmbeddingResponse(
+        vectors=vectors,
+        model_id=_parse_response_model_id(payload),
+        usage=_parse_embedding_usage(payload.get("usage")),
+    )
+
+
+def _input_type_for_purpose(purpose: str | None) -> str | None:
+    if purpose is None:
+        return None
+    try:
+        return _OPENROUTER_INPUT_TYPES[purpose]
+    except KeyError as error:
+        raise ProviderError(f"Unsupported embedding purpose: {purpose}", retryable=False) from error
+
+
+def _parse_response_model_id(payload: JsonObject) -> str | None:
+    """Return the actual model id, rejecting an unusable advertised value."""
+
+    if "model" not in payload:
+        return None
+    model_id = payload.get("model")
+    if not isinstance(model_id, str) or not model_id.strip():
+        raise ProviderError(
+            "Embeddings response model must be a non-empty string",
+            retryable=False,
+        )
+    return model_id
+
+
+def _parse_embedding_usage(raw: Any) -> EmbeddingUsage:
+    """Normalize optional token and cost telemetry without failing vectors.
+
+    Usage is operational metadata rather than vector content. A compatible
+    provider that omits or malforms it therefore produces an explicitly
+    unreported request instead of making an otherwise valid embedding fail.
+    """
+
+    if not isinstance(raw, dict):
+        return EmbeddingUsage(requests=1)
+    input_tokens = _non_negative_int(raw.get("prompt_tokens"))
+    if input_tokens is None:
+        input_tokens = _non_negative_int(raw.get("input_tokens"))
+    total_tokens = _non_negative_int(raw.get("total_tokens"))
+    if total_tokens is None and input_tokens is not None:
+        total_tokens = input_tokens
+    cost = _non_negative_number(raw.get("cost"))
+    has_tokens = input_tokens is not None or total_tokens is not None
+    return EmbeddingUsage(
+        requests=1,
+        token_reports=int(has_tokens),
+        cost_reports=int(cost is not None),
+        input_tokens=input_tokens or 0,
+        total_tokens=total_tokens or 0,
+        cost=cost or 0.0,
+    )
+
+
+def _non_negative_int(value: Any) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
+
+
+def _non_negative_number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(normalized) or normalized < 0:
+        return None
+    return normalized
 
 
 def _describe_payload(payload: Any) -> str:
