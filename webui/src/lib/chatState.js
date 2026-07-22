@@ -796,7 +796,13 @@ export function agentActivityStatus(state, agentId, displayedSessionKey = '') {
   const sessions = Object.values(state?.sessions ?? {}).filter(
     (sessionState) => sessionState.agentId === agentId,
   );
-  if (sessions.some((sessionState) => isRunActive(sessionState))) {
+  if (
+    sessions.some(
+      (sessionState) =>
+        isRunActive(sessionState) &&
+        runContributesToAgentActivity(sessionState),
+    )
+  ) {
     return AGENT_ACTIVITY_RUNNING;
   }
   if (
@@ -954,6 +960,10 @@ export function startRun(sessionState, run) {
     runId: run.run_id,
     sseUrl: run.sse_url,
     status: run.status ?? CHAT_STATUS_RUNNING,
+    ...(run.contributes_to_agent_activity === false ||
+    run.contributesToAgentActivity === false
+      ? { contributesToAgentActivity: false }
+      : {}),
   };
   sessionState.status = CHAT_STATUS_RUNNING;
   sessionState.error = null;
@@ -1030,6 +1040,9 @@ function beginRunFromEvent(sessionState, event) {
     runId: event.run_id,
     sseUrl: currentSseUrl,
     status: CHAT_STATUS_RUNNING,
+    ...(event.contributes_to_agent_activity === false
+      ? { contributesToAgentActivity: false }
+      : {}),
   };
   sessionState.status = CHAT_STATUS_RUNNING;
   sessionState.error = null;
@@ -1061,6 +1074,8 @@ export function finishRun(sessionState, event) {
   const type = event?.type;
   const status = event?.payload?.status;
   const completedRunId = event?.run_id ?? '';
+  const contributesToAgentActivity =
+    event?.contributes_to_agent_activity !== false;
   if (sessionState.currentRun) {
     sessionState.currentRun.status = status ?? terminalStatus(type);
   }
@@ -1083,7 +1098,7 @@ export function finishRun(sessionState, event) {
     completedRunId &&
     sessionState.latestCompletionRunId === completedRunId &&
     !sessionState.hasUnreadCompletion;
-  if (!completionAlreadyRead) {
+  if (contributesToAgentActivity && !completionAlreadyRead) {
     sessionState.hasUnreadCompletion = true;
     sessionState.latestCompletionRunId = completedRunId;
     sessionState.unreadRunId = completedRunId;
@@ -1261,6 +1276,10 @@ export function isRunActive(sessionState) {
   return sessionState?.status === CHAT_STATUS_RUNNING;
 }
 
+function runContributesToAgentActivity(sessionState) {
+  return sessionState?.currentRun?.contributesToAgentActivity !== false;
+}
+
 // Reset a session's live Run state when history has confirmed the Run is no
 // longer active (e.g. the terminal event was missed, the SSE stream gave up,
 // the bus buffer rolled, or the server restarted). Leaving `runEvents` and
@@ -1296,6 +1315,9 @@ function normalizeRunEvent(event) {
     run_id: event.run_id,
     agent_id: event.agent_id,
     session_id: event.session_id,
+    ...(event.contributes_to_agent_activity === false
+      ? { contributes_to_agent_activity: false }
+      : {}),
     type: event.type,
     payload: event.payload ?? {},
     timestamp: event.timestamp,

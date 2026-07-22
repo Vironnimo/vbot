@@ -16,6 +16,7 @@ from core.runs import (
     MODEL_STEP_USAGE_EVENT,
     REASONING_DELTA_EVENT,
     REASONING_EVENT,
+    RUN_AGENT_ACTIVITY_FIELD,
     RUN_CANCELLED_EVENT,
     RUN_COMPLETED_EVENT,
     RUN_FAILED_EVENT,
@@ -200,6 +201,8 @@ def _server_event_from_run_event(event: RunEvent) -> JsonObject:
         "run_event_sequence": event.sequence,
         "run_event_timestamp": event.timestamp,
     }
+    if not event.contributes_to_agent_activity:
+        payload[RUN_AGENT_ACTIVITY_FIELD] = False
     if event.type in RUN_OUTPUT_EVENT_TYPES or event.type == RUN_STARTED_EVENT:
         payload["output"] = remove_opaque_provider_metadata(event.payload)
     if event.type in RUN_TERMINAL_EVENT_TYPES:

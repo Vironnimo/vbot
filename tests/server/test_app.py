@@ -583,6 +583,30 @@ def test_active_runs_snapshot_keeps_project_id_none_for_identity_run(
     assert result[0]["project_id"] is None
 
 
+def test_active_runs_snapshot_marks_runs_excluded_from_agent_activity() -> None:
+    chat_runs = ChatRunManager()
+    hidden_run = cast(
+        Any,
+        type(
+            "StubRun",
+            (),
+            {
+                "id": "run-system",
+                "agent_id": "coder",
+                "project_id": None,
+                "session_id": "session-system",
+                "status": RunStatus.RUNNING,
+                "contributes_to_agent_activity": False,
+            },
+        )(),
+    )
+    chat_runs.active_runs = lambda: [hidden_run]  # type: ignore[method-assign]
+
+    result = _active_runs_snapshot(type("State", (), {"chat_runs": chat_runs})())
+
+    assert result[0]["contributes_to_agent_activity"] is False
+
+
 def test_active_runs_snapshot_returns_empty_list_when_run_manager_missing() -> None:
     state = type("State", (), {})()
     result = _active_runs_snapshot(state)

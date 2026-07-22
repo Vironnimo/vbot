@@ -15,6 +15,7 @@ from core.chat import ChatLoop, ChatSessionManager
 from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     REASONING_DELTA_EVENT,
+    RUN_AGENT_ACTIVITY_FIELD,
     RUN_STARTED_EVENT,
     TOOL_CALL_DELTA_EVENT,
     ActiveRunError,
@@ -51,6 +52,7 @@ __all__ = [
     "ChatSessionManager",
     "ASSISTANT_OUTPUT_DELTA_EVENT",
     "REASONING_DELTA_EVENT",
+    "RUN_AGENT_ACTIVITY_FIELD",
     "RUN_STARTED_EVENT",
     "TOOL_CALL_DELTA_EVENT",
     "ActiveRunError",

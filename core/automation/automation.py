@@ -13,9 +13,17 @@ if TYPE_CHECKING:
     from core.runtime.runtime import Runtime
 
 
-def _input_persisted_kwargs(callback: Callable[[], None] | None) -> dict[str, Any]:
-    """Omit the optional hook entirely when no producer requested a receipt."""
-    return {} if callback is None else {"input_persisted_hook": callback}
+def _optional_run_kwargs(
+    callback: Callable[[], None] | None,
+    contributes_to_agent_activity: bool,
+) -> dict[str, Any]:
+    """Omit defaulted Run options so existing producer call shapes stay stable."""
+    options: dict[str, Any] = {}
+    if callback is not None:
+        options["input_persisted_hook"] = callback
+    if not contributes_to_agent_activity:
+        options["contributes_to_agent_activity"] = False
+    return options
 
 
 class TriggerService:
@@ -46,6 +54,7 @@ class TriggerService:
         project_id: str | None = None,
         waiting_work_admission: WaitingWorkAdmission | None = None,
         input_persisted_hook: Callable[[], None] | None = None,
+        contributes_to_agent_activity: bool = True,
     ) -> Run:
         """Start a run immediately, or queue it until the target session is idle.
 
@@ -62,7 +71,7 @@ class TriggerService:
                         internal=True,
                         reply_surface=reply_surface,
                         project_id=project_id,
-                        **_input_persisted_kwargs(input_persisted_hook),
+                        **_optional_run_kwargs(input_persisted_hook, contributes_to_agent_activity),
                     )
                 return await self._trigger_chat_loop.start_run_in_new_session(
                     agent_id,
@@ -70,7 +79,7 @@ class TriggerService:
                     sender=sender,
                     reply_surface=reply_surface,
                     project_id=project_id,
-                    **_input_persisted_kwargs(input_persisted_hook),
+                    **_optional_run_kwargs(input_persisted_hook, contributes_to_agent_activity),
                 )
             except BaseException:
                 self.release_waiting_work(waiting_work_admission)
@@ -86,7 +95,7 @@ class TriggerService:
                     internal=True,
                     reply_surface=reply_surface,
                     project_id=project_id,
-                    **_input_persisted_kwargs(input_persisted_hook),
+                    **_optional_run_kwargs(input_persisted_hook, contributes_to_agent_activity),
                 )
             else:
                 run = await self._trigger_chat_loop.start_run(
@@ -96,7 +105,7 @@ class TriggerService:
                     sender=sender,
                     reply_surface=reply_surface,
                     project_id=project_id,
-                    **_input_persisted_kwargs(input_persisted_hook),
+                    **_optional_run_kwargs(input_persisted_hook, contributes_to_agent_activity),
                 )
         except ActiveRunError:
             try:
@@ -109,7 +118,9 @@ class TriggerService:
                             internal=True,
                             reply_surface=reply_surface,
                             project_id=project_id,
-                            **_input_persisted_kwargs(input_persisted_hook),
+                            **_optional_run_kwargs(
+                                input_persisted_hook, contributes_to_agent_activity
+                            ),
                         )
                     else:
                         queued_item = await self._trigger_chat_loop.queue_run(
@@ -120,7 +131,9 @@ class TriggerService:
                             reply_surface=reply_surface,
                             project_id=project_id,
                             waiting_work_admission=waiting_work_admission,
-                            **_input_persisted_kwargs(input_persisted_hook),
+                            **_optional_run_kwargs(
+                                input_persisted_hook, contributes_to_agent_activity
+                            ),
                         )
                 else:
                     if waiting_work_admission is None:
@@ -131,7 +144,9 @@ class TriggerService:
                             sender=sender,
                             reply_surface=reply_surface,
                             project_id=project_id,
-                            **_input_persisted_kwargs(input_persisted_hook),
+                            **_optional_run_kwargs(
+                                input_persisted_hook, contributes_to_agent_activity
+                            ),
                         )
                     else:
                         queued_item = await self._trigger_chat_loop.queue_run(
@@ -142,7 +157,9 @@ class TriggerService:
                             reply_surface=reply_surface,
                             project_id=project_id,
                             waiting_work_admission=waiting_work_admission,
-                            **_input_persisted_kwargs(input_persisted_hook),
+                            **_optional_run_kwargs(
+                                input_persisted_hook, contributes_to_agent_activity
+                            ),
                         )
                 return await queued_item.future
             except BaseException:

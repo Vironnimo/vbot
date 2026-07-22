@@ -303,6 +303,44 @@ async def test_trigger_run_forwards_input_persistence_hook_when_queued() -> None
     )
 
 
+async def test_trigger_run_forwards_agent_activity_policy_when_queued() -> None:
+    queued_run = make_run("queued-run")
+    queued_item = make_queued_item(queued_run)
+    chat_loop = SimpleNamespace(
+        start_run=AsyncMock(side_effect=ActiveRunError("active run")),
+        queue_run=AsyncMock(return_value=queued_item),
+    )
+    trigger_service = TriggerService(cast(Any, chat_loop), cast(Any, Mock()), cast(Any, Mock()))
+
+    run = await trigger_service.trigger_run(
+        "coder",
+        "System work",
+        session_id="session-one",
+        internal=True,
+        contributes_to_agent_activity=False,
+    )
+
+    assert run is queued_run
+    chat_loop.start_run.assert_awaited_once_with(
+        "coder",
+        "System work",
+        session_id="session-one",
+        internal=True,
+        reply_surface=None,
+        project_id=None,
+        contributes_to_agent_activity=False,
+    )
+    chat_loop.queue_run.assert_awaited_once_with(
+        "coder",
+        "System work",
+        session_id="session-one",
+        internal=True,
+        reply_surface=None,
+        project_id=None,
+        contributes_to_agent_activity=False,
+    )
+
+
 async def test_trigger_run_queues_via_chat_run_manager_when_session_is_busy() -> None:
     # Arrange
     queued_run = make_run("queued-run")

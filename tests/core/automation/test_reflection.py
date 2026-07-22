@@ -368,6 +368,7 @@ async def test_run_review_reports_fork_before_run_and_returns_summary() -> None:
         f"{REFLECT_BRIEF}\n\nThe user asked you to focus this reflection on:\nskills"
     )
     assert loop.started[0]["reply_surface"] is None
+    assert loop.started[0]["contributes_to_agent_activity"] is False
 
 
 @pytest.mark.asyncio

@@ -225,6 +225,7 @@ class ReflectionService:
             reply_surface=reply_surface,
             project_id=project_id,
             tool_restriction=REFLECTION_TOOL_RESTRICTION,
+            contributes_to_agent_activity=False,
         )
         final_message = await review_run.wait()
         return ReflectionResult(session_id=fork.id, summary=_final_text(final_message.content))

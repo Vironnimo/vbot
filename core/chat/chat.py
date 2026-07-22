@@ -519,6 +519,7 @@ class ChatLoop:
         project_id: str | None = None,
         tool_restriction: Sequence[str] | None = None,
         input_persisted_hook: Callable[[], None] | None = None,
+        contributes_to_agent_activity: bool = True,
     ) -> Run:
         """Start one chat run against an existing session for server-facing callers.
 
@@ -543,6 +544,7 @@ class ChatLoop:
             project_id=project_id,
             tool_restriction=tool_restriction,
             input_persisted_hook=input_persisted_hook,
+            contributes_to_agent_activity=contributes_to_agent_activity,
         )
 
     async def start_run_in_new_session(
@@ -557,6 +559,7 @@ class ChatLoop:
         project_id: str | None = None,
         tool_restriction: Sequence[str] | None = None,
         input_persisted_hook: Callable[[], None] | None = None,
+        contributes_to_agent_activity: bool = True,
     ) -> Run:
         """Validate a target, create its Session, and start one Run.
 
@@ -577,6 +580,7 @@ class ChatLoop:
             project_id=project_id,
             tool_restriction=tool_restriction,
             input_persisted_hook=input_persisted_hook,
+            contributes_to_agent_activity=contributes_to_agent_activity,
         )
 
     async def queue_run(
@@ -592,6 +596,7 @@ class ChatLoop:
         project_id: str | None = None,
         waiting_work_admission: WaitingWorkAdmission | None = None,
         input_persisted_hook: Callable[[], None] | None = None,
+        contributes_to_agent_activity: bool = True,
     ) -> QueuedRunItem:
         """Queue one chat run for a busy session or start it immediately when idle.
 
@@ -623,6 +628,7 @@ class ChatLoop:
             project_id=project_id,
             working_project_id=working_project_id,
             waiting_work_admission=waiting_work_admission,
+            contributes_to_agent_activity=contributes_to_agent_activity,
         )
 
     def build_queue_update(
@@ -775,6 +781,7 @@ class ChatLoop:
         project_id: str | None = None,
         tool_restriction: Sequence[str] | None = None,
         input_persisted_hook: Callable[[], None] | None = None,
+        contributes_to_agent_activity: bool = True,
     ) -> Run:
         agent = self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
         working_project_id = resolve_working_project_id(project_id, agent)
@@ -799,6 +806,7 @@ class ChatLoop:
             executor=lambda run: self._execute_run(run, request),
             project_id=project_id,
             working_project_id=working_project_id,
+            contributes_to_agent_activity=contributes_to_agent_activity,
         )
 
     async def _execute_run(
@@ -1144,22 +1152,23 @@ class ChatLoop:
                 timing=run_timing,
             )
             session.append(run_summary)
-            try:
-                self._dependencies.sessions.record_terminal_run(
-                    run.agent_id,
-                    run.session_id,
-                    run.id,
-                    run_status,
-                    run_summary.timestamp,
-                    run.project_id,
-                )
-            except Exception:
-                # The canonical Run result is already durable in the transcript.
-                # A damaged activity sidecar must not turn successful agent work
-                # into a failed Run, but the missing notification is diagnosable.
-                _LOGGER.warning(
-                    "Failed to record unread completion for run %s", run.id, exc_info=True
-                )
+            if run.contributes_to_agent_activity:
+                try:
+                    self._dependencies.sessions.record_terminal_run(
+                        run.agent_id,
+                        run.session_id,
+                        run.id,
+                        run_status,
+                        run_summary.timestamp,
+                        run.project_id,
+                    )
+                except Exception:
+                    # The canonical Run result is already durable in the transcript.
+                    # A damaged activity sidecar must not turn successful agent work
+                    # into a failed Run, but the missing notification is diagnosable.
+                    _LOGGER.warning(
+                        "Failed to record unread completion for run %s", run.id, exc_info=True
+                    )
             if context.continuation_tracker is not None:
                 if (
                     outcome == "success"

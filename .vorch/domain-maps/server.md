@@ -19,7 +19,7 @@ RPC method bodies are grouped by owning product/domain surface under `server/rpc
 ## Transport contracts
 
 - `POST /api/rpc` accepts `{method, params?}` and always returns `{ok:true,result}` or `{ok:false,error:{code,message}}`, including malformed JSON/params. `server/rpc/dispatcher.py` owns envelope parsing; `server/rpc/methods.py` builds the static `METHODS` table from domain-indexed registries.
-- `GET /api/runs/{run_id}/events` is the primary per-Run SSE stream and carries complete Run events plus transient deltas. The shared `/ws` socket carries app-wide lifecycle summaries, active-Run reconnect state, presence, and `resource_changed`; it is server-push only.
+- `GET /api/runs/{run_id}/events` is the primary per-Run SSE stream and carries complete Run events plus transient deltas. The shared `/ws` socket carries app-wide lifecycle summaries, active-Run reconnect state, presence, and `resource_changed`; it is server-push only. Both Run events and `connection_ready.active_runs` preserve an explicit `contributes_to_agent_activity: false` from the Runs domain while omitting the default true value; transport does not decide which work needs attention.
 - `/ws/logs` is a dedicated selected-file log stream, not part of the shared event bus. Its read/cursor handoff belongs in `logs.md`.
 - Attachments, Speech, and Image artifacts use dedicated HTTP endpoints because binary data does not belong in the JSON RPC envelope. Their size/MIME/artifact semantics live in `attachments.md` and the relevant `model_tasks/*` maps.
 - `/health` is the transport health probe. Built `webui/dist` assets are optional and served as an SPA only when `index.html` exists.
