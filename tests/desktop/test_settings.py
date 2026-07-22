@@ -176,7 +176,10 @@ def test_read_servers_returns_empty_for_non_list(tmp_path: Path) -> None:
 
 def test_write_servers_preserves_other_keys(tmp_path: Path) -> None:
     settings_file = tmp_path / "settings.json"
-    wakeword = {"enabled": True, "sensitivity": 0.7}
+    wakeword = {
+        "enabled": True,
+        "model_sensitivities": {"builtin/okay_nabu": 0.7},
+    }
     settings_file.write_text(
         json.dumps({"last_used": {"host": "pi.lan", "port": 9000}, "wakeword": wakeword}),
         encoding="utf-8",
@@ -280,8 +283,48 @@ def test_read_wakeword_settings_merges_with_defaults(tmp_path: Path) -> None:
     config = desktop_settings.read_wakeword_settings(settings_file)
 
     assert config["enabled"] is True
-    assert config["model_id"] == desktop_settings.DEFAULT_WAKEWORD_SETTINGS["model_id"]
+    assert config["active_model_ids"] == list(desktop_settings.DEFAULT_WAKEWORD_MODEL_IDS)
     assert config["model_sensitivities"] == {}
+
+
+@pytest.mark.parametrize(
+    "active_model_ids",
+    [None, [], ["one", "one"], ["one", "two", "three"], [1]],
+)
+def test_read_wakeword_settings_normalizes_invalid_active_models(
+    tmp_path: Path, active_model_ids: object
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(
+        json.dumps(
+            {
+                "wakeword": {
+                    "model_id": "builtin/legacy",
+                    "active_model_ids": active_model_ids,
+                    "model_sensitivities": [],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = desktop_settings.read_wakeword_settings(settings_file)
+
+    assert config["active_model_ids"] == list(desktop_settings.DEFAULT_WAKEWORD_MODEL_IDS)
+    assert config["model_sensitivities"] == {}
+    assert "model_id" not in config
+
+
+def test_read_wakeword_settings_trims_active_model_ids(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(
+        json.dumps({"wakeword": {"active_model_ids": [" builtin/okay_nabu "]}}),
+        encoding="utf-8",
+    )
+
+    config = desktop_settings.read_wakeword_settings(settings_file)
+
+    assert config["active_model_ids"] == ["builtin/okay_nabu"]
 
 
 def test_read_wakeword_settings_falls_back_for_missing_wakeword_key(tmp_path: Path) -> None:
@@ -329,8 +372,8 @@ def test_write_wakeword_settings_preserves_servers_and_last_used(tmp_path: Path)
     wakeword_config = {
         "enabled": True,
         "microphone": None,
-        "model_id": "builtin/hey_mycroft",
-        "model_sensitivities": {"builtin/hey_mycroft": 0.8},
+        "active_model_ids": ["builtin/okay_nabu", "builtin/hey_nabu"],
+        "model_sensitivities": {"builtin/hey_nabu": 0.8},
         "server_profiles": {
             "http://127.0.0.1:8420": {
                 "target_agent_id": "test-agent",
@@ -353,11 +396,17 @@ def test_write_wakeword_settings_overwrites_existing_wakeword(tmp_path: Path) ->
         encoding="utf-8",
     )
 
-    desktop_settings.write_wakeword_settings({"enabled": False, "sensitivity": 0.3}, settings_file)
+    desktop_settings.write_wakeword_settings(
+        {
+            "enabled": False,
+            "model_sensitivities": {"builtin/okay_nabu": 0.3},
+        },
+        settings_file,
+    )
 
     stored = json.loads(settings_file.read_text(encoding="utf-8"))
     assert stored["wakeword"]["enabled"] is False
-    assert stored["wakeword"]["sensitivity"] == 0.3
+    assert stored["wakeword"]["model_sensitivities"] == {"builtin/okay_nabu": 0.3}
 
 
 def test_parallel_section_writes_share_one_transaction_lock(

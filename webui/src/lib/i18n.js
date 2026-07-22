@@ -1343,16 +1343,22 @@ export const englishCatalog = Object.freeze({
   'settings.voice.subtitle': 'Wakeword detection and voice command settings.',
   'settings.voice.enabled': 'Wakeword listening',
   'settings.voice.model': 'Wakeword model',
+  'settings.voice.models': 'Wakeword phrases',
   'settings.voice.modelDescription':
-    'Exactly one model listens at a time. Import finished custom ONNX models trained outside vBot.',
+    'Choose one or two phrases to listen for at the same time. Each model keeps its own sensitivity.',
   'settings.voice.modelBuiltIn': 'Built-in',
-  'settings.voice.modelImported': 'Imported ONNX',
-  'settings.voice.importModel': 'Import ONNX model',
+  'settings.voice.modelImported': 'Imported TFLite',
+  'settings.voice.modelToggleAria': 'Listen for {name}',
+  'settings.voice.modelLimit': '{count} of 2 wakeword models active',
+  'settings.voice.importModel': 'Import TFLite model',
   'settings.voice.removeModel': 'Remove imported model',
-  'settings.voice.importSuccess': 'Wakeword model imported and selected.',
+  'settings.voice.importSuccessActive':
+    'Wakeword model imported and activated.',
+  'settings.voice.importSuccessInactive':
+    'Wakeword model imported. Deactivate another model to use it.',
   'settings.voice.deleteConfirmTitle': 'Remove wakeword model',
   'settings.voice.deleteConfirm':
-    'Remove “{name}” permanently from this Desktop? The ONNX file stored by vBot will be deleted.',
+    'Remove “{name}” permanently from this Desktop? The TFLite file stored by vBot will be deleted.',
   'settings.voice.deleteSuccess': 'Wakeword model removed.',
   'settings.voice.microphone': 'Microphone',
   'settings.voice.sensitivity': 'Sensitivity',

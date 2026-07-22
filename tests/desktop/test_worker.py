@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import io
+import sys
 import time
+import types
+import wave
 from collections.abc import Callable
 from unittest.mock import MagicMock
 
 import pytest
 
-from desktop.wakeword.engine import MockWakewordEngine
+from desktop.wakeword.engine import MockWakewordEngine, WakewordMatch
 
 
 class FakeBridge:
@@ -106,8 +110,6 @@ class FailingReadStream(FakeSounddeviceStream):
 
 
 class DetectOnceEngine:
-    threshold = 0.5
-
     def __init__(self) -> None:
         self.calls = 0
 
@@ -117,18 +119,19 @@ class DetectOnceEngine:
     def stop(self) -> None:
         pass
 
-    def detect(self, _chunk: bytes) -> float:
+    def detect(self, _chunk: bytes) -> WakewordMatch | None:
         self.calls += 1
-        return 1.0 if self.calls == 1 else 0.0
+        if self.calls == 1:
+            return WakewordMatch("builtin/okay_nabu", 1.0, 0.5)
+        return None
 
 
 class SequenceEngine:
-    threshold = 0.5
-
     def __init__(self, scores: list[float], on_detect: Callable[[int], None] | None = None) -> None:
         self._scores = list(scores)
         self._on_detect = on_detect
         self.calls = 0
+        self._armed = True
 
     def start(self) -> None:
         pass
@@ -136,13 +139,20 @@ class SequenceEngine:
     def stop(self) -> None:
         pass
 
-    def detect(self, _chunk: bytes) -> float:
+    def detect(self, _chunk: bytes) -> WakewordMatch | None:
         self.calls += 1
         if callable(self._on_detect):
             self._on_detect(self.calls)
         if not self._scores:
-            return 0.0
-        return self._scores.pop(0)
+            return None
+        score = self._scores.pop(0)
+        if score < 0.5:
+            self._armed = True
+            return None
+        if not self._armed:
+            return None
+        self._armed = False
+        return WakewordMatch("builtin/okay_nabu", score, 0.5)
 
 
 @pytest.fixture
@@ -275,6 +285,118 @@ def test_encode_wav_produces_valid_container() -> None:
         assert wf.readframes(wf.getnframes()) == raw
 
 
+def test_detection_loop_passes_the_last_four_chunks_as_pre_roll(
+    fake_bridge: FakeBridge,
+) -> None:
+    from desktop.wakeword.worker import WakewordWorker
+
+    chunks = [bytes([value]) * 2560 for value in range(1, 6)]
+
+    class DetectFifthEngine:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+        def detect(self, _chunk: bytes) -> WakewordMatch | None:
+            self.calls += 1
+            if self.calls == 5:
+                return WakewordMatch("builtin/hey_nabu", 0.8, 0.5)
+            return None
+
+    worker = WakewordWorker(
+        engine=DetectFifthEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+    captured: list[bytes] = []
+    worker._read_config = lambda: {"target_agent_id": "main"}  # type: ignore[method-assign]
+    worker._target_agent_available = lambda _agent_id: True  # type: ignore[assignment,method-assign]
+    worker._open_stream = lambda: setattr(  # type: ignore[method-assign]
+        worker, "_stream", FakeSounddeviceStream(chunks)
+    )
+
+    def handle(pre_roll: bytes) -> None:
+        captured.append(pre_roll)
+        worker._running.clear()
+
+    worker._handle_detection = handle  # type: ignore[assignment,method-assign]
+    worker._running.set()
+
+    worker._run()
+
+    assert captured == [b"".join(chunks[-4:])]
+    assert fake_bridge.states == ["listening", "wakeword_detected"]
+
+
+def test_recording_prepends_end_aligned_pre_roll_when_new_speech_arrives(
+    fake_bridge: FakeBridge,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from desktop.wakeword.worker import WakewordWorker
+
+    class FakeVad:
+        def __init__(self, _mode: int) -> None:
+            self.calls = 0
+
+        def is_speech(self, _frame: bytes, _sample_rate: int) -> bool:
+            self.calls += 1
+            return self.calls == 1
+
+    monkeypatch.setitem(sys.modules, "webrtcvad", types.SimpleNamespace(Vad=FakeVad))
+    frame_bytes = 480 * 2
+    aligned_pre_roll = b"".join(bytes([value]) * frame_bytes for value in range(1, 11))
+    pre_roll = b"x" * 640 + aligned_pre_roll
+    speech = b"s" * frame_bytes
+    silence = b"\0" * frame_bytes
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+    worker._stream = FakeSounddeviceStream([speech, *([silence] * 50)])
+    worker._running.set()
+
+    wav_bytes = worker._record_until_silence(pre_roll)
+
+    assert wav_bytes is not None
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
+        recorded = wav_file.readframes(wav_file.getnframes())
+    assert recorded.startswith(aligned_pre_roll + speech)
+
+
+def test_pre_roll_alone_does_not_become_a_command(
+    fake_bridge: FakeBridge,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from desktop.wakeword import worker as worker_module
+    from desktop.wakeword.worker import WakewordWorker
+
+    class SilentVad:
+        def __init__(self, _mode: int) -> None:
+            pass
+
+        def is_speech(self, _frame: bytes, _sample_rate: int) -> bool:
+            return False
+
+    monkeypatch.setitem(sys.modules, "webrtcvad", types.SimpleNamespace(Vad=SilentVad))
+    monkeypatch.setattr(worker_module, "_SPEECH_START_FRAME_COUNT", 2)
+    wake_phrase_audio = b"w" * (480 * 2 * 10)
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+    worker._stream = FakeSounddeviceStream([b"\0" * 960, b"\0" * 960])
+    worker._running.set()
+
+    assert worker._record_until_silence(wake_phrase_audio) is None
+
+
 @pytest.mark.parametrize(
     ("transcript", "cancelled"),
     [
@@ -329,7 +451,7 @@ def test_handle_detection_discards_voice_cancel_before_session_resolution(
         "target_agent_id": "main",
         "session_behavior": "active",
     }
-    worker._record_until_silence = lambda: b"audio"  # type: ignore[method-assign]
+    worker._record_until_silence = lambda _pre_roll=b"": b"audio"  # type: ignore[assignment,method-assign]
     worker._transcribe = lambda _audio: "Mach das Licht aus, vergiss es."  # type: ignore[assignment,method-assign]
     worker._resolve_session = MagicMock()  # type: ignore[method-assign]
     worker._send_transcript = MagicMock()  # type: ignore[method-assign]
@@ -448,7 +570,7 @@ def test_handle_detection_closes_microphone_before_network_calls(
         "target_agent_id": "main",
         "session_behavior": "active",
     }
-    worker._record_until_silence = lambda: b"audio"  # type: ignore[method-assign]
+    worker._record_until_silence = lambda _pre_roll=b"": b"audio"  # type: ignore[assignment,method-assign]
 
     def transcribe(_audio_data: bytes) -> str:
         assert worker._stream is None
@@ -491,7 +613,7 @@ def test_handle_detection_empty_transcript_returns_to_listening(
         "target_agent_id": "main",
         "session_behavior": "active",
     }
-    worker._record_until_silence = lambda: b"audio"  # type: ignore[method-assign]
+    worker._record_until_silence = lambda _pre_roll=b"": b"audio"  # type: ignore[assignment,method-assign]
     worker._transcribe = lambda _audio_data: "   "  # type: ignore[assignment,method-assign]
     worker._resolve_session = MagicMock()  # type: ignore[method-assign]
     worker._send_transcript = MagicMock()  # type: ignore[method-assign]
@@ -520,7 +642,7 @@ def test_handle_detection_transcription_failure_returns_to_listening(
         "target_agent_id": "main",
         "session_behavior": "active",
     }
-    worker._record_until_silence = lambda: b"audio"  # type: ignore[method-assign]
+    worker._record_until_silence = lambda _pre_roll=b"": b"audio"  # type: ignore[assignment,method-assign]
     worker._transcribe = lambda _audio_data: None  # type: ignore[assignment,method-assign]
     worker._resolve_session = MagicMock()  # type: ignore[method-assign]
     worker._send_transcript = MagicMock()  # type: ignore[method-assign]
@@ -550,11 +672,11 @@ def test_handle_detection_skips_network_when_stopped_during_recording(
         "session_behavior": "active",
     }
 
-    def record_then_stop() -> bytes:
+    def record_then_stop(_pre_roll: bytes = b"") -> bytes:
         worker._running.clear()  # disabled/reconfigured mid-recording
         return b"audio"
 
-    worker._record_until_silence = record_then_stop  # type: ignore[method-assign]
+    worker._record_until_silence = record_then_stop  # type: ignore[assignment,method-assign]
     worker._transcribe = MagicMock()  # type: ignore[method-assign]
 
     worker._handle_detection()
@@ -580,7 +702,7 @@ def test_handle_detection_discards_transcript_when_stopped_during_transcription(
         "target_agent_id": "main",
         "session_behavior": "active",
     }
-    worker._record_until_silence = lambda: b"audio"  # type: ignore[method-assign]
+    worker._record_until_silence = lambda _pre_roll=b"": b"audio"  # type: ignore[assignment,method-assign]
 
     def transcribe_then_stop(_audio_data: bytes) -> str:
         worker._running.clear()  # disabled mid-transcription
@@ -621,7 +743,7 @@ def test_detection_loop_reopens_microphone_after_successful_turn(
         worker._stream = stream
 
     worker._open_stream = open_stream  # type: ignore[method-assign]
-    worker._handle_detection = lambda: None  # type: ignore[method-assign]
+    worker._handle_detection = lambda _pre_roll=b"": None  # type: ignore[assignment,method-assign]
     worker._read_config = lambda: {"target_agent_id": "main"}  # type: ignore[method-assign]
     worker._target_agent_available = lambda _agent_id: True  # type: ignore[assignment,method-assign]
     worker._running.set()
@@ -665,12 +787,12 @@ def test_detection_loop_requires_score_drop_before_retrigger(
         opened_streams.append(stream)
         worker._stream = stream
 
-    def handle_detection() -> None:
+    def handle_detection(_pre_roll: bytes = b"") -> None:
         nonlocal detection_count
         detection_count += 1
 
     worker._open_stream = open_stream  # type: ignore[method-assign]
-    worker._handle_detection = handle_detection  # type: ignore[method-assign]
+    worker._handle_detection = handle_detection  # type: ignore[assignment,method-assign]
     worker._read_config = lambda: {"target_agent_id": "main"}  # type: ignore[method-assign]
     worker._target_agent_available = lambda _agent_id: True  # type: ignore[assignment,method-assign]
     worker._running.set()
@@ -868,18 +990,15 @@ def test_mock_worker_walks_full_state_cycle_on_spike(
     calls = {"n": 0}
 
     class SpikeThenStopEngine:
-        threshold = 0.5
-
         def start(self) -> None:
             pass
 
-        def detect(self, _chunk: bytes) -> float:
+        def detect(self, _chunk: bytes) -> WakewordMatch | None:
             calls["n"] += 1
             if calls["n"] == 1:
-                return 1.0
-            # Drop below threshold and end the loop after one full cycle.
+                return WakewordMatch("builtin/okay_nabu", 1.0, 0.5)
             worker._running.clear()
-            return 0.0
+            return None
 
     worker._engine = SpikeThenStopEngine()  # type: ignore[assignment]
     worker._running.set()

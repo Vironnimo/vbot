@@ -10,83 +10,91 @@ import {
 } from '../wakewordSettings.js';
 
 describe('createVoiceSettingsState', () => {
-  it('returns defaults', () => {
+  it('starts with both Nabu wakeword models active', () => {
     const state = createVoiceSettingsState();
+
     expect(state.enabled).toBe(false);
-    expect(state.model_id).toBe('builtin/hey_jarvis');
-    expect(state.sensitivity).toBe(0.5);
+    expect(state.active_model_ids).toEqual([
+      'builtin/okay_nabu',
+      'builtin/hey_nabu',
+    ]);
+    expect(state.model_sensitivities).toEqual({});
     expect(state.liveState).toBe('off');
   });
 
-  it('returns a new object each call', () => {
-    const a = createVoiceSettingsState();
-    const b = createVoiceSettingsState();
-    expect(a).not.toBe(b);
+  it('isolates arrays and objects between calls', () => {
+    const first = createVoiceSettingsState();
+    const second = createVoiceSettingsState();
+
+    first.active_model_ids.pop();
+    first.model_sensitivities['builtin/okay_nabu'] = 0.8;
+
+    expect(second.active_model_ids).toHaveLength(2);
+    expect(second.model_sensitivities).toEqual({});
   });
 });
 
 describe('applyWakewordStatus', () => {
-  it('hydrates from bridge status', () => {
+  it('hydrates the multi-model bridge contract', () => {
     const state = createVoiceSettingsState();
     const status = {
       enabled: true,
       state: 'listening',
-      sensitivity: 0.8,
-      model_id: 'builtin/hey_mycroft',
+      active_model_ids: ['builtin/okay_nabu', 'custom/computer'],
+      model_sensitivities: {
+        'builtin/okay_nabu': 0.8,
+        'custom/computer': 0.65,
+      },
       target_agent_id: 'agent-1',
       session_behavior: 'new',
     };
 
     const hydrated = applyWakewordStatus(state, status);
+
     expect(hydrated.enabled).toBe(true);
     expect(hydrated.liveState).toBe('listening');
-    expect(hydrated.sensitivity).toBe(0.8);
-    expect(hydrated.model_id).toBe('builtin/hey_mycroft');
+    expect(hydrated.active_model_ids).toEqual(status.active_model_ids);
+    expect(hydrated.model_sensitivities).toEqual(status.model_sensitivities);
+    expect(hydrated.active_model_ids).not.toBe(status.active_model_ids);
+    expect(hydrated.model_sensitivities).not.toBe(status.model_sensitivities);
     expect(hydrated.target_agent_id).toBe('agent-1');
     expect(hydrated.session_behavior).toBe('new');
   });
 
-  it('preserves existing values for missing keys', () => {
-    const state = { ...createVoiceSettingsState(), sensitivity: 0.3 };
-    const status = { enabled: true };
-
-    const hydrated = applyWakewordStatus(state, status);
-    expect(hydrated.sensitivity).toBe(0.3);
-    expect(hydrated.enabled).toBe(true);
-  });
-
-  it('applies explicit null values from bridge status', () => {
+  it('preserves editable values for missing keys and accepts explicit nulls', () => {
     const state = {
       ...createVoiceSettingsState(),
       microphone: 3,
       target_agent_id: 'agent-1',
+      model_sensitivities: { 'builtin/okay_nabu': 0.3 },
     };
-    const status = { microphone: null, target_agent_id: null };
 
-    const hydrated = applyWakewordStatus(state, status);
+    const hydrated = applyWakewordStatus(state, {
+      enabled: true,
+      microphone: null,
+      target_agent_id: null,
+    });
 
+    expect(hydrated.enabled).toBe(true);
     expect(hydrated.microphone).toBeNull();
     expect(hydrated.target_agent_id).toBeNull();
+    expect(hydrated.model_sensitivities).toEqual({
+      'builtin/okay_nabu': 0.3,
+    });
   });
 
-  it('returns same state when status is null', () => {
+  it('returns the original state when status is absent', () => {
     const state = createVoiceSettingsState();
-    const hydrated = applyWakewordStatus(state, null);
-    expect(hydrated).toEqual(state);
-  });
-
-  it('hydrates the mock flag', () => {
-    const state = createVoiceSettingsState();
-    const hydrated = applyWakewordStatus(state, { mock: true });
-    expect(hydrated.mock).toBe(true);
+    expect(applyWakewordStatus(state, null)).toBe(state);
   });
 });
 
 describe('applyRuntimeStatus', () => {
-  it('updates only liveState and mock, never editable config', () => {
+  it('updates runtime fields without reverting model edits', () => {
     const state = {
       ...createVoiceSettingsState(),
-      sensitivity: 0.9,
+      active_model_ids: ['builtin/hey_nabu'],
+      model_sensitivities: { 'builtin/hey_nabu': 0.9 },
       target_agent_id: 'agent-1',
     };
     const status = {
@@ -95,9 +103,8 @@ describe('applyRuntimeStatus', () => {
       mode: 'unavailable',
       error_code: 'microphone_unavailable',
       active_microphone: { index: 4, name: 'Desk mic', sample_rate: 48000 },
-      // Config fields in the poll payload must be ignored so an in-progress
-      // edit is never reverted.
-      sensitivity: 0.5,
+      active_model_ids: ['builtin/okay_nabu'],
+      model_sensitivities: { 'builtin/okay_nabu': 0.5 },
       target_agent_id: null,
     };
 
@@ -108,111 +115,88 @@ describe('applyRuntimeStatus', () => {
     expect(next.mode).toBe('unavailable');
     expect(next.errorCode).toBe('microphone_unavailable');
     expect(next.activeMicrophone.name).toBe('Desk mic');
-    expect(next.sensitivity).toBe(0.9);
+    expect(next.active_model_ids).toEqual(['builtin/hey_nabu']);
+    expect(next.model_sensitivities).toEqual({ 'builtin/hey_nabu': 0.9 });
     expect(next.target_agent_id).toBe('agent-1');
   });
 
-  it('returns the same reference when nothing changed', () => {
+  it('returns the same reference when runtime state is unchanged', () => {
     const state = {
       ...createVoiceSettingsState(),
       liveState: 'listening',
       mock: false,
     };
-    const next = applyRuntimeStatus(state, { state: 'listening', mock: false });
-    expect(next).toBe(state);
-  });
-
-  it('returns same state when status is null', () => {
-    const state = createVoiceSettingsState();
-    expect(applyRuntimeStatus(state, null)).toBe(state);
+    expect(applyRuntimeStatus(state, { state: 'listening', mock: false })).toBe(
+      state,
+    );
   });
 });
 
 describe('buildVoiceSettingsPayload', () => {
-  it('builds full payload when no last-saved snapshot', () => {
+  it('builds a full structured payload without runtime fields', () => {
     const state = {
       ...createVoiceSettingsState(),
       enabled: true,
-      sensitivity: 0.7,
+      model_sensitivities: {
+        'builtin/okay_nabu': 0.7,
+        'builtin/hey_nabu': 0.6,
+      },
       target_agent_id: 'agent-1',
       session_behavior: 'new',
       liveState: 'listening',
     };
 
     const payload = buildVoiceSettingsPayload(state, null);
-    expect(payload.enabled).toBe(true);
-    expect(payload.sensitivity).toBe(0.7);
+
+    expect(payload.active_model_ids).toEqual(state.active_model_ids);
+    expect(payload.model_sensitivities).toEqual(state.model_sensitivities);
     expect(payload.target_agent_id).toBe('agent-1');
     expect(payload.session_behavior).toBe('new');
-    expect(payload.liveState).toBeUndefined(); // liveState excluded
+    expect(payload.liveState).toBeUndefined();
   });
 
-  it('builds sparse payload with only changed keys', () => {
-    const lastSaved = {
-      ...createVoiceSettingsState(),
-      enabled: false,
-      sensitivity: 0.5,
-    };
+  it('detects array and object changes by value', () => {
+    const lastSaved = snapshotVoiceSettings(createVoiceSettingsState());
     const state = {
       ...lastSaved,
-      sensitivity: 0.9,
-      target_agent_id: 'agent-2',
+      active_model_ids: ['builtin/okay_nabu'],
+      model_sensitivities: { 'builtin/okay_nabu': 0.9 },
     };
 
-    const payload = buildVoiceSettingsPayload(state, lastSaved);
-    expect(Object.keys(payload)).toEqual(['sensitivity', 'target_agent_id']);
-    expect(payload.sensitivity).toBe(0.9);
-    expect(payload.enabled).toBeUndefined(); // unchanged
+    expect(buildVoiceSettingsPayload(state, lastSaved)).toEqual({
+      active_model_ids: ['builtin/okay_nabu'],
+      model_sensitivities: { 'builtin/okay_nabu': 0.9 },
+    });
   });
 
-  it('excludes liveState from payload', () => {
-    const state = createVoiceSettingsState();
-    const payload = buildVoiceSettingsPayload(state, null);
-    expect(payload.liveState).toBeUndefined();
-    expect(payload.enabled).toBeDefined();
-  });
-
-  it('excludes the runtime mock flag from payload and dirty', () => {
+  it('ignores runtime-only changes', () => {
     const lastSaved = snapshotVoiceSettings(createVoiceSettingsState());
-    const state = { ...lastSaved, mock: true };
+    const state = { ...lastSaved, liveState: 'recording', mock: true };
 
     expect(buildVoiceSettingsPayload(state, lastSaved)).toEqual({});
     expect(voiceSettingsDirty(state, lastSaved)).toBe(false);
   });
 });
 
-describe('voiceSettingsDirty', () => {
-  it('returns false when unchanged', () => {
+describe('voiceSettingsDirty and snapshotVoiceSettings', () => {
+  it('treats equivalent structured values as clean', () => {
     const state = createVoiceSettingsState();
     const lastSaved = snapshotVoiceSettings(state);
+
+    state.active_model_ids = [...state.active_model_ids];
+    state.model_sensitivities = { ...state.model_sensitivities };
+
     expect(voiceSettingsDirty(state, lastSaved)).toBe(false);
   });
 
-  it('returns true when changed', () => {
-    const state = createVoiceSettingsState();
-    const lastSaved = snapshotVoiceSettings(state);
-    state.sensitivity = 0.8;
-    expect(voiceSettingsDirty(state, lastSaved)).toBe(true);
-  });
-
-  it('ignores liveState changes', () => {
-    const state = createVoiceSettingsState();
-    const lastSaved = snapshotVoiceSettings(state);
-    state.liveState = 'recording';
-    expect(voiceSettingsDirty(state, lastSaved)).toBe(false);
-  });
-
-  it('returns false when no lastSaved', () => {
-    const state = createVoiceSettingsState();
-    expect(voiceSettingsDirty(state, null)).toBe(false);
-  });
-});
-
-describe('snapshotVoiceSettings', () => {
-  it('clones the current state', () => {
+  it('deep-clones structured editable values', () => {
     const state = createVoiceSettingsState();
     const snapshot = snapshotVoiceSettings(state);
-    expect(snapshot).toEqual(state);
-    expect(snapshot).not.toBe(state);
+
+    state.active_model_ids.pop();
+    state.model_sensitivities['builtin/okay_nabu'] = 0.8;
+
+    expect(snapshot.active_model_ids).toHaveLength(2);
+    expect(snapshot.model_sensitivities).toEqual({});
   });
 });

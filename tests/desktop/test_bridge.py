@@ -17,7 +17,7 @@ from desktop.wakeword import bridge as bridge_module
 from desktop.wakeword import engine as engine_module
 from desktop.wakeword.bridge import DesktopBridge
 from desktop.wakeword.engine import (
-    DEFAULT_WAKEWORD_MODEL_ID,
+    DEFAULT_WAKEWORD_MODEL_IDS,
     WakewordModelDescriptor,
     WakewordModelError,
 )
@@ -104,7 +104,7 @@ def test_get_wakeword_status_shape(tmp_path: Path) -> None:
         tmp_path / "settings.json",
         {
             "enabled": True,
-            "model_sensitivities": {DEFAULT_WAKEWORD_MODEL_ID: 0.7},
+            "model_sensitivities": {DEFAULT_WAKEWORD_MODEL_IDS[0]: 0.7},
         },
     )
 
@@ -112,13 +112,17 @@ def test_get_wakeword_status_shape(tmp_path: Path) -> None:
     status = bridge.getWakewordStatus()
 
     assert status["enabled"] is True
-    assert status["sensitivity"] == 0.7
+    assert status["model_sensitivities"] == {
+        DEFAULT_WAKEWORD_MODEL_IDS[0]: 0.7,
+        DEFAULT_WAKEWORD_MODEL_IDS[1]: 0.5,
+    }
     assert status["state"] == "off"
     assert "engine" in status
     assert "microphone" in status
     assert "target_agent_id" in status
     assert "session_behavior" in status
-    assert status["model_id"] == DEFAULT_WAKEWORD_MODEL_ID
+    assert status["active_model_ids"] == list(DEFAULT_WAKEWORD_MODEL_IDS)
+    assert status["engine"] == "pyopen_wakeword"
 
 
 def test_get_wakeword_status_includes_mock_flag(tmp_path: Path) -> None:
@@ -272,12 +276,12 @@ def test_set_wakeword_config_recreates_running_worker(tmp_path: Path) -> None:
     bridge = DesktopBridge(settings_path=settings_file, worker_factory=worker_factory)
     bridge.setWakewordEnabled(True)
 
-    bridge.setWakewordConfig({"sensitivity": 0.9})
+    bridge.setWakewordConfig({"model_sensitivities": {DEFAULT_WAKEWORD_MODEL_IDS[0]: 0.9}})
 
     assert len(workers) == 2
     assert workers[0].stopped is True
     assert workers[1].started is True
-    assert bridge.getWakewordStatus()["sensitivity"] == 0.9
+    assert bridge.getWakewordStatus()["model_sensitivities"][DEFAULT_WAKEWORD_MODEL_IDS[0]] == 0.9
 
 
 def test_set_wakeword_config_partial_update(tmp_path: Path) -> None:
@@ -288,10 +292,15 @@ def test_set_wakeword_config_partial_update(tmp_path: Path) -> None:
         settings_path=settings_file,
         server_url="http://127.0.0.1:8420",
     )
-    bridge.setWakewordConfig({"sensitivity": 0.9, "target_agent_id": "agent-1"})
+    bridge.setWakewordConfig(
+        {
+            "model_sensitivities": {DEFAULT_WAKEWORD_MODEL_IDS[0]: 0.9},
+            "target_agent_id": "agent-1",
+        }
+    )
 
     status = bridge.getWakewordStatus()
-    assert status["sensitivity"] == 0.9
+    assert status["model_sensitivities"][DEFAULT_WAKEWORD_MODEL_IDS[0]] == 0.9
     assert status["target_agent_id"] == "agent-1"
 
 
@@ -302,25 +311,30 @@ def test_bridge_imports_selects_and_deletes_a_custom_model(
     _write_settings(settings_file)
     monkeypatch.setattr(engine_module, "_validate_custom_model", lambda _path: None)
     bridge = DesktopBridge(settings_path=settings_file)
+    bridge.setWakewordConfig({"active_model_ids": [DEFAULT_WAKEWORD_MODEL_IDS[0]]})
 
     imported = bridge.importWakewordModel(
-        "hey_computer.onnx",
-        base64.b64encode(b"onnx-model").decode("ascii"),
+        "hey_computer.tflite",
+        base64.b64encode(b"tflite-model").decode("ascii"),
     )
-    bridge.setWakewordConfig({"model_id": imported["id"], "sensitivity": 0.75})
+    bridge.setWakewordConfig({"model_sensitivities": {imported["id"]: 0.75}})
 
     assert imported["label"] == "hey computer"
     assert imported["removable"] is True
-    assert imported in bridge.listWakewordModels()
-    assert bridge.getWakewordStatus()["model_id"] == imported["id"]
-    assert bridge.getWakewordStatus()["sensitivity"] == 0.75
+    assert imported["activated"] is True
+    assert any(model["id"] == imported["id"] for model in bridge.listWakewordModels())
+    assert bridge.getWakewordStatus()["active_model_ids"] == [
+        DEFAULT_WAKEWORD_MODEL_IDS[0],
+        imported["id"],
+    ]
+    assert bridge.getWakewordStatus()["model_sensitivities"][imported["id"]] == 0.75
     engine = bridge._create_wakeword_engine()
-    assert isinstance(engine, engine_module.OpenWakeWordEngine)
-    assert engine._model_target.endswith(".onnx")
+    assert isinstance(engine, engine_module.MultiWakewordEngine)
+    assert engine.active_model_ids == (DEFAULT_WAKEWORD_MODEL_IDS[0], imported["id"])
     with pytest.raises(WakewordModelError, match="active"):
         bridge.deleteWakewordModel(imported["id"])
 
-    bridge.setWakewordConfig({"model_id": DEFAULT_WAKEWORD_MODEL_ID})
+    bridge.setWakewordConfig({"active_model_ids": list(DEFAULT_WAKEWORD_MODEL_IDS)})
     assert bridge.deleteWakewordModel(imported["id"]) == {"deleted": True}
     assert imported not in bridge.listWakewordModels()
     stored = json.loads(settings_file.read_text(encoding="utf-8"))["wakeword"]
@@ -335,12 +349,41 @@ def test_bridge_rejects_invalid_model_content_and_unknown_selection(
     bridge = DesktopBridge(settings_path=settings_file)
 
     with pytest.raises(WakewordModelError, match="base64"):
-        bridge.importWakewordModel("bad.onnx", "%%%")
+        bridge.importWakewordModel("bad.tflite", "%%%")
     monkeypatch.setattr(bridge_module, "_MAX_CUSTOM_WAKEWORD_MODEL_BASE64_CHARS", 8)
     with pytest.raises(WakewordModelError, match="size limit"):
-        bridge.importWakewordModel("large.onnx", "a" * 9)
+        bridge.importWakewordModel("large.tflite", "a" * 9)
     with pytest.raises(WakewordModelError, match="not available"):
-        bridge.setWakewordConfig({"model_id": "custom/missing"})
+        bridge.setWakewordConfig({"active_model_ids": ["custom/missing"]})
+
+
+@pytest.mark.parametrize(
+    "active_model_ids",
+    [[], ["builtin/okay_nabu", "builtin/okay_nabu"], ["a", "b", "c"]],
+)
+def test_bridge_rejects_invalid_active_model_sets(
+    tmp_path: Path, active_model_ids: list[str]
+) -> None:
+    bridge = DesktopBridge(settings_path=tmp_path / "settings.json")
+
+    with pytest.raises(WakewordModelError):
+        bridge.setWakewordConfig({"active_model_ids": active_model_ids})
+
+
+def test_import_leaves_model_inactive_when_both_slots_are_occupied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file)
+    monkeypatch.setattr(engine_module, "_validate_custom_model", lambda _path: None)
+    bridge = DesktopBridge(settings_path=settings_file)
+
+    imported = bridge.importWakewordModel(
+        "computer.tflite", base64.b64encode(b"model").decode("ascii")
+    )
+
+    assert imported["activated"] is False
+    assert bridge.getWakewordStatus()["active_model_ids"] == list(DEFAULT_WAKEWORD_MODEL_IDS)
 
 
 def test_model_import_validation_does_not_block_status_polling(tmp_path: Path) -> None:
@@ -356,9 +399,9 @@ def test_model_import_validation_does_not_block_status_polling(tmp_path: Path) -
                 id="custom/model",
                 label="Model",
                 source="imported",
-                format="onnx",
+                format="tflite",
                 removable=True,
-                target="model.onnx",
+                target="model.tflite",
             )
 
     bridge = DesktopBridge(
@@ -368,7 +411,7 @@ def test_model_import_validation_does_not_block_status_polling(tmp_path: Path) -
 
     def import_model() -> None:
         try:
-            bridge.importWakewordModel("model.onnx", base64.b64encode(b"model").decode())
+            bridge.importWakewordModel("model.tflite", base64.b64encode(b"model").decode())
         except Exception as exc:  # pragma: no cover - asserted through the shared list
             errors.append(exc)
 
@@ -393,12 +436,19 @@ def test_sensitivity_is_preserved_per_wakeword_model(tmp_path: Path) -> None:
     _write_settings(settings_file)
     bridge = DesktopBridge(settings_path=settings_file)
 
-    bridge.setWakewordConfig({"sensitivity": 0.8})
-    bridge.setWakewordConfig({"model_id": "builtin/hey_mycroft", "sensitivity": 0.35})
-    assert bridge.getWakewordStatus()["sensitivity"] == 0.35
+    bridge.setWakewordConfig(
+        {
+            "model_sensitivities": {
+                DEFAULT_WAKEWORD_MODEL_IDS[0]: 0.8,
+                DEFAULT_WAKEWORD_MODEL_IDS[1]: 0.35,
+            }
+        }
+    )
 
-    bridge.setWakewordConfig({"model_id": DEFAULT_WAKEWORD_MODEL_ID})
-    assert bridge.getWakewordStatus()["sensitivity"] == 0.8
+    assert bridge.getWakewordStatus()["model_sensitivities"] == {
+        DEFAULT_WAKEWORD_MODEL_IDS[0]: 0.8,
+        DEFAULT_WAKEWORD_MODEL_IDS[1]: 0.35,
+    }
 
 
 def test_worker_factory_model_error_becomes_actionable_status(tmp_path: Path) -> None:
@@ -470,7 +520,10 @@ def test_set_wakeword_config_rejects_non_dict(tmp_path: Path) -> None:
     bridge.setWakewordConfig({"not": "applicable"})
 
     status = bridge.getWakewordStatus()
-    assert status["sensitivity"] == 0.5  # Default unchanged
+    assert status["model_sensitivities"] == {
+        DEFAULT_WAKEWORD_MODEL_IDS[0]: 0.5,
+        DEFAULT_WAKEWORD_MODEL_IDS[1]: 0.5,
+    }
 
 
 def test_publish_state_updates_state(tmp_path: Path) -> None:
@@ -514,7 +567,9 @@ def test_bridge_thread_safety_concurrent_access(tmp_path: Path) -> None:
         for i in range(50):
             try:
                 bridge.publish_state("listening" if i % 2 == 0 else "recording")
-                bridge.setWakewordConfig({"sensitivity": 0.5 + (i % 10) * 0.05})
+                bridge.setWakewordConfig(
+                    {"model_sensitivities": {DEFAULT_WAKEWORD_MODEL_IDS[0]: 0.5 + (i % 9) * 0.05}}
+                )
             except Exception as exc:
                 errors.append(exc)
 
