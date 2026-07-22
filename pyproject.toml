@@ -9,7 +9,7 @@ description = "A local-first agent harness: an async Python runtime giving AI ag
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 authors = [{ name = "The vBot Authors" }]
 keywords = ["ai", "agent", "llm", "agentic", "fastapi", "svelte", "automation"]
 classifiers = [
@@ -38,7 +38,7 @@ Issues = "https://github.com/Vironnimo/vbot/issues"
 [project.optional-dependencies]
 server  = ["fastapi", "uvicorn[standard]", "websockets", "watchfiles", "python-telegram-bot[rate-limiter]", "discord.py>=2.7,<3", "python-multipart"]
 cli     = ["psutil"]
-desktop = ["pywebview", "openwakeword", "pyopen-wakeword>=1.1,<2", "sounddevice", "webrtcvad"]
+desktop = ["pywebview", "pyopen-wakeword>=1.1,<2", "sounddevice", "webrtcvad"]
 dev     = ["pytest", "pytest-asyncio", "ruff", "mypy", "hatchling", "pytest-xdist", "pytest-timeout", "respx", "fastapi", "uvicorn[standard]", "websockets", "watchfiles", "python-telegram-bot[rate-limiter]", "discord.py>=2.7,<3", "python-multipart", "psutil", "numpy"]
 
 [tool.hatch.build.targets.wheel]
@@ -67,5 +67,5 @@ warn_unused_configs = true
 disallow_untyped_defs = false
 
 [[tool.mypy.overrides]]
-module = ["openwakeword", "openwakeword.*", "pyopen_wakeword", "pyopen_wakeword.*", "sounddevice", "webrtcvad", "yaml"]
+module = ["pyopen_wakeword", "pyopen_wakeword.*", "sounddevice", "webrtcvad", "yaml"]
 ignore_missing_imports = true

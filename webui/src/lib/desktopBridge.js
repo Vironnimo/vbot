@@ -173,7 +173,7 @@ export async function listWakewordModels() {
   }
 }
 
-/** Validate and install one user-selected ONNX wakeword model. */
+/** Validate and install one user-selected TFLite wakeword model. */
 export async function importWakewordModel(filename, contentBase64) {
   return callBridge('importWakewordModel', filename, contentBase64);
 }

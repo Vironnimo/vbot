@@ -254,7 +254,7 @@ describe('getWakewordStatus', () => {
           getWakewordStatus: () => ({
             enabled: true,
             state: 'listening',
-            engine: 'openwakeword',
+            engine: 'pyopen_wakeword',
           }),
         },
       },
@@ -310,8 +310,12 @@ describe('setWakewordConfig', () => {
       },
     };
 
-    await setWakewordConfig({ sensitivity: 0.8 });
-    expect(calls).toEqual([{ sensitivity: 0.8 }]);
+    await setWakewordConfig({
+      model_sensitivities: { 'builtin/okay_nabu': 0.8 },
+    });
+    expect(calls).toEqual([
+      { model_sensitivities: { 'builtin/okay_nabu': 0.8 } },
+    ]);
   });
 });
 
@@ -341,7 +345,7 @@ describe('desktop Voice recovery and devices', () => {
 
 describe('desktop wakeword models', () => {
   it('lists, imports, and deletes models through the bridge', async () => {
-    const models = [{ id: 'builtin/hey_jarvis', label: 'Hey Jarvis' }];
+    const models = [{ id: 'builtin/okay_nabu', label: 'Okay Nabu' }];
     const importModel = vi.fn(() => ({
       id: 'custom/model',
       label: 'Hey Computer',
@@ -360,12 +364,12 @@ describe('desktop wakeword models', () => {
 
     await expect(listWakewordModels()).resolves.toEqual(models);
     await expect(
-      importWakewordModel('computer.onnx', 'b25ueA=='),
+      importWakewordModel('computer.tflite', 'b25ueA=='),
     ).resolves.toEqual({ id: 'custom/model', label: 'Hey Computer' });
     await expect(deleteWakewordModel('custom/model')).resolves.toEqual({
       deleted: true,
     });
-    expect(importModel).toHaveBeenCalledWith('computer.onnx', 'b25ueA==');
+    expect(importModel).toHaveBeenCalledWith('computer.tflite', 'b25ueA==');
     expect(deleteModel).toHaveBeenCalledWith('custom/model');
   });
 

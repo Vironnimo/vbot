@@ -38,6 +38,7 @@ SETTINGS_FILE_NAME = "settings.json"
 SERVERS_KEY = "servers"
 LAST_USED_KEY = "last_used"
 WAKEWORD_KEY = "wakeword"
+DEFAULT_WAKEWORD_MODEL_IDS = ("builtin/okay_nabu", "builtin/hey_nabu")
 # Read and write both retry a few times on transient I/O errors (e.g. a
 # Windows file lock from antivirus or another accessor) before giving up.
 _IO_RETRY_ATTEMPTS = 3
@@ -53,10 +54,8 @@ _SETTINGS_LOCKS: dict[str, threading.RLock] = {}
 DEFAULT_WAKEWORD_SETTINGS: dict[str, Any] = {
     "enabled": False,
     "microphone": None,
-    "model_id": "builtin/hey_jarvis",
-    # Sensitivity is calibrated per model. The bridge exposes the selected
-    # model's value as a flat runtime field while this map preserves tuning
-    # when the user switches between installed models.
+    "active_model_ids": list(DEFAULT_WAKEWORD_MODEL_IDS),
+    # Sensitivity is calibrated and preserved independently per installed model.
     "model_sensitivities": {},
     # Agent/session routing is server-specific. A Desktop can switch between
     # unrelated vBot servers, where the same bare agent id may name a different
@@ -259,6 +258,15 @@ def read_wakeword_settings(path: Path | None = None) -> dict[str, Any]:
         wakeword_data = {}
     merged = copy.deepcopy(DEFAULT_WAKEWORD_SETTINGS)
     merged.update(wakeword_data)
+    merged.pop("model_id", None)
+    active_model_ids = merged.get("active_model_ids")
+    if _valid_active_model_ids(active_model_ids) and isinstance(active_model_ids, list):
+        merged["active_model_ids"] = [model_id.strip() for model_id in active_model_ids]
+    else:
+        merged["active_model_ids"] = list(DEFAULT_WAKEWORD_MODEL_IDS)
+    sensitivities = merged.get("model_sensitivities")
+    if not isinstance(sensitivities, dict):
+        merged["model_sensitivities"] = {}
     return merged
 
 
@@ -322,3 +330,12 @@ def _normalize_target_reference(reference: Any) -> dict[str, Any] | None:
     if server is None:
         return None
     return {"host": server["host"], "port": server["port"]}
+
+
+def _valid_active_model_ids(value: Any) -> bool:
+    """Return whether persisted active model IDs have the supported shape."""
+    if not isinstance(value, list) or not 1 <= len(value) <= 2:
+        return False
+    if any(not isinstance(model_id, str) or not model_id.strip() for model_id in value):
+        return False
+    return len({model_id.strip() for model_id in value}) == len(value)

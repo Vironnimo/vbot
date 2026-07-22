@@ -40,6 +40,8 @@ _SPEECH_START_TIMEOUT_SECONDS = 4.0
 _SPEECH_START_FRAME_COUNT = int(_SPEECH_START_TIMEOUT_SECONDS / (_VAD_FRAME_DURATION_MS / 1000))
 _PRE_SPEECH_DURATION_SECONDS = 0.3
 _PRE_SPEECH_FRAME_COUNT = int(_PRE_SPEECH_DURATION_SECONDS / (_VAD_FRAME_DURATION_MS / 1000))
+_DETECTION_PRE_ROLL_SECONDS = 0.32
+_DETECTION_PRE_ROLL_CHUNKS = int(_DETECTION_PRE_ROLL_SECONDS / (_FRAME_SIZE_SAMPLES / _SAMPLE_RATE))
 
 _MAX_RECORDING_SECONDS = 15.0
 _MAX_RECORDING_FRAMES = int(_MAX_RECORDING_SECONDS / (_VAD_FRAME_DURATION_MS / 1000))
@@ -56,7 +58,6 @@ _MAX_RETRIES = 3
 # so the WebUI status indicator can be validated with --mock-wakeword.
 _MOCK_FRAME_SECONDS = 0.1
 _MOCK_STAGE_SECONDS = 0.8
-_MOCK_THRESHOLD = 0.5
 # Idle low scores then a spike, so the mock periodically triggers one full cycle.
 _MOCK_DEFAULT_SCORES = [0.0] * 25 + [1.0]
 
@@ -222,7 +223,7 @@ class WakewordWorker:
 
         self._bridge.publish_state("listening")
         consecutive_read_errors = 0
-        wakeword_armed = True
+        detection_pre_roll: deque[bytes] = deque(maxlen=_DETECTION_PRE_ROLL_CHUNKS)
 
         try:
             while self._running.is_set():
@@ -241,22 +242,24 @@ class WakewordWorker:
                     break
 
                 consecutive_read_errors = 0
+                detection_pre_roll.append(chunk)
 
                 try:
-                    score = self._engine.detect(chunk)
+                    match = self._engine.detect(chunk)
                 except Exception:
                     logger.warning("Wakeword detection failed", exc_info=True)
                     self._fail("detection_failed")
                     break
-                threshold = getattr(self._engine, "threshold", 0.5)
-                if not wakeword_armed:
-                    if score < threshold:
-                        wakeword_armed = True
-                    continue
-                if score >= threshold:
-                    wakeword_armed = False
+                if match is not None:
+                    logger.info(
+                        "Wakeword detected: model=%s score=%.3f threshold=%.3f",
+                        match.model_id,
+                        match.score,
+                        match.threshold,
+                    )
                     self._bridge.publish_state("wakeword_detected")
-                    outcome = self._handle_detection()
+                    outcome = self._handle_detection(b"".join(detection_pre_roll))
+                    detection_pre_roll.clear()
                     if not self._running.is_set():
                         break
                     self._prepare_next_listen(outcome)
@@ -333,7 +336,7 @@ class WakewordWorker:
 
     # -- Post-detection pipeline ---------------------------------------------
 
-    def _handle_detection(self) -> str | None:
+    def _handle_detection(self, pre_roll_audio: bytes = b"") -> str | None:
         """Record audio, transcribe, and send after wakeword detection."""
         config = self._read_config()
         agent_id = config.get("target_agent_id")
@@ -343,7 +346,7 @@ class WakewordWorker:
             return None
 
         self._bridge.publish_state("recording")
-        audio_data = self._record_until_silence()
+        audio_data = self._record_until_silence(pre_roll_audio)
         if audio_data is None:
             return _OUTCOME_NO_SPEECH
         if not self._running.is_set():
@@ -413,7 +416,7 @@ class WakewordWorker:
 
     # -- Audio recording -----------------------------------------------------
 
-    def _record_until_silence(self) -> bytes | None:
+    def _record_until_silence(self, pre_roll_audio: bytes = b"") -> bytes | None:
         """Capture microphone audio until silence or max duration.
 
         Uses webrtcvad for voice activity detection. Returns WAV-encoded
@@ -423,11 +426,12 @@ class WakewordWorker:
             import webrtcvad  # type: ignore[import-untyped]
         except ImportError:
             logger.warning("webrtcvad not available; recording raw audio")
-            return self._record_raw()
+            return self._record_raw(pre_roll_audio)
 
         vad = webrtcvad.Vad(_VAD_MODE)
         frames: list[bytes] = []
         pre_speech_frames: deque[bytes] = deque(maxlen=_PRE_SPEECH_FRAME_COUNT)
+        pre_speech_frames.extend(_end_aligned_vad_frames(pre_roll_audio))
         silent_frames = 0
         has_speech = False
         waited_frames = 0
@@ -469,7 +473,7 @@ class WakewordWorker:
 
         return _encode_wav(b"".join(frames))
 
-    def _record_raw(self) -> bytes | None:
+    def _record_raw(self, pre_roll_audio: bytes = b"") -> bytes | None:
         """Fallback recording without VAD — fixed 3-second capture."""
         frames: list[bytes] = []
         max_frames = int(3.0 / (_VAD_FRAME_DURATION_MS / 1000))
@@ -484,7 +488,7 @@ class WakewordWorker:
                 break
         if not frames:
             return None
-        return _encode_wav(b"".join(frames))
+        return _encode_wav(pre_roll_audio + b"".join(frames))
 
     # -- Server communication ------------------------------------------------
 
@@ -626,6 +630,18 @@ def _encode_wav(raw_frames: bytes) -> bytes:
         wav_file.setframerate(_SAMPLE_RATE)
         wav_file.writeframes(raw_frames)
     return buffer.getvalue()
+
+
+def _end_aligned_vad_frames(audio: bytes) -> list[bytes]:
+    """Split PCM into full VAD frames while retaining the newest audio."""
+    frame_bytes = _VAD_FRAME_SIZE * _SAMPLE_WIDTH
+    if len(audio) < frame_bytes:
+        return []
+    complete_audio = audio[len(audio) % frame_bytes :]
+    return [
+        complete_audio[offset : offset + frame_bytes]
+        for offset in range(0, len(complete_audio), frame_bytes)
+    ]
 
 
 def _backoff_sleep(attempt: int, running: threading.Event | None = None) -> None:
@@ -822,21 +838,12 @@ class MockWakewordWorker:
         except Exception:
             logger.warning("Mock wakeword engine failed to start", exc_info=True)
         self._bridge.publish_state("listening")
-        armed = True
         while self._running.is_set():
             _sleep_while_running(self._running, _MOCK_FRAME_SECONDS)
             if not self._running.is_set():
                 break
-            score = self._engine.detect(b"")
-            threshold = getattr(self._engine, "threshold", _MOCK_THRESHOLD)
-            if not armed:
-                # Mirror the real worker: re-arm only once the score falls back
-                # below threshold, so one spike is one cycle.
-                if score < threshold:
-                    armed = True
-                continue
-            if score >= threshold:
-                armed = False
+            match = self._engine.detect(b"")
+            if match is not None:
                 self._simulate_cycle()
                 if self._running.is_set():
                     self._bridge.publish_state("listening")

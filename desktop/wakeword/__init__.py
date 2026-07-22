@@ -3,8 +3,9 @@
 from desktop.wakeword.bridge import DesktopBridge
 from desktop.wakeword.engine import (
     MockWakewordEngine,
-    OpenWakeWordEngine,
+    MultiWakewordEngine,
     WakewordEngine,
+    WakewordMatch,
     WakewordModelCatalog,
     WakewordModelDescriptor,
     WakewordModelError,
@@ -15,8 +16,9 @@ __all__ = [
     "DesktopBridge",
     "MockWakewordEngine",
     "MockWakewordWorker",
-    "OpenWakeWordEngine",
+    "MultiWakewordEngine",
     "WakewordEngine",
+    "WakewordMatch",
     "WakewordModelCatalog",
     "WakewordModelDescriptor",
     "WakewordModelError",

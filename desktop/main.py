@@ -356,7 +356,7 @@ def _create_wakeword_bridge(
     def worker_factory(bridge: DesktopBridge) -> Any:
         if bool(args.mock_wakeword):
             return MockWakewordWorker(bridge=bridge)
-        # Both detector backends and sounddevice are optional Desktop extras.
+        # The TFLite detector and sounddevice are optional Desktop extras.
         # Probe them only when Voice is actually starting, never on an ordinary
         # Desktop launch with Voice disabled.
         if not _real_wakeword_available():
@@ -388,14 +388,13 @@ def _create_wakeword_bridge(
 def _real_wakeword_available() -> bool:
     """Whether the on-device wakeword stack can be imported.
 
-    Both detector backends and sounddevice must import for the real worker; a
-    missing dependency selects unavailable mode. The worker factory calls this
+    The detector and sounddevice must import for the real worker; a missing
+    dependency selects unavailable mode. The worker factory calls this
     lazily only when Voice is enabled or explicitly retried, keeping the stack
     out of the normal Desktop startup path.
     """
 
     try:
-        import openwakeword  # type: ignore[import-untyped]  # noqa: F401
         import pyopen_wakeword  # type: ignore[import-untyped]  # noqa: F401
         import sounddevice  # type: ignore[import-untyped]  # noqa: F401
     except ImportError:

@@ -26,6 +26,23 @@ const desktopBridge = await import('$lib/desktopBridge.js');
 const { default: WakewordVoiceSettings } =
   await import('../WakewordVoiceSettings.svelte');
 
+const BUILTIN_MODELS = [
+  {
+    id: 'builtin/okay_nabu',
+    label: 'Okay Nabu',
+    source: 'built_in',
+    format: 'tflite',
+    removable: false,
+  },
+  {
+    id: 'builtin/hey_nabu',
+    label: 'Hey Nabu',
+    source: 'built_in',
+    format: 'tflite',
+    removable: false,
+  },
+];
+
 describe('WakewordVoiceSettings', () => {
   let mountedComponent;
 
@@ -50,22 +67,7 @@ describe('WakewordVoiceSettings', () => {
         default_sample_rate: 8000,
       },
     ]);
-    desktopBridge.listWakewordModels.mockResolvedValue([
-      {
-        id: 'builtin/hey_jarvis',
-        label: 'Hey Jarvis',
-        source: 'built_in',
-        format: 'onnx',
-        removable: false,
-      },
-      {
-        id: 'builtin/hey_mycroft',
-        label: 'Hey Mycroft',
-        source: 'built_in',
-        format: 'onnx',
-        removable: false,
-      },
-    ]);
+    desktopBridge.listWakewordModels.mockResolvedValue(BUILTIN_MODELS);
     desktopBridge.setWakewordConfig.mockResolvedValue(undefined);
     desktopBridge.setWakewordEnabled.mockResolvedValue(undefined);
     desktopBridge.deleteWakewordModel.mockResolvedValue({ deleted: true });
@@ -102,111 +104,111 @@ describe('WakewordVoiceSettings', () => {
     expect(buttonContainingText('Bluetooth hands-free').disabled).toBe(true);
   });
 
-  it('saves the server-specific Personal Agent immediately without a second Save action', async () => {
+  it('saves the server-specific Personal Agent immediately', async () => {
     await mountPanel();
 
     buttonByText('— (none)').click();
     flushSync();
     buttonByText('Main').click();
-    await tick();
-    await Promise.resolve();
+    await settle();
 
-    expect(desktopBridge.setWakewordConfig).toHaveBeenCalledTimes(1);
     expect(desktopBridge.setWakewordConfig).toHaveBeenCalledWith({
       target_agent_id: 'main',
     });
     expect(buttonByText('Save')).toBeUndefined();
   });
 
-  it('selects exactly one installed wakeword model', async () => {
+  it('starts with Okay Nabu and Hey Nabu active together', async () => {
     await mountPanel();
 
-    buttonByLabel('Wakeword model').click();
-    flushSync();
-    buttonContainingText('Hey Mycroft').click();
-    await tick();
-    await Promise.resolve();
+    expect(
+      switchByLabel('Listen for Okay Nabu').getAttribute('aria-checked'),
+    ).toBe('true');
+    expect(
+      switchByLabel('Listen for Hey Nabu').getAttribute('aria-checked'),
+    ).toBe('true');
+    expect(document.body.textContent).toContain(
+      '2 of 2 wakeword models active',
+    );
+  });
+
+  it('allows one active model to be disabled but never the last one', async () => {
+    await mountPanel();
+
+    switchByLabel('Listen for Hey Nabu').click();
+    await settle();
 
     expect(desktopBridge.setWakewordConfig).toHaveBeenCalledWith({
-      model_id: 'builtin/hey_mycroft',
+      active_model_ids: ['builtin/okay_nabu'],
+    });
+    expect(switchByLabel('Listen for Okay Nabu').disabled).toBe(true);
+    expect(document.body.textContent).toContain(
+      '1 of 2 wakeword models active',
+    );
+  });
+
+  it('saves sensitivity for the edited model without changing selection', async () => {
+    await mountPanel();
+    const slider = document.getElementById(
+      'voice-sensitivity-builtin/okay_nabu',
+    );
+
+    slider.value = '0.8';
+    slider.dispatchEvent(new Event('input', { bubbles: true }));
+    slider.dispatchEvent(new Event('change', { bubbles: true }));
+    await settle();
+
+    expect(desktopBridge.setWakewordConfig).toHaveBeenCalledWith({
+      model_sensitivities: {
+        'builtin/okay_nabu': 0.8,
+        'builtin/hey_nabu': 0.5,
+      },
     });
   });
 
-  it('imports a finished ONNX model and selects it', async () => {
+  it('imports a TFLite model without replacing two active phrases', async () => {
     const importedModel = {
       id: 'custom/computer',
       label: 'Hey Computer',
       source: 'imported',
-      format: 'onnx',
+      format: 'tflite',
       removable: true,
+      activated: false,
     };
     desktopBridge.importWakewordModel.mockResolvedValue(importedModel);
-    desktopBridge.getWakewordStatus
-      .mockResolvedValueOnce(baseStatus())
-      .mockResolvedValue({
-        ...baseStatus(),
-        model_id: importedModel.id,
-      });
     desktopBridge.listWakewordModels
-      .mockResolvedValueOnce([
-        {
-          id: 'builtin/hey_jarvis',
-          label: 'Hey Jarvis',
-          source: 'built_in',
-          removable: false,
-        },
-      ])
-      .mockResolvedValue([
-        {
-          id: 'builtin/hey_jarvis',
-          label: 'Hey Jarvis',
-          source: 'built_in',
-          removable: false,
-        },
-        importedModel,
-      ]);
+      .mockResolvedValueOnce(BUILTIN_MODELS)
+      .mockResolvedValue([...BUILTIN_MODELS, importedModel]);
     await mountPanel();
 
     const fileInput = document.body.querySelector('input[type="file"]');
+    expect(fileInput.accept).toContain('.tflite');
     Object.defineProperty(fileInput, 'files', {
       configurable: true,
-      value: [new File(['model'], 'hey_computer.onnx')],
+      value: [new File(['model'], 'hey_computer.tflite')],
     });
     fileInput.dispatchEvent(new Event('change', { bubbles: true }));
     await waitForCondition(
       () => desktopBridge.importWakewordModel.mock.calls.length > 0,
     );
-    await waitForCondition(() =>
-      desktopBridge.setWakewordConfig.mock.calls.some(
-        ([payload]) => payload.model_id === importedModel.id,
-      ),
-    );
 
     expect(desktopBridge.importWakewordModel).toHaveBeenCalledWith(
-      'hey_computer.onnx',
+      'hey_computer.tflite',
       'bW9kZWw=',
     );
+    expect(desktopBridge.setWakewordConfig).not.toHaveBeenCalled();
   });
 
-  it('requires confirmation, switches away, and removes an imported model', async () => {
+  it('removes only an inactive imported model after confirmation', async () => {
     const customModel = {
       id: 'custom/computer',
       label: 'Hey Computer',
       source: 'imported',
-      format: 'onnx',
+      format: 'tflite',
       removable: true,
     };
-    desktopBridge.getWakewordStatus.mockResolvedValue({
-      ...baseStatus(),
-      model_id: customModel.id,
-    });
     desktopBridge.listWakewordModels.mockResolvedValue([
-      {
-        id: 'builtin/hey_jarvis',
-        label: 'Hey Jarvis',
-        source: 'built_in',
-        removable: false,
-      },
+      ...BUILTIN_MODELS,
       customModel,
     ]);
     await mountPanel();
@@ -217,16 +219,12 @@ describe('WakewordVoiceSettings', () => {
       'Remove “Hey Computer” permanently',
     );
     buttonByText('Delete').click();
-    await tick();
-    await Promise.resolve();
-    await tick();
+    await settle();
 
-    expect(desktopBridge.setWakewordConfig).toHaveBeenCalledWith({
-      model_id: 'builtin/hey_jarvis',
-    });
     expect(desktopBridge.deleteWakewordModel).toHaveBeenCalledWith(
       customModel.id,
     );
+    expect(desktopBridge.setWakewordConfig).not.toHaveBeenCalled();
   });
 
   async function mountPanel() {
@@ -235,9 +233,7 @@ describe('WakewordVoiceSettings', () => {
       props: { agents: [{ id: 'main', name: 'Main' }] },
     });
     flushSync();
-    await tick();
-    await Promise.resolve();
-    flushSync();
+    await settle();
   }
 });
 
@@ -246,8 +242,11 @@ function baseStatus() {
     enabled: false,
     state: 'off',
     microphone: null,
-    model_id: 'builtin/hey_jarvis',
-    sensitivity: 0.5,
+    active_model_ids: ['builtin/okay_nabu', 'builtin/hey_nabu'],
+    model_sensitivities: {
+      'builtin/okay_nabu': 0.5,
+      'builtin/hey_nabu': 0.5,
+    },
     target_agent_id: null,
     session_behavior: 'active',
     mock: false,
@@ -267,10 +266,22 @@ function buttonByLabel(label) {
   return document.body.querySelector(`button[aria-label="${label}"]`);
 }
 
+function switchByLabel(label) {
+  return document.body.querySelector(
+    `button[role="switch"][aria-label="${label}"]`,
+  );
+}
+
 function buttonContainingText(text) {
   return [...document.body.querySelectorAll('button')].find((button) =>
     button.textContent.includes(text),
   );
+}
+
+async function settle() {
+  await tick();
+  await Promise.resolve();
+  flushSync();
 }
 
 async function waitForCondition(predicate) {

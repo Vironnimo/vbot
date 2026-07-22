@@ -2,6 +2,7 @@
   import { onDestroy } from 'svelte';
   import Dropdown from './Dropdown.svelte';
   import Button from './ui/Button.svelte';
+  import Badge from './ui/Badge.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import Toggle from './ui/Toggle.svelte';
   import { t } from '$lib/i18n.js';
@@ -78,26 +79,12 @@
       ? String(voiceState.microphone)
       : '',
   );
-  let wakewordModelOptions = $derived(
-    wakewordModels.map((model) => ({
-      value: model.id,
-      label: model.label,
-      secondaryLabel:
-        model.source === 'built_in'
-          ? t('settings.voice.modelBuiltIn', 'Built-in')
-          : t('settings.voice.modelImported', 'Imported ONNX'),
-    })),
-  );
-  let selectedWakewordModel = $derived(
-    wakewordModels.find((model) => model.id === voiceState.model_id) ?? null,
-  );
   let modelActionBusy = $derived(modelActionState !== 'idle');
 
   let liveStateLabel = $derived(liveStateText(voiceState.liveState));
   let liveStateDotClass = $derived(liveStateDotColor(voiceState.liveState));
 
   let dirty = $derived(voiceSettingsDirty(voiceState, lastSaved));
-  let sensitivityPercent = $derived(Math.round(voiceState.sensitivity * 100));
   let enableToggleDisabled = $derived(
     !loaded ||
       (!voiceState.enabled &&
@@ -136,7 +123,7 @@
       ),
       wakeword_model_invalid: t(
         'settings.voice.error.modelInvalid',
-        'The wakeword model is not a compatible openWakeWord ONNX model.',
+        'The wakeword model is not a compatible pyopen-wakeword TFLite model.',
       ),
       microphone_unavailable: t(
         'settings.voice.error.microphone',
@@ -288,9 +275,17 @@
     void saveConfig();
   }
 
-  async function handleWakewordModelChange(value) {
-    if (!value || value === voiceState.model_id) return;
-    voiceState = { ...voiceState, model_id: value };
+  async function handleWakewordModelToggle(model, checked) {
+    const isActive = voiceState.active_model_ids.includes(model.id);
+    if (checked === isActive) return;
+    if (checked && voiceState.active_model_ids.length >= 2) return;
+    if (!checked && voiceState.active_model_ids.length <= 1) return;
+    voiceState = {
+      ...voiceState,
+      active_model_ids: checked
+        ? [...voiceState.active_model_ids, model.id]
+        : voiceState.active_model_ids.filter((modelId) => modelId !== model.id),
+    };
     await saveConfig();
     if (saveState !== 'saved') return;
     await refreshEditableStatus();
@@ -311,14 +306,18 @@
       await saveChain;
       const contentBase64 = await readFileAsBase64(file);
       const imported = await importWakewordModel(file.name, contentBase64);
-      await setWakewordConfig({ model_id: imported.id });
       wakewordModels = await listWakewordModels();
       await refreshEditableStatus();
       onToast({
-        title: t(
-          'settings.voice.importSuccess',
-          'Wakeword model imported and selected.',
-        ),
+        title: imported.activated
+          ? t(
+              'settings.voice.importSuccessActive',
+              'Wakeword model imported and activated.',
+            )
+          : t(
+              'settings.voice.importSuccessInactive',
+              'Wakeword model imported. Deactivate another model to use it.',
+            ),
         variant: 'success',
       });
     } catch (error) {
@@ -346,7 +345,6 @@
     modelActionState = 'deleting';
     try {
       await saveChain;
-      await setWakewordConfig({ model_id: 'builtin/hey_jarvis' });
       await deleteWakewordModel(model.id);
       wakewordModels = await listWakewordModels();
       await refreshEditableStatus();
@@ -387,10 +385,16 @@
     });
   }
 
-  function handleSensitivityInput(event) {
+  function handleSensitivityInput(modelId, event) {
     const value = parseFloat(event.target.value);
     if (Number.isFinite(value)) {
-      voiceState = { ...voiceState, sensitivity: value };
+      voiceState = {
+        ...voiceState,
+        model_sensitivities: {
+          ...voiceState.model_sensitivities,
+          [modelId]: value,
+        },
+      };
     }
   }
 
@@ -502,34 +506,111 @@
       </div>
     {/if}
 
-    <!-- Active wakeword model and local model management -->
+    <!-- Active wakeword models and local model management -->
     <div class="s-row">
       <div class="s-row-info">
         <div class="s-row-label">
-          {t('settings.voice.model', 'Wakeword model')}
+          {t('settings.voice.models', 'Wakeword phrases')}
         </div>
         <div class="s-row-desc">
           {t(
             'settings.voice.modelDescription',
-            'Exactly one model listens at a time. Import finished custom ONNX models trained outside vBot.',
+            'Choose one or two phrases to listen for at the same time. Each model keeps its own sensitivity.',
           )}
         </div>
       </div>
       <div class="s-row-control voice-model-control">
-        <Dropdown
-          value={voiceState.model_id}
-          options={wakewordModelOptions}
-          ariaLabel={t('settings.voice.model', 'Wakeword model')}
-          triggerClass="voice-model-dropdown"
-          onValueChange={handleWakewordModelChange}
-          disabled={!loaded || modelActionBusy || wakewordModels.length === 0}
-        />
+        <div class="voice-model-list">
+          {#each wakewordModels as model (model.id)}
+            {@const active = voiceState.active_model_ids.includes(model.id)}
+            {@const sensitivity =
+              voiceState.model_sensitivities[model.id] ?? 0.5}
+            <div
+              class:voice-model-card--active={active}
+              class="voice-model-card"
+            >
+              <div class="voice-model-card__header">
+                <div class="voice-model-card__identity">
+                  <span class="voice-model-card__name">{model.label}</span>
+                  <Badge
+                    variant={model.source === 'built_in' ? 'info' : 'neutral'}
+                  >
+                    {model.source === 'built_in'
+                      ? t('settings.voice.modelBuiltIn', 'Built-in')
+                      : t('settings.voice.modelImported', 'Imported TFLite')}
+                  </Badge>
+                </div>
+                <Toggle
+                  size="sm"
+                  checked={active}
+                  onChange={(checked) =>
+                    handleWakewordModelToggle(model, checked)}
+                  disabled={!loaded ||
+                    modelActionBusy ||
+                    (active && voiceState.active_model_ids.length === 1) ||
+                    (!active && voiceState.active_model_ids.length === 2)}
+                  ariaLabel={t(
+                    'settings.voice.modelToggleAria',
+                    'Listen for {name}',
+                    { name: model.label },
+                  )}
+                />
+              </div>
+              {#if active}
+                <div class="voice-model-card__tuning">
+                  <div class="voice-model-card__sensitivity">
+                    <label for={`voice-sensitivity-${model.id}`}>
+                      {t('settings.voice.sensitivity', 'Sensitivity')}
+                    </label>
+                    <span>{Math.round(sensitivity * 100)}%</span>
+                  </div>
+                  <input
+                    id={`voice-sensitivity-${model.id}`}
+                    type="range"
+                    min="0.05"
+                    max="0.95"
+                    step="0.05"
+                    value={sensitivity}
+                    oninput={(event) => handleSensitivityInput(model.id, event)}
+                    onchange={() => void saveConfig()}
+                    disabled={!loaded || modelActionBusy}
+                  />
+                  <div class="voice-slider-labels">
+                    <span
+                      >{t(
+                        'settings.voice.lessSensitive',
+                        'Less sensitive',
+                      )}</span
+                    >
+                    <span
+                      >{t(
+                        'settings.voice.moreSensitive',
+                        'More sensitive',
+                      )}</span
+                    >
+                  </div>
+                </div>
+              {/if}
+              {#if model.removable && !active}
+                <div class="voice-model-card__actions">
+                  <Button
+                    variant="tertiary"
+                    disabled={!loaded || modelActionBusy}
+                    onClick={() => (deleteConfirmModel = model)}
+                  >
+                    {t('settings.voice.removeModel', 'Remove imported model')}
+                  </Button>
+                </div>
+              {/if}
+            </div>
+          {/each}
+        </div>
         <div class="voice-model-actions">
           <input
             bind:this={modelFileInput}
             class="voice-model-file"
             type="file"
-            accept=".onnx,application/octet-stream"
+            accept=".tflite,application/octet-stream"
             onchange={handleWakewordModelFile}
           />
           <Button
@@ -538,51 +619,15 @@
             disabled={!loaded || modelActionBusy}
             onClick={chooseWakewordModelFile}
           >
-            {t('settings.voice.importModel', 'Import ONNX model')}
+            {t('settings.voice.importModel', 'Import TFLite model')}
           </Button>
-          {#if selectedWakewordModel?.removable}
-            <Button
-              variant="tertiary"
-              disabled={!loaded || modelActionBusy}
-              onClick={() => (deleteConfirmModel = selectedWakewordModel)}
-            >
-              {t('settings.voice.removeModel', 'Remove imported model')}
-            </Button>
-          {/if}
         </div>
-      </div>
-    </div>
-
-    <!-- Sensitivity is stored independently for each model -->
-    <div class="s-row">
-      <div class="s-row-info">
-        <div class="s-row-label">
-          {t('settings.voice.sensitivity', 'Sensitivity')}
-        </div>
-        <div class="s-row-desc">
-          {sensitivityPercent}%
-        </div>
-      </div>
-      <div class="s-row-control">
-        <div class="voice-slider">
-          <label class="voice-slider-label" for="voice-sensitivity">
-            {t('settings.voice.sensitivity', 'Sensitivity')}
-          </label>
-          <input
-            id="voice-sensitivity"
-            type="range"
-            min="0.05"
-            max="0.95"
-            step="0.05"
-            value={voiceState.sensitivity}
-            oninput={handleSensitivityInput}
-            onchange={() => void saveConfig()}
-            disabled={!loaded}
-          />
-          <div class="voice-slider-labels">
-            <span>{t('settings.voice.lessSensitive', 'Less sensitive')}</span>
-            <span>{t('settings.voice.moreSensitive', 'More sensitive')}</span>
-          </div>
+        <div class="voice-model-limit">
+          {t(
+            'settings.voice.modelLimit',
+            '{count} of 2 wakeword models active',
+            { count: voiceState.active_model_ids.length },
+          )}
         </div>
       </div>
     </div>
@@ -681,7 +726,7 @@
     title={t('settings.voice.deleteConfirmTitle', 'Remove wakeword model')}
     body={t(
       'settings.voice.deleteConfirm',
-      'Remove “{name}” permanently from this Desktop? The ONNX file stored by vBot will be deleted.',
+      'Remove “{name}” permanently from this Desktop? The TFLite file stored by vBot will be deleted.',
       { name: deleteConfirmModel.label },
     )}
     confirmLabel={t('common.delete', 'Delete')}
@@ -766,21 +811,6 @@
     }
   }
 
-  /* Sensitivity slider */
-  .voice-slider {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    width: 100%;
-  }
-  .voice-slider-label {
-    font-size: var(--fs-body-sm);
-    color: var(--text-lo);
-  }
-  .voice-slider input[type='range'] {
-    width: 100%;
-    accent-color: var(--accent);
-  }
   .voice-slider-labels {
     display: flex;
     justify-content: space-between;
@@ -790,7 +820,6 @@
 
   .voice-microphone-control,
   .voice-model-control,
-  .voice-settings :global(.voice-model-dropdown.dropdown),
   .voice-settings :global(.voice-microphone-dropdown.dropdown) {
     min-width: 300px;
   }
@@ -801,11 +830,74 @@
     align-items: stretch;
     gap: 8px;
   }
+  .voice-model-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .voice-model-card {
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    transition:
+      border-color 140ms ease,
+      background 140ms ease;
+  }
+  .voice-model-card--active {
+    border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+    background: color-mix(in srgb, var(--accent) 6%, var(--surface-2));
+  }
+  .voice-model-card__header,
+  .voice-model-card__identity,
+  .voice-model-card__sensitivity,
+  .voice-model-card__actions {
+    display: flex;
+    align-items: center;
+  }
+  .voice-model-card__header,
+  .voice-model-card__sensitivity {
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .voice-model-card__identity {
+    min-width: 0;
+    flex-wrap: wrap;
+    gap: 7px;
+  }
+  .voice-model-card__name {
+    color: var(--text-hi);
+    font-size: var(--fs-body-md);
+    font-weight: 600;
+  }
+  .voice-model-card__tuning {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding-top: 10px;
+  }
+  .voice-model-card__sensitivity,
+  .voice-slider-labels,
+  .voice-model-limit {
+    color: var(--text-lo);
+    font-size: var(--fs-body-sm);
+  }
+  .voice-model-card__tuning input[type='range'] {
+    width: 100%;
+    accent-color: var(--accent);
+  }
+  .voice-model-card__actions {
+    justify-content: flex-end;
+    padding-top: 8px;
+  }
   .voice-model-actions {
     display: flex;
     justify-content: flex-end;
     flex-wrap: wrap;
     gap: 8px;
+  }
+  .voice-model-limit {
+    text-align: right;
   }
   .voice-model-file {
     display: none;

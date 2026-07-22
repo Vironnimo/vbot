@@ -1,69 +1,35 @@
-"""Tests for MockWakewordEngine score sequence and lifecycle."""
+"""Tests for MockWakewordEngine structured matches and lifecycle."""
 
-from __future__ import annotations
-
-from desktop.wakeword.engine import MockWakewordEngine
+from desktop.wakeword.engine import MockWakewordEngine, WakewordMatch
 
 
-def test_mock_engine_returns_zero_when_not_running() -> None:
-    engine = MockWakewordEngine()
+def test_mock_engine_returns_none_before_start() -> None:
+    engine = MockWakewordEngine(score_sequence=[1.0])
 
-    score = engine.detect(b"\x00" * 2560)
-
-    assert score == 0.0
+    assert engine.detect(b"audio") is None
 
 
-def test_mock_engine_returns_scores_from_sequence() -> None:
-    engine = MockWakewordEngine(score_sequence=[0.2, 0.5, 0.9])
+def test_mock_engine_cycles_scores_and_returns_only_threshold_matches() -> None:
+    engine = MockWakewordEngine(
+        score_sequence=[0.2, 0.5, 0.9],
+        model_id="builtin/hey_nabu",
+    )
     engine.start()
 
-    assert engine.detect(b"\x00" * 2560) == 0.2
-    assert engine.detect(b"\x00" * 2560) == 0.5
-    assert engine.detect(b"\x00" * 2560) == 0.9
+    assert engine.detect(b"audio") is None
+    assert engine.detect(b"audio") == WakewordMatch("builtin/hey_nabu", 0.5, 0.5)
+    assert engine.detect(b"audio") == WakewordMatch("builtin/hey_nabu", 0.9, 0.5)
+    assert engine.detect(b"audio") is None
 
 
-def test_mock_engine_wraps_around_sequence() -> None:
-    engine = MockWakewordEngine(score_sequence=[0.0, 1.0])
+def test_mock_engine_stop_and_score_replacement_reset_state() -> None:
+    engine = MockWakewordEngine(score_sequence=[0.9, 0.9])
     engine.start()
+    assert engine.detect(b"audio") is not None
 
-    assert engine.detect(b"\x00" * 2560) == 0.0
-    assert engine.detect(b"\x00" * 2560) == 1.0
-    assert engine.detect(b"\x00" * 2560) == 0.0
-    assert engine.detect(b"\x00" * 2560) == 1.0
-
-
-def test_mock_engine_stops_returning_after_stop() -> None:
-    engine = MockWakewordEngine(score_sequence=[0.8])
-    engine.start()
-    assert engine.detect(b"\x00" * 2560) == 0.8
+    engine.set_score_sequence([0.1, 1.0])
+    assert engine.detect(b"audio") is None
+    assert engine.detect(b"audio") is not None
 
     engine.stop()
-    assert engine.detect(b"\x00" * 2560) == 0.0
-
-
-def test_mock_engine_default_sequence_returns_zero() -> None:
-    engine = MockWakewordEngine()
-    engine.start()
-
-    for _ in range(10):
-        assert engine.detect(b"\x00" * 2560) == 0.0
-
-
-def test_set_score_sequence_replaces_and_resets() -> None:
-    engine = MockWakewordEngine(score_sequence=[0.9, 0.9, 0.9])
-    engine.start()
-    engine.detect(b"\x00" * 2560)  # 0.9
-    engine.detect(b"\x00" * 2560)  # 0.9
-
-    engine.set_score_sequence([0.1])
-
-    assert engine.detect(b"\x00" * 2560) == 0.1
-
-
-def test_mock_engine_accepts_any_audio_chunk_size() -> None:
-    engine = MockWakewordEngine(score_sequence=[0.5])
-    engine.start()
-
-    assert engine.detect(b"\x00" * 480) == 0.5  # Small chunk
-    assert engine.detect(b"\x00" * 2560) == 0.5  # Standard chunk
-    assert engine.detect(b"" * 0) == 0.5  # Empty chunk
+    assert engine.detect(b"audio") is None
