@@ -147,7 +147,9 @@
   min-width: 0;
   flex: 1;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 24px 32px;
+  scrollbar-gutter: stable;
 }
 
 /* The settings document: one scrolling column of section cards, capped to
@@ -184,6 +186,14 @@
 
 .s-section + .s-section {
   margin-top: 14px;
+}
+
+/* The document ends with enough quiet space to bring the final section to the
+   same upper-third reading line used by click navigation and scrollspy. Its
+   exact height follows the live scrollport, including Desktop/mobile chrome. */
+.settings-scroll-tail {
+  width: 100%;
+  pointer-events: none;
 }
 
 .s-section-header {

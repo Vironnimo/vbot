@@ -9,6 +9,7 @@ import {
   App,
   cleanupAppHarness,
   createChatRpcMock,
+  createSettingsRpcMock,
   createSubAgentNavigationRpcMock,
   listLogsMock,
   readLogFileMock,
@@ -251,6 +252,33 @@ describe('App', () => {
       expect(sidebarNavButton('Chat')?.getAttribute('aria-current')).toBe(
         'page',
       );
+    });
+  });
+
+  it('restores the Settings reading position after switching to another tab', async () => {
+    rpcMock.mockImplementation(createSettingsRpcMock());
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    sidebarNavButton('Settings')?.click();
+    await waitForCondition(() => {
+      expect(document.querySelector('.settings-scroll-tail')).toBeTruthy();
+    });
+
+    const firstScrollContainer = document.querySelector('.settings-content');
+    firstScrollContainer.scrollTop = 640;
+
+    sidebarNavButton('Logs')?.click();
+    await waitForCondition(() => {
+      expect(document.querySelector('#logs-title')).toBeTruthy();
+    });
+
+    sidebarNavButton('Settings')?.click();
+    await waitForCondition(() => {
+      const restoredContainer = document.querySelector('.settings-content');
+      expect(restoredContainer).toBeTruthy();
+      expect(restoredContainer).not.toBe(firstScrollContainer);
+      expect(restoredContainer.scrollTop).toBe(640);
     });
   });
 

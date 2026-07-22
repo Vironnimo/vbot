@@ -94,38 +94,120 @@ describe('SettingsView', () => {
 
   it('uses the compact section picker to navigate the mobile Settings document', async () => {
     rpcMock.mockResolvedValue(createSettingsPayload());
-    const originalScrollIntoView = Element.prototype.scrollIntoView;
-    const scrollIntoView = vi.fn();
-    Element.prototype.scrollIntoView = scrollIntoView;
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await waitForText('Add provider');
 
+    const scrollContainer = document.querySelector('.settings-content');
+    const scrollTo = vi.fn();
+    scrollContainer.scrollTo = scrollTo;
+
+    const picker = document.querySelector('#settings-mobile-section');
+    expect(picker).not.toBeNull();
+    expect(picker.textContent).toContain('Providers');
+
+    picker.click();
+    flushSync();
+
+    const appearanceOption = Array.from(
+      document.body.querySelectorAll('.dropdown-option'),
+    ).find((option) => option.textContent.includes('Appearance'));
+    expect(appearanceOption).toBeTruthy();
+
+    appearanceOption.click();
+    flushSync();
+
+    expect(picker.textContent).toContain('Appearance');
+    expect(scrollTo).toHaveBeenCalledWith({
+      behavior: 'smooth',
+      top: 0,
+    });
+  });
+
+  it('shares an upper-third reading line between click navigation, scrollspy, and the document tail', async () => {
+    rpcMock.mockResolvedValue(createSettingsPayload());
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await waitForText('Add provider');
+
+    const scrollContainer = document.querySelector('.settings-content');
+    const appearanceSection = document.querySelector(
+      '[data-settings-section="appearance"]',
+    );
+    Object.defineProperties(scrollContainer, {
+      clientHeight: { configurable: true, value: 1000 },
+      scrollHeight: { configurable: true, value: 4000 },
+      scrollTop: { configurable: true, value: 400, writable: true },
+    });
+    scrollContainer.getBoundingClientRect = () => ({ top: 100 });
+    appearanceSection.getBoundingClientRect = () => ({ top: 900 });
+    const scrollTo = vi.fn();
+    scrollContainer.scrollTo = scrollTo;
+
+    clickButton('Appearance');
+
+    // 400 current + 800 section delta - 320 reading-line offset.
+    expect(scrollTo).toHaveBeenCalledWith({
+      behavior: 'smooth',
+      top: 880,
+    });
+
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = vi.fn(() => ({ matches: true }));
     try {
-      mountedComponent = mount(SettingsView, { target: document.body });
-      flushSync();
-      await waitForText('Add provider');
-
-      const picker = document.querySelector('#settings-mobile-section');
-      expect(picker).not.toBeNull();
-      expect(picker.textContent).toContain('Providers');
-
-      picker.click();
-      flushSync();
-
-      const appearanceOption = Array.from(
-        document.body.querySelectorAll('.dropdown-option'),
-      ).find((option) => option.textContent.includes('Appearance'));
-      expect(appearanceOption).toBeTruthy();
-
-      appearanceOption.click();
-      flushSync();
-
-      expect(picker.textContent).toContain('Appearance');
-      expect(scrollIntoView).toHaveBeenCalledWith({
-        behavior: 'smooth',
-        block: 'start',
+      clickButton('Appearance');
+      expect(scrollTo).toHaveBeenLastCalledWith({
+        behavior: 'auto',
+        top: 880,
       });
     } finally {
-      Element.prototype.scrollIntoView = originalScrollIntoView;
+      window.matchMedia = originalMatchMedia;
     }
+
+    window.dispatchEvent(new Event('resize'));
+    flushSync();
+    expect(document.querySelector('.settings-scroll-tail').style.height).toBe(
+      '680px',
+    );
+
+    const sections = Array.from(
+      document.querySelectorAll('[data-settings-section]'),
+    );
+    sections.forEach((section, index) => {
+      section.getBoundingClientRect = () => ({ top: 100 + index * 100 });
+    });
+    scrollContainer.dispatchEvent(new Event('wheel'));
+    scrollContainer.dispatchEvent(new Event('scroll'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    flushSync();
+
+    const activeIndexItem = document.querySelector(
+      '.settings-desktop-index .snav-item[aria-current="true"]',
+    );
+    expect(activeIndexItem.textContent.trim()).toBe('Agent defaults');
+
+    const appearanceIndex = sections.indexOf(appearanceSection);
+    sections.forEach((section, index) => {
+      section.getBoundingClientRect = () => ({
+        top:
+          index < appearanceIndex
+            ? -100
+            : index === appearanceIndex
+              ? 420.5
+              : 1000,
+      });
+    });
+    scrollContainer.dispatchEvent(new Event('scroll'));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    flushSync();
+
+    expect(
+      document
+        .querySelector(
+          '.settings-desktop-index .snav-item[aria-current="true"]',
+        )
+        .textContent.trim(),
+    ).toBe('Appearance');
   });
 
   it('adds, removes, and saves skill directories', async () => {
