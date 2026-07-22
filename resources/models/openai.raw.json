@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-07-22T14:53:02.738406+00:00",
+  "fetched_at": "2026-07-20T17:44:15.794085+00:00",
   "provider_id": "openai",
   "raw_response": {
     "models": [
@@ -541,11 +541,11 @@
           "mode": "tokens"
         },
         "upgrade": {
-          "migration_markdown": "GPT-5.4 will be deprecated soon\n\nCodex now uses GPT-5.6 Terra in place of GPT-5.4. Switch to GPT-5.6 Terra to continue.\n",
+          "migration_markdown": "GPT-5.4 is no longer available\n\nCodex now uses GPT-5.6 Terra in place of GPT-5.4. Switch to GPT-5.6 Terra to continue.\n",
           "model": "gpt-5.6-terra"
         },
         "use_responses_lite": false,
-        "visibility": "list",
+        "visibility": "hide",
         "web_search_tool_type": "text_and_image"
       },
       {
@@ -643,11 +643,11 @@
           "mode": "tokens"
         },
         "upgrade": {
-          "migration_markdown": "GPT-5.4 Mini will be deprecated soon\n\nCodex now uses GPT-5.6 Luna in place of GPT-5.4 Mini. Switch to GPT-5.6 Luna to continue.\n",
+          "migration_markdown": "GPT-5.4 Mini is no longer available\n\nCodex now uses GPT-5.6 Luna in place of GPT-5.4 Mini. Switch to GPT-5.6 Luna to continue.\n",
           "model": "gpt-5.6-luna"
         },
         "use_responses_lite": false,
-        "visibility": "list",
+        "visibility": "hide",
         "web_search_tool_type": "text_and_image"
       },
       {

@@ -3,7 +3,7 @@
 
 Normal ``vbot model refresh`` writes the complete runtime Model DB under the
 server's data directory. This maintainer-only entry point selects the explicit
-system target so the complete release database is published in this checkout's
+system target so the complete tracked database is published in this checkout's
 ``resources/models/`` directory.
 """
 
@@ -27,7 +27,7 @@ _WORKTREE_MARKER = PROJECT_ROOT / ".vbot-worktree"
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Refresh the tracked release Model DB through this checkout's server"
+        description="Refresh the tracked system Model DB through this checkout's server"
     )
     parser.add_argument(
         "provider",
