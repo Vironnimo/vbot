@@ -38,7 +38,7 @@ Issues = "https://github.com/Vironnimo/vbot/issues"
 [project.optional-dependencies]
 server  = ["fastapi", "uvicorn[standard]", "websockets", "watchfiles", "python-telegram-bot[rate-limiter]", "discord.py>=2.7,<3", "python-multipart"]
 cli     = ["psutil"]
-desktop = ["pywebview", "openwakeword", "sounddevice", "webrtcvad"]
+desktop = ["pywebview", "openwakeword", "pyopen-wakeword>=1.1,<2", "sounddevice", "webrtcvad"]
 dev     = ["pytest", "pytest-asyncio", "ruff", "mypy", "hatchling", "pytest-xdist", "pytest-timeout", "respx", "fastapi", "uvicorn[standard]", "websockets", "watchfiles", "python-telegram-bot[rate-limiter]", "discord.py>=2.7,<3", "python-multipart", "psutil", "numpy"]
 
 [tool.hatch.build.targets.wheel]
@@ -67,5 +67,5 @@ warn_unused_configs = true
 disallow_untyped_defs = false
 
 [[tool.mypy.overrides]]
-module = ["openwakeword", "openwakeword.*", "sounddevice", "webrtcvad", "yaml"]
+module = ["openwakeword", "openwakeword.*", "pyopen_wakeword", "pyopen_wakeword.*", "sounddevice", "webrtcvad", "yaml"]
 ignore_missing_imports = true
