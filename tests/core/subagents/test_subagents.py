@@ -43,6 +43,7 @@ def make_context(
     nesting_depth: int = 0,
     emit_hook: Any | None = None,
     allowed_agents: list[str] | None = None,
+    result_persisted_hook: Any | None = None,
 ) -> ToolContext:
     return ToolContext(
         agent_id=agent_id,
@@ -57,10 +58,103 @@ def make_context(
         project_id=project_id,
         nesting_depth=nesting_depth,
         emit_hook=emit_hook,
+        result_persisted_hook=result_persisted_hook,
         tool_settings=(
             None if allowed_agents is None else {"subagent": {"allowed_agents": allowed_agents}}
         ),
     )
+
+
+async def test_foreground_result_acknowledges_child_only_after_parent_persistence(
+    tmp_path: Path,
+) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    persisted_callbacks: list[Any] = []
+    context = make_context(
+        result_persisted_hook=persisted_callbacks.append,
+    )
+
+    task = asyncio.create_task(
+        _handle_subagent(
+            context,
+            {"content": "spawn", "agent_id": "worker", "background": False},
+            runtime=runtime,
+            batch_tracker=tracker,
+        )
+    )
+    await asyncio.sleep(0)
+    manager.started[0]["run"].mark_completed(
+        ChatMessage.assistant(
+            model="openai/gpt-5.2",
+            content="child output",
+        )
+    )
+    result = await task
+
+    assert result["ok"] is True
+    assert len(persisted_callbacks) == 1
+    child_session_id = result["data"]["session_id"]
+    child_run_id = result["data"]["run_id"]
+    runtime.chat_sessions.record_terminal_run(
+        "worker",
+        child_session_id,
+        child_run_id,
+        "completed",
+        "2026-07-22T10:00:00+00:00",
+    )
+    assert runtime.chat_sessions.list_with_metadata("worker")[0]["has_unread_completion"] is True
+
+    persisted_callbacks[0]()
+
+    assert runtime.chat_sessions.list_with_metadata("worker")[0]["has_unread_completion"] is False
+
+
+async def test_result_lookup_acknowledges_persisted_child_run_only_after_parent_persistence(
+    tmp_path: Path,
+) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    child = runtime.chat_sessions.create("worker", session_id="child-session")
+    child.append(ChatMessage.assistant(model="openai/gpt-5.2", content="child output"))
+    child.append(
+        ChatMessage.run_summary(
+            run_id="child-run",
+            status="completed",
+            timing={
+                "started_at": "2026-07-22T10:00:00+00:00",
+                "completed_at": "2026-07-22T10:00:01+00:00",
+                "duration_ms": 1000,
+            },
+        )
+    )
+    runtime.chat_sessions.record_terminal_run(
+        "worker",
+        "child-session",
+        "child-run",
+        "completed",
+        "2026-07-22T10:00:00+00:00",
+    )
+    persisted_callbacks: list[Any] = []
+    context = make_context(result_persisted_hook=persisted_callbacks.append)
+
+    result = await _handle_subagent_result(
+        context,
+        {"agent_id": "worker", "session_id": "child-session"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["run_id"] == "child-run"
+    assert len(persisted_callbacks) == 1
+    assert runtime.chat_sessions.list_with_metadata("worker")[0]["has_unread_completion"] is True
+
+    persisted_callbacks[0]()
+
+    assert runtime.chat_sessions.list_with_metadata("worker")[0]["has_unread_completion"] is False
 
 
 class RecordingTriggerService:

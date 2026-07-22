@@ -236,6 +236,7 @@ class _RunRequest:
     sender: MessageSender | None = None
     reply_surface: ReplySurface | None = None
     tool_restriction: tuple[str, ...] | None = None
+    input_persisted_hook: Callable[[], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -517,6 +518,7 @@ class ChatLoop:
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
         tool_restriction: Sequence[str] | None = None,
+        input_persisted_hook: Callable[[], None] | None = None,
     ) -> Run:
         """Start one chat run against an existing session for server-facing callers.
 
@@ -540,6 +542,7 @@ class ChatLoop:
             reply_surface=reply_surface,
             project_id=project_id,
             tool_restriction=tool_restriction,
+            input_persisted_hook=input_persisted_hook,
         )
 
     async def start_run_in_new_session(
@@ -553,6 +556,7 @@ class ChatLoop:
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
         tool_restriction: Sequence[str] | None = None,
+        input_persisted_hook: Callable[[], None] | None = None,
     ) -> Run:
         """Validate a target, create its Session, and start one Run.
 
@@ -572,6 +576,7 @@ class ChatLoop:
             reply_surface=reply_surface,
             project_id=project_id,
             tool_restriction=tool_restriction,
+            input_persisted_hook=input_persisted_hook,
         )
 
     async def queue_run(
@@ -586,6 +591,7 @@ class ChatLoop:
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
         waiting_work_admission: WaitingWorkAdmission | None = None,
+        input_persisted_hook: Callable[[], None] | None = None,
     ) -> QueuedRunItem:
         """Queue one chat run for a busy session or start it immediately when idle.
 
@@ -606,6 +612,7 @@ class ChatLoop:
             input_origin=input_origin,
             sender=sender,
             reply_surface=reply_surface,
+            input_persisted_hook=input_persisted_hook,
         )
         return await manager.enqueue(
             agent_id=agent_id,
@@ -767,6 +774,7 @@ class ChatLoop:
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
         tool_restriction: Sequence[str] | None = None,
+        input_persisted_hook: Callable[[], None] | None = None,
     ) -> Run:
         agent = self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
         working_project_id = resolve_working_project_id(project_id, agent)
@@ -783,6 +791,7 @@ class ChatLoop:
             sender=sender,
             reply_surface=reply_surface,
             tool_restriction=(tuple(tool_restriction) if tool_restriction is not None else None),
+            input_persisted_hook=input_persisted_hook,
         )
         return await manager.start(
             agent_id=agent_id,
@@ -982,6 +991,15 @@ class ChatLoop:
                     user_message = ChatMessage.user(request.content, sender=request.sender)
                     session.append(user_message)
                     _emit_message_event(run, USER_MESSAGE_EVENT, user_message)
+                if request.input_persisted_hook is not None:
+                    try:
+                        request.input_persisted_hook()
+                    except Exception:
+                        _LOGGER.warning(
+                            "Input-persistence callback failed for run %s",
+                            run.id,
+                            exc_info=True,
+                        )
             if not internal:
                 if self._session_title_service is not None:
                     self._session_title_service.notify_user_message(
@@ -1624,27 +1642,30 @@ class ChatLoop:
                         context.continuation_tracker.record_tool_starts(
                             assistant_message.tool_calls
                         )
+                    tool_dispatch_context = ToolDispatchContext(
+                        registry=self._dependencies.tools,
+                        extension_registry=self._dependencies.get_extension_registry(),
+                        agent=agent,
+                        session=session,
+                        run=run,
+                        nesting_depth=self._nesting_depth,
+                        app_root=Path(self._dependencies.get_system_prompts().app_dir),
+                        data_root=Path(self._dependencies.storage.data_dir),
+                        project_cwd=context.project_cwd,
+                        project_id=project_id,
+                        skill_project_id=context.skill_project_id,
+                        tool_restriction=context.request.tool_restriction,
+                        base_allowed_tools=state.allowed_tool_names,
+                        session_tool_grants=state.session_tool_grants,
+                    )
                     tool_messages, media_injections = await _dispatch_tool_calls(
-                        ToolDispatchContext(
-                            registry=self._dependencies.tools,
-                            extension_registry=self._dependencies.get_extension_registry(),
-                            agent=agent,
-                            session=session,
-                            run=run,
-                            nesting_depth=self._nesting_depth,
-                            app_root=Path(self._dependencies.get_system_prompts().app_dir),
-                            data_root=Path(self._dependencies.storage.data_dir),
-                            project_cwd=context.project_cwd,
-                            project_id=project_id,
-                            skill_project_id=context.skill_project_id,
-                            tool_restriction=context.request.tool_restriction,
-                            base_allowed_tools=state.allowed_tool_names,
-                            session_tool_grants=state.session_tool_grants,
-                        ),
+                        tool_dispatch_context,
                         assistant_message.tool_calls,
                     )
                     for tool_message in tool_messages:
                         session.append(tool_message)
+                        assert tool_message.tool_call_id is not None
+                        tool_dispatch_context.notify_result_persisted(tool_message.tool_call_id)
                         messages.append(_message_to_request_dict(tool_message))
                     if context.continuation_tracker is not None:
                         context.continuation_tracker.record_tool_results(tool_messages)

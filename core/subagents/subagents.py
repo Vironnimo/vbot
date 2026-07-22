@@ -115,9 +115,13 @@ class SubAgentCoordinator:
         trigger_service: Any,
         *,
         batch_tracker: SubAgentBatchTracker | None = None,
+        sessions: Any | None = None,
     ) -> None:
         self._runtime = runtime
-        self._batch_tracker = batch_tracker or SubAgentBatchTracker(trigger_service)
+        self._batch_tracker = batch_tracker or SubAgentBatchTracker(
+            trigger_service,
+            sessions=sessions,
+        )
 
     @property
     def batch_tracker(self) -> SubAgentBatchTracker:
@@ -441,6 +445,14 @@ async def _handle_subagent(
             project_id=target_project_id,
         )
         batch_tracker.on_sub_agent_complete(parent_key, sub_run.id, result)
+        _register_result_read_after_parent_persistence(
+            context,
+            runtime,
+            target_agent_id,
+            session.id,
+            sub_run.id,
+            target_project_id,
+        )
         if forced_foreground:
             result = {**result, "spawn_note": FORCED_FOREGROUND_NOTE}
         return tool_success(_with_activity_note(result, activity_file))
@@ -549,7 +561,39 @@ async def _handle_subagent_result(
             activity_file=activity_file,
         )
 
+    result_run_id = result.get("run_id")
+    _register_result_read_after_parent_persistence(
+        context,
+        runtime,
+        agent_id,
+        session_id,
+        result_run_id if isinstance(result_run_id, str) else None,
+        target_project_id,
+    )
     return tool_success(result)
+
+
+def _register_result_read_after_parent_persistence(
+    context: ToolContext,
+    runtime: RuntimeServices,
+    agent_id: str,
+    session_id: str,
+    run_id: str | None,
+    project_id: str | None,
+) -> None:
+    """Acknowledge one child only after its result is durable in the parent."""
+    if not run_id:
+        return
+
+    def acknowledge() -> None:
+        runtime.chat_sessions.mark_terminal_run_read(
+            agent_id,
+            session_id,
+            run_id,
+            project_id,
+        )
+
+    context.after_result_persisted(acknowledge)
 
 
 async def _start_subagent_run(
@@ -715,7 +759,7 @@ def _result_from_session(
             project_id,
         )
 
-    assistant = _last_assistant_with_content(messages)
+    assistant, persisted_run_id = _last_assistant_result(messages)
     if assistant is None:
         return _with_target_project(
             {
@@ -735,7 +779,7 @@ def _result_from_session(
         {
             "agent_id": agent_id,
             "session_id": session_id,
-            "run_id": run_id,
+            "run_id": run_id or persisted_run_id,
             "status": RunStatus.COMPLETED.value,
             "result": assistant.content,
             "usage": assistant.usage,
@@ -846,11 +890,19 @@ def _session_result_has_output(result: JsonObject) -> bool:
     return result.get("status") == RunStatus.COMPLETED.value and bool(result.get("result"))
 
 
-def _last_assistant_with_content(messages: list[ChatMessage]) -> ChatMessage | None:
+def _last_assistant_result(
+    messages: list[ChatMessage],
+) -> tuple[ChatMessage | None, str | None]:
+    terminal_run_id: str | None = None
     for message in reversed(messages):
-        if message.role == "assistant" and message.content:
-            return message
-    return None
+        if message.role == "run_summary":
+            terminal_run_id = message.run_id
+            continue
+        if message.role == "assistant":
+            if message.content:
+                return message, terminal_run_id
+            terminal_run_id = None
+    return None, None
 
 
 def _load_subagent_settings(runtime: RuntimeServices) -> dict[str, int]:

@@ -29,6 +29,9 @@ ToolNoteHook = Callable[[str], None]
 # (skill_name, wrapped_content) -> newly_activated. The content is passed for the
 # session's in-memory activation record only; the tool result is the durable carrier.
 ToolSkillActivationHook = Callable[[str, str], bool]
+ToolResultPersistedCallback = Callable[[], None]
+ToolResultPersistedHook = Callable[[ToolResultPersistedCallback], None]
+ToolCallResultPersistedRegistrar = Callable[[str, ToolResultPersistedCallback], None]
 ToolHandler = Callable[["ToolContext", JsonObject], JsonObject | Awaitable[JsonObject]]
 ToolReadinessPredicate = Callable[[], bool]
 ToolSummaryBuilder = Callable[[JsonObject], str | None]
@@ -144,6 +147,7 @@ class ToolContext:
     cancel_check_hook: ToolCancelCheckHook | None = None
     note_hook: ToolNoteHook | None = None
     skill_activation_hook: ToolSkillActivationHook | None = None
+    result_persisted_hook: ToolResultPersistedHook | None = None
     allowed_skills: Sequence[str] | None = None
     tool_settings: Mapping[str, Any] | None = None
     # Session-derived grants for tools whose authority belongs to persisted
@@ -219,6 +223,12 @@ class ToolContext:
 
         return self.skill_activation_hook(name, content)
 
+    def after_result_persisted(self, callback: ToolResultPersistedCallback) -> None:
+        """Run *callback* only after this Tool Result enters Session history."""
+        if self.result_persisted_hook is None:
+            return
+        self.result_persisted_hook(callback)
+
 
 @dataclass(frozen=True)
 class ToolCall:
@@ -257,6 +267,7 @@ class ToolExecutionConfig:
     tool_call_cancel_check: ToolCallCancelCheck | None = None
     note_hook: ToolNoteHook | None = None
     skill_activation_hook: ToolSkillActivationHook | None = None
+    tool_call_result_persisted_registrar: ToolCallResultPersistedRegistrar | None = None
     allowed_skills: Sequence[str] | None = None
     tool_settings: Mapping[str, Any] | None = None
     session_tool_grants: Sequence[str] = field(default_factory=tuple)
@@ -782,6 +793,14 @@ class ToolExecutor:
             cancel_registration_hook, cancel_check_hook = _build_per_call_cancel_hooks(
                 config, tool_call.id
             )
+            result_persisted_hook: ToolResultPersistedHook | None = None
+            result_persisted_registrar = config.tool_call_result_persisted_registrar
+            if result_persisted_registrar is not None:
+
+                def register_result_persisted(callback: ToolResultPersistedCallback) -> None:
+                    result_persisted_registrar(tool_call.id, callback)
+
+                result_persisted_hook = register_result_persisted
             context = ToolContext(
                 agent_id=config.agent_id,
                 session_id=config.session_id,
@@ -801,6 +820,7 @@ class ToolExecutor:
                 cancel_check_hook=cancel_check_hook,
                 note_hook=config.note_hook,
                 skill_activation_hook=config.skill_activation_hook,
+                result_persisted_hook=result_persisted_hook,
                 allowed_skills=config.allowed_skills,
                 tool_settings=config.tool_settings,
                 session_tool_grants=config.session_tool_grants,

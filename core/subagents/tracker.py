@@ -49,8 +49,9 @@ class _SubAgentBatch:
 class SubAgentBatchTracker:
     """Track spawned sub-agent batches for one parent run in memory."""
 
-    def __init__(self, trigger_service: Any) -> None:
+    def __init__(self, trigger_service: Any, *, sessions: Any | None = None) -> None:
         self._trigger_service = trigger_service
+        self._sessions = sessions
         self._batches: dict[ParentKey, _SubAgentBatch] = {}
 
     def register(
@@ -241,15 +242,26 @@ class SubAgentBatchTracker:
             return
 
         message = _batch_completion_message(pending_entries)
-        task = asyncio.create_task(
-            self._trigger_service.trigger_run(
+
+        async def deliver_to_parent() -> Any:
+            if self._sessions is None:
+                return await self._trigger_service.trigger_run(
+                    parent_key[0],
+                    message,
+                    session_id=parent_key[1],
+                    internal=True,
+                    project_id=batch.project_id,
+                )
+            return await self._trigger_service.trigger_run(
                 parent_key[0],
                 message,
                 session_id=parent_key[1],
                 internal=True,
                 project_id=batch.project_id,
+                input_persisted_hook=lambda: self._acknowledge_delivered_entries(pending_entries),
             )
-        )
+
+        task = asyncio.create_task(deliver_to_parent())
         task.add_done_callback(
             lambda completed: _log_background_task_result(
                 completed,
@@ -265,6 +277,29 @@ class SubAgentBatchTracker:
         for pending_entry in pending_entries:
             pending_entry.fetched = True
         self._prune_if_finished(parent_key, batch)
+
+    def _acknowledge_delivered_entries(self, entries: list[_SubAgentEntry]) -> None:
+        """Mark exact child Runs read after their completion note is persisted."""
+        if self._sessions is None:
+            return
+        for entry in entries:
+            if entry.run_id is None:
+                continue
+            try:
+                self._sessions.mark_terminal_run_read(
+                    entry.agent_id,
+                    entry.session_id,
+                    entry.run_id,
+                    entry.project_id,
+                )
+            except Exception:
+                _LOGGER.warning(
+                    "Failed to acknowledge delivered sub-agent result (agent=%s session=%s run=%s)",
+                    entry.agent_id,
+                    entry.session_id,
+                    entry.run_id,
+                    exc_info=True,
+                )
 
     def mark_fetched(
         self,

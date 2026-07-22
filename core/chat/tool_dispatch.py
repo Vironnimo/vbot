@@ -7,7 +7,7 @@ import re
 import time
 from collections.abc import Callable, Sequence
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -29,6 +29,7 @@ from core.tools import (
     ToolNotAllowedError,
     ToolNotFoundError,
     ToolRegistry,
+    ToolResultPersistedCallback,
     is_tool_result_envelope,
     tool_failure,
 )
@@ -70,6 +71,32 @@ class ToolDispatchContext:
     tool_restriction: Sequence[str] | None = None
     base_allowed_tools: Sequence[str] | None = None
     session_tool_grants: Sequence[str] = ()
+    _result_persisted_callbacks: dict[str, list[ToolResultPersistedCallback]] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
+    def register_result_persisted(
+        self,
+        tool_call_id: str,
+        callback: ToolResultPersistedCallback,
+    ) -> None:
+        """Register a side effect for the exact Tool Result persistence boundary."""
+        self._result_persisted_callbacks.setdefault(tool_call_id, []).append(callback)
+
+    def notify_result_persisted(self, tool_call_id: str) -> None:
+        """Run and retire callbacks after one Tool Result was durably appended."""
+        for callback in self._result_persisted_callbacks.pop(tool_call_id, []):
+            try:
+                callback()
+            except Exception:
+                _LOGGER.warning(
+                    "Post-persistence callback failed for tool call %s",
+                    tool_call_id,
+                    exc_info=True,
+                )
 
 
 class _EmittingToolRegistry(ToolRegistry):
@@ -321,6 +348,7 @@ async def _dispatch_tool_calls(
             tool_call_cancel_check=lambda tool_call_id: run.tool_call_cancelled(tool_call_id),
             note_hook=session.add_note,
             skill_activation_hook=session.register_skill_activation,
+            tool_call_result_persisted_registrar=context.register_result_persisted,
             nesting_depth=context.nesting_depth,
         ),
     )

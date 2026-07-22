@@ -143,6 +143,88 @@ async def test_send_dispatches_tool_and_resends_context_until_final(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_tool_result_persistence_callback_observes_durable_result(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["probe"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [{"id": "call_probe", "name": "probe", "arguments": {}}],
+            },
+            {"content": "done", "tool_calls": None},
+        ]
+    )
+    runtime_holder: dict[str, Any] = {}
+    observed_roles: list[list[str]] = []
+
+    def probe(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        context.after_result_persisted(
+            lambda: observed_roles.append(
+                persisted_roles(
+                    runtime_holder["runtime"].chat_sessions.get("coder", "session-one").load()
+                )
+            )
+        )
+        return tool_success({"value": "ready"})
+
+    tools = ToolRegistry()
+    tools.register("probe", "Probe persistence.", {"type": "object"}, probe)
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    runtime_holder["runtime"] = runtime
+
+    await build_chat_loop(runtime).send("coder", "Run probe", session_id="session-one")
+
+    assert observed_roles == [["user", "assistant", "tool"]]
+
+
+@pytest.mark.asyncio
+async def test_internal_input_persistence_callback_observes_durable_note(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2")
+    adapter = StubAdapter([{"content": "handled", "tool_calls": None}])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    observed_roles: list[list[str]] = []
+    loop = build_chat_loop(runtime)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+
+    run = await loop.start_run(
+        "coder",
+        "background result",
+        session_id="session-one",
+        internal=True,
+        input_persisted_hook=lambda: observed_roles.append(
+            persisted_roles(runtime.chat_sessions.get("coder", "session-one").load())
+        ),
+    )
+    await run.wait()
+
+    assert observed_roles == [["note"]]
+
+
+@pytest.mark.asyncio
+async def test_queued_input_persistence_callback_waits_for_durable_note(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2")
+    adapter = StubAdapter([{"content": "handled", "tool_calls": None}])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    observed_roles: list[list[str]] = []
+    loop = build_chat_loop(runtime)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+
+    queued = await loop.queue_run(
+        "coder",
+        "background result",
+        session_id="session-one",
+        internal=True,
+        input_persisted_hook=lambda: observed_roles.append(
+            persisted_roles(runtime.chat_sessions.get("coder", "session-one").load())
+        ),
+    )
+    run = await queued.future
+    await run.wait()
+
+    assert observed_roles == [["note"]]
+
+
+@pytest.mark.asyncio
 async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
     tmp_path: Path,
 ) -> None:
