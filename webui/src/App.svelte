@@ -230,6 +230,11 @@
   let managedProjectId = $state(
     initialSelectedProjectId || readStoredManagedProjectId(),
   );
+  // Settings is unmounted when another main view opens. Keep its reading
+  // anchor in the long-lived App shell so a normal tab return resumes exactly
+  // where the user left the document.
+  let settingsScrollPosition = $state(null);
+  let settingsView = $state(null);
   // The remembered active agent inside the selected project (tri-state: null =
   // nothing remembered, '' = identity agent active alongside the project, or a
   // bare team-member id). Persisted like the selected agent/project; ChatView
@@ -497,7 +502,18 @@
     projectAgentId: selectedProjectAgentId,
   });
 
-  const selectView = (viewId) => appController.selectView(viewId);
+  const selectView = (viewId) => {
+    // Capture synchronously while Settings still owns its DOM. Browser scroll
+    // events usually keep this current already, but the navigation boundary
+    // must not depend on a final event or destroy-hook ordering.
+    if (activeViewId === 'settings' && viewId !== 'settings') {
+      const position = settingsView?.getScrollPosition?.();
+      if (position) {
+        settingsScrollPosition = position;
+      }
+    }
+    return appController.selectView(viewId);
+  };
   const handleChatSessionNavigation = (override) =>
     appController.handleChatSessionNavigation(override);
 
@@ -613,7 +629,14 @@
   // Sets the target + a fresh request id, then switches to the Settings view;
   // SettingsView selects the panel when the request id changes.
   const navigateToSettingsPanel = (panelId) => {
+    // A deliberate deep link (for example "Edit global defaults") owns the
+    // next Settings position; ordinary tab switches leave the memory intact.
+    settingsScrollPosition = null;
     appController.navigateToSettingsPanel(panelId);
+  };
+
+  const rememberSettingsScrollPosition = (position) => {
+    settingsScrollPosition = position;
   };
 
   const navigateToVoiceSettings = () => {
@@ -906,6 +929,7 @@
       />
     {:else if activeViewId === 'settings'}
       <SettingsView
+        bind:this={settingsView}
         {providerAuthEvent}
         onToast={showToast}
         {agents}
@@ -917,6 +941,8 @@
         {modelsRefreshToken}
         {clientsRefreshToken}
         {channelsRefreshToken}
+        initialScrollPosition={settingsScrollPosition}
+        onScrollPositionChange={rememberSettingsScrollPosition}
       />
     {:else if activeViewId === 'logs'}
       <LogsView />

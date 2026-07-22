@@ -43,10 +43,16 @@
     modelsRefreshToken = 0,
     clientsRefreshToken = 0,
     channelsRefreshToken = 0,
+    initialScrollPosition = null,
+    onScrollPositionChange = noop,
   } = $props();
 
   export function handleProviderAuthCompleted(event) {
     providersPanel?.handleProviderAuthCompleted(event);
+  }
+
+  export function getScrollPosition() {
+    return captureScrollPosition();
   }
 
   // The whole Settings surface is one scrolling document. The index on the
@@ -66,9 +72,13 @@
     '.s-client-row',
     '.s-skill-directory-item',
   ].join(', ');
-  // How far below the scroll edge a section top may sit and still count as
-  // the "current" section for the index highlight.
-  const SCROLLSPY_OFFSET_PX = 90;
+  // The section under the upper-third reading line is the one the user is
+  // most likely reading. Click navigation and scrollspy share this exact
+  // anchor so the index cannot disagree with the document position.
+  const READING_LINE_RATIO = 0.32;
+  // Layout can land a target a sub-pixel below the computed line. Treat that
+  // browser rounding as aligned instead of selecting the previous section.
+  const READING_LINE_TOLERANCE_PX = 1;
   // Ignore scroll-driven highlight updates while a click-triggered smooth
   // scroll is in flight, so intermediate sections do not flicker in the index.
   const SCROLLSPY_SUPPRESS_MS = 700;
@@ -329,18 +339,26 @@
   let matchCount = $state(0);
   const hiddenSectionIds = new SvelteSet();
   let scrollSpyFrame = null;
+  let scrollRestoreFrame = null;
   let scrollSpySuppressedUntil = 0;
   let searchFilterQueued = false;
+  let scrollTailHeight = $state(0);
+  let pinnedScrollRestore = null;
 
   let searchActive = $derived(searchQuery.trim().length > 0);
 
   onMount(() => {
+    pinnedScrollRestore = normalizeScrollPosition(initialScrollPosition);
     loadSettings();
 
     return () => {
       if (scrollSpyFrame !== null) {
         cancelAnimationFrame(scrollSpyFrame);
         scrollSpyFrame = null;
+      }
+      if (scrollRestoreFrame !== null) {
+        cancelAnimationFrame(scrollRestoreFrame);
+        scrollRestoreFrame = null;
       }
     };
   });
@@ -363,8 +381,57 @@
       panelById.has(targetPanelId)
     ) {
       handledTargetPanelRequestId = targetPanelRequestId;
-      scrollToSection(targetPanelId);
+      // An existing restore belongs to a normal tab return. App clears it for
+      // a fresh deep link, which then deliberately wins here.
+      if (!pinnedScrollRestore) {
+        scrollToSection(targetPanelId);
+      }
     }
+  });
+
+  // A restored position stays pinned while the independently loading panels
+  // settle. Real user input releases the pin; programmatic scroll events do
+  // not, so late content above the reading point cannot steal the position.
+  $effect(() => {
+    if (!loading && scrollContainer && documentRoot && pinnedScrollRestore) {
+      queuePinnedScrollRestore();
+    }
+  });
+
+  $effect(() => {
+    const container = scrollContainer;
+    if (!container) {
+      return undefined;
+    }
+
+    const handleResize = () => {
+      syncReadingGeometry();
+      queuePinnedScrollRestore();
+    };
+    const releaseRestore = () => releasePinnedScrollRestore();
+    const observer =
+      typeof ResizeObserver === 'function'
+        ? new ResizeObserver(handleResize)
+        : null;
+
+    syncReadingGeometry();
+    observer?.observe(container);
+    window.addEventListener('resize', handleResize);
+    container.addEventListener('wheel', releaseRestore, { passive: true });
+    container.addEventListener('touchstart', releaseRestore, {
+      passive: true,
+    });
+    container.addEventListener('pointerdown', releaseRestore);
+    container.addEventListener('keydown', releaseRestore);
+
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', handleResize);
+      container.removeEventListener('wheel', releaseRestore);
+      container.removeEventListener('touchstart', releaseRestore);
+      container.removeEventListener('pointerdown', releaseRestore);
+      container.removeEventListener('keydown', releaseRestore);
+    };
   });
 
   // Re-apply the search filter whenever the query changes or the document is
@@ -389,9 +456,18 @@
       if (searchQuery.trim().length > 0) {
         queueSearchFilter();
       }
+      queuePinnedScrollRestore();
     });
+    const layoutObserver =
+      typeof ResizeObserver === 'function'
+        ? new ResizeObserver(() => queuePinnedScrollRestore())
+        : null;
     observer.observe(documentRoot, { childList: true, subtree: true });
-    return () => observer.disconnect();
+    layoutObserver?.observe(documentRoot);
+    return () => {
+      observer.disconnect();
+      layoutObserver?.disconnect();
+    };
   });
 
   function queueSearchFilter() {
@@ -501,6 +577,9 @@
     }
     scrollSpyFrame = requestAnimationFrame(() => {
       scrollSpyFrame = null;
+      if (!pinnedScrollRestore) {
+        rememberScrollPosition();
+      }
       updateActiveSectionFromScroll();
     });
   }
@@ -518,6 +597,7 @@
       scrollContainer.scrollTop + scrollContainer.clientHeight >=
       scrollContainer.scrollHeight - 2;
     const containerTop = scrollContainer.getBoundingClientRect().top;
+    const readingLine = readingLineOffset();
     let currentId = '';
     for (const sectionElement of documentRoot.querySelectorAll(
       '[data-settings-section]',
@@ -527,7 +607,11 @@
       }
       const sectionTop =
         sectionElement.getBoundingClientRect().top - containerTop;
-      if (!currentId || scrolledToBottom || sectionTop <= SCROLLSPY_OFFSET_PX) {
+      if (
+        !currentId ||
+        scrolledToBottom ||
+        sectionTop <= readingLine + READING_LINE_TOLERANCE_PX
+      ) {
         currentId = sectionElement.dataset.settingsSection;
       }
     }
@@ -537,18 +621,164 @@
   }
 
   function scrollToSection(panelId) {
+    releasePinnedScrollRestore();
     activeSectionId = panelId;
-    scrollSpySuppressedUntil = Date.now() + SCROLLSPY_SUPPRESS_MS;
     const sectionElement = documentRoot?.querySelector(
       `[data-settings-section="${panelId}"]`,
     );
-    if (sectionElement && typeof sectionElement.scrollIntoView === 'function') {
-      sectionElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (!sectionElement || !scrollContainer) {
+      return;
+    }
+
+    const behavior = preferredScrollBehavior();
+    scrollSpySuppressedUntil =
+      Date.now() + (behavior === 'smooth' ? SCROLLSPY_SUPPRESS_MS : 0);
+    const containerTop = scrollContainer.getBoundingClientRect().top;
+    const sectionTop = sectionElement.getBoundingClientRect().top;
+    const targetTop = Math.max(
+      0,
+      scrollContainer.scrollTop +
+        sectionTop -
+        containerTop -
+        readingLineOffset(),
+    );
+    if (typeof scrollContainer.scrollTo === 'function') {
+      scrollContainer.scrollTo({ top: targetTop, behavior });
+    } else {
+      scrollContainer.scrollTop = targetTop;
     }
   }
 
   function handleSearchInput(event) {
+    releasePinnedScrollRestore();
     searchQuery = event.currentTarget.value;
+  }
+
+  function readingLineOffset() {
+    return Math.max(0, scrollContainer?.clientHeight ?? 0) * READING_LINE_RATIO;
+  }
+
+  function syncReadingGeometry() {
+    const height = Math.max(0, scrollContainer?.clientHeight ?? 0);
+    scrollTailHeight = Math.ceil(height * (1 - READING_LINE_RATIO));
+  }
+
+  function preferredScrollBehavior() {
+    if (
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ) {
+      return 'auto';
+    }
+    return 'smooth';
+  }
+
+  function normalizeScrollPosition(position) {
+    if (!position || !Number.isFinite(position.top)) {
+      return null;
+    }
+    return {
+      top: Math.max(0, position.top),
+      sectionId:
+        typeof position.sectionId === 'string' ? position.sectionId : '',
+      sectionOffset: Number.isFinite(position.sectionOffset)
+        ? position.sectionOffset
+        : 0,
+    };
+  }
+
+  function captureScrollPosition() {
+    if (!scrollContainer) {
+      return null;
+    }
+
+    const position = {
+      top: Math.max(0, scrollContainer.scrollTop),
+      sectionId: '',
+      sectionOffset: 0,
+    };
+    if (!documentRoot || scrollContainer.clientHeight <= 0) {
+      return position;
+    }
+
+    const containerTop = scrollContainer.getBoundingClientRect().top;
+    const readingLine = readingLineOffset();
+    let anchor = null;
+    for (const sectionElement of documentRoot.querySelectorAll(
+      '[data-settings-section]',
+    )) {
+      if (sectionElement.hidden) {
+        continue;
+      }
+      const sectionTop =
+        sectionElement.getBoundingClientRect().top - containerTop;
+      if (!anchor || sectionTop <= readingLine + READING_LINE_TOLERANCE_PX) {
+        anchor = { element: sectionElement, top: sectionTop };
+      }
+    }
+    if (anchor) {
+      position.sectionId = anchor.element.dataset.settingsSection ?? '';
+      position.sectionOffset = readingLine - anchor.top;
+    }
+    return position;
+  }
+
+  function rememberScrollPosition() {
+    const position = captureScrollPosition();
+    if (position) {
+      onScrollPositionChange(position);
+    }
+  }
+
+  function releasePinnedScrollRestore() {
+    pinnedScrollRestore = null;
+    scrollSpySuppressedUntil = 0;
+    if (scrollRestoreFrame !== null) {
+      cancelAnimationFrame(scrollRestoreFrame);
+      scrollRestoreFrame = null;
+    }
+  }
+
+  function queuePinnedScrollRestore() {
+    if (
+      !pinnedScrollRestore ||
+      loading ||
+      !scrollContainer ||
+      !documentRoot ||
+      scrollRestoreFrame !== null
+    ) {
+      return;
+    }
+    scrollRestoreFrame = requestAnimationFrame(() => {
+      scrollRestoreFrame = null;
+      restorePinnedScrollPosition();
+    });
+  }
+
+  function restorePinnedScrollPosition() {
+    if (!pinnedScrollRestore || !scrollContainer || !documentRoot) {
+      return;
+    }
+
+    let targetTop = pinnedScrollRestore.top;
+    const anchor = pinnedScrollRestore.sectionId
+      ? documentRoot.querySelector(
+          `[data-settings-section="${pinnedScrollRestore.sectionId}"]`,
+        )
+      : null;
+    if (anchor && scrollContainer.clientHeight > 0) {
+      const containerTop = scrollContainer.getBoundingClientRect().top;
+      const sectionDocumentTop =
+        scrollContainer.scrollTop +
+        anchor.getBoundingClientRect().top -
+        containerTop;
+      targetTop =
+        sectionDocumentTop -
+        readingLineOffset() +
+        pinnedScrollRestore.sectionOffset;
+      activeSectionId = pinnedScrollRestore.sectionId;
+    }
+    scrollContainer.scrollTop = Math.max(0, targetTop);
   }
 
   // The single settings error seam: a panel's `onError` funnels here. A
@@ -967,6 +1197,12 @@
             {onOpenSetupGuide}
           />
         </section>
+
+        <div
+          class="settings-scroll-tail"
+          style={`height: ${scrollTailHeight}px`}
+          aria-hidden="true"
+        ></div>
       {/if}
     </div>
   </div>
