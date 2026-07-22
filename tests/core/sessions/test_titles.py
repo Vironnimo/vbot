@@ -17,6 +17,7 @@ from core.sessions.titles import (
     TITLE_OMISSION_MARKER,
     SessionTitleService,
     _bounded_text_projection,
+    _generated_title,
     _local_title,
     _title_input,
     _title_source_parts,
@@ -174,7 +175,9 @@ async def test_configured_title_model_replaces_local_title_with_bounded_request(
     assert runtime.adapter_calls == [("openai", "openai:cheap")]
     request = adapter.requests[0]
     assert request["messages"][0]["role"] == "system"
-    assert request["messages"][0]["content"].strip()
+    system_prompt = request["messages"][0]["content"]
+    assert "Your entire response must be only the title" in system_prompt
+    assert "Bad: The user is asking me" in system_prompt
     assert TITLE_OMISSION_MARKER in request["messages"][1]["content"]
     assert request["max_tokens"] == 32
     assert request["thinking_effort"] == "none"
@@ -183,6 +186,87 @@ async def test_configured_title_model_replaces_local_title_with_bounded_request(
     )
     assert adapter.closed is True
     assert adapter.debug_context.run_id == "title-run-one"
+
+
+def test_generated_title_uses_final_content_and_ignores_reasoning() -> None:
+    title = _generated_title(
+        {
+            "content": "Session naming audit",
+            "reasoning": "The user is asking me to inspect the naming agent",
+            "reasoning_meta": {"reasoning_details": [{"text": "Internal analysis"}]},
+        }
+    )
+
+    assert title == "Session naming audit"
+
+
+def test_generated_title_ignores_typed_reasoning_blocks() -> None:
+    title = _generated_title(
+        {
+            "content": [
+                {"type": "reasoning", "text": "The user wants a title"},
+                {"type": "text", "text": "Session naming audit"},
+            ]
+        }
+    )
+
+    assert title == "Session naming audit"
+
+
+@pytest.mark.parametrize(
+    "meta_title",
+    [
+        "The user is asking me to perform a session naming audit",
+        "Was macht der User in dieser Session",
+    ],
+)
+def test_generated_title_rejects_meta_descriptions(meta_title: str) -> None:
+    with pytest.raises(ValueError, match="described the naming task"):
+        _generated_title({"content": meta_title})
+
+
+@pytest.mark.asyncio
+async def test_meta_description_from_model_keeps_immediate_local_title(tmp_path) -> None:
+    adapter = StubAdapter("The user is asking me to perform a session naming audit")
+    runtime = StubRuntime(tmp_path, enabled=True, adapters=[adapter])
+    _append_first_user(runtime, "Inspect session naming")
+    service = SessionTitleService(cast(Any, runtime))
+
+    service.notify_user_message(
+        agent_id="coder",
+        session_id="session-one",
+        project_id=None,
+        agent=SimpleNamespace(model="openai/agent::main"),
+        content="Inspect session naming",
+        run_id="run-one",
+    )
+    await _wait_for_background(service)
+
+    assert runtime.chat_sessions.get_metadata("coder", "session-one")["auto_title"] == (
+        "Inspect session naming"
+    )
+
+
+@pytest.mark.asyncio
+async def test_unclosed_thinking_output_keeps_immediate_local_title(tmp_path) -> None:
+    adapter = StubAdapter("<think>The user is asking me to perform a naming audit")
+    runtime = StubRuntime(tmp_path, enabled=True, adapters=[adapter])
+    _append_first_user(runtime, "Inspect session naming")
+    service = SessionTitleService(cast(Any, runtime))
+
+    service.notify_user_message(
+        agent_id="coder",
+        session_id="session-one",
+        project_id=None,
+        agent=SimpleNamespace(model="openai/agent::main"),
+        content="Inspect session naming",
+        run_id="run-one",
+    )
+    await _wait_for_background(service)
+
+    assert runtime.chat_sessions.get_metadata("coder", "session-one")["auto_title"] == (
+        "Inspect session naming"
+    )
 
 
 @pytest.mark.asyncio
