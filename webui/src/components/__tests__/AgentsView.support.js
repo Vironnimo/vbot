@@ -264,6 +264,7 @@ export function createAgentsRpcMock(options = {}) {
   const connections = options.connections ?? [
     usableConnection('openai:api-key', 'openai', 'API Key'),
   ];
+  let orderRevision = options.orderRevision ?? 1;
 
   return async (method, params) => {
     if (method === 'model.list') {
@@ -299,7 +300,21 @@ export function createAgentsRpcMock(options = {}) {
     }
 
     if (method === 'agent.list') {
-      return { agents };
+      return { agents, order_revision: orderRevision };
+    }
+
+    if (method === 'agent.reorder') {
+      if (typeof options.agentReorder === 'function') {
+        return options.agentReorder(params);
+      }
+      const agentsById = new Map(agents.map((agent) => [agent.id, agent]));
+      agents.splice(
+        0,
+        agents.length,
+        ...params.agent_ids.map((agentId) => agentsById.get(agentId)),
+      );
+      orderRevision += 1;
+      return { agents, order_revision: orderRevision };
     }
 
     if (method === 'settings.get') {

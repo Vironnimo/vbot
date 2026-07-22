@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 import json
 from collections.abc import Callable
 from contextlib import suppress
@@ -14,7 +15,12 @@ from typing import Any, TypeVar, cast
 
 import pytest
 
-from core.agents import AgentAlreadyExistsError, default_workspace_dir
+from core.agents import (
+    AgentAlreadyExistsError,
+    AgentOrderConflictError,
+    InvalidAgentOrderError,
+    default_workspace_dir,
+)
 from core.memory import DEFAULT_MEMORY_PROMPT_MODE
 from core.models import Capabilities, Model, ModelQuery, ReasoningCapabilities
 from core.models.models import ModelRegistry
@@ -86,6 +92,8 @@ class StubAgents:
         defaults_provider: Callable[[], JsonObject] | None = None,
     ) -> None:
         self._agents: dict[str, StubAgent] = {agent.id: agent}
+        self._order = [agent.id]
+        self._order_revision = 1
         self._defaults_provider = defaults_provider
 
     def _get_raw(self, agent_id: str) -> StubAgent:
@@ -141,11 +149,43 @@ class StubAgents:
         return str(default_workspace_dir(Path("C:/data"), agent_id))
 
     def list(self) -> list[StubAgent]:
-        return [self._apply_defaults(self._agents[agent_id]) for agent_id in sorted(self._agents)]
+        return [self._apply_defaults(self._agents[agent_id]) for agent_id in self._order]
+
+    def list_with_order(self) -> Any:
+        return SimpleNamespace(
+            agents=tuple(self.list()),
+            order_revision=self._order_revision,
+            order_changed=False,
+        )
+
+    def reorder(self, agent_ids: builtins.list[str], *, expected_revision: int) -> Any:
+        if len(agent_ids) != len(set(agent_ids)):
+            raise InvalidAgentOrderError("agent_ids must not contain duplicates")
+        if set(agent_ids) != set(self._order):
+            raise AgentOrderConflictError(
+                "Identity Agent roster changed; reload it before reordering",
+                current_revision=self._order_revision,
+            )
+        if agent_ids == self._order:
+            return self.list_with_order()
+        if expected_revision != self._order_revision:
+            raise AgentOrderConflictError(
+                "Identity Agent order changed; reload it before reordering",
+                current_revision=self._order_revision,
+            )
+        self._order = list(agent_ids)
+        self._order_revision += 1
+        return SimpleNamespace(
+            agents=tuple(self.list()),
+            order_revision=self._order_revision,
+            order_changed=True,
+        )
 
     def create(self, agent_id: str, name: str | None = None, **changes: Any) -> StubAgent:
         agent = StubAgent(id=agent_id, name=name or agent_id, **changes)
         self._agents[agent_id] = agent
+        self._order.append(agent_id)
+        self._order_revision += 1
         return self._get_raw(agent_id)
 
     def update(self, agent_id: str, **changes: Any) -> StubAgent:
@@ -178,11 +218,17 @@ class StubAgents:
         renamed = StubAgent(**{**previous.__dict__, "id": new_agent_id})
         del self._agents[agent_id]
         self._agents[new_agent_id] = renamed
+        self._order = [new_agent_id if item == agent_id else item for item in self._order]
+        self._order_revision += 1
         return SimpleNamespace(agent=self.get(new_agent_id), previous_agent=previous)
 
     def restore_rename(self, result: Any) -> None:
         del self._agents[result.agent.id]
         self._agents[result.previous_agent.id] = result.previous_agent
+        self._order = [
+            result.previous_agent.id if item == result.agent.id else item for item in self._order
+        ]
+        self._order_revision += 1
 
     def retarget_allowed_agent_references(
         self,
@@ -212,6 +258,8 @@ class StubAgents:
     def delete(self, agent_id: str) -> Path:
         self._get_raw(agent_id)
         del self._agents[agent_id]
+        self._order.remove(agent_id)
+        self._order_revision += 1
         return Path("archive") / agent_id
 
 

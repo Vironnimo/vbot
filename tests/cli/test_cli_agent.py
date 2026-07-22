@@ -60,7 +60,13 @@ def test_agent_list_posts_rpc_and_formats_rows(
         assert timeout == 10.0
         return httpx.Response(
             200,
-            json={"ok": True, "result": {"agents": [agent_payload()]}},
+            json={
+                "ok": True,
+                "result": {
+                    "agents": [agent_payload("writer"), agent_payload()],
+                    "order_revision": 3,
+                },
+            },
         )
 
     monkeypatch.setattr(agent_management.httpx, "post", fake_post)
@@ -70,6 +76,9 @@ def test_agent_list_posts_rpc_and_formats_rows(
     assert result.ok is True
     assert result.message.splitlines() == [
         "agents:",
+        "- id=writer name=Coder model=openai/gpt-5.2 "
+        "fallback_model=anthropic/claude-sonnet-4 temperature=0.4 "
+        "thinking_effort=high current_session_id=session-one context_window=256000",
         "- id=coder name=Coder model=openai/gpt-5.2 "
         "fallback_model=anthropic/claude-sonnet-4 temperature=0.4 "
         "thinking_effort=high current_session_id=session-one context_window=256000",

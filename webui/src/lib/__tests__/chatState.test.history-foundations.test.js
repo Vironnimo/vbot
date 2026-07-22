@@ -35,6 +35,18 @@ describe('chat state helpers', () => {
     expect(sessionState.key).toBe('alpha::session-one');
   });
 
+  it('falls back to the first canonical Agent when selection is unavailable', () => {
+    const state = createChatState();
+    state.selectedAgentId = 'removed';
+
+    const selectedAgentId = setAgents(state, [
+      { id: 'preferred-first', current_session_id: 'session-one' },
+      { id: 'alpha', current_session_id: 'session-two' },
+    ]);
+
+    expect(selectedAgentId).toBe('preferred-first');
+  });
+
   it('does not create session state when reading the current session', () => {
     const state = createChatState();
 

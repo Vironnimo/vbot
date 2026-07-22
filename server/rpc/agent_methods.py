@@ -75,10 +75,46 @@ __all__ = ["ALLOWED_THINKING_EFFORTS", "MAX_TEMPERATURE", "MIN_TEMPERATURE"]
 
 def _list_agents(state: Any) -> JsonObject:
     try:
-        agents = sorted(state.runtime.agents.list(), key=lambda agent: agent.id)
+        listing = state.runtime.agents.list_with_order()
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    return {"agents": [_agent_response(state, agent) for agent in agents]}
+    return _agent_list_response(state, listing)
+
+
+async def _reorder_agents(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"agent_ids", "expected_revision"}, "agent.reorder")
+    agent_ids = _validate_string_list("agent_ids", params.get("agent_ids"))
+    expected_revision = params.get("expected_revision")
+    if (
+        isinstance(expected_revision, bool)
+        or not isinstance(expected_revision, int)
+        or expected_revision < 0
+    ):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.expected_revision must be a non-negative integer",
+        )
+
+    try:
+        async with _agent_reference_lock(state):
+            listing = state.runtime.agents.reorder(
+                agent_ids,
+                expected_revision=expected_revision,
+            )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    if listing.order_changed:
+        publish_resource_changed(state, RESOURCE_KIND_AGENTS)
+        _LOGGER.info("Agent order updated (agents=%s)", ",".join(agent_ids))
+    return _agent_list_response(state, listing)
+
+
+def _agent_list_response(state: Any, listing: Any) -> JsonObject:
+    return {
+        "agents": [_agent_response(state, agent) for agent in listing.agents],
+        "order_revision": listing.order_revision,
+    }
 
 
 def _get_agent(state: Any, params: JsonObject) -> JsonObject:
@@ -901,6 +937,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
 
     return {
         "agent.list": list_agents,
+        "agent.reorder": _reorder_agents,
         "agent.get": _get_agent,
         "agent.create": _create_agent,
         "agent.update": _update_agent,

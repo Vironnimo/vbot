@@ -29,3 +29,19 @@ def test_validate_data_dir_config_delegates_project_files(tmp_path: Path) -> Non
     project_reports = [report for report in reports if report.file_path.name == "project.json"]
     assert len(project_reports) == 1
     assert project_reports[0].ok
+
+
+def test_validate_data_dir_config_delegates_agent_order_file(tmp_path: Path) -> None:
+    order_path = tmp_path / "agents" / "order.json"
+    order_path.parent.mkdir(parents=True)
+    order_path.write_text(
+        json.dumps({"revision": 1, "agent_ids": ["main", "main"]}),
+        encoding="utf-8",
+    )
+
+    reports = validate_data_dir_config(tmp_path)
+
+    order_reports = [report for report in reports if report.file_path == order_path]
+    assert len(order_reports) == 1
+    assert order_reports[0].ok is False
+    assert order_reports[0].diagnostics[0].path == "$.agent_ids[1]"

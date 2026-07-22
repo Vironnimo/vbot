@@ -12,6 +12,11 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     getSettings: () => call('settings.get'),
     updateSettings: (params) => call('settings.update', params),
     listAgents: () => call('agent.list'),
+    reorderAgents: (agentIds, expectedRevision) =>
+      call('agent.reorder', {
+        agent_ids: agentIds,
+        expected_revision: expectedRevision,
+      }),
     getAgent: (id) => call('agent.get', { id }),
     createAgent: (params) => call('agent.create', params),
     updateAgent: (params) => call('agent.update', params),

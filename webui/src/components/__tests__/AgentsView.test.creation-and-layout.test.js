@@ -42,6 +42,41 @@ vi.mock('$lib/api.js', () => rpcBackedApiMock(rpcMock));
 
 const { default: AgentsView } = await import('../AgentsView.svelte');
 
+function listedAgentIds() {
+  return Array.from(document.body.querySelectorAll('button.agent-item')).map(
+    (button) =>
+      button.closest('.agent-list-row').querySelector('.agent-order-handle')
+        .dataset.agentOrderHandle,
+  );
+}
+
+function agentOrderHandle(agentId) {
+  return document.body.querySelector(`[data-agent-order-handle="${agentId}"]`);
+}
+
+function createDataTransfer() {
+  const values = new Map();
+  return {
+    effectAllowed: 'none',
+    dropEffect: 'none',
+    setData(type, value) {
+      values.set(type, String(value));
+    },
+    getData(type) {
+      return values.get(type) ?? '';
+    },
+  };
+}
+
+function dragEvent(type, dataTransfer) {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, 'dataTransfer', {
+    configurable: true,
+    value: dataTransfer,
+  });
+  return event;
+}
+
 describe('AgentsView', () => {
   let mountedComponent;
 
@@ -206,6 +241,119 @@ describe('AgentsView', () => {
     expect(agentItem.querySelector('.agent-item-sub').textContent.trim()).toBe(
       'gpt-5.2',
     );
+  });
+
+  it('reorders agents by drag-and-drop and persists the roster revision', async () => {
+    const agents = [
+      baseAgent(),
+      { ...baseAgent(), id: 'bravo', name: 'Bravo' },
+      { ...baseAgent(), id: 'charlie', name: 'Charlie' },
+    ];
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({ agents, orderRevision: 7 }),
+    );
+
+    mountedComponent = mount(AgentsView, {
+      target: document.body,
+      props: { sharedSelectedAgentId: 'alpha' },
+    });
+    flushSync();
+    await waitForCondition(() => listedAgentIds().length === 3, 100);
+
+    const dataTransfer = createDataTransfer();
+    agentOrderHandle('alpha').dispatchEvent(
+      dragEvent('dragstart', dataTransfer),
+    );
+    document
+      .querySelector('[data-agent-order-handle="charlie"]')
+      .closest('.agent-list-row')
+      .dispatchEvent(dragEvent('drop', dataTransfer));
+    flushSync();
+
+    await waitForCondition(
+      () => rpcMock.mock.calls.some(([method]) => method === 'agent.reorder'),
+      100,
+    );
+    expect(listedAgentIds()).toEqual(['bravo', 'charlie', 'alpha']);
+    expect(
+      rpcMock.mock.calls.find(([method]) => method === 'agent.reorder')[1],
+    ).toEqual({
+      agent_ids: ['bravo', 'charlie', 'alpha'],
+      expected_revision: 7,
+    });
+    expect(document.body.textContent).toContain('id: alpha');
+  });
+
+  it('reorders agents with arrow keys and announces the new position', async () => {
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [baseAgent(), { ...baseAgent(), id: 'bravo', name: 'Bravo' }],
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, { target: document.body });
+    flushSync();
+    await waitForCondition(() => listedAgentIds().length === 2, 100);
+
+    const handle = agentOrderHandle('bravo');
+    handle.focus();
+    handle.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'ArrowUp',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    flushSync();
+
+    await waitForCondition(
+      () => rpcMock.mock.calls.some(([method]) => method === 'agent.reorder'),
+      100,
+    );
+    expect(listedAgentIds()).toEqual(['bravo', 'alpha']);
+    expect(
+      document.body.querySelector('.agent-list-pane__sr-only').textContent,
+    ).toContain('position 1 of 2');
+    expect(document.activeElement.dataset.agentOrderHandle).toBe('bravo');
+  });
+
+  it('reloads authoritative order and reports a failed reorder', async () => {
+    const onToast = vi.fn();
+    rpcMock.mockImplementation(
+      createAgentsRpcMock({
+        agents: [baseAgent(), { ...baseAgent(), id: 'bravo', name: 'Bravo' }],
+        agentReorder: () => {
+          throw new Error('Order changed in another window');
+        },
+      }),
+    );
+
+    mountedComponent = mount(AgentsView, {
+      target: document.body,
+      props: { onToast },
+    });
+    flushSync();
+    await waitForCondition(() => listedAgentIds().length === 2, 100);
+
+    agentOrderHandle('bravo').dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'ArrowUp',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        onToast.mock.calls.length === 1 &&
+        listedAgentIds().join(',') === 'alpha,bravo',
+      100,
+    );
+    expect(onToast).toHaveBeenCalledWith({
+      title: 'Order changed in another window',
+      variant: 'error',
+    });
   });
 
   it('keeps existing agent selection after cancelling Add modal', async () => {

@@ -14,6 +14,7 @@ from core.agents import (
     AgentAlreadyExistsError,
     AgentError,
     AgentNotFoundError,
+    AgentOrderConflictError,
     AgentStore,
     InvalidAgentIdError,
 )
@@ -359,13 +360,68 @@ def test_get_rejects_invalid_agent_json_schema(store: AgentStore) -> None:
         store.get("broken")
 
 
-def test_list_returns_agents_sorted_by_id(store: AgentStore) -> None:
+def test_create_appends_agents_to_persisted_order(store: AgentStore) -> None:
     store.create("beta", "Beta Agent")
     store.create("alpha", "Alpha Agent")
 
-    agents = store.list()
+    listing = store.list_with_order()
+    persisted = json.loads((store.data_dir / "agents" / "order.json").read_text(encoding="utf-8"))
 
-    assert [agent.id for agent in agents] == ["alpha", "beta"]
+    assert [agent.id for agent in listing.agents] == ["beta", "alpha"]
+    assert persisted == {
+        "revision": listing.order_revision,
+        "agent_ids": ["beta", "alpha"],
+    }
+
+
+def test_missing_order_preserves_historical_id_order(store: AgentStore) -> None:
+    store.create("beta", "Beta Agent")
+    store.create("alpha", "Alpha Agent")
+    (store.data_dir / "agents" / "order.json").unlink()
+
+    listing = store.list_with_order()
+
+    assert [agent.id for agent in listing.agents] == ["alpha", "beta"]
+    assert listing.order_revision == 1
+
+
+def test_reorder_persists_complete_roster_with_revision(store: AgentStore) -> None:
+    store.create("alpha", "Alpha Agent")
+    store.create("beta", "Beta Agent")
+    initial = store.list_with_order()
+
+    reordered = store.reorder(
+        ["beta", "alpha"],
+        expected_revision=initial.order_revision,
+    )
+
+    assert [agent.id for agent in reordered.agents] == ["beta", "alpha"]
+    assert reordered.order_revision == initial.order_revision + 1
+    assert reordered.order_changed is True
+    assert [agent.id for agent in store.list()] == ["beta", "alpha"]
+
+
+def test_reorder_rejects_stale_revision_without_changing_order(store: AgentStore) -> None:
+    store.create("alpha", "Alpha Agent")
+    store.create("beta", "Beta Agent")
+    initial = store.list_with_order()
+    store.reorder(["beta", "alpha"], expected_revision=initial.order_revision)
+
+    with pytest.raises(AgentOrderConflictError, match="order changed"):
+        store.reorder(["alpha", "beta"], expected_revision=initial.order_revision)
+
+    assert [agent.id for agent in store.list()] == ["beta", "alpha"]
+
+
+def test_reorder_rejects_changed_roster(store: AgentStore) -> None:
+    store.create("alpha", "Alpha Agent")
+    initial = store.list_with_order()
+    store.create("beta", "Beta Agent")
+
+    with pytest.raises(AgentOrderConflictError, match="roster changed"):
+        store.reorder(["alpha"], expected_revision=initial.order_revision)
+
+    assert [agent.id for agent in store.list()] == ["alpha", "beta"]
 
 
 def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> None:
@@ -568,7 +624,25 @@ def test_rename_supports_case_only_id_change(store: AgentStore) -> None:
 
     assert renamed.id == "Coder"
     assert store.get("Coder").id == "Coder"
-    assert [path.name for path in (store.data_dir / "agents").iterdir()] == ["Coder"]
+    assert sorted(path.name for path in (store.data_dir / "agents").iterdir()) == [
+        "Coder",
+        "order.json",
+    ]
+
+
+def test_rename_preserves_agent_order_position(store: AgentStore) -> None:
+    store.create("alpha", "Alpha")
+    store.create("beta", "Beta")
+    store.create("gamma", "Gamma")
+    listing = store.list_with_order()
+    store.reorder(
+        ["gamma", "alpha", "beta"],
+        expected_revision=listing.order_revision,
+    )
+
+    store.rename("alpha", "renamed")
+
+    assert [agent.id for agent in store.list()] == ["gamma", "renamed", "beta"]
 
 
 def test_rename_rejects_existing_destination(store: AgentStore) -> None:
@@ -619,7 +693,7 @@ def test_retarget_allowed_agent_references_is_exact_and_reversible(store: AgentS
 
     update = store.retarget_allowed_agent_references("coder", "researcher")
 
-    assert update.agent_ids == ("manager", "researcher")
+    assert update.agent_ids == ("researcher", "manager")
     assert store.get("manager").tools["subagent"]["allowed_agents"] == [
         "researcher",
         "coder@project",
@@ -1063,6 +1137,18 @@ def test_delete_archives_agent_data_and_workspace(store: AgentStore) -> None:
     # The default workspace lives inside the agent directory, so it is archived
     # within the agent tree, not as a separate ``workspace/`` sibling.
     assert (archive_dir / "agent" / "workspace" / "SOUL.md").exists()
+
+
+def test_delete_removes_agent_from_persisted_order(store: AgentStore) -> None:
+    store.create("alpha", "Alpha")
+    store.create("beta", "Beta")
+    store.delete("alpha")
+
+    listing = store.list_with_order()
+    persisted = json.loads((store.data_dir / "agents" / "order.json").read_text(encoding="utf-8"))
+
+    assert [agent.id for agent in listing.agents] == ["beta"]
+    assert persisted["agent_ids"] == ["beta"]
 
 
 def test_delete_archives_external_workspace_beside_agent(store: AgentStore, tmp_path: Path) -> None:

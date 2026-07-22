@@ -877,6 +877,7 @@
         onToast={showToast}
         onNavigateToSettingsPanel={navigateToSettingsPanel}
         onNavigateToAgentPrompt={navigateToAgentPromptScope}
+        {agentsRefreshToken}
         {modelsRefreshToken}
         {projectsRefreshToken}
       />
