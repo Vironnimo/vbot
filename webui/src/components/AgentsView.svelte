@@ -421,6 +421,10 @@
 
   async function handleAgentCreated(agentId) {
     isCreateModalOpen = false;
+    // Creation also emits a roster invalidation. Make the intended selection
+    // authoritative before either reload can finish so a competing refresh
+    // cannot preserve the previously selected Agent.
+    selectAgent(agentId);
     await loadAgents({ preferredAgentId: agentId });
   }
 

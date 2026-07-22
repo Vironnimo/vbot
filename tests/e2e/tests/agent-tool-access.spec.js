@@ -19,6 +19,9 @@ test("an Agent Tool allowlist constrains the Provider catalog", async ({
   await createDialog.getByLabel("Name").fill("Tool Restricted");
   await createDialog.getByRole("button", { name: "Create agent" }).click();
   await expect(page.getByText("Agent created.", { exact: true })).toBeVisible();
+  await expect(
+    agentList.getByRole("button", { name: /^Tool Restricted(?:\s|$)/ }),
+  ).toHaveClass(/active/);
 
   const toolAccess = agents
     .locator(".tl-section")
