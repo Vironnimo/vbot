@@ -36,6 +36,9 @@ DEFAULT_TASK_NAME = "vBot"
 
 _WINDOWS_POWERSHELL = "powershell.exe"
 _WINDOWS_TASK_NOT_FOUND_EXIT_CODE = 3
+_WINDOWS_AUTOSTART_STARTUP_TIMEOUT_SECONDS = 60.0
+_WINDOWS_TASK_RESTART_COUNT = 3
+_WINDOWS_TASK_RESTART_INTERVAL = "PT1M"
 _WINDOWS_TASK_SCRIPT = r"""
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
@@ -105,6 +108,8 @@ try {
     $definition.Settings.StartWhenAvailable = $true
     $definition.Settings.ExecutionTimeLimit = "PT0S"
     $definition.Settings.MultipleInstances = 2
+    $definition.Settings.RestartCount = [int]$payload.restart_count
+    $definition.Settings.RestartInterval = [string]$payload.restart_interval
 
     $trigger = $definition.Triggers.Create(9)
     $trigger.Enabled = $true
@@ -334,6 +339,8 @@ def _windows_enable(
             task_name=task_name,
             launcher=launcher,
             arguments=arguments,
+            restart_count=_WINDOWS_TASK_RESTART_COUNT,
+            restart_interval=_WINDOWS_TASK_RESTART_INTERVAL,
         )
     )
     if created.returncode != 0:
@@ -525,13 +532,24 @@ def windows_autostart_main(
         redirect_stderr(output),
     ):
         if run_cli is None:
-            # Import lazily to avoid the normal CLI's import of this module
-            # forming a cycle during startup.
-            from cli.main import run
-
-            run_cli = run
+            run_cli = _run_windows_autostart_cli
         exit_code = run_cli(["server", "start", *arguments])
     raise SystemExit(exit_code)
+
+
+def _run_windows_autostart_cli(arguments: Sequence[str]) -> int:
+    # Import lazily to avoid the normal CLI's import of this module forming a
+    # cycle during startup. Only the boot path gets the longer cold-start budget.
+    from cli.main import run
+
+    return run(arguments, start=_start_windows_autostart_server)
+
+
+def _start_windows_autostart_server(instance: ServerInstance) -> CommandResult:
+    return start_server(
+        instance,
+        startup_timeout_seconds=_WINDOWS_AUTOSTART_STARTUP_TIMEOUT_SECONDS,
+    )
 
 
 def _default_runner(command: list[str]) -> CommandRun:
@@ -570,7 +588,7 @@ def _windows_task_lookup(run: Runner, task_name: str) -> _TaskLookup:
     return _TaskLookup(False, False, detail)
 
 
-def _windows_task_command(operation: str, **values: str) -> list[str]:
+def _windows_task_command(operation: str, **values: str | int) -> list[str]:
     payload = {"operation": operation, **values}
     payload_token = base64.b64encode(
         json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
