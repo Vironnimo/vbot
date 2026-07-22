@@ -15,6 +15,7 @@ from core.model_tasks.embeddings import (
     EmbeddingExecutionError,
     EmbeddingResult,
     EmbeddingService,
+    EmbeddingSpaceIdentity,
     EmbeddingUnsupportedTargetError,
 )
 from core.model_tasks.embeddings_providers import ProviderEmbeddingClient
@@ -70,6 +71,7 @@ __all__ = [
     "EmbeddingExecutionError",
     "EmbeddingResult",
     "EmbeddingService",
+    "EmbeddingSpaceIdentity",
     "EmbeddingUnsupportedTargetError",
     "ImageArtifact",
     "ImageConfigurationError",

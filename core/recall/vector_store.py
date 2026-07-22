@@ -3,15 +3,16 @@
 The store is a **disposable derived index** — canonical Session storage
 stays in JSONL under ``<data_dir>/agents/<agent-id>/sessions/``. This
 module is responsible for opening the connection, observing the embedding
-dimension lazily, pinning ``(provider_id, model_id, dimension)`` in a
-header, and exposing Passage-vector upsert/lookup primitives that the
+dimension lazily, pinning the complete embedding-space and index-policy
+identity in a header, and exposing Passage-vector upsert/lookup primitives that the
 recall backend (``core/recall/vector.py``) builds on top of.
 
 A Session's searchable text is split into overlapping source-derived Passages.
 Each Passage is its own metadata row and its own row in the ``vec0`` virtual
 table, keyed by the compatibility-named chunk index in the
-``(agent_id, session_id, chunk_index)`` tuple. The on-disk file lives at
-``<data_dir>/recall/session_vectors.sqlite``; the ``sqlite-vec``
+``(agent_id, session_id, chunk_index)`` tuple. Callers choose the exact on-disk
+file under ``<data_dir>/recall/`` so typed Passage and legacy chunk policies
+stay separate; the ``sqlite-vec``
 extension is loaded via the same enable/disable dance as the rest of
 the project's SQLite work, and the index is schema-versioned through
 ``PRAGMA user_version`` so a mismatched index is dropped and rebuilt
@@ -42,7 +43,9 @@ _SQLITE_BUSY_TIMEOUT_MS = 1000
 #      UUID under a project vs. the global scope never collides in the index.
 # v5 → vec0 carries scope, Session, and time metadata so structural filters run
 #      inside KNN instead of starving an eligible scope after global retrieval.
-_SCHEMA_VERSION = 5
+# v6 → a singleton header pins the complete embedding-space fingerprint and
+#      index policy, preventing cross-connection/options/policy vector reuse.
+_SCHEMA_VERSION = 6
 _VECTOR_TABLE_NAME = "session_vectors"
 _CHUNK_TABLE_NAME = "chunks"
 _HEADER_TABLE_NAME = "store_header"
@@ -79,6 +82,8 @@ class VectorHeader:
     provider_id: str
     model_id: str
     dimension: int
+    space_fingerprint: str = ""
+    index_policy: str = ""
 
 
 @dataclass(frozen=True)
@@ -118,9 +123,11 @@ class ChunkVectorRecord:
 class VectorStore:
     """sqlite-vec backed store keyed by chunk rowid."""
 
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(self, data_dir: Path, *, index_file_name: str = _INDEX_FILE_NAME) -> None:
+        if Path(index_file_name).name != index_file_name:
+            raise ValueError("Vector index file name must not contain path components")
         self.data_dir = data_dir
-        self.index_path = data_dir / _INDEX_DIR_NAME / _INDEX_FILE_NAME
+        self.index_path = data_dir / _INDEX_DIR_NAME / index_file_name
 
     @property
     def path(self) -> Path:
@@ -135,24 +142,27 @@ class VectorStore:
     def _connect(self) -> sqlite3.Connection:
         self.index_path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(self.index_path)
-        connection.row_factory = sqlite3.Row
-        connection.enable_load_extension(True)
         try:
-            sqlite_vec.load(connection)
-        finally:
-            connection.enable_load_extension(False)
-        connection.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT_MS}")
-        try:
+            connection.row_factory = sqlite3.Row
+            connection.enable_load_extension(True)
+            try:
+                sqlite_vec.load(connection)
+            finally:
+                connection.enable_load_extension(False)
+            connection.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT_MS}")
             connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("PRAGMA synchronous=NORMAL")
-        except sqlite3.DatabaseError as error:
-            # WAL can fail on read-only or shared mounts — non-fatal, store
-            # still works (slower). The error path is logged by the caller.
-            raise VectorStoreError(f"could not enable WAL for vector store: {error}") from error
-        return connection
+            return connection
+        except Exception as error:
+            connection.close()
+            if isinstance(error, VectorStoreError):
+                raise
+            raise VectorStoreError(f"could not open vector store: {error}") from error
 
-    def _chunk_table_ddl(self) -> str:
-        return f"""
+    @staticmethod
+    def _create_chunk_schema(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            f"""
             CREATE TABLE IF NOT EXISTS {_CHUNK_TABLE_NAME} (
               rowid INTEGER PRIMARY KEY,
               session_id TEXT NOT NULL,
@@ -173,25 +183,43 @@ class VectorStore:
               start_role TEXT NOT NULL,
               end_role TEXT NOT NULL,
               UNIQUE (project_id, agent_id, session_id, chunk_index)
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_chunks_agent
-              ON {_CHUNK_TABLE_NAME}(project_id, agent_id);
-            CREATE INDEX IF NOT EXISTS idx_chunks_agent_session
-              ON {_CHUNK_TABLE_NAME}(project_id, agent_id, session_id);
+            )
             """
+        )
+        connection.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS idx_chunks_agent
+              ON {_CHUNK_TABLE_NAME}(project_id, agent_id)
+            """
+        )
+        connection.execute(
+            f"""
+            CREATE INDEX IF NOT EXISTS idx_chunks_agent_session
+              ON {_CHUNK_TABLE_NAME}(project_id, agent_id, session_id)
+            """
+        )
 
     @staticmethod
-    def _header_table_ddl() -> str:
-        return f"""
+    def _create_header_schema(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            f"""
             CREATE TABLE IF NOT EXISTS {_HEADER_TABLE_NAME} (
+              singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
               provider_id TEXT NOT NULL,
               model_id TEXT NOT NULL,
+              space_fingerprint TEXT NOT NULL,
+              index_policy TEXT NOT NULL,
               dimension INTEGER NOT NULL,
-              schema_version INTEGER NOT NULL,
-              PRIMARY KEY (provider_id, model_id)
-            );
+              schema_version INTEGER NOT NULL
+            )
             """
+        )
+
+    @staticmethod
+    def _drop_schema(connection: sqlite3.Connection) -> None:
+        connection.execute(f"DROP TABLE IF EXISTS {_VECTOR_TABLE_NAME}")
+        connection.execute(f"DROP TABLE IF EXISTS {_CHUNK_TABLE_NAME}")
+        connection.execute(f"DROP TABLE IF EXISTS {_HEADER_TABLE_NAME}")
 
     def _initialize_schema(
         self,
@@ -201,15 +229,9 @@ class VectorStore:
     ) -> None:
         version = int(connection.execute("PRAGMA user_version").fetchone()[0])
         if version != _SCHEMA_VERSION:
-            connection.executescript(
-                f"""
-                DROP TABLE IF EXISTS {_VECTOR_TABLE_NAME};
-                DROP TABLE IF EXISTS {_CHUNK_TABLE_NAME};
-                DROP TABLE IF EXISTS {_HEADER_TABLE_NAME};
-                """
-            )
-        connection.executescript(self._chunk_table_ddl())
-        connection.executescript(self._header_table_ddl())
+            self._drop_schema(connection)
+        self._create_chunk_schema(connection)
+        self._create_header_schema(connection)
         if version != _SCHEMA_VERSION:
             connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
@@ -223,30 +245,32 @@ class VectorStore:
         """Write the header row if missing; drop & rebuild if the bound model changed."""
 
         existing = self._read_header(connection)
-        if existing is not None and self._header_matches(existing, expected_header):
+        if (
+            existing is not None
+            and self._header_matches(existing, expected_header)
+            and self._has_chunk_table(connection)
+            and self._has_vector_table(connection)
+        ):
             return
-        if existing is not None and not self._header_matches(existing, expected_header):
-            # Bound model changed — vectors from the previous space are
-            # not comparable; drop the whole index and start clean.
-            connection.executescript(
-                f"""
-                DROP TABLE IF EXISTS {_VECTOR_TABLE_NAME};
-                DROP TABLE IF EXISTS {_CHUNK_TABLE_NAME};
-                DELETE FROM {_HEADER_TABLE_NAME};
-                """
-            )
-            connection.executescript(self._chunk_table_ddl())
-            connection.executescript(self._header_table_ddl())
+        if existing is not None or self._has_vector_table(connection):
+            # A mismatched header or a vector table without its committed
+            # header is not comparable/complete; rebuild the disposable schema.
+            self._drop_schema(connection)
+            self._create_chunk_schema(connection)
+            self._create_header_schema(connection)
         self._create_vector_table(connection, expected_header.dimension)
         connection.execute(
             f"""
             INSERT INTO {_HEADER_TABLE_NAME} (
-              provider_id, model_id, dimension, schema_version
-            ) VALUES (?, ?, ?, ?)
+              singleton, provider_id, model_id, space_fingerprint,
+              index_policy, dimension, schema_version
+            ) VALUES (1, ?, ?, ?, ?, ?, ?)
             """,
             (
                 expected_header.provider_id,
                 expected_header.model_id,
+                expected_header.space_fingerprint,
+                expected_header.index_policy,
                 expected_header.dimension,
                 _SCHEMA_VERSION,
             ),
@@ -257,6 +281,8 @@ class VectorStore:
         return (
             stored.provider_id == expected.provider_id
             and stored.model_id == expected.model_id
+            and stored.space_fingerprint == expected.space_fingerprint
+            and stored.index_policy == expected.index_policy
             and stored.dimension == expected.dimension
         )
 
@@ -271,7 +297,10 @@ class VectorStore:
         if exists is None:
             return None
         row = connection.execute(
-            f"SELECT provider_id, model_id, dimension FROM {_HEADER_TABLE_NAME} LIMIT 1"
+            f"""
+            SELECT provider_id, model_id, space_fingerprint, index_policy, dimension
+            FROM {_HEADER_TABLE_NAME} WHERE singleton = 1
+            """
         ).fetchone()
         if row is None:
             return None
@@ -279,6 +308,8 @@ class VectorStore:
             provider_id=str(row["provider_id"]),
             model_id=str(row["model_id"]),
             dimension=int(row["dimension"]),
+            space_fingerprint=str(row["space_fingerprint"]),
+            index_policy=str(row["index_policy"]),
         )
 
     @staticmethod
@@ -339,8 +370,9 @@ class VectorStore:
             return 0
         count = 0
         with closing(self._connect()) as connection:
-            self._initialize_schema(connection, expected_header=header)
-            with connection:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                self._initialize_schema(connection, expected_header=header)
                 # Delete each scope+session's existing chunks exactly once.
                 distinct_sessions = {
                     (record.agent_id, record.project_id, record.session_id)
@@ -405,7 +437,23 @@ class VectorStore:
                         ),
                     )
                     count += 1
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
         return count
+
+    def ensure_index(self, header: VectorHeader) -> None:
+        """Create and commit an empty index for a resolved positive-dimension header."""
+
+        with closing(self._connect()) as connection:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                self._initialize_schema(connection, expected_header=header)
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
 
     @staticmethod
     def _delete_session_rows(
@@ -541,7 +589,13 @@ class VectorStore:
             clauses.append("start_timestamp <= ?")
             parameters.append(_datetime_micros(until))
         with closing(self._connect()) as connection:
-            self._initialize_schema(connection, expected_header=header)
+            stored = self._read_header(connection)
+            if stored is None or not self._header_matches(stored, header):
+                raise VectorStoreError(
+                    "vector store header is missing or does not match the requested embedding space"
+                )
+            if not self._has_vector_table(connection):
+                raise VectorStoreError("vector store table is missing")
             rows = connection.execute(
                 f"""
                 SELECT rowid, distance FROM {_VECTOR_TABLE_NAME}
@@ -599,21 +653,37 @@ class VectorStore:
         """Public read of the stored header — used by tests to assert pinning."""
 
         with closing(self._connect()) as connection:
+            version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            if version != _SCHEMA_VERSION:
+                tables = connection.execute(
+                    """
+                    SELECT 1 FROM sqlite_master
+                    WHERE type = 'table' AND name IN (?, ?, ?)
+                    LIMIT 1
+                    """,
+                    (_VECTOR_TABLE_NAME, _CHUNK_TABLE_NAME, _HEADER_TABLE_NAME),
+                ).fetchone()
+                if tables is not None:
+                    raise VectorStoreError(
+                        f"vector store schema {version} does not match {_SCHEMA_VERSION}"
+                    )
+                return None
             return self._read_header(connection)
 
     def drop_index(self) -> None:
-        """Wipe the on-disk index — used when the bound model changes."""
+        """Wipe the on-disk disposable index, including SQLite sidecar files."""
 
-        with closing(self._connect()) as connection:
-            connection.executescript(
-                f"""
-                DROP TABLE IF EXISTS {_VECTOR_TABLE_NAME};
-                DROP TABLE IF EXISTS {_CHUNK_TABLE_NAME};
-                DROP TABLE IF EXISTS {_HEADER_TABLE_NAME};
-                """
-            )
-            connection.execute("PRAGMA user_version = 0")
-            connection.commit()
+        self.reset_index()
+
+    def reset_index(self) -> None:
+        """Discard the exact derived-index files without opening a corrupt database."""
+
+        for path in (
+            self.index_path,
+            Path(f"{self.index_path}-wal"),
+            Path(f"{self.index_path}-shm"),
+        ):
+            path.unlink(missing_ok=True)
 
     @staticmethod
     def _has_chunk_table(connection: sqlite3.Connection) -> bool:
@@ -623,6 +693,16 @@ class VectorStore:
             connection.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
                 (_CHUNK_TABLE_NAME,),
+            ).fetchone()
+            is not None
+        )
+
+    @staticmethod
+    def _has_vector_table(connection: sqlite3.Connection) -> bool:
+        return (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (_VECTOR_TABLE_NAME,),
             ).fetchone()
             is not None
         )

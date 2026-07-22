@@ -38,10 +38,35 @@ JsonObject = dict[str, Any]
 ALLOWED_OPTION_TYPES: frozenset[str] = frozenset(
     {"text", "textarea", "select", "number", "boolean", "json"}
 )
+EMBEDDING_RESERVED_PAYLOAD_FIELDS: frozenset[str] = frozenset(
+    {"model", "input", "encoding_format", "dimensions"}
+)
 
 
 class TaskModelOptionValidationError(ValueError):
     """Raised when a task-model option field is malformed."""
+
+
+def validate_text_embedding_options(options: Mapping[str, Any]) -> None:
+    """Validate values that define the embedding request and vector space."""
+
+    dimensions = options.get("dimensions")
+    if dimensions is not None and (
+        not isinstance(dimensions, int) or isinstance(dimensions, bool) or dimensions <= 0
+    ):
+        raise TaskModelOptionValidationError(
+            "text_embedding dimensions must be a positive integer or null"
+        )
+    extra_options = options.get("extra_options")
+    if extra_options is None:
+        return
+    if not isinstance(extra_options, Mapping):
+        raise TaskModelOptionValidationError("text_embedding extra_options must be an object")
+    reserved = sorted(EMBEDDING_RESERVED_PAYLOAD_FIELDS.intersection(extra_options))
+    if reserved:
+        raise TaskModelOptionValidationError(
+            "text_embedding extra_options cannot override reserved fields: " + ", ".join(reserved)
+        )
 
 
 # ---------------------------------------------------------------------------

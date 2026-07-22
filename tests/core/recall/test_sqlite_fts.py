@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -52,11 +53,16 @@ def backend(tmp_path: Path, sessions: ChatSessionManager) -> SqliteFtsRecallBack
     return SqliteFtsRecallBackend(RecallBackendContext(data_dir=tmp_path, sessions=sessions))
 
 
-def passage_request(query: str, *, limit: int = 20) -> RecallSearchRequest:
+def passage_request(
+    query: str,
+    *,
+    limit: int = 20,
+    session_id: str | None = None,
+) -> RecallSearchRequest:
     return RecallSearchRequest(
         agent_id="coder",
         project_id=None,
-        session_id=None,
+        session_id=session_id,
         query=query,
         since=None,
         until=None,
@@ -85,6 +91,30 @@ async def test_sqlite_fts_passage_arm_returns_multiple_source_faithful_hits(
     assert all(hit.session_id == "passages" for hit in page.hits)
     assert all(hit.sources == ("literal",) for hit in page.hits)
     assert page.hits[0].text in original
+
+
+async def test_sqlite_fts_filtered_search_keeps_other_scope_sessions_indexed(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    for session_id, day in (("one", 1), ("two", 2)):
+        sessions.create("coder", session_id=session_id).append(
+            ChatMessage.user(f"banana fruit {session_id}", timestamp=timestamp(day))
+        )
+    recall = backend(tmp_path, sessions)
+    await recall.search_passages(passage_request("fruit"))
+
+    await recall.search_passages(passage_request("fruit", session_id="one"))
+
+    with sqlite3.connect(recall.index_path) as connection:
+        indexed = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT session_id FROM indexed_sessions WHERE agent_id = ? AND project_id = ?",
+                ("coder", ""),
+            )
+        }
+    assert indexed == {"one", "two"}
 
 
 async def test_sqlite_fts_builds_index_lazily_and_finds_matches(tmp_path: Path) -> None:

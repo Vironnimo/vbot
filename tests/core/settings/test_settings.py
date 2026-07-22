@@ -303,6 +303,14 @@ def test_parse_settings_update_rejects_conflicting_openrouter_routing(
             {"model_tasks": {"speech_to_text": {"options": []}}},
             "params.model_tasks.speech_to_text.options must be an object",
         ),
+        (
+            {"model_tasks": {"text_embedding": {"options": {"dimensions": 0}}}},
+            "params.model_tasks.text_embedding.dimensions must be a positive integer or null",
+        ),
+        (
+            {"model_tasks": {"text_embedding": {"options": {"extra_options": {"input": "wrong"}}}}},
+            "params.model_tasks.text_embedding.extra_options cannot override reserved fields",
+        ),
     ],
 )
 def test_parse_settings_update_rejects_invalid_payloads(

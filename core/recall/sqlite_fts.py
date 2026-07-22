@@ -523,11 +523,14 @@ class SqliteFtsRecallBackend(JsonlSessionRecallBackend):
         self,
         connection: sqlite3.Connection,
         request: RecallRequest,
-        summaries: list[JsonObject],
+        _summaries: list[JsonObject],
     ) -> None:
         agent_id = request.agent_id
         scope = _scope(request.project_id)
-        active_session_ids = {str(summary["id"]) for summary in summaries}
+        active_session_ids = {
+            str(summary["id"])
+            for summary in self.sessions.list_with_metadata(agent_id, request.project_id)
+        }
         indexed_session_ids = {
             str(row["session_id"])
             for row in connection.execute(

@@ -7,7 +7,11 @@ import re
 from collections.abc import Mapping
 from typing import Any, cast
 
-from core.model_tasks import SUPPORTED_TASK_TYPES
+from core.model_tasks import SUPPORTED_TASK_TYPES, TASK_TEXT_EMBEDDING
+from core.model_tasks.options import (
+    TaskModelOptionValidationError,
+    validate_text_embedding_options,
+)
 from core.search_config import (
     FIRST_PARTY_WEB_SEARCH_PROVIDERS,
     MAX_WEB_SEARCH_COUNT,
@@ -501,6 +505,11 @@ def _parse_model_tasks_update(model_tasks: Any) -> JsonObject:
                 raise SettingsValidationError(
                     f"params.model_tasks.{task_type}.options must be an object"
                 )
+            if task_type == TASK_TEXT_EMBEDDING:
+                try:
+                    validate_text_embedding_options(options)
+                except TaskModelOptionValidationError as error:
+                    raise SettingsValidationError(f"params.model_tasks.{error}") from error
             parsed_binding["options"] = dict(options)
 
         if not parsed_binding:

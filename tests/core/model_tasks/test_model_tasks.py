@@ -11,6 +11,7 @@ from core.model_tasks import (
     SUPPORTED_TASK_TYPES,
     TASK_IMAGE_GENERATION,
     TASK_SPEECH_TO_TEXT,
+    TASK_TEXT_EMBEDDING,
     TASK_TEXT_TO_SPEECH,
     LocalTaskTargetDescriptor,
     LocalTaskTargetRegistry,
@@ -72,6 +73,35 @@ def test_parse_target_rejects_invalid_account_id() -> None:
 def test_parse_target_rejects_empty_connection_before_account() -> None:
     with pytest.raises(TaskModelValidationError, match="Invalid provider task model target"):
         parse_task_model_target_id("openrouter/openai/gpt-4o-transcribe::openrouter::work")
+
+
+@pytest.mark.parametrize("dimensions", [0, -1, 256.0, True, "256"])
+def test_update_rejects_invalid_embedding_dimensions(dimensions: object) -> None:
+    service = TaskModelService(_Providers(), _Models([]), _Credentials(), _Storage())
+
+    with pytest.raises(TaskModelValidationError, match="positive integer or null"):
+        service.update(
+            {
+                TASK_TEXT_EMBEDDING: {
+                    "target": "openrouter/google/gemini-embedding-2::api-key",
+                    "options": {"dimensions": dimensions},
+                }
+            }
+        )
+
+
+def test_update_rejects_reserved_embedding_extra_options() -> None:
+    service = TaskModelService(_Providers(), _Models([]), _Credentials(), _Storage())
+
+    with pytest.raises(TaskModelValidationError, match="reserved fields: input, model"):
+        service.update(
+            {
+                TASK_TEXT_EMBEDDING: {
+                    "target": "openrouter/google/gemini-embedding-2::api-key",
+                    "options": {"extra_options": {"model": "other", "input": "wrong"}},
+                }
+            }
+        )
 
 
 def test_list_targets_filters_by_task_type_and_credentials() -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -16,6 +17,7 @@ from core.model_tasks.embeddings_providers import (
     _coerce_vector,
     _parse_embeddings_response,
 )
+from core.providers.errors import ProviderError
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 # ---------------------------------------------------------------------------
@@ -67,16 +69,9 @@ def test_build_payload_drops_dimensions_when_none() -> None:
     assert "dimensions" not in payload
 
 
-def test_build_payload_drops_dimensions_when_zero() -> None:
-    """A ``0`` ``dimensions`` is a placeholder, not a real value, and is dropped.
-
-    A zero-length embedding is not a real model output, so the wire
-    treats it the same as a missing field.
-    """
-
-    payload = _build_embeddings_payload("google/gemini-embedding-2", ["a"], {"dimensions": 0})
-
-    assert "dimensions" not in payload
+def test_build_payload_rejects_zero_dimensions() -> None:
+    with pytest.raises(ProviderError, match="positive integer"):
+        _build_embeddings_payload("google/gemini-embedding-2", ["a"], {"dimensions": 0})
 
 
 def test_build_payload_forwards_positive_integer_dimensions() -> None:
@@ -90,17 +85,13 @@ def test_build_payload_forwards_positive_integer_dimensions() -> None:
     assert isinstance(payload["dimensions"], int)
 
 
-def test_build_payload_coerces_positive_float_dimensions_to_int() -> None:
-    """A float ``dimensions`` is coerced to int — the wire contract is an integer.
-
-    Settings UIs sometimes surface numbers as floats; the wire layer
-    normalizes so the provider sees a clean int.
-    """
-
-    payload = _build_embeddings_payload("google/gemini-embedding-2", ["a"], {"dimensions": 256.0})
-
-    assert payload["dimensions"] == 256
-    assert isinstance(payload["dimensions"], int)
+def test_build_payload_rejects_float_dimensions() -> None:
+    with pytest.raises(ProviderError, match="positive integer"):
+        _build_embeddings_payload(
+            "google/gemini-embedding-2",
+            ["a"],
+            {"dimensions": 256.0},
+        )
 
 
 def test_build_payload_keeps_input_as_array_even_for_single_text() -> None:
@@ -317,6 +308,75 @@ def test_parse_response_rejects_non_object_data_entry() -> None:
         _parse_embeddings_response({"data": ["not-a-dict"]}, expected_count=1)
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "data": [
+                {"index": 0, "embedding": [0.1, 0.2]},
+                {"index": 0, "embedding": [0.3, 0.4]},
+            ]
+        },
+        {
+            "data": [
+                {"index": 0, "embedding": [0.1, 0.2]},
+                {"index": 2, "embedding": [0.3, 0.4]},
+            ]
+        },
+    ],
+)
+def test_parse_response_rejects_non_bijective_indices(payload: object) -> None:
+    with pytest.raises(ProviderError, match="map each input exactly once"):
+        _parse_embeddings_response(payload, expected_count=2)
+
+
+def test_parse_response_accepts_all_entries_without_indices_in_wire_order() -> None:
+    payload = {
+        "data": [
+            {"embedding": [0.1, 0.2]},
+            {"embedding": [0.3, 0.4]},
+        ]
+    }
+
+    assert _parse_embeddings_response(payload, expected_count=2) == [
+        [0.1, 0.2],
+        [0.3, 0.4],
+    ]
+
+
+def test_parse_response_rejects_mixed_index_presence() -> None:
+    payload = {
+        "data": [
+            {"index": 0, "embedding": [0.1, 0.2]},
+            {"embedding": [0.3, 0.4]},
+        ]
+    }
+
+    with pytest.raises(ProviderError, match="mixes indexed and unindexed"):
+        _parse_embeddings_response(payload, expected_count=2)
+
+
+def test_parse_response_rejects_inconsistent_vector_dimensions() -> None:
+    payload = {
+        "data": [
+            {"index": 0, "embedding": [0.1, 0.2]},
+            {"index": 1, "embedding": [0.3]},
+        ]
+    }
+
+    with pytest.raises(ProviderError, match="inconsistent dimensions"):
+        _parse_embeddings_response(payload, expected_count=2)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_parse_response_rejects_non_finite_vector_values(value: float) -> None:
+    with pytest.raises(ProviderError, match="non-finite"):
+        _parse_embeddings_response(
+            {"data": [{"index": 0, "embedding": [value]}]},
+            expected_count=1,
+        )
+
+
 def test_coerce_vector_passes_through_real_floats() -> None:
     """The private helper accepts floats unchanged."""
 
@@ -387,6 +447,26 @@ async def test_openrouter_embed_forwards_dimensions_when_set() -> None:
     payload = json.loads(route.calls[0].request.content)
     assert payload["dimensions"] == 256
     assert isinstance(payload["dimensions"], int)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openrouter_embed_retries_529_overload() -> None:
+    route = respx.post("https://openrouter.ai/api/v1/embeddings")
+    route.side_effect = [
+        httpx.Response(529, text="overloaded"),
+        httpx.Response(
+            200,
+            json={"data": [{"index": 0, "embedding": [0.1, 0.2]}]},
+        ),
+    ]
+    client = _openrouter_embedding_client("google/gemini-embedding-2")
+
+    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        vectors = await client.embed(["alpha"], options={})
+
+    assert vectors == [[0.1, 0.2]]
+    assert route.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -518,17 +598,25 @@ def _openrouter_embedding_client(model_id: str) -> ProviderEmbeddingClient:
     )
 
 
-def test_build_payload_merges_extra_options_last() -> None:
-    """The ``extra_options`` escape hatch merges into the request payload
-    and wins over authored keys; empty placeholders are dropped."""
+def test_build_payload_merges_non_reserved_extra_options() -> None:
 
     payload = _build_embeddings_payload(
         "openai/text-embedding-3-small",
         ["hello"],
-        {"dimensions": 256, "extra_options": {"dimensions": 512, "user": "abc", "empty": ""}},
+        {"dimensions": 256, "extra_options": {"user": "abc", "empty": ""}},
     )
 
-    assert payload["dimensions"] == 512
+    assert payload["dimensions"] == 256
     assert payload["user"] == "abc"
     assert "empty" not in payload
     assert "extra_options" not in payload
+
+
+@pytest.mark.parametrize("field", ["model", "input", "encoding_format", "dimensions"])
+def test_build_payload_rejects_reserved_extra_option(field: str) -> None:
+    with pytest.raises(ProviderError, match="cannot override reserved fields"):
+        _build_embeddings_payload(
+            "openai/text-embedding-3-small",
+            ["hello"],
+            {"extra_options": {field: "override"}},
+        )

@@ -6,12 +6,17 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
-from core.model_tasks.constants import SUPPORTED_TASK_TYPES
+from core.model_tasks.constants import SUPPORTED_TASK_TYPES, TASK_TEXT_EMBEDDING
 from core.model_tasks.local_targets import (
     DEFAULT_LOCAL_TASK_TARGET_REGISTRY,
     LocalTaskTargetRegistry,
 )
-from core.model_tasks.options import TaskModelOptionSchema, option_schema_for
+from core.model_tasks.options import (
+    TaskModelOptionSchema,
+    TaskModelOptionValidationError,
+    option_schema_for,
+    validate_text_embedding_options,
+)
 from core.models import ModelQuery
 from core.providers.accounts import compose_connection_id, validate_account_id
 from core.utils.errors import ConfigError, VBotError
@@ -187,7 +192,27 @@ class TaskModelService:
     def update(self, model_tasks: Mapping[str, Any]) -> JsonObject:
         """Persist task-model settings and return the normalized section."""
 
+        if not isinstance(model_tasks, Mapping):
+            raise TaskModelValidationError("Task model settings must be an object")
+        self._validate_embedding_update(model_tasks)
         return cast(JsonObject, self._storage.update_model_task_settings(model_tasks))
+
+    @staticmethod
+    def _validate_embedding_update(model_tasks: Mapping[str, Any]) -> None:
+        raw_binding = model_tasks.get(TASK_TEXT_EMBEDDING)
+        if raw_binding is None:
+            return
+        if not isinstance(raw_binding, Mapping):
+            raise TaskModelValidationError("text_embedding binding must be an object")
+        raw_options = raw_binding.get("options")
+        if raw_options is None:
+            return
+        if not isinstance(raw_options, Mapping):
+            raise TaskModelValidationError("text_embedding options must be an object")
+        try:
+            validate_text_embedding_options(raw_options)
+        except TaskModelOptionValidationError as error:
+            raise TaskModelValidationError(str(error)) from error
 
     def binding_for(self, task_type: str) -> TaskModelBinding:
         """Return the configured binding for *task_type*."""
