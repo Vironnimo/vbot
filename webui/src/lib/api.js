@@ -164,6 +164,31 @@ export function listAgents(options = {}) {
   return rpc('agent.list', {}, options);
 }
 
+export function reorderAgents(agentIds, expectedRevision, options = {}) {
+  if (
+    !Array.isArray(agentIds) ||
+    agentIds.some((agentId) => typeof agentId !== 'string' || !agentId)
+  ) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Agent order must be a list of non-empty ids',
+      { method: 'agent.reorder' },
+    );
+  }
+  if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Agent order revision must be a non-negative integer',
+      { method: 'agent.reorder' },
+    );
+  }
+  return rpc(
+    'agent.reorder',
+    { agent_ids: agentIds, expected_revision: expectedRevision },
+    options,
+  );
+}
+
 export function getAgent(id, options = {}) {
   requireNonEmptyString(id, 'Agent id must be a non-empty string', 'agent.get');
   return rpc('agent.get', { id }, options);

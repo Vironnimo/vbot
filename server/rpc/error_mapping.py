@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from core.agents import AgentError
+from core.agents import AgentError, AgentOrderConflictError, InvalidAgentOrderError
 from core.channels import ChannelConfigError, ChannelNotFoundError
 from core.chat import ChatError, ChatSessionError
 from core.model_tasks import TaskModelError
@@ -17,6 +17,7 @@ from core.runs import ActiveRunError, RunCancelledError, RunError, RunNotFoundEr
 from core.utils.errors import ConfigError, VBotError
 from server.rpc.errors import (
     RPC_ERROR_ACTIVE_RUN,
+    RPC_ERROR_AGENT_ORDER_CONFLICT,
     RPC_ERROR_CANCELLED,
     RPC_ERROR_CHANNEL_ALREADY_EXISTS,
     RPC_ERROR_CHANNEL_CONFIG,
@@ -51,6 +52,10 @@ def _map_expected_error(error: Exception) -> RpcError:
     if isinstance(error, ProjectAlreadyExistsError):
         return RpcError(RPC_ERROR_PROJECT_ALREADY_EXISTS, str(error))
     if isinstance(error, ModelConfigurationError):
+        return RpcError(RPC_ERROR_INVALID_REQUEST, str(error))
+    if isinstance(error, AgentOrderConflictError):
+        return RpcError(RPC_ERROR_AGENT_ORDER_CONFLICT, str(error))
+    if isinstance(error, InvalidAgentOrderError):
         return RpcError(RPC_ERROR_INVALID_REQUEST, str(error))
     if isinstance(error, ProjectError):
         return RpcError(RPC_ERROR_DOMAIN, str(error))

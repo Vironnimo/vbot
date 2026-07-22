@@ -27,6 +27,8 @@ from core.config_validation import (
     validate_json_file,
     validate_non_empty_string,
     validate_optional_path_string,
+    validate_positive_integer,
+    validate_required_fields,
     validate_string,
     validate_string_list,
     warn_unknown_keys,
@@ -62,6 +64,7 @@ DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED = False
 DEFAULT_ALLOWED_ITEMS = ("*",)
 _BOOTSTRAP_AGENT_ID = "main"
 _BOOTSTRAP_AGENT_NAME = "Main"
+_AGENT_ORDER_FILE_NAME = "order.json"
 _LOGGER = get_logger("agents")
 # Only SOUL.md is identity the agent domain owns and seeds. USER.md/MEMORY.md belong
 # to the memory system and are created lazily on the first memory write, so a
@@ -91,6 +94,7 @@ _AGENT_CONFIG_FIELDS = frozenset(
     }
 )
 _SUBAGENT_TOOL_SETTING_FIELDS = frozenset({"allowed_agents"})
+_AGENT_ORDER_FIELDS = frozenset({"agent_ids", "revision"})
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _DEFAULT_TEMPLATE_DIR = _PROJECT_ROOT / "resources" / "workspace-templates"
@@ -110,6 +114,53 @@ class AgentNotFoundError(AgentError):
 
 class InvalidAgentIdError(AgentError):
     """Raised when an agent ID is unsafe for filesystem use."""
+
+
+class InvalidAgentOrderError(AgentError):
+    """Raised when a requested Identity Agent order is malformed."""
+
+
+class AgentOrderConflictError(AgentError):
+    """Raised when a reorder was based on stale roster or revision state."""
+
+    def __init__(self, message: str, *, current_revision: int) -> None:
+        super().__init__(message)
+        self.current_revision = current_revision
+
+
+def validate_agent_order_file(order_path: str | Path) -> JsonValidationReport:
+    """Validate the optional persisted Identity Agent order document."""
+    return validate_json_file(order_path, validate_agent_order_data, missing_ok=True)
+
+
+def validate_agent_order_data(data: Any) -> list[JsonDiagnostic]:
+    """Validate a decoded raw ``agents/order.json`` mapping."""
+    diagnostics: list[JsonDiagnostic] = []
+    if not isinstance(data, dict):
+        return [error_diagnostic("$", f"Expected a JSON object, got {type(data).__name__}")]
+
+    warn_unknown_keys(diagnostics, "$", data, _AGENT_ORDER_FIELDS, "agent order field")
+    validate_required_fields(diagnostics, "$", data, _AGENT_ORDER_FIELDS)
+    if "revision" in data:
+        validate_positive_integer(diagnostics, "$.revision", data["revision"], required=True)
+    agent_ids = data.get("agent_ids")
+    if "agent_ids" in data:
+        validate_string_list(diagnostics, "$.agent_ids", agent_ids)
+    if isinstance(agent_ids, list):
+        seen: set[str] = set()
+        for index, agent_id in enumerate(agent_ids):
+            if not isinstance(agent_id, str):
+                continue
+            if not is_valid_agent_id(agent_id):
+                add_error(
+                    diagnostics,
+                    f"$.agent_ids[{index}]",
+                    "must be a valid Agent id",
+                )
+            if agent_id in seen:
+                add_error(diagnostics, f"$.agent_ids[{index}]", "must be unique")
+            seen.add(agent_id)
+    return diagnostics
 
 
 def validate_agent_file(agent_path: str | Path) -> JsonValidationReport:
@@ -260,6 +311,23 @@ class Agent:
 
 
 @dataclass(frozen=True)
+class AgentListResult:
+    """The canonical Identity Agent roster and its persisted order revision."""
+
+    agents: tuple[Agent, ...]
+    order_revision: int
+    order_changed: bool = False
+
+
+@dataclass(frozen=True)
+class _AgentOrderDocument:
+    """Validated collection metadata stored once for the whole Agent roster."""
+
+    agent_ids: tuple[str, ...]
+    revision: int
+
+
+@dataclass(frozen=True)
 class AgentUpdateResult:
     """An Agent update plus non-persisted Workspace relocation metadata."""
 
@@ -277,6 +345,8 @@ class AgentRenameResult:
 
     agent: Agent
     previous_agent: Agent = field(repr=False)
+    previous_order: _AgentOrderDocument | None = field(default=None, repr=False)
+    order_updated: bool = field(default=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -305,6 +375,7 @@ class AgentStore:
             Path(template_dir) if template_dir is not None else _DEFAULT_TEMPLATE_DIR
         )
         self._defaults_provider = defaults_provider
+        self._reported_order_error: str | None = None
 
     @property
     def data_dir(self) -> Path:
@@ -385,6 +456,11 @@ class AgentStore:
 
         self._seed_workspace(Path(agent.workspace))
         self._write_agent(agent)
+        # ``list_with_order`` appends this newly valid Agent after every existing
+        # roster entry and persists that projection. The config write remains the
+        # creation commit point; an auxiliary order write failure is logged there
+        # and never turns a successfully created identity into a false failure.
+        self.list_with_order()
         return self._apply_defaults(agent, self._agent_defaults())
 
     def get(self, agent_id: str) -> Agent:
@@ -434,14 +510,21 @@ class AgentStore:
         return True
 
     def list(self) -> list[Agent]:
-        """Return valid persisted Agents sorted by id.
+        """Return valid persisted Agents in the canonical roster order."""
+        return list(self.list_with_order().agents)
 
-        One malformed or unreadable ``agent.json`` is logged and skipped. Strict
-        single-Agent access through :meth:`get` still reports that Agent's error.
+    def list_with_order(self) -> AgentListResult:
+        """Return the canonical roster plus its conflict-detection revision.
+
+        A missing order document preserves the historical id order and is
+        materialized on the first non-empty read. Stale ids are discarded and
+        newly discovered valid Agents append at the end. A malformed order file
+        never hides Agents: the roster falls back to id order and the invalid
+        file remains available for ``doctor config`` diagnostics.
         """
         agents_dir = self._data_dir / "agents"
         if not agents_dir.exists():
-            return []
+            return AgentListResult(agents=(), order_revision=0)
 
         defaults = self._agent_defaults()
         agents: list[Agent] = []
@@ -451,7 +534,91 @@ class AgentStore:
                 agents.append(self._apply_defaults(raw_agent, defaults))
             except (AgentError, OSError) as error:
                 _LOGGER.warning("Skipping invalid Agent config %s: %s", agent_path, error)
-        return agents
+
+        order = self._load_agent_order()
+        ordered_agents = _apply_agent_order(agents, order)
+        if not agents and order is None:
+            return AgentListResult(
+                agents=(),
+                order_revision=0,
+            )
+
+        effective_ids = tuple(agent.id for agent in ordered_agents)
+        order_path = self._agent_order_path()
+        order_is_invalid = order is None and order_path.exists()
+        if order is None and not order_is_invalid:
+            materialized = _AgentOrderDocument(agent_ids=effective_ids, revision=1)
+            try:
+                self._write_agent_order(materialized)
+            except OSError as error:
+                _LOGGER.warning("Could not persist Identity Agent order: %s", error)
+            else:
+                order = materialized
+        elif order is not None and order.agent_ids != effective_ids:
+            reconciled = _AgentOrderDocument(
+                agent_ids=effective_ids,
+                revision=order.revision + 1,
+            )
+            try:
+                self._write_agent_order(reconciled)
+            except OSError as error:
+                _LOGGER.warning("Could not reconcile Identity Agent order: %s", error)
+            else:
+                order = reconciled
+
+        return AgentListResult(
+            agents=tuple(ordered_agents),
+            order_revision=order.revision if order is not None else 0,
+        )
+
+    def reorder(
+        self,
+        agent_ids: builtins.list[str],
+        *,
+        expected_revision: int,
+    ) -> AgentListResult:
+        """Atomically replace the canonical order when roster and revision match."""
+        if isinstance(expected_revision, bool) or not isinstance(expected_revision, int):
+            raise InvalidAgentOrderError("expected_revision must be a non-negative integer")
+        if expected_revision < 0:
+            raise InvalidAgentOrderError("expected_revision must be a non-negative integer")
+        if not isinstance(agent_ids, list) or not all(
+            isinstance(agent_id, str) for agent_id in agent_ids
+        ):
+            raise InvalidAgentOrderError("agent_ids must be a list of strings")
+        if any(not is_valid_agent_id(agent_id) for agent_id in agent_ids):
+            raise InvalidAgentOrderError("agent_ids must contain only valid Agent ids")
+        if len(agent_ids) != len(set(agent_ids)):
+            raise InvalidAgentOrderError("agent_ids must not contain duplicates")
+
+        current = self.list_with_order()
+        current_ids = [agent.id for agent in current.agents]
+        if len(agent_ids) != len(current_ids) or set(agent_ids) != set(current_ids):
+            raise AgentOrderConflictError(
+                "Identity Agent roster changed; reload it before reordering",
+                current_revision=current.order_revision,
+            )
+
+        order_needs_repair = self._load_agent_order() is None
+        if agent_ids == current_ids and not order_needs_repair:
+            return current
+        if expected_revision != current.order_revision:
+            raise AgentOrderConflictError(
+                "Identity Agent order changed; reload it before reordering",
+                current_revision=current.order_revision,
+            )
+
+        next_order = _AgentOrderDocument(
+            agent_ids=tuple(agent_ids),
+            revision=current.order_revision + 1,
+        )
+        self._write_agent_order(next_order)
+        agents_by_id = {agent.id: agent for agent in current.agents}
+        return AgentListResult(
+            agents=tuple(agents_by_id[agent_id] for agent_id in agent_ids),
+            order_revision=next_order.revision,
+            order_changed=True,
+        )
 
     def ensure_bootstrap(self) -> Agent | None:
         """Create one valid bootstrap Agent when the store has none.
@@ -622,6 +789,8 @@ class AgentStore:
         if destination_dir.exists() and not _paths_are_same_location(source_dir, destination_dir):
             raise AgentAlreadyExistsError(f"Agent already exists: {new_agent_id}")
 
+        previous_listing = self.list_with_order()
+        previous_order = self._load_agent_order()
         previous_agent = self._load_raw_agent(self._agent_path(agent_id))
         renamed_workspace = _rebase_path_with_tree(
             previous_agent.workspace,
@@ -635,16 +804,35 @@ class AgentStore:
             updated_at=_utc_now(),
         )
 
+        order_updated = False
+        agent_config_updated = False
         self._move_agent_tree(source_dir, destination_dir)
         try:
             self._write_agent(renamed_agent)
+            agent_config_updated = True
+            if previous_order is not None:
+                renamed_ids = tuple(
+                    new_agent_id if listed.id == agent_id else listed.id
+                    for listed in previous_listing.agents
+                )
+                self._write_agent_order(
+                    _AgentOrderDocument(
+                        agent_ids=renamed_ids,
+                        revision=previous_order.revision + 1,
+                    )
+                )
+                order_updated = True
         except Exception:
             self._move_agent_tree(destination_dir, source_dir)
+            if agent_config_updated:
+                self._write_agent(previous_agent)
             raise
 
         return AgentRenameResult(
             agent=self._apply_defaults(renamed_agent, self._agent_defaults()),
             previous_agent=previous_agent,
+            previous_order=previous_order,
+            order_updated=order_updated,
         )
 
     def restore_rename(self, result: AgentRenameResult) -> None:
@@ -654,6 +842,8 @@ class AgentStore:
             self._agent_dir(result.previous_agent.id),
         )
         self._write_agent(result.previous_agent)
+        if result.order_updated:
+            self._restore_agent_order(result.previous_order)
 
     def retarget_allowed_agent_references(
         self,
@@ -770,6 +960,10 @@ class AgentStore:
         if workspace_path.exists():
             shutil.move(str(workspace_path), str(archive_dir / "workspace"))
 
+        # Reconcile the collection document after the archive is committed. A
+        # stale id is filtered even if persistence fails, so delete never reports
+        # failure after the irreversible archive already succeeded.
+        self.list_with_order()
         return archive_dir
 
     def reset_current_after_session_removed(self, agent_id: str, removed_session_id: str) -> Agent:
@@ -829,6 +1023,9 @@ class AgentStore:
     def _agent_path(self, agent_id: str) -> Path:
         return self._agent_dir(agent_id) / "agent.json"
 
+    def _agent_order_path(self) -> Path:
+        return self._data_dir / "agents" / _AGENT_ORDER_FILE_NAME
+
     def default_workspace(self, agent_id: str) -> str:
         """Return an agent's default identity home as a resolved absolute path.
 
@@ -861,6 +1058,48 @@ class AgentStore:
             data_dir=self._data_dir,
         )
         atomic_write_text(agent_path, json.dumps(persisted, ensure_ascii=False, indent=2) + "\n")
+
+    def _load_agent_order(self) -> _AgentOrderDocument | None:
+        order_path = self._agent_order_path()
+        try:
+            data = load_validated_json_file(
+                order_path,
+                validate_agent_order_data,
+                missing_ok=True,
+                missing_default=None,
+            )
+        except JsonConfigValidationError as error:
+            message = str(error)
+            if message != self._reported_order_error:
+                _LOGGER.warning("Ignoring invalid Identity Agent order: %s", message)
+                self._reported_order_error = message
+            return None
+
+        self._reported_order_error = None
+        if data is None:
+            return None
+        return _AgentOrderDocument(
+            agent_ids=tuple(data["agent_ids"]),
+            revision=data["revision"],
+        )
+
+    def _write_agent_order(self, order: _AgentOrderDocument) -> None:
+        payload = {
+            "revision": order.revision,
+            "agent_ids": list(order.agent_ids),
+        }
+        atomic_write_text(
+            self._agent_order_path(),
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        )
+        self._reported_order_error = None
+
+    def _restore_agent_order(self, order: _AgentOrderDocument | None) -> None:
+        if order is None:
+            self._agent_order_path().unlink(missing_ok=True)
+            self._reported_order_error = None
+            return
+        self._write_agent_order(order)
 
     def _agent_defaults(self) -> dict[str, Any]:
         if self._defaults_provider is None:
@@ -973,6 +1212,21 @@ def _validate_string_field(field: str, value: Any, *, allow_empty: bool) -> str:
     if not allow_empty and not value:
         raise AgentError(f"{field} must be a non-empty string")
     return value
+
+
+def _apply_agent_order(
+    agents: list[Agent],
+    order: _AgentOrderDocument | None,
+) -> list[Agent]:
+    """Project valid Agents through stored order, appending new ids by id."""
+    if order is None:
+        return agents
+
+    agents_by_id = {agent.id: agent for agent in agents}
+    ordered = [agents_by_id[agent_id] for agent_id in order.agent_ids if agent_id in agents_by_id]
+    ordered_ids = {agent.id for agent in ordered}
+    ordered.extend(agent for agent in agents if agent.id not in ordered_ids)
+    return ordered
 
 
 def _normalize_agent_name(agent_id: str, value: Any) -> str:

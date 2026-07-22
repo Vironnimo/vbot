@@ -34,6 +34,7 @@ import {
   listLogs,
   normalizeRpcError,
   readLogFile,
+  reorderAgents,
   renameAgent,
   removeFromQueue,
   rpc,
@@ -316,6 +317,25 @@ describe('agent API', () => {
     expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
       method: 'agent.rename',
       params: { id: 'coder', new_id: 'researcher' },
+    });
+  });
+
+  it('posts the complete Agent order with its expected revision', async () => {
+    const fetchFunction = vi.fn().mockResolvedValue(
+      jsonResponse({
+        ok: true,
+        result: { agents: [], order_revision: 4 },
+      }),
+    );
+
+    await reorderAgents(['writer', 'coder'], 3, { fetch: fetchFunction });
+
+    expect(JSON.parse(fetchFunction.mock.calls[0][1].body)).toEqual({
+      method: 'agent.reorder',
+      params: {
+        agent_ids: ['writer', 'coder'],
+        expected_revision: 3,
+      },
     });
   });
 });

@@ -376,6 +376,85 @@ async def test_agent_list_response_omits_connection_fields(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
+async def test_agent_reorder_persists_canonical_list_order(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    await dispatch_rpc(
+        state,
+        {"method": "agent.create", "params": {"id": "writer", "name": "Writer"}},
+    )
+    listed = await dispatch_rpc(state, {"method": "agent.list", "params": {}})
+    revision = listed["result"]["order_revision"]
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "agent.reorder",
+            "params": {
+                "agent_ids": ["writer", "coder"],
+                "expected_revision": revision,
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    assert [agent["id"] for agent in response["result"]["agents"]] == [
+        "writer",
+        "coder",
+    ]
+    assert response["result"]["order_revision"] == revision + 1
+    assert [agent.id for agent in state.runtime.agents.list()] == ["writer", "coder"]
+
+
+@pytest.mark.asyncio
+async def test_agent_reorder_rejects_stale_revision(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    await dispatch_rpc(state, {"method": "agent.create", "params": {"id": "writer"}})
+    listed = await dispatch_rpc(state, {"method": "agent.list", "params": {}})
+    stale_revision = listed["result"]["order_revision"]
+    await dispatch_rpc(
+        state,
+        {
+            "method": "agent.reorder",
+            "params": {
+                "agent_ids": ["writer", "coder"],
+                "expected_revision": stale_revision,
+            },
+        },
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "agent.reorder",
+            "params": {
+                "agent_ids": ["coder", "writer"],
+                "expected_revision": stale_revision,
+            },
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "agent_order_conflict"
+    assert [agent.id for agent in state.runtime.agents.list()] == ["writer", "coder"]
+
+
+@pytest.mark.asyncio
+async def test_agent_reorder_rejects_invalid_payload(tmp_path: Path) -> None:
+    state = make_state(tmp_path, StubAdapter())
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "agent.reorder",
+            "params": {"agent_ids": ["coder", "coder"], "expected_revision": 1},
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+
+
+@pytest.mark.asyncio
 async def test_agent_list_includes_context_window_for_known_model(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
 

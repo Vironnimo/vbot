@@ -9,6 +9,7 @@
     listProjects,
     listSkills,
     listTools,
+    reorderAgents,
     showProject,
   } from '$lib/api.js';
   import { buildAgentTargetCatalog } from '$lib/agentForm.js';
@@ -37,10 +38,15 @@
     onNavigateToAgentPrompt = noop,
     modelsRefreshToken = 0,
     projectsRefreshToken = 0,
+    agentsRefreshToken = 0,
   } = $props();
 
   let agents = $state([]);
   let selectedAgentId = $state('');
+  let agentOrderRevision = $state(0);
+  let isReordering = $state(false);
+  let reorderInteractionActive = $state(false);
+  let pendingAgentReload = false;
   let lastSharedSelectedAgentId = $state('');
   let isCreateModalOpen = $state(false);
   let isLoading = $state(false);
@@ -65,6 +71,9 @@
   let pendingModelCatalogs = null;
   let lastModelsRefreshToken = null;
   let lastProjectsRefreshToken = null;
+  let lastAgentsRefreshToken = null;
+  let agentListRequestId = 0;
+  let loadingAgentListRequestId = 0;
   let projectCatalogRequestId = 0;
 
   let selectedAgent = $derived(
@@ -96,6 +105,22 @@
     void loadCatalogs();
     void loadProjectCatalog();
     void loadAgents({ preferredAgentId: sharedSelectedAgentId });
+  });
+
+  $effect(() => {
+    if (lastAgentsRefreshToken === null) {
+      lastAgentsRefreshToken = agentsRefreshToken;
+      return;
+    }
+    if (agentsRefreshToken === lastAgentsRefreshToken) {
+      return;
+    }
+    lastAgentsRefreshToken = agentsRefreshToken;
+    if (isReordering || reorderInteractionActive) {
+      pendingAgentReload = true;
+      return;
+    }
+    void loadAgents({ notify: false, showLoading: false });
   });
 
   $effect(() => {
@@ -252,19 +277,93 @@
   }
 
   async function loadAgents(options = {}) {
-    isLoading = true;
+    const requestId = ++agentListRequestId;
+    const showLoading = options.showLoading !== false;
+    if (showLoading) {
+      isLoading = true;
+      loadingAgentListRequestId = requestId;
+    }
     loadError = '';
 
     try {
       const result = await listAgents();
+      if (requestId !== agentListRequestId) {
+        return;
+      }
       agents = Array.isArray(result?.agents) ? result.agents : [];
+      agentOrderRevision = Number.isInteger(result?.order_revision)
+        ? result.order_revision
+        : 0;
       const preferredAgentId = options.preferredAgentId ?? selectedAgentId;
       selectAgent(resolveSelectedAgentId(agents, preferredAgentId));
-      notifyAgentsChanged();
+      if (options.notify !== false) {
+        notifyAgentsChanged();
+      }
     } catch (error) {
+      if (requestId !== agentListRequestId) {
+        return;
+      }
       loadError = viewErrorMessage(error, t('agents.loadError'));
     } finally {
-      isLoading = false;
+      if (loadingAgentListRequestId === requestId) {
+        isLoading = false;
+        loadingAgentListRequestId = 0;
+      }
+    }
+  }
+
+  async function handleAgentsReordered(agentIds) {
+    if (isReordering || agentIds.length !== agents.length) {
+      return;
+    }
+    const agentsById = new Map(agents.map((agent) => [agent.id, agent]));
+    if (agentIds.some((agentId) => !agentsById.has(agentId))) {
+      return;
+    }
+
+    const previousAgents = agents;
+    const preferredAgentId = selectedAgentId;
+    agents = agentIds.map((agentId) => agentsById.get(agentId));
+    isReordering = true;
+    try {
+      const result = await reorderAgents(agentIds, agentOrderRevision);
+      agents = Array.isArray(result?.agents) ? result.agents : agents;
+      agentOrderRevision = Number.isInteger(result?.order_revision)
+        ? result.order_revision
+        : agentOrderRevision;
+      notifyAgentsChanged();
+    } catch (error) {
+      agents = previousAgents;
+      onToast({
+        title: viewErrorMessage(
+          error,
+          t('agents.order.saveError', 'Agent order could not be saved.'),
+        ),
+        variant: 'error',
+      });
+      await loadAgents({
+        preferredAgentId,
+        notify: false,
+        showLoading: false,
+      });
+    } finally {
+      isReordering = false;
+      if (pendingAgentReload) {
+        pendingAgentReload = false;
+        await loadAgents({
+          preferredAgentId,
+          notify: false,
+          showLoading: false,
+        });
+      }
+    }
+  }
+
+  function handleReorderInteractionChange(active) {
+    reorderInteractionActive = active;
+    if (!active && !isReordering && pendingAgentReload) {
+      pendingAgentReload = false;
+      void loadAgents({ notify: false, showLoading: false });
     }
   }
 
@@ -348,8 +447,11 @@
       {agents}
       {selectedAgentId}
       {isLoading}
+      {isReordering}
       onSelect={selectAgent}
       onCreate={openCreateModal}
+      onReorder={handleAgentsReordered}
+      onReorderInteractionChange={handleReorderInteractionChange}
     />
 
     {#key selectedAgent?.id ?? 'new-agent'}

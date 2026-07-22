@@ -182,7 +182,7 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
     # Settings owns bundle orchestration, while each persisted format is validated
     # by its domain. Imports stay local so those domains may reuse Settings-owned
     # scalar/Policy rules without creating package initialization cycles.
-    from core.agents import validate_agent_file
+    from core.agents import validate_agent_file, validate_agent_order_file
     from core.automation import validate_cron_jobs_file
     from core.channels import validate_channel_file
     from core.projects import validate_project_file
@@ -193,6 +193,9 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
         validate_agent_file(agent_path)
         for agent_path in sorted((root / "agents").glob("*/agent.json"))
     )
+    agent_order_path = root / "agents" / "order.json"
+    if agent_order_path.exists():
+        reports.append(validate_agent_order_file(agent_order_path))
     reports.extend(
         validate_channel_file(channel_path)
         for channel_path in sorted((root / "channels").glob("*/channel.json"))
