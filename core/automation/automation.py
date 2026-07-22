@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from core.chat import ChatLoop, MessageSender, ReplySurface
 from core.chat.content_blocks import ContentBlock
@@ -10,6 +11,11 @@ from core.runs import ActiveRunError, ChatRunManager, Run, WaitingWorkAdmission
 
 if TYPE_CHECKING:
     from core.runtime.runtime import Runtime
+
+
+def _input_persisted_kwargs(callback: Callable[[], None] | None) -> dict[str, Any]:
+    """Omit the optional hook entirely when no producer requested a receipt."""
+    return {} if callback is None else {"input_persisted_hook": callback}
 
 
 class TriggerService:
@@ -39,6 +45,7 @@ class TriggerService:
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
         waiting_work_admission: WaitingWorkAdmission | None = None,
+        input_persisted_hook: Callable[[], None] | None = None,
     ) -> Run:
         """Start a run immediately, or queue it until the target session is idle.
 
@@ -55,6 +62,7 @@ class TriggerService:
                         internal=True,
                         reply_surface=reply_surface,
                         project_id=project_id,
+                        **_input_persisted_kwargs(input_persisted_hook),
                     )
                 return await self._trigger_chat_loop.start_run_in_new_session(
                     agent_id,
@@ -62,6 +70,7 @@ class TriggerService:
                     sender=sender,
                     reply_surface=reply_surface,
                     project_id=project_id,
+                    **_input_persisted_kwargs(input_persisted_hook),
                 )
             except BaseException:
                 self.release_waiting_work(waiting_work_admission)
@@ -77,6 +86,7 @@ class TriggerService:
                     internal=True,
                     reply_surface=reply_surface,
                     project_id=project_id,
+                    **_input_persisted_kwargs(input_persisted_hook),
                 )
             else:
                 run = await self._trigger_chat_loop.start_run(
@@ -86,6 +96,7 @@ class TriggerService:
                     sender=sender,
                     reply_surface=reply_surface,
                     project_id=project_id,
+                    **_input_persisted_kwargs(input_persisted_hook),
                 )
         except ActiveRunError:
             try:
@@ -98,6 +109,7 @@ class TriggerService:
                             internal=True,
                             reply_surface=reply_surface,
                             project_id=project_id,
+                            **_input_persisted_kwargs(input_persisted_hook),
                         )
                     else:
                         queued_item = await self._trigger_chat_loop.queue_run(
@@ -108,6 +120,7 @@ class TriggerService:
                             reply_surface=reply_surface,
                             project_id=project_id,
                             waiting_work_admission=waiting_work_admission,
+                            **_input_persisted_kwargs(input_persisted_hook),
                         )
                 else:
                     if waiting_work_admission is None:
@@ -118,6 +131,7 @@ class TriggerService:
                             sender=sender,
                             reply_surface=reply_surface,
                             project_id=project_id,
+                            **_input_persisted_kwargs(input_persisted_hook),
                         )
                     else:
                         queued_item = await self._trigger_chat_loop.queue_run(
@@ -128,6 +142,7 @@ class TriggerService:
                             reply_surface=reply_surface,
                             project_id=project_id,
                             waiting_work_admission=waiting_work_admission,
+                            **_input_persisted_kwargs(input_persisted_hook),
                         )
                 return await queued_item.future
             except BaseException:

@@ -264,6 +264,7 @@ export function createChatRpcMock({
       return {
         agent_id: params.agent_id,
         session_id: params.session_id,
+        latest_completion_run_id: params.run_id,
         has_unread_completion: false,
         unread_run_id: null,
         unread_run_status: null,

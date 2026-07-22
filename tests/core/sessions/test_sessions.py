@@ -695,6 +695,7 @@ class TestChatSessionManager:
                 "id": "session-a",
                 "created_at": first_timestamp.isoformat(),
                 "last_active_at": last_timestamp.isoformat(),
+                "latest_completion_run_id": None,
                 "has_unread_completion": False,
                 "unread_run_id": None,
                 "unread_run_status": None,
@@ -707,6 +708,7 @@ class TestChatSessionManager:
                 "id": "session-b",
                 "created_at": fallback_timestamp.isoformat(),
                 "last_active_at": fallback_timestamp.isoformat(),
+                "latest_completion_run_id": None,
                 "has_unread_completion": False,
                 "unread_run_id": None,
                 "unread_run_status": None,
@@ -724,6 +726,7 @@ class TestChatSessionManager:
 
         unread = manager.list_with_metadata("coder")[0]
         assert unread["has_unread_completion"] is True
+        assert unread["latest_completion_run_id"] == "run-one"
         assert unread["unread_run_id"] == "run-one"
         assert unread["unread_run_status"] == "completed"
         assert unread["unread_run_at"] == first_timestamp
@@ -739,6 +742,7 @@ class TestChatSessionManager:
         acknowledged = manager.mark_terminal_run_read("coder", "session-a", "run-two")
 
         assert acknowledged == {
+            "latest_completion_run_id": "run-two",
             "has_unread_completion": False,
             "unread_run_id": None,
             "unread_run_status": None,
@@ -761,6 +765,7 @@ class TestChatSessionManager:
                 "id": "session-a",
                 "created_at": message_timestamp.isoformat(),
                 "last_active_at": message_timestamp.isoformat(),
+                "latest_completion_run_id": None,
                 "has_unread_completion": False,
                 "unread_run_id": None,
                 "unread_run_status": None,

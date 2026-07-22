@@ -712,6 +712,7 @@ export function ensureSessionState(state, agentId, sessionId) {
       hasOlderHistory: false,
       loadingOlderHistory: false,
       hasUnreadCompletion: false,
+      latestCompletionRunId: '',
       unreadRunId: '',
       unreadRunStatus: '',
       unreadRunAt: '',
@@ -750,20 +751,40 @@ export function applySessionCompletionActivity(sessionState, source) {
   const lastActiveAt = normalizedActivityText(source?.last_active_at);
   const incomingUnreadAt = normalizedActivityText(source?.unread_run_at);
   const incomingHasUnread = source?.has_unread_completion === true;
-  if (
-    !incomingHasUnread &&
-    sessionState.hasUnreadCompletion &&
-    lastActiveAt &&
-    isAtLeastAsNewActivityTimestamp(sessionState.unreadRunAt, lastActiveAt)
-  ) {
+  const incomingUnreadRunId = normalizedActivityText(source?.unread_run_id);
+  const incomingLatestRunId =
+    normalizedActivityText(source?.latest_completion_run_id) ||
+    (incomingHasUnread ? incomingUnreadRunId : '');
+  const localLatestRunId =
+    normalizedActivityText(sessionState.latestCompletionRunId) ||
+    (sessionState.hasUnreadCompletion
+      ? normalizedActivityText(sessionState.unreadRunId)
+      : '');
+  if (localLatestRunId && !incomingLatestRunId) {
     return sessionState;
+  }
+  if (localLatestRunId && incomingLatestRunId) {
+    if (localLatestRunId === incomingLatestRunId) {
+      if (incomingHasUnread && !sessionState.hasUnreadCompletion) {
+        return sessionState;
+      }
+    } else {
+      const localCompletionAt = sessionState.hasUnreadCompletion
+        ? sessionState.unreadRunAt
+        : sessionState.lastActiveAt;
+      const incomingCompletionAt = incomingUnreadAt || lastActiveAt;
+      if (
+        isAtLeastAsNewActivityTimestamp(localCompletionAt, incomingCompletionAt)
+      ) {
+        return sessionState;
+      }
+    }
   }
 
   sessionState.lastActiveAt = lastActiveAt || sessionState.lastActiveAt;
+  sessionState.latestCompletionRunId = incomingLatestRunId;
   sessionState.hasUnreadCompletion = incomingHasUnread;
-  sessionState.unreadRunId = incomingHasUnread
-    ? normalizedActivityText(source?.unread_run_id)
-    : '';
+  sessionState.unreadRunId = incomingHasUnread ? incomingUnreadRunId : '';
   sessionState.unreadRunStatus = incomingHasUnread
     ? normalizedActivityText(source?.unread_run_status)
     : '';
@@ -823,6 +844,7 @@ export function sessionHasTerminalRun(sessionState, runId) {
 
 function clearSessionCompletionActivity(sessionState) {
   sessionState.hasUnreadCompletion = false;
+  sessionState.latestCompletionRunId = '';
   sessionState.unreadRunId = '';
   sessionState.unreadRunStatus = '';
   sessionState.unreadRunAt = '';
@@ -1038,6 +1060,7 @@ export function appendCompactionCheckpoint(sessionState, message) {
 export function finishRun(sessionState, event) {
   const type = event?.type;
   const status = event?.payload?.status;
+  const completedRunId = event?.run_id ?? '';
   if (sessionState.currentRun) {
     sessionState.currentRun.status = status ?? terminalStatus(type);
   }
@@ -1056,10 +1079,17 @@ export function finishRun(sessionState, event) {
   if (event?.payload?.session_usage) {
     sessionState.sessionUsage = event.payload.session_usage;
   }
-  sessionState.hasUnreadCompletion = true;
-  sessionState.unreadRunId = event?.run_id ?? '';
-  sessionState.unreadRunStatus = status ?? terminalStatus(type);
-  sessionState.unreadRunAt = event?.timestamp ?? '';
+  const completionAlreadyRead =
+    completedRunId &&
+    sessionState.latestCompletionRunId === completedRunId &&
+    !sessionState.hasUnreadCompletion;
+  if (!completionAlreadyRead) {
+    sessionState.hasUnreadCompletion = true;
+    sessionState.latestCompletionRunId = completedRunId;
+    sessionState.unreadRunId = completedRunId;
+    sessionState.unreadRunStatus = status ?? terminalStatus(type);
+    sessionState.unreadRunAt = event?.timestamp ?? '';
+  }
   sessionState.lastActiveAt = event?.timestamp ?? sessionState.lastActiveAt;
   return sessionState;
 }
