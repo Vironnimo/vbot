@@ -850,6 +850,21 @@ def test_shell_detection_uses_native_shell(monkeypatch: pytest.MonkeyPatch) -> N
     assert bash_module._shell_argv("echo hello") == ["bash", "-c", "echo hello"]
 
 
+def test_shell_env_probe_requests_windowless_process_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[bool] = []
+
+    def creation_flags(*, new_process_group: bool = False) -> int:
+        calls.append(new_process_group)
+        return 123
+
+    monkeypatch.setattr(bash_module, "subprocess_creation_flags", creation_flags)
+
+    assert bash_module._probe_creationflags() == 123
+    assert calls == [True]
+
+
 @pytest.mark.asyncio
 async def test_shell_env_probe_timeout_terminates_and_reaps_probe(
     monkeypatch: pytest.MonkeyPatch,

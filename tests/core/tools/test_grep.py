@@ -59,6 +59,7 @@ class FakeRgProcess:
         self.returncode = returncode
         self.killed = False
         self._finished = False
+        self.creationflags = 0
 
     def poll(self) -> int | None:
         return self.returncode if self._finished else None
@@ -84,6 +85,7 @@ def install_fake_rg(
 
     def fake_popen(command: list[str], cwd: str | None = None, **_kwargs: Any) -> FakeRgProcess:
         process = FakeRgProcess(command, cwd or "", stdout_text, stderr_text, returncode)
+        process.creationflags = int(_kwargs.get("creationflags", 0))
         created.append(process)
         return process
 
@@ -543,11 +545,13 @@ def test_grep_uses_rg_success_output_when_available(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     workspace.joinpath("notes.txt").write_text("hello\n", encoding="utf-8")
-    install_fake_rg(monkeypatch, stdout_text="notes.txt:1:hello\n")
+    monkeypatch.setattr(grep_module, "subprocess_creation_flags", lambda: 123)
+    created = install_fake_rg(monkeypatch, stdout_text="notes.txt:1:hello\n")
 
     result = grep_handler(make_context(workspace), {"pattern": "hello"})
     data = assert_success_envelope(result)
     assert data["content"] == "notes.txt:1: hello"
+    assert created[0].creationflags == 123
 
 
 def test_grep_stops_reading_rg_output_at_limit_and_kills_process(

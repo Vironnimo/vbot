@@ -22,6 +22,7 @@ from core.tools.process_manager import (
     SessionInputClosedError,
     SessionNotFoundError,
     SessionStillRunningError,
+    subprocess_creation_flags,
 )
 
 PollResult = dict[str, object]
@@ -666,6 +667,29 @@ def test_buffer_cap_default_is_500_kb() -> None:
     assert PROCESS_BUFFER_CAP_BYTES == 500 * 1024
 
 
+def test_windows_subprocess_creation_flags_hide_console_and_keep_process_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200, raising=False)
+
+    assert subprocess_creation_flags(platform_name="nt") == 0x08000000
+    assert (
+        subprocess_creation_flags(
+            new_process_group=True,
+            platform_name="nt",
+        )
+        == 0x08000200
+    )
+    assert (
+        subprocess_creation_flags(
+            new_process_group=True,
+            platform_name="posix",
+        )
+        == 0
+    )
+
+
 def test_unix_process_tree_kill_uses_sigkill(monkeypatch: pytest.MonkeyPatch) -> None:
     sent_signals: list[tuple[int, int]] = []
 
@@ -705,6 +729,7 @@ def test_windows_process_tree_kill_falls_back_when_taskkill_times_out(
         raise subprocess.TimeoutExpired(cmd="taskkill", timeout=5)
 
     monkeypatch.setattr("core.tools.process_manager.os.name", "nt")
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
     monkeypatch.setattr("core.tools.process_manager.subprocess.run", raise_timeout)
 
     ProcessManager._kill_process_tree(FakeProcess())  # type: ignore[arg-type]
