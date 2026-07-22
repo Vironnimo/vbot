@@ -37,13 +37,39 @@ TITLE_ATTACHMENT_METADATA_MAX_BYTES = 1024
 TITLE_MAX_OUTPUT_TOKENS = 32
 TITLE_OMISSION_MARKER = "\n\n[large middle section omitted]\n\n"
 _SUBAGENT_SESSION_METADATA_FLAG = "is_subagent_session"
-_THINK_BLOCK_PATTERN = re.compile(r"<think>[\s\S]*?</think>\s*", re.IGNORECASE)
+_HIDDEN_REASONING_BLOCK_PATTERN = re.compile(
+    r"<(think|thinking|analysis|reasoning)>[\s\S]*?(?:</\1>|$)\s*",
+    re.IGNORECASE,
+)
+_META_TITLE_PATTERNS = (
+    re.compile(
+        r"^(?:the\s+)?user\s+(?:is\s+)?(?:asking|asks|wants|requested|requests|needs)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(?:this|the)\s+(?:chat|session|conversation|request)\s+"
+        r"(?:is|asks|concerns|involves|focuses)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(?:der|die)\s+(?:user|nutzer(?:in)?)\s+"
+        r"(?:fragt|bittet|möchte|will|fordert)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^was\s+(?:macht|möchte|will)\s+(?:der|die)\s+(?:user|nutzer(?:in)?)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^(?:in\s+)?dieser\s+(?:session|unterhaltung)\b", re.IGNORECASE),
+)
 
 TITLE_SYSTEM_PROMPT = (
     "Create one concise display title for this chat Session from the first user message. "
-    "Describe the requested work, not your response. Use the user's language. Aim for 40 "
-    "characters or fewer, exceeding that only when clarity requires it. Return only the title "
-    "as one plain-text line, without quotes, Markdown, a label, or ending punctuation."
+    "Name the requested work or topic directly, not your response or the interaction. Use the "
+    "user's language. Aim for 40 characters or fewer, exceeding that only when clarity "
+    "requires it. Your entire response must be only the title as one plain-text line, without "
+    "quotes, Markdown, a label, or ending punctuation. Never output analysis or reasoning. "
+    "Good: Login failure investigation. Bad: The user is asking me to investigate login failures."
 )
 
 
@@ -293,22 +319,35 @@ def _generated_title(response: dict[str, Any]) -> str:
     if isinstance(content, str):
         text = content
     elif isinstance(content, list):
-        chunks = [
-            item if isinstance(item, str) else item.get("text", "")
-            for item in content
-            if isinstance(item, (str, dict))
-        ]
+        chunks: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                chunks.append(item)
+                continue
+            if not isinstance(item, dict):
+                continue
+            block_type = item.get("type")
+            if block_type not in (None, "text", "output_text"):
+                continue
+            block_text = item.get("text")
+            if isinstance(block_text, str):
+                chunks.append(block_text)
         text = "\n".join(chunk for chunk in chunks if isinstance(chunk, str))
     else:
         raise ValueError("Session title response did not include text content")
 
-    text = _THINK_BLOCK_PATTERN.sub("", text)
-    line = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    text = _HIDDEN_REASONING_BLOCK_PATTERN.sub("", text)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) != 1:
+        raise ValueError("Session title response was not exactly one text line")
+    line = lines[0]
     line = re.sub(r"^(?:title|titel)\s*:\s*", "", line, flags=re.IGNORECASE)
     line = line.strip(" \t\"'`*_#")
     line = " ".join(line.split()).rstrip(".!?:;").strip(" \t\"'`*_#")
     if not line:
         raise ValueError("Session title response was empty")
+    if any(pattern.search(line) for pattern in _META_TITLE_PATTERNS):
+        raise ValueError("Session title response described the naming task instead of the topic")
     return line
 
 

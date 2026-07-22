@@ -417,9 +417,11 @@ def _render_openrouter_reasoning(payload: dict[str, Any], intent: ReasoningInten
     elif intent.kind == REASONING_INTENT_OFF:
         if intent.effort_level == OPENROUTER_NONE_EFFORT:
             payload["reasoning"] = {"effort": OPENROUTER_NONE_EFFORT}
-            payload["include_reasoning"] = True
         else:
             payload["reasoning"] = dict(OPENROUTER_REASONING_OFF)
+        # Some upstreams honor the output toggle even when they ignore the
+        # requested effort. Never ask one to return reasoning for an off intent.
+        payload.pop("include_reasoning", None)
 
 
 def _is_claude_family(model_id: str) -> bool:

@@ -106,8 +106,8 @@ async def test_openrouter_reasoning_uses_openrouter_wire_format(
 
 
 @pytest.mark.parametrize(
-    ("thinking_effort", "expected_effort"),
-    [("none", "none"), ("max", "xhigh")],
+    ("thinking_effort", "expected_effort", "includes_reasoning"),
+    [("none", "none", False), ("max", "xhigh", True)],
 )
 @respx.mock
 @pytest.mark.asyncio
@@ -115,6 +115,7 @@ async def test_openrouter_reasoning_maps_to_nearest_supported_effort(
     openrouter_adapter: OpenRouterAdapter,
     thinking_effort: str,
     expected_effort: str,
+    includes_reasoning: bool,
 ) -> None:
     route = respx.post(OPENROUTER_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
 
@@ -126,7 +127,9 @@ async def test_openrouter_reasoning_maps_to_nearest_supported_effort(
 
     request_body = json.loads(route.calls.last.request.content)
     assert request_body["reasoning"] == {"effort": expected_effort}
-    assert request_body["include_reasoning"] is True
+    assert ("include_reasoning" in request_body) is includes_reasoning
+    if includes_reasoning:
+        assert request_body["include_reasoning"] is True
 
 
 @respx.mock
@@ -317,6 +320,7 @@ async def test_openrouter_on_off_model_disables_on_none(
 
     request_body = json.loads(route.calls.last.request.content)
     assert request_body["reasoning"] == {"enabled": False}
+    assert "include_reasoning" not in request_body
 
 
 @respx.mock
