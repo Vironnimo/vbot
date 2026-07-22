@@ -21,7 +21,9 @@ test("Statistics aggregates persisted Run and Tool activity across its views", a
     statistics.locator(".stats-card").filter({ hasText: /^Runs\s+[1-9]/ }),
   ).toBeVisible();
   await expect(
-    statistics.locator(".stats-card").filter({ hasText: /^Messages\s+[1-9]/ }),
+    statistics
+      .locator(".stats-card")
+      .filter({ hasText: /^Chat messages\s+[1-9]/ }),
   ).toBeVisible();
   await expect(
     statistics

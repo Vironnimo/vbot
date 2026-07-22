@@ -29,6 +29,9 @@ test("an Agent-specific System Prompt stays isolated from the Default scope", as
   await createDialog.getByLabel("Name").fill("Prompt Agent");
   await createDialog.getByRole("button", { name: "Create agent" }).click();
   await expect(page.getByText("Agent created.", { exact: true })).toBeVisible();
+  await expect(
+    agentList.getByRole("button", { name: /^Prompt Agent(?:\s|$)/ }),
+  ).toHaveClass(/active/);
 
   await agents.getByRole("switch", { name: "Custom system prompt" }).click();
   await agents.getByRole("button", { name: "Save changes" }).click();

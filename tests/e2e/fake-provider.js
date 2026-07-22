@@ -742,9 +742,10 @@ async function handleChatCompletion(request, response) {
     offeredTools,
   );
 
+  const requestText = messagesText(body?.messages);
   if (
-    prompt.includes("E2E_COMMAND_CONTINUE") &&
-    messagesText(body?.messages).includes("<continuation-checkpoint")
+    requestText.includes("E2E_COMMAND_CONTINUE") &&
+    requestText.includes("<continuation-checkpoint")
   ) {
     await streamCompletion(
       response,
