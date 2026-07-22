@@ -458,13 +458,15 @@ class DesktopBridge:
         with self._lock:
             return self._worker_config_locked()
 
-    def resolve_wakeword_model_target(self) -> str:
-        """Return the active model's built-in name or private imported path."""
+    def _create_wakeword_engine(self) -> Any:
+        """Create the active model's backend-specific detector."""
         with self._lock:
             config = self._worker_config_locked()
             with self._model_lock:
-                descriptor = self._model_catalog.resolve(config["model_id"])
-            return descriptor.target
+                return self._model_catalog.create_engine(
+                    config["model_id"],
+                    config["sensitivity"],
+                )
 
     def _worker_config_locked(self) -> dict[str, Any]:
         config = read_wakeword_settings(self._settings_path)

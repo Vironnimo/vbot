@@ -314,7 +314,9 @@ def test_bridge_imports_selects_and_deletes_a_custom_model(
     assert imported in bridge.listWakewordModels()
     assert bridge.getWakewordStatus()["model_id"] == imported["id"]
     assert bridge.getWakewordStatus()["sensitivity"] == 0.75
-    assert bridge.resolve_wakeword_model_target().endswith(".onnx")
+    engine = bridge._create_wakeword_engine()
+    assert isinstance(engine, engine_module.OpenWakeWordEngine)
+    assert engine._model_target.endswith(".onnx")
     with pytest.raises(WakewordModelError, match="active"):
         bridge.deleteWakewordModel(imported["id"])
 

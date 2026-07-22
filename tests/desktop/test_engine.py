@@ -15,6 +15,7 @@ from desktop.wakeword.engine import (
     MAX_WAKEWORD_SENSITIVITY,
     MIN_WAKEWORD_SENSITIVITY,
     OpenWakeWordEngine,
+    PyOpenWakeWordEngine,
     WakewordModelCatalog,
     WakewordModelError,
 )
@@ -26,12 +27,21 @@ def test_catalog_lists_only_curated_public_builtin_models(tmp_path: Path) -> Non
     models = [model.to_dict() for model in catalog.list_models()]
 
     assert [model["id"] for model in models] == [
+        "builtin/okay_nabu",
         "builtin/hey_jarvis",
         "builtin/hey_mycroft",
         "builtin/hey_rhasspy",
         "builtin/alexa",
     ]
+    assert models[0] == {
+        "id": "builtin/okay_nabu",
+        "label": "Okay Nabu",
+        "source": "built_in",
+        "format": "tflite",
+        "removable": False,
+    }
     assert all("target" not in model for model in models)
+    assert all("backend" not in model for model in models)
     assert catalog.resolve(DEFAULT_WAKEWORD_MODEL_ID).target == "hey_jarvis"
 
 
@@ -108,6 +118,7 @@ def test_catalog_deletes_only_imported_models(
     catalog.delete_model(imported.id)
 
     assert [model.id for model in catalog.list_models()] == [
+        "builtin/okay_nabu",
         "builtin/hey_jarvis",
         "builtin/hey_mycroft",
         "builtin/hey_rhasspy",
@@ -145,3 +156,53 @@ def test_engine_starts_the_resolved_model_target(monkeypatch: pytest.MonkeyPatch
 
     create_model.assert_called_once_with("C:/models/computer.onnx", vad_threshold=0.3)
     assert engine._model is loaded_model
+
+
+def test_catalog_creates_nabu_with_the_home_assistant_backend(tmp_path: Path) -> None:
+    catalog = WakewordModelCatalog(tmp_path / "settings.json")
+
+    engine = catalog.create_engine("builtin/okay_nabu", sensitivity=0.7)
+
+    assert isinstance(engine, PyOpenWakeWordEngine)
+    assert engine._model_target == "okay_nabu"
+    assert engine.threshold == pytest.approx(0.3)
+
+
+def test_pyopen_engine_returns_strongest_streaming_score(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = Mock()
+    model.process_streaming.side_effect = ([0.2, 0.8], [0.4])
+    features = Mock()
+    features.process_streaming.return_value = ["features-1", "features-2"]
+    monkeypatch.setattr(
+        engine_module,
+        "_create_pyopenwakeword_components",
+        Mock(return_value=(model, features)),
+    )
+    engine = PyOpenWakeWordEngine(model_target="okay_nabu")
+    engine.start()
+
+    score = engine.detect(b"\0" * 2560)
+    engine.stop()
+
+    assert score == pytest.approx(0.8)
+    model.close.assert_called_once_with()
+    features.close.assert_called_once_with()
+
+
+def test_pyopen_engine_does_not_detect_without_a_positive_score(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = Mock()
+    features = Mock()
+    features.process_streaming.return_value = []
+    monkeypatch.setattr(
+        engine_module,
+        "_create_pyopenwakeword_components",
+        Mock(return_value=(model, features)),
+    )
+    engine = PyOpenWakeWordEngine(model_target="okay_nabu")
+    engine.start()
+
+    assert engine.detect(b"\0" * 2560) == 0.0

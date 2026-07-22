@@ -25,6 +25,8 @@ _CUSTOM_MODEL_DIRECTORY_NAME = "wakewords"
 _CUSTOM_MODEL_METADATA_SUFFIX = ".json"
 _CUSTOM_MODEL_FILE_SUFFIX = ".onnx"
 _CUSTOM_MODEL_LABEL_LIMIT = 80
+_OPENWAKEWORD_BACKEND = "openwakeword"
+_PYOPEN_WAKEWORD_BACKEND = "pyopen_wakeword"
 
 
 @dataclass(frozen=True)
@@ -36,6 +38,7 @@ class WakewordModelDescriptor:
     source: str
     format: str
     removable: bool
+    backend: str
     target: str
 
     def to_dict(self) -> dict[str, Any]:
@@ -51,11 +54,21 @@ class WakewordModelDescriptor:
 
 _BUILTIN_MODELS = (
     WakewordModelDescriptor(
+        id="builtin/okay_nabu",
+        label="Okay Nabu",
+        source="built_in",
+        format="tflite",
+        removable=False,
+        backend=_PYOPEN_WAKEWORD_BACKEND,
+        target="okay_nabu",
+    ),
+    WakewordModelDescriptor(
         id="builtin/hey_jarvis",
         label="Hey Jarvis",
         source="built_in",
         format="onnx",
         removable=False,
+        backend=_OPENWAKEWORD_BACKEND,
         target="hey_jarvis",
     ),
     WakewordModelDescriptor(
@@ -64,6 +77,7 @@ _BUILTIN_MODELS = (
         source="built_in",
         format="onnx",
         removable=False,
+        backend=_OPENWAKEWORD_BACKEND,
         target="hey_mycroft",
     ),
     WakewordModelDescriptor(
@@ -72,6 +86,7 @@ _BUILTIN_MODELS = (
         source="built_in",
         format="onnx",
         removable=False,
+        backend=_OPENWAKEWORD_BACKEND,
         target="hey_rhasspy",
     ),
     WakewordModelDescriptor(
@@ -80,6 +95,7 @@ _BUILTIN_MODELS = (
         source="built_in",
         format="onnx",
         removable=False,
+        backend=_OPENWAKEWORD_BACKEND,
         target="alexa",
     ),
 )
@@ -122,6 +138,23 @@ class WakewordModelCatalog:
         raise WakewordModelError(
             f"Wakeword model is not available: {model_id}",
             error_code="wakeword_model_unavailable",
+        )
+
+    def create_engine(
+        self,
+        model_id: str,
+        sensitivity: float = DEFAULT_WAKEWORD_SENSITIVITY,
+    ) -> WakewordEngine:
+        """Create the detector implementation owned by the selected catalog entry."""
+        descriptor = self.resolve(model_id)
+        if descriptor.backend == _PYOPEN_WAKEWORD_BACKEND:
+            return PyOpenWakeWordEngine(
+                model_target=descriptor.target,
+                sensitivity=sensitivity,
+            )
+        return OpenWakeWordEngine(
+            model_target=descriptor.target,
+            sensitivity=sensitivity,
         )
 
     def import_model(self, filename: str, content: bytes) -> WakewordModelDescriptor:
@@ -181,6 +214,7 @@ class WakewordModelCatalog:
             source="imported",
             format="onnx",
             removable=True,
+            backend=_OPENWAKEWORD_BACKEND,
             target=str(model_path),
         )
 
@@ -244,6 +278,7 @@ class WakewordModelCatalog:
             source="imported",
             format="onnx",
             removable=True,
+            backend=_OPENWAKEWORD_BACKEND,
             target=str(model_path),
         )
 
@@ -341,6 +376,58 @@ class OpenWakeWordEngine:
         return max(0.0, min(1.0, score))
 
 
+class PyOpenWakeWordEngine:
+    """Wakeword detection for Home Assistant's bundled TFLite models."""
+
+    def __init__(
+        self,
+        model_target: str,
+        sensitivity: float = DEFAULT_WAKEWORD_SENSITIVITY,
+    ) -> None:
+        self._model_target = model_target
+        normalized_sensitivity = max(
+            MIN_WAKEWORD_SENSITIVITY,
+            min(MAX_WAKEWORD_SENSITIVITY, float(sensitivity)),
+        )
+        self._threshold = 1.0 - normalized_sensitivity
+        self._model: Any = None
+        self._features: Any = None
+
+    @property
+    def threshold(self) -> float:
+        """Score threshold above which a detection is triggered."""
+        return self._threshold
+
+    def start(self) -> None:
+        """Load the selected pyopen-wakeword built-in and shared feature models."""
+        self._model, self._features = _create_pyopenwakeword_components(self._model_target)
+
+    def stop(self) -> None:
+        """Release the native TensorFlow Lite resources."""
+        model = self._model
+        features = self._features
+        self._model = None
+        self._features = None
+        try:
+            if model is not None:
+                model.close()
+        finally:
+            if features is not None:
+                features.close()
+
+    def detect(self, audio_chunk: bytes) -> float:
+        """Run streaming feature extraction and return the strongest model score."""
+        if self._model is None or self._features is None:
+            return 0.0
+        scores = [
+            float(score)
+            for features in self._features.process_streaming(audio_chunk)
+            for score in self._model.process_streaming(features)
+        ]
+        score = max(scores, default=0.0)
+        return max(0.0, min(1.0, score))
+
+
 def _create_openwakeword_model(model_target: str, *, vad_threshold: float) -> Any:
     from openwakeword.model import Model  # type: ignore[import-untyped]
 
@@ -349,6 +436,29 @@ def _create_openwakeword_model(model_target: str, *, vad_threshold: float) -> An
         inference_framework="onnx",
         vad_threshold=vad_threshold,
     )
+
+
+def _create_pyopenwakeword_components(model_target: str) -> tuple[Any, Any]:
+    from pyopen_wakeword import (  # type: ignore[import-untyped]
+        Model,
+        OpenWakeWord,
+        OpenWakeWordFeatures,
+    )
+
+    try:
+        model = Model(model_target)
+    except ValueError as exc:
+        raise WakewordModelError(
+            f"pyopen-wakeword model is not available: {model_target}",
+            error_code="wakeword_model_unavailable",
+        ) from exc
+    wakeword_model = OpenWakeWord.from_builtin(model)
+    try:
+        features = OpenWakeWordFeatures.from_builtin()
+    except Exception:
+        wakeword_model.close()
+        raise
+    return wakeword_model, features
 
 
 def _validate_custom_model(model_path: Path) -> None:

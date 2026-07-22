@@ -8,7 +8,7 @@ pywebview-based desktop accessor that embeds the normal WebUI and talks only to 
 
 Server selection lives **inside the window**: a shell-owned native connection screen (`desktop/connection.py`) handles first run and launch failures, while the connected WebUI exposes the Desktop-local remembered-server list under Settings → Desktop app → Connection. The last-used target auto-connects on launch; there is no silent localhost default or dead-end error page. The window attaches no native menu, so Windows does not add a permanent menu bar for this rare action. See the **Connection screen** and **Desktop Client** terms below.
 
-The Desktop also includes a local wakeword voice pipeline (`desktop/wakeword/`) that runs entirely on-device: one active openWakeWord model → sounddevice recording with webrtcvad silence detection → upload to the vBot speech endpoint → send transcript as a chat message through server RPC. `desktop/wakeword/engine.py` owns the curated built-in model catalog and validated Desktop-local imports of finished custom ONNX models; model training remains external to vBot. The voice stack (`sounddevice`/`webrtcvad`, alongside `openwakeword`) ships in the `[desktop]` optional-dependency group, so a standard Desktop install runs real (non-mock) wakeword detection out of the box.
+The Desktop also includes a local wakeword voice pipeline (`desktop/wakeword/`) that runs entirely on-device: one active openWakeWord-family model → sounddevice recording with webrtcvad silence detection → upload to the vBot speech endpoint → send transcript as a chat message through server RPC. `desktop/wakeword/engine.py` owns the curated built-in model catalog, backend selection, and validated Desktop-local imports of finished custom ONNX models; model training remains external to vBot. Existing built-ins and imports use the ONNX `openwakeword` backend, while Home Assistant's built-in Okay Nabu model uses its packaged TFLite `pyopen-wakeword` backend. Both backends plus `sounddevice`/`webrtcvad` ship in the `[desktop]` optional-dependency group, so a standard Desktop install runs real (non-mock) wakeword detection out of the box.
 
 ## Terms
 
@@ -65,7 +65,7 @@ Nested under the `wakeword` key in the Desktop settings file:
 
 - `enabled` — whether the wakeword pipeline starts after the native Desktop window becomes visible; `false` keeps the ML/audio dependencies out of the startup path
 - `microphone` — sounddevice device index or `null` for automatic selection; the worker tries the host defaults then compatible input devices, captures in a supported native format, and normalizes to 16 kHz mono PCM internally
-- `model_id` — the single active catalog id (`builtin/<name>` or `custom/<uuid>`); any number of models may be installed, but only this model is loaded for detection
+- `model_id` — the single active catalog id (`builtin/<name>` or `custom/<uuid>`); any number of models may be installed, but only this model is loaded for detection; the catalog keeps the backend and executable target private, so callers select `builtin/okay_nabu` exactly like any other model
 - `model_sensitivities` — optional float values keyed by model id, each constrained to 0.05–0.95 and mapped to score threshold `1.0 - sensitivity`; a missing entry uses 0.5, and switching models preserves each model's calibration
 - `server_profiles` — map keyed by normalized active server base URL; each profile stores that server's Personal Agent `target_agent_id` and `session_behavior`, preventing a server switch from silently reusing another server's bare Agent id
 
@@ -84,7 +84,7 @@ Bridge methods:
 | `getDesktopCapabilities()` | `{ wakeword: true, serverSelection: true }` | Feature flags for WebUI gating |
 | `getWakewordStatus()` | status dict | Current config + live worker state |
 | `listMicrophones()` | device list | Input devices with compatibility and capture-rate metadata |
-| `listWakewordModels()` | model descriptors | Curated built-ins followed by valid Desktop-local imported models; descriptors expose id, label, source, format, and removability, never a local path |
+| `listWakewordModels()` | model descriptors | Curated built-ins (including Okay Nabu) followed by valid Desktop-local imported models; descriptors expose id, label, source, format, and removability, never a backend or local path |
 | `importWakewordModel(filename, contentBase64)` | model descriptor | Validate and persist one finished custom ONNX model |
 | `deleteWakewordModel(modelId)` | `{ deleted: true }` | Permanently remove one inactive imported model; built-ins and the active model are protected |
 | `setWakewordEnabled(enabled)` | — | Enable/disable the worker |
@@ -98,7 +98,7 @@ Bridge methods:
 
 The WebUI polls `getWakewordStatus()` every 500ms while Desktop is detected; settings UI polling carries only runtime fields into editable state. Status includes the active `model_id` and its effective flat `sensitivity` alongside the current `state`, stable `error_code`, concrete `active_microphone`, `mode`, and a bounded sequence-numbered event history so short transitions such as detection are not lost between polls. App-level event consumption plays non-verbal Web Audio cues for detection, success, cancellation, no-speech/transcription failure, and fatal error; visual state remains authoritative if the host cannot play audio.
 
-Worker states (exposed in `getWakewordStatus().state`): `off` → `starting` → `listening` → `wakeword_detected` → `recording` → `transcribing` → `sending` → `sent` → `listening`; recoverable utterance outcomes are `cancelled`, `no_speech`, and `transcription_failed`, while fatal startup/device/routing/send failures enter `error` with a machine-readable reason. The real worker closes the microphone while transcribing/sending, shows the outcome briefly, then reopens it. Detection re-arms only after the score falls below threshold. openWakeWord's bundled VAD gates detection; post-detection WebRTC VAD waits up to four seconds for speech, retains 300 ms of pre-speech padding, ends after 1.5 seconds of trailing silence, and caps the command at 15 seconds.
+Worker states (exposed in `getWakewordStatus().state`): `off` → `starting` → `listening` → `wakeword_detected` → `recording` → `transcribing` → `sending` → `sent` → `listening`; recoverable utterance outcomes are `cancelled`, `no_speech`, and `transcription_failed`, while fatal startup/device/routing/send failures enter `error` with a machine-readable reason. The real worker closes the microphone while transcribing/sending, shows the outcome briefly, then reopens it. Detection re-arms only after the score falls below threshold. The ONNX backend uses openWakeWord's bundled VAD before detection; the Okay Nabu backend performs its packaged streaming inference directly. After either backend detects, WebRTC VAD waits up to four seconds for command speech, retains 300 ms of pre-speech padding, ends after 1.5 seconds of trailing silence, and caps the command at 15 seconds.
 
 ## Conventions
 
@@ -126,10 +126,11 @@ Worker states (exposed in `getWakewordStatus().state`): `off` → `starting` →
 
 ## External Dependencies
 
-All four ship in the `[desktop]` optional-dependency group (`pyproject.toml`). They are still imported lazily/optionally in code so the backend test gate never requires the GUI/audio stack; `openwakeword` and `sounddevice` are not probed until Voice actually starts.
+All five ship in the `[desktop]` optional-dependency group (`pyproject.toml`). They are still imported lazily/optionally in code so the backend test gate never requires the GUI/audio stack; the detector backends and `sounddevice` are not probed until Voice actually starts.
 
 - **pywebview** — native window wrapper used to host the existing WebUI and the Connection screen; no application menu is attached.
 - **openwakeword** — ONNX-based wakeword detection with its bundled VAD enabled to reduce non-speech activations. vBot exposes the curated built-ins Hey Jarvis, Hey Mycroft, Hey Rhasspy, and Alexa and accepts compatible user-supplied ONNX models; the upstream package and individual model sources retain their own licenses. A Python import failure selects the non-simulating unavailable worker unless `--mock-wakeword` was explicitly requested.
+- **pyopen-wakeword** — Home Assistant's platform-specific TFLite runtime and packaged Okay Nabu model. vBot loads it only for `builtin/okay_nabu`; its Apache-2.0 package owns the model and native inference library rather than vBot copying either binary into the repository.
 - **sounddevice** — cross-platform PortAudio access. The worker probes device/rate/dtype support, prefers native 16 kHz when available, otherwise captures at a supported rate of at least 16 kHz and resamples to the engine's 16 kHz signed-PCM contract.
 - **webrtcvad** — Google WebRTC VAD for silence detection during post-wakeword recording. Falls back to fixed-duration capture when not installed.
 
@@ -138,7 +139,7 @@ All four ship in the `[desktop]` optional-dependency group (`pyproject.toml`). T
 - A healthy vBot server may exist without `webui/dist`; in that case the probe returns `webui_unavailable` and Desktop shows the connection screen with a "WebUI unavailable" inline error (not a dead-end page).
 - Desktop-local preferences must not be written into the shared server `data_dir`, because that directory belongs to the selected vBot instance. They live in the OS per-user config dir (`%APPDATA%\vbot` / XDG), which survives a package/venv reinstall — a real install puts the program inside a venv that is not user-writable.
 - pywebview is imported lazily so backend tests and non-desktop development workflows do not require the optional GUI package. Never call `Window.load_url` or `Window.load_html` synchronously inside a `js_api` method invoked by the document being replaced; return a `PreparedConnection` payload first and let that document apply the outcome after its pywebview Promise resolves. The native `shown` startup callback does not have this restriction and continues through `ConnectionController.connect` before optional Voice startup.
-- openWakeWord and sounddevice are optional imports — normal Desktop mode reports Voice unavailable when either is missing; only the explicit mock flag simulates activity. webrtcvad remains optional for post-wake silence detection; without it, the worker uses fixed-duration recording.
+- Both wakeword backends and sounddevice are optional imports — normal Desktop mode reports Voice unavailable when any is missing; only the explicit mock flag simulates activity. webrtcvad remains optional for post-wake silence detection; without it, the worker uses fixed-duration recording.
 - Automatic microphone selection may choose a host-API default/fallback whose index differs from the persisted `microphone: null`; `active_microphone` is the authoritative runtime device shown beside the automatic option. Explicit unsupported devices stay visible but disabled in the picker.
 - The real wakeword worker runs in a daemon thread. Fatal failures leave a stable reason until config change, Retry, disable, or server switch rebuilds it; recoverable utterance failures return to listening automatically.
 - The engine must read the score from the model's actual prediction mapping rather than looking it up by the configured path/id; imported models use their filename stem as openWakeWord's output label. Sensitivity must stay below 1.0 because a zero threshold combined with `score >= threshold` turns every zero score into a detection.

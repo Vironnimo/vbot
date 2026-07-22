@@ -347,7 +347,6 @@ def _create_wakeword_bridge(
     """
 
     from desktop.wakeword.bridge import DesktopBridge
-    from desktop.wakeword.engine import OpenWakeWordEngine
     from desktop.wakeword.worker import (
         MockWakewordWorker,
         UnavailableWakewordWorker,
@@ -357,18 +356,14 @@ def _create_wakeword_bridge(
     def worker_factory(bridge: DesktopBridge) -> Any:
         if bool(args.mock_wakeword):
             return MockWakewordWorker(bridge=bridge)
-        # openWakeWord pulls in the ONNX/numpy stack. Probe it only when Voice
-        # is actually starting, never on an ordinary Desktop launch with Voice
-        # disabled.
+        # Both detector backends and sounddevice are optional Desktop extras.
+        # Probe them only when Voice is actually starting, never on an ordinary
+        # Desktop launch with Voice disabled.
         if not _real_wakeword_available():
             bridge._set_mode("unavailable")
             return UnavailableWakewordWorker(bridge=bridge)
         bridge._set_mode("real")
-        wakeword_config = bridge.worker_config()
-        engine = OpenWakeWordEngine(
-            model_target=bridge.resolve_wakeword_model_target(),
-            sensitivity=wakeword_config.get("sensitivity", 0.5),
-        )
+        engine = bridge._create_wakeword_engine()
         # Read the current server URL off the bridge (not a captured constant) so
         # a worker rebuilt after a server switch targets the new server.
         return WakewordWorker(
@@ -393,14 +388,15 @@ def _create_wakeword_bridge(
 def _real_wakeword_available() -> bool:
     """Whether the on-device wakeword stack can be imported.
 
-    Both openWakeWord and sounddevice must import for the real worker; a missing
-    dependency selects unavailable mode. The worker factory calls this lazily
-    only when Voice is enabled or explicitly retried, keeping both dependencies
+    Both detector backends and sounddevice must import for the real worker; a
+    missing dependency selects unavailable mode. The worker factory calls this
+    lazily only when Voice is enabled or explicitly retried, keeping the stack
     out of the normal Desktop startup path.
     """
 
     try:
         import openwakeword  # type: ignore[import-untyped]  # noqa: F401
+        import pyopen_wakeword  # type: ignore[import-untyped]  # noqa: F401
         import sounddevice  # type: ignore[import-untyped]  # noqa: F401
     except ImportError:
         return False
