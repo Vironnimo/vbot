@@ -371,6 +371,7 @@ describe('chat controller', () => {
   it('acknowledges only the exact completion rendered in the Session', async () => {
     const markSessionRead = vi.fn().mockResolvedValue({
       marked_read: true,
+      latest_completion_run_id: 'run-one',
       has_unread_completion: false,
       unread_run_id: null,
       unread_run_status: null,
@@ -408,6 +409,7 @@ describe('chat controller', () => {
     );
     const markSessionRead = vi.fn().mockResolvedValue({
       marked_read: true,
+      latest_completion_run_id: 'run-one',
       has_unread_completion: false,
       unread_run_id: null,
       unread_run_status: null,

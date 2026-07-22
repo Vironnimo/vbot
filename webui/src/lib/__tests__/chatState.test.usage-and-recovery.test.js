@@ -9,6 +9,7 @@ import {
   AGENT_ACTIVITY_RUNNING,
   AGENT_ACTIVITY_UNREAD,
   agentActivityStatus,
+  applySessionCompletionActivity,
   appendRunEvent,
   canCreateNewSession,
   createChatState,
@@ -116,6 +117,142 @@ describe('chat state helpers', () => {
     expect(agentActivityStatus(chatState, 'alpha', displayed.key)).toBe(
       AGENT_ACTIVITY_UNREAD,
     );
+  });
+
+  it('accepts the exact backend read state after a terminal event is replayed', () => {
+    const chatState = createChatState();
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    sessionState.hasUnreadCompletion = true;
+    sessionState.unreadRunId = 'run-one';
+    sessionState.unreadRunAt = '2026-07-20T10:00:00+00:00';
+
+    applySessionCompletionActivity(sessionState, {
+      last_active_at: '2026-07-20T10:00:00+00:00',
+      latest_completion_run_id: 'run-one',
+      has_unread_completion: false,
+      unread_run_id: null,
+      unread_run_status: null,
+      unread_run_at: null,
+    });
+
+    expect(sessionState.hasUnreadCompletion).toBe(false);
+    expect(sessionState.unreadRunId).toBe('');
+  });
+
+  it('does not let a retained terminal event overwrite an exact backend read state', () => {
+    const chatState = createChatState();
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    applySessionCompletionActivity(sessionState, {
+      last_active_at: '2026-07-20T10:00:00+00:00',
+      latest_completion_run_id: 'run-one',
+      has_unread_completion: false,
+      unread_run_id: null,
+      unread_run_status: null,
+      unread_run_at: null,
+    });
+
+    appendRunEvent(sessionState, {
+      type: 'run_completed',
+      run_id: 'run-one',
+      sequence: 2,
+      timestamp: '2026-07-20T10:00:00+00:00',
+      payload: { status: CHAT_STATUS_COMPLETED },
+    });
+
+    expect(sessionState.hasUnreadCompletion).toBe(false);
+    expect(sessionState.unreadRunId).toBe('');
+  });
+
+  it('does not let a stale unread listing resurrect the exact backend-read run', () => {
+    const chatState = createChatState();
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    applySessionCompletionActivity(sessionState, {
+      last_active_at: '2026-07-20T10:00:00+00:00',
+      latest_completion_run_id: 'run-one',
+      has_unread_completion: false,
+      unread_run_id: null,
+      unread_run_status: null,
+      unread_run_at: null,
+    });
+
+    applySessionCompletionActivity(sessionState, {
+      last_active_at: '2026-07-20T10:00:00+00:00',
+      latest_completion_run_id: 'run-one',
+      has_unread_completion: true,
+      unread_run_id: 'run-one',
+      unread_run_status: CHAT_STATUS_COMPLETED,
+      unread_run_at: '2026-07-20T10:00:00+00:00',
+    });
+
+    expect(sessionState.hasUnreadCompletion).toBe(false);
+    expect(sessionState.unreadRunId).toBe('');
+  });
+
+  it('keeps a newer local completion when an older clean listing arrives', () => {
+    const chatState = createChatState();
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    sessionState.latestCompletionRunId = 'run-new';
+    sessionState.hasUnreadCompletion = true;
+    sessionState.unreadRunId = 'run-new';
+    sessionState.unreadRunAt = '2026-07-20T10:05:00+00:00';
+
+    applySessionCompletionActivity(sessionState, {
+      last_active_at: '2026-07-20T10:00:00+00:00',
+      latest_completion_run_id: 'run-old',
+      has_unread_completion: false,
+      unread_run_id: null,
+      unread_run_status: null,
+      unread_run_at: null,
+    });
+
+    expect(sessionState.hasUnreadCompletion).toBe(true);
+    expect(sessionState.unreadRunId).toBe('run-new');
+  });
+
+  it('keeps a local completion when a different listing has the same timestamp', () => {
+    const chatState = createChatState();
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    sessionState.latestCompletionRunId = 'run-local';
+    sessionState.hasUnreadCompletion = true;
+    sessionState.unreadRunId = 'run-local';
+    sessionState.unreadRunAt = '2026-07-20T10:05:00+00:00';
+
+    applySessionCompletionActivity(sessionState, {
+      last_active_at: '2026-07-20T10:05:00+00:00',
+      latest_completion_run_id: 'run-listing',
+      has_unread_completion: true,
+      unread_run_id: 'run-listing',
+      unread_run_status: CHAT_STATUS_COMPLETED,
+      unread_run_at: '2026-07-20T10:05:00+00:00',
+    });
+
+    expect(sessionState.hasUnreadCompletion).toBe(true);
+    expect(sessionState.unreadRunId).toBe('run-local');
+  });
+
+  it('accepts a genuinely newer unread completion from the backend', () => {
+    const chatState = createChatState();
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    applySessionCompletionActivity(sessionState, {
+      last_active_at: '2026-07-20T10:00:00+00:00',
+      latest_completion_run_id: 'run-old',
+      has_unread_completion: false,
+      unread_run_id: null,
+      unread_run_status: null,
+      unread_run_at: null,
+    });
+
+    applySessionCompletionActivity(sessionState, {
+      last_active_at: '2026-07-20T10:05:00+00:00',
+      latest_completion_run_id: 'run-new',
+      has_unread_completion: true,
+      unread_run_id: 'run-new',
+      unread_run_status: CHAT_STATUS_COMPLETED,
+      unread_run_at: '2026-07-20T10:05:00+00:00',
+    });
+
+    expect(sessionState.hasUnreadCompletion).toBe(true);
+    expect(sessionState.unreadRunId).toBe('run-new');
   });
 
   it('updates token usage after a completed model step while the run stays active', () => {

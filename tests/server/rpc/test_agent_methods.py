@@ -57,6 +57,7 @@ class _FakeSessions:
         self.renamed: list[tuple[str, str, str, str | None]] = []
         self.marked_read: list[tuple[str, str, str, str | None]] = []
         self.mark_read_result: dict[str, Any] = {
+            "latest_completion_run_id": None,
             "has_unread_completion": False,
             "unread_run_id": None,
             "unread_run_status": None,
@@ -310,6 +311,7 @@ def test_mark_session_read_stale_ack_does_not_invalidate_sessions() -> None:
     state, _resolver, sessions = _make_state()
     sessions.mark_read_result["marked_read"] = False
     sessions.mark_read_result["has_unread_completion"] = True
+    sessions.mark_read_result["latest_completion_run_id"] = "run-newer"
     sessions.mark_read_result["unread_run_id"] = "run-newer"
 
     result = _mark_session_read(

@@ -1241,14 +1241,17 @@ def _valid_latest_completion(activity: JsonObject) -> JsonObject | None:
 
 def _completion_activity_payload(activity: JsonObject) -> JsonObject:
     latest = _valid_latest_completion(activity)
-    if latest is None or activity.get("read_run_id") == latest["run_id"]:
+    latest_run_id = latest["run_id"] if latest is not None else None
+    if latest is None or activity.get("read_run_id") == latest_run_id:
         return {
+            "latest_completion_run_id": latest_run_id,
             "has_unread_completion": False,
             "unread_run_id": None,
             "unread_run_status": None,
             "unread_run_at": None,
         }
     return {
+        "latest_completion_run_id": latest_run_id,
         "has_unread_completion": True,
         "unread_run_id": latest["run_id"],
         "unread_run_status": latest["status"],
