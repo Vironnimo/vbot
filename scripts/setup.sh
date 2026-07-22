@@ -15,6 +15,8 @@ DATA_DIR="${HOME}/.vbot"
 HOST="127.0.0.1"
 PORT=8420
 PORT_PROVIDED=0
+DEFAULT_AGENT_TEMPERATURE="0.1"
+DEFAULT_AGENT_THINKING_EFFORT="high"
 DEV=0
 DESKTOP=0
 DESKTOP_CLIENT=0
@@ -246,8 +248,9 @@ if [ "$DESKTOP_CLIENT" -eq 0 ]; then
 
     step "Preparing data directory: ${DATA_DIR}"
     if [ ! -f "$SETTINGS_PATH" ]; then
-        printf '{\n    "server_port": %s\n}\n' "$PORT" > "$SETTINGS_PATH"
-        echo "Created settings.json with server_port ${PORT}."
+        printf '{\n    "server_port": %s,\n    "defaults": {\n        "agent": {\n            "temperature": %s,\n            "thinking_effort": "%s"\n        }\n    }\n}\n' \
+            "$PORT" "$DEFAULT_AGENT_TEMPERATURE" "$DEFAULT_AGENT_THINKING_EFFORT" > "$SETTINGS_PATH"
+        echo "Created settings.json with server_port ${PORT} and fresh-install Agent defaults."
     elif [ "$PORT_PROVIDED" -eq 1 ]; then
         updated_key="$(sync_settings_port "$SETTINGS_PATH" "$PORT")" \
             || fail "Existing settings.json is not valid JSON and was not updated: ${SETTINGS_PATH}"

@@ -177,7 +177,7 @@ Application-removing scopes first stop the exact selected server; if that stop f
 
 ## First-run setup
 
-Open `http://127.0.0.1:8420/`. Runtime creates an initial Identity Agent and its first Session automatically. The setup guide connects a Provider or OAuth subscription and selects a Model; creating another Agent is optional.
+Open `http://127.0.0.1:8420/`. Runtime creates an initial Identity Agent and its first Session automatically. A fresh server installation seeds the global Agent defaults with temperature `0.1` and thinking effort `high`; the initial Agent and later Agents inherit them unless configured more specifically. Existing `settings.json` files are preserved during installation and updates, so this fresh-install policy does not change an existing instance. The setup guide connects a Provider or OAuth subscription and selects a Model; creating another Agent is optional.
 
 The WebUI is the easiest place to manage Connections and Accounts. Equivalent CLI examples are:
 
