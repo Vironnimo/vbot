@@ -35,6 +35,21 @@ ProcessStatus = Literal["running", "completed", "failed", "killed"]
 OutputStreamName = Literal["stdout", "stderr"]
 
 
+def subprocess_creation_flags(
+    *,
+    new_process_group: bool = False,
+    platform_name: str = os.name,
+) -> int:
+    """Return platform flags for a windowless child process."""
+    if platform_name != "nt":
+        return 0
+
+    flags = int(cast(Any, subprocess).CREATE_NO_WINDOW)
+    if new_process_group:
+        flags |= int(cast(Any, subprocess).CREATE_NEW_PROCESS_GROUP)
+    return flags
+
+
 class ProcessManagerError(VBotError):
     """Base class for expected process manager errors."""
 
@@ -175,12 +190,8 @@ class ProcessManager:
             process_env.update(env)
         process_env["PYTHONIOENCODING"] = "utf-8"
 
-        if os.name == "nt":
-            creationflags = cast(Any, subprocess).CREATE_NEW_PROCESS_GROUP
-            start_new_session = False
-        else:
-            creationflags = 0
-            start_new_session = True
+        creationflags = subprocess_creation_flags(new_process_group=True)
+        start_new_session = os.name != "nt"
 
         proc = await asyncio.create_subprocess_exec(
             *argv,
@@ -629,6 +640,7 @@ class ProcessManager:
                     stderr=subprocess.DEVNULL,
                     timeout=5,
                     check=False,
+                    creationflags=subprocess_creation_flags(),
                 )
                 if completed.returncode == 0:
                     return

@@ -18,6 +18,7 @@ from core.tools.arguments import (
     optional_int,
     optional_string,
 )
+from core.tools.process_manager import subprocess_creation_flags
 from core.tools.search import (
     MAX_OUTPUT_BYTES,
     OUTPUT_TRUNCATED_MARKER,
@@ -466,6 +467,7 @@ def _grep_with_rg(
             text=True,
             encoding="utf-8",
             errors="replace",
+            creationflags=subprocess_creation_flags(),
         )
     except OSError as error:
         return _RipgrepOutcome(

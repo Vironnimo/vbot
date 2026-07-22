@@ -16,6 +16,7 @@ Manages background process sessions created by `bash`.
 - Actions: `list`, `poll`, `log`, `write`, `submit`, `kill`, `clear`. `list` entries include `log_file` (path or `null`).
 - Display: summary fields `action` and `session_id`.
 - `ProcessManager.spawn(scope_key, agent_id, argv, *, env, cwd) -> str`
+- `subprocess_creation_flags(*, new_process_group=False, platform_name=os.name) -> int` is the shared child-process launch policy for core Tools: zero on non-Windows; `CREATE_NO_WINDOW` on Windows, optionally combined with `CREATE_NEW_PROCESS_GROUP`.
 - `ProcessManager.poll/log/write/submit/kill/clear(..., agent_id=...)`
 - `ProcessManager.list_sessions(agent_id) -> list[ProcessSession]`
 - `ProcessManager.cancel_scope(scope_key) -> None`
@@ -25,6 +26,7 @@ Manages background process sessions created by `bash`.
 - Access is isolated by `ToolContext.agent_id`; missing and cross-agent sessions use not-found semantics.
 - `cancel_scope(run.id)` kills all active processes started by tools in that Run.
 - Combined output buffers are capped; `process log` returns a window from that buffer.
+- Core Tool subprocesses must use `subprocess_creation_flags`: the managed command, Bash environment probe, ripgrep search, and Windows `taskkill` helpers stay windowless when vBot runs without a parent console, while managed commands retain their separate process group for tree cancellation.
 - The in-memory finished-Session TTL and the complete-output file retention are separate: evicting a `ProcessSession` does not remove its 72-hour temporary log.
 - `process poll` output is incremental since the previous poll.
 - `waiting_for_input` is a best-effort hint only.

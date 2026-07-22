@@ -12,7 +12,12 @@ from pathlib import Path
 from typing import Any
 
 from core.tools.arguments import coerce_bool, optional_number, optional_string
-from core.tools.process_manager import ProcessManager, ProcessSession, SessionNotFoundError
+from core.tools.process_manager import (
+    ProcessManager,
+    ProcessSession,
+    SessionNotFoundError,
+    subprocess_creation_flags,
+)
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -544,9 +549,7 @@ async def _probe_shell_env() -> dict[str, str]:
 
 
 def _probe_creationflags() -> int:
-    if sys.platform == "win32":
-        return subprocess.CREATE_NEW_PROCESS_GROUP
-    return 0
+    return subprocess_creation_flags(new_process_group=True)
 
 
 def _probe_start_new_session() -> bool:
@@ -575,6 +578,7 @@ async def _terminate_probe_process(proc: asyncio.subprocess.Process) -> None:
                     stderr=subprocess.DEVNULL,
                     timeout=5,
                     check=False,
+                    creationflags=subprocess_creation_flags(),
                 )
                 taskkill_succeeded = completed.returncode == 0
             except (OSError, subprocess.TimeoutExpired):
