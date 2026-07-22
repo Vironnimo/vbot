@@ -880,6 +880,34 @@
       "release_date": "2026-06-02",
       "temperature": true
     },
+    "alibaba/qwen3.8-max-preview": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "family": "qwen",
+      "last_updated": "2026-07-19",
+      "max_output_tokens": 131072,
+      "name": "Qwen3.8 Max Preview",
+      "release_date": "2026-07-19",
+      "temperature": true
+    },
     "alibaba/qwq-plus": {
       "capabilities": {
         "input_modalities": [
@@ -2856,6 +2884,82 @@
       "max_output_tokens": 65536,
       "name": "Gemini 3.5 Flash",
       "release_date": "2026-05-19",
+      "temperature": true
+    },
+    "google/gemini-3.5-flash-lite": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1048576,
+      "family": "gemini-flash-lite",
+      "knowledge": "2026-03",
+      "last_updated": "2026-07-21",
+      "max_output_tokens": 65536,
+      "name": "Gemini 3.5 Flash Lite",
+      "release_date": "2026-07-21",
+      "temperature": true
+    },
+    "google/gemini-3.6-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1048576,
+      "family": "gemini-flash",
+      "knowledge": "2026-03",
+      "last_updated": "2026-07-21",
+      "max_output_tokens": 65536,
+      "name": "Gemini 3.6 Flash",
+      "release_date": "2026-07-21",
       "temperature": true
     },
     "google/gemini-embedding-001": {
@@ -6456,6 +6560,32 @@
       "max_output_tokens": 32768,
       "name": "Laguna M.1",
       "release_date": "2026-04-28",
+      "temperature": true
+    },
+    "poolside/laguna-s-2.1": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 1048576,
+      "family": "laguna",
+      "last_updated": "2026-07-21",
+      "max_output_tokens": 32768,
+      "name": "Laguna S 2.1",
+      "release_date": "2026-07-21",
       "temperature": true
     },
     "poolside/laguna-xs-2.1": {
