@@ -21,11 +21,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
 from core.model_tasks.constants import TASK_TEXT_EMBEDDING
-from core.model_tasks.embeddings_providers import ProviderEmbeddingClient
+from core.model_tasks.embeddings_providers import EmbeddingUsage, ProviderEmbeddingClient
 from core.model_tasks.task_execution import TaskBindingResolver
 from core.providers.task_client import TaskClientRuntime
 from core.utils.errors import EmbeddingError as _BaseEmbeddingError
@@ -34,7 +34,10 @@ from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("embeddings")
-_EMBEDDING_SPACE_CONTRACT_VERSION = 1
+_EMBEDDING_SPACE_CONTRACT_VERSION = 2
+
+EmbeddingPurpose = Literal["query", "document"]
+_EMBEDDING_PURPOSES = frozenset({"query", "document"})
 
 
 class EmbeddingError(_BaseEmbeddingError):
@@ -68,7 +71,7 @@ class EmbeddingResult:
 
     Attributes:
         vectors: One vector per input, in input order.
-        model_id: Provider-side model id that produced the vectors.
+        model_id: Configured model id requested by the binding.
         provider_id: Provider id from the resolved binding — the
             recall store pins ``(provider_id, model_id, dimension)``
             together so a binding switch triggers a rebuild.
@@ -78,6 +81,11 @@ class EmbeddingResult:
             defensiveness).
         space_fingerprint: Stable identity of the target, Connection/Account,
             effective options, and embedding wire contract used for the call.
+        response_model_id: Actual model id reported by the provider response.
+            Falls back to the configured model when the compatible provider
+            omits response metadata.
+        usage: Normalized token/cost telemetry for the successful provider
+            request(s). Report counters preserve whether a value was supplied.
     """
 
     vectors: tuple[list[float], ...]
@@ -85,12 +93,20 @@ class EmbeddingResult:
     provider_id: str
     dimension: int
     space_fingerprint: str = ""
+    response_model_id: str = ""
+    usage: EmbeddingUsage = field(default_factory=EmbeddingUsage)
 
     @property
     def resolved_model_id(self) -> tuple[str, str]:
         """``(provider_id, model_id)`` tuple for identity pinning."""
 
-        return (self.provider_id, self.model_id)
+        return (self.provider_id, self.actual_model_id)
+
+    @property
+    def actual_model_id(self) -> str:
+        """Provider-reported model id, or the configured id when omitted."""
+
+        return self.response_model_id or self.model_id
 
 
 class EmbeddingService:
@@ -106,7 +122,12 @@ class EmbeddingService:
             model_tasks, configuration_error=EmbeddingConfigurationError
         )
 
-    async def embed(self, texts: list[str]) -> EmbeddingResult:
+    async def embed(
+        self,
+        texts: list[str],
+        *,
+        purpose: EmbeddingPurpose | None = None,
+    ) -> EmbeddingResult:
         """Embed a batch of texts using the configured binding.
 
         Raises:
@@ -127,6 +148,8 @@ class EmbeddingService:
                 raise EmbeddingConfigurationError(
                     f"Embedding input at index {index} is not a string"
                 )
+        if purpose is not None and purpose not in _EMBEDDING_PURPOSES:
+            raise EmbeddingConfigurationError(f"Unsupported embedding purpose: {purpose}")
 
         _binding, options, target_ref = self._resolver.resolve(TASK_TEXT_EMBEDDING)
 
@@ -138,7 +161,11 @@ class EmbeddingService:
         identity = self._space_identity(target_ref, options)
         provider_client = ProviderEmbeddingClient.from_runtime(self._runtime, target_ref)
         try:
-            vectors = await provider_client.embed(list(texts), options=options)
+            response = await provider_client.embed(
+                list(texts),
+                options=options,
+                purpose=purpose,
+            )
         except EmbeddingError:
             raise
         except VBotError as exc:
@@ -160,18 +187,20 @@ class EmbeddingService:
             )
             raise EmbeddingExecutionError(str(exc)) from exc
 
-        if not vectors:
+        if not response.vectors:
             raise EmbeddingExecutionError(
                 f"Embedding provider returned no vectors for model {target_ref.model_id}"
             )
 
-        dimension = len(vectors[0])
+        dimension = len(response.vectors[0])
         return EmbeddingResult(
-            vectors=tuple(vectors),
+            vectors=response.vectors,
             model_id=target_ref.model_id,
             provider_id=target_ref.provider_id,
             dimension=dimension,
             space_fingerprint=identity.fingerprint,
+            response_model_id=response.model_id or target_ref.model_id,
+            usage=response.usage,
         )
 
     def resolve_space(self) -> EmbeddingSpaceIdentity:

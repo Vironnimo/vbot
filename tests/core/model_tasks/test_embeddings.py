@@ -16,6 +16,10 @@ from core.model_tasks import (
     EmbeddingUnsupportedTargetError,
     TaskModelError,
 )
+from core.model_tasks.embeddings_providers import (
+    EmbeddingUsage,
+    ProviderEmbeddingResponse,
+)
 from core.providers.token_getter import TokenGetter
 
 # ---------------------------------------------------------------------------
@@ -165,7 +169,7 @@ async def test_embed_merges_schema_defaults_with_stored_options() -> None:
     # asked to embed. The stored options dict is merged over the
     # schema default; the resulting ``{"dimensions": 2}`` reaches the
     # provider client.
-    assert fake_client.embed_calls == [(["alpha"], {"dimensions": 2})]
+    assert fake_client.embed_calls == [(["alpha"], {"dimensions": 2}, None)]
 
 
 @pytest.mark.asyncio
@@ -190,6 +194,65 @@ async def test_embed_forwards_input_batch_verbatim() -> None:
         await service.embed(["x", "y", "z"])
 
     assert fake_client.embed_calls[0][0] == ["x", "y", "z"]
+
+
+@pytest.mark.asyncio
+async def test_embed_surfaces_actual_model_usage_and_purpose() -> None:
+    usage = EmbeddingUsage(
+        requests=1,
+        token_reports=1,
+        cost_reports=1,
+        input_tokens=9,
+        total_tokens=9,
+        cost=0.0002,
+    )
+    fake_client = _FakeProviderClient(
+        vectors=[[0.1, 0.2]],
+        model_id="google/gemini-embedding-2-202607",
+        usage=usage,
+    )
+    service = EmbeddingService(
+        _BindingModelTasks(
+            target="openrouter/google/gemini-embedding-2::api-key",
+            options={},
+        ),
+        _RuntimeStub(),
+    )
+
+    with patch(
+        "core.model_tasks.embeddings.ProviderEmbeddingClient.from_runtime",
+        return_value=fake_client,
+    ):
+        result = await service.embed(["query"], purpose="query")
+
+    assert result.model_id == "google/gemini-embedding-2"
+    assert result.response_model_id == "google/gemini-embedding-2-202607"
+    assert result.resolved_model_id == (
+        "openrouter",
+        "google/gemini-embedding-2-202607",
+    )
+    assert result.usage == usage
+    assert fake_client.embed_calls == [(["query"], {"dimensions": None}, "query")]
+
+
+@pytest.mark.asyncio
+async def test_embed_rejects_unknown_purpose_before_provider_execution() -> None:
+    fake_client = _FakeProviderClient(vectors=[[0.1]])
+    service = EmbeddingService(
+        _BindingModelTasks(target="openrouter/google/gemini-embedding-2::api-key", options={}),
+        _RuntimeStub(),
+    )
+
+    with (
+        patch(
+            "core.model_tasks.embeddings.ProviderEmbeddingClient.from_runtime",
+            return_value=fake_client,
+        ),
+        pytest.raises(EmbeddingConfigurationError, match="Unsupported embedding purpose"),
+    ):
+        await service.embed(["query"], purpose="classification")  # type: ignore[arg-type]
+
+    assert fake_client.embed_calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -316,28 +379,28 @@ def test_resolve_space_fingerprint_covers_target_and_effective_options() -> None
     baseline = EmbeddingService(
         _BindingModelTasks(
             target="openrouter/google/gemini-embedding-2::api-key:work",
-            options={"dimensions": 768, "extra_options": {"input_type": "query"}},
+            options={"dimensions": 768, "extra_options": {"user": "recall"}},
         ),
         _RuntimeStub(),
     ).resolve_space()
     same = EmbeddingService(
         _BindingModelTasks(
             target="openrouter/google/gemini-embedding-2::api-key:work",
-            options={"extra_options": {"input_type": "query"}, "dimensions": 768},
+            options={"extra_options": {"user": "recall"}, "dimensions": 768},
         ),
         _RuntimeStub(),
     ).resolve_space()
     other_connection = EmbeddingService(
         _BindingModelTasks(
             target="openrouter/google/gemini-embedding-2::oauth:work",
-            options={"dimensions": 768, "extra_options": {"input_type": "query"}},
+            options={"dimensions": 768, "extra_options": {"user": "recall"}},
         ),
         _RuntimeStub(),
     ).resolve_space()
     other_options = EmbeddingService(
         _BindingModelTasks(
             target="openrouter/google/gemini-embedding-2::api-key:work",
-            options={"dimensions": 256, "extra_options": {"input_type": "query"}},
+            options={"dimensions": 256, "extra_options": {"user": "recall"}},
         ),
         _RuntimeStub(),
     ).resolve_space()
@@ -441,13 +504,26 @@ class _FakeProviderClient:
         *,
         vectors: list[list[float]] | None = None,
         embed_exception: Exception | None = None,
+        model_id: str | None = None,
+        usage: EmbeddingUsage | None = None,
     ) -> None:
         self._vectors = list(vectors or [])
         self._embed_exception = embed_exception
-        self.embed_calls: list[tuple[list[str], dict[str, Any]]] = []
+        self._model_id = model_id
+        self._usage = usage or EmbeddingUsage(requests=1)
+        self.embed_calls: list[tuple[list[str], dict[str, Any], str | None]] = []
 
-    async def embed(self, inputs: list[str], options: dict[str, Any]) -> list[list[float]]:
-        self.embed_calls.append((list(inputs), dict(options)))
+    async def embed(
+        self,
+        inputs: list[str],
+        options: dict[str, Any],
+        purpose: str | None = None,
+    ) -> ProviderEmbeddingResponse:
+        self.embed_calls.append((list(inputs), dict(options), purpose))
         if self._embed_exception is not None:
             raise self._embed_exception
-        return [list(vector) for vector in self._vectors]
+        return ProviderEmbeddingResponse(
+            vectors=tuple(list(vector) for vector in self._vectors),
+            model_id=self._model_id,
+            usage=self._usage,
+        )

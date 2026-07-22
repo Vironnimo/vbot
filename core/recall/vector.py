@@ -17,14 +17,16 @@ import asyncio
 import hashlib
 import sqlite3
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, cast
 
 from core.model_tasks import (
     EmbeddingError,
+    EmbeddingPurpose,
     EmbeddingResult,
     EmbeddingService,
     EmbeddingSpaceIdentity,
+    EmbeddingUsage,
 )
 from core.models.models import ModelRegistry
 from core.recall.jsonl import (
@@ -90,13 +92,6 @@ _MAX_DISTANCE = 0.7
 _CHUNK_FETCH_MULTIPLIER = 8
 # Margin to over-fetch from KNN so structural filters still leave ``limit`` hits.
 _KNN_FETCH_MARGIN = 4
-# How many times to halve an over-long embedding input before giving up. The
-# character-budget truncation is a heuristic and cannot guarantee staying under
-# the model's *token* cap for dense text (German compounds, code, CJK); when the
-# provider rejects the input for context length, we shrink and retry until it
-# fits. 6 halvings take any realistic session text down to a few hundred chars.
-_EMBED_OVERFLOW_RETRIES = 6
-
 # Guidance appended to the session_search tool description when this backend is
 # active (see ``describe_search``). Static: it describes the capability, not the
 # current availability — actual availability is surfaced per-call in the result
@@ -170,6 +165,32 @@ class Chunk:
     end_role: str = ""
 
 
+@dataclass
+class _EmbeddingOperationUsage:
+    """Request-local aggregate for one Recall Search operation."""
+
+    usage: EmbeddingUsage = field(default_factory=EmbeddingUsage)
+    query_inputs: int = 0
+    document_inputs: int = 0
+    provider_id: str = ""
+    model_id: str = ""
+
+    def add(
+        self,
+        result: EmbeddingResult,
+        *,
+        purpose: EmbeddingPurpose,
+        input_count: int,
+    ) -> None:
+        self.usage = self.usage.combined(result.usage)
+        if purpose == "query":
+            self.query_inputs += input_count
+        else:
+            self.document_inputs += input_count
+        self.provider_id = result.provider_id
+        self.model_id = result.actual_model_id
+
+
 class VectorRecallBackend(JsonlSessionRecallBackend):
     """Recall backend backed by sqlite-vec per-chunk vectors."""
 
@@ -206,6 +227,17 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         )
 
     async def search_page(self, request: RecallSearchRequest) -> RecallSearchPage:
+        usage = _EmbeddingOperationUsage()
+        try:
+            return await self._search_page_with_usage(request, usage)
+        finally:
+            self._log_embedding_usage("typed_search", usage)
+
+    async def _search_page_with_usage(
+        self,
+        request: RecallSearchRequest,
+        usage: _EmbeddingOperationUsage,
+    ) -> RecallSearchPage:
         summaries = await asyncio.to_thread(self._search_candidate_summaries, request)
         try:
             async with self._index_lock:
@@ -243,18 +275,35 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
                             binding_header,
                             store=self._typed_store,
                             index_policy=_TYPED_INDEX_POLICY,
+                            usage=usage,
                         )
                         query_vector, query_header = await self._embed_query(
                             binding_header,
                             request.query,
                             index_policy=_TYPED_INDEX_POLICY,
+                            usage=usage,
                         )
                         await self._ensure_query_header(
                             request,
                             query_header,
                             store=self._typed_store,
                             index_policy=_TYPED_INDEX_POLICY,
+                            usage=usage,
                         )
+                        resolved_snapshot_id = self._vector_snapshot(
+                            request,
+                            summaries,
+                            query_header,
+                        )
+                        if (
+                            request.snapshot_id is not None
+                            and request.snapshot_id != resolved_snapshot_id
+                        ):
+                            raise RecallSearchError(
+                                "stale_cursor",
+                                "Session search source changed; repeat the search.",
+                            )
+                        snapshot_id = resolved_snapshot_id
                         candidates = await asyncio.to_thread(
                             self._typed_store.knn_search,
                             header=query_header,
@@ -324,7 +373,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         source = self._search_snapshot(request, summaries)
         payload = (
             f"{source}\0{header.provider_id}\0{header.model_id}\0"
-            f"{header.space_fingerprint}\0{header.index_policy}"
+            f"{header.response_model_id}\0{header.space_fingerprint}\0{header.index_policy}"
         ).encode()
         return hashlib.sha256(payload).hexdigest()
 
@@ -360,17 +409,21 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         if not summaries:
             return self._message_result(request, [], searched_sessions=0, total_candidates=0)
 
+        usage = _EmbeddingOperationUsage()
         try:
-            return await self._search_with_vector_store(request, summaries)
+            return await self._search_with_vector_store(request, summaries, usage)
         except (VectorStoreError, EmbeddingError, OSError, sqlite3.Error) as error:
             self._warning("Vector recall failed; falling back to JSONL scan: %s", error)
             fallback = await self._fallback.search(request)
             return self._degraded_result(fallback, _SEMANTIC_FAILED_NOTICE)
+        finally:
+            self._log_embedding_usage("legacy_search", usage)
 
     async def _search_with_vector_store(
         self,
         request: RecallRequest,
         summaries: list[JsonObject],
+        usage: _EmbeddingOperationUsage,
     ) -> JsonObject:
         async with self._index_lock:
             for attempt in range(2):
@@ -392,6 +445,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
                         binding_header,
                         store=self.store,
                         index_policy=_LEGACY_INDEX_POLICY,
+                        usage=usage,
                     )
 
                     # ``search()`` has already rejected ``None``/blank queries
@@ -401,12 +455,14 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
                         binding_header,
                         query,
                         index_policy=_LEGACY_INDEX_POLICY,
+                        usage=usage,
                     )
                     await self._ensure_query_header(
                         request,
                         query_header,
                         store=self.store,
                         index_policy=_LEGACY_INDEX_POLICY,
+                        usage=usage,
                     )
                     candidates, rowid_to_record = await asyncio.to_thread(
                         self._query_store,
@@ -537,9 +593,14 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
             dimension=0,
             space_fingerprint=identity.fingerprint,
             index_policy=index_policy,
+            response_model_id="",
         )
         stored = store.read_header()
-        if stored is not None and not self._headers_match(stored, expected):
+        if stored is not None and not self._headers_match(
+            stored,
+            expected,
+            include_response_model=False,
+        ):
             self._warning(
                 "Vector recall embedding space or index policy changed "
                 "(%s/%s → %s/%s); rebuilding index",
@@ -562,6 +623,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         right: VectorHeader,
         *,
         include_dimension: bool = False,
+        include_response_model: bool = True,
     ) -> bool:
         identity_matches = (
             left.provider_id == right.provider_id
@@ -569,7 +631,14 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
             and left.space_fingerprint == right.space_fingerprint
             and left.index_policy == right.index_policy
         )
-        return identity_matches and (not include_dimension or left.dimension == right.dimension)
+        response_model_matches = (
+            not include_response_model or left.response_model_id == right.response_model_id
+        )
+        return (
+            identity_matches
+            and response_model_matches
+            and (not include_dimension or left.dimension == right.dimension)
+        )
 
     async def _embed_query(
         self,
@@ -577,15 +646,22 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         query: str,
         *,
         index_policy: str,
+        usage: _EmbeddingOperationUsage,
     ) -> tuple[list[float], VectorHeader]:
         """Embed a single query string and pin the dimension from the first response."""
 
-        result = await self._run_embed([query])
+        result = await self._run_embed([query], purpose="query")
+        usage.add(result, purpose="query", input_count=1)
         if result.dimension <= 0:
             raise VectorStoreError(
                 f"embedding provider returned empty dimension for {header.model_id}"
             )
-        resolved = self._header_from_result(result, header, index_policy=index_policy)
+        resolved = self._header_from_result(
+            result,
+            header,
+            index_policy=index_policy,
+            allow_response_model_change=True,
+        )
         self._resolved_headers[index_policy] = resolved
         return list(result.vectors[0]), resolved
 
@@ -595,6 +671,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         expected: VectorHeader,
         *,
         index_policy: str,
+        allow_response_model_change: bool = False,
     ) -> VectorHeader:
         resolved = VectorHeader(
             provider_id=result.provider_id,
@@ -602,9 +679,23 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
             dimension=result.dimension,
             space_fingerprint=result.space_fingerprint or expected.space_fingerprint,
             index_policy=index_policy,
+            response_model_id=result.actual_model_id,
         )
-        if not self._headers_match(resolved, expected):
+        if not self._headers_match(
+            resolved,
+            expected,
+            include_response_model=False,
+        ):
             raise EmbeddingError("embedding space changed while the Recall request was running")
+        if (
+            not allow_response_model_change
+            and expected.response_model_id
+            and resolved.response_model_id != expected.response_model_id
+        ):
+            raise EmbeddingError(
+                "embedding response model changed while the Recall request was running: "
+                f"{expected.response_model_id} → {resolved.response_model_id}"
+            )
         return resolved
 
     async def _embed_chunks(
@@ -613,11 +704,18 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         expected: VectorHeader,
         *,
         index_policy: str,
+        usage: _EmbeddingOperationUsage,
     ) -> tuple[list[list[float]], VectorHeader]:
         """Embed a batch of chunk texts and return vectors with the resolved header."""
 
-        result = await self._run_embed(texts)
-        header = self._header_from_result(result, expected, index_policy=index_policy)
+        result = await self._run_embed(texts, purpose="document")
+        usage.add(result, purpose="document", input_count=len(texts))
+        header = self._header_from_result(
+            result,
+            expected,
+            index_policy=index_policy,
+            allow_response_model_change=True,
+        )
         self._resolved_headers[index_policy] = header
         return [list(vector) for vector in result.vectors], header
 
@@ -628,6 +726,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         *,
         store: VectorStore,
         index_policy: str,
+        usage: _EmbeddingOperationUsage,
     ) -> None:
         """Ensure the live query vector is comparable with every stored vector."""
 
@@ -637,14 +736,25 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
             return
         if self._headers_match(stored, query_header, include_dimension=True):
             return
-        if not self._headers_match(stored, query_header):
+        if not self._headers_match(
+            stored,
+            query_header,
+            include_response_model=False,
+        ):
             raise EmbeddingError("embedding space changed while the Recall request was running")
 
-        self._warning(
-            "Embedding dimension changed (%d → %d); rebuilding vector index",
-            stored.dimension,
-            query_header.dimension,
-        )
+        if stored.response_model_id != query_header.response_model_id:
+            self._warning(
+                "Embedding response model changed (%s → %s); rebuilding vector index",
+                stored.response_model_id,
+                query_header.response_model_id,
+            )
+        else:
+            self._warning(
+                "Embedding dimension changed (%d → %d); rebuilding vector index",
+                stored.dimension,
+                query_header.dimension,
+            )
         await asyncio.to_thread(store.reset_index)
         self._resolved_headers[index_policy] = query_header
         await self._ensure_fresh_index(
@@ -652,6 +762,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
             query_header,
             store=store,
             index_policy=index_policy,
+            usage=usage,
         )
         rebuilt = await asyncio.to_thread(store.read_header)
         if rebuilt is None:
@@ -659,16 +770,20 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         elif not self._headers_match(rebuilt, query_header, include_dimension=True):
             raise VectorStoreError("rebuilt vector store header does not match the live query")
 
-    async def _run_embed(self, texts: list[str]) -> EmbeddingResult:
+    async def _run_embed(
+        self,
+        texts: list[str],
+        *,
+        purpose: EmbeddingPurpose = "document",
+    ) -> EmbeddingResult:
         """Embed *texts*, batching into ``_EMBED_BATCH_SIZE`` groups.
 
-        Each batch is sent through the shrink-retry path independently so
-        a context-overflow on one batch does not affect the others, and
-        single-text callers naturally fall through the ``len == 1`` path
-        without any splitting. Vectors are concatenated in input order
-        and the response's ``provider_id``/``model_id``/``dimension`` is
-        asserted consistent across batches — a binding switch mid-batch
-        is an error, not a silent mix.
+        A context overflow on a multi-input call recursively divides that call
+        until each accepted provider request fits. A single rejected text is
+        never modified here: chunk/Passage construction owns any truncation so
+        the text stored beside a vector remains byte-for-byte honest. Results
+        are concatenated in input order and every configured/actual model,
+        provider, dimension, and fingerprint must stay consistent.
         """
 
         if self.embeddings is None:
@@ -676,87 +791,85 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         if not texts:
             raise EmbeddingError("embedding input is empty")
         if len(texts) == 1:
-            # Fast path: a single query is one batch with no concatenation.
-            return await self._run_embed_batch(texts[0])
+            return await self._run_embed_batch(texts, purpose=purpose)
 
-        combined_vectors: list[list[float]] = []
-        combined_provider: str | None = None
-        combined_model: str | None = None
-        combined_dimension: int | None = None
-        combined_fingerprint: str | None = None
+        results: list[EmbeddingResult] = []
         for start in range(0, len(texts), _EMBED_BATCH_SIZE):
             batch = texts[start : start + _EMBED_BATCH_SIZE]
-            result = await self._run_embed_batch(batch)
-            if combined_provider is None:
-                combined_provider = result.provider_id
-                combined_model = result.model_id
-                combined_dimension = result.dimension
-                combined_fingerprint = result.space_fingerprint
-            else:
-                if result.provider_id != combined_provider:
-                    raise EmbeddingError(
-                        f"embedding provider changed mid-batch: "
-                        f"{combined_provider} → {result.provider_id}"
-                    )
-                if result.model_id != combined_model:
-                    raise EmbeddingError(
-                        f"embedding model changed mid-batch: {combined_model} → {result.model_id}"
-                    )
-                if result.dimension != combined_dimension:
-                    raise EmbeddingError(
-                        f"embedding dimension changed mid-batch: "
-                        f"{combined_dimension} → {result.dimension}"
-                    )
-                if result.space_fingerprint != combined_fingerprint:
-                    raise EmbeddingError("embedding space changed mid-batch")
-            combined_vectors.extend(list(vector) for vector in result.vectors)
-        assert combined_provider is not None
-        assert combined_model is not None
-        assert combined_dimension is not None
-        assert combined_fingerprint is not None
-        return EmbeddingResult(
-            vectors=tuple(combined_vectors),
-            model_id=combined_model,
-            provider_id=combined_provider,
-            dimension=combined_dimension,
-            space_fingerprint=combined_fingerprint,
-        )
+            results.append(await self._run_embed_batch(batch, purpose=purpose))
+        return self._combine_embedding_results(results)
 
-    async def _run_embed_batch(self, batch: str | list[str]) -> EmbeddingResult:
-        """Embed one batch (single string or list) with the shrink-retry loop."""
+    async def _run_embed_batch(
+        self,
+        batch: list[str],
+        *,
+        purpose: EmbeddingPurpose,
+    ) -> EmbeddingResult:
+        """Embed one batch, recursively splitting only aggregate overflows."""
 
         # ``_run_embed`` is the only caller and it raises when the
         # embedding service is missing; the cast keeps mypy happy
         # without re-checking the same condition on every retry.
         embeddings = cast(EmbeddingService, self.embeddings)
-        if isinstance(batch, str):
-            current: list[str] = [batch]
-        else:
-            current = list(batch)
-        for attempt in range(_EMBED_OVERFLOW_RETRIES + 1):
-            try:
-                result = await embeddings.embed(current)
-                return cast(EmbeddingResult, result)
-            except EmbeddingError as error:
-                # Only the provider's context-length rejection is recoverable by
-                # shrinking — every other embedding error (auth, network, no
-                # binding) re-raises immediately and the caller falls back.
-                if attempt >= _EMBED_OVERFLOW_RETRIES or not _is_context_overflow(error):
-                    raise
-                cap = max((len(text) for text in current), default=0) // 2
-                if cap <= 0:
-                    raise
-                current = [text[:cap] if len(text) > cap else text for text in current]
-                self._warning(
-                    "Embedding input exceeded the model context window; "
-                    "shrinking to <=%d chars and retrying (attempt %d/%d)",
-                    cap,
-                    attempt + 1,
-                    _EMBED_OVERFLOW_RETRIES,
+        current = list(batch)
+        try:
+            result = await embeddings.embed(current, purpose=purpose)
+            return cast(EmbeddingResult, result)
+        except EmbeddingError as error:
+            if not _is_context_overflow(error) or len(current) <= 1:
+                raise
+            midpoint = len(current) // 2
+            self._warning(
+                "Embedding batch exceeded the model context window; splitting %d inputs "
+                "into %d + %d",
+                len(current),
+                midpoint,
+                len(current) - midpoint,
+            )
+            left = await self._run_embed_batch(current[:midpoint], purpose=purpose)
+            right = await self._run_embed_batch(current[midpoint:], purpose=purpose)
+            return self._combine_embedding_results([left, right])
+
+    @staticmethod
+    def _combine_embedding_results(results: list[EmbeddingResult]) -> EmbeddingResult:
+        if not results:
+            raise EmbeddingError("embedding result aggregate is empty")
+        first = results[0]
+        vectors: list[list[float]] = []
+        usage = EmbeddingUsage()
+        for result in results:
+            if result.provider_id != first.provider_id:
+                raise EmbeddingError(
+                    f"embedding provider changed mid-batch: "
+                    f"{first.provider_id} → {result.provider_id}"
                 )
-        # The loop either returns a result or re-raises inside the body; this is
-        # only reached if the retry budget is exhausted by repeated overflows.
-        raise EmbeddingError("embedding input still exceeded the context window after retries")
+            if result.model_id != first.model_id:
+                raise EmbeddingError(
+                    f"configured embedding model changed mid-batch: "
+                    f"{first.model_id} → {result.model_id}"
+                )
+            if result.actual_model_id != first.actual_model_id:
+                raise EmbeddingError(
+                    f"embedding response model changed mid-batch: "
+                    f"{first.actual_model_id} → {result.actual_model_id}"
+                )
+            if result.dimension != first.dimension:
+                raise EmbeddingError(
+                    f"embedding dimension changed mid-batch: {first.dimension} → {result.dimension}"
+                )
+            if result.space_fingerprint != first.space_fingerprint:
+                raise EmbeddingError("embedding space changed mid-batch")
+            vectors.extend(list(vector) for vector in result.vectors)
+            usage = usage.combined(result.usage)
+        return EmbeddingResult(
+            vectors=tuple(vectors),
+            model_id=first.model_id,
+            provider_id=first.provider_id,
+            dimension=first.dimension,
+            space_fingerprint=first.space_fingerprint,
+            response_model_id=first.actual_model_id,
+            usage=usage,
+        )
 
     # ------------------------------------------------------------------
     # Freshness + backfill
@@ -769,7 +882,8 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         *,
         store: VectorStore,
         index_policy: str,
-        allow_dimension_rebuild: bool = True,
+        usage: _EmbeddingOperationUsage,
+        allow_header_rebuild: bool = True,
     ) -> None:
         """Make sure every JSONL session in this scope has fresh chunk vectors."""
 
@@ -813,6 +927,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
             texts,
             header,
             index_policy=index_policy,
+            usage=usage,
         )
         if resolved_header.dimension <= 0:
             raise VectorStoreError("embedding provider returned no vectors")
@@ -821,13 +936,21 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
             resolved_header,
             include_dimension=True,
         ):
-            if not allow_dimension_rebuild:
-                raise EmbeddingError("embedding dimension changed repeatedly during index rebuild")
-            self._warning(
-                "Embedding dimension changed during backfill (%d → %d); rebuilding full index",
-                header.dimension,
-                resolved_header.dimension,
-            )
+            if not allow_header_rebuild:
+                raise EmbeddingError("embedding header changed repeatedly during index rebuild")
+            if header.response_model_id != resolved_header.response_model_id:
+                self._warning(
+                    "Embedding response model changed during backfill (%s → %s); "
+                    "rebuilding full index",
+                    header.response_model_id,
+                    resolved_header.response_model_id,
+                )
+            else:
+                self._warning(
+                    "Embedding dimension changed during backfill (%d → %d); rebuilding full index",
+                    header.dimension,
+                    resolved_header.dimension,
+                )
             await asyncio.to_thread(store.reset_index)
             self._resolved_headers[index_policy] = resolved_header
             await self._ensure_fresh_index(
@@ -835,7 +958,8 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
                 resolved_header,
                 store=store,
                 index_policy=index_policy,
-                allow_dimension_rebuild=False,
+                usage=usage,
+                allow_header_rebuild=False,
             )
             return
 
@@ -1027,6 +1151,34 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         content = base_result.get("content", "")
         decorated = f"{notice}\n\n{content}" if content else notice
         return {**base_result, "content": decorated, "notice": notice}
+
+    def _log_embedding_usage(
+        self,
+        operation: str,
+        aggregate: _EmbeddingOperationUsage,
+    ) -> None:
+        """Emit one normalized usage summary per Search, never provider payloads."""
+
+        usage = aggregate.usage
+        if usage.requests <= 0:
+            return
+        if self.logger is not None and hasattr(self.logger, "info"):
+            self.logger.info(
+                "Embedding usage operation=%s provider=%s model=%s requests=%d "
+                "token_reports=%d input_tokens=%d total_tokens=%d cost_reports=%d "
+                "cost=%.12g query_inputs=%d document_inputs=%d",
+                operation,
+                aggregate.provider_id,
+                aggregate.model_id,
+                usage.requests,
+                usage.token_reports,
+                usage.input_tokens,
+                usage.total_tokens,
+                usage.cost_reports,
+                usage.cost,
+                aggregate.query_inputs,
+                aggregate.document_inputs,
+            )
 
     def _warning(self, message: str, *args: object) -> None:
         if self.logger is not None and hasattr(self.logger, "warning"):

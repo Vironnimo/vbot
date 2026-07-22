@@ -39,7 +39,7 @@ ALLOWED_OPTION_TYPES: frozenset[str] = frozenset(
     {"text", "textarea", "select", "number", "boolean", "json"}
 )
 EMBEDDING_RESERVED_PAYLOAD_FIELDS: frozenset[str] = frozenset(
-    {"model", "input", "encoding_format", "dimensions"}
+    {"model", "input", "encoding_format", "dimensions", "input_type"}
 )
 
 

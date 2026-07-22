@@ -12,7 +12,12 @@ import pytest
 import sqlite_vec  # type: ignore[import-untyped]
 
 from core.chat import ChatMessage
-from core.model_tasks import EmbeddingError, EmbeddingResult, EmbeddingSpaceIdentity
+from core.model_tasks import (
+    EmbeddingError,
+    EmbeddingResult,
+    EmbeddingSpaceIdentity,
+    EmbeddingUsage,
+)
 from core.recall import (
     RecallBackendContext,
     RecallRequest,
@@ -72,8 +77,10 @@ class _StubEmbeddings:
         self.dimension = dimension
         self.provider_id = "openrouter"
         self.model_id = "stub-embed"
+        self.response_model_id = ""
         self.space_fingerprint = "stub-space-a"
         self.embed_calls: list[list[str]] = []
+        self.embed_purposes: list[str | None] = []
         self.resolve_calls = 0
 
     def resolve_model_id(self) -> tuple[str, str]:
@@ -88,8 +95,14 @@ class _StubEmbeddings:
             fingerprint=self.space_fingerprint,
         )
 
-    async def embed(self, texts: list[str]) -> EmbeddingResult:
+    async def embed(
+        self,
+        texts: list[str],
+        *,
+        purpose: str | None = None,
+    ) -> EmbeddingResult:
         self.embed_calls.append(list(texts))
+        self.embed_purposes.append(purpose)
         vectors: list[list[float]] = [self._vector_for(text) for text in texts]
         return EmbeddingResult(
             vectors=tuple(vectors),
@@ -97,6 +110,7 @@ class _StubEmbeddings:
             provider_id=self.provider_id,
             dimension=self.dimension,
             space_fingerprint=self.space_fingerprint,
+            response_model_id=self.response_model_id,
         )
 
     def _vector_for(self, text: str) -> list[float]:
@@ -120,17 +134,22 @@ class _NullEmbeddings:
     def resolve_model_id(self) -> tuple[str, str]:
         raise EmbeddingError("no text_embedding binding configured")
 
-    async def embed(self, texts: list[str]) -> EmbeddingResult:  # pragma: no cover - never used
+    async def embed(
+        self,
+        texts: list[str],
+        *,
+        purpose: str | None = None,
+    ) -> EmbeddingResult:  # pragma: no cover - never used
+        del purpose
         raise EmbeddingError("no text_embedding binding configured")
 
 
 class _OverflowThenOkEmbeddings:
-    """Raises a context-length overflow until every input is short enough.
+    """Raises a context-length overflow until the aggregate batch fits.
 
-    Mirrors the OpenRouter/bge-m3 failure: the provider rejects an input that
-    exceeds the model's token cap, and the character-budget truncation cannot
-    guarantee staying under it for dense text, so the backend must shrink and
-    retry until it fits.
+    This models providers that apply the token cap to one whole batch. Every
+    individual text can fit unchanged once the backend recursively divides the
+    request.
     """
 
     def __init__(self, *, max_chars: int, dimension: int = 4) -> None:
@@ -143,9 +162,15 @@ class _OverflowThenOkEmbeddings:
     def resolve_model_id(self) -> tuple[str, str]:
         return (self.provider_id, self.model_id)
 
-    async def embed(self, texts: list[str]) -> EmbeddingResult:
+    async def embed(
+        self,
+        texts: list[str],
+        *,
+        purpose: str | None = None,
+    ) -> EmbeddingResult:
+        del purpose
         self.embed_calls.append(list(texts))
-        if any(len(text) > self.max_chars for text in texts):
+        if sum(len(text) for text in texts) > self.max_chars:
             raise EmbeddingError(
                 "Embeddings response contains no data: HTTP 400: This model's "
                 "maximum context length is 8192 tokens. (parameter=input_tokens)"
@@ -168,9 +193,27 @@ class _AuthErrorEmbeddings:
     def resolve_model_id(self) -> tuple[str, str]:
         return ("openrouter", "stub-embed")
 
-    async def embed(self, texts: list[str]) -> EmbeddingResult:
+    async def embed(
+        self,
+        texts: list[str],
+        *,
+        purpose: str | None = None,
+    ) -> EmbeddingResult:
+        del texts, purpose
         self.embed_calls += 1
         raise EmbeddingError("401 Unauthorized: invalid API key")
+
+
+class _CapturingLogger:
+    def __init__(self) -> None:
+        self.info_calls: list[tuple[str, tuple[object, ...]]] = []
+        self.warning_calls: list[tuple[str, tuple[object, ...]]] = []
+
+    def info(self, message: str, *args: object) -> None:
+        self.info_calls.append((message, args))
+
+    def warning(self, message: str, *args: object) -> None:
+        self.warning_calls.append((message, args))
 
 
 def backend(
@@ -178,12 +221,14 @@ def backend(
     sessions: ChatSessionManager,
     *,
     embeddings: Any | None = None,
+    logger: Any | None = None,
 ) -> VectorRecallBackend:
     return VectorRecallBackend(
         RecallBackendContext(
             data_dir=tmp_path,
             sessions=sessions,
             embeddings=embeddings,
+            logger=logger,
         )
     )
 
@@ -194,6 +239,8 @@ def search_request(
     limit: int = 10,
     since: datetime | None = None,
     session_id: str | None = None,
+    offset: int = 0,
+    snapshot_id: str | None = None,
 ) -> RecallSearchRequest:
     return RecallSearchRequest(
         agent_id="coder",
@@ -205,8 +252,9 @@ def search_request(
         roles=("user", "assistant", "error", "compaction_checkpoint"),
         match_mode="all_terms",
         order="relevance",
-        offset=0,
+        offset=offset,
         limit=limit,
+        snapshot_id=snapshot_id,
     )
 
 
@@ -361,6 +409,158 @@ async def test_typed_and_legacy_search_use_separate_index_policies(tmp_path: Pat
     assert legacy_header is not None and typed_header is not None
     assert legacy_header.index_policy != typed_header.index_policy
     assert len(embeddings.embed_calls) >= legacy_calls + 2
+
+
+async def test_typed_search_embeds_documents_and_query_with_explicit_purposes(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="one").append(
+        ChatMessage.user("banana fruit", timestamp=timestamp(1))
+    )
+    embeddings = _StubEmbeddings()
+    recall = backend(tmp_path, sessions, embeddings=embeddings)
+
+    await recall.search_page(search_request("fruit"))
+
+    assert embeddings.embed_purposes == ["document", "query"]
+
+
+async def test_typed_search_rebuilds_when_provider_response_model_changes(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="one").append(
+        ChatMessage.user("banana fruit", timestamp=timestamp(1))
+    )
+    embeddings = _StubEmbeddings()
+    embeddings.response_model_id = "served/embed-a"
+    logger = _CapturingLogger()
+    recall = backend(tmp_path, sessions, embeddings=embeddings, logger=logger)
+    first_page = await recall.search_page(search_request("fruit"))
+    continuation = await recall.search_page(
+        search_request(
+            "fruit",
+            offset=1,
+            snapshot_id=first_page.snapshot_id,
+        )
+    )
+
+    embeddings.response_model_id = "served/embed-b"
+    with pytest.raises(RecallSearchError) as error_info:
+        await recall.search_page(
+            search_request(
+                "fruit",
+                offset=1,
+                snapshot_id=first_page.snapshot_id,
+            )
+        )
+    page = await recall.search_page(search_request("fruit"))
+
+    assert continuation.snapshot_id == first_page.snapshot_id
+    assert error_info.value.code == "stale_cursor"
+    assert [hit.session_id for hit in page.hits] == ["one"]
+    header = recall._typed_store.read_header()
+    assert header is not None
+    assert header.model_id == "stub-embed"
+    assert header.response_model_id == "served/embed-b"
+    assert any("response model changed" in message for message, _args in logger.warning_calls)
+
+
+async def test_typed_search_rebuilds_when_response_model_drifts_during_backfill(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="one")
+    session.append(ChatMessage.user("banana fruit", timestamp=timestamp(1)))
+    embeddings = _StubEmbeddings()
+    embeddings.response_model_id = "served/embed-a"
+    recall = backend(tmp_path, sessions, embeddings=embeddings)
+    await recall.search_page(search_request("fruit"))
+
+    session.append(ChatMessage.user("another banana", timestamp=timestamp(2)))
+    embeddings.response_model_id = "served/embed-b"
+    page = await recall.search_page(search_request("fruit"))
+
+    assert [hit.session_id for hit in page.hits] == ["one"]
+    header = recall._typed_store.read_header()
+    assert header is not None
+    assert header.response_model_id == "served/embed-b"
+
+
+async def test_run_embed_rejects_actual_model_drift_between_batches(tmp_path: Path) -> None:
+    class _DriftingEmbeddings(_StubEmbeddings):
+        async def embed(
+            self,
+            texts: list[str],
+            *,
+            purpose: str | None = None,
+        ) -> EmbeddingResult:
+            self.response_model_id = f"served/embed-{len(self.embed_calls)}"
+            return await super().embed(texts, purpose=purpose)
+
+    sessions = ChatSessionManager(tmp_path)
+    recall = backend(tmp_path, sessions, embeddings=_DriftingEmbeddings())
+    texts = [f"text-{index}" for index in range(_EMBED_BATCH_SIZE + 1)]
+
+    with pytest.raises(EmbeddingError, match="response model changed mid-batch"):
+        await recall._run_embed(texts)
+
+
+async def test_typed_search_logs_usage_aggregated_across_rebuild_batches(
+    tmp_path: Path,
+) -> None:
+    class _UsageEmbeddings(_StubEmbeddings):
+        async def embed(
+            self,
+            texts: list[str],
+            *,
+            purpose: str | None = None,
+        ) -> EmbeddingResult:
+            result = await super().embed(texts, purpose=purpose)
+            return EmbeddingResult(
+                vectors=result.vectors,
+                model_id=result.model_id,
+                provider_id=result.provider_id,
+                dimension=result.dimension,
+                space_fingerprint=result.space_fingerprint,
+                response_model_id=result.response_model_id,
+                usage=EmbeddingUsage(
+                    requests=1,
+                    token_reports=1,
+                    cost_reports=1,
+                    input_tokens=len(texts),
+                    total_tokens=len(texts),
+                    cost=0.01,
+                ),
+            )
+
+    sessions = ChatSessionManager(tmp_path)
+    for index in range(_EMBED_BATCH_SIZE + 1):
+        sessions.create("coder", session_id=f"session-{index}").append(
+            ChatMessage.user(f"banana fruit {index}", timestamp=timestamp(1))
+        )
+    logger = _CapturingLogger()
+    recall = backend(tmp_path, sessions, embeddings=_UsageEmbeddings(), logger=logger)
+
+    await recall.search_page(search_request("fruit"))
+
+    assert len(logger.info_calls) == 1
+    message, args = logger.info_calls[0]
+    assert message.startswith("Embedding usage operation=")
+    assert args == (
+        "typed_search",
+        "openrouter",
+        "stub-embed",
+        3,
+        3,
+        _EMBED_BATCH_SIZE + 2,
+        _EMBED_BATCH_SIZE + 2,
+        3,
+        pytest.approx(0.03),
+        1,
+        _EMBED_BATCH_SIZE + 1,
+    )
 
 
 async def test_vector_backend_ranks_semantically_nearest_sessions(tmp_path: Path) -> None:
@@ -638,7 +838,13 @@ async def test_vector_backend_falls_back_to_jsonl_when_embed_call_fails(
     )
 
     class _FlakyEmbeddings(_StubEmbeddings):
-        async def embed(self, texts: list[str]) -> EmbeddingResult:
+        async def embed(
+            self,
+            texts: list[str],
+            *,
+            purpose: str | None = None,
+        ) -> EmbeddingResult:
+            del texts, purpose
             raise EmbeddingError("provider unavailable")
 
     data = await backend(tmp_path, sessions, embeddings=_FlakyEmbeddings()).search(
@@ -653,22 +859,23 @@ async def test_vector_backend_falls_back_to_jsonl_when_embed_call_fails(
     assert data["content"].startswith(_SEMANTIC_FAILED_NOTICE)
 
 
-async def test_run_embed_shrinks_input_until_under_context_window(tmp_path: Path) -> None:
-    """A context-length overflow is recovered by halving the input and retrying.
-
-    The character-budget truncation cannot guarantee a token count, so the
-    backend self-corrects against the provider's hard cap.
-    """
+async def test_run_embed_recursively_splits_overflowing_batch_without_changing_text(
+    tmp_path: Path,
+) -> None:
+    """Aggregate overflow is recovered by dividing inputs, never their text."""
 
     sessions = ChatSessionManager(tmp_path)
     embeddings = _OverflowThenOkEmbeddings(max_chars=100)
     recall = backend(tmp_path, sessions, embeddings=embeddings)
+    texts = ["a" * 60, "b" * 60, "c" * 60, "d" * 60]
 
-    result = await recall._run_embed(["x" * 1000])
+    result = await recall._run_embed(texts)
 
     assert result.dimension == 4
-    assert len(embeddings.embed_calls) > 1  # at least one shrink retry happened
-    assert all(len(text) <= 100 for text in embeddings.embed_calls[-1])
+    assert len(result.vectors) == len(texts)
+    assert embeddings.embed_calls[0] == texts
+    successful_calls = [call for call in embeddings.embed_calls if sum(map(len, call)) <= 100]
+    assert [text for call in successful_calls for text in call] == texts
 
 
 async def test_run_embed_does_not_retry_non_overflow_errors(tmp_path: Path) -> None:
@@ -685,19 +892,17 @@ async def test_run_embed_does_not_retry_non_overflow_errors(tmp_path: Path) -> N
     assert embeddings.embed_calls == 1
 
 
-async def test_run_embed_gives_up_after_retry_budget(tmp_path: Path) -> None:
-    """When the input can never satisfy the provider, the shrink loop stops
-    after its budget and re-raises so the caller falls back to JSONL.
-    """
+async def test_run_embed_never_truncates_a_single_overlong_text(tmp_path: Path) -> None:
+    """A single overflow re-raises after one honest, unchanged provider call."""
 
     sessions = ChatSessionManager(tmp_path)
-    embeddings = _OverflowThenOkEmbeddings(max_chars=0)
+    embeddings = _OverflowThenOkEmbeddings(max_chars=100)
     recall = backend(tmp_path, sessions, embeddings=embeddings)
+    text = "x" * 1000
 
     with pytest.raises(EmbeddingError):
-        await recall._run_embed(["x" * 1000])
-    # 1 initial attempt + 6 retries = 7 embed calls before giving up.
-    assert len(embeddings.embed_calls) == 7
+        await recall._run_embed([text])
+    assert embeddings.embed_calls == [[text]]
 
 
 async def test_vector_backend_search_includes_per_match_distance_in_payload(
@@ -747,7 +952,13 @@ async def test_vector_search_cancellation_reaches_embedding_call(tmp_path: Path)
     cancelled = asyncio.Event()
 
     class _SlowEmbeddings(_StubEmbeddings):
-        async def embed(self, texts: list[str]) -> EmbeddingResult:
+        async def embed(
+            self,
+            texts: list[str],
+            *,
+            purpose: str | None = None,
+        ) -> EmbeddingResult:
+            del texts, purpose
             started.set()
             try:
                 await asyncio.Event().wait()
@@ -1472,9 +1683,14 @@ async def test_run_embed_splits_texts_into_batches_above_batch_size(tmp_path: Pa
             super().__init__()
             self.batch_sizes: list[int] = []
 
-        async def embed(self, texts: list[str]) -> EmbeddingResult:
+        async def embed(
+            self,
+            texts: list[str],
+            *,
+            purpose: str | None = None,
+        ) -> EmbeddingResult:
             self.batch_sizes.append(len(texts))
-            return await super().embed(texts)
+            return await super().embed(texts, purpose=purpose)
 
     sessions = ChatSessionManager(tmp_path)
     embeddings = _CountingEmbeddings()
@@ -1507,9 +1723,14 @@ async def test_run_embed_single_text_does_not_split(tmp_path: Path) -> None:
             super().__init__()
             self.batch_sizes: list[int] = []
 
-        async def embed(self, texts: list[str]) -> EmbeddingResult:
+        async def embed(
+            self,
+            texts: list[str],
+            *,
+            purpose: str | None = None,
+        ) -> EmbeddingResult:
             self.batch_sizes.append(len(texts))
-            return await super().embed(texts)
+            return await super().embed(texts, purpose=purpose)
 
     sessions = ChatSessionManager(tmp_path)
     embeddings = _CountingEmbeddings()

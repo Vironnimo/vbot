@@ -88,7 +88,13 @@ class _StubEmbeddings:
         self.resolve_calls += 1
         return (self.provider_id, self.model_id)
 
-    async def embed(self, texts: list[str]) -> EmbeddingResult:
+    async def embed(
+        self,
+        texts: list[str],
+        *,
+        purpose: str | None = None,
+    ) -> EmbeddingResult:
+        del purpose
         self.embed_calls.append(list(texts))
         vectors: list[list[float]] = [self._vector_for(text) for text in texts]
         return EmbeddingResult(
