@@ -159,6 +159,7 @@
   flex-shrink: 0;
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
+  background: var(--surface);
 }
 
 /* Sections that host dropdowns must not clip the portaled panel. */
