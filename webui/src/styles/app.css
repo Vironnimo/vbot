@@ -875,8 +875,7 @@ svg {
 .input-area {
   flex-shrink: 0;
   padding: 14px 20px;
-  border-top: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--bg);
 }
 
 .input-wrap {

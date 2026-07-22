@@ -212,9 +212,9 @@ Interaction is calm. Hover states are warm tint shifts, not bright flashes. The 
 
 The palette is organized around five layers of warm dark surface and three semantic status colors.
 
-- **Bg (#221A12):** The page foundation — darkest, used behind content areas and the chat message stream. Warm near-black with a distinct brown cast.
+- **Bg (#221A12):** The page foundation — darkest, used behind content areas, the chat message stream, and the unbordered composer area. Warm near-black with a distinct brown cast.
 - **Secondary-surface (#271E15):** The narrow intermediate layer used only by Secondary bars. It sits exactly between the main navigation and content backgrounds so the app descends from light on the left to dark on the right without adding elevation.
-- **Surface (#2B2217):** Primary panel surface — Main menu, input bar, and section cards. One step up from the Secondary bar.
+- **Surface (#2B2217):** Primary panel surface — Main menu and section cards. One step up from the Secondary bar.
 - **Surface-2 (#33291D):** Elevated cards, dropdown backgrounds, user message bubbles. Used whenever a component needs to sit above its container.
 - **Surface-3 (#3D3124):** Tertiary highlight layer — toggle tracks, code block backgrounds, hover surfaces for dropdowns.
 - **Border (#4A3928) / Border-2 (#5D4A35):** Two border strengths. `border` for structural dividers (sidebar edge, section separators). `border-2` for interactive element outlines (inputs, buttons, dropdowns).
@@ -362,7 +362,7 @@ Primary save buttons inside long editor panels stay enabled even when the form i
 
 **Every ordinary multi-line form field is the shared `TextArea` component (`webui/src/components/ui/TextArea.svelte`).** It follows the same `value` / `onInput(next, event)` callback contract as `TextField` and owns the default, inset, code, invalid, disabled, and read-only states. `variant="default"` is the bordered `surface-2` field used by Cron and Settings; `variant="inset"` is the borderless `bg` editor integrated into a bounded System Prompt block. `code` preserves whitespace, enables horizontal overflow, and raises the minimum height for JSON editors; `invalid` keeps a red border/ring and sets `aria-invalid`. The guard allows raw textareas only in the specialized Chat Composer and queued-message editor and rejects every retired form-textarea class.
 
-**Chat composer** — A `bg`-filled rounded rectangle (10px radius) with `border-2` border. Its specialized auto-resizing textarea (max 182px, hidden scrollbar) and action buttons sit flush to the bottom-right; it is deliberately not `TextArea`. Focus applies the accent border + glow. The queued-message editor is the other deliberate raw-textarea exception because it owns inline queue-edit behavior.
+**Chat composer** — Its full-width outer area continues the Chat `bg` without a structural border, so the composer sits directly in the conversation surface. The interactive composer remains a `bg`-filled rounded rectangle (10px radius) with a `border-2` border. Its specialized auto-resizing textarea (max 182px, hidden scrollbar) and action buttons sit flush to the bottom-right; it is deliberately not `TextArea`. Focus applies the accent border + glow. The queued-message editor is the other deliberate raw-textarea exception because it owns inline queue-edit behavior.
 
 ### Toggles
 
