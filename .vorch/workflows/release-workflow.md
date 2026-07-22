@@ -4,17 +4,19 @@ How to cut a tagged GitHub release of vBot. Releases are how end users install: 
 
 ## Steps
 
-### 1. Refresh the tracked Model DB
+### 1. Synchronize release state and choose the version
 
-With this branch checkout's development server running and the required Provider credentials configured, refresh the complete tracked release database and review the result before committing:
+Fetch remote tags before inspecting the latest release. Never infer the next version from an unrefreshed local tag set:
 
 ```bash
-python scripts/refresh_model_db.py
-python scripts/validate_model_db.py --resources resources
-git status --short resources/models
+git fetch --prune --tags origin
+git describe --tags --abbrev=0 origin/main
+gh release view --json tagName,publishedAt,url
 ```
 
-The maintainer script explicitly targets this checkout's `resources/models/` and the server rejects the request if it is serving a different checkout. Normal `vbot model refresh` is not a release command: it writes the complete runtime database under the server data directory and intentionally leaves tracked files unchanged. Resolve any reported Provider failures before continuing.
+The reachable remote tag and GitHub's latest published release must agree. Resolve any mismatch before continuing. Choose the next SemVer from that confirmed remote state and the changes since the release; do not reuse an existing tag.
+
+Model DB maintenance is independent of releases. Do not run `scripts/refresh_model_db.py`, modify `resources/models/`, or include incidental Model DB changes while cutting a release.
 
 ### 2. Bump the version
 
@@ -31,7 +33,7 @@ Release tasks are explicitly exempt from the repository's normal local quality-g
 ### 4. Commit and push
 
 ```bash
-git add pyproject.toml resources/models
+git add pyproject.toml
 git commit -m "chore(release): bump version to X.Y.Z"
 git push origin main
 ```
@@ -84,4 +86,6 @@ gh api repos/Vironnimo/vbot/releases/generate-notes \
 - **Notes**: only the auto-generated Full Changelog line — no custom prose. A custom `--notes` replaces it and breaks the convention every prior release follows.
 - **Asset is mandatory**: a release without `webui-dist.tar.gz` cannot be installed by the public Installer or reached by `vbot update`. Never skip step 6.
 - **Tag = version**: `vX.Y.Z` must equal the `pyproject.toml` version, with a leading `v`.
+- **Remote state first**: fetch tags and confirm GitHub's latest release before choosing the version; a stale local tag set is not release evidence.
+- **Model DB is separate**: never refresh or stage `resources/models/` as part of a release.
 - **Publication is last**: never create the tag or GitHub Release manually. The workflow publishes both only after the full CI gate and WebUI packaging succeed.
