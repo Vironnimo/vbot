@@ -126,6 +126,7 @@ async def test_embed_returns_vectors_in_input_order_and_resolves_model_id() -> N
     assert result.provider_id == "openrouter"
     assert result.model_id == "google/gemini-embedding-2"
     assert result.dimension == 3
+    assert result.space_fingerprint == service.resolve_space().fingerprint
     assert result.resolved_model_id == ("openrouter", "google/gemini-embedding-2")
 
     # The factory was called with the parsed target reference and the
@@ -311,6 +312,41 @@ def test_resolve_model_id_returns_provider_and_model_id() -> None:
     assert service.resolve_model_id() == ("openrouter", "google/gemini-embedding-2")
 
 
+def test_resolve_space_fingerprint_covers_target_and_effective_options() -> None:
+    baseline = EmbeddingService(
+        _BindingModelTasks(
+            target="openrouter/google/gemini-embedding-2::api-key:work",
+            options={"dimensions": 768, "extra_options": {"input_type": "query"}},
+        ),
+        _RuntimeStub(),
+    ).resolve_space()
+    same = EmbeddingService(
+        _BindingModelTasks(
+            target="openrouter/google/gemini-embedding-2::api-key:work",
+            options={"extra_options": {"input_type": "query"}, "dimensions": 768},
+        ),
+        _RuntimeStub(),
+    ).resolve_space()
+    other_connection = EmbeddingService(
+        _BindingModelTasks(
+            target="openrouter/google/gemini-embedding-2::oauth:work",
+            options={"dimensions": 768, "extra_options": {"input_type": "query"}},
+        ),
+        _RuntimeStub(),
+    ).resolve_space()
+    other_options = EmbeddingService(
+        _BindingModelTasks(
+            target="openrouter/google/gemini-embedding-2::api-key:work",
+            options={"dimensions": 256, "extra_options": {"input_type": "query"}},
+        ),
+        _RuntimeStub(),
+    ).resolve_space()
+
+    assert baseline.fingerprint == same.fingerprint
+    assert baseline.fingerprint != other_connection.fingerprint
+    assert baseline.fingerprint != other_options.fingerprint
+
+
 def test_resolve_model_id_without_binding_raises_configuration_error() -> None:
     """``resolve_model_id`` raises the same configuration error as
     :meth:`embed` when the binding is missing.
@@ -368,7 +404,7 @@ class _BindingModelTasks:
         # drops ``None`` before sending, so the stored options dict
         # arrives here with ``None`` for the unset case and the
         # user's integer when overridden.
-        return {"dimensions": self._options.get("dimensions")}
+        return {"dimensions": None, **self._options}
 
 
 class _RuntimeStub:

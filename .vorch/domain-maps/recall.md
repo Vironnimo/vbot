@@ -53,15 +53,18 @@ The cross-cutting Session and Tool terms live in `.vorch/GLOSSARY.md`.
 - Message search has the same case-insensitive substring semantics as JSONL, but defaults to BM25 relevance. Explicit newest/oldest ordering remains available. Queries shorter than the trigram minimum use an in-memory substring relevance scan (or chronological JSONL scan for explicit time order), so short literals are not lost.
 - Candidate rows are filtered by scope, Session, role, and time before limiting, then revalidated and hydrated from canonical JSONL. Persisted `session_search` results and skill-context notes are excluded before candidate limiting.
 - A separate Passage FTS table, built from the shared Passage policy, is the literal arm used by Hybrid. Normal queries use Passage BM25; short queries use source-derived substring relevance.
+- Cleanup reconciles indexed Session ids against the complete canonical agent/project scope, never the request-filtered candidate set; a Session-filtered search therefore cannot evict unrelated Sessions from the shared index.
 - Index failure triggers one delete-and-rebuild attempt, then a canonical scan fallback for Message search. The index is never authoritative.
 
 ### `vector`
 
-- Maintains a disposable sqlite-vec cosine index at `<data_dir>/recall/session_vectors.sqlite`; schema version 5 drops and lazily rebuilds incompatible indexes. The header pins provider, model, dimension, and schema version.
+- Maintains two disposable sqlite-vec cosine indexes: typed Passage search uses `<data_dir>/recall/session_passage_vectors.sqlite`, while legacy `RecallBackend.search` keeps `<data_dir>/recall/session_vectors.sqlite`. Their policy-tagged headers and physical files prevent typed Passage vectors from reusing legacy chunks.
+- Schema version 6 uses a singleton header that pins provider, model, full embedding-space fingerprint, index policy, observed dimension, and schema version. Target/Connection/Account/options, policy, dimension, or schema changes discard and fully rebuild the affected derived index in the same Search.
 - Typed search returns pure semantic top-K Passages ordered by cosine distance. It does not literal-revalidate, collapse to one result per Session, apply a universal distance cutoff, or fall back to keyword search.
 - Missing embedding configuration or an embedding/store failure returns the stable `semantic_unavailable` failure. This is intentionally different from the legacy `RecallBackend.search` compatibility path, which retains its old degraded JSONL payload for old callers.
 - The vec0 table stores scope as a partition key plus Session and Passage time metadata. Scope, optional Session, and time-overlap filters execute inside the KNN query before top-K selection, preventing unrelated scopes or time ranges from starving eligible results.
-- Freshness compares canonical Session mtime/size with indexed metadata. Missing/stale Sessions are rebuilt from shared Passages in embedding batches; deleted Sessions are dropped. Index reconciliation, query, and removal are serialized per backend, while embedding calls remain cancellable async work.
+- Freshness compares canonical Session mtime/size with indexed metadata. Reconciliation always uses the complete canonical agent/project scope, independently of request Session/time filters; missing/stale Sessions are rebuilt under that index's Passage/chunk policy and deleted Sessions are dropped.
+- Schema creation/replacement and vector upserts run in one explicit write transaction; KNN validates an existing matching header and never mutates schema. Store/index failures trigger one exact-file discard (including WAL/SHM sidecars) and full rebuild before surfacing stable unavailability or legacy fallback.
 
 ### `hybrid`
 
@@ -74,7 +77,7 @@ The cross-cutting Session and Tool terms live in `.vorch/GLOSSARY.md`.
 ## Storage, Lifecycle, and Removal
 
 - Canonical Messages always come from `ChatSessionManager`; Recall modules must not construct Session paths.
-- FTS and Vector files are derived, disposable indexes under `<data_dir>/recall/`. Schema or embedding-space changes rebuild rather than migrate them.
+- FTS and Vector files are derived, disposable indexes under `<data_dir>/recall/`. Schema, embedding-space, dimension, or index-policy changes rebuild rather than migrate them.
 - `SupportsSessionRemoval` lets `sqlite_fts`, `vector`, and `hybrid` evict a deleted Session immediately. `jsonl_scan` has no removal method because the canonical live scan already reflects deletion.
 - First-party search snapshots are derived from candidate Session files; pagination refuses a changed snapshot. Index state is not treated as canonical source state.
 

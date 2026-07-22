@@ -6,8 +6,9 @@ Passages without Session deduplication, a universal distance cutoff, or literal
 fallback. The older ``RecallBackend.search`` entry point retains its chunk-based
 payload and degraded JSONL behavior solely for compatibility with legacy callers.
 
-The disposable store pins ``(provider_id, model_id, dimension)`` in its header;
-an embedding-space or schema change drops and lazily rebuilds the index.
+Separate disposable stores pin the full embedding-space fingerprint,
+index policy, and dimension in their headers; any incompatible change drops
+and lazily rebuilds only the affected index.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from core.model_tasks import (
     EmbeddingError,
     EmbeddingResult,
     EmbeddingService,
+    EmbeddingSpaceIdentity,
 )
 from core.models.models import ModelRegistry
 from core.recall.jsonl import (
@@ -36,7 +38,13 @@ from core.recall.jsonl import (
     message_search_text,
     request_payload,
 )
-from core.recall.passages import Passage, build_session_passages
+from core.recall.passages import (
+    PASSAGE_OVERLAP_CHARS,
+    PASSAGE_POLICY_VERSION,
+    PASSAGE_TARGET_CHARS,
+    Passage,
+    build_session_passages,
+)
 from core.recall.recall import (
     JsonObject,
     RecallBackendContext,
@@ -114,6 +122,16 @@ _SEMANTIC_FAILED_NOTICE = (
 # chunk-key tuple. An empty string keeps the store's UNIQUE constraint reliable —
 # SQLite treats NULLs as distinct, which would break per-scope uniqueness.
 _GLOBAL_PROJECT_SCOPE = ""
+_TYPED_INDEX_POLICY = (
+    f"passage-v{PASSAGE_POLICY_VERSION}:target={PASSAGE_TARGET_CHARS}:"
+    f"overlap={PASSAGE_OVERLAP_CHARS}"
+)
+_LEGACY_INDEX_POLICY_VERSION = 1
+_LEGACY_INDEX_POLICY = (
+    f"legacy-chunk-v{_LEGACY_INDEX_POLICY_VERSION}:target={_CHUNK_TARGET_CHARS}:"
+    f"overlap_messages={_CHUNK_OVERLAP_MESSAGES}:message_cap={_PER_MESSAGE_CHAR_CAP}"
+)
+_TYPED_INDEX_FILE_NAME = "session_passage_vectors.sqlite"
 
 
 def _project_scope(project_id: str | None) -> str:
@@ -158,7 +176,14 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
     def __init__(self, context: RecallBackendContext) -> None:
         super().__init__(context.sessions)
         self.data_dir = context.data_dir
+        # Keep the established store/file as the legacy Search index; the typed
+        # Passage contract gets a physically separate index so neither policy
+        # can ever reuse the other's rows.
         self.store = VectorStore(context.data_dir)
+        self._typed_store = VectorStore(
+            context.data_dir,
+            index_file_name=_TYPED_INDEX_FILE_NAME,
+        )
         self.logger = context.logger
         self.embeddings: EmbeddingService | None = context.embeddings
         self.model_registry: ModelRegistry | None = context.model_registry
@@ -166,7 +191,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         # Cached resolved binding for the lifetime of the index — the store
         # itself drops+rebuilds on a binding change, so the cache is always
         # in sync with the on-disk header after the first successful embed.
-        self._resolved_header: VectorHeader | None = None
+        self._resolved_headers: dict[str, VectorHeader] = {}
         self._index_lock = asyncio.Lock()
 
     def describe_search(self) -> str:
@@ -182,49 +207,76 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
 
     async def search_page(self, request: RecallSearchRequest) -> RecallSearchPage:
         summaries = await asyncio.to_thread(self._search_candidate_summaries, request)
-        binding_header = await asyncio.to_thread(self._resolve_header)
-        if binding_header is None:
-            raise RecallSearchError(
-                "semantic_unavailable",
-                "Semantic search is unavailable because no embedding model is configured.",
-            )
-        snapshot_id = self._vector_snapshot(request, summaries, binding_header)
-        if request.snapshot_id is not None and request.snapshot_id != snapshot_id:
-            raise RecallSearchError(
-                "stale_cursor", "Session search source changed; repeat the search."
-            )
-        if not summaries:
-            return RecallSearchPage(
-                hits=(),
-                result_type="passage",
-                ranking="cosine_distance",
-                snapshot_id=snapshot_id,
-                has_more=False,
-                total_candidate_sessions=0,
-            )
-
         try:
             async with self._index_lock:
-                await self._ensure_fresh_index(request, summaries, binding_header)
-                query_vector = await self._embed_query(binding_header, request.query)
-                pinned_header = self._resolved_header
-                if pinned_header is None or pinned_header.dimension <= 0:
-                    raise VectorStoreError("vector store header is not pinned after embed")
-                candidates = await asyncio.to_thread(
-                    self.store.knn_search,
-                    header=pinned_header,
-                    query_vector=query_vector,
-                    limit=request.offset + request.limit + 1,
-                    agent_id=request.agent_id,
-                    project_id=_project_scope(request.project_id),
-                    session_id=request.session_id,
-                    since=request.since,
-                    until=request.until,
-                )
-                records = await asyncio.to_thread(
-                    self.store.get_chunks_by_rowids,
-                    [rowid for rowid, _ in candidates],
-                )
+                for attempt in range(2):
+                    try:
+                        binding_header = await asyncio.to_thread(
+                            self._resolve_header,
+                            self._typed_store,
+                            _TYPED_INDEX_POLICY,
+                        )
+                        if binding_header is None:
+                            raise RecallSearchError(
+                                "semantic_unavailable",
+                                "Semantic search is unavailable because no embedding model "
+                                "is configured.",
+                            )
+                        snapshot_id = self._vector_snapshot(request, summaries, binding_header)
+                        if request.snapshot_id is not None and request.snapshot_id != snapshot_id:
+                            raise RecallSearchError(
+                                "stale_cursor",
+                                "Session search source changed; repeat the search.",
+                            )
+                        if not summaries:
+                            return RecallSearchPage(
+                                hits=(),
+                                result_type="passage",
+                                ranking="cosine_distance",
+                                snapshot_id=snapshot_id,
+                                has_more=False,
+                                total_candidate_sessions=0,
+                            )
+
+                        await self._ensure_fresh_index(
+                            request,
+                            binding_header,
+                            store=self._typed_store,
+                            index_policy=_TYPED_INDEX_POLICY,
+                        )
+                        query_vector, query_header = await self._embed_query(
+                            binding_header,
+                            request.query,
+                            index_policy=_TYPED_INDEX_POLICY,
+                        )
+                        await self._ensure_query_header(
+                            request,
+                            query_header,
+                            store=self._typed_store,
+                            index_policy=_TYPED_INDEX_POLICY,
+                        )
+                        candidates = await asyncio.to_thread(
+                            self._typed_store.knn_search,
+                            header=query_header,
+                            query_vector=query_vector,
+                            limit=request.offset + request.limit + 1,
+                            agent_id=request.agent_id,
+                            project_id=_project_scope(request.project_id),
+                            session_id=request.session_id,
+                            since=request.since,
+                            until=request.until,
+                        )
+                        records = await asyncio.to_thread(
+                            self._typed_store.get_chunks_by_rowids,
+                            [rowid for rowid, _ in candidates],
+                        )
+                        break
+                    except (VectorStoreError, OSError, sqlite3.Error) as error:
+                        if attempt > 0:
+                            raise
+                        self._warning("Vector recall index failed; rebuilding once: %s", error)
+                        await asyncio.to_thread(self._typed_store.reset_index)
+                        self._resolved_headers.pop(_TYPED_INDEX_POLICY, None)
         except (VectorStoreError, EmbeddingError, OSError, sqlite3.Error) as error:
             self._warning("Vector recall failed: %s", error)
             raise RecallSearchError(
@@ -270,7 +322,10 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         header: VectorHeader,
     ) -> str:
         source = self._search_snapshot(request, summaries)
-        payload = f"{source}\0{header.provider_id}\0{header.model_id}".encode()
+        payload = (
+            f"{source}\0{header.provider_id}\0{header.model_id}\0"
+            f"{header.space_fingerprint}\0{header.index_policy}"
+        ).encode()
         return hashlib.sha256(payload).hexdigest()
 
     async def remove_session(
@@ -284,12 +339,13 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         ``_project_scope`` to match how chunks are keyed in the store.
         """
         async with self._index_lock:
-            await asyncio.to_thread(
-                self.store.delete_session,
-                agent_id,
-                _project_scope(project_id),
-                session_id,
-            )
+            for store in (self.store, self._typed_store):
+                await asyncio.to_thread(
+                    store.delete_session,
+                    agent_id,
+                    _project_scope(project_id),
+                    session_id,
+                )
 
     # ------------------------------------------------------------------
     # Search
@@ -317,31 +373,55 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         summaries: list[JsonObject],
     ) -> JsonObject:
         async with self._index_lock:
-            binding_header = await asyncio.to_thread(self._resolve_header)
-            if binding_header is None:
-                self._warning("Vector recall has no embedding binding; falling back to JSONL scan")
-                fallback = await self._fallback.search(request)
-                return self._degraded_result(fallback, _SEMANTIC_UNAVAILABLE_NOTICE)
+            for attempt in range(2):
+                try:
+                    binding_header = await asyncio.to_thread(
+                        self._resolve_header,
+                        self.store,
+                        _LEGACY_INDEX_POLICY,
+                    )
+                    if binding_header is None:
+                        self._warning(
+                            "Vector recall has no embedding binding; falling back to JSONL scan"
+                        )
+                        fallback = await self._fallback.search(request)
+                        return self._degraded_result(fallback, _SEMANTIC_UNAVAILABLE_NOTICE)
 
-            await self._ensure_fresh_index(request, summaries, binding_header)
+                    await self._ensure_fresh_index(
+                        request,
+                        binding_header,
+                        store=self.store,
+                        index_policy=_LEGACY_INDEX_POLICY,
+                    )
 
-            # After the backfill the cached ``_resolved_header`` holds the real
-            # dimension observed from the embedding provider. Use that for the
-            # KNN call — the binding-resolution header only knows the (provider,
-            # model) pair and is unaware of dimension until the first embed runs.
-            # ``search()`` has already rejected ``None``/blank queries before
-            # calling us, so the cast is just narrowing for the type-checker.
-            query = cast(str, request.query)
-            query_vector = await self._embed_query(binding_header, query)
-            pinned_header = self._resolved_header
-            if pinned_header is None or pinned_header.dimension <= 0:
-                raise VectorStoreError("vector store header is not pinned after embed")
-            candidates, rowid_to_record = await asyncio.to_thread(
-                self._query_store,
-                pinned_header,
-                query_vector,
-                request.limit * _CHUNK_FETCH_MULTIPLIER + _KNN_FETCH_MARGIN,
-            )
+                    # ``search()`` has already rejected ``None``/blank queries
+                    # before calling us, so the cast only narrows for typing.
+                    query = cast(str, request.query)
+                    query_vector, query_header = await self._embed_query(
+                        binding_header,
+                        query,
+                        index_policy=_LEGACY_INDEX_POLICY,
+                    )
+                    await self._ensure_query_header(
+                        request,
+                        query_header,
+                        store=self.store,
+                        index_policy=_LEGACY_INDEX_POLICY,
+                    )
+                    candidates, rowid_to_record = await asyncio.to_thread(
+                        self._query_store,
+                        self.store,
+                        query_header,
+                        query_vector,
+                        request.limit * _CHUNK_FETCH_MULTIPLIER + _KNN_FETCH_MARGIN,
+                    )
+                    break
+                except (VectorStoreError, OSError, sqlite3.Error) as error:
+                    if attempt > 0:
+                        raise
+                    self._warning("Legacy vector index failed; rebuilding once: %s", error)
+                    await asyncio.to_thread(self.store.reset_index)
+                    self._resolved_headers.pop(_LEGACY_INDEX_POLICY, None)
         if not candidates:
             return self._message_result(
                 request,
@@ -360,16 +440,17 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
 
     def _query_store(
         self,
+        store: VectorStore,
         header: VectorHeader,
         query_vector: list[float],
         limit: int,
     ) -> tuple[list[tuple[int, float]], dict[int, ChunkVectorRecord]]:
-        candidates = self.store.knn_search(
+        candidates = store.knn_search(
             header=header,
             query_vector=query_vector,
             limit=limit,
         )
-        records = self.store.get_chunks_by_rowids([rowid for rowid, _ in candidates])
+        records = store.get_chunks_by_rowids([rowid for rowid, _ in candidates])
         return candidates, records
 
     def _hydrate_vector_result(
@@ -426,45 +507,77 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
     # Embedding helpers
     # ------------------------------------------------------------------
 
-    def _resolve_header(self) -> VectorHeader | None:
+    def _resolve_header(
+        self,
+        store: VectorStore,
+        index_policy: str,
+    ) -> VectorHeader | None:
         """Resolve the binding identity; ``None`` means no usable binding."""
 
         if self.embeddings is None:
             return None
         try:
-            provider_id, model_id = self.embeddings.resolve_model_id()
+            resolve_space = getattr(self.embeddings, "resolve_space", None)
+            if callable(resolve_space):
+                identity = cast(EmbeddingSpaceIdentity, resolve_space())
+            else:
+                provider_id, model_id = self.embeddings.resolve_model_id()
+                identity = EmbeddingSpaceIdentity(
+                    provider_id=provider_id,
+                    model_id=model_id,
+                    fingerprint="",
+                )
         except EmbeddingError as error:
             self._warning("Vector recall binding lookup failed: %s", error)
             return None
 
-        stored = self.store.read_header()
-        if stored is not None and (
-            stored.provider_id != provider_id or stored.model_id != model_id
-        ):
-            # Bound model changed — drop the now-incompatible index so the
-            # next upsert rebuilds from scratch. The spec's "no
-            # legacy/compat" decision says a binding switch is a hard reset.
+        expected = VectorHeader(
+            provider_id=identity.provider_id,
+            model_id=identity.model_id,
+            dimension=0,
+            space_fingerprint=identity.fingerprint,
+            index_policy=index_policy,
+        )
+        stored = store.read_header()
+        if stored is not None and not self._headers_match(stored, expected):
             self._warning(
-                "Vector recall binding changed (%s/%s → %s/%s); rebuilding index",
+                "Vector recall embedding space or index policy changed "
+                "(%s/%s → %s/%s); rebuilding index",
                 stored.provider_id,
                 stored.model_id,
-                provider_id,
-                model_id,
+                identity.provider_id,
+                identity.model_id,
             )
-            self.store.drop_index()
-            self._resolved_header = None
-        if self._resolved_header is not None and self._headers_match(
-            self._resolved_header,
-            VectorHeader(provider_id=provider_id, model_id=model_id, dimension=0),
-        ):
-            return self._resolved_header
-        return VectorHeader(provider_id=provider_id, model_id=model_id, dimension=0)
+            store.reset_index()
+            self._resolved_headers.pop(index_policy, None)
+            stored = None
+        if stored is not None:
+            self._resolved_headers[index_policy] = stored
+            return stored
+        return expected
 
     @staticmethod
-    def _headers_match(left: VectorHeader, right: VectorHeader) -> bool:
-        return left.provider_id == right.provider_id and left.model_id == right.model_id
+    def _headers_match(
+        left: VectorHeader,
+        right: VectorHeader,
+        *,
+        include_dimension: bool = False,
+    ) -> bool:
+        identity_matches = (
+            left.provider_id == right.provider_id
+            and left.model_id == right.model_id
+            and left.space_fingerprint == right.space_fingerprint
+            and left.index_policy == right.index_policy
+        )
+        return identity_matches and (not include_dimension or left.dimension == right.dimension)
 
-    async def _embed_query(self, header: VectorHeader, query: str) -> list[float]:
+    async def _embed_query(
+        self,
+        header: VectorHeader,
+        query: str,
+        *,
+        index_policy: str,
+    ) -> tuple[list[float], VectorHeader]:
         """Embed a single query string and pin the dimension from the first response."""
 
         result = await self._run_embed([query])
@@ -472,24 +585,79 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
             raise VectorStoreError(
                 f"embedding provider returned empty dimension for {header.model_id}"
             )
-        self._resolved_header = VectorHeader(
+        resolved = self._header_from_result(result, header, index_policy=index_policy)
+        self._resolved_headers[index_policy] = resolved
+        return list(result.vectors[0]), resolved
+
+    def _header_from_result(
+        self,
+        result: EmbeddingResult,
+        expected: VectorHeader,
+        *,
+        index_policy: str,
+    ) -> VectorHeader:
+        resolved = VectorHeader(
             provider_id=result.provider_id,
             model_id=result.model_id,
             dimension=result.dimension,
+            space_fingerprint=result.space_fingerprint or expected.space_fingerprint,
+            index_policy=index_policy,
         )
-        return list(result.vectors[0])
+        if not self._headers_match(resolved, expected):
+            raise EmbeddingError("embedding space changed while the Recall request was running")
+        return resolved
 
-    async def _embed_chunks(self, texts: list[str]) -> tuple[list[list[float]], VectorHeader]:
+    async def _embed_chunks(
+        self,
+        texts: list[str],
+        expected: VectorHeader,
+        *,
+        index_policy: str,
+    ) -> tuple[list[list[float]], VectorHeader]:
         """Embed a batch of chunk texts and return vectors with the resolved header."""
 
         result = await self._run_embed(texts)
-        header = VectorHeader(
-            provider_id=result.provider_id,
-            model_id=result.model_id,
-            dimension=result.dimension,
-        )
-        self._resolved_header = header
+        header = self._header_from_result(result, expected, index_policy=index_policy)
+        self._resolved_headers[index_policy] = header
         return [list(vector) for vector in result.vectors], header
+
+    async def _ensure_query_header(
+        self,
+        request: RecallRequest | RecallSearchRequest,
+        query_header: VectorHeader,
+        *,
+        store: VectorStore,
+        index_policy: str,
+    ) -> None:
+        """Ensure the live query vector is comparable with every stored vector."""
+
+        stored = await asyncio.to_thread(store.read_header)
+        if stored is None:
+            await asyncio.to_thread(store.ensure_index, query_header)
+            return
+        if self._headers_match(stored, query_header, include_dimension=True):
+            return
+        if not self._headers_match(stored, query_header):
+            raise EmbeddingError("embedding space changed while the Recall request was running")
+
+        self._warning(
+            "Embedding dimension changed (%d → %d); rebuilding vector index",
+            stored.dimension,
+            query_header.dimension,
+        )
+        await asyncio.to_thread(store.reset_index)
+        self._resolved_headers[index_policy] = query_header
+        await self._ensure_fresh_index(
+            request,
+            query_header,
+            store=store,
+            index_policy=index_policy,
+        )
+        rebuilt = await asyncio.to_thread(store.read_header)
+        if rebuilt is None:
+            await asyncio.to_thread(store.ensure_index, query_header)
+        elif not self._headers_match(rebuilt, query_header, include_dimension=True):
+            raise VectorStoreError("rebuilt vector store header does not match the live query")
 
     async def _run_embed(self, texts: list[str]) -> EmbeddingResult:
         """Embed *texts*, batching into ``_EMBED_BATCH_SIZE`` groups.
@@ -515,6 +683,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
         combined_provider: str | None = None
         combined_model: str | None = None
         combined_dimension: int | None = None
+        combined_fingerprint: str | None = None
         for start in range(0, len(texts), _EMBED_BATCH_SIZE):
             batch = texts[start : start + _EMBED_BATCH_SIZE]
             result = await self._run_embed_batch(batch)
@@ -522,6 +691,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
                 combined_provider = result.provider_id
                 combined_model = result.model_id
                 combined_dimension = result.dimension
+                combined_fingerprint = result.space_fingerprint
             else:
                 if result.provider_id != combined_provider:
                     raise EmbeddingError(
@@ -537,15 +707,19 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
                         f"embedding dimension changed mid-batch: "
                         f"{combined_dimension} → {result.dimension}"
                     )
+                if result.space_fingerprint != combined_fingerprint:
+                    raise EmbeddingError("embedding space changed mid-batch")
             combined_vectors.extend(list(vector) for vector in result.vectors)
         assert combined_provider is not None
         assert combined_model is not None
         assert combined_dimension is not None
+        assert combined_fingerprint is not None
         return EmbeddingResult(
             vectors=tuple(combined_vectors),
             model_id=combined_model,
             provider_id=combined_provider,
             dimension=combined_dimension,
+            space_fingerprint=combined_fingerprint,
         )
 
     async def _run_embed_batch(self, batch: str | list[str]) -> EmbeddingResult:
@@ -591,21 +765,29 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
     async def _ensure_fresh_index(
         self,
         request: RecallRequest | RecallSearchRequest,
-        summaries: list[JsonObject],
         header: VectorHeader,
+        *,
+        store: VectorStore,
+        index_policy: str,
+        allow_dimension_rebuild: bool = True,
     ) -> None:
         """Make sure every JSONL session in this scope has fresh chunk vectors."""
 
         agent_id = request.agent_id
         scope = _project_scope(request.project_id)
+        summaries = await asyncio.to_thread(
+            self.sessions.list_with_metadata,
+            request.agent_id,
+            request.project_id,
+        )
         active = {str(summary["id"]): summary for summary in summaries}
-        indexed = await asyncio.to_thread(self.store.list_indexed_sessions, agent_id, scope)
+        indexed = await asyncio.to_thread(store.list_indexed_sessions, agent_id, scope)
 
         # Drop JSONL sessions that have been removed since last index.
         stale_to_remove = sorted(set(indexed) - set(active))
         if stale_to_remove:
             await asyncio.to_thread(
-                self.store.drop_indexed_sessions,
+                store.drop_indexed_sessions,
                 agent_id,
                 scope,
                 stale_to_remove,
@@ -619,14 +801,43 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
             request,
             active,
             indexed,
+            store,
         )
         if not all_chunks:
+            if header.dimension > 0:
+                await asyncio.to_thread(store.ensure_index, header)
             return
 
         texts = [chunk.text for _, _, _, chunk in all_chunks]
-        vectors, resolved_header = await self._embed_chunks(texts)
+        vectors, resolved_header = await self._embed_chunks(
+            texts,
+            header,
+            index_policy=index_policy,
+        )
         if resolved_header.dimension <= 0:
             raise VectorStoreError("embedding provider returned no vectors")
+        if header.dimension > 0 and not self._headers_match(
+            header,
+            resolved_header,
+            include_dimension=True,
+        ):
+            if not allow_dimension_rebuild:
+                raise EmbeddingError("embedding dimension changed repeatedly during index rebuild")
+            self._warning(
+                "Embedding dimension changed during backfill (%d → %d); rebuilding full index",
+                header.dimension,
+                resolved_header.dimension,
+            )
+            await asyncio.to_thread(store.reset_index)
+            self._resolved_headers[index_policy] = resolved_header
+            await self._ensure_fresh_index(
+                request,
+                resolved_header,
+                store=store,
+                index_policy=index_policy,
+                allow_dimension_rebuild=False,
+            )
+            return
 
         # Per-session running counter: chunk_index must be unique within
         # ``(project_id, agent_id, session_id)`` and start at 0 — the store's
@@ -664,17 +875,18 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
             )
 
         await asyncio.to_thread(
-            self.store.upsert_many_chunks,
+            store.upsert_many_chunks,
             header=resolved_header,
             records=records,
         )
-        self._resolved_header = resolved_header
+        self._resolved_headers[index_policy] = resolved_header
 
     def _collect_stale_chunks(
         self,
         request: RecallRequest | RecallSearchRequest,
         active: dict[str, JsonObject],
         indexed: dict[str, tuple[int, int]],
+        store: VectorStore,
     ) -> list[tuple[JsonObject, int, int, Chunk]]:
         """Load changed Sessions and pack their chunks off the event loop."""
 
@@ -700,7 +912,7 @@ class VectorRecallBackend(JsonlSessionRecallBackend):
             else:
                 chunks = build_session_chunks(messages)
             if not chunks:
-                self.store.delete_session(agent_id, scope, str(summary["id"]))
+                store.delete_session(agent_id, scope, str(summary["id"]))
                 continue
             all_chunks.extend((summary, mtime_ns, size_bytes, chunk) for chunk in chunks)
         return all_chunks

@@ -19,6 +19,8 @@ missing bindings.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -32,6 +34,7 @@ from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("embeddings")
+_EMBEDDING_SPACE_CONTRACT_VERSION = 1
 
 
 class EmbeddingError(_BaseEmbeddingError):
@@ -51,6 +54,15 @@ class EmbeddingExecutionError(EmbeddingError):
 
 
 @dataclass(frozen=True)
+class EmbeddingSpaceIdentity:
+    """Stable identity for one configured embedding execution space."""
+
+    provider_id: str
+    model_id: str
+    fingerprint: str
+
+
+@dataclass(frozen=True)
 class EmbeddingResult:
     """Normalized embedding response.
 
@@ -64,12 +76,15 @@ class EmbeddingResult:
             returned. ``0`` when *vectors* is empty (the runtime never
             produces an empty batch, but we keep the field valid for
             defensiveness).
+        space_fingerprint: Stable identity of the target, Connection/Account,
+            effective options, and embedding wire contract used for the call.
     """
 
     vectors: tuple[list[float], ...]
     model_id: str
     provider_id: str
     dimension: int
+    space_fingerprint: str = ""
 
     @property
     def resolved_model_id(self) -> tuple[str, str]:
@@ -120,6 +135,7 @@ class EmbeddingService:
                 f"Embedding does not support local targets: {target_ref.target}"
             )
 
+        identity = self._space_identity(target_ref, options)
         provider_client = ProviderEmbeddingClient.from_runtime(self._runtime, target_ref)
         try:
             vectors = await provider_client.embed(list(texts), options=options)
@@ -155,21 +171,58 @@ class EmbeddingService:
             model_id=target_ref.model_id,
             provider_id=target_ref.provider_id,
             dimension=dimension,
+            space_fingerprint=identity.fingerprint,
         )
 
-    def resolve_model_id(self) -> tuple[str, str]:
-        """Return ``(provider_id, model_id)`` for the configured binding.
+    def resolve_space(self) -> EmbeddingSpaceIdentity:
+        """Return the full configured embedding-space identity without executing it.
 
-        The recall store uses this to pin the embedding model identity
-        in its header so a binding switch triggers a rebuild. It
-        raises the same errors as :meth:`embed` for unconfigured or
-        malformed bindings, but never executes a request.
+        The fingerprint covers the normalized target (including connection and
+        account), the effective options after schema defaults, and this wire
+        contract version. Recall uses it to reject vectors produced by any
+        materially different execution configuration, even when provider and
+        model ids stay unchanged.
         """
 
-        binding = self._resolver.binding_for(TASK_TEXT_EMBEDDING)
-        target_ref = self._resolver.parse_target(binding.target)
+        _binding, options, target_ref = self._resolver.resolve(TASK_TEXT_EMBEDDING)
         if target_ref.kind == "local":
             raise EmbeddingUnsupportedTargetError(
                 f"Embedding does not support local targets: {target_ref.target}"
             )
-        return (target_ref.provider_id, target_ref.model_id)
+        return self._space_identity(target_ref, options)
+
+    def resolve_model_id(self) -> tuple[str, str]:
+        """Return ``(provider_id, model_id)`` for the configured binding.
+
+        Compatibility projection of :meth:`resolve_space`; new callers that
+        persist vectors must use the full fingerprint. It raises the same
+        errors as :meth:`embed` for unconfigured or malformed bindings, but
+        never executes a request.
+        """
+
+        identity = self.resolve_space()
+        return (identity.provider_id, identity.model_id)
+
+    @staticmethod
+    def _space_identity(target_ref: Any, options: JsonObject) -> EmbeddingSpaceIdentity:
+        try:
+            encoded = json.dumps(
+                {
+                    "contract_version": _EMBEDDING_SPACE_CONTRACT_VERSION,
+                    "target": target_ref.target,
+                    "options": options,
+                },
+                ensure_ascii=False,
+                allow_nan=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        except (TypeError, ValueError) as error:
+            raise EmbeddingConfigurationError(
+                f"Embedding options cannot form a stable execution identity: {error}"
+            ) from error
+        return EmbeddingSpaceIdentity(
+            provider_id=target_ref.provider_id,
+            model_id=target_ref.model_id,
+            fingerprint=hashlib.sha256(encoded).hexdigest(),
+        )

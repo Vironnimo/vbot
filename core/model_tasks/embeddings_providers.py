@@ -2,8 +2,8 @@
 
 OpenAI-compatible embeddings POST ``/api/v1/embeddings`` with a single
 ``input`` string or an array of strings, return ``data[].embedding``
-floats in the same order as the request (sort/zip by ``index`` to be
-safe), and let callers pin ``encoding_format="float"`` and (Matryoshka)
+floats in the same order as the request (using a complete ``index`` mapping
+when supplied), and let callers pin ``encoding_format="float"`` and (Matryoshka)
 ``dimensions`` when the model supports it. The shape is verified
 against OpenRouter's :code:`/api/v1/embeddings` endpoint — the same
 shape the standard OpenAI platform endpoint returns — so the client
@@ -20,8 +20,13 @@ owns only the embeddings payload shape and response parsing.
 from __future__ import annotations
 
 import json
-from typing import Any
+import math
+from typing import Any, cast
 
+from core.model_tasks.options import (
+    TaskModelOptionValidationError,
+    validate_text_embedding_options,
+)
 from core.providers.errors import ProviderError
 from core.providers.task_client import ProviderTaskClient, merge_extra_options
 
@@ -34,6 +39,8 @@ _PAYLOAD_DETAIL_LIMIT = 500
 class ProviderEmbeddingClient(ProviderTaskClient):
     """OpenAI-compatible embedding HTTP client bound to one target."""
 
+    EXTRA_RETRYABLE_STATUS_CODES = frozenset({529})
+
     async def embed(self, inputs: list[str], *, options: JsonObject) -> list[list[float]]:
         """Call the provider's ``/api/v1/embeddings`` endpoint.
 
@@ -41,9 +48,9 @@ class ProviderEmbeddingClient(ProviderTaskClient):
         wire contract accepts a single string or an array, and we always
         pass an array so callers can batch. *options* is the merged
         task-model options dict; ``dimensions`` is forwarded when set as
-        a real value (empty placeholders are dropped so the provider
-        does not see a stray ``null``), and the ``extra_options`` escape
-        hatch merges last.
+        a positive integer, and the ``extra_options`` escape hatch may
+        add provider-specific fields but cannot override authored wire
+        fields.
         """
 
         payload = _build_embeddings_payload(self._model_id, inputs, options)
@@ -70,8 +77,8 @@ def _build_embeddings_payload(
     surface a base64 mode, and decoding base64 floats would complicate
     the recall store). ``dimensions`` is forwarded only when it carries
     a real value (Matryoshka models use it to truncate the embedding
-    length; the schema injects an empty default that we drop here so
-    non-Matryoshka models never see the field).
+    length; an absent/``None`` schema default is dropped so non-Matryoshka
+    models never see the field).
     """
 
     payload: JsonObject = {
@@ -79,11 +86,13 @@ def _build_embeddings_payload(
         "input": list(inputs),
         "encoding_format": "float",
     }
+    try:
+        validate_text_embedding_options(options)
+    except TaskModelOptionValidationError as error:
+        raise ProviderError(str(error), retryable=False) from error
     dimensions = options.get("dimensions")
-    if isinstance(dimensions, int) and not isinstance(dimensions, bool) and dimensions > 0:
+    if isinstance(dimensions, int) and not isinstance(dimensions, bool):
         payload["dimensions"] = dimensions
-    elif isinstance(dimensions, float) and not isinstance(dimensions, bool) and dimensions > 0:
-        payload["dimensions"] = int(dimensions)
     merge_extra_options(payload, options)
     return payload
 
@@ -119,7 +128,16 @@ def _parse_embeddings_response(payload: Any, *, expected_count: int) -> list[lis
             retryable=not has_error,
         )
 
-    indexed: list[tuple[int, list[float]]] = []
+    if expected_count <= 0:
+        raise ProviderError("Expected embedding count must be positive", retryable=False)
+    if len(data) != expected_count:
+        raise ProviderError(
+            f"Embeddings response returned {len(data)} vectors for {expected_count} inputs",
+            retryable=True,
+        )
+
+    indexed: list[tuple[int | None, list[float]]] = []
+    dimension: int | None = None
     for entry in data:
         if not isinstance(entry, dict):
             raise ProviderError(
@@ -133,20 +151,36 @@ def _parse_embeddings_response(payload: Any, *, expected_count: int) -> list[lis
                 "Embeddings response data entry is missing an embedding",
                 retryable=True,
             )
-        normalized_index = index if isinstance(index, int) else len(indexed)
+        if index is not None and (not isinstance(index, int) or isinstance(index, bool)):
+            raise ProviderError(
+                "Embeddings response data index must be an integer",
+                retryable=False,
+            )
         normalized_vector = _coerce_vector(embedding)
-        indexed.append((normalized_index, normalized_vector))
+        if dimension is None:
+            dimension = len(normalized_vector)
+        elif len(normalized_vector) != dimension:
+            raise ProviderError(
+                "Embeddings response vectors have inconsistent dimensions",
+                retryable=False,
+            )
+        indexed.append((index, normalized_vector))
 
-    indexed.sort(key=lambda pair: pair[0])
-    vectors = [vector for _, vector in indexed]
-
-    if expected_count and len(vectors) != expected_count:
-        # ``expected_count`` mismatches are a retryable shape problem —
-        # the next attempt may return a complete batch.
+    has_indices = [index is not None for index, _vector in indexed]
+    if any(has_indices) and not all(has_indices):
         raise ProviderError(
-            f"Embeddings response returned {len(vectors)} vectors for {expected_count} inputs",
-            retryable=True,
+            "Embeddings response mixes indexed and unindexed data entries",
+            retryable=False,
         )
+    if all(has_indices):
+        indices = [index for index, _vector in indexed]
+        if len(set(indices)) != len(indices) or set(indices) != set(range(expected_count)):
+            raise ProviderError(
+                "Embeddings response indices must map each input exactly once",
+                retryable=False,
+            )
+        indexed.sort(key=lambda pair: cast(int, pair[0]))
+    vectors = [vector for _, vector in indexed]
     return vectors
 
 
@@ -202,7 +236,13 @@ def _coerce_vector(raw: list[Any]) -> list[float]:
                 retryable=False,
             )
         if isinstance(value, (int, float)):
-            vector.append(float(value))
+            normalized = float(value)
+            if not math.isfinite(normalized):
+                raise ProviderError(
+                    "Embeddings response embedding contains a non-finite value",
+                    retryable=False,
+                )
+            vector.append(normalized)
             continue
         raise ProviderError(
             "Embeddings response embedding contains a non-numeric value",

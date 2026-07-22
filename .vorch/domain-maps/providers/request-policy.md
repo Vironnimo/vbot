@@ -44,7 +44,7 @@ Compatible Adapters resolve a positive output allowance in this order: explicit 
 
 - Chat Adapters construct HTTP clients through `_http_shared.build_async_client()` so timeouts and optional debug capture are consistent. Task clients deliberately use their separate shared client path and have no chat debug capture.
 - Chat generation uses bounded connect/write/pool timeouts and no read timeout; Chat's streaming-chunk timeout owns open-stream stalls.
-- HTTP 401/403 are fatal auth errors; 429 and 502/503/504 are retryable; concrete Providers can add verified codes such as Anthropic 529. Provider POST 500 is fatal. Retryable errors can carry parsed `Retry-After`, used as a capped floor over backoff.
+- HTTP 401/403 are fatal auth errors; 429 and 502/503/504 are retryable; concrete Adapters or task clients can add verified codes through their explicit extra-status policy (Anthropic and embedding task requests opt into 529). Provider POST 500 is fatal. Retryable errors can carry parsed `Retry-After`, used as a capped floor over backoff.
 - Every `httpx.TimeoutException` becomes retryable `ProviderTimeoutError`; other transport failures become retryable `NetworkError`. Malformed 2xx JSON and malformed SSE JSON become non-retryable `ProviderError` with the decode error chained.
 - Adapter retry covers request/stream establishment. Once streaming has begun, mid-stream failures propagate to Chat, which owns preservation/recovery. Only `ProviderStreamingUnsupportedError` triggers the nonstreaming fallback.
 - Authorization headers are rebuilt inside every retry attempt so OAuth refresh remains effective.
@@ -53,7 +53,7 @@ Compatible Adapters resolve a positive output allowance in this order: explicit 
 
 `ProviderTaskClient` is the shared HTTP base for speech, image, and embedding Provider clients. Its local structural Runtime/target Protocols avoid importing Runtime or `core/model_tasks/`. `from_runtime()` resolves the Connection and refresh-capable token getter; `post_and_parse()` puts request, status classification, and parsing inside `retry_async`, rebuilding headers per attempt.
 
-Task-specific payload/response semantics remain in `model_tasks.md` and its task references. `extra_options` is the common JSON escape hatch: non-empty entries override authored payload keys; empty placeholders are omitted while `0`, `0.0`, and `False` remain meaningful.
+Task-specific payload/response semantics remain in `model_tasks.md` and its task references. `extra_options` is the common JSON escape hatch: empty placeholders are omitted while `0`, `0.0`, and `False` remain meaningful. Most task wires let non-empty entries override authored fields; embeddings explicitly reserve identity/input/encoding/dimension fields and reject attempts to override them.
 
 ## Usage normalization
 

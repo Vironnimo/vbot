@@ -12,7 +12,7 @@ import pytest
 import sqlite_vec  # type: ignore[import-untyped]
 
 from core.chat import ChatMessage
-from core.model_tasks import EmbeddingError, EmbeddingResult
+from core.model_tasks import EmbeddingError, EmbeddingResult, EmbeddingSpaceIdentity
 from core.recall import (
     RecallBackendContext,
     RecallRequest,
@@ -72,12 +72,21 @@ class _StubEmbeddings:
         self.dimension = dimension
         self.provider_id = "openrouter"
         self.model_id = "stub-embed"
+        self.space_fingerprint = "stub-space-a"
         self.embed_calls: list[list[str]] = []
         self.resolve_calls = 0
 
     def resolve_model_id(self) -> tuple[str, str]:
         self.resolve_calls += 1
         return (self.provider_id, self.model_id)
+
+    def resolve_space(self) -> EmbeddingSpaceIdentity:
+        self.resolve_calls += 1
+        return EmbeddingSpaceIdentity(
+            provider_id=self.provider_id,
+            model_id=self.model_id,
+            fingerprint=self.space_fingerprint,
+        )
 
     async def embed(self, texts: list[str]) -> EmbeddingResult:
         self.embed_calls.append(list(texts))
@@ -87,6 +96,7 @@ class _StubEmbeddings:
             model_id=self.model_id,
             provider_id=self.provider_id,
             dimension=self.dimension,
+            space_fingerprint=self.space_fingerprint,
         )
 
     def _vector_for(self, text: str) -> list[float]:
@@ -183,11 +193,12 @@ def search_request(
     *,
     limit: int = 10,
     since: datetime | None = None,
+    session_id: str | None = None,
 ) -> RecallSearchRequest:
     return RecallSearchRequest(
         agent_id="coder",
         project_id=None,
-        session_id=None,
+        session_id=session_id,
         query=query,
         since=since,
         until=None,
@@ -253,6 +264,103 @@ async def test_typed_vector_search_prefilters_time_inside_knn(tmp_path: Path) ->
     page = await recall.search_page(search_request("fruit", since=datetime(2026, 5, 2, tzinfo=UTC)))
 
     assert [hit.session_id for hit in page.hits] == ["new"]
+
+
+async def test_typed_filtered_search_keeps_other_scope_sessions_indexed(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="one").append(
+        ChatMessage.user("banana fruit one", timestamp=timestamp(1))
+    )
+    sessions.create("coder", session_id="two").append(
+        ChatMessage.user("banana fruit two", timestamp=timestamp(2))
+    )
+    recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
+
+    await recall.search_page(search_request("fruit"))
+    assert set(recall._typed_store.list_indexed_sessions("coder")) == {"one", "two"}
+
+    page = await recall.search_page(search_request("fruit", session_id="one"))
+
+    assert {hit.session_id for hit in page.hits} == {"one"}
+    assert set(recall._typed_store.list_indexed_sessions("coder")) == {"one", "two"}
+
+
+async def test_typed_search_rebuilds_full_scope_on_native_dimension_change(
+    tmp_path: Path,
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    for session_id, day in (("one", 1), ("two", 2)):
+        sessions.create("coder", session_id=session_id).append(
+            ChatMessage.user(f"banana fruit {session_id}", timestamp=timestamp(day))
+        )
+    embeddings = _StubEmbeddings(dimension=4)
+    recall = backend(tmp_path, sessions, embeddings=embeddings)
+    await recall.search_page(search_request("fruit"))
+
+    embeddings.dimension = 6
+    page = await recall.search_page(search_request("fruit"))
+
+    assert {hit.session_id for hit in page.hits} == {"one", "two"}
+    header = recall._typed_store.read_header()
+    assert header is not None
+    assert header.dimension == 6
+    assert set(recall._typed_store.list_indexed_sessions("coder")) == {"one", "two"}
+
+
+async def test_typed_search_rebuilds_when_execution_fingerprint_changes(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="one").append(
+        ChatMessage.user("banana fruit", timestamp=timestamp(1))
+    )
+    embeddings = _StubEmbeddings()
+    recall = backend(tmp_path, sessions, embeddings=embeddings)
+    await recall.search_page(search_request("fruit"))
+    calls_before_switch = len(embeddings.embed_calls)
+
+    embeddings.space_fingerprint = "stub-space-b"
+    page = await recall.search_page(search_request("fruit"))
+
+    assert [hit.session_id for hit in page.hits] == ["one"]
+    assert len(embeddings.embed_calls) >= calls_before_switch + 2
+    header = recall._typed_store.read_header()
+    assert header is not None
+    assert header.space_fingerprint == "stub-space-b"
+
+
+async def test_typed_search_discards_corrupt_index_once_and_rebuilds(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="one").append(
+        ChatMessage.user("banana fruit", timestamp=timestamp(1))
+    )
+    recall = backend(tmp_path, sessions, embeddings=_StubEmbeddings())
+    await recall.search_page(search_request("fruit"))
+    recall._typed_store.path.write_bytes(b"not a sqlite database")
+
+    page = await recall.search_page(search_request("fruit"))
+
+    assert [hit.session_id for hit in page.hits] == ["one"]
+    assert recall._typed_store.read_header() is not None
+
+
+async def test_typed_and_legacy_search_use_separate_index_policies(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="one").append(
+        ChatMessage.user("banana fruit", timestamp=timestamp(1))
+    )
+    embeddings = _StubEmbeddings()
+    recall = backend(tmp_path, sessions, embeddings=embeddings)
+
+    await recall.search(request(query="fruit"))
+    legacy_calls = len(embeddings.embed_calls)
+    typed_page = await recall.search_page(search_request("fruit"))
+
+    assert [hit.session_id for hit in typed_page.hits] == ["one"]
+    assert recall.store.path != recall._typed_store.path
+    legacy_header = recall.store.read_header()
+    typed_header = recall._typed_store.read_header()
+    assert legacy_header is not None and typed_header is not None
+    assert legacy_header.index_policy != typed_header.index_policy
+    assert len(embeddings.embed_calls) >= legacy_calls + 2
 
 
 async def test_vector_backend_ranks_semantically_nearest_sessions(tmp_path: Path) -> None:

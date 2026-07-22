@@ -111,6 +111,8 @@ class TaskTargetRef(Protocol):
 class ProviderTaskClient:
     """Base HTTP client bound to one resolved provider task target."""
 
+    EXTRA_RETRYABLE_STATUS_CODES: frozenset[int] = frozenset()
+
     def __init__(
         self,
         *,
@@ -184,7 +186,10 @@ class ProviderTaskClient:
                     # protocol, proxy, connect) the way the chat adapters do, so
                     # a flaky read is retried instead of escaping unwrapped.
                     raise wrap_network_error(exc) from exc
-                classify_task_response(response)
+                classify_task_response(
+                    response,
+                    extra_retryable_status_codes=self.EXTRA_RETRYABLE_STATUS_CODES,
+                )
                 return parse(response)
 
         return await retry_async(_do_request)
@@ -205,12 +210,17 @@ class ProviderTaskClient:
         return self._headers_from_credential(await self._credential_value())
 
 
-def classify_task_response(response: httpx.Response) -> None:
+def classify_task_response(
+    response: httpx.Response,
+    *,
+    extra_retryable_status_codes: frozenset[int] = frozenset(),
+) -> None:
     """Classify a task HTTP response, including body detail on error."""
 
     detail = response.text if response.status_code >= 400 else ""
     classify_http_status(
         response.status_code,
+        extra_retryable=set(extra_retryable_status_codes),
         detail=f"{response.status_code} {detail}".strip() if detail else str(response.status_code),
         response_headers=response.headers,
     )
