@@ -97,6 +97,7 @@ def test_register_edit_tool_exposes_provider_schema() -> None:
     assert parameters["required"] == ["path", "old_string", "new_string"]
     assert parameters["additionalProperties"] is False
     assert set(parameters["properties"]) == {"path", "old_string", "new_string", "replace_all"}
+    assert "surrounding text" in parameters["properties"]["old_string"]["description"]
     assert "filePath" not in parameters["properties"]
 
 
@@ -306,8 +307,35 @@ def test_edit_returns_ambiguous_match_without_replace_all(tmp_path: Path) -> Non
     )
 
     error = assert_failure_envelope(result, "ambiguous_match")
-    assert "Found 2 occurrences" in error["message"]
+    assert "Found 2 occurrences on lines 1, 3" in error["message"]
+    assert "Raw candidate contexts" in error["message"]
+    assert "Candidate 1 (around line 1):\nsame\nother" in error["message"]
+    assert "Candidate 2 (around line 3):\nother\nsame" in error["message"]
     assert target.read_text(encoding="utf-8") == "same\nother\nsame\n"
+
+
+def test_edit_bounds_ambiguous_candidate_contexts(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "notes.txt"
+    long_line = "x" * 200
+    target.write_text(
+        f"same\n{long_line}\nsame\nmiddle\nsame\nother\nsame\n",
+        encoding="utf-8",
+    )
+
+    result = edit_handler(
+        make_context(workspace),
+        {"path": "notes.txt", "old_string": "same", "new_string": "changed"},
+    )
+
+    error = assert_failure_envelope(result, "ambiguous_match")
+    assert "Showing the first 3 of 4 candidates" in error["message"]
+    assert "Candidate 3" in error["message"]
+    assert "Candidate 4" not in error["message"]
+    assert "x" * 160 not in error["message"]
+    assert "x" * 157 + "..." in error["message"]
+    assert target.read_text(encoding="utf-8").count("same") == 4
 
 
 def test_edit_replaces_ambiguous_matches_with_replace_all(tmp_path: Path) -> None:

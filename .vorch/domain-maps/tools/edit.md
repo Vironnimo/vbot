@@ -14,7 +14,7 @@ Replaces text inside an existing file, matching `old_string` with controlled fuz
 
 - Use `edit` for surgical changes to existing files; use `write` for full-file replacement or creation.
 - `old_string` must be non-empty and different from `new_string`.
-- Without `replace_all: true`, `old_string` must match uniquely (the winning strategy's own ambiguity is terminal — it does not fall through to a looser one).
+- Without `replace_all: true`, `old_string` must match uniquely (the winning strategy's own ambiguity is terminal — it does not fall through to a looser one). The model-facing contract tells callers to include an unchanged neighboring line or heading when a line may repeat.
 
 ## Matching (fuzzy)
 
@@ -26,5 +26,6 @@ Replaces text inside an existing file, matching `old_string` with controlled fuz
 
 - **Read-before-write guard** (shared with `write`, see `file_state.md`): the edit is **blocked** (failure envelope) when the file was not read in this session (`file_not_read`) or its `(mtime, size)` changed on disk since the read (`file_modified_since_read`). The check runs right after the exists/is-file checks, before the content is read for matching; a successful edit restamps the file so the same session can edit again without re-reading. This is a hard block, separate from the fuzzy match and the (non-blocking) syntax check.
 - Missing text, ambiguous matches, validation failures, and expected filesystem errors return failure envelopes.
+- An `ambiguous_match` remains a hard no-write result and reports the occurrence count plus at most three raw candidate contexts. Each candidate includes the matched line and one neighboring line on either side, omits read's line-number gutter so its text can be reused safely, and truncates individual context lines at 160 characters; additional candidates are summarized rather than emitted without bound.
 - `new_string` dominated by read's `N|` line-number gutter is rejected with a `line_numbered_content` failure (it would write line-number prefixes into the file). When a not-found `old_string` itself carries the gutter, the `text_not_found` message points at the gutter rather than generic whitespace advice. Shared detector: `looks_like_line_numbered_content` in `core/tools/arguments.py`.
 - After a successful edit, the result is syntax-checked in-process by extension (`.py`/`.json`/`.yaml`/`.yml`/`.toml`). It is non-blocking (the edit is already written) and surfaced as `data.syntax_warning`. The file is parsed both before and after, so a pre-existing syntax error is never blamed on the edit — the message then says the file "was already syntactically invalid". Logic in `core/tools/syntax_check.py`.
