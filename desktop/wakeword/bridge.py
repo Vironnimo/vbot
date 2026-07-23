@@ -122,6 +122,7 @@ class DesktopBridge:
         mock: bool = False,
         mode: str = "real",
         model_catalog: Any = None,
+        speech_readiness_checker: Callable[[str], str | None] | None = None,
     ) -> None:
         self._settings_path = settings_path
         self._worker = worker
@@ -138,6 +139,7 @@ class DesktopBridge:
         self._model_catalog = (
             model_catalog if model_catalog is not None else WakewordModelCatalog(settings_path)
         )
+        self._speech_readiness_checker = speech_readiness_checker
         self._state = _WAKEWORD_STATE_OFF
         self._error_code: str | None = None
         self._active_microphone: dict[str, Any] | None = None
@@ -245,9 +247,15 @@ class DesktopBridge:
 
     # -- Actions from WebUI --------------------------------------------------
 
-    def setWakewordEnabled(self, enabled: bool) -> None:  # noqa: N802
+    def setWakewordEnabled(self, enabled: bool) -> dict[str, Any]:  # noqa: N802
         """Enable or disable wakeword listening."""
         enabled = bool(enabled)
+        if enabled and not self._mock and self._speech_readiness_checker is not None:
+            readiness_error = self._speech_readiness_checker(self.server_url)
+            if readiness_error is not None:
+                logger.warning("Wakeword activation rejected (reason=%s)", readiness_error)
+                self.publish_state(_WAKEWORD_STATE_ERROR, readiness_error)
+                return {"enabled": False, "error_code": readiness_error}
         with self._lock:
             config = read_wakeword_settings(self._settings_path)
             config["enabled"] = enabled
@@ -257,6 +265,7 @@ class DesktopBridge:
         else:
             self._stop_worker()
             self.publish_state(_WAKEWORD_STATE_OFF)
+        return {"enabled": enabled, "error_code": None}
 
     def setWakewordConfig(self, config: dict[str, Any]) -> None:  # noqa: N802
         """Apply a partial wakeword configuration update from the WebUI."""

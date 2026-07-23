@@ -1388,6 +1388,14 @@ export const englishCatalog = Object.freeze({
     'Voice is running in demo mode. State changes are simulated; no microphone is heard and no command is sent. Restart Desktop without --mock-wakeword for real detection.',
   'settings.voice.cancelPhrases':
     'Say “abbrechen” or “vergiss es” at the end of the same recording to discard the entire command before it starts a Run.',
+  'settings.voice.error.serverUnreachable':
+    'Voice could not reach the active server. Check the Desktop connection and try again.',
+  'settings.voice.error.speechToTextUnconfigured':
+    'Configure a Speech-to-text Model under Settings → Models before enabling wakeword listening.',
+  'settings.voice.error.speechToTextUnavailable':
+    'The configured Speech-to-text Model is not currently usable. Check its Provider connection or choose another Model under Settings → Models.',
+  'settings.voice.error.speechToTextReadiness':
+    'Voice could not verify the Speech-to-text configuration. Check the Desktop log and try again.',
 
   'voice.state.off': 'Disabled',
   'voice.state.starting': 'Starting',
@@ -1414,6 +1422,16 @@ export const englishCatalog = Object.freeze({
   'voice.mic.tooltip.noSpeech': 'No speech heard',
   'voice.mic.tooltip.transcriptionFailed': 'Voice command was not understood',
   'voice.mic.tooltip.error': 'Voice error',
+  'voice.toast.sentTitle': 'Voice command sent',
+  'voice.toast.noSpeechTitle': 'No speech heard',
+  'voice.toast.noSpeechMessage':
+    'No command followed the wakeword. Try again and speak after the cue.',
+  'voice.toast.transcriptionFailedTitle':
+    'Voice command could not be transcribed',
+  'voice.toast.transcriptionFailedMessage':
+    'Check the Speech-to-text Model and the Desktop log, then try again.',
+  'voice.toast.errorMessage':
+    'Open Voice settings for details. The failure was written to the Desktop log.',
 
   'statistics.eyebrow': 'Usage & activity',
   'statistics.title': 'Statistics',

@@ -283,15 +283,22 @@ describe('setWakewordEnabled', () => {
         api: {
           setWakewordEnabled: (val) => {
             enabledCalls.push(val);
+            return { enabled: val, error_code: null };
           },
         },
       },
     };
 
-    await setWakewordEnabled(true);
+    await expect(setWakewordEnabled(true)).resolves.toEqual({
+      enabled: true,
+      error_code: null,
+    });
     expect(enabledCalls).toEqual([true]);
 
-    await setWakewordEnabled(false);
+    await expect(setWakewordEnabled(false)).resolves.toEqual({
+      enabled: false,
+      error_code: null,
+    });
     expect(enabledCalls).toEqual([true, false]);
   });
 });

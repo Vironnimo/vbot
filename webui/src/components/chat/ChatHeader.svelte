@@ -100,6 +100,9 @@
   }
 
   function computeMicDotClass(status) {
+    if (status?.state === 'error') {
+      return 'mic-dot--error';
+    }
     if (!status?.enabled) {
       return 'mic-dot--off';
     }
@@ -128,6 +131,9 @@
   }
 
   function computeMicTooltip(status) {
+    if (status?.state === 'error') {
+      return t('voice.mic.tooltip.error', 'Voice error');
+    }
     if (!status?.enabled) {
       return t('voice.mic.tooltip.off', 'Wakeword disabled');
     }
@@ -162,6 +168,9 @@
   }
 
   function compactMicStatus(status) {
+    if (status?.state === 'error') {
+      return t('voice.state.error', 'Voice error');
+    }
     if (!status?.enabled) return '';
     switch (status.state) {
       case 'wakeword_detected':

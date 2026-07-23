@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -166,6 +167,24 @@ def test_desktop_main_keeps_out_of_server_lifecycle_management() -> None:
     assert "server start" not in source.lower()
     assert "server stop" not in source.lower()
     assert "server restart" not in source.lower()
+
+
+def test_desktop_logging_writes_structured_daily_file(tmp_path: Path) -> None:
+    handler = desktop_main.configure_desktop_logging(tmp_path)
+    assert handler is not None
+    try:
+        logging.getLogger("vbot.desktop.wakeword.worker").warning(
+            "Wakeword worker stopped (reason=speech_to_text_unconfigured)"
+        )
+        handler.flush()
+
+        log_files = list((tmp_path / "logs").glob("*.log"))
+        assert len(log_files) == 1
+        content = log_files[0].read_text(encoding="utf-8")
+        assert "[WARN] vbot.desktop.wakeword.worker" in content
+        assert "reason=speech_to_text_unconfigured" in content
+    finally:
+        desktop_main.close_desktop_logging(handler)
 
 
 # -- Probe classification ----------------------------------------------------

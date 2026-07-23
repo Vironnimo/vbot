@@ -118,6 +118,30 @@ describe('WakewordVoiceSettings', () => {
     expect(buttonByText('Save')).toBeUndefined();
   });
 
+  it('keeps Wakeword disabled and shows the STT requirement when activation is rejected', async () => {
+    desktopBridge.getWakewordStatus.mockResolvedValue({
+      ...baseStatus(),
+      target_agent_id: 'main',
+    });
+    desktopBridge.setWakewordEnabled.mockResolvedValue({
+      enabled: false,
+      error_code: 'speech_to_text_unconfigured',
+    });
+    await mountPanel();
+
+    switchByLabel('Enable wakeword listening').click();
+    await settle();
+
+    expect(desktopBridge.setWakewordEnabled).toHaveBeenCalledWith(true);
+    expect(
+      switchByLabel('Enable wakeword listening').getAttribute('aria-checked'),
+    ).toBe('false');
+    expect(document.body.textContent).toContain('Voice needs attention');
+    expect(document.body.textContent).toContain(
+      'Configure a Speech-to-text Model',
+    );
+  });
+
   it('starts with Okay Nabu and Hey Nabu active together', async () => {
     await mountPanel();
 
@@ -227,10 +251,10 @@ describe('WakewordVoiceSettings', () => {
     expect(desktopBridge.setWakewordConfig).not.toHaveBeenCalled();
   });
 
-  async function mountPanel() {
+  async function mountPanel(props = {}) {
     mountedComponent = mount(WakewordVoiceSettings, {
       target: document.body,
-      props: { agents: [{ id: 'main', name: 'Main' }] },
+      props: { agents: [{ id: 'main', name: 'Main' }], ...props },
     });
     flushSync();
     await settle();

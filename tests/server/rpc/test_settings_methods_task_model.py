@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from core.model_tasks import TaskModelError
 from server.rpc.methods import dispatch_rpc
 
 
@@ -52,6 +53,38 @@ async def test_task_model_update_validates_payload() -> None:
     assert result["error"]["code"] == "invalid_request"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured", "usable"),
+    [
+        (False, False),
+        (True, False),
+        (True, True),
+    ],
+)
+async def test_task_model_status_reports_live_binding_readiness(
+    configured: bool,
+    usable: bool,
+) -> None:
+    state = SimpleNamespace(
+        runtime=SimpleNamespace(model_tasks=_StatusModelTasks(configured=configured, usable=usable))
+    )
+
+    result = await dispatch_rpc(
+        state,
+        {"method": "task_model.status", "params": {"task_type": "speech_to_text"}},
+    )
+
+    assert result == {
+        "ok": True,
+        "result": {
+            "task_type": "speech_to_text",
+            "configured": configured,
+            "usable": usable,
+        },
+    }
+
+
 class _Target:
     def to_dict(self) -> dict[str, object]:
         return {
@@ -74,3 +107,17 @@ class _ModelTasks:
 
     def update(self, model_tasks: object) -> object:
         return model_tasks
+
+
+class _StatusModelTasks:
+    def __init__(self, *, configured: bool, usable: bool) -> None:
+        self._configured = configured
+        self._usable = usable
+
+    def binding_for(self, _task_type: str) -> object:
+        if not self._configured:
+            raise TaskModelError("No task model configured")
+        return object()
+
+    def binding_is_usable(self, _task_type: str) -> bool:
+        return self._usable

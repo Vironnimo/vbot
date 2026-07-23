@@ -105,6 +105,22 @@
         'settings.voice.error.noServer',
         'Voice has no active server. Connect the Desktop app to a server and try again.',
       ),
+      server_unreachable: t(
+        'settings.voice.error.serverUnreachable',
+        'Voice could not reach the active server. Check the Desktop connection and try again.',
+      ),
+      speech_to_text_unconfigured: t(
+        'settings.voice.error.speechToTextUnconfigured',
+        'Configure a Speech-to-text Model under Settings → Models before enabling wakeword listening.',
+      ),
+      speech_to_text_unavailable: t(
+        'settings.voice.error.speechToTextUnavailable',
+        'The configured Speech-to-text Model is not currently usable. Check its Provider connection or choose another Model under Settings → Models.',
+      ),
+      speech_to_text_readiness_failed: t(
+        'settings.voice.error.speechToTextReadiness',
+        'Voice could not verify the Speech-to-text configuration. Check the Desktop log and try again.',
+      ),
       missing_target_agent: t(
         'settings.voice.error.missingTarget',
         'Choose a Personal Agent for this server before enabling wakeword listening.',
@@ -216,10 +232,15 @@
     const enabled = !voiceState.enabled;
     voiceState = { ...voiceState, enabled };
     try {
-      await setWakewordEnabled(enabled);
+      const result = await setWakewordEnabled(enabled);
+      const acceptedEnabled =
+        typeof result?.enabled === 'boolean' ? result.enabled : enabled;
+      const errorCode =
+        typeof result?.error_code === 'string' ? result.error_code : null;
       voiceState = applyWakewordStatus(voiceState, {
-        enabled,
-        state: enabled ? 'starting' : 'off',
+        enabled: acceptedEnabled,
+        state: errorCode ? 'error' : acceptedEnabled ? 'starting' : 'off',
+        error_code: errorCode,
       });
       lastSaved = snapshotVoiceSettings(voiceState);
     } catch (error) {
@@ -498,7 +519,7 @@
             )}
           </p>
         </div>
-        {#if voiceState.errorCode !== 'missing_target_agent' && voiceState.errorCode !== 'target_agent_unavailable' && voiceState.mode !== 'unavailable'}
+        {#if voiceState.errorCode !== 'missing_target_agent' && voiceState.errorCode !== 'target_agent_unavailable' && voiceState.errorCode !== 'speech_to_text_unconfigured' && voiceState.mode !== 'unavailable'}
           <Button variant="secondary" class="voice-retry" onClick={handleRetry}>
             {t('settings.voice.retry', 'Retry listening')}
           </Button>

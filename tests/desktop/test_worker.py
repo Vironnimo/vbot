@@ -8,6 +8,7 @@ import time
 import types
 import wave
 from collections.abc import Callable
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -158,6 +159,23 @@ class SequenceEngine:
 @pytest.fixture
 def fake_bridge() -> FakeBridge:
     return FakeBridge()
+
+
+@pytest.fixture(autouse=True)
+def ready_speech_to_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Callable[..., str | None]:
+    """Keep existing worker-state tests independent from a real server."""
+
+    from desktop.wakeword import worker as worker_module
+
+    original_checker = worker_module.check_speech_to_text_readiness
+    monkeypatch.setattr(
+        worker_module,
+        "check_speech_to_text_readiness",
+        lambda _server_url: None,
+    )
+    return original_checker
 
 
 def _make_silence_chunk(samples: int = 1280) -> bytes:
@@ -500,6 +518,69 @@ def test_worker_start_fails_fast_without_target_agent(fake_bridge: FakeBridge) -
     assert fake_bridge.errors[-1] == "missing_target_agent"
     assert not worker.is_running()
     engine.start.assert_not_called()
+
+
+def test_worker_start_fails_before_engine_or_microphone_without_speech_to_text(
+    fake_bridge: FakeBridge,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from desktop.wakeword.worker import WakewordWorker
+
+    engine = MagicMock()
+    worker = WakewordWorker(
+        engine=engine,
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+        speech_readiness_checker=lambda _server_url: "speech_to_text_unconfigured",
+    )
+    worker._read_config = lambda: {"target_agent_id": "main"}  # type: ignore[method-assign]
+    worker._target_agent_available = MagicMock(return_value=True)  # type: ignore[assignment,method-assign]
+    worker._open_stream = MagicMock()  # type: ignore[method-assign]
+    worker._running.set()
+
+    with caplog.at_level("WARNING", logger="vbot.desktop.wakeword.worker"):
+        worker._run()
+
+    assert fake_bridge.states == ["error"]
+    assert fake_bridge.errors == ["speech_to_text_unconfigured"]
+    assert "speech_to_text_unconfigured" in caplog.text
+    engine.start.assert_not_called()
+    worker._open_stream.assert_not_called()
+    worker._target_agent_available.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        ({"configured": False, "usable": False}, "speech_to_text_unconfigured"),
+        ({"configured": True, "usable": False}, "speech_to_text_unavailable"),
+        ({"configured": True, "usable": True}, None),
+    ],
+)
+def test_speech_to_text_readiness_uses_server_task_model_status(
+    result: dict[str, bool],
+    expected: str | None,
+    ready_speech_to_text: Callable[..., str | None],
+) -> None:
+    class Response:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict[str, object]:
+            return {"ok": True, "result": result}
+
+    calls: list[tuple[str, dict[str, object], float]] = []
+
+    def post(url: str, *, json: dict[str, object], timeout: float) -> Any:
+        calls.append((url, json, timeout))
+        return Response()
+
+    assert ready_speech_to_text("http://pi.lan:8420/", post=post) == expected
+    assert calls[0][0] == "http://pi.lan:8420/api/rpc"
+    assert calls[0][1] == {
+        "method": "task_model.status",
+        "params": {"task_type": "speech_to_text"},
+    }
 
 
 def test_worker_stop_during_target_validation_never_opens_engine(
