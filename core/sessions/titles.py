@@ -31,10 +31,10 @@ if TYPE_CHECKING:
 _LOGGER = get_logger("sessions.titles")
 
 LOCAL_TITLE_MAX_CHARACTERS = 40
+GENERATED_TITLE_MAX_CHARACTERS = 60
 TITLE_INPUT_HEAD_BYTES = 3 * 1024
 TITLE_INPUT_TAIL_BYTES = 2 * 1024
 TITLE_ATTACHMENT_METADATA_MAX_BYTES = 1024
-TITLE_MAX_OUTPUT_TOKENS = 32
 TITLE_OMISSION_MARKER = "\n\n[large middle section omitted]\n\n"
 _SUBAGENT_SESSION_METADATA_FLAG = "is_subagent_session"
 _HIDDEN_REASONING_BLOCK_PATTERN = re.compile(
@@ -64,12 +64,11 @@ _META_TITLE_PATTERNS = (
 )
 
 TITLE_SYSTEM_PROMPT = (
-    "Create one concise display title for this chat Session from the first user message. "
-    "Name the requested work or topic directly, not your response or the interaction. Use the "
-    "user's language. Aim for 40 characters or fewer, exceeding that only when clarity "
-    "requires it. Your entire response must be only the title as one plain-text line, without "
-    "quotes, Markdown, a label, or ending punctuation. Never output analysis or reasoning. "
-    "Good: Login failure investigation. Bad: The user is asking me to investigate login failures."
+    "Your sole job is to create a title for a chat Session based on its first user message. "
+    "The soft cap is 40 characters; exceed it only when clarity requires it. The absolute "
+    "maximum is 60 characters. Your entire response must be only the title in plain text on "
+    "a single line, with no quotes, no leading 'Title:', and no Markdown. Good title: Login "
+    "failure investigation. Bad title: The user is asking me to investigate login failures."
 )
 
 
@@ -211,7 +210,6 @@ class SessionTitleService:
                 model_id=model_id,
                 temperature=0.0,
                 thinking_effort="none",
-                max_tokens=TITLE_MAX_OUTPUT_TOKENS,
             )
             normalized = adapter.normalize_response(response, model_id=model_id)
             title = _generated_title(normalized)
@@ -348,6 +346,10 @@ def _generated_title(response: dict[str, Any]) -> str:
         raise ValueError("Session title response was empty")
     if any(pattern.search(line) for pattern in _META_TITLE_PATTERNS):
         raise ValueError("Session title response described the naming task instead of the topic")
+    if len(line) > GENERATED_TITLE_MAX_CHARACTERS:
+        raise ValueError(
+            f"Session title response exceeded {GENERATED_TITLE_MAX_CHARACTERS} characters"
+        )
     return line
 
 
