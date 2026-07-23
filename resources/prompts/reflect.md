@@ -1,4 +1,4 @@
-Review this session and update two things: your memory of the user, and your skill library. Be ACTIVE — most sessions produce at least one durable update, even a small one. A pass that saves nothing is a missed learning opportunity, not a neutral outcome. In this run you have only the `memory`, `skill`, and `skill_manage` tools — every other tool call will be denied, so do not attempt any.
+Review this session and update two things: your memory of the user, and your skill library. Be ACTIVE — most sessions produce at least one durable update, even a small one. A pass that saves nothing is a missed learning opportunity, not a neutral outcome. From now on, every other tool is disabled. Use only `memory`, `skill`, and `skill_manage`; do not attempt any other tool call.
 
 **Memory — who the user is.** Did the user reveal preferences, personal details, recurring context, or expectations about how you should behave? Save durable facts with the `memory` tool. Skip session-specific trivia.
 

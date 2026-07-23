@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
 from core.automation.reflection import (
+    COUNTER_GENERATION_KEY,
     REFLECTION_COUNTERS_META_KEY,
     REFLECTION_TOOL_RESTRICTION,
     ReflectionService,
@@ -36,8 +38,11 @@ class _FakeRun:
         self.project_id = project_id
         self.tool_call_count = tool_call_count
         self._final_content = final_content
+        self.wait_gate: asyncio.Event | None = None
 
     async def wait(self) -> Any:
+        if self.wait_gate is not None:
+            await self.wait_gate.wait()
         return SimpleNamespace(content=self._final_content)
 
 
@@ -82,12 +87,17 @@ class _FakeLoop:
         self.started: list[dict[str, Any]] = []
         self.final_content = "Saved a memory about the user."
         self.raise_on_start: Exception | None = None
+        self.wait_gate: asyncio.Event | None = None
+        self.run_started = asyncio.Event()
 
     async def start_run(self, agent_id: str, content: str, **kwargs: Any) -> _FakeRun:
         if self.raise_on_start is not None:
             raise self.raise_on_start
         self.started.append({"agent_id": agent_id, "message": content, **kwargs})
-        return _FakeRun(final_content=self.final_content)
+        run = _FakeRun(final_content=self.final_content)
+        run.wait_gate = self.wait_gate
+        self.run_started.set()
+        return run
 
 
 def _make_service(
@@ -114,7 +124,16 @@ def _make_service(
 
 
 def _counters(sessions: _FakeSessions, session_id: str = "s1") -> dict[str, int]:
-    return cast("dict[str, int]", sessions.metadata[session_id][REFLECTION_COUNTERS_META_KEY])
+    raw = cast("dict[str, int]", sessions.metadata[session_id][REFLECTION_COUNTERS_META_KEY])
+    return {
+        "turns_since_memory_review": raw["turns_since_memory_review"],
+        "tool_calls_since_skill_review": raw["tool_calls_since_skill_review"],
+    }
+
+
+def _counter_generation(sessions: _FakeSessions, session_id: str = "s1") -> int:
+    raw = cast("dict[str, int]", sessions.metadata[session_id][REFLECTION_COUNTERS_META_KEY])
+    return raw[COUNTER_GENERATION_KEY]
 
 
 def _identity_agent() -> Any:
@@ -322,7 +341,7 @@ async def test_in_flight_guard_skips_review_but_keeps_counters() -> None:
 
 
 @pytest.mark.asyncio
-async def test_failed_review_releases_the_guard_and_costs_the_cycle(
+async def test_failed_review_releases_guard_and_keeps_cycle_due_for_next_run(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     service, sessions, loop = _make_service(memory_turn_interval=1)
@@ -334,13 +353,67 @@ async def test_failed_review_releases_the_guard_and_costs_the_cycle(
     await _drain(service)
 
     assert "main" not in service._agents_in_review
-    # Counter was reset at trigger time — a failed review costs the cycle.
-    assert _counters(sessions)["turns_since_memory_review"] == 0
+    assert _counters(sessions)["turns_since_memory_review"] == 1
     assert any(
         "Reflection review failed" in record.getMessage()
         for record in caplog.records
         if record.name == "vbot.automation.reflection"
     )
+
+    loop.raise_on_start = None
+    service.notify_run_end(
+        cast("Any", _FakeRun()), _identity_agent(), internal=False, outcome="success"
+    )
+    await _drain(service)
+
+    assert len(loop.started) == 1
+    assert _counters(sessions)["turns_since_memory_review"] == 0
+
+
+@pytest.mark.asyncio
+async def test_successful_review_preserves_activity_recorded_while_it_runs() -> None:
+    service, sessions, loop = _make_service(memory_turn_interval=1)
+    loop.wait_gate = asyncio.Event()
+
+    service.notify_run_end(
+        cast("Any", _FakeRun()), _identity_agent(), internal=False, outcome="success"
+    )
+    await loop.run_started.wait()
+
+    service.notify_run_end(
+        cast("Any", _FakeRun()), _identity_agent(), internal=False, outcome="success"
+    )
+    await asyncio.sleep(0)
+    assert _counters(sessions)["turns_since_memory_review"] == 2
+
+    loop.wait_gate.set()
+    await _drain(service)
+
+    assert _counters(sessions)["turns_since_memory_review"] == 1
+
+
+@pytest.mark.asyncio
+async def test_manual_reset_during_review_preserves_activity_after_reset() -> None:
+    service, sessions, loop = _make_service(memory_turn_interval=1)
+    loop.wait_gate = asyncio.Event()
+
+    service.notify_run_end(
+        cast("Any", _FakeRun()), _identity_agent(), internal=False, outcome="success"
+    )
+    await loop.run_started.wait()
+
+    service.reset_counters("main", "s1")
+    service.notify_run_end(
+        cast("Any", _FakeRun()), _identity_agent(), internal=False, outcome="success"
+    )
+    await asyncio.sleep(0)
+    assert _counters(sessions)["turns_since_memory_review"] == 1
+
+    loop.wait_gate.set()
+    await _drain(service)
+
+    assert _counters(sessions)["turns_since_memory_review"] == 1
+    assert _counter_generation(sessions) == 1
 
 
 # --- run_review orchestration --------------------------------------------------
@@ -389,6 +462,7 @@ async def test_reset_counters_zeroes_both_dimensions() -> None:
         "turns_since_memory_review": 0,
         "tool_calls_since_skill_review": 0,
     }
+    assert _counter_generation(sessions) == 1
 
 
 def test_cadence_instruction_shapes() -> None:
@@ -397,3 +471,11 @@ def test_cadence_instruction_shapes() -> None:
     skill_note = _cadence_instruction(False, True)
     assert memory_note is not None and "memory cadence" in memory_note
     assert skill_note is not None and "skill cadence" in skill_note
+
+
+def test_real_reflection_prompt_explicitly_disables_every_other_tool() -> None:
+    prompt_path = Path(__file__).parents[3] / "resources" / "prompts" / "reflect.md"
+    prompt = prompt_path.read_text(encoding="utf-8")
+
+    assert "every other tool is disabled" in prompt
+    assert "Use only `memory`, `skill`, and `skill_manage`" in prompt

@@ -12,7 +12,8 @@ The reflection service owns two halves of one capability:
    the session metadata sidecar (user turns since the last memory review, tool
    calls since the last skill review), incremented at the end of every
    successful visible run of an identity agent. When a threshold is reached,
-   one review run fires in the background and the due counters reset.
+   one review run fires in the background. A successful review consumes the
+   due counts it covered; a failed review leaves them due for the next run.
 
 The chat loop notifies this service at run end through the small
 ``ReflectionNotifier`` protocol it owns; everything with I/O happens in a
@@ -46,6 +47,9 @@ REFLECTION_TOOL_RESTRICTION = ("memory", "skill", "skill_manage")
 REFLECTION_COUNTERS_META_KEY = "reflection_counters"
 TURNS_SINCE_MEMORY_REVIEW_KEY = "turns_since_memory_review"
 TOOL_CALLS_SINCE_SKILL_REVIEW_KEY = "tool_calls_since_skill_review"
+# A manual reset advances this generation so a concurrent background review
+# cannot consume activity recorded after that reset.
+COUNTER_GENERATION_KEY = "generation"
 # Display title stamped onto review forks so they are recognizable in the
 # session list (a fork would otherwise inherit the source session's title).
 REFLECTION_FORK_TITLE = "Reflection"
@@ -124,21 +128,16 @@ class ReflectionService:
         tool_calls = _non_negative_int(counters.get(TOOL_CALLS_SINCE_SKILL_REVIEW_KEY)) + max(
             tool_call_count, 0
         )
+        counter_generation = _non_negative_int(counters.get(COUNTER_GENERATION_KEY))
         memory_due = turns >= settings["memory_turn_interval"]
         skill_due = tool_calls >= settings["skill_tool_call_interval"]
         # One review at a time per agent: a due session while a review is already
         # running keeps its counters and re-checks on its next run end.
         should_review = (memory_due or skill_due) and agent_id not in self._agents_in_review
-        if should_review:
-            # Reset only the due dimensions, before the review starts: a failed
-            # review deliberately costs the cycle instead of retry-looping.
-            if memory_due:
-                turns = 0
-            if skill_due:
-                tool_calls = 0
         metadata[REFLECTION_COUNTERS_META_KEY] = {
             TURNS_SINCE_MEMORY_REVIEW_KEY: turns,
             TOOL_CALLS_SINCE_SKILL_REVIEW_KEY: tool_calls,
+            COUNTER_GENERATION_KEY: counter_generation,
         }
         sessions.set_metadata(agent_id, session_id, metadata, project_id)
         if not should_review:
@@ -161,6 +160,14 @@ class ReflectionService:
                 project_id=project_id,
                 extra_instruction=_cadence_instruction(memory_due, skill_due),
             )
+            self._consume_reviewed_counters(
+                agent_id,
+                session_id,
+                project_id=project_id,
+                counter_generation=counter_generation,
+                reviewed_turns=turns if memory_due else 0,
+                reviewed_tool_calls=tool_calls if skill_due else 0,
+            )
             _LOGGER.info(
                 "Reflection review completed (agent=%s fork=%s): %s",
                 agent_id,
@@ -176,6 +183,33 @@ class ReflectionService:
             )
         finally:
             self._agents_in_review.discard(agent_id)
+
+    def _consume_reviewed_counters(
+        self,
+        agent_id: str,
+        session_id: str,
+        *,
+        project_id: str | None,
+        counter_generation: int,
+        reviewed_turns: int,
+        reviewed_tool_calls: int,
+    ) -> None:
+        """Consume only counts covered by a successful background review."""
+        sessions = self._runtime.chat_sessions
+        metadata = sessions.get_metadata(agent_id, session_id, project_id)
+        raw_counters = metadata.get(REFLECTION_COUNTERS_META_KEY)
+        counters = raw_counters if isinstance(raw_counters, dict) else {}
+        current_generation = _non_negative_int(counters.get(COUNTER_GENERATION_KEY))
+        if current_generation != counter_generation:
+            return
+        current_turns = _non_negative_int(counters.get(TURNS_SINCE_MEMORY_REVIEW_KEY))
+        current_tool_calls = _non_negative_int(counters.get(TOOL_CALLS_SINCE_SKILL_REVIEW_KEY))
+        metadata[REFLECTION_COUNTERS_META_KEY] = {
+            TURNS_SINCE_MEMORY_REVIEW_KEY: max(current_turns - reviewed_turns, 0),
+            TOOL_CALLS_SINCE_SKILL_REVIEW_KEY: max(current_tool_calls - reviewed_tool_calls, 0),
+            COUNTER_GENERATION_KEY: current_generation,
+        }
+        sessions.set_metadata(agent_id, session_id, metadata, project_id)
 
     # -- shared review orchestration --------------------------------------------
 
@@ -234,9 +268,12 @@ class ReflectionService:
         """Zero both cadence counters (a manual ``/reflect`` reviewed everything)."""
         sessions = self._runtime.chat_sessions
         metadata = sessions.get_metadata(agent_id, session_id, project_id)
+        raw_counters = metadata.get(REFLECTION_COUNTERS_META_KEY)
+        counters = raw_counters if isinstance(raw_counters, dict) else {}
         metadata[REFLECTION_COUNTERS_META_KEY] = {
             TURNS_SINCE_MEMORY_REVIEW_KEY: 0,
             TOOL_CALLS_SINCE_SKILL_REVIEW_KEY: 0,
+            COUNTER_GENERATION_KEY: _non_negative_int(counters.get(COUNTER_GENERATION_KEY)) + 1,
         }
         sessions.set_metadata(agent_id, session_id, metadata, project_id)
 
