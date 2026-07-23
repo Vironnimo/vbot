@@ -1,12 +1,8 @@
 <script>
   import Banner from '../ui/Banner.svelte';
+  import CopyButton from '../ui/CopyButton.svelte';
   import { t } from '$lib/i18n.js';
-  import {
-    renderMarkdown,
-    renderMarkdownStreaming,
-    renderReasoningMarkdown,
-    renderReasoningMarkdownStreaming,
-  } from '$lib/markdown.js';
+  import { reasoningMarkdownSource } from '$lib/markdown.js';
   import {
     avatarForItem,
     compactToolValue,
@@ -41,6 +37,8 @@
     visibleRunChildren,
   } from '$lib/chatTimelinePresentation.js';
 
+  import MarkdownContent from './MarkdownContent.svelte';
+
   let {
     item,
     agentName = '',
@@ -54,6 +52,16 @@
     onCancelToolCall = () => {},
     onCancelSubAgent = () => {},
   } = $props();
+
+  let answerCopyText = $derived(
+    visibleRunChildren(item)
+      .filter((child) => child.type === 'assistant_output')
+      .map((child) =>
+        typeof child.content === 'string' ? child.content.trim() : '',
+      )
+      .filter(Boolean)
+      .join('\n\n'),
+  );
 
   function handleSubAgentNavigate(event, tool) {
     event.preventDefault();
@@ -167,11 +175,21 @@
   toolName = '',
   tool = null,
 )}
+  {@const displayValue = compactToolValue(value, {
+    preferPayload,
+    toolName,
+    tool,
+  })}
   <div class="teb-row">
     <span class="teb-label">{label}</span>
-    <span class:error={isError} class="teb-code"
-      >{compactToolValue(value, { preferPayload, toolName, tool })}</span
-    >
+    <span class:error={isError} class="teb-code">{displayValue}</span>
+    {#if displayValue !== t('chat.toolNoData', '—')}
+      <CopyButton
+        text={displayValue}
+        class="chat-copy-action tool-detail-copy"
+        label={t('chat.copyToolField', 'Copy {label}', { label })}
+      />
+    {/if}
   </div>
 {/snippet}
 
@@ -220,6 +238,14 @@
     {#each runMetaParts(item) as metaPart (metaPart)}
       <span class="msg-meta-extra">· {metaPart}</span>
     {/each}
+    {#if answerCopyText}
+      <CopyButton
+        text={answerCopyText}
+        class="chat-copy-action message-copy"
+        label={t('chat.copyAnswer', 'Copy answer')}
+        copiedLabel={t('chat.answerCopied', 'Answer copied')}
+      />
+    {/if}
   </div>
   <div class="msg-content assistant-run-content">
     {#each visibleRunChildren(item) as child (child.id)}
@@ -233,10 +259,20 @@
         >
           {@render reasoningSummary(working, isReasoningOpen(child.id))}
           <div class="reasoning-body">
-            <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-            {@html working
-              ? renderReasoningMarkdownStreaming(child.content ?? '')
-              : renderReasoningMarkdown(child.content ?? '')}
+            <div class="reasoning-body__actions">
+              <CopyButton
+                text={reasoningMarkdownSource(child.content ?? '')}
+                class="chat-copy-action reasoning-copy"
+                label={t('chat.copyReasoning', 'Copy thinking')}
+                copiedLabel={t('chat.reasoningCopied', 'Thinking copied')}
+              />
+            </div>
+            <MarkdownContent
+              source={child.content ?? ''}
+              streaming={working}
+              reasoning
+              class="reasoning-markdown"
+            />
           </div>
         </details>
       {:else if child.type === 'tool_call'}
@@ -442,14 +478,12 @@
         {/if}
       {:else if child.type === 'assistant_output'}
         {@const working = isRunChildWorking(item, child)}
-        <div class="msg-markdown" class:streaming-text={working}>
-          <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-          {@html working
-            ? renderMarkdownStreaming(child.content ?? '')
-            : renderMarkdown(child.content ?? '')}
-          {#if working}<span class="streaming-caret" aria-hidden="true"
-            ></span>{/if}
-        </div>
+        <MarkdownContent
+          source={child.content ?? ''}
+          streaming={working}
+          caret={working}
+          class={`msg-markdown${working ? ' streaming-text' : ''}`}
+        />
       {:else if child.type === 'model_fallback'}
         <Banner variant="info" class="run-inline-banner">
           {t('chat.modelFallbackActivated', 'Switched to {model}', {

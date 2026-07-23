@@ -1,7 +1,7 @@
 <script>
   import { t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
-  import { renderMarkdown, renderReasoningMarkdown } from '$lib/markdown.js';
+  import { reasoningMarkdownSource } from '$lib/markdown.js';
   import {
     attachmentFilename,
     attachmentPreviewLabel,
@@ -44,12 +44,48 @@
     userContentBlocks,
   } from '$lib/chatTimelinePresentation.js';
 
+  import CopyButton from '../ui/CopyButton.svelte';
+  import MarkdownContent from './MarkdownContent.svelte';
+
   let {
     item,
     agentName = '',
     isReasoningOpen = () => false,
     onReasoningOpenChange = () => {},
   } = $props();
+
+  function copyableMessageText(message) {
+    if (typeof message?.content === 'string') {
+      return message.content;
+    }
+    if (message?.role !== 'user') {
+      return '';
+    }
+
+    return userContentBlocks(message)
+      .flatMap((block) => {
+        if (isTextContentBlock(block)) {
+          return [block.text];
+        }
+        if (isFileMentionContentBlock(block)) {
+          return [`@${block.path}`];
+        }
+        return [];
+      })
+      .join('\n\n');
+  }
+
+  function copyLabelForMessage(message) {
+    return message?.role === 'assistant'
+      ? t('chat.copyAnswer', 'Copy answer')
+      : t('chat.copyUserMessage', 'Copy message');
+  }
+
+  function copiedLabelForMessage(message) {
+    return message?.role === 'assistant'
+      ? t('chat.answerCopied', 'Answer copied')
+      : t('chat.userMessageCopied', 'Message copied');
+  }
 </script>
 
 {#snippet toolDetailSection(
@@ -60,11 +96,21 @@
   toolName = '',
   tool = null,
 )}
+  {@const displayValue = compactToolValue(value, {
+    preferPayload,
+    toolName,
+    tool,
+  })}
   <div class="teb-row">
     <span class="teb-label">{label}</span>
-    <span class:error={isError} class="teb-code"
-      >{compactToolValue(value, { preferPayload, toolName, tool })}</span
-    >
+    <span class:error={isError} class="teb-code">{displayValue}</span>
+    {#if displayValue !== t('chat.toolNoData', '—')}
+      <CopyButton
+        text={displayValue}
+        class="chat-copy-action tool-detail-copy"
+        label={t('chat.copyToolField', 'Copy {label}', { label })}
+      />
+    {/if}
   </div>
 {/snippet}
 
@@ -223,6 +269,14 @@
       {#if formatTime(item.message.timestamp)}
         <span class="msg-timestamp">{formatTime(item.message.timestamp)}</span>
       {/if}
+      {#if ['assistant', 'user'].includes(item.message.role) && copyableMessageText(item.message)}
+        <CopyButton
+          text={copyableMessageText(item.message)}
+          class="chat-copy-action message-copy"
+          label={copyLabelForMessage(item.message)}
+          copiedLabel={copiedLabelForMessage(item.message)}
+        />
+      {/if}
     </div>
     <div class="msg-content">
       {#if hasReadableReasoning(item.message) && hasAssistantContent(item.message)}
@@ -234,8 +288,19 @@
         >
           {@render reasoningSummary(false, isReasoningOpen(item.id))}
           <div class="reasoning-body">
-            <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-            {@html renderReasoningMarkdown(item.message.reasoning ?? '')}
+            <div class="reasoning-body__actions">
+              <CopyButton
+                text={reasoningMarkdownSource(item.message.reasoning ?? '')}
+                class="chat-copy-action reasoning-copy"
+                label={t('chat.copyReasoning', 'Copy thinking')}
+                copiedLabel={t('chat.reasoningCopied', 'Thinking copied')}
+              />
+            </div>
+            <MarkdownContent
+              source={item.message.reasoning ?? ''}
+              reasoning
+              class="reasoning-markdown"
+            />
           </div>
         </details>
       {/if}
@@ -250,10 +315,10 @@
           {#if isReasoningOnlyAssistantMessage(item.message)}
             <p class="msg-body-text">{textFromMessage(item.message)}</p>
           {:else}
-            <div class="msg-markdown">
-              <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-              {@html renderMarkdown(textFromMessage(item.message))}
-            </div>
+            <MarkdownContent
+              source={textFromMessage(item.message)}
+              class="msg-markdown"
+            />
           {/if}
         {:else if item.message.role === 'error'}
           {@const errorPresentation = errorMessagePresentation(
@@ -295,6 +360,15 @@
         <span class="msg-author">{labelForEvent(item.event)}</span>
         {#if formatTime(item.event.timestamp)}
           <span class="msg-timestamp">{formatTime(item.event.timestamp)}</span>
+        {/if}
+        {#if (isAssistantItem(item) || isUserItem(item)) && (copyableMessageText(messageFromEvent(item.event)) || textFromEvent(item.event))}
+          <CopyButton
+            text={copyableMessageText(messageFromEvent(item.event)) ||
+              textFromEvent(item.event)}
+            class="chat-copy-action message-copy"
+            label={copyLabelForMessage(messageFromEvent(item.event))}
+            copiedLabel={copiedLabelForMessage(messageFromEvent(item.event))}
+          />
         {/if}
       </div>
       <div class="msg-content">
@@ -377,8 +451,21 @@
           >
             {@render reasoningSummary(false, isReasoningOpen(item.id))}
             <div class="reasoning-body">
-              <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-              {@html renderReasoningMarkdown(textFromEvent(item.event) ?? '')}
+              <div class="reasoning-body__actions">
+                <CopyButton
+                  text={reasoningMarkdownSource(
+                    textFromEvent(item.event) ?? '',
+                  )}
+                  class="chat-copy-action reasoning-copy"
+                  label={t('chat.copyReasoning', 'Copy thinking')}
+                  copiedLabel={t('chat.reasoningCopied', 'Thinking copied')}
+                />
+              </div>
+              <MarkdownContent
+                source={textFromEvent(item.event) ?? ''}
+                reasoning
+                class="reasoning-markdown"
+              />
             </div>
           </details>
         {:else if hasUserContentBlocks(messageFromEvent(item.event))}

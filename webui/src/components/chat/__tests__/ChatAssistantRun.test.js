@@ -426,3 +426,128 @@ describe('ChatAssistantRun tool dot state', () => {
     expect(dot.classList.contains('preparing')).toBe(false);
   });
 });
+
+describe('ChatAssistantRun copy actions', () => {
+  let mountedComponent;
+  let writeText;
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    init('en');
+    mountedComponent = null;
+    writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+  });
+
+  afterEach(async () => {
+    if (mountedComponent) {
+      await unmount(mountedComponent);
+      mountedComponent = null;
+    }
+    document.body.innerHTML = '';
+    vi.restoreAllMocks();
+  });
+
+  it('copies every assistant Markdown section without reasoning or tools', async () => {
+    const item = createAssistantRunItem({
+      items: [
+        {
+          type: 'assistant_output',
+          id: 'answer-1',
+          content: '# First section',
+          streaming: false,
+        },
+        {
+          type: 'reasoning',
+          id: 'reasoning-1',
+          content: '**Private reasoning**',
+          streaming: false,
+        },
+        createReadToolChild({ status: 'success' }),
+        {
+          type: 'assistant_output',
+          id: 'answer-2',
+          content: '**Final section**',
+          streaming: false,
+        },
+      ],
+    });
+    mountedComponent = mountRun({ item });
+
+    document.querySelector('.message-copy').click();
+    await flushAsync();
+
+    expect(writeText).toHaveBeenCalledWith(
+      '# First section\n\n**Final section**',
+    );
+    expect(writeText.mock.calls[0][0]).not.toContain('Private reasoning');
+    expect(writeText.mock.calls[0][0]).not.toContain('README.md');
+  });
+
+  it('copies thinking through its independent action', async () => {
+    const item = createAssistantRunItem({
+      items: [
+        {
+          type: 'reasoning',
+          id: 'reasoning-copy',
+          content: '**Plan**\n\n<!-- -->\n\nInspect the state.',
+          streaming: false,
+        },
+      ],
+    });
+    mountedComponent = mountRun({ item });
+
+    document.querySelector('.reasoning-copy').click();
+    await flushAsync();
+
+    expect(writeText).toHaveBeenCalledOnce();
+    expect(writeText.mock.calls[0][0]).toContain('**Plan**');
+    expect(writeText.mock.calls[0][0]).toContain('Inspect the state.');
+    expect(writeText.mock.calls[0][0]).not.toContain('<!--');
+    expect(document.querySelector('.message-copy')).toBeNull();
+  });
+
+  it('copies only the sanitized Tool argument display', async () => {
+    const item = createAssistantRunItem({
+      items: [
+        {
+          type: 'tool_call',
+          id: 'write-copy',
+          name: 'write',
+          toolCallId: 'call-write-copy',
+          status: 'success',
+          arguments: {
+            path: 'safe.txt',
+            content: 'hidden file body',
+          },
+          startedEvent: {
+            type: 'tool_call_started',
+            payload: {
+              tool_call: { id: 'call-write-copy', name: 'write' },
+            },
+          },
+        },
+      ],
+    });
+    mountedComponent = mountRun({ item });
+
+    const argsRow = Array.from(document.querySelectorAll('.teb-row')).find(
+      (row) => row.querySelector('.teb-label')?.textContent === 'Args',
+    );
+    argsRow.querySelector('.tool-detail-copy').click();
+    await flushAsync();
+
+    expect(writeText).toHaveBeenCalledWith('path: safe.txt');
+    expect(writeText.mock.calls[0][0]).not.toContain('hidden file body');
+  });
+});
+
+async function flushAsync() {
+  for (let index = 0; index < 5; index += 1) {
+    await Promise.resolve();
+    flushSync();
+  }
+}

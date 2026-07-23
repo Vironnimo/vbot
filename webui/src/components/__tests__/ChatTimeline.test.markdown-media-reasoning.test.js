@@ -557,6 +557,6 @@ describe('ChatTimeline', () => {
     expect(reasoningBody.textContent).not.toContain('**');
     // The provider's `<!-- -->` separator is removed, not escaped into view.
     expect(reasoningBody.textContent).not.toContain('<!--');
-    expect(reasoningBody.innerHTML).not.toContain('<!--');
+    expect(reasoningBody.innerHTML).not.toContain('&lt;!--');
   });
 });

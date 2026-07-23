@@ -1,7 +1,11 @@
 import MarkdownIt from 'markdown-it';
 import { describe, expect, it, vi } from 'vitest';
 
-import { renderMarkdown, renderMarkdownStreaming } from '../markdown.js';
+import {
+  renderMarkdown,
+  renderMarkdownDocument,
+  renderMarkdownStreaming,
+} from '../markdown.js';
 
 describe('renderMarkdown()', () => {
   it('renders headings', () => {
@@ -18,12 +22,27 @@ describe('renderMarkdown()', () => {
     expect(html).toContain('<em>italic</em>');
   });
 
-  it('renders fenced code blocks without syntax highlighting classes', () => {
+  it('renders fenced code blocks with the shared header contract', () => {
     const html = renderMarkdown('```\nconst x = 1;\n```');
 
+    expect(html).toContain('<div class="msg-code">');
+    expect(html).toContain('<span class="msg-code__language">text</span>');
+    expect(html).toContain('data-markdown-code-index="0"');
     expect(html).toContain('<pre><code>');
     expect(html).toContain('const x = 1;');
     expect(html).not.toContain('class="language-');
+  });
+
+  it('projects fenced code text separately from safe HTML', () => {
+    const document = renderMarkdownDocument('```python\nprint("& safe")\n```');
+
+    expect(document.html).toContain(
+      '<span class="msg-code__language">python</span>',
+    );
+    expect(document.html).toContain('print(&quot;&amp; safe&quot;)');
+    expect(document.codeBlocks).toEqual([
+      { text: 'print("& safe")\n', copyable: true },
+    ]);
   });
 
   it('renders inline code', () => {
@@ -65,8 +84,10 @@ describe('renderMarkdown()', () => {
     const html = renderMarkdownStreaming('## Title\n\n```js\nconst value = 1;');
 
     expect(html).toContain('<h2>Title</h2>');
+    expect(html).toContain('<span class="msg-code__language">js</span>');
     expect(html).toContain('<pre><code>');
     expect(html).toContain('const value = 1;');
+    expect(html).not.toContain('data-markdown-code-index');
   });
 
   it('falls back to normal rendering for closed fences while streaming', () => {
@@ -83,6 +104,14 @@ describe('renderMarkdown()', () => {
 
     expect(html).toContain('<pre><code>');
     expect(html).toContain('console.log(&quot;``` not a fence&quot;);');
+  });
+
+  it('keeps an open tilde fence non-copyable while streaming', () => {
+    const html = renderMarkdownStreaming('~~~json\n{"partial": true}');
+
+    expect(html).toContain('<span class="msg-code__language">json</span>');
+    expect(html).toContain('{&quot;partial&quot;: true}');
+    expect(html).not.toContain('data-markdown-code-index');
   });
 
   it('returns an empty string for empty input', () => {
