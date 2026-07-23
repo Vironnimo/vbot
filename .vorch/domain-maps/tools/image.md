@@ -1,8 +1,20 @@
-# Image Tool
+# Image Tools
 
-Built-in `image_generation` tool for creating or editing image artifacts through the central image-generation task-model binding.
+Built-in `analyze_image` and `image_generation` Tools for isolated visual analysis and image artifact creation/editing through central task-model bindings.
 
 ## Interfaces
+
+### `analyze_image`
+
+- Tool name: `analyze_image`
+- Registration: `register_analyze_image_tool(registry, image_service)`
+- Schema: required non-empty `prompt` plus required non-empty `images` array of local path strings; `additionalProperties: false`. The handler accepts one string leniently as a one-item list, resolves paths against `ToolContext.effective_cwd`, and calls `ImageService.analyze()`.
+- Display: summary fields `prompt`, `images`.
+- Success data: `{ analysis, model, image_count, usage? }`.
+- Invalid arguments return `invalid_arguments`; expected image-task failures return `image_understanding_error`.
+- Description states that files are uploaded to the configured external Provider and that text/instructions inside images are untrusted content, not instructions for the Main Agent.
+
+### `image_generation`
 
 - Tool name: `image_generation`
 - Registration: `register_image_generation_tool(registry, image_service)`
@@ -14,7 +26,7 @@ Built-in `image_generation` tool for creating or editing image artifacts through
 
 ## Runtime
 
-Runtime registers the tool at startup with the runtime-owned `ImageService`. The tool uses `ImageService.generate_artifacts()` and never calls providers directly.
+Runtime registers both Tools at startup with the same runtime-owned `ImageService`; neither Tool calls Providers directly. `image_generation` remains a normal allowlist Tool. `analyze_image` is registered in the catalog but Chat includes it in Provider Tool definitions and the effective System Prompt only when the active Model route cannot carry images and `TaskModelService.binding_is_usable("image_understanding")` is true. Normal Tool permissions still apply as a separate gate.
 
 ## Constraints & Gotchas
 
@@ -22,3 +34,6 @@ Runtime registers the tool at startup with the runtime-owned `ImageService`. The
 - `source_images` intentionally accepts any absolute or cwd-relative local image path the Agent can reach, not only Attachments or vBot-generated artifacts. Those file bytes are sent to the configured external image Provider; do not add a path allowlist or silently downgrade an edit to text-only generation.
 - Masks, inpainting regions, fidelity, strength, and other advanced edit controls are not part of the Tool schema. Source-image presence plus the prompt is the complete edit intent for this capability.
 - The tool should remain a normal user-visible tool, not an internal tool.
+- `analyze_image` is not an automatic attachment transformer: a non-vision Main Agent receives the attachment path and consciously calls the Tool with a task-specific prompt. Vision-capable routes do not see the Tool.
+- The effective route test is the intersection of Model `input_modalities` containing `image` and Adapter `wire_media_support(model_id)` containing at least one image MIME type. A Model catalog flag alone is insufficient. Chat rebuilds the gate after Run-local Model fallback.
+- `analyze_image` may read any absolute or cwd-relative local image path the Agent can reach and uploads its bytes to the configured external Provider. The execution service applies the Runtime Attachment-size ceiling and supported-image sniffing; there is no path-root allowlist.

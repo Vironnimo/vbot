@@ -1,5 +1,6 @@
 export const TASK_SPEECH_TO_TEXT = 'speech_to_text';
 export const TASK_TEXT_TO_SPEECH = 'text_to_speech';
+export const TASK_IMAGE_UNDERSTANDING = 'image_understanding';
 export const TASK_IMAGE_GENERATION = 'image_generation';
 export const TASK_TEXT_EMBEDDING = 'text_embedding';
 
@@ -56,6 +57,14 @@ const SPEECH_TASK_ROWS = Object.freeze([
 ]);
 
 const IMAGE_TASK_ROWS = Object.freeze([
+  {
+    taskType: TASK_IMAGE_UNDERSTANDING,
+    titleKey: 'settings.specializedModels.imageUnderstanding',
+    titleFallback: 'Image understanding',
+    descriptionKey: 'settings.specializedModels.imageUnderstandingDescription',
+    descriptionFallback:
+      'Used by analyze_image when the active agent route cannot accept images.',
+  },
   {
     taskType: TASK_IMAGE_GENERATION,
     titleKey: 'settings.specializedModels.imageGeneration',

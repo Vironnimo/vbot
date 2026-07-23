@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   JSON_OPTION_TYPE,
   TASK_IMAGE_GENERATION,
+  TASK_IMAGE_UNDERSTANDING,
   TASK_SPEECH_TO_TEXT,
   TASK_TEXT_EMBEDDING,
   TASK_TEXT_TO_SPEECH,
@@ -71,6 +72,7 @@ describe('taskModelSettings helpers', () => {
       expect.arrayContaining([
         TASK_SPEECH_TO_TEXT,
         TASK_TEXT_TO_SPEECH,
+        TASK_IMAGE_UNDERSTANDING,
         TASK_IMAGE_GENERATION,
         TASK_TEXT_EMBEDDING,
       ]),
@@ -83,6 +85,13 @@ describe('taskModelSettings helpers', () => {
       'settings.specializedModels.embeddingModel',
     );
     expect(embeddingRow.titleFallback).toBe('Embedding model');
+    const imageUnderstandingRow = TASK_MODEL_ROWS.find(
+      (row) => row.taskType === TASK_IMAGE_UNDERSTANDING,
+    );
+    expect(imageUnderstandingRow.titleFallback).toBe('Image understanding');
+    expect(imageUnderstandingRow.descriptionFallback).toContain(
+      'active agent route',
+    );
   });
 
   it('normalizes an embedding binding and includes it in the update payload', () => {
@@ -106,6 +115,10 @@ describe('taskModelSettings helpers', () => {
     // Other rows must still be present in the sparse payload so the
     // server receives an explicit "not configured" for them.
     expect(payload[TASK_SPEECH_TO_TEXT]).toEqual({ target: '', options: {} });
+    expect(payload[TASK_IMAGE_UNDERSTANDING]).toEqual({
+      target: '',
+      options: {},
+    });
     expect(payload[TASK_IMAGE_GENERATION]).toEqual({ target: '', options: {} });
   });
 });

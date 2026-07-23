@@ -241,6 +241,53 @@ class TaskModelService:
         targets.extend(self._local_task_targets(normalized_task_type))
         return sorted(targets, key=lambda target: (target.kind, target.label.lower(), target.id))
 
+    def binding_is_usable(self, task_type: str) -> bool:
+        """Return whether the configured binding currently resolves to a usable target.
+
+        This is the live, non-mutating availability gate used by route-specific
+        Tool visibility. It rejects stale model ids, unsupported task
+        capabilities, missing/forbidden Connections, unusable credentials, and
+        local targets whose execution is not owned by the provider task path.
+        """
+
+        try:
+            binding = self.binding_for(task_type)
+            target_ref = parse_task_model_target_id(binding.target)
+        except VBotError:
+            return False
+        if target_ref.kind != "provider":
+            return False
+
+        model = self._resolve_model(target_ref.provider_id, target_ref.model_id)
+        if model is None:
+            return False
+        capabilities = getattr(model, "capabilities", None)
+        task_types = getattr(capabilities, "task_types", ()) or ()
+        if task_type not in task_types:
+            return False
+        allows_connection = getattr(model, "allows_connection", None)
+        if callable(allows_connection) and not allows_connection(target_ref.local_connection_id):
+            return False
+
+        try:
+            provider = self._providers.get(target_ref.provider_id)
+        except KeyError:
+            return False
+        if not any(
+            getattr(connection, "id", None) == target_ref.local_connection_id
+            for connection in getattr(provider, "connections", ())
+        ):
+            return False
+        try:
+            return bool(
+                self._credentials.is_usable(
+                    target_ref.provider_id,
+                    target_ref.connection_id,
+                )
+            )
+        except VBotError:
+            return False
+
     def options(self, task_type: str, target: str) -> TaskModelOptionSchema:
         """Return the backend-owned option schema for a target.
 

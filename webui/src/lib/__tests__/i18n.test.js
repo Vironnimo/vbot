@@ -446,6 +446,8 @@ describe('i18n t()', () => {
       'settings.recall.saveSuccess',
       'settings.specializedModels.embeddingModel',
       'settings.specializedModels.embeddingModelDescription',
+      'settings.specializedModels.imageUnderstanding',
+      'settings.specializedModels.imageUnderstandingDescription',
       'settings.providers.title',
       'settings.providers.subtitle',
       'settings.providers.noneConnected',
@@ -497,6 +499,12 @@ describe('i18n t()', () => {
     expect(t('settings.specializedModels.embeddingModelDescription')).toContain(
       'meaning-based search',
     );
+    expect(t('settings.specializedModels.imageUnderstanding')).toBe(
+      'Image understanding',
+    );
+    expect(
+      t('settings.specializedModels.imageUnderstandingDescription'),
+    ).toContain('analyze_image');
     // The consolidated Save key replaced the per-panel bespoke variants.
     expect(englishCatalog['settings.recall.save']).toBeUndefined();
     expect(englishCatalog['settings.compaction.save']).toBeUndefined();

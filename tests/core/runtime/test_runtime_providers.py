@@ -1191,6 +1191,7 @@ def test_runtime_loads_phase_two_services(runtime: Runtime) -> None:
     # registered (readiness only hides them from model-facing surfaces until a
     # token is set), so they appear in the registered inventory here.
     assert [tool.name for tool in runtime.tools.list_tools()] == [
+        "analyze_image",
         "bash",
         "cron",
         "edit",

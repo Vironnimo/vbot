@@ -14,6 +14,7 @@ from core.chat import (
     ChatMessage,
 )
 from core.chat.messages import HISTORY_COMPACTION_GUIDANCE
+from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.runs import (
     MODEL_STEP_USAGE_EVENT,
     TOOL_CALL_RESULT_EVENT,
@@ -21,6 +22,7 @@ from core.runs import (
     RunStatus,
 )
 from core.tools import (
+    ANALYZE_IMAGE_TOOL_NAME,
     HISTORY_TOOL_NAME,
     ToolContext,
     ToolDisplay,
@@ -43,6 +45,136 @@ from tests.core.chat.chat_loop_support import (
 )
 
 JsonObject = dict[str, Any]
+
+
+def _analyze_image_registry() -> ToolRegistry:
+    registry = ToolRegistry()
+    registry.register(
+        ANALYZE_IMAGE_TOOL_NAME,
+        "Analyze images.",
+        {"type": "object"},
+        lambda _context, _arguments: tool_success({"analysis": "ok"}),
+    )
+    return registry
+
+
+def _request_tool_names(adapter: StubAdapter) -> set[str]:
+    tools = adapter.requests[0]["kwargs"]["tools"]
+    return {str(definition["name"]) for definition in tools}
+
+
+@pytest.mark.asyncio
+async def test_analyze_image_visible_for_nonvision_route_with_usable_binding(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/text-model",
+        allowed_tools=[ANALYZE_IMAGE_TOOL_NAME],
+    )
+    adapter = StubAdapter([{"content": "done", "tool_calls": None}])
+    models = StubModels(
+        {("openai", "text-model"): 128_000},
+        input_modalities={("openai", "text-model"): ("text",)},
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        tools=_analyze_image_registry(),
+        models=models,
+        available_task_models={TASK_IMAGE_UNDERSTANDING},
+    )
+
+    await build_chat_loop(runtime).send("coder", "Inspect the image", session_id="s1")
+
+    assert ANALYZE_IMAGE_TOOL_NAME in _request_tool_names(adapter)
+    assert ANALYZE_IMAGE_TOOL_NAME in runtime.system_prompts.effective_tool_name_calls[-1]
+
+
+@pytest.mark.asyncio
+async def test_analyze_image_hidden_when_effective_route_can_view_images(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/vision-model",
+        allowed_tools=[ANALYZE_IMAGE_TOOL_NAME],
+    )
+    adapter = StubAdapter(
+        [{"content": "done", "tool_calls": None}],
+        wire_media_types=frozenset({"image/png"}),
+    )
+    models = StubModels(
+        {("openai", "vision-model"): 128_000},
+        input_modalities={("openai", "vision-model"): ("text", "image")},
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        tools=_analyze_image_registry(),
+        models=models,
+        available_task_models={TASK_IMAGE_UNDERSTANDING},
+    )
+
+    await build_chat_loop(runtime).send("coder", "Inspect the image", session_id="s1")
+
+    assert ANALYZE_IMAGE_TOOL_NAME not in _request_tool_names(adapter)
+    assert ANALYZE_IMAGE_TOOL_NAME not in runtime.system_prompts.effective_tool_name_calls[-1]
+
+
+@pytest.mark.asyncio
+async def test_analyze_image_visible_when_model_has_image_but_wire_does_not(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/vision-model",
+        allowed_tools=[ANALYZE_IMAGE_TOOL_NAME],
+    )
+    adapter = StubAdapter([{"content": "done", "tool_calls": None}])
+    models = StubModels(
+        {("openai", "vision-model"): 128_000},
+        input_modalities={("openai", "vision-model"): ("text", "image")},
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        tools=_analyze_image_registry(),
+        models=models,
+        available_task_models={TASK_IMAGE_UNDERSTANDING},
+    )
+
+    await build_chat_loop(runtime).send("coder", "Inspect the image", session_id="s1")
+
+    assert ANALYZE_IMAGE_TOOL_NAME in _request_tool_names(adapter)
+
+
+@pytest.mark.asyncio
+async def test_analyze_image_hidden_without_usable_binding(tmp_path: Path) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/text-model",
+        allowed_tools=[ANALYZE_IMAGE_TOOL_NAME],
+    )
+    adapter = StubAdapter([{"content": "done", "tool_calls": None}])
+    models = StubModels(
+        {("openai", "text-model"): 128_000},
+        input_modalities={("openai", "text-model"): ("text",)},
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        tools=_analyze_image_registry(),
+        models=models,
+    )
+
+    await build_chat_loop(runtime).send("coder", "Inspect the image", session_id="s1")
+
+    assert ANALYZE_IMAGE_TOOL_NAME not in _request_tool_names(adapter)
 
 
 @pytest.mark.asyncio

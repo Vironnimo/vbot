@@ -31,6 +31,7 @@ from core.utils.config import Config
 from tests.core.chat.chat_loop_support import build_chat_loop
 
 CANONICAL_BUILTIN_TOOLS = [
+    "analyze_image",
     "bash",
     "cron",
     "edit",

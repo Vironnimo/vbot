@@ -40,6 +40,26 @@ class ImageGenerationResult:
 
 
 @dataclass(frozen=True)
+class ImageUnderstandingResult:
+    """Normalized text analysis of one or more local images."""
+
+    content: str
+    model: str
+    image_count: int
+    usage: JsonObject | None = None
+
+    def to_dict(self) -> JsonObject:
+        payload: JsonObject = {
+            "analysis": self.content,
+            "model": self.model,
+            "image_count": self.image_count,
+        }
+        if self.usage is not None:
+            payload["usage"] = dict(self.usage)
+        return payload
+
+
+@dataclass(frozen=True)
 class ImageArtifact:
     """Persisted image generation artifact metadata."""
 

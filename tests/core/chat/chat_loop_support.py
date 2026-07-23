@@ -52,6 +52,9 @@ def build_chat_loop(runtime: Any, **kwargs: Any) -> ChatLoop:
         ),
         resolve_skills=lambda project_id, agent_id: runtime.skills_for(project_id, agent_id),
         get_local_context_windows=lambda: runtime.local_context_windows(),
+        task_model_available=lambda task_type: bool(
+            getattr(runtime, "task_model_available", lambda _task_type: False)(task_type)
+        ),
     )
     return ChatLoop(dependencies, **kwargs)
 
@@ -173,6 +176,7 @@ class StubPrompts:
         self.tool_registry = tool_registry
         self.app_dir = Path("app")
         self.build_calls: list[tuple[str, str, Any]] = []
+        self.effective_tool_name_calls: list[tuple[str, ...]] = []
         self.render_project_files_calls: list[Any] = []
         self.render_skill_catalog_calls = 0
 
@@ -191,6 +195,9 @@ class StubPrompts:
         session_tool_grants: Any = (),
     ) -> str:
         del agent_project_id
+        self.effective_tool_name_calls.append(
+            tuple(str(name) for name in (effective_tool_names or ()))
+        )
         self.build_calls.append((agent.id, agent_body, project_context))
         # Echo the body and rendered project files so chat tests can assert what
         # actually reaches the system message, mirroring the real builder's slots
@@ -310,9 +317,16 @@ class StubSkills:
 
 
 class StubAdapter:
-    def __init__(self, responses: list[Any], *, stream_responses: list[Any] | None = None) -> None:
+    def __init__(
+        self,
+        responses: list[Any],
+        *,
+        stream_responses: list[Any] | None = None,
+        wire_media_types: frozenset[str] = frozenset(),
+    ) -> None:
         self._responses = responses
         self._stream_responses = stream_responses or []
+        self._wire_media_types = wire_media_types
         self.requests: list[JsonObject] = []
         self.stream_requests: list[JsonObject] = []
 
@@ -331,6 +345,9 @@ class StubAdapter:
         self, response: JsonObject, *, model_id: str | None = None
     ) -> JsonObject:
         return response
+
+    def wire_media_support(self, _model_id: str) -> frozenset[str]:
+        return self._wire_media_types
 
     async def stream(
         self,
@@ -556,6 +573,7 @@ class StubRuntime:
         project_agents: dict[tuple[str, str], StubAgent | ConfigAgent] | None = None,
         unresolvable_agents: set[tuple[str, str]] | None = None,
         projects: Any | None = None,
+        available_task_models: set[str] | None = None,
     ) -> None:
         self.agents = StubAgents(agent)
         self.agent_resolver = StubAgentResolver(self.agents, project_agents, unresolvable_agents)
@@ -598,6 +616,7 @@ class StubRuntime:
         self.skills_for_calls: list[tuple[str | None, str | None]] = []
         # Project-owned Skills exposed by explicit Project Context loading.
         self.project_own_skills_result: list[Any] = []
+        self.available_task_models = set(available_task_models or set())
 
     def get_adapter(self, provider_id: str, connection_id: str) -> StubAdapter:
         self.adapter_provider_id = provider_id
@@ -628,6 +647,9 @@ class StubRuntime:
         # local-model window map, read from storage at call time.
         return cast(JsonObject, self.storage.load_local_models_settings()["context_windows"])
 
+    def task_model_available(self, task_type: str) -> bool:
+        return task_type in self.available_task_models
+
 
 class StubProviderCredentials:
     def __init__(self, usable_connection_ids: set[str]) -> None:
@@ -645,12 +667,24 @@ class StubModelEntry:
     context_window: int | None
     connections: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
+    capabilities: Any = field(default_factory=lambda: SimpleNamespace(input_modalities=()))
 
 
 class StubModels:
-    def __init__(self, entries: dict[tuple[str, str], int | None]) -> None:
+    def __init__(
+        self,
+        entries: dict[tuple[str, str], int | None],
+        *,
+        input_modalities: dict[tuple[str, str], tuple[str, ...]] | None = None,
+    ) -> None:
+        modality_map = input_modalities or {}
         self._entries = {
-            (provider_id, model_id): StubModelEntry(context_window=context_window)
+            (provider_id, model_id): StubModelEntry(
+                context_window=context_window,
+                capabilities=SimpleNamespace(
+                    input_modalities=modality_map.get((provider_id, model_id), ())
+                ),
+            )
             for (provider_id, model_id), context_window in entries.items()
         }
 

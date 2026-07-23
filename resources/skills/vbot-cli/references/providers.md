@@ -66,7 +66,7 @@ vbot model refresh [<provider-id>]
 
 ## Task models
 
-Bind a specialized task to a model target. Task types: `image_generation`, `speech_to_text`, `text_embedding`, `text_to_speech`, `video_generation`.
+Bind a specialized task to a model target. Task types: `image_generation`, `image_understanding`, `speech_to_text`, `text_embedding`, `text_to_speech`, `video_generation`.
 
 ```bash
 vbot task-model list
