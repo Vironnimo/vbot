@@ -1007,7 +1007,7 @@ describe('i18n t()', () => {
     ];
 
     expectCatalogKeys(requiredKeys);
-    expect(t('chat.project.none')).toBe('Personal — no project');
+    expect(t('chat.project.none')).toBe('No project selected');
     expect(t('chat.personalBarLabel')).toBe('Personal');
     expect(
       t('chat.project.scanBannerCount', undefined, { count: 2 }),

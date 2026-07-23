@@ -21,7 +21,7 @@ import {
 describe('ChatView', () => {
   const chatViewTest = setupChatViewTestSuite();
 
-  it('renders the project dropdown with No project default and identity chat unchanged', async () => {
+  it('renders the project dropdown with no project selected and identity chat unchanged', async () => {
     rpcMock.mockImplementation(createChatRpcMock());
 
     chatViewTest.mount({
@@ -46,7 +46,7 @@ describe('ChatView', () => {
     const dropdownLabel = dropdown.querySelector(
       '.dropdown-primitive__trigger-label',
     );
-    expect(dropdownLabel?.textContent?.trim()).toBe('Personal — no project');
+    expect(dropdownLabel?.textContent?.trim()).toBe('No project selected');
     // No project chosen → no second bar, no project.show call.
     expect(document.querySelector('.chat-view__project-team')).toBeNull();
     expect(showProjectMock).not.toHaveBeenCalled();

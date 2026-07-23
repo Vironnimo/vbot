@@ -170,7 +170,7 @@ export const englishCatalog = Object.freeze({
   'chat.takenOver': 'Taken over by {from} → {to}',
   'chat.takenOverGeneric': 'Session taken over',
   'chat.transientCard.label': 'Command output',
-  'chat.project.none': 'Personal — no project',
+  'chat.project.none': 'No project selected',
   'chat.personalBarLabel': 'Personal',
   'chat.personalBarHint':
     'Your personal agents — available with or without a project.',
