@@ -23,6 +23,7 @@ import pytest
 from core.chat import ChatError
 from core.projects.resolver import ConfigAgent
 from core.prompts import ProjectPromptContext
+from core.tools import ToolContext, ToolRegistry, tool_success
 from tests.core.chat.chat_loop_support import build_chat_loop
 from tests.core.chat.test_chat_loop import (
     StubAdapter,
@@ -173,7 +174,14 @@ async def test_rooted_identity_agent_puts_project_files_in_system_prompt(tmp_pat
         agent=agent,
         adapter=adapter,
         projects=StubProjects(
-            {PROJECT_ID: StubProject(project_id=PROJECT_ID, cwd=str(repo), auto_load=["AGENTS.md"])}
+            {
+                PROJECT_ID: StubProject(
+                    project_id=PROJECT_ID,
+                    cwd=str(repo),
+                    auto_load=["AGENTS.md"],
+                    display_name="vBot",
+                )
+            }
         ),
     )
     runtime.chat_sessions.create("coder", session_id="s1")
@@ -181,13 +189,96 @@ async def test_rooted_identity_agent_puts_project_files_in_system_prompt(tmp_pat
     await build_chat_loop(runtime).send("coder", "Hi", session_id="s1")
 
     system = _system_message(adapter)
-    assert '<file name="AGENTS.md">\nTeam rules\n</file>' in system
+    assert "## Working Project" in system
+    assert (
+        f'You are rooted in the Project "vBot" (id: `{PROJECT_ID}`), located at `{repo}`.' in system
+    )
+    assert ' <file name="AGENTS.md">\nTeam rules\n </file>' in system
     agent_id, agent_body, project_context = runtime.system_prompts.build_calls[-1]
     assert agent_id == "coder"
     assert agent_body == ""
     assert isinstance(project_context, ProjectPromptContext)
     assert project_context.cwd == repo
     assert project_context.auto_load == ("AGENTS.md",)
+
+
+@pytest.mark.asyncio
+async def test_rooted_project_context_stays_pinned_across_project_tool_call(
+    tmp_path: Path,
+) -> None:
+    from core.chat.chat import PINNED_WORKING_PROJECT_CONTEXT_META_KEY
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    agents_file = repo / "AGENTS.md"
+    agents_file.write_text("Original rules", encoding="utf-8")
+
+    def project_tool(_context: ToolContext, _arguments: dict[str, Any]) -> dict[str, Any]:
+        agents_file.write_text("Changed during project Tool call", encoding="utf-8")
+        return tool_success({"status": "loaded"})
+
+    tools = ToolRegistry()
+    tools.register(
+        "project",
+        "Load Project Context.",
+        {
+            "type": "object",
+            "properties": {"project_id": {"type": "string"}},
+            "required": ["project_id"],
+        },
+        project_tool,
+    )
+    agent = StubAgent(
+        id="coder",
+        model=MODEL,
+        allowed_tools=["project"],
+        workspace=tmp_path / "workspace",
+        root_project_id=PROJECT_ID,
+    )
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call-project",
+                        "name": "project",
+                        "arguments": {"project_id": PROJECT_ID},
+                    }
+                ],
+            },
+            {"content": "Done", "tool_calls": None},
+        ]
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        tools=tools,
+        projects=StubProjects(
+            {
+                PROJECT_ID: StubProject(
+                    project_id=PROJECT_ID,
+                    cwd=str(repo),
+                    auto_load=["AGENTS.md"],
+                    display_name="vBot",
+                )
+            }
+        ),
+    )
+    runtime.chat_sessions.create("coder", session_id="s1")
+
+    await build_chat_loop(runtime).send("coder", "Hi", session_id="s1")
+
+    first_system = str(adapter.requests[0]["messages"][0]["content"])
+    second_system = str(adapter.requests[1]["messages"][0]["content"])
+    assert "Original rules" in first_system
+    assert "Original rules" in second_system
+    assert "Changed during project Tool call" not in second_system
+    assert first_system == second_system
+    assert len(runtime.system_prompts.render_working_project_context_calls) == 1
+    metadata = runtime.chat_sessions.get_metadata("coder", "s1")
+    assert metadata[PINNED_WORKING_PROJECT_CONTEXT_META_KEY]["text"] in first_system
 
 
 @pytest.mark.asyncio
@@ -210,7 +301,14 @@ async def test_rooted_identity_agent_resolves_skills_against_home_project(tmp_pa
         agent=agent,
         adapter=adapter,
         projects=StubProjects(
-            {PROJECT_ID: StubProject(project_id=PROJECT_ID, cwd=str(repo), auto_load=["AGENTS.md"])}
+            {
+                PROJECT_ID: StubProject(
+                    project_id=PROJECT_ID,
+                    cwd=str(repo),
+                    auto_load=["AGENTS.md"],
+                    display_name="vBot",
+                )
+            }
         ),
     )
     runtime.chat_sessions.create("coder", session_id="s1")

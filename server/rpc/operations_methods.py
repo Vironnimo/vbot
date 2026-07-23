@@ -252,11 +252,21 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
 
     try:
         prompt_manager = state.runtime.system_prompts
+        working_project_context = (
+            prompt_manager.render_working_project_context(
+                prompt_project.project_id,
+                prompt_project.display_name,
+                project_context,
+            )
+            if project_id is None and prompt_project is not None and project_context is not None
+            else None
+        )
         text = prompt_manager.build_system_prompt(
             agent,
             scope=prompt_scope,
             agent_body=runtime_agent_body(agent),
             project_context=project_context,
+            working_project_context=working_project_context,
             agent_project_id=project_id,
             skill_registry=state.runtime.skills_for(skill_project_id, identity_agent_id),
         )

@@ -565,6 +565,7 @@ class StubPrompts:
         *,
         agent_body: str = "",
         project_context: object = None,
+        working_project_context: str | None = None,
         agent_project_id: str | None = None,
         skill_registry: object = None,
         skill_catalog: object = None,
@@ -588,7 +589,20 @@ class StubPrompts:
             extras.append(f"body={agent_body}")
         if project_context is not None:
             extras.append(f"project_cwd={getattr(project_context, 'cwd', '')}")
+        if working_project_context is not None:
+            extras.append(f"working_project={working_project_context}")
         return " ".join([base, *extras])
+
+    def render_working_project_context(
+        self,
+        project_id: str,
+        project_name: str,
+        project_context: object,
+        *,
+        on_read: object = None,
+    ) -> str:
+        del project_name, project_context, on_read
+        return project_id
 
     def render_skill_catalog(self, _agent: StubAgent, skill_registry: object = None) -> Any:
         from core.prompts import PinnedSkillCatalog

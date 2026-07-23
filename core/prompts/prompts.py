@@ -958,6 +958,7 @@ class SystemPromptManager:
         *,
         agent_body: str = "",
         project_context: ProjectPromptContext | None = None,
+        working_project_context: str | None = None,
         agent_project_id: str | None = None,
         skill_registry: SkillPromptRegistry | None = None,
         skill_catalog: PinnedSkillCatalog | None = None,
@@ -976,12 +977,15 @@ class SystemPromptManager:
         ``agent_body`` is a config agent's imported prompt body, inserted verbatim
         through the ``core:agent_body`` data block (empty for identity agents →
         collapses). ``project_context`` carries the project's cwd and auto-load list
-        for the ``core:project_files`` data block (``None`` off a project →
-        collapses). ``skill_registry`` overrides the registry the skills block is
-        filtered against — a project run passes its project-scoped registry; ``None``
-        uses the configured global one (identity runs, unchanged). ``skill_catalog``
-        is a session-pinned snapshot: when present the skills block renders its frozen
-        text instead of re-filtering the registry, so a mid-session skill write never
+        for the normal ``core:project_files`` render (``None`` off a project →
+        collapses). ``working_project_context`` is the already-rendered,
+        session-pinned replacement used only by Rooted Identity Agents; when set it
+        wins over ``project_context`` so Project files are not read again.
+        ``skill_registry`` overrides the registry the skills block is filtered
+        against — a project run passes its project-scoped registry; ``None`` uses the
+        configured global one (identity runs, unchanged). ``skill_catalog`` is a
+        session-pinned snapshot: when present the skills block renders its frozen text
+        instead of re-filtering the registry, so a mid-session skill write never
         shifts the prompt prefix.
 
         ``agent_project_id`` is the Agent's addressing scope for contributed blocks.
@@ -1004,6 +1008,7 @@ class SystemPromptManager:
         context = BlockRenderContext(
             agent=agent,
             project_context=project_context,
+            working_project_context=working_project_context,
             agent_project_id=agent_project_id,
             scope=scope_key,
             read_observer=observer,
@@ -1197,7 +1202,46 @@ class SystemPromptManager:
 
     def _render_project_files_block(self, context: BlockRenderContext) -> str:
         """Render the ``core:project_files`` data block (the auto-load files)."""
+        if context.working_project_context is not None:
+            return context.working_project_context
         return self.render_project_files(context.project_context, on_read=context.read_observer)
+
+    def render_working_project_context(
+        self,
+        project_id: str,
+        project_name: str,
+        project_context: ProjectPromptContext,
+        *,
+        on_read: Callable[[Path], None] | None = None,
+    ) -> str:
+        """Render a Rooted Identity Agent's Working Project Context snapshot."""
+        project_files: list[str] = []
+        for name in project_context.auto_load:
+            block = self._read_project_file_block(
+                project_context.cwd,
+                name,
+                on_read=on_read,
+            )
+            if block is not None:
+                project_files.append(_indent_project_file_frame(block))
+
+        safe_project_id = escape(project_id, quote=True)
+        safe_project_name = escape(" ".join(project_name.split()), quote=True)
+        safe_cwd = escape(str(project_context.cwd), quote=True)
+        file_text = "\n\n".join(project_files)
+        framed_files = f"\n{file_text}\n" if file_text else "\n"
+        return (
+            "## Working Project\n\n"
+            f'You are rooted in the Project "{safe_project_name}" '
+            f"(id: `{safe_project_id}`), located at `{safe_cwd}`.\n"
+            f"Your working directory is set to: `{safe_cwd}`\n"
+            "Below is the Project Context, follow it for every action that affects "
+            "this Project.\n\n"
+            f'<project_context id="{safe_project_id}" name="{safe_project_name}" '
+            f'cwd="{safe_cwd}">'
+            f"{framed_files}"
+            "</project_context>"
+        )
 
     def _runtime_replacements(self, agent: PromptAgent) -> dict[str, str]:
         """Return the build-time runtime-variable substitutions (``{host}``, …).
@@ -1707,6 +1751,17 @@ def _listing_data_placeholder(_context: BlockRenderContext) -> str:
     satisfy the "exactly one of default_text/render" contract. This is never called.
     """
     return ""
+
+
+def _indent_project_file_frame(block: str) -> str:
+    """Indent only a Project file's wrapper tags, preserving its content exactly."""
+    opening, separator, remainder = block.partition("\n")
+    if not separator:
+        return f" {block}"
+    content, closing_separator, closing = remainder.rpartition("\n")
+    if not closing_separator:
+        return f" {opening}\n{remainder}"
+    return f" {opening}\n{content}\n {closing}"
 
 
 def load_bundled_default_layout() -> list[LayoutEntry]:

@@ -32,6 +32,10 @@ Pure-text `/skill-name` at the start and `$skill-name` anywhere are deterministi
 
 `_pinned_skill_catalog` snapshots the rendered Skill catalog text in Session metadata on first build. Later requests reuse that exact text to keep the System Prompt stable for provider prompt caching. A newly available+allowed Skill therefore does not rewrite the catalog; `_announce_newly_available_skills` adds a one-time System Reminder note instead. The admitted working Project supplies Project Skills while an Identity Agent retains its private Skill layer; Config Agents remain under Project ceilings.
 
+## Rooted Working Project Context
+
+For a Rooted Identity Agent only, `_pinned_working_project_context` asks `SystemPromptManager.render_working_project_context` to render the selected Project's id, display name, cwd, and readable auto-load files before the first provider request, stores the exact text under `pinned_working_project_context` in Session metadata, and supplies that text verbatim to every later System Prompt build. A Project-file change or an explicit `project` Tool call cannot regenerate or replace it. This pins only the automatic Working Project block; Config/Project Agents retain the live `project_context` render, the explicit `project` Tool retains its ordinary persisted Tool result, and every unrelated System Prompt input keeps its existing lifecycle. Prompt preview renders a prospective snapshot without persisting it.
+
 ## Content Blocks, mentions, and media
 
 `core/chat/content_blocks.py` owns `TextBlock`, `MediaBlock`, `FileBlock`, and `FileMentionBlock` plus JSON round-trip. `core/chat/file_mentions.py` lists cwd files for autocomplete and expands verified mentioned paths into immutable snapshots before Run admission. A `FileMentionBlock` records `path`, `status`, `text`, and `size_bytes`; request rendering always identifies it as a user-supplied file snapshot. Auto-injected Project files and expanded mentions are stamped into `runtime.file_read_state` so later write/edit Tools satisfy read-before-write without duplicating a read.

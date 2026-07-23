@@ -178,6 +178,7 @@ class StubPrompts:
         self.build_calls: list[tuple[str, str, Any]] = []
         self.effective_tool_name_calls: list[tuple[str, ...]] = []
         self.render_project_files_calls: list[Any] = []
+        self.render_working_project_context_calls: list[tuple[str, str, Any]] = []
         self.render_skill_catalog_calls = 0
 
     def build_system_prompt(
@@ -187,6 +188,7 @@ class StubPrompts:
         *,
         agent_body: str = "",
         project_context: Any = None,
+        working_project_context: str | None = None,
         agent_project_id: str | None = None,
         skill_registry: Any = None,
         skill_catalog: Any = None,
@@ -205,12 +207,44 @@ class StubPrompts:
         # through render_project_files so project files are reported as read, like
         # the real builder (SOUL/memory are not modeled by this stub).
         on_read = read_paths.append if read_paths is not None else None
+        rendered_project = (
+            working_project_context
+            if working_project_context is not None
+            else self.render_project_files(project_context, on_read=on_read)
+        )
         parts = [
             agent_body,
             f"System for {agent.id}",
-            self.render_project_files(project_context, on_read=on_read),
+            rendered_project,
         ]
         return "\n".join(part for part in parts if part)
+
+    def render_working_project_context(
+        self,
+        project_id: str,
+        project_name: str,
+        project_context: Any,
+        *,
+        on_read: Any = None,
+    ) -> str:
+        self.render_working_project_context_calls.append(
+            (project_id, project_name, project_context)
+        )
+        files = self.render_project_files(project_context, on_read=on_read)
+        indented_files = files.replace("<file ", " <file ").replace("</file>", " </file>")
+        cwd = str(project_context.cwd)
+        framed_files = f"\n{indented_files}\n" if indented_files else "\n"
+        return (
+            "## Working Project\n\n"
+            f'You are rooted in the Project "{project_name}" (id: `{project_id}`), '
+            f"located at `{cwd}`.\n"
+            f"Your working directory is set to: `{cwd}`\n"
+            "Below is the Project Context, follow it for every action that affects "
+            "this Project.\n\n"
+            f'<project_context id="{project_id}" name="{project_name}" cwd="{cwd}">'
+            f"{framed_files}"
+            "</project_context>"
+        )
 
     def render_skill_catalog(self, agent: StubAgent, skill_registry: Any = None) -> Any:
         from core.prompts import PinnedSkillCatalog

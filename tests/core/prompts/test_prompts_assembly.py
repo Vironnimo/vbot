@@ -245,6 +245,60 @@ def test_project_files_render_in_order_after_memory(workspace: Path, tmp_path: P
     assert prompt.index("AGENTS.md") < prompt.index("CONTEXT.md")
 
 
+def test_working_project_context_uses_exact_rooted_agent_frame(tmp_path: Path) -> None:
+    repo = tmp_path / "second-brain"
+    repo.mkdir()
+    (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
+    wiki_dir = repo / "wiki"
+    wiki_dir.mkdir()
+    (wiki_dir / "index.md").write_text("Wiki index", encoding="utf-8")
+    manager = _manager(tmp_path)
+    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+    context = ProjectPromptContext.from_project(repo, ["AGENTS.md", "wiki/index.md"])
+    read_paths: list[Path] = []
+
+    snapshot = manager.render_working_project_context(
+        "second-brain",
+        "Second Brain",
+        context,
+        on_read=read_paths.append,
+    )
+
+    assert snapshot == (
+        "## Working Project\n\n"
+        f'You are rooted in the Project "Second Brain" (id: `second-brain`), '
+        f"located at `{repo}`.\n"
+        f"Your working directory is set to: `{repo}`\n"
+        "Below is the Project Context, follow it for every action that affects "
+        "this Project.\n\n"
+        f'<project_context id="second-brain" name="Second Brain" cwd="{repo}">\n'
+        ' <file name="AGENTS.md">\n'
+        "Team rules\n"
+        " </file>\n\n"
+        ' <file name="wiki/index.md">\n'
+        "Wiki index\n"
+        " </file>\n"
+        "</project_context>"
+    )
+    assert read_paths == [
+        (repo / "AGENTS.md").resolve(),
+        (repo / "wiki" / "index.md").resolve(),
+    ]
+
+    (repo / "AGENTS.md").write_text("Changed rules", encoding="utf-8")
+    rebuild_reads: list[Path] = []
+    prompt = manager.build_system_prompt(
+        agent,
+        project_context=context,
+        working_project_context=snapshot,
+        read_paths=rebuild_reads,
+    )
+
+    assert snapshot in prompt
+    assert "Changed rules" not in prompt
+    assert rebuild_reads == []
+
+
 def test_project_files_collapse_without_context(workspace: Path, tmp_path: Path) -> None:
     manager = _manager(tmp_path)
     agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT)

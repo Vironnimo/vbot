@@ -190,6 +190,9 @@ MAX_TOOL_ITERATIONS = 1000
 # stored in session metadata so a mid-session skill write never shifts the session's
 # system prompt (the prompt-cache invariant).
 PINNED_SKILL_CATALOG_META_KEY = "pinned_skill_catalog"
+# Rooted Identity Agent Working Project Context, rendered once from the selected
+# Project's identity and auto-load files and then reused verbatim for the Session.
+PINNED_WORKING_PROJECT_CONTEXT_META_KEY = "pinned_working_project_context"
 
 
 @dataclass(frozen=True)
@@ -268,6 +271,7 @@ class _RunExecutionContext:
     project_id: str | None
     project_cwd: Path | None
     project_prompt_context: ProjectPromptContext | None
+    working_project_context: str | None
     skill_project_id: str | None
     skill_registry: SkillRegistry
     skill_catalog: PinnedSkillCatalog
@@ -725,6 +729,13 @@ class ChatLoop:
                 if prompt_project is not None
                 else None
             )
+            working_project_context = self._pinned_working_project_context(
+                agent_id,
+                session_id,
+                prompt_project,
+                prompt_context,
+                project_id,
+            )
             skill_project_id, identity_agent_id = resolve_skill_scope(
                 project_id, prompt_project, agent_id
             )
@@ -741,6 +752,7 @@ class ChatLoop:
                 wire_media_types=_resolve_wire_media_support(adapter, model_id),
                 agent_body=runtime_agent_body(agent),
                 project_context=prompt_context,
+                working_project_context=working_project_context,
                 agent_project_id=project_id,
                 skill_registry=skill_registry,
                 skill_catalog=self._pinned_skill_catalog(
@@ -892,6 +904,13 @@ class ChatLoop:
             if prompt_project is not None
             else None
         )
+        working_project_context = self._pinned_working_project_context(
+            run.agent_id,
+            run.session_id,
+            prompt_project,
+            project_prompt_context,
+            project_id,
+        )
         skill_project_id, identity_agent_id = resolve_skill_scope(
             project_id, prompt_project, run.agent_id
         )
@@ -912,6 +931,7 @@ class ChatLoop:
             project_id=project_id,
             project_cwd=project_cwd,
             project_prompt_context=project_prompt_context,
+            working_project_context=working_project_context,
             skill_project_id=skill_project_id,
             skill_registry=skill_registry,
             skill_catalog=skill_catalog,
@@ -1048,6 +1068,7 @@ class ChatLoop:
                 wire_media_types=target.wire_media_types,
                 agent_body=runtime_agent_body(agent),
                 project_context=context.project_prompt_context,
+                working_project_context=context.working_project_context,
                 agent_project_id=context.project_id,
                 skill_registry=context.skill_registry,
                 skill_catalog=context.skill_catalog,
@@ -1110,6 +1131,7 @@ class ChatLoop:
                             wire_media_types=fallback_target.wire_media_types,
                             agent_body=runtime_agent_body(agent),
                             project_context=context.project_prompt_context,
+                            working_project_context=context.working_project_context,
                             agent_project_id=context.project_id,
                             skill_registry=context.skill_registry,
                             skill_catalog=context.skill_catalog,
@@ -1324,6 +1346,43 @@ class ChatLoop:
         self._dependencies.sessions.set_metadata(agent_id, session_id, metadata, project_id)
         return snapshot
 
+    def _pinned_working_project_context(
+        self,
+        agent_id: str,
+        session_id: str,
+        prompt_project: Any | None,
+        project_context: ProjectPromptContext | None,
+        project_id: str | None,
+    ) -> str | None:
+        """Return one Rooted Identity Agent Working Project Context per Session.
+
+        This snapshot governs only the automatic Working Project block. The rest
+        of the System Prompt keeps its existing live assembly behavior, and the
+        explicit ``project`` Tool remains an ordinary Tool-result path.
+        """
+        if project_id is not None:
+            return None
+
+        metadata = self._dependencies.sessions.get_metadata(agent_id, session_id, project_id)
+        pinned = metadata.get(PINNED_WORKING_PROJECT_CONTEXT_META_KEY)
+        pinned_text = pinned.get("text") if isinstance(pinned, dict) else None
+        if isinstance(pinned_text, str):
+            return pinned_text
+        if prompt_project is None or project_context is None:
+            return None
+
+        read_paths: list[Path] = []
+        snapshot = self._dependencies.get_system_prompts().render_working_project_context(
+            prompt_project.project_id,
+            prompt_project.display_name,
+            project_context,
+            on_read=read_paths.append,
+        )
+        self._stamp_prompt_files_read(session_id, read_paths)
+        metadata[PINNED_WORKING_PROJECT_CONTEXT_META_KEY] = {"text": snapshot}
+        self._dependencies.sessions.set_metadata(agent_id, session_id, metadata, project_id)
+        return snapshot
+
     def _announce_newly_available_skills(
         self,
         agent_id: str,
@@ -1397,6 +1456,7 @@ class ChatLoop:
         wire_media_types: frozenset[str] = frozenset(),
         agent_body: str = "",
         project_context: ProjectPromptContext | None = None,
+        working_project_context: str | None = None,
         agent_project_id: str | None = None,
         skill_registry: SkillRegistry | None = None,
         skill_catalog: PinnedSkillCatalog | None = None,
@@ -1409,6 +1469,7 @@ class ChatLoop:
             wire_media_types=wire_media_types,
             agent_body=agent_body,
             project_context=project_context,
+            working_project_context=working_project_context,
             agent_project_id=agent_project_id,
             skill_registry=skill_registry,
             skill_catalog=skill_catalog,
@@ -1425,6 +1486,7 @@ class ChatLoop:
         wire_media_types: frozenset[str] = frozenset(),
         agent_body: str = "",
         project_context: ProjectPromptContext | None = None,
+        working_project_context: str | None = None,
         agent_project_id: str | None = None,
         skill_registry: SkillRegistry | None = None,
         skill_catalog: PinnedSkillCatalog | None = None,
@@ -1462,6 +1524,7 @@ class ChatLoop:
             agent,
             agent_body=agent_body,
             project_context=project_context,
+            working_project_context=working_project_context,
             agent_project_id=agent_project_id,
             skill_registry=skill_registry,
             skill_catalog=skill_catalog,
@@ -1965,6 +2028,7 @@ class ChatLoop:
             wire_media_types=target.wire_media_types,
             agent_body=runtime_agent_body(agent),
             project_context=context.project_prompt_context,
+            working_project_context=context.working_project_context,
             agent_project_id=context.project_id,
             skill_registry=compaction_skill_registry,
             # Reuse the session's pinned snapshot so the rebuilt prompt's catalog is
