@@ -169,7 +169,7 @@ if TYPE_CHECKING:
     from core.compaction import CompactionService, CompactionSettings
     from core.extensions import ExtensionRegistry
     from core.models.models import ModelRegistry
-    from core.projects import AgentResolver, ProjectStore
+    from core.projects import AgentResolver, AgentRunOverrides, ProjectStore
     from core.prompts import SystemPromptManager
     from core.providers.adapter import ProviderAdapter
     from core.providers.providers import ProviderRegistry
@@ -243,6 +243,7 @@ class _RunRequest:
     reply_surface: ReplySurface | None = None
     tool_restriction: tuple[str, ...] | None = None
     input_persisted_hook: Callable[[], None] | None = None
+    agent_overrides: AgentRunOverrides | None = None
 
 
 @dataclass(frozen=True)
@@ -476,6 +477,7 @@ class ChatLoop:
         content: str | list[ContentBlock],
         *,
         reply_surface: ReplySurface | None = None,
+        agent_overrides: AgentRunOverrides | None = None,
     ) -> RunExecutor:
         """Return a run-manager executor that runs *content* through this loop.
 
@@ -486,7 +488,11 @@ class ChatLoop:
         project anchor, tool cwd = repo). The public way for other domains
         (sub-agents) to hand the run manager an executor.
         """
-        request = _RunRequest(content=content, reply_surface=reply_surface)
+        request = _RunRequest(
+            content=content,
+            reply_surface=reply_surface,
+            agent_overrides=agent_overrides,
+        )
         return lambda run: self._execute_run(run, request)
 
     async def send(
@@ -890,7 +896,14 @@ class ChatLoop:
         """Resolve all stable execution inputs once at the Run boundary."""
         project_id = run.project_id
         working_project_id = run.working_project_id
-        agent = self._dependencies.agent_resolver.resolve_agent(project_id, run.agent_id)
+        if request.agent_overrides is None:
+            agent = self._dependencies.agent_resolver.resolve_agent(project_id, run.agent_id)
+        else:
+            agent = self._dependencies.agent_resolver.resolve_agent(
+                project_id,
+                run.agent_id,
+                run_overrides=request.agent_overrides,
+            )
         provider_id, connection_id = _resolve_agent_connection(self._dependencies, agent)
         _ensure_provider_exists(self._dependencies.providers, provider_id)
         _model_provider_id, model_id = _split_agent_model(agent.model)

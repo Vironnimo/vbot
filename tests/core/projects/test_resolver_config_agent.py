@@ -2,6 +2,7 @@
 
 from .resolver_test_support import (
     PROJECT_DEFAULT_ALLOWED_TOOLS,
+    AgentRunOverrides,
     AgentStore,
     ConfigAgent,
     Path,
@@ -45,6 +46,38 @@ def test_config_agent_resolves_to_runnable_runtime_agent(
     assert runtime_agent.tools == {"subagent": {"allowed_agents": []}}
     assert runtime_agent.fallback_model == ""
     assert runtime_agent.thinking_effort is None
+
+
+def test_config_agent_run_overrides_change_only_the_runtime_view(
+    agents: AgentStore, projects: ProjectStore, repo: Path
+) -> None:
+    _write_agent(
+        repo,
+        "builder.md",
+        model="openai/gpt-5.2",
+        reasoning_effort="low",
+    )
+    project = _project(projects, repo)
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    overridden = resolver.resolve_agent(
+        project.project_id,
+        "builder",
+        run_overrides=AgentRunOverrides(
+            model="openai/gpt-mini",
+            thinking_effort="",
+        ),
+    )
+    configured = resolver.resolve_agent(project.project_id, "builder")
+
+    assert isinstance(overridden, ConfigAgent)
+    assert isinstance(configured, ConfigAgent)
+    assert overridden.model == "openai/gpt-mini"
+    assert overridden.thinking_effort == ""
+    assert configured.model == "openai/gpt-5.2"
+    assert configured.thinking_effort == "low"
+    assert overridden.allowed_tools == configured.allowed_tools
+    assert overridden.body == configured.body
 
 
 def test_effective_tools_drop_explorer_denials(

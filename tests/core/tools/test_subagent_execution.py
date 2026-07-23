@@ -84,6 +84,88 @@ async def test_subagent_tool_self_spawns_background_and_propagates_depth(
     assert FakeChatLoop.seen_streaming == [True]
 
 
+async def test_subagent_tool_forwards_run_local_model_and_thinking_overrides(
+    tmp_path: Path,
+) -> None:
+    FakeChatLoop.seen_agent_overrides = []
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+
+    result = await _handle_subagent(
+        context,
+        {
+            "content": "do work",
+            "model": "openai/gpt-mini",
+            "thinking_effort": "high",
+        },
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert result["ok"] is True
+    assert len(FakeChatLoop.seen_agent_overrides) == 1
+    overrides = FakeChatLoop.seen_agent_overrides[0]
+    assert overrides is not None
+    assert overrides.model == "openai/gpt-mini"
+    assert overrides.thinking_effort == "high"
+    resolver_overrides = runtime.agent_resolver.calls[0][2]
+    assert resolver_overrides == overrides
+    manager.started[0][3].mark_completed(
+        ChatMessage.assistant(model="openai/gpt-mini", content="done")
+    )
+    await asyncio.sleep(0)
+
+
+async def test_subagent_tool_preserves_explicit_provider_default_thinking_effort(
+    tmp_path: Path,
+) -> None:
+    FakeChatLoop.seen_agent_overrides = []
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+
+    result = await _handle_subagent(
+        make_context(),
+        {"content": "do work", "thinking_effort": ""},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert result["ok"] is True
+    overrides = FakeChatLoop.seen_agent_overrides[0]
+    assert overrides is not None
+    assert overrides.thinking_effort == ""
+    manager.started[0][3].mark_completed(
+        ChatMessage.assistant(model="openai/gpt-5.2", content="done")
+    )
+    await asyncio.sleep(0)
+
+
+async def test_subagent_tool_without_overrides_keeps_executor_default(
+    tmp_path: Path,
+) -> None:
+    FakeChatLoop.seen_agent_overrides = []
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+
+    result = await _handle_subagent(
+        make_context(),
+        {"content": "do work"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert result["ok"] is True
+    assert FakeChatLoop.seen_agent_overrides == [None]
+    manager.started[0][3].mark_completed(
+        ChatMessage.assistant(model="openai/gpt-5.2", content="done")
+    )
+    await asyncio.sleep(0)
+
+
 async def test_subagent_tool_forces_foreground_at_depth(tmp_path: Path) -> None:
     # A sub-agent (depth >= 1) cannot park background work, so an omitted background
     # flag is forced to the foreground: the tool returns the finished child result

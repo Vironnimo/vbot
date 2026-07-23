@@ -33,6 +33,7 @@ from core.projects.projects import (
 from core.projects.resolver import (
     AgentResolutionError,
     AgentResolver,
+    AgentRunOverrides,
     ConfigAgent,
     ModelConfigurationChecker,
     ModelConfigurationError,
@@ -46,6 +47,7 @@ from core.projects.resolver import (
 from core.projects.store import ProjectStore, project_sessions_dir
 
 __all__ = [
+    "AgentRunOverrides",
     "AgentResolutionError",
     "AgentResolver",
     "ConfigAgent",

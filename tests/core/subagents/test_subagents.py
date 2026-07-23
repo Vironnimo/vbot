@@ -204,7 +204,14 @@ class FakeAgentResolver:
         self._agents = agents
         self.calls: list[tuple[str | None, str]] = []
 
-    def resolve_agent(self, project_id: str | None, agent_id: str) -> SimpleNamespace:
+    def resolve_agent(
+        self,
+        project_id: str | None,
+        agent_id: str,
+        *,
+        run_overrides: Any | None = None,
+    ) -> SimpleNamespace:
+        del run_overrides
         self.calls.append((project_id, agent_id))
         try:
             return self._agents.get(agent_id)
@@ -267,9 +274,11 @@ class FakeChildLoop:
         del nesting_depth
         return self
 
-    def run_executor(self, content: str) -> Any:
+    def run_executor(self, content: str, *, agent_overrides: Any | None = None) -> Any:
         # The project anchor rides ``run.project_id`` (set by the run manager
         # from the project_id passed to start/enqueue), not the executor closure.
+        del agent_overrides
+
         async def _execute(run: Run) -> ChatMessage:
             return ChatMessage.assistant(model="openai/gpt-5.2", content=f"handled: {content}")
 
@@ -783,7 +792,14 @@ async def test_resolver_failure_maps_to_tool_failure_not_raised() -> None:
     from core.subagents.subagents import _validate_target_agent
 
     class _RaisingResolver:
-        def resolve_agent(self, _project_id: str | None, _agent_id: str) -> Any:
+        def resolve_agent(
+            self,
+            _project_id: str | None,
+            _agent_id: str,
+            *,
+            run_overrides: Any | None = None,
+        ) -> Any:
+            del run_overrides
             raise AgentResolutionError("off team")
 
     runtime = SimpleNamespace(agent_resolver=_RaisingResolver())

@@ -1,6 +1,6 @@
 """Connection-bound Model configuration tests."""
 
-from core.projects import ModelConfigurationError
+from core.projects import AgentRunOverrides, ModelConfigurationError
 
 from .resolver_test_support import (
     AgentResolutionError,
@@ -11,6 +11,7 @@ from .resolver_test_support import (
     _checker,
     _FakeConnection,
     _FakeProviderConfig,
+    _openai_configured,
     _project,
     _resolver,
     _two_connection_checker,
@@ -108,6 +109,48 @@ def test_resolver_require_model_configured_uses_domain_validation_seam(
     resolver.require_model_configured("openai/gpt-5.2::subscription")
     with pytest.raises(ModelConfigurationError, match="not usable in this instance"):
         resolver.require_model_configured("openai/ghost-model")
+
+
+def test_identity_run_overrides_are_immutable_and_not_persisted(
+    agents: AgentStore, projects: ProjectStore
+) -> None:
+    agents.create(
+        "identity",
+        model="openai/gpt-5.2",
+        thinking_effort="low",
+    )
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    resolved = resolver.resolve_agent(
+        None,
+        "identity",
+        run_overrides=AgentRunOverrides(
+            model="openai/gpt-mini",
+            thinking_effort="high",
+        ),
+    )
+
+    assert resolved.model == "openai/gpt-mini"
+    assert resolved.thinking_effort == "high"
+    assert agents.get("identity").model == "openai/gpt-5.2"
+    assert agents.get("identity").thinking_effort == "low"
+
+
+def test_run_override_rejects_unusable_model(agents: AgentStore, projects: ProjectStore) -> None:
+    agents.create("identity", model="openai/gpt-5.2")
+    resolver = _resolver(agents, projects, _openai_configured())
+
+    with pytest.raises(ModelConfigurationError, match="not usable in this instance"):
+        resolver.resolve_agent(
+            None,
+            "identity",
+            run_overrides=AgentRunOverrides(model="openai/ghost-model"),
+        )
+
+
+def test_run_override_rejects_unknown_thinking_effort() -> None:
+    with pytest.raises(ValueError, match="thinking_effort must be one of"):
+        AgentRunOverrides(thinking_effort="extreme")
 
 
 def test_empty_suffix_after_separator_is_unconfigured() -> None:
