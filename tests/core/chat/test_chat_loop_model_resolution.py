@@ -10,6 +10,7 @@ import pytest
 from core.chat import (
     ChatError,
 )
+from core.projects import AgentRunOverrides
 from core.utils.errors import ProviderError
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
@@ -106,6 +107,46 @@ async def test_chat_loop_provider_comes_from_model_with_connection_suffix(tmp_pa
     assert runtime.adapter_provider_id == "openrouter"
     assert runtime.adapter_connection_id == "openrouter:api-key"
     assert adapter.requests[0]["model_id"] == "gpt-5.2"
+
+
+@pytest.mark.asyncio
+async def test_run_executor_applies_overrides_to_only_its_admitted_run(tmp_path: Path) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        thinking_effort="low",
+        allowed_tools=["*"],
+    )
+    adapter = StubAdapter(
+        [
+            {"content": "Overridden", "tool_calls": None},
+            {"content": "Configured", "tool_calls": None},
+        ]
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    loop = build_chat_loop(runtime)
+    executor = loop.run_executor(
+        "First",
+        agent_overrides=AgentRunOverrides(
+            model="openai/gpt-mini",
+            thinking_effort="high",
+        ),
+    )
+
+    run = await runtime.chat_run_manager.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=executor,
+        project_id=None,
+    )
+    await run.wait()
+    await loop.send("coder", "Second", session_id="session-one")
+
+    assert adapter.requests[0]["model_id"] == "gpt-mini"
+    assert adapter.requests[0]["kwargs"]["thinking_effort"] == "high"
+    assert adapter.requests[1]["model_id"] == "gpt-5.2"
+    assert adapter.requests[1]["kwargs"]["thinking_effort"] == "low"
 
 
 @pytest.mark.asyncio

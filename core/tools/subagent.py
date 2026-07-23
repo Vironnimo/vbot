@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.settings import ALLOWED_THINKING_EFFORTS
 from core.subagents import SubAgentCoordinator, SubAgentPromptTarget
 from core.tools.tools import JsonObject, ToolDisplay, ToolPromptBlockRegistry, ToolRegistry
 
@@ -46,6 +47,9 @@ SUBAGENT_PROMPT_BLOCK_TEMPLATE = (
     "result. When you are yourself a Sub-Agent, every spawn runs in the foreground "
     "regardless of the requested setting; issue sibling calls in the same turn to "
     "run them concurrently.\n\n"
+    "Optional `model` and `thinking_effort` values override only the newly admitted "
+    "Sub-Agent Run. They do not modify the target Agent or Session, persist into a "
+    "later continuation, or pass to nested Sub-Agents.\n\n"
     "Omit `session_id` to create a new Sub-Agent Session. Provide it only to continue "
     "a specific existing Session. Use `subagent_result` only when the user explicitly "
     "asks for a running Sub-Agent's status or result before automatic batch delivery."
@@ -80,6 +84,21 @@ SUBAGENT_TOOL_PARAMETERS: JsonObject = {
             "description": (
                 "Existing Sub-Agent Session to continue. Creates a new persisted Session "
                 "when omitted."
+            ),
+        },
+        "model": {
+            "type": "string",
+            "description": (
+                "Run-local primary Model override in <provider>/<model-id> form. "
+                "Does not modify the target Agent or Session."
+            ),
+        },
+        "thinking_effort": {
+            "type": "string",
+            "enum": sorted(ALLOWED_THINKING_EFFORTS),
+            "description": (
+                "Run-local thinking effort override. Omit to inherit the target Agent; "
+                "an empty string selects the Provider default."
             ),
         },
     },

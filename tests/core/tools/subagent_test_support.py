@@ -150,8 +150,16 @@ class FakeAgentResolver:
 
     def __init__(self, agents: FakeAgents) -> None:
         self._agents = agents
+        self.calls: list[tuple[str | None, str, Any | None]] = []
 
-    def resolve_agent(self, _project_id: str | None, agent_id: str) -> SimpleNamespace:
+    def resolve_agent(
+        self,
+        project_id: str | None,
+        agent_id: str,
+        *,
+        run_overrides: Any | None = None,
+    ) -> SimpleNamespace:
+        self.calls.append((project_id, agent_id, run_overrides))
         try:
             return self._agents.get(agent_id)
         except AgentNotFoundError as error:
@@ -299,6 +307,7 @@ class FakeRunManager:
 class FakeChatLoop:
     seen_depths: list[int] = []
     seen_streaming: list[bool] = []
+    seen_agent_overrides: list[Any | None] = []
 
     def __init__(
         self,
@@ -325,8 +334,13 @@ class FakeChatLoop:
         self.seen_streaming.append(child._streaming)
         return child
 
-    def run_executor(self, content: str, *, project_id: str | None = None) -> Any:
-        del project_id
+    def run_executor(
+        self,
+        content: str,
+        *,
+        agent_overrides: Any | None = None,
+    ) -> Any:
+        self.seen_agent_overrides.append(agent_overrides)
         return lambda run: self._execute_run(run, content)
 
     async def _execute_run(self, run: Run, content: str) -> ChatMessage:

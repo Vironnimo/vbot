@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from core.projects import ModelConfigurationError
 from core.tools.subagent import (
     SUBAGENT_RESULT_TOOL_DESCRIPTION,
     SUBAGENT_RESULT_TOOL_PARAMETERS,
@@ -12,13 +13,16 @@ from core.tools.subagent import (
 from .subagent_test_support import (
     SUBAGENT_RESULT_TOOL_NAME,
     SUBAGENT_TOOL_NAME,
+    Any,
     ChatMessage,
     FakeAgentResolver,
     FakeAgents,
+    FakeChatLoop,
     FakeRunManager,
     JsonObject,
     Path,
     RecordingTriggerService,
+    Run,
     SimpleNamespace,
     SubAgentBatchTracker,
     SubAgentCoordinator,
@@ -75,6 +79,24 @@ async def test_register_subagent_tools_registers_both_public_tools() -> None:
     )
     assert subagent.parameters["properties"]["session_id"]["description"] == (
         "Existing Sub-Agent Session to continue. Creates a new persisted Session when omitted."
+    )
+    assert subagent.parameters["properties"]["model"]["description"] == (
+        "Run-local primary Model override in <provider>/<model-id> form. "
+        "Does not modify the target Agent or Session."
+    )
+    assert subagent.parameters["properties"]["thinking_effort"]["enum"] == [
+        "",
+        "high",
+        "low",
+        "max",
+        "medium",
+        "minimal",
+        "none",
+        "xhigh",
+    ]
+    assert subagent.parameters["properties"]["thinking_effort"]["description"] == (
+        "Run-local thinking effort override. Omit to inherit the target Agent; "
+        "an empty string selects the Provider default."
     )
     assert subagent_result.parameters["properties"]["session_id"]["description"] == (
         "Persisted Sub-Agent Session id returned by subagent."
@@ -159,6 +181,63 @@ async def test_subagent_tool_validates_target_agent_before_creating_session(
     assert result["error"]["code"] == "agent_not_found"
     assert manager.started == []
     assert list((tmp_path / "agents").glob("missing")) == []
+
+
+async def test_subagent_tool_rejects_invalid_thinking_effort_before_creating_session(
+    tmp_path: Path,
+) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+
+    result = await _handle_subagent(
+        context,
+        {"content": "spawn", "thinking_effort": "extreme"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
+    assert manager.started == []
+    assert runtime.chat_sessions.list(context.agent_id) == []
+
+
+async def test_subagent_tool_rejects_unusable_model_before_creating_session(
+    tmp_path: Path,
+) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+
+    class RejectingModelResolver(FakeAgentResolver):
+        def resolve_agent(
+            self,
+            project_id: str | None,
+            agent_id: str,
+            *,
+            run_overrides: Any | None = None,
+        ) -> SimpleNamespace:
+            if run_overrides is not None:
+                raise ModelConfigurationError("model is not usable in this instance")
+            return super().resolve_agent(project_id, agent_id)
+
+    runtime.agent_resolver = RejectingModelResolver(runtime.agents)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+
+    result = await _handle_subagent(
+        context,
+        {"content": "spawn", "model": "openai/ghost-model"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
+    assert "not usable" in result["error"]["message"]
+    assert manager.started == []
+    assert runtime.chat_sessions.list(context.agent_id) == []
 
 
 async def test_subagent_tool_creates_new_session_when_no_session_id_provided(
@@ -317,6 +396,61 @@ async def test_subagent_tool_routes_into_existing_session_when_session_id_provid
     assert metadata["platform"] == "telegram"
     assert metadata["is_subagent_session"] is True
     assert metadata["subagent_parent"]["session_id"] == context.session_id
+
+
+async def test_queued_subagent_runs_capture_independent_overrides(tmp_path: Path) -> None:
+    FakeChatLoop.seen_agent_overrides = []
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+    session_id = "busy-sub-session"
+    runtime.chat_sessions.create(context.agent_id, session_id=session_id)
+    manager.busy_sessions[(context.agent_id, session_id)] = Run(
+        run_id="busy-run",
+        agent_id=context.agent_id,
+        session_id=session_id,
+    )
+
+    first = await _handle_subagent(
+        context,
+        {
+            "content": "first",
+            "session_id": session_id,
+            "model": "openai/gpt-mini",
+            "thinking_effort": "low",
+        },
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+    second = await _handle_subagent(
+        context,
+        {
+            "content": "second",
+            "session_id": session_id,
+            "model": "openai/gpt-5.2",
+            "thinking_effort": "max",
+        },
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert first["ok"] is True
+    assert second["ok"] is True
+    assert len(manager.enqueued) == 2
+    captured_overrides = [
+        overrides for overrides in FakeChatLoop.seen_agent_overrides if overrides is not None
+    ]
+    assert len(captured_overrides) == 4
+    assert [(overrides.model, overrides.thinking_effort) for overrides in captured_overrides] == [
+        ("openai/gpt-mini", "low"),
+        ("openai/gpt-mini", "low"),
+        ("openai/gpt-5.2", "max"),
+        ("openai/gpt-5.2", "max"),
+    ]
+    for record in manager.enqueued:
+        record["run"].mark_completed(ChatMessage.assistant(model="openai/gpt-5.2", content="done"))
+    await asyncio.sleep(0)
 
 
 async def test_reused_session_gets_a_distinct_activity_file_per_run(tmp_path: Path) -> None:

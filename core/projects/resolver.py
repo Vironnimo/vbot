@@ -47,7 +47,7 @@ risk, mirroring ``core/providers/task_client.py`` / ``usage.py``).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
@@ -61,6 +61,7 @@ from core.projects.scanners.base import (
     ScanResult,
     scan_project,
 )
+from core.settings import validate_thinking_effort
 from core.skills import WILDCARD_ALLOWLIST
 
 if TYPE_CHECKING:
@@ -154,6 +155,29 @@ class RuntimeAgent(Protocol):
     def updated_at(self) -> str: ...
     @property
     def compaction_policy(self) -> dict[str, Any] | None: ...
+
+
+@dataclass(frozen=True)
+class AgentRunOverrides:
+    """The only Agent fields one admitted Run may replace ephemerally."""
+
+    model: str | None = None
+    thinking_effort: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.model is not None and (not isinstance(self.model, str) or not self.model):
+            raise ValueError("model must be a non-empty string")
+        if self.thinking_effort is not None:
+            validate_thinking_effort(
+                self.thinking_effort,
+                label="thinking_effort",
+                allow_none=False,
+            )
+
+    @property
+    def is_empty(self) -> bool:
+        """Return whether this value changes neither permitted field."""
+        return self.model is None and self.thinking_effort is None
 
 
 @dataclass(frozen=True)
@@ -486,18 +510,53 @@ class AgentResolver:
         # re-scan / project-open repopulates it via ``rescan_project``.
         self._team_cache: dict[str, ScanResult] = {}
 
-    def resolve_agent(self, project_id: str | None, agent_id: str) -> RuntimeAgent:
+    def resolve_agent(
+        self,
+        project_id: str | None,
+        agent_id: str,
+        *,
+        run_overrides: AgentRunOverrides | None = None,
+    ) -> RuntimeAgent:
         """Resolve one agent to a runnable :class:`RuntimeAgent`.
 
         ``project_id is None`` returns the store identity agent unchanged. A set
         ``project_id`` returns a :class:`ConfigAgent` synthesized from the
-        project's Team scan plus the resolved model. Raises
+        project's Team scan plus the resolved model. Optional Run overrides are
+        applied only to the returned immutable runtime view after normal
+        resolution; they never mutate either source configuration. Raises
         :class:`AgentResolutionError` for an unknown project/agent or a config
-        agent whose model chain fell through.
+        agent whose model chain fell through, and
+        :class:`ModelConfigurationError` for an unusable explicit Run Model.
         """
         if project_id is None:
-            return self._resolve_identity_agent(agent_id)
-        return self._resolve_config_agent(project_id, agent_id)
+            agent: RuntimeAgent = self._resolve_identity_agent(agent_id)
+        else:
+            agent = self._resolve_config_agent(project_id, agent_id)
+        return self._apply_run_overrides(agent, run_overrides)
+
+    def _apply_run_overrides(
+        self,
+        agent: RuntimeAgent,
+        run_overrides: AgentRunOverrides | None,
+    ) -> RuntimeAgent:
+        """Return an immutable runtime view with only the admitted fields replaced."""
+        if run_overrides is None or run_overrides.is_empty:
+            return agent
+
+        changes: dict[str, Any] = {}
+        if run_overrides.model is not None:
+            self._model_checker.require_configured(run_overrides.model)
+            changes["model"] = run_overrides.model
+        if run_overrides.thinking_effort is not None:
+            changes["thinking_effort"] = run_overrides.thinking_effort
+        if isinstance(agent, ConfigAgent):
+            return replace(agent, **changes)
+
+        from core.agents.agents import Agent
+
+        if isinstance(agent, Agent):
+            return replace(agent, **changes)
+        raise TypeError(f"unsupported RuntimeAgent implementation: {type(agent).__name__}")
 
     def _resolve_identity_agent(self, agent_id: str) -> Agent:
         """Resolve one persisted Identity Agent."""

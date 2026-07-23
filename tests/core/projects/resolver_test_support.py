@@ -13,6 +13,7 @@ from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from core.projects.resolver import (
     AgentResolutionError,
     AgentResolver,
+    AgentRunOverrides,
     ConfigAgent,
     ModelConfigurationChecker,
     resolve_prompt_project,
@@ -256,6 +257,7 @@ __all__ = [
     "AgentStore",
     "PROJECT_DEFAULT_ALLOWED_TOOLS",
     "AgentResolutionError",
+    "AgentRunOverrides",
     "AgentResolver",
     "ConfigAgent",
     "ModelConfigurationChecker",

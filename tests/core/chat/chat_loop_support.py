@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -135,13 +135,30 @@ class StubAgentResolver:
         self._unresolvable = set(unresolvable or set())
         self.calls: list[tuple[str | None, str]] = []
 
-    def resolve_agent(self, project_id: str | None, agent_id: str) -> StubAgent | ConfigAgent:
+    def resolve_agent(
+        self,
+        project_id: str | None,
+        agent_id: str,
+        *,
+        run_overrides: Any | None = None,
+    ) -> StubAgent | ConfigAgent:
         self.calls.append((project_id, agent_id))
         if project_id is None:
-            return self._agents.get(agent_id)
-        if (project_id, agent_id) in self._unresolvable:
-            raise AgentResolutionError(f"agent '{agent_id}' is not on project '{project_id}' team")
-        return self._project_agents.get((project_id, agent_id)) or self._agents.get(agent_id)
+            agent: StubAgent | ConfigAgent = self._agents.get(agent_id)
+        else:
+            if (project_id, agent_id) in self._unresolvable:
+                raise AgentResolutionError(
+                    f"agent '{agent_id}' is not on project '{project_id}' team"
+                )
+            agent = self._project_agents.get((project_id, agent_id)) or self._agents.get(agent_id)
+        if run_overrides is None:
+            return agent
+        changes: dict[str, Any] = {}
+        if run_overrides.model is not None:
+            changes["model"] = run_overrides.model
+        if run_overrides.thinking_effort is not None:
+            changes["thinking_effort"] = run_overrides.thinking_effort
+        return replace(agent, **changes)
 
 
 class StubProviders:

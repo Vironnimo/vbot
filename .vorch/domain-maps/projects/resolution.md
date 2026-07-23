@@ -8,6 +8,8 @@ Read this reference when changing how a Project Agent becomes effective runtime 
 
 Team membership is cached per Project, but the selected repository Agent source is reread on each resolution. This gives stable, cheap membership lookup while allowing edits to model, instructions, Tool denials, Agent-target rules, or scalar settings to take effect without a Team rebuild.
 
+`AgentResolver.resolve_agent(..., run_overrides=AgentRunOverrides | None)` may apply an immutable execution-only overlay after ordinary Identity or Project Agent resolution. `AgentRunOverrides` deliberately contains only `model` and `thinking_effort`; the resolver returns a replaced runtime dataclass and never mutates the stored Identity Agent, repository Agent, Project overrides, or Session. An empty or omitted overlay returns the ordinary resolved object unchanged.
+
 ## Model & Scalar Resolution
 
 The model chain is:
@@ -17,6 +19,8 @@ per-Agent override → repository Agent → Project default → global default �
 ```
 
 Each model tier must pass the same `ModelConfigurationChecker` before it can win. The checker validates the Provider, Model catalog entry, and an allowed usable Connection, including an explicitly pinned account suffix. `is_configured` supplies the boolean fallback/scan decision; `require_configured` and `AgentResolver.require_model_configured` expose the same invariant as a raising mutation seam for Chat `/model` and Project Agent overrides. A forbidden pin names the rejected Connection and the Model's allowed Connections; other failures use the general unusable-Model diagnostic. A syntactically present but unusable Model falls through to the next tier; if no usable Model exists, resolution fails rather than constructing a broken Agent.
+
+An explicit Run Model does not add another fallback tier: it replaces the already resolved primary Model for that Run and must pass `ModelConfigurationChecker.require_configured` directly. It does not alter the resolved fallback Model or any non-Model field. The Run thinking effort accepts the same canonical values as Agent/Project settings, including `""` for Provider default; Model-specific snapping, toggle, and budget rendering remain Provider policy.
 
 Temperature and thinking effort use:
 

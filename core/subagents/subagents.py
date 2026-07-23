@@ -11,7 +11,9 @@ from core.chat import (
 )
 from core.projects import (
     AgentResolutionError,
+    AgentRunOverrides,
     InvalidAgentAddressError,
+    ModelConfigurationError,
     format_agent_address,
     parse_agent_address,
     resolve_working_project_id,
@@ -24,6 +26,7 @@ from core.runs import (
     RunNotFoundError,
     RunStatus,
 )
+from core.settings import SettingsValidationError, validate_thinking_effort
 from core.subagents.activity import SubAgentActivity
 from core.subagents.catalog import SubAgentPromptTarget, build_subagent_prompt_targets
 from core.subagents.tracker import (
@@ -162,7 +165,14 @@ async def _handle_subagent(
     runtime: RuntimeServices,
     batch_tracker: SubAgentBatchTracker,
 ) -> JsonObject:
-    unknown_arguments = set(arguments) - {"content", "agent_id", "background", "session_id"}
+    unknown_arguments = set(arguments) - {
+        "content",
+        "agent_id",
+        "background",
+        "session_id",
+        "model",
+        "thinking_effort",
+    }
     if unknown_arguments:
         names = ", ".join(sorted(unknown_arguments))
         return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
@@ -182,7 +192,8 @@ async def _handle_subagent(
         )
         background = coerce_bool(arguments.get("background"), field_name="background", default=True)
         session_id = optional_string(arguments.get("session_id"), field_name="session_id")
-    except (ToolArgumentError, InvalidAgentAddressError) as error:
+        run_overrides = _parse_agent_run_overrides(arguments)
+    except (ToolArgumentError, InvalidAgentAddressError, SettingsValidationError) as error:
         return tool_failure("invalid_arguments", str(error))
 
     if not _target_is_allowed(context, target_agent_id, target_project_id):
@@ -207,6 +218,15 @@ async def _handle_subagent(
             "cannot target the calling agent's own active session",
         )
 
+    validation_error = _validate_target_agent(
+        runtime,
+        target_agent_id,
+        target_project_id,
+        run_overrides=run_overrides,
+    )
+    if validation_error is not None:
+        return validation_error
+
     settings = _load_subagent_settings(runtime)
     parent_key = _parent_key(context)
     if context.nesting_depth >= settings["max_subagent_depth"]:
@@ -228,10 +248,6 @@ async def _handle_subagent(
     try:
         if context.is_cancelled():
             return tool_failure("run_cancelled", "Parent run was cancelled before sub-agent spawn")
-
-        validation_error = _validate_target_agent(runtime, target_agent_id, target_project_id)
-        if validation_error is not None:
-            return validation_error
 
         if session_id is None:
             session = runtime.chat_sessions.create(target_agent_id, project_id=target_project_id)
@@ -265,6 +281,7 @@ async def _handle_subagent(
                 session.id,
                 content,
                 context,
+                run_overrides,
             )
         except ActiveRunError:
             if session_id is None:
@@ -273,7 +290,12 @@ async def _handle_subagent(
                     f"session already has an active run: {session.id}",
                 )
 
-            _, executor = _make_subagent_executor(runtime, content, context)
+            _, executor = _make_subagent_executor(
+                runtime,
+                content,
+                context,
+                run_overrides,
+            )
             target_agent = runtime.agent_resolver.resolve_agent(target_project_id, target_agent_id)
             item = await runtime.chat_run_manager.enqueue(
                 agent_id=target_agent_id,
@@ -603,8 +625,14 @@ async def _start_subagent_run(
     session_id: str,
     content: str,
     context: ToolContext,
+    run_overrides: AgentRunOverrides | None,
 ) -> Run:
-    _, executor = _make_subagent_executor(runtime, content, context)
+    _, executor = _make_subagent_executor(
+        runtime,
+        content,
+        context,
+        run_overrides,
+    )
     target_agent = runtime.agent_resolver.resolve_agent(project_id, agent_id)
     return await runtime.chat_run_manager.start(
         agent_id=agent_id,
@@ -619,6 +647,7 @@ def _make_subagent_executor(
     runtime: RuntimeServices,
     content: str,
     context: ToolContext,
+    run_overrides: AgentRunOverrides | None = None,
 ) -> tuple[ChatLoop, RunExecutor]:
     # Child Runs must match normal live Runs: the parent streaming loop
     # carries its attachment resolver and compaction service into the
@@ -629,7 +658,10 @@ def _make_subagent_executor(
     sub_loop = runtime.streaming_chat_loop.child_loop(
         nesting_depth=context.nesting_depth + 1,
     )
-    return sub_loop, sub_loop.run_executor(content)
+    return sub_loop, sub_loop.run_executor(
+        content,
+        agent_overrides=run_overrides,
+    )
 
 
 def _track_subagent_completion(
@@ -926,8 +958,32 @@ def _positive_int(value: Any, default: int) -> int:
     return default
 
 
+def _parse_agent_run_overrides(arguments: JsonObject) -> AgentRunOverrides | None:
+    """Parse the Run-only fields without collapsing explicit Provider default."""
+    model = optional_string(arguments.get("model"), field_name="model")
+    thinking_effort: str | None = None
+    if "thinking_effort" in arguments:
+        thinking_effort = cast(
+            str,
+            validate_thinking_effort(
+                arguments["thinking_effort"],
+                label="thinking_effort",
+                allow_none=False,
+            ),
+        )
+    overrides = AgentRunOverrides(
+        model=model,
+        thinking_effort=thinking_effort,
+    )
+    return None if overrides.is_empty else overrides
+
+
 def _validate_target_agent(
-    runtime: RuntimeServices, target_agent_id: str, project_id: str | None
+    runtime: RuntimeServices,
+    target_agent_id: str,
+    project_id: str | None,
+    *,
+    run_overrides: AgentRunOverrides | None = None,
 ) -> JsonObject | None:
     """Validate the spawn target resolves under its addressed project.
 
@@ -939,9 +995,18 @@ def _validate_target_agent(
     letting the error escape the tool boundary.
     """
     try:
-        runtime.agent_resolver.resolve_agent(project_id, target_agent_id)
+        if run_overrides is None:
+            runtime.agent_resolver.resolve_agent(project_id, target_agent_id)
+        else:
+            runtime.agent_resolver.resolve_agent(
+                project_id,
+                target_agent_id,
+                run_overrides=run_overrides,
+            )
     except AgentResolutionError as error:
         return tool_failure("agent_not_found", str(error))
+    except ModelConfigurationError as error:
+        return tool_failure("invalid_arguments", str(error))
     return None
 
 
