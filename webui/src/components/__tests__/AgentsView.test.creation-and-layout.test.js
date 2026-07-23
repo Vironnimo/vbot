@@ -241,6 +241,9 @@ describe('AgentsView', () => {
     expect(agentItem.querySelector('.agent-item-sub').textContent.trim()).toBe(
       'gpt-5.2',
     );
+    const row = agentItem.closest('.agent-list-row');
+    expect(row.firstElementChild).toBe(agentItem);
+    expect(row.lastElementChild).toBe(agentOrderHandle('alpha'));
   });
 
   it('reorders agents by drag-and-drop and persists the roster revision', async () => {
