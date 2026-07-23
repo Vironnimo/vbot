@@ -10,7 +10,7 @@ Review this session and update two things: your memory of the user, and your ski
 
 Preference order — pick the earliest that fits:
 
-1. PATCH A SKILL USED THIS SESSION. If a skill that was loaded or consulted covers the new learning, patch that one first (`skill_manage` operation "patch") — it was in play, it is the right place.
+1. PATCH A SKILL USED THIS SESSION (only if it is one of your own private skills). If a skill that was loaded or consulted covers the new learning, patch that one first (`skill_manage` operation "patch") — it was in play, it is the right place.
 2. PATCH ANOTHER OF YOUR EXISTING SKILLS. Call `skill` with no name to list your skills; load a candidate with `skill` to see its current content, then patch it — add a step, a pitfall, or broaden its triggers.
 3. ADD A SUPPORT FILE under an existing skill via `skill_manage` operation "write_file": `references/<topic>.md` for condensed knowledge (quoted findings, API notes, error recipes — concise and task-focused), `scripts/<name>` for re-runnable helpers, `assets/<name>` for starter files meant to be copied and adapted. Add a one-line pointer in the SKILL.md so future sessions find it.
 4. CREATE A NEW SKILL only when nothing existing covers the class of task. Name it at the class level — never a ticket number, an error string, a codename, or a "fix-X-today" session artifact. If the name only makes sense for today's task, fall back to 1–3 instead.
