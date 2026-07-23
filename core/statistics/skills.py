@@ -23,6 +23,12 @@ Usage is keyed by **bare skill name across scopes**: a name collision between,
 say, a global and a project skill aggregates into one row whose ``origins`` list
 makes the ambiguity visible. Per-scope attribution is deliberately not built.
 
+``usage_rate`` is an offer conversion, not raw activations divided by offers.
+Its numerator counts only Sessions where the same Skill is present in both the
+persisted ``seen_skills`` catalog and the activation carriers. Activations from
+older Sessions without catalog metadata remain visible in
+``activated_sessions`` but cannot inflate the conversion or push it above 100%.
+
 **Window semantics** follow the domain convention. The inventory join and the
 ``total_skills`` / ``never_used_skills`` snapshots are window-independent;
 ``offered_sessions`` and its timestamps filter by the offering session's
@@ -96,6 +102,7 @@ class SkillUsageStat:
     origins: list[str]
     offered_sessions: int
     activated_sessions: int
+    activated_offered_sessions: int
     usage_rate: float | None
     first_offered: str | None
     last_offered: str | None
@@ -111,6 +118,12 @@ class SkillsSection:
     total_skills: int
     used_skills: int
     never_used_skills: int
+    # Evidence-backed delete/improve candidates: at least one recorded offer,
+    # but no activation in a Session carrying that offer.
+    offered_unactivated_skills: int
+    # Current-inventory Skills with no observed offer metadata. These are kept
+    # separate because absence of evidence is not evidence of disuse.
+    skills_without_offer_data: int
     skills: list[SkillUsageStat]
 
 
@@ -125,6 +138,7 @@ class _SkillUsageAcc:
 
     offered_sessions: int = 0
     activated_sessions: int = 0
+    activated_offered_sessions: int = 0
     # Window-independent activation count, so a skill activated only outside the
     # window still reads as "used ever" (never-used flagging must not depend on
     # the window).
@@ -165,13 +179,16 @@ class SkillUsageAccumulator:
         session, windowed by the session ``created_at``). ``activations`` are
         ``(skill_name, note_timestamp)`` pairs from the session's activation
         notes; a ``(session, skill)`` pair counts at most once, windowed by the
-        note timestamp. Names are recorded raw here — the inventory join and the
-        drop of deleted-skill usage happen at build time.
+        note timestamp. The per-session intersection is the conversion numerator.
+        Names are recorded raw here — the inventory join and the drop of
+        deleted-skill usage happen at build time.
         """
         # Offered filters by the session's own start (``created_at``); the
         # seen_skills list carries no per-skill time.
-        if self._in_window(created_at):
-            for name in dict.fromkeys(offered_names):
+        offered_in_window = self._in_window(created_at)
+        offered_name_set = set(dict.fromkeys(offered_names)) if offered_in_window else set()
+        if offered_in_window:
+            for name in offered_name_set:
                 accumulator = self._skill(name)
                 accumulator.offered_sessions += 1
                 accumulator.first_offered = _min_timestamp(accumulator.first_offered, created_at)
@@ -189,6 +206,8 @@ class SkillUsageAccumulator:
             seen_in_window.add(name)
             accumulator = self._skill(name)
             accumulator.activated_sessions += 1
+            if name in offered_name_set:
+                accumulator.activated_offered_sessions += 1
             accumulator.by_agent[display_key] = accumulator.by_agent.get(display_key, 0) + 1
             accumulator.first_activated = _min_timestamp(
                 accumulator.first_activated, note_timestamp
@@ -205,22 +224,32 @@ class SkillUsageAccumulator:
         rows: list[SkillUsageStat] = []
         used = 0
         never_used = 0
+        offered_unactivated = 0
+        without_offer_data = 0
         for name in sorted(inventory.names):
             accumulator = self._skills.get(name)
             offered = accumulator.offered_sessions if accumulator is not None else 0
             activated = accumulator.activated_sessions if accumulator is not None else 0
+            activated_offered = (
+                accumulator.activated_offered_sessions if accumulator is not None else 0
+            )
             activated_ever = accumulator.activated_sessions_ever if accumulator is not None else 0
             if activated:
                 used += 1
             if not activated_ever:
                 never_used += 1
+            if not offered:
+                without_offer_data += 1
+            elif not activated_offered:
+                offered_unactivated += 1
             rows.append(
                 SkillUsageStat(
                     name=name,
                     origins=inventory.origins_for(name),
                     offered_sessions=offered,
                     activated_sessions=activated,
-                    usage_rate=(activated / offered) if offered else None,
+                    activated_offered_sessions=activated_offered,
+                    usage_rate=(activated_offered / offered) if offered else None,
                     first_offered=accumulator.first_offered if accumulator is not None else None,
                     last_offered=accumulator.last_offered if accumulator is not None else None,
                     first_activated=(
@@ -239,6 +268,8 @@ class SkillUsageAccumulator:
             total_skills=len(inventory.names),
             used_skills=used,
             never_used_skills=never_used,
+            offered_unactivated_skills=offered_unactivated,
+            skills_without_offer_data=without_offer_data,
             skills=rows,
         )
 

@@ -516,7 +516,7 @@ export function parseOrigin(origin) {
   return { scope, detail };
 }
 
-// Format a skill's usage rate (activated / offered, a 0–1 ratio) for display.
+// Format a Skill's evidence-backed offer conversion (matched activations / offers).
 // The report sets `usage_rate` to null when `offered_sessions` is 0 (no
 // opportunity to activate); that renders as an em dash, never `NaN` or a
 // misleading `0%`. A present ratio renders as a whole percentage — a skill's

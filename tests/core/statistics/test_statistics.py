@@ -11,7 +11,7 @@ from typing import cast
 
 import pytest
 
-from core.chat.messages import ChatMessage
+from core.chat.messages import ChatMessage, ToolCall
 from core.sessions import ChatSessionManager
 from core.sessions.sessions import SKILL_CONTEXT_NOTE_PREFIX
 from core.statistics import (
@@ -80,13 +80,15 @@ def _assistant(
     *,
     model: str,
     at: datetime,
-    content: str = "ok",
+    content: str | None = "ok",
+    reasoning: str | None = None,
     usage: dict | None = None,
     tool_calls: list | None = None,
 ) -> ChatMessage:
     return ChatMessage.assistant(
         model=model,
         content=content,
+        reasoning=reasoning,
         usage=usage,
         tool_calls=tool_calls,
         timestamp=at,
@@ -208,6 +210,62 @@ def test_chat_messages_and_session_records_are_separate(tmp_path: Path) -> None:
     assert report.overview.agents[0].session_records == 4
 
 
+def test_chat_messages_exclude_thinking_and_tool_only_model_steps(tmp_path: Path) -> None:
+    service, manager = _service(tmp_path, ["main"])
+    model = "openrouter/anthropic/claude-sonnet-4"
+    tool_call = ToolCall(id="call-read", name="read", arguments={"path": "README.md"})
+    _write_session(
+        manager,
+        "main",
+        [
+            ChatMessage.user("inspect", timestamp=BASE),
+            _assistant(
+                model=model,
+                at=BASE + timedelta(seconds=1),
+                content=None,
+                reasoning="I should inspect the file.",
+                tool_calls=[tool_call],
+            ),
+            _assistant(
+                model=model,
+                at=BASE + timedelta(seconds=2),
+                content=None,
+                tool_calls=[tool_call],
+            ),
+            _assistant(
+                model=model,
+                at=BASE + timedelta(seconds=3),
+                content="   ",
+            ),
+            _assistant(
+                model=model,
+                at=BASE + timedelta(seconds=4),
+                content="I found the cause; checking the fix.",
+                reasoning="Summarize the finding.",
+                tool_calls=[tool_call],
+            ),
+            _run_summary(
+                status="completed",
+                at=BASE + timedelta(seconds=5),
+                duration_ms=5000,
+                run_id="r1",
+            ),
+        ],
+    )
+
+    report = service.report()
+
+    assert report.overview.chat_messages_by_role == {"user": 1, "assistant": 1}
+    assert report.overview.total_chat_messages == 2
+    assert report.overview.session_records_by_role["assistant"] == 4
+    assert report.overview.agents[0].chat_messages == 2
+    assert report.usage.totals.assistant_messages == 4
+    assert report.runs.agent_messages == 1
+    assert report.runs.model_steps == 4
+    assert report.runs.average_agent_messages_per_run == 1.0
+    assert report.runs.average_model_steps_per_run == 4.0
+
+
 def test_run_segmentation_status_and_tool_calls(tmp_path: Path) -> None:
     service, manager = _service(tmp_path, ["main"])
     model = "openrouter/anthropic/claude-sonnet-4"
@@ -241,6 +299,10 @@ def test_run_segmentation_status_and_tool_calls(tmp_path: Path) -> None:
     assert report.runs.status.failed == 1
     assert report.runs.runs_with_tool_calls == 1
     assert report.runs.total_tool_calls == 1
+    assert report.runs.agent_messages == 2
+    assert report.runs.model_steps == 2
+    assert report.runs.average_agent_messages_per_run == 1.0
+    assert report.runs.average_model_steps_per_run == 1.0
     assert report.runs.failure_rate == pytest.approx(0.5)
     assert report.overview.run_status.completed == 1
 
@@ -970,6 +1032,7 @@ def test_skills_offered_from_metadata_and_activated_from_notes(tmp_path: Path) -
     teach = _skills_row(report, "teach")
     assert deploy.offered_sessions == 1
     assert deploy.activated_sessions == 1
+    assert deploy.activated_offered_sessions == 1
     assert deploy.usage_rate == 1.0
     assert deploy.by_agent == [type(deploy.by_agent[0])(key="main", count=1)]
     # teach was offered but never activated.
@@ -978,6 +1041,8 @@ def test_skills_offered_from_metadata_and_activated_from_notes(tmp_path: Path) -
     assert report.skills.total_skills == 2
     assert report.skills.used_skills == 1
     assert report.skills.never_used_skills == 1
+    assert report.skills.offered_unactivated_skills == 1
+    assert report.skills.skills_without_offer_data == 0
 
 
 def test_skills_usage_for_deleted_name_is_dropped(tmp_path: Path) -> None:
@@ -1012,6 +1077,8 @@ def test_skills_default_service_has_empty_section(tmp_path: Path) -> None:
 
     assert report.skills.skills == []
     assert report.skills.total_skills == 0
+    assert report.skills.offered_unactivated_skills == 0
+    assert report.skills.skills_without_offer_data == 0
     # Fully JSON-serializable with the skills section present.
     assert json.loads(json.dumps(report.to_dict()))["skills"]["total_skills"] == 0
 
@@ -1057,6 +1124,8 @@ def test_skills_window_filters_offered_and_activated(tmp_path: Path) -> None:
 
     assert deploy.offered_sessions == 0
     assert deploy.activated_sessions == 1
+    assert deploy.activated_offered_sessions == 0
+    assert deploy.usage_rate is None
     assert report.skills.never_used_skills == 0
 
 

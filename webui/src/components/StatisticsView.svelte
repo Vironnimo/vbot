@@ -626,6 +626,18 @@
       {@render statCard(
         t('statistics.overview.chatMessages', 'Chat messages'),
         formatInteger(overview.total_chat_messages, locale),
+        t(
+          'statistics.overview.chatMessagesHint',
+          'Visible User messages and Assistant text. Thinking-only and Tool-call-only Model steps are excluded.',
+        ),
+      )}
+      {@render statCard(
+        t('statistics.overview.modelSteps', 'Model steps'),
+        formatInteger(usage.totals.assistant_messages, locale),
+        t(
+          'statistics.overview.modelStepsHint',
+          'Every persisted Assistant response from a Model, including steps that only contain Thinking or request Tools.',
+        ),
       )}
       {@render statCard(
         t('statistics.overview.toolCalls', 'Tool calls'),
@@ -729,7 +741,10 @@
           </div>
         </dl>
         <h3 class="stats-block__title">
-          {t('statistics.overview.chatMessagesByRole', 'Chat messages by role')}
+          {t(
+            'statistics.overview.chatMessagesByRole',
+            'Visible chat messages by role',
+          )}
         </h3>
         {@render barRows(
           CHAT_MESSAGE_ROLES.filter(
@@ -843,11 +858,11 @@
         `${formatTokens(usage.totals.estimated_input_tokens, locale)} / ${formatTokens(usage.totals.estimated_output_tokens, locale)}`,
       )}
       {@render statCard(
-        t('statistics.usage.measuredTurns', 'Measured turns'),
+        t('statistics.usage.measuredTurns', 'Measured Model steps'),
         formatInteger(usage.totals.measured_turns, locale),
       )}
       {@render statCard(
-        t('statistics.usage.estimatedTurns', 'Estimated turns'),
+        t('statistics.usage.estimatedTurns', 'Estimated Model steps'),
         formatInteger(usage.totals.estimated_turns, locale),
       )}
       {@render statCard(
@@ -866,7 +881,7 @@
     <p class="stats-note">
       {t(
         'statistics.usage.cacheIntro',
-        'Cache metrics track provider-side prompt caching: cached input tokens are billed at a much lower rate, so a higher hit rate means cheaper runs.',
+        'Cache metrics track provider-side prompt caching. A higher hit rate can reduce billed input where the Provider discounts cache reads.',
       )}
     </p>
     <p class="stats-note">
@@ -877,6 +892,12 @@
       {t(
         'statistics.usage.cacheHitHint',
         'Cache hit rate: tokens read from cache as a share of the input, over the turns that report cache data.',
+      )}
+    </p>
+    <p class="stats-note">
+      {t(
+        'statistics.usage.runAttributionHint',
+        'Provider and Model Run counts mean “involved in this Run.” A fallback Run can appear in multiple rows, and Model duration is the full Run duration.',
       )}
     </p>
 
@@ -1229,10 +1250,30 @@
         formatInteger(runs.derived_fallback_runs, locale),
       )}
       {@render statCard(
-        t('statistics.runs.avgToolsPerRun', 'Avg tools / run'),
+        t('statistics.runs.avgToolsPerRun', 'Avg Tool calls / Run'),
         runs.average_tool_calls_per_run == null
           ? '—'
-          : runs.average_tool_calls_per_run.toFixed(1),
+          : formatChartTick(runs.average_tool_calls_per_run, locale),
+      )}
+      {@render statCard(
+        t('statistics.runs.avgAgentMessagesPerRun', 'Avg Agent messages / Run'),
+        runs.average_agent_messages_per_run == null
+          ? '—'
+          : formatChartTick(runs.average_agent_messages_per_run, locale),
+        t(
+          'statistics.runs.avgAgentMessagesHint',
+          'Visible Assistant text per recorded Run, including intermediate status updates. Open Run groups are excluded.',
+        ),
+      )}
+      {@render statCard(
+        t('statistics.runs.avgModelStepsPerRun', 'Avg Model steps / Run'),
+        runs.average_model_steps_per_run == null
+          ? '—'
+          : formatChartTick(runs.average_model_steps_per_run, locale),
+        t(
+          'statistics.runs.avgModelStepsHint',
+          'All Assistant Model responses per recorded Run, including Thinking-only and Tool-call-only steps. Open Run groups are excluded.',
+        ),
       )}
     </div>
     <p class="stats-note">
@@ -1278,6 +1319,12 @@
     <h3 class="stats-section-title">
       {t('statistics.errors.title', 'Errors')}
     </h3>
+    <p class="stats-note">
+      {t(
+        'statistics.errors.scopeHint',
+        'These are persisted Run errors; Tool failures are reported under Tools. Provider and Model attribution uses the last preceding Assistant Model step and is therefore a proxy.',
+      )}
+    </p>
     <div class="stats-grid">
       {@render statCard(
         t('statistics.errors.total', 'Total errors'),
@@ -1301,7 +1348,7 @@
 
     <div class="stats-block">
       <h3 class="stats-block__title">
-        {t('statistics.errors.byHour', 'By hour of day')}
+        {t('statistics.errors.byHour', 'By UTC hour')}
       </h3>
       <div class="stats-hours">
         {#each errors.by_hour as entry, index (entry.hour)}
@@ -1329,7 +1376,10 @@
       )}
     </div>
     <p class="stats-note">
-      {t('statistics.tools.noArgsNote', 'Tool arguments are never collected.')}
+      {t(
+        'statistics.tools.noArgsNote',
+        'Statistics never reads or includes Tool arguments; only Tool names, timing, and result status are aggregated.',
+      )}
     </p>
 
     <div class="stats-block">
@@ -1429,18 +1479,22 @@
         formatInteger(skills.total_skills, locale),
       )}
       {@render statCard(
-        t('statistics.skills.used', 'Used'),
+        t('statistics.skills.used', 'Activated'),
         formatInteger(skills.used_skills, locale),
       )}
       {@render statCard(
-        t('statistics.skills.neverUsed', 'Never used'),
-        formatInteger(skills.never_used_skills, locale),
+        t('statistics.skills.offeredUnactivated', 'No offer conversion'),
+        formatInteger(skills.offered_unactivated_skills, locale),
+      )}
+      {@render statCard(
+        t('statistics.skills.withoutOfferData', 'No offer data'),
+        formatInteger(skills.skills_without_offer_data, locale),
       )}
     </div>
     <p class="stats-note">
       {t(
         'statistics.skills.intro',
-        'A skill is offered to a session when its catalog is built, and activated when the agent actually invokes it. A skill offered to many sessions but never activated is a candidate to delete or improve.',
+        'A Skill is offered when it appears in a Session catalog and activated when the Agent invokes it. “Offer conversion” counts only Sessions where both facts are recorded, so older Sessions without catalog metadata cannot inflate the rate.',
       )}
     </p>
 
@@ -1464,31 +1518,46 @@
               <th>{t('statistics.col.origins', 'Origins')}</th>
               <th>{t('statistics.col.offered', 'Offered')}</th>
               <th>{t('statistics.col.activated', 'Activated')}</th>
-              <th>{t('statistics.col.usageRate', 'Usage rate')}</th>
+              <th>{t('statistics.col.usageRate', 'Offer conversion')}</th>
               <th>{t('statistics.col.firstActivated', 'First activated')}</th>
               <th>{t('statistics.col.lastActivated', 'Last activated')}</th>
             </tr>
           </thead>
           <tbody>
             {#each skills.skills as skill (skill.name)}
-              {@const neverActivated = skill.activated_sessions === 0}
+              {@const offeredUnactivated =
+                skill.offered_sessions > 0 &&
+                skill.activated_offered_sessions === 0}
+              {@const withoutOfferData = skill.offered_sessions === 0}
               <tr
-                class:stats-skill-row--never={neverActivated}
-                use:tooltip={neverActivated
+                class:stats-skill-row--candidate={offeredUnactivated}
+                use:tooltip={offeredUnactivated
                   ? t(
                       'statistics.skills.neverUsedRowTitle',
-                      'Offered but never activated — a candidate to delete or improve.',
+                      'No Session with recorded offer data also recorded an activation — a candidate to delete or improve.',
                     )
-                  : ''}
+                  : withoutOfferData
+                    ? t(
+                        'statistics.skills.noOfferDataRowTitle',
+                        'No Session has recorded this Skill in its offered catalog yet, so there is not enough evidence to judge it.',
+                      )
+                    : ''}
               >
                 <td class="stats-mono">
                   <span class="stats-skill-name">
                     <span>{skill.name}</span>
-                    {#if neverActivated}
+                    {#if offeredUnactivated}
                       <Badge variant="warn">
                         {t(
                           'statistics.skills.neverUsedBadge',
-                          'Never activated',
+                          'No offer conversion',
+                        )}
+                      </Badge>
+                    {:else if withoutOfferData}
+                      <Badge variant="neutral">
+                        {t(
+                          'statistics.skills.noOfferDataBadge',
+                          'No offer data',
                         )}
                       </Badge>
                     {/if}
@@ -1769,13 +1838,12 @@
   .stats-agent__project {
     flex-shrink: 0;
   }
-  /* Zero-activation skills are the delete/improve candidates — highlight the
-     whole row with a warm amber tint + left rule so they read as actionable at
-     a glance, not as errors (red is reserved for failure). */
-  .stats-skill-row--never td {
+  /* Only Skills with recorded opportunities but no matching activation are
+     candidates. A fresh Skill with no offer data stays neutral. */
+  .stats-skill-row--candidate td {
     background: rgba(245, 158, 11, 0.06);
   }
-  .stats-skill-row--never td:first-child {
+  .stats-skill-row--candidate td:first-child {
     box-shadow: inset 2px 0 0 var(--amber);
   }
   .stats-skill-name {
@@ -1784,8 +1852,7 @@
     gap: 8px;
     min-width: 0;
   }
-  /* Keep the "never activated" Badge from shrinking inside the inline-flex name
-     cell (the pill styling now lives in the Badge primitive). */
+  /* Keep the evidence Badge from shrinking inside the inline-flex name cell. */
   .stats-skill-name :global(.badge) {
     flex-shrink: 0;
   }

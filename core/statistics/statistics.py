@@ -46,8 +46,9 @@ from core.tools import is_tool_result_envelope
 
 JsonObject = dict[str, Any]
 
-# Human conversation roles stay separate from the full persisted Session record
-# vocabulary so the Overview never presents internal bookkeeping as Chat messages.
+# Visible conversation roles stay separate from the full persisted Session
+# record vocabulary. User records always count; Assistant records count only
+# when they carry non-blank text, excluding Thinking-/Tool-only Model steps.
 CHAT_MESSAGE_ROLES = (
     "user",
     "assistant",
@@ -389,6 +390,10 @@ class RunsSection:
     runs_with_tool_calls: int
     total_tool_calls: int
     average_tool_calls_per_run: float | None
+    agent_messages: int
+    model_steps: int
+    average_agent_messages_per_run: float | None
+    average_model_steps_per_run: float | None
     derived_fallback_runs: int
     runs_per_agent: list[AgentRunCount]
     top_sessions_by_runs: list[SessionRunCount]
@@ -669,6 +674,7 @@ class _Aggregator:
         self._agents: dict[str, _AgentAcc] = {}
         self._total_sessions = 0
         self._role_counts: Counter[str] = Counter()
+        self._chat_message_role_counts: Counter[str] = Counter()
         self._last_activity: str | None = None
 
         self._run_durations: list[int] = []
@@ -677,6 +683,8 @@ class _Aggregator:
         self._open_run_groups = 0
         self._runs_with_tool_calls = 0
         self._run_tool_calls = 0
+        self._run_agent_messages = 0
+        self._run_model_steps = 0
         self._derived_fallback_runs = 0
         self._runs_per_session: list[SessionRunCount] = []
         self._longest_runs: list[LongestRun] = []
@@ -756,7 +764,8 @@ class _Aggregator:
         for message in in_window:
             self._role_counts[message.role] += 1
             agent.session_records += 1
-            if message.role in CHAT_MESSAGE_ROLES:
+            if _is_visible_chat_message(message):
+                self._chat_message_role_counts[message.role] += 1
                 agent.chat_messages += 1
             cache_tracker.observe(message)
             if message.role == "run_summary":
@@ -955,6 +964,10 @@ class _Aggregator:
                 model.run_duration_count += 1
 
         tool_calls = sum(1 for message in group if message.role == "tool")
+        self._run_model_steps += sum(1 for message in group if message.role == "assistant")
+        self._run_agent_messages += sum(
+            1 for message in group if _is_visible_assistant_message(message)
+        )
         if tool_calls:
             self._runs_with_tool_calls += 1
             self._run_tool_calls += tool_calls
@@ -1034,10 +1047,11 @@ class _Aggregator:
             total_runs=self._total_runs,
             open_run_groups=self._open_run_groups,
             total_chat_messages=int(
-                sum(self._role_counts.get(role, 0) for role in CHAT_MESSAGE_ROLES)
+                sum(self._chat_message_role_counts.get(role, 0) for role in CHAT_MESSAGE_ROLES)
             ),
             chat_messages_by_role={
-                role: int(self._role_counts.get(role, 0)) for role in CHAT_MESSAGE_ROLES
+                role: int(self._chat_message_role_counts.get(role, 0))
+                for role in CHAT_MESSAGE_ROLES
             },
             total_session_records=int(sum(self._role_counts.values())),
             session_records_by_role={
@@ -1168,6 +1182,10 @@ class _Aggregator:
             runs_with_tool_calls=self._runs_with_tool_calls,
             total_tool_calls=self._run_tool_calls,
             average_tool_calls_per_run=(self._run_tool_calls / total) if total else None,
+            agent_messages=self._run_agent_messages,
+            model_steps=self._run_model_steps,
+            average_agent_messages_per_run=(self._run_agent_messages / total if total else None),
+            average_model_steps_per_run=(self._run_model_steps / total if total else None),
             derived_fallback_runs=self._derived_fallback_runs,
             runs_per_agent=runs_per_agent,
             top_sessions_by_runs=top_sessions,
@@ -1450,6 +1468,20 @@ def _distinct_run_models(group: list[ChatMessage]) -> set[str]:
 def _group_is_open(group: list[ChatMessage]) -> bool:
     """Best-effort: a trailing group with conversational activity is unterminated."""
     return any(message.role in ("user", "assistant") for message in group)
+
+
+def _is_visible_assistant_message(message: ChatMessage) -> bool:
+    """Return whether an Assistant record contains user-visible Agent text."""
+    return (
+        message.role == "assistant"
+        and isinstance(message.content, str)
+        and bool(message.content.strip())
+    )
+
+
+def _is_visible_chat_message(message: ChatMessage) -> bool:
+    """Count visible User messages and Assistant text, not internal Model steps."""
+    return message.role == "user" or _is_visible_assistant_message(message)
 
 
 @dataclass(frozen=True)
