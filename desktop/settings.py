@@ -10,6 +10,7 @@ The on-disk schema is::
     {
       "servers": [{"host": "...", "port": 8420, "label": "..."}],
       "last_used": {"host": "...", "port": 8420},
+      "window": {"width": 1280, "height": 800},
       "wakeword": {...}
     }
 
@@ -31,12 +32,13 @@ import time
 from collections.abc import Mapping
 from contextlib import suppress
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
-from typing import Any
+from typing import Any, TypeGuard
 
 APP_CONFIG_DIR_NAME = "vbot"
 SETTINGS_FILE_NAME = "settings.json"
 SERVERS_KEY = "servers"
 LAST_USED_KEY = "last_used"
+WINDOW_KEY = "window"
 WAKEWORD_KEY = "wakeword"
 DEFAULT_WAKEWORD_MODEL_IDS = ("builtin/okay_nabu", "builtin/hey_nabu")
 # Read and write both retry a few times on transient I/O errors (e.g. a
@@ -246,6 +248,28 @@ def clear_last_used(path: Path | None = None) -> None:
         _write_settings_unlocked(full, resolved_path)
 
 
+def read_window_size(path: Path | None = None) -> tuple[int, int] | None:
+    """Return the last Desktop window size, or ``None`` when unset/malformed."""
+
+    full = read_settings(path)
+    window = full.get(WINDOW_KEY)
+    if not isinstance(window, dict):
+        return None
+    width = window.get("width")
+    height = window.get("height")
+    if not _valid_window_dimension(width) or not _valid_window_dimension(height):
+        return None
+    return int(width), int(height)
+
+
+def write_window_size(width: int, height: int, path: Path | None = None) -> None:
+    """Persist the Desktop window size while preserving other settings keys."""
+
+    if not _valid_window_dimension(width) or not _valid_window_dimension(height):
+        raise ValueError("window width and height must be positive integers")
+    _write_section(WINDOW_KEY, {"width": width, "height": height}, path)
+
+
 def read_wakeword_settings(path: Path | None = None) -> dict[str, Any]:
     """Read wakeword config from Desktop settings, merged with defaults.
 
@@ -330,6 +354,12 @@ def _normalize_target_reference(reference: Any) -> dict[str, Any] | None:
     if server is None:
         return None
     return {"host": server["host"], "port": server["port"]}
+
+
+def _valid_window_dimension(value: Any) -> TypeGuard[int]:
+    """Return whether a persisted window dimension has the supported shape."""
+
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
 def _valid_active_model_ids(value: Any) -> bool:

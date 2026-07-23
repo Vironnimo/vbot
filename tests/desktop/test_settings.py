@@ -250,6 +250,74 @@ def test_write_last_used_preserves_other_keys(tmp_path: Path) -> None:
     assert stored["wakeword"] == wakeword
 
 
+# -- Window size -------------------------------------------------------------
+
+
+def test_read_window_size_returns_none_when_unset(tmp_path: Path) -> None:
+    assert desktop_settings.read_window_size(tmp_path / "settings.json") is None
+
+
+def test_read_window_size_returns_persisted_dimensions(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(
+        json.dumps({"window": {"width": 1420, "height": 910}}),
+        encoding="utf-8",
+    )
+
+    assert desktop_settings.read_window_size(settings_file) == (1420, 910)
+
+
+@pytest.mark.parametrize(
+    "window",
+    [
+        None,
+        [],
+        {"width": 0, "height": 800},
+        {"width": True, "height": 800},
+        {"width": "1280", "height": 800},
+        {"width": 1280},
+    ],
+)
+def test_read_window_size_returns_none_for_malformed_dimensions(
+    tmp_path: Path,
+    window: object,
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps({"window": window}), encoding="utf-8")
+
+    assert desktop_settings.read_window_size(settings_file) is None
+
+
+def test_write_window_size_preserves_other_keys(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(
+        json.dumps(
+            {
+                "servers": [{"host": "pi.lan", "port": 9000}],
+                "wakeword": {"enabled": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    desktop_settings.write_window_size(1360, 880, settings_file)
+
+    stored = json.loads(settings_file.read_text(encoding="utf-8"))
+    assert stored["window"] == {"width": 1360, "height": 880}
+    assert stored["servers"] == [{"host": "pi.lan", "port": 9000}]
+    assert stored["wakeword"] == {"enabled": True}
+
+
+@pytest.mark.parametrize(("width", "height"), [(0, 800), (1280, 0), (True, 800)])
+def test_write_window_size_rejects_invalid_dimensions(
+    tmp_path: Path,
+    width: object,
+    height: object,
+) -> None:
+    with pytest.raises(ValueError, match="positive integers"):
+        desktop_settings.write_window_size(width, height, tmp_path / "settings.json")  # type: ignore[arg-type]
+
+
 # -- Wakeword block ----------------------------------------------------------
 
 

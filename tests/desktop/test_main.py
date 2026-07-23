@@ -32,6 +32,8 @@ class FakeWindow:
     def __init__(self) -> None:
         self.loaded_urls: list[str] = []
         self.loaded_html: list[str] = []
+        self.width = 1280
+        self.height = 800
         self.events = FakeWindowEvents()
 
     def load_url(self, url: str) -> None:
@@ -59,6 +61,13 @@ class FakeEvent:
 class FakeWindowEvents:
     def __init__(self) -> None:
         self.shown = FakeEvent()
+        self.closing = FakeEvent()
+
+
+@dataclass
+class FakeScreen:
+    width: int = 1600
+    height: int = 1000
 
 
 class FakeWebview:
@@ -73,11 +82,14 @@ class FakeWebview:
     def __init__(self) -> None:
         self.created_windows: list[tuple[str, dict[str, Any]]] = []
         self.window = FakeWindow()
+        self.screens = [FakeScreen()]
         self.start_calls: list[dict[str, Any]] = []
         self.start_func: Callable[[], Any] | None = None
 
     def create_window(self, title: str, **kwargs: Any) -> FakeWindow:
         self.created_windows.append((title, kwargs))
+        self.window.width = kwargs["width"]
+        self.window.height = kwargs["height"]
         return self.window
 
     def start(self, func: Callable[[], Any] | None = None, **kwargs: Any) -> None:
@@ -333,8 +345,72 @@ def test_launch_creates_window_before_loop_with_html_and_bridge_js_api(tmp_path:
     assert "Connect to a server" in kwargs["html"]
     assert kwargs["text_select"] is True
     assert kwargs["js_api"] is not None
+    assert kwargs["width"] == 1280
+    assert kwargs["height"] == 800
+    assert kwargs["min_size"] == (800, 600)
     assert hasattr(kwargs["js_api"], "connect")
     assert hasattr(kwargs["js_api"], "getWakewordStatus")
+
+
+def test_resolve_window_layout_uses_screen_aware_first_run_size() -> None:
+    layout = desktop_main.resolve_window_layout(None, (1920, 1080))
+
+    assert (layout.width, layout.height) == (1440, 864)
+    assert (layout.minimum_width, layout.minimum_height) == (800, 600)
+
+
+def test_resolve_window_layout_keeps_remembered_size_that_fits() -> None:
+    layout = desktop_main.resolve_window_layout((1380, 900), (1920, 1080))
+
+    assert (layout.width, layout.height) == (1380, 900)
+
+
+def test_resolve_window_layout_clamps_remembered_size_to_smaller_screen() -> None:
+    layout = desktop_main.resolve_window_layout((1800, 1100), (1280, 720))
+
+    assert (layout.width, layout.height) == (1200, 640)
+    assert (layout.minimum_width, layout.minimum_height) == (800, 600)
+
+
+def test_launch_restores_remembered_window_size(tmp_path: Path) -> None:
+    fake_webview = FakeWebview()
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(
+        json.dumps({"window": {"width": 1400, "height": 900}}),
+        encoding="utf-8",
+    )
+
+    desktop_main.launch_desktop(
+        [],
+        settings_file=settings_file,
+        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
+        webview_module=fake_webview,
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+
+    _, kwargs = fake_webview.created_windows[0]
+    assert kwargs["width"] == 1400
+    assert kwargs["height"] == 900
+
+
+def test_launch_persists_window_size_when_window_closes(tmp_path: Path) -> None:
+    fake_webview = FakeWebview()
+    settings_file = tmp_path / "settings.json"
+
+    desktop_main.launch_desktop(
+        [],
+        settings_file=settings_file,
+        probe=lambda target: DesktopProbeResult(desktop_main.PROBE_WEBUI_AVAILABLE, target),
+        webview_module=fake_webview,
+        app_icon_path=tmp_path / "missing-icon.png",
+    )
+    fake_webview.window.width = 1500
+    fake_webview.window.height = 920
+
+    fake_webview.window.events.closing.emit()
+
+    stored = json.loads(settings_file.read_text(encoding="utf-8"))
+    assert stored["window"] == {"width": 1500, "height": 920}
 
 
 def test_launch_runs_auto_connect_after_window_is_shown(tmp_path: Path) -> None:
