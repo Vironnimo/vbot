@@ -1,6 +1,7 @@
 import markdownit from 'markdown-it';
 
-const FENCE_PATTERN = /^[ \t]{0,3}```[^\n]*$/gm;
+const FENCE_PATTERN = /^[ \t]{0,3}(`{3,}|~{3,})([^\n]*)$/gm;
+const SINGLE_FENCE_PATTERN = /^[ \t]{0,3}(`{3,}|~{3,})([^\n]*)$/;
 
 const md = markdownit({
   html: false,
@@ -10,6 +11,26 @@ const md = markdownit({
   linkify: false,
   typographer: false,
 });
+
+md.renderer.rules.fence = (tokens, idx, _options, env) => {
+  const token = tokens[idx];
+  const codeBlocks = Array.isArray(env?.codeBlocks) ? env.codeBlocks : null;
+  const codeBlockIndex = codeBlocks?.length ?? -1;
+  const language =
+    fenceLanguage(token.info) || env?.plainLanguageLabel || 'text';
+
+  codeBlocks?.push({
+    text: token.content,
+    copyable: true,
+  });
+
+  return codeBlockHtml({
+    content: token.content,
+    language,
+    codeBlockIndex,
+    copyable: Boolean(codeBlocks),
+  });
+};
 
 const defaultLinkOpenRender =
   md.renderer.rules['link_open'] ||
@@ -31,22 +52,27 @@ md.renderer.rules['link_open'] = (tokens, idx, options, env, self) => {
 const RENDER_CACHE_LIMIT = 300;
 const renderCache = new Map();
 
-function cachedRender(src) {
-  const cached = renderCache.get(src);
+function cachedRenderDocument(src, plainLanguageLabel) {
+  const cacheKey = `${plainLanguageLabel}\u0000${src}`;
+  const cached = renderCache.get(cacheKey);
   if (cached !== undefined) {
     // Refresh recency: move the entry to the end of the insertion order.
-    renderCache.delete(src);
-    renderCache.set(src, cached);
+    renderCache.delete(cacheKey);
+    renderCache.set(cacheKey, cached);
     return cached;
   }
 
-  const html = md.render(src);
-  renderCache.set(src, html);
+  const codeBlocks = [];
+  const document = {
+    html: md.render(src, { codeBlocks, plainLanguageLabel }),
+    codeBlocks,
+  };
+  renderCache.set(cacheKey, document);
   if (renderCache.size > RENDER_CACHE_LIMIT) {
     const oldestKey = renderCache.keys().next().value;
     renderCache.delete(oldestKey);
   }
-  return html;
+  return document;
 }
 
 function escapeHtml(value) {
@@ -58,17 +84,61 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
-function lastUnclosedFenceIndex(src) {
-  const matches = Array.from(src.matchAll(FENCE_PATTERN));
-  if (matches.length === 0 || matches.length % 2 === 0) {
-    return -1;
-  }
-  return matches.at(-1)?.index ?? -1;
+function fenceLanguage(info) {
+  return typeof info === 'string' ? (info.trim().split(/\s+/)[0] ?? '') : '';
 }
 
-export function renderMarkdown(src) {
-  if (!src) return '';
-  return cachedRender(src);
+function codeBlockHtml({ content, language, codeBlockIndex, copyable }) {
+  const copySlot = copyable
+    ? `<span class="msg-code__copy-slot" data-markdown-code-index="${codeBlockIndex}"></span>`
+    : '';
+
+  return (
+    '<div class="msg-code">' +
+    '<div class="msg-code__header">' +
+    `<span class="msg-code__language">${escapeHtml(language)}</span>` +
+    copySlot +
+    '</div>' +
+    `<pre><code>${escapeHtml(content)}</code></pre>` +
+    '</div>\n'
+  );
+}
+
+function lastUnclosedFenceIndex(src) {
+  let openFence = null;
+  for (const match of src.matchAll(FENCE_PATTERN)) {
+    const marker = match[1];
+    const suffix = match[2] ?? '';
+    if (!openFence) {
+      openFence = {
+        markerCharacter: marker[0],
+        markerLength: marker.length,
+        index: match.index,
+      };
+      continue;
+    }
+
+    if (
+      marker[0] === openFence.markerCharacter &&
+      marker.length >= openFence.markerLength &&
+      suffix.trim() === ''
+    ) {
+      openFence = null;
+    }
+  }
+  return openFence?.index ?? -1;
+}
+
+export function renderMarkdownDocument(
+  src,
+  { plainLanguageLabel = 'text' } = {},
+) {
+  if (!src) return { html: '', codeBlocks: [] };
+  return cachedRenderDocument(src, plainLanguageLabel);
+}
+
+export function renderMarkdown(src, options) {
+  return renderMarkdownDocument(src, options).html;
 }
 
 // Providers embed literal HTML comments in reasoning text as section separators
@@ -78,34 +148,67 @@ export function renderMarkdown(src) {
 // its `-->` arrives and the pair is removed.
 const HTML_COMMENT_PATTERN = /<!--[\s\S]*?-->/g;
 
-function stripHtmlComments(src) {
-  return src.replace(HTML_COMMENT_PATTERN, '');
+export function reasoningMarkdownSource(src) {
+  return typeof src === 'string' ? src.replace(HTML_COMMENT_PATTERN, '') : '';
 }
 
-export function renderReasoningMarkdown(src) {
-  if (!src) return '';
-  return renderMarkdown(stripHtmlComments(src));
+export function renderReasoningMarkdownDocument(src, options) {
+  return renderMarkdownDocument(reasoningMarkdownSource(src), options);
 }
 
-export function renderReasoningMarkdownStreaming(src) {
-  if (!src) return '';
-  return renderMarkdownStreaming(stripHtmlComments(src));
+export function renderReasoningMarkdown(src, options) {
+  return renderReasoningMarkdownDocument(src, options).html;
 }
 
-export function renderMarkdownStreaming(src) {
-  if (!src) return '';
+export function renderReasoningMarkdownStreamingDocument(src, options) {
+  return renderMarkdownStreamingDocument(reasoningMarkdownSource(src), options);
+}
+
+export function renderReasoningMarkdownStreaming(src, options) {
+  return renderReasoningMarkdownStreamingDocument(src, options).html;
+}
+
+export function renderMarkdownStreamingDocument(
+  src,
+  { plainLanguageLabel = 'text' } = {},
+) {
+  if (!src) return { html: '', codeBlocks: [] };
 
   const openFenceIndex = lastUnclosedFenceIndex(src);
   if (openFenceIndex === -1) {
-    return renderMarkdown(src);
+    return renderMarkdownDocument(src, { plainLanguageLabel });
   }
 
   const prefix = src.slice(0, openFenceIndex);
   const fenceBlock = src.slice(openFenceIndex);
   const firstNewlineIndex = fenceBlock.indexOf('\n');
+  const openingFenceLine =
+    firstNewlineIndex === -1
+      ? fenceBlock
+      : fenceBlock.slice(0, firstNewlineIndex);
+  const openingFenceMatch = SINGLE_FENCE_PATTERN.exec(openingFenceLine);
+  const fenceInfo = openingFenceMatch?.[2] ?? '';
   const codeContent =
     firstNewlineIndex === -1 ? '' : fenceBlock.slice(firstNewlineIndex + 1);
+  const prefixDocument = prefix
+    ? renderMarkdownDocument(prefix, { plainLanguageLabel })
+    : { html: '', codeBlocks: [] };
+  const codeBlocks = [
+    ...prefixDocument.codeBlocks,
+    { text: codeContent, copyable: false },
+  ];
+  const html =
+    prefixDocument.html +
+    codeBlockHtml({
+      content: codeContent,
+      language: fenceLanguage(fenceInfo) || plainLanguageLabel,
+      codeBlockIndex: codeBlocks.length - 1,
+      copyable: false,
+    });
 
-  const prefixHtml = prefix ? renderMarkdown(prefix) : '';
-  return `${prefixHtml}<pre><code>${escapeHtml(codeContent)}</code></pre>`;
+  return { html, codeBlocks };
+}
+
+export function renderMarkdownStreaming(src, options) {
+  return renderMarkdownStreamingDocument(src, options).html;
 }

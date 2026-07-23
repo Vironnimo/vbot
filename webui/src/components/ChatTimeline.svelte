@@ -16,6 +16,7 @@
   import ChatTimelineEntry from './chat/ChatTimelineEntry.svelte';
   import ImageLightbox from './ImageLightbox.svelte';
   import Banner from './ui/Banner.svelte';
+  import CopyButton from './ui/CopyButton.svelte';
   import EmptyState from './ui/EmptyState.svelte';
 
   let {
@@ -541,9 +542,17 @@
     role="note"
     aria-label={t('chat.transientCard.label', 'Command output')}
   >
-    <span class="transient-card__label">
-      {t('chat.transientCard.label', 'Command output')}
-    </span>
+    <div class="transient-card__header">
+      <span class="transient-card__label">
+        {t('chat.transientCard.label', 'Command output')}
+      </span>
+      <CopyButton
+        text={card.text}
+        class="chat-copy-action transient-card__copy"
+        label={t('chat.copyCommandOutput', 'Copy command output')}
+        copiedLabel={t('chat.commandOutputCopied', 'Command output copied')}
+      />
+    </div>
     <pre class="transient-card__body">{card.text}</pre>
   </div>
 {/snippet}

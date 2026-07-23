@@ -61,6 +61,14 @@
   background: var(--surface-2);
 }
 
+.transient-card__header {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .transient-card__label {
   color: var(--text-lo);
   font-family: var(--font-mono);
@@ -141,6 +149,7 @@
 
 .reasoning-body {
   display: none;
+  position: relative;
   margin-top: 4px;
   border-left: 2px solid var(--border-2);
   padding: 6px 0 2px 16px;
@@ -148,6 +157,17 @@
   font-size: 13px;
   font-style: italic;
   line-height: 1.6;
+}
+
+.reasoning-body__actions {
+  position: absolute;
+  z-index: 1;
+  top: 2px;
+  right: 0;
+}
+
+.reasoning-markdown > :first-child {
+  padding-right: 30px;
 }
 
 /* Reasoning renders Markdown (bold, lists, code) but stays visually secondary:
@@ -255,6 +275,37 @@
   min-width: 0;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+/* Copy actions stay visually quiet in the dense Chat timeline. Pointer hover
+   reveals only the actions belonging to the current semantic copy surface;
+   keyboard focus and coarse pointers keep the same controls discoverable. */
+.chat-copy-action {
+  flex: 0 0 auto;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.msg:hover > .msg-header .message-copy,
+.msg:focus-within > .msg-header .message-copy,
+.reasoning-block[open]:hover .reasoning-copy,
+.reasoning-block[open]:focus-within .reasoning-copy,
+.tool-event[open]:hover .tool-detail-copy,
+.tool-event[open]:focus-within .tool-detail-copy,
+.transient-card:hover .transient-card__copy,
+.transient-card:focus-within .transient-card__copy,
+.chat-copy-action:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.btn-tertiary.btn-icon.message-copy,
+.btn-tertiary.btn-icon.reasoning-copy,
+.btn-tertiary.btn-icon.tool-detail-copy,
+.btn-tertiary.btn-icon.transient-card__copy {
+  width: 24px;
+  height: 24px;
 }
 
 .speech-audio-player {
@@ -642,5 +693,12 @@ a.inline-attachment:focus-visible {
 
   .attachment-hover-preview {
     width: min(260px, calc(100vw - 48px));
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .chat-copy-action {
+    opacity: 1;
+    pointer-events: auto;
   }
 }

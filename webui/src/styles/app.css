@@ -2103,6 +2103,71 @@ textarea::placeholder {
   font-size: 13px;
 }
 
+/* Fenced Markdown code is a bounded technical artifact, so it gets the
+   language/copy header defined by the Chat design rather than the plain
+   indented-code treatment above. */
+.msg-code {
+  margin: 0.5em 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg);
+}
+
+.msg-code__header {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 6px 3px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.msg-code__language {
+  overflow: hidden;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+  letter-spacing: 0.05em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msg-code__copy-slot {
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.btn-tertiary.btn-icon.msg-code__copy {
+  width: 24px;
+  height: 24px;
+}
+
+.msg-markdown .msg-code pre,
+.reasoning-body .msg-code pre {
+  margin: 0;
+  overflow-x: auto;
+  border: none;
+  border-radius: 0;
+  padding: 12px 14px;
+  background: var(--bg);
+}
+
+.msg-markdown .msg-code pre code,
+.reasoning-body .msg-code pre code {
+  border: none;
+  padding: 0;
+  color: var(--text-med);
+  background: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.65;
+  white-space: pre;
+}
+
 .msg-markdown code {
   border: 1px solid var(--border-2);
   border-radius: 3px;
