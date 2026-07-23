@@ -162,8 +162,8 @@
 
   .skill-autocomplete__option {
     display: grid;
-    grid-template-columns: minmax(96px, 0.42fr) minmax(0, 1fr);
-    gap: 12px;
+    grid-template-columns: minmax(14ch, 0.2fr) minmax(0, 1fr);
+    gap: var(--space-sm);
     width: 100%;
     padding: 9px 10px;
     border: 0;
