@@ -576,8 +576,14 @@ describe('StatisticsView', () => {
     expect(document.body.textContent).toContain('Per tool');
     expect(document.body.textContent).toContain('read');
     expect(document.body.textContent).toContain('not_found');
+    expect(document.body.textContent).toContain('Accepted');
+    expect(document.body.textContent).toContain('Rejected');
+    expect(document.body.textContent).toContain('Top rejection');
     expect(document.body.textContent).toContain(
       'Statistics never reads or includes Tool arguments',
+    );
+    expect(document.body.textContent).toContain(
+      'including safe validation and guardrail rejections',
     );
   });
 

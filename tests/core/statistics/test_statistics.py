@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import builtins
 import json
 from dataclasses import dataclass
@@ -208,6 +209,84 @@ def test_chat_messages_and_session_records_are_separate(tmp_path: Path) -> None:
     assert report.overview.agents[0].runs == 1
     assert report.overview.agents[0].chat_messages == 2
     assert report.overview.agents[0].session_records == 4
+
+
+def test_fork_counts_only_activity_appended_after_copied_history(tmp_path: Path) -> None:
+    service, manager = _service(tmp_path, ["main"])
+    model = "openrouter/anthropic/claude-sonnet-4"
+    source = manager.create("main")
+    source_messages = [
+        ChatMessage.user("source work", timestamp=BASE),
+        _assistant(
+            model=model,
+            at=BASE + timedelta(seconds=1),
+            usage={"input_tokens": 100, "output_tokens": 20},
+        ),
+        _tool(
+            name="edit",
+            at=BASE + timedelta(seconds=2),
+            envelope=tool_success({"changed": True}),
+            duration_ms=4,
+        ),
+        ChatMessage.error(
+            "source_error",
+            "source failure",
+            timestamp=BASE + timedelta(seconds=3),
+        ),
+        _run_summary(
+            status="completed",
+            at=BASE + timedelta(seconds=4),
+            duration_ms=1000,
+            run_id="source-run",
+        ),
+    ]
+    for message in source_messages:
+        source.append(message)
+
+    fork = asyncio.run(manager.fork("main", source.id))
+    fork_messages = [
+        ChatMessage.user("fork work", timestamp=BASE + timedelta(minutes=1)),
+        _assistant(
+            model=model,
+            at=BASE + timedelta(minutes=1, seconds=1),
+            usage={"input_tokens": 50, "output_tokens": 10},
+        ),
+        _tool(
+            name="edit",
+            at=BASE + timedelta(minutes=1, seconds=2),
+            envelope=tool_failure("ambiguous_match", "choose one"),
+            duration_ms=2,
+        ),
+        ChatMessage.error(
+            "fork_error",
+            "fork failure",
+            timestamp=BASE + timedelta(minutes=1, seconds=3),
+        ),
+        _run_summary(
+            status="failed",
+            at=BASE + timedelta(minutes=1, seconds=4),
+            duration_ms=500,
+            run_id="fork-run",
+        ),
+    ]
+    for message in fork_messages:
+        fork.append(message)
+
+    report = service.report()
+
+    assert report.overview.total_sessions == 2
+    assert report.overview.total_session_records == len(source_messages) + len(fork_messages)
+    assert report.overview.total_chat_messages == 4
+    assert report.runs.total_runs == 2
+    assert report.runs.status.completed == 1
+    assert report.runs.status.failed == 1
+    assert report.usage.totals.measured_input_tokens == 150
+    assert report.usage.totals.measured_output_tokens == 30
+    assert report.errors.total_errors == 2
+    assert report.tools.total_calls == 2
+    edit = next(tool for tool in report.tools.tools if tool.name == "edit")
+    assert edit.successes == 1
+    assert edit.failures == 1
 
 
 def test_chat_messages_exclude_thinking_and_tool_only_model_steps(tmp_path: Path) -> None:
