@@ -21,7 +21,11 @@ from typing import Any, cast
 
 import pytest
 
-from core.automation.reflection import REFLECTION_COUNTERS_META_KEY, ReflectionService
+from core.automation.reflection import (
+    COUNTER_GENERATION_KEY,
+    REFLECTION_COUNTERS_META_KEY,
+    ReflectionService,
+)
 from core.chat import (
     ChatMessage,
     CommandDispatcher,
@@ -560,6 +564,7 @@ async def test_reflect_forks_and_runs_restricted_review(monkeypatch: pytest.Monk
                 REFLECTION_COUNTERS_META_KEY: {
                     "turns_since_memory_review": 0,
                     "tool_calls_since_skill_review": 0,
+                    COUNTER_GENERATION_KEY: 1,
                 }
             },
         )
