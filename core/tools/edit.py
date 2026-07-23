@@ -27,9 +27,11 @@ EDIT_TOOL_NAME = "edit"
 EDIT_TOOL_DESCRIPTION = (
     "Edit a file by replacing text. old_string is matched against the file, "
     "tolerating minor differences in whitespace/indentation, line endings, and "
-    "quote style; it must still identify a unique location unless replace_all is "
-    "true. Use this for precise, surgical edits. You must read the file first; "
-    "this tool fails if you did not, or if it changed on disk since you last read it."
+    "quote style; include enough unchanged surrounding text to identify one "
+    "location unless replace_all is true. For repeated lines, include a neighboring "
+    "line or heading. Use this for precise, surgical edits. You must read the file "
+    "first; this tool fails if you did not, or if it changed on disk since you last "
+    "read it."
 )
 EDIT_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -43,7 +45,9 @@ EDIT_TOOL_PARAMETERS: JsonObject = {
         "old_string": {
             "type": "string",
             "description": (
-                "Exact text to find and replace (must be unique unless replace_all is true)."
+                "Text to replace. Include enough unchanged surrounding text to make "
+                "the target unique; for repeated lines include a neighboring line or "
+                "heading. Uniqueness is not required when replace_all is true."
             ),
         },
         "new_string": {
@@ -60,17 +64,58 @@ EDIT_TOOL_PARAMETERS: JsonObject = {
     "additionalProperties": False,
 }
 
+AMBIGUOUS_CONTEXT_LIMIT = 3
+AMBIGUOUS_CONTEXT_LINE_RADIUS = 1
+AMBIGUOUS_CONTEXT_LINE_MAX_CHARS = 160
 
-def _format_ambiguous_match_error(occurrence_count: int, line_numbers: list[int]) -> str:
+
+def _bounded_context_line(line: str) -> str:
+    if len(line) <= AMBIGUOUS_CONTEXT_LINE_MAX_CHARS:
+        return line
+    return line[: AMBIGUOUS_CONTEXT_LINE_MAX_CHARS - 3] + "..."
+
+
+def _candidate_context(content: str, line_number: int) -> str:
+    lines = content.splitlines()
+    if not lines:
+        return ""
+    target_index = min(max(line_number - 1, 0), len(lines) - 1)
+    start = max(0, target_index - AMBIGUOUS_CONTEXT_LINE_RADIUS)
+    end = min(len(lines), target_index + AMBIGUOUS_CONTEXT_LINE_RADIUS + 1)
+    return "\n".join(_bounded_context_line(line) for line in lines[start:end])
+
+
+def _format_ambiguous_match_error(
+    content: str, occurrence_count: int, line_numbers: list[int]
+) -> str:
     line_preview = ", ".join(str(line_number) for line_number in line_numbers[:3])
     if line_preview:
-        return (
-            f"Found {occurrence_count} occurrences on lines {line_preview}. "
-            "Provide more context to make it unique, or use replace_all=true."
+        summary = f"Found {occurrence_count} occurrences on lines {line_preview}. "
+    else:
+        summary = f"Found {occurrence_count} occurrences. "
+
+    candidates = [
+        f"Candidate {index} (around line {line_number}):\n"
+        f"{_candidate_context(content, line_number)}"
+        for index, line_number in enumerate(line_numbers[:AMBIGUOUS_CONTEXT_LIMIT], start=1)
+    ]
+    candidate_text = ""
+    if candidates:
+        candidate_text = (
+            "Raw candidate contexts (without read's line-number gutter):\n"
+            + "\n".join(candidates)
+            + "\n"
         )
+        if occurrence_count > AMBIGUOUS_CONTEXT_LIMIT:
+            candidate_text += (
+                f"Showing the first {AMBIGUOUS_CONTEXT_LIMIT} of {occurrence_count} candidates.\n"
+            )
+
     return (
-        f"Found {occurrence_count} occurrences. Provide more context to make it "
-        "unique, or use replace_all=true."
+        summary
+        + candidate_text
+        + "Provide enough raw surrounding text to make the target unique, or use "
+        "replace_all=true only when every occurrence should change."
     )
 
 
@@ -204,7 +249,7 @@ def edit_handler(
     if isinstance(result, AmbiguousFuzzyMatch):
         return tool_failure(
             "ambiguous_match",
-            _format_ambiguous_match_error(result.occurrences, result.line_numbers),
+            _format_ambiguous_match_error(content, result.occurrences, result.line_numbers),
         )
 
     if result.new_content == content:
