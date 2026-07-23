@@ -102,7 +102,9 @@
     z-index: 20;
     display: flex;
     flex-direction: column;
+    max-width: var(--chat-measure);
     max-height: min(320px, 45vh);
+    margin-inline: auto;
     overflow-y: auto;
     border: 1px solid var(--accent-30);
     border-radius: var(--r-md);
@@ -178,5 +180,12 @@
 
   .file-autocomplete__option.active .file-autocomplete__filename {
     color: var(--accent);
+  }
+
+  @media (max-width: 640px) {
+    .file-autocomplete {
+      right: 14px;
+      left: 14px;
+    }
   }
 </style>
