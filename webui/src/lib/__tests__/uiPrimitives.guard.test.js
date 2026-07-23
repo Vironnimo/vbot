@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 // so a bypassed primitive cannot drift back in. Each phase adds its rule below.
 
 const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const APP_CSS = readFileSync(join(SRC_DIR, 'styles', 'app.css'), 'utf8');
 
 function collectSvelteFiles(directory) {
   const files = [];
@@ -82,6 +83,10 @@ function findRawClassViolations(
 const ANY_ELEMENT = '[a-z][\\w-]*';
 
 describe('UI primitive guard', () => {
+  it('keeps secondary-list content equally inset on every edge', () => {
+    expect(APP_CSS).toMatch(/\.secondary-list\s*\{\s*padding:\s*12px;/);
+  });
+
   it('routes every button through components/ui/Button.svelte', () => {
     const forbidden = new Set([
       // canonical variant + footprint classes the Button component owns
