@@ -268,6 +268,7 @@ class StubProject:
     """Minimal project entity for the prompt-preview project path."""
 
     project_id: str
+    display_name: str
     cwd: str
     auto_load: tuple[str, ...] = ()
 

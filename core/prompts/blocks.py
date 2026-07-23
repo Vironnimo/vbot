@@ -133,6 +133,10 @@ class BlockRenderContext:
 
     agent: PromptAgent
     project_context: ProjectPromptContext | None = None
+    # Session-pinned Working Project Context for a Rooted Identity Agent. When
+    # present, the project-files block emits this text verbatim instead of reading
+    # ``project_context`` again. Other System Prompt inputs remain live.
+    working_project_context: str | None = None
     # Addressing scope of the Agent itself. This is deliberately separate from
     # ``project_context``: a Rooted Identity Agent may receive Project files while
     # remaining identity-scoped for Sub-Agent routing.

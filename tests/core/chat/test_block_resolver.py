@@ -49,6 +49,7 @@ class _StubPrompts:
         *,
         agent_body: str = "",
         project_context: object = None,
+        working_project_context: str | None = None,
         agent_project_id: str | None = None,
         skill_registry: object = None,
         skill_catalog: object = None,

@@ -494,7 +494,12 @@ async def test_preview_resolves_rooted_identity_skill_pool(tmp_path: Path) -> No
         root_project_id="vbot",
     )
     manager = _manager(tmp_path, agents=[agent])
-    home_project = SimpleNamespace(project_id="vbot", cwd=str(repo), auto_load=())
+    home_project = SimpleNamespace(
+        project_id="vbot",
+        display_name="vBot",
+        cwd=str(repo),
+        auto_load=(),
+    )
     skills_for_calls: list[tuple[str | None, str | None]] = []
 
     def skills_for(project_id: str | None, agent_id: str | None = None) -> StubSkills:

@@ -121,7 +121,12 @@ def _register_project_agent(state: SimpleNamespace, repo: Path) -> None:
     """Wire one project agent + its project anchor into the stub runtime."""
     repo.mkdir()
     state.runtime.projects.add(
-        StubProject(project_id="vbot", cwd=str(repo), auto_load=("CONTEXT.md",))
+        StubProject(
+            project_id="vbot",
+            display_name="vBot",
+            cwd=str(repo),
+            auto_load=("CONTEXT.md",),
+        )
     )
     state.runtime.agent_resolver.register_project_agent(
         "vbot",
@@ -187,7 +192,12 @@ async def test_prompt_preview_rooted_identity_agent_renders_project_context(
     coder_workspace.mkdir()
     state.runtime.agents.update("coder", workspace=str(coder_workspace))
     state.runtime.projects.add(
-        StubProject(project_id="vbot", cwd=str(coder_workspace), auto_load=("AGENTS.md",))
+        StubProject(
+            project_id="vbot",
+            display_name="vBot",
+            cwd=str(coder_workspace),
+            auto_load=("AGENTS.md",),
+        )
     )
     state.runtime.agents.update("coder", root_project_id="vbot")
 
