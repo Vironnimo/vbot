@@ -268,6 +268,23 @@ def test_managed_uninstaller_uses_recorded_lifecycle_target(script_name: str) ->
 
 
 @pytest.mark.parametrize("script_name", ["uninstall.sh", "uninstall.ps1"])
+def test_uninstaller_guards_desktop_artifact_removal_by_install_shape(
+    script_name: str,
+) -> None:
+    script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+
+    assert "install_shape" in script
+    assert "server-desktop" in script
+    assert "desktop-client" in script
+    if script_name.endswith(".sh"):
+        assert "if install_owns_desktop_entry; then" in script
+        assert 'if [ "$remove_desktop" -eq 1 ]; then' in script
+    else:
+        assert "$removeDesktopShortcut = Test-InstallOwnsDesktopShortcut" in script
+        assert "if ($removeDesktopShortcut)" in script
+
+
+@pytest.mark.parametrize("script_name", ["uninstall.sh", "uninstall.ps1"])
 def test_application_uninstaller_treats_server_stop_as_mandatory(script_name: str) -> None:
     script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
 

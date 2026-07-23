@@ -70,6 +70,26 @@ function Remove-DesktopShortcut {
     }
 }
 
+function Test-InstallOwnsDesktopShortcut {
+    if (Test-Path -LiteralPath $InstallManifest -PathType Leaf) {
+        try {
+            $state = Get-Content -Raw -LiteralPath $InstallManifest | ConvertFrom-Json
+            $shapeProperty = $state.PSObject.Properties["install_shape"]
+            if ($null -eq $shapeProperty) {
+                return $false
+            }
+            return $shapeProperty.Value -in @("server-desktop", "desktop-client")
+        }
+        catch {
+            Write-Warning "The installation manifest is invalid; preserving the Start-menu shortcut: $($_.Exception.Message)"
+            return $false
+        }
+    }
+
+    $legacyDesktopLauncher = Join-Path $ProjectRoot ".venv\Scripts\vbot-desktop.exe"
+    return Test-Path -LiteralPath $legacyDesktopLauncher -PathType Leaf
+}
+
 function Resolve-PythonCommand {
     $python = Get-Command python -ErrorAction SilentlyContinue
     if ($null -ne $python) {
@@ -341,6 +361,8 @@ function Stop-VbotServer {
 function Invoke-ManagedUninstall {
     param([switch]$PreserveCheckout)
 
+    $removeDesktopShortcut = Test-InstallOwnsDesktopShortcut
+
     if ($PreserveCheckout) {
         Write-Step "Removing managed vBot environment from $ProjectRoot"
     }
@@ -384,8 +406,11 @@ function Invoke-ManagedUninstall {
     # The shim itself lives inside ProjectRoot; drop its PATH entry.
     Remove-FromUserPath -PathToRemove (Join-Path $ProjectRoot "bin")
 
-    # The Start-menu shortcut lives outside ProjectRoot, so remove it explicitly.
-    Remove-DesktopShortcut
+    # The Start-menu shortcut lives outside ProjectRoot. Remove it only when
+    # this installation shape owns the Desktop accessor.
+    if ($removeDesktopShortcut) {
+        Remove-DesktopShortcut
+    }
 
     Set-Location $HOME
     if ($RemoveData) {
@@ -423,6 +448,7 @@ function Invoke-ManagedUninstall {
 }
 
 function Invoke-ManualUninstall {
+    $removeDesktopShortcut = Test-InstallOwnsDesktopShortcut
     Stop-VbotServer
     Write-Step "Uninstalling pip package: $PackageName"
     $python = Resolve-UninstallPython
@@ -433,7 +459,9 @@ function Invoke-ManualUninstall {
         Write-Host "Removed installation manifest."
     }
 
-    Remove-DesktopShortcut
+    if ($removeDesktopShortcut) {
+        Remove-DesktopShortcut
+    }
 
     if ($RemoveAutostart) {
         Write-Step "Removing autostart task"

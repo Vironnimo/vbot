@@ -176,6 +176,33 @@ print(python_executable)
 PY
 }
 
+install_owns_desktop_entry() {
+    if [ -f "$INSTALL_MANIFEST" ]; then
+        local parser=""
+        parser="$(resolve_manifest_python 2>/dev/null || true)"
+        if [ -z "$parser" ] || [ ! -x "$parser" ]; then
+            if command -v python3 >/dev/null 2>&1; then
+                parser="$(command -v python3)"
+            elif command -v python >/dev/null 2>&1; then
+                parser="$(command -v python)"
+            else
+                return 1
+            fi
+        fi
+        "$parser" - "$INSTALL_MANIFEST" <<'PY' 2>/dev/null
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as manifest_file:
+    shape = json.load(manifest_file).get("install_shape")
+raise SystemExit(0 if shape in {"server-desktop", "desktop-client"} else 1)
+PY
+        return
+    fi
+
+    [ -x "${PROJECT_ROOT}/.venv/bin/vbot-desktop" ]
+}
+
 resolve_vbot_path() {
     local recorded_python=""
     if [ -f "$INSTALL_MANIFEST" ]; then
@@ -254,6 +281,11 @@ PY
 }
 
 managed_cleanup() {
+    local remove_desktop=0
+    if install_owns_desktop_entry; then
+        remove_desktop=1
+    fi
+
     # Removing an active environment is unsafe. The stop is mandatory and runs
     # before any launcher, unit, package, or application file is removed.
     stop_vbot_server
@@ -273,7 +305,9 @@ managed_cleanup() {
         esac
     fi
 
-    remove_desktop_entry
+    if [ "$remove_desktop" -eq 1 ]; then
+        remove_desktop_entry
+    fi
 }
 
 managed_root_uninstall() {
@@ -322,6 +356,11 @@ managed_venv_uninstall() {
 # --- manual/editable install: uninstall the pip package -----------------------
 
 manual_uninstall() {
+    local remove_desktop=0
+    if install_owns_desktop_entry; then
+        remove_desktop=1
+    fi
+
     stop_vbot_server
     if command -v python3 >/dev/null 2>&1; then
         PYTHON="python3"
@@ -360,7 +399,9 @@ manual_uninstall() {
         echo "Warning: systemd user unit '${SERVICE_NAME}' still exists. Re-run with --remove-autostart to remove it." >&2
     fi
 
-    remove_desktop_entry
+    if [ "$remove_desktop" -eq 1 ]; then
+        remove_desktop_entry
+    fi
 
     if [ "$REMOVE_DATA" -eq 1 ]; then
         cd "$HOME"
