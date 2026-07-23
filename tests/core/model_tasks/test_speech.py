@@ -22,11 +22,20 @@ from core.providers.errors import ProviderError
 
 
 @pytest.mark.asyncio
-async def test_transcribe_without_configured_binding_is_expected_error(tmp_path: Path) -> None:
+async def test_transcribe_without_configured_binding_is_logged_expected_error(
+    tmp_path: Path,
+    caplog: Any,
+) -> None:
     service = SpeechService(_MissingModelTasks(), cast(Any, object()), tmp_path)
 
-    with pytest.raises(SpeechConfigurationError, match="configured"):
+    with (
+        caplog.at_level(logging.WARNING, logger="vbot.speech"),
+        pytest.raises(SpeechConfigurationError, match="configured"),
+    ):
         await service.transcribe(b"audio")
+
+    assert "Speech transcription unavailable" in caplog.text
+    assert "No task model configured" in caplog.text
 
 
 @pytest.mark.asyncio

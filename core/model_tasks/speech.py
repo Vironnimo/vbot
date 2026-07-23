@@ -92,7 +92,11 @@ class SpeechService:
 
         if not audio:
             raise SpeechConfigurationError("Audio input is empty")
-        _binding, options, target_ref = self._resolver.resolve(TASK_SPEECH_TO_TEXT)
+        try:
+            _binding, options, target_ref = self._resolver.resolve(TASK_SPEECH_TO_TEXT)
+        except SpeechConfigurationError as exc:
+            _LOGGER.warning("Speech transcription unavailable: %s", exc)
+            raise
 
         if target_ref.kind == "local":
             try:

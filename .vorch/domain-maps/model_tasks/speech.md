@@ -77,7 +77,7 @@ Callers of `SpeechService` should see expected speech errors as `SpeechError` su
 - `SpeechUnsupportedTargetError` for configured local targets with no execution adapter.
 - `SpeechExecutionError` for provider/network/runtime request failures.
 
-Provider request failures raised inside `ProviderSpeechClient` are `ProviderError`/network errors; `SpeechService` wraps them as `SpeechExecutionError` and logs through `vbot.speech` without credentials. The server maps `SpeechConfigurationError` to HTTP 409, `SpeechUnsupportedTargetError` to 422, and `SpeechExecutionError` to 502. Transient network and retryable HTTP errors use the shared provider retry helper.
+Missing STT bindings and Provider request failures are logged through `vbot.speech` without credentials; Provider/network failures raised inside `ProviderSpeechClient` are wrapped as `SpeechExecutionError`. The server maps `SpeechConfigurationError` to HTTP 409, `SpeechUnsupportedTargetError` to 422, and `SpeechExecutionError` to 502. Transient network and retryable HTTP errors use the shared provider retry helper.
 
 ## Constraints & Gotchas
 

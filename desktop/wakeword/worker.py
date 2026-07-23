@@ -74,6 +74,14 @@ _OUTCOME_SENT = "sent"
 _OUTCOME_CANCELLED = "cancelled"
 _OUTCOME_NO_SPEECH = "no_speech"
 _OUTCOME_TRANSCRIPTION_FAILED = "transcription_failed"
+_TASK_SPEECH_TO_TEXT = "speech_to_text"
+_TASK_MODEL_STATUS_METHOD = "task_model.status"
+
+_ERROR_NO_SERVER = "no_server"
+_ERROR_SERVER_UNREACHABLE = "server_unreachable"
+_ERROR_SPEECH_TO_TEXT_UNCONFIGURED = "speech_to_text_unconfigured"
+_ERROR_SPEECH_TO_TEXT_UNAVAILABLE = "speech_to_text_unavailable"
+_ERROR_SPEECH_TO_TEXT_READINESS_FAILED = "speech_to_text_readiness_failed"
 
 
 class MicrophoneUnavailableError(RuntimeError):
@@ -88,6 +96,59 @@ class CaptureFormat:
     name: str
     sample_rate: int
     dtype: str
+
+
+def check_speech_to_text_readiness(
+    server_url: str,
+    *,
+    post: Callable[..., httpx.Response] = httpx.post,
+) -> str | None:
+    """Return a stable activation error when server-side STT is not executable."""
+
+    normalized_server_url = (server_url or "").rstrip("/")
+    if not normalized_server_url:
+        return _ERROR_NO_SERVER
+
+    try:
+        response = post(
+            f"{normalized_server_url}/api/rpc",
+            json={
+                "method": _TASK_MODEL_STATUS_METHOD,
+                "params": {"task_type": _TASK_SPEECH_TO_TEXT},
+            },
+            timeout=_RPC_TIMEOUT,
+        )
+    except httpx.RequestError:
+        logger.warning("Speech-to-text readiness check could not reach the server", exc_info=True)
+        return _ERROR_SERVER_UNREACHABLE
+
+    if response.status_code != 200:
+        logger.warning(
+            "Speech-to-text readiness check failed: HTTP %s",
+            response.status_code,
+        )
+        return _ERROR_SPEECH_TO_TEXT_READINESS_FAILED
+
+    try:
+        payload = response.json()
+    except ValueError:
+        logger.warning("Speech-to-text readiness check returned invalid JSON")
+        return _ERROR_SPEECH_TO_TEXT_READINESS_FAILED
+    if not isinstance(payload, dict) or payload.get("ok") is not True:
+        logger.warning("Speech-to-text readiness RPC was rejected")
+        return _ERROR_SPEECH_TO_TEXT_READINESS_FAILED
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        logger.warning("Speech-to-text readiness RPC returned an invalid result")
+        return _ERROR_SPEECH_TO_TEXT_READINESS_FAILED
+    if result.get("configured") is False:
+        return _ERROR_SPEECH_TO_TEXT_UNCONFIGURED
+    if result.get("usable") is False:
+        return _ERROR_SPEECH_TO_TEXT_UNAVAILABLE
+    if result.get("configured") is not True or result.get("usable") is not True:
+        logger.warning("Speech-to-text readiness RPC omitted readiness fields")
+        return _ERROR_SPEECH_TO_TEXT_READINESS_FAILED
+    return None
 
 
 class ResamplingInputStream:
@@ -146,12 +207,14 @@ class WakewordWorker:
         settings_path: Path | None = None,
         server_url: str = "",
         config_reader: Callable[[], dict[str, Any]] | None = None,
+        speech_readiness_checker: Callable[[str], str | None] | None = None,
     ) -> None:
         self._engine = engine
         self._bridge = bridge
         self._settings_path = settings_path
         self._server_url = server_url.rstrip("/")
         self._config_reader = config_reader
+        self._speech_readiness_checker = speech_readiness_checker or check_speech_to_text_readiness
         self._thread: threading.Thread | None = None
         self._running = threading.Event()
         self._stream: Any = None
@@ -191,6 +254,10 @@ class WakewordWorker:
             return
         if not isinstance(agent_id, str) or not agent_id.strip():
             self._fail("missing_target_agent")
+            return
+        readiness_error = self._speech_readiness_checker(self._server_url)
+        if readiness_error is not None:
+            self._fail(readiness_error)
             return
         if not self._target_agent_available(agent_id):
             if not self._running.is_set():
@@ -387,6 +454,11 @@ class WakewordWorker:
             if self._running.is_set():
                 self._fail("send_failed")
             return None
+        logger.info(
+            "Wakeword command sent (agent_id=%s, session_behavior=%s)",
+            agent_id,
+            session_behavior,
+        )
         return _OUTCOME_SENT
 
     def _read_config(self) -> dict[str, Any]:
@@ -411,6 +483,7 @@ class WakewordWorker:
 
     def _fail(self, error_code: str) -> None:
         """Stop the worker and expose one actionable stable failure reason."""
+        logger.warning("Wakeword worker stopped (reason=%s)", error_code)
         self._running.clear()
         self._bridge.publish_state("error", error_code)
 

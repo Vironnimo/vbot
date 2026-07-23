@@ -9,7 +9,11 @@ from typing import Any
 
 from core.debug.store import DebugTraceStore
 from core.extensions import validate_extension_config
-from core.model_tasks import SUPPORTED_TASK_TYPES
+from core.model_tasks import (
+    SUPPORTED_TASK_TYPES,
+    TaskModelError,
+    validate_task_type,
+)
 from core.recall.recall import FIRST_PARTY_RECALL_BACKENDS
 from core.search_config import FIRST_PARTY_WEB_SEARCH_PROVIDERS
 from core.settings import (
@@ -657,6 +661,33 @@ def _task_model_list_targets(state: Any, params: JsonObject) -> JsonObject:
     return {"targets": [target.to_dict() for target in targets]}
 
 
+def _task_model_status(state: Any, params: JsonObject) -> JsonObject:
+    """Report whether one configured Task Model is currently executable."""
+
+    _reject_unsupported(params, {"task_type"}, "task_model.status")
+    task_type = _required_string(params, "task_type")
+    try:
+        normalized_task_type = validate_task_type(task_type)
+        try:
+            state.runtime.model_tasks.binding_for(normalized_task_type)
+        except TaskModelError:
+            configured = False
+        else:
+            configured = True
+        usable = (
+            state.runtime.model_tasks.binding_is_usable(normalized_task_type)
+            if configured
+            else False
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {
+        "task_type": normalized_task_type,
+        "configured": configured,
+        "usable": usable,
+    }
+
+
 def _task_model_options(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"task_type", "target"}, "task_model.options")
     task_type = _required_string(params, "task_type")
@@ -800,5 +831,6 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "task_model.settings": _task_model_settings,
         "task_model.update": _task_model_update,
         "task_model.list_targets": _task_model_list_targets,
+        "task_model.status": _task_model_status,
         "task_model.options": _task_model_options,
     }

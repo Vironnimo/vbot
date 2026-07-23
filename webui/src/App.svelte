@@ -643,6 +643,73 @@
     navigateToSettingsPanel('voice');
   };
 
+  const wakewordFailureMessage = (errorCode) => {
+    if (errorCode === 'speech_to_text_unconfigured') {
+      return t(
+        'settings.voice.error.speechToTextUnconfigured',
+        'Configure a Speech-to-text Model under Settings → Models before enabling wakeword listening.',
+      );
+    }
+    if (errorCode === 'speech_to_text_unavailable') {
+      return t(
+        'settings.voice.error.speechToTextUnavailable',
+        'The configured Speech-to-text Model is not currently usable. Check its Provider connection or choose another Model under Settings → Models.',
+      );
+    }
+    if (errorCode === 'server_unreachable') {
+      return t(
+        'settings.voice.error.serverUnreachable',
+        'Voice could not reach the active server. Check the Desktop connection and try again.',
+      );
+    }
+    return t(
+      'voice.toast.errorMessage',
+      'Open Voice settings for details. The failure was written to the Desktop log.',
+    );
+  };
+
+  const showWakewordEventToast = (event) => {
+    if (event?.state === 'sent') {
+      showToast({
+        title: t('voice.toast.sentTitle', 'Voice command sent'),
+        variant: 'success',
+      });
+      return;
+    }
+    if (event?.state === 'no_speech') {
+      showToast({
+        title: t('voice.toast.noSpeechTitle', 'No speech heard'),
+        message: t(
+          'voice.toast.noSpeechMessage',
+          'No command followed the wakeword. Try again and speak after the cue.',
+        ),
+        variant: 'warn',
+      });
+      return;
+    }
+    if (event?.state === 'transcription_failed') {
+      showToast({
+        title: t(
+          'voice.toast.transcriptionFailedTitle',
+          'Voice command could not be transcribed',
+        ),
+        message: t(
+          'voice.toast.transcriptionFailedMessage',
+          'Check the Speech-to-text Model and the Desktop log, then try again.',
+        ),
+        variant: 'error',
+      });
+      return;
+    }
+    if (event?.state === 'error') {
+      showToast({
+        title: t('settings.voice.errorTitle', 'Voice needs attention'),
+        message: wakewordFailureMessage(event.error_code),
+        variant: 'error',
+      });
+    }
+  };
+
   const applyDesktopWakewordStatus = (status) => {
     wakewordStatus = status;
     const events = Array.isArray(status?.events) ? status.events : [];
@@ -656,6 +723,15 @@
     if (lastWakewordEventSequence === null) {
       // Do not replay sounds that happened before this WebUI mounted.
       lastWakewordEventSequence = latestSequence;
+      // A fatal startup failure is still current, not historical feedback.
+      // Surface it even when the worker failed before the WebUI finished
+      // mounting (for example an enabled Desktop starting without STT).
+      if (status?.state === 'error') {
+        showWakewordEventToast({
+          state: 'error',
+          error_code: status.error_code,
+        });
+      }
       return;
     }
     for (const event of events) {
@@ -664,6 +740,7 @@
         event.sequence > lastWakewordEventSequence
       ) {
         void playWakewordCue(event.state);
+        showWakewordEventToast(event);
       }
     }
     lastWakewordEventSequence = Math.max(

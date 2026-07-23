@@ -244,6 +244,31 @@ def test_set_wakeword_enabled_toggles_and_persists(tmp_path: Path) -> None:
     assert status["enabled"] is False
 
 
+def test_set_wakeword_enabled_rejects_missing_speech_to_text_before_persisting(
+    tmp_path: Path,
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file)
+    worker = FakeWorker()
+    bridge = DesktopBridge(
+        settings_path=settings_file,
+        worker=worker,
+        server_url="http://127.0.0.1:8420",
+        speech_readiness_checker=lambda _server_url: "speech_to_text_unconfigured",
+    )
+
+    result = bridge.setWakewordEnabled(True)
+
+    assert result == {
+        "enabled": False,
+        "error_code": "speech_to_text_unconfigured",
+    }
+    assert bridge.getWakewordStatus()["enabled"] is False
+    assert bridge.getWakewordStatus()["state"] == "error"
+    assert bridge.getWakewordStatus()["error_code"] == "speech_to_text_unconfigured"
+    assert worker.started is False
+
+
 def test_set_wakeword_enabled_uses_worker_factory(tmp_path: Path) -> None:
     settings_file = tmp_path / "settings.json"
     _write_settings(settings_file)
