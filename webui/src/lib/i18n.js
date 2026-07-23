@@ -1524,9 +1524,9 @@ export const englishCatalog = Object.freeze({
   'statistics.col.models': 'Models',
   'statistics.col.tool': 'Tool',
   'statistics.col.calls': 'Calls',
-  'statistics.col.successRate': 'Success',
-  'statistics.col.errorRate': 'Errors',
-  'statistics.col.topError': 'Top error',
+  'statistics.col.acceptedRate': 'Accepted',
+  'statistics.col.rejectedRate': 'Rejected',
+  'statistics.col.topRejection': 'Top rejection',
   'statistics.col.cacheHit': 'Cache hit',
   'statistics.col.turns': 'Turns',
   'statistics.col.input': 'Input',
@@ -1597,8 +1597,8 @@ export const englishCatalog = Object.freeze({
   'statistics.errors.scopeHint':
     'These are persisted Run errors; Tool failures are reported under Tools. Provider and Model attribution uses the last preceding Assistant Model step and is therefore a proxy.',
   'statistics.tools.totalCalls': 'Tool calls',
-  'statistics.tools.noArgsNote':
-    'Statistics never reads or includes Tool arguments; only Tool names, timing, and result status are aggregated.',
+  'statistics.tools.outcomeNote':
+    'Accepted means the Tool returned ok:true. Rejected means it returned ok:false, including safe validation and guardrail rejections; a rejection does not by itself mean the Tool malfunctioned. Statistics never reads or includes Tool arguments.',
   'statistics.tools.perTool': 'Per tool',
   'statistics.tools.byAgent': 'Calls per agent',
   'statistics.tools.topSessions': 'Busiest sessions',

@@ -831,7 +831,7 @@ describe('i18n t()', () => {
       'statistics.errors.byHour',
       'statistics.errors.scopeHint',
       'statistics.tools.perTool',
-      'statistics.tools.noArgsNote',
+      'statistics.tools.outcomeNote',
       'statistics.skills.total',
       'statistics.skills.used',
       'statistics.skills.offeredUnactivated',

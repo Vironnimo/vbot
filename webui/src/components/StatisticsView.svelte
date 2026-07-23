@@ -1377,8 +1377,8 @@
     </div>
     <p class="stats-note">
       {t(
-        'statistics.tools.noArgsNote',
-        'Statistics never reads or includes Tool arguments; only Tool names, timing, and result status are aggregated.',
+        'statistics.tools.outcomeNote',
+        'Accepted means the Tool returned ok:true. Rejected means it returned ok:false, including safe validation and guardrail rejections; a rejection does not by itself mean the Tool malfunctioned. Statistics never reads or includes Tool arguments.',
       )}
     </p>
 
@@ -1397,11 +1397,11 @@
             <tr>
               <th>{t('statistics.col.tool', 'Tool')}</th>
               <th>{t('statistics.col.calls', 'Calls')}</th>
-              <th>{t('statistics.col.successRate', 'Success')}</th>
-              <th>{t('statistics.col.errorRate', 'Errors')}</th>
+              <th>{t('statistics.col.acceptedRate', 'Accepted')}</th>
+              <th>{t('statistics.col.rejectedRate', 'Rejected')}</th>
               <th>{t('statistics.col.avgDuration', 'Avg')}</th>
               <th>P95</th>
-              <th>{t('statistics.col.topError', 'Top error')}</th>
+              <th>{t('statistics.col.topRejection', 'Top rejection')}</th>
             </tr>
           </thead>
           <tbody>

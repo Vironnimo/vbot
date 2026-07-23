@@ -16,6 +16,8 @@ and writes nothing. Every figure is derived from persisted ``ChatMessage`` data
 - **Derived fallback** (a run group with ≥2 distinct bare models) is a
   best-effort signal, clearly labelled — it is NOT the authoritative in-memory
   ``model_fallback_activated`` event, which is not persisted.
+- **Fork copies are not new activity.** A forked Session contributes only the
+  messages appended after its recorded ``fork_source.message_count`` prefix.
 - **Tool arguments are never read.** Only the tool ``name``, ``timing`` and the
   ``{ok, error.code}`` result envelope feed the report.
 """
@@ -32,7 +34,7 @@ from typing import Any, Protocol
 
 from core.chat.messages import ChatMessage
 from core.chat.model_resolution import parse_bare_model
-from core.sessions import skill_context_note_name, skill_tool_activation_name
+from core.sessions import FORK_SOURCE_META_KEY, skill_context_note_name, skill_tool_activation_name
 from core.statistics.skills import (
     SkillInventorySource,
     SkillsSection,
@@ -753,7 +755,8 @@ class _Aggregator:
         timestamp).
         """
         agent = self._agent(agent_id)
-        in_window = [message for message in messages if self._in_window(message.timestamp)]
+        activity_messages = _session_activity_messages(messages, summary)
+        in_window = [message for message in activity_messages if self._in_window(message.timestamp)]
 
         current: list[ChatMessage] = []
         current_model: str | None = None
@@ -795,7 +798,7 @@ class _Aggregator:
         self._cache_break_evaluated_turns += cache_tracker.evaluated_turns
         self._cache_break_incidents.extend(cache_tracker.incidents)
 
-        self._record_skill_usage(agent_id, summary, messages)
+        self._record_skill_usage(agent_id, summary, activity_messages)
 
     def _record_skill_usage(
         self, display_key: str, summary: JsonObject, messages: list[ChatMessage]
@@ -1454,6 +1457,31 @@ def _provider_model_key(model: str | None) -> str:
     if not model:
         return UNKNOWN_MODEL_KEY
     return parse_bare_model(model)
+
+
+def _session_activity_messages(
+    messages: list[ChatMessage], summary: JsonObject
+) -> list[ChatMessage]:
+    """Exclude the copied transcript prefix from a fork's activity aggregates.
+
+    ``ChatSessionManager.fork`` records the exact number of copied complete
+    messages in ``fork_source.message_count``. Those records remain part of the
+    fork's visible history, but their Runs, usage, errors, and Tool calls already
+    belong to the source Session. Invalid hand-edited metadata fails open and
+    leaves the transcript unchanged rather than silently hiding activity.
+    """
+    fork_source = summary.get(FORK_SOURCE_META_KEY)
+    if not isinstance(fork_source, dict):
+        return messages
+    copied_message_count = fork_source.get("message_count")
+    if (
+        isinstance(copied_message_count, bool)
+        or not isinstance(copied_message_count, int)
+        or copied_message_count < 0
+        or copied_message_count > len(messages)
+    ):
+        return messages
+    return messages[copied_message_count:]
 
 
 def _distinct_run_models(group: list[ChatMessage]) -> set[str]:
