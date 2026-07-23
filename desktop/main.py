@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
 
-from desktop.settings import read_wakeword_settings
+from desktop.settings import read_wakeword_settings, read_window_size, write_window_size
 
 if TYPE_CHECKING:
     from desktop.connection import ConnectionController
@@ -38,6 +38,14 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8420
 WINDOW_TITLE = "vBot"
 ICON_FILE_NAME = "icon.png"
+FALLBACK_SCREEN_WIDTH = 1600
+FALLBACK_SCREEN_HEIGHT = 1000
+DEFAULT_WINDOW_SCREEN_RATIO = 0.8
+DEFAULT_WINDOW_MAX_WIDTH = 1440
+DEFAULT_WINDOW_MAX_HEIGHT = 960
+MINIMUM_WINDOW_WIDTH = 800
+MINIMUM_WINDOW_HEIGHT = 600
+WINDOW_SCREEN_EDGE_ALLOWANCE = 80
 PROBE_TIMEOUT_SECONDS = 2.0
 PROBE_WEBUI_AVAILABLE = "webui_available"
 PROBE_WEBUI_UNAVAILABLE = "webui_unavailable"
@@ -76,6 +84,8 @@ class WebviewModule(Protocol):
     ``shown`` event and uses ``start`` only to enter the native GUI loop.
     """
 
+    screens: list[Any]
+
     def create_window(self, title: str, **kwargs: Any) -> Any:
         """Create a window before the GUI loop starts (needs ``url`` or ``html``)."""
 
@@ -99,6 +109,16 @@ class DesktopProbeResult:
 
     status: str
     target: DesktopTarget
+
+
+@dataclass(frozen=True)
+class DesktopWindowLayout:
+    """Initial Desktop window size and its screen-safe resize floor."""
+
+    width: int
+    height: int
+    minimum_width: int
+    minimum_height: int
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -222,11 +242,18 @@ def launch_desktop(
     # connection screen is a safe neutral page that the post-loop entry callable
     # replaces once the loop is live (navigating to the WebUI on connect).
     initial_html = build_connection_html(servers=controller.list_servers())
+    window_layout = resolve_window_layout(
+        read_window_size(settings_file),
+        _primary_screen_size(webview),
+    )
     window = webview.create_window(
         WINDOW_TITLE,
         html=initial_html,
         text_select=True,
         js_api=bridge,
+        width=window_layout.width,
+        height=window_layout.height,
+        min_size=(window_layout.minimum_width, window_layout.minimum_height),
     )
     controller.attach_window(window)
 
@@ -248,10 +275,68 @@ def launch_desktop(
 
     window.events.shown += start_visible_services
 
+    def persist_window_size() -> None:
+        # Save only size, not position: OS centering keeps the window reachable
+        # after a monitor is disconnected or the display layout changes.
+        try:
+            write_window_size(window.width, window.height, settings_file)
+        except (AttributeError, OSError, RuntimeError, ValueError):
+            logger.warning("Desktop window size could not be persisted", exc_info=True)
+
+    window.events.closing += persist_window_size
+
     try:
         webview.start(**start_kwargs)
     finally:
         bridge._stop_worker()
+
+
+def resolve_window_layout(
+    saved_size: tuple[int, int] | None,
+    screen_size: tuple[int, int],
+) -> DesktopWindowLayout:
+    """Return a useful initial size bounded to the current primary display.
+
+    A fresh install uses roughly 80% of the display with a desktop-sized cap.
+    A remembered size wins when present, but is clamped so a former large
+    monitor cannot produce an unreachable or unusable window on a smaller one.
+    """
+
+    screen_width, screen_height = screen_size
+    available_width = max(1, screen_width - WINDOW_SCREEN_EDGE_ALLOWANCE)
+    available_height = max(1, screen_height - WINDOW_SCREEN_EDGE_ALLOWANCE)
+    minimum_width = min(MINIMUM_WINDOW_WIDTH, available_width)
+    minimum_height = min(MINIMUM_WINDOW_HEIGHT, available_height)
+
+    if saved_size is None:
+        preferred_width = round(screen_width * DEFAULT_WINDOW_SCREEN_RATIO)
+        preferred_height = round(screen_height * DEFAULT_WINDOW_SCREEN_RATIO)
+        width = min(preferred_width, DEFAULT_WINDOW_MAX_WIDTH)
+        height = min(preferred_height, DEFAULT_WINDOW_MAX_HEIGHT)
+    else:
+        width, height = saved_size
+
+    return DesktopWindowLayout(
+        width=max(minimum_width, min(width, available_width)),
+        height=max(minimum_height, min(height, available_height)),
+        minimum_width=minimum_width,
+        minimum_height=minimum_height,
+    )
+
+
+def _primary_screen_size(webview: WebviewModule) -> tuple[int, int]:
+    """Return primary-screen logical pixels, with a stable fallback."""
+
+    try:
+        screens = webview.screens
+        primary_screen = screens[0]
+        width = int(primary_screen.width)
+        height = int(primary_screen.height)
+    except (AttributeError, IndexError, OSError, RuntimeError, TypeError, ValueError):
+        return FALLBACK_SCREEN_WIDTH, FALLBACK_SCREEN_HEIGHT
+    if width <= 0 or height <= 0:
+        return FALLBACK_SCREEN_WIDTH, FALLBACK_SCREEN_HEIGHT
+    return width, height
 
 
 def _select_launch_entry(
