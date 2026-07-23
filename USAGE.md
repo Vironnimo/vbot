@@ -173,7 +173,7 @@ vbot uninstall --all --yes
 
 Use `--host`, `--port`, and `--data-dir` to override the recorded target. Custom Autostart names can be supplied with `--task-name` on Windows or `--service-name` on Linux. The command refuses protected roots, the home directory, any data target containing the application installation, a data target containing the caller's current directory, and application removal while the caller is inside the installation directory.
 
-Application-removing scopes first stop the exact selected server; if that stop fails, removal aborts and reports the preserved application directory. They then delegate to the bundled platform Uninstaller, which verifies the stop again before removing anything. A fresh managed install is removed wholesale; an install performed in an existing checkout removes the installer-owned `.venv` and launcher but preserves the checkout. Windows requests elevation and launches a helper that waits for the calling `vbot.exe` to exit before deleting its environment. The caller reports the absolute application directory and says explicitly that helper launch is not completed removal; the elevated window reports final completion or failure. Cancelling UAC leaves the installation and selected data in place, although a server stopped during preflight remains stopped. The underlying `scripts/uninstall.ps1` and `scripts/uninstall.sh` retain the same mandatory-stop contract as recovery and direct-setup entrypoints.
+Application-removing scopes first stop the exact selected server; if that stop fails, removal aborts and reports the preserved application directory. They then delegate to the bundled platform Uninstaller, which verifies the stop again before removing anything. A fresh managed install is removed wholesale; an install performed in an existing checkout removes the installer-owned `.venv` and launcher but preserves the checkout. Desktop Start-menu/application-menu entries are removed only when the recorded install shape owns the Desktop accessor; uninstalling a server-only shape preserves any Desktop entry owned by another installation. Windows requests elevation and launches a helper that waits for the calling `vbot.exe` to exit before deleting its environment. The caller reports the absolute application directory and says explicitly that helper launch is not completed removal; the elevated window reports final completion or failure. Cancelling UAC leaves the installation and selected data in place, although a server stopped during preflight remains stopped. The underlying `scripts/uninstall.ps1` and `scripts/uninstall.sh` retain the same mandatory-stop contract as recovery and direct-setup entrypoints.
 
 ## First-run setup
 
@@ -706,7 +706,7 @@ python scripts/quality.py
 python scripts/quality-frontend.py
 ```
 
-The Playwright E2E suite under `tests/e2e/` is separate and opt-in because it controls a real server and browser environment. Follow the repository workflow instructions before running it.
+The Playwright E2E suite under `tests/e2e/` is separate from the local quality scripts because it controls a real server and browser environment. Local runs remain explicit opt-in and follow the repository workflow instructions; Release CI calls the same reusable Chromium job as a required pre-publish gate.
 
 ## Operational notes
 

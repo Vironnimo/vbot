@@ -1,8 +1,9 @@
 name: Release Smoke
 
-# Exercises the public distribution path without publishing or mutating a
-# release. The release workflow calls this after publication, and maintainers
-# can dispatch it again for any existing release tag.
+# Canaries the public distribution path after publication. Candidate install,
+# runtime, WebUI, and uninstall behavior already gate publication in CI; this
+# workflow proves that the public tag and asset can be acquired by both public
+# Installer implementations. Maintainers can dispatch it again for any release.
 on:
   workflow_call:
     inputs:
@@ -40,17 +41,9 @@ jobs:
           test "$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '[.assets[].name] | index("webui-dist.tar.gz") != null')" = "true"
 
   linux:
-    name: linux (${{ matrix.architecture }})
+    name: linux (x64)
     needs: validate
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - architecture: x64
-            runner: ubuntu-latest
-          - architecture: arm64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-latest
     env:
       RELEASE_TAG: ${{ inputs.tag }}
     steps:
