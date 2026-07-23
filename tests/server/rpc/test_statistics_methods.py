@@ -270,8 +270,11 @@ def test_report_skills_section_joins_usage_against_inventory(tmp_path: Path) -> 
     assert skills["total_skills"] == 2
     assert skills["used_skills"] == 1
     assert skills["never_used_skills"] == 1
+    assert skills["offered_unactivated_skills"] == 1
+    assert skills["skills_without_offer_data"] == 0
     assert by_name["deploy"]["offered_sessions"] == 1
     assert by_name["deploy"]["activated_sessions"] == 1
+    assert by_name["deploy"]["activated_offered_sessions"] == 1
     assert by_name["deploy"]["usage_rate"] == 1.0
     assert by_name["deploy"]["by_agent"] == [{"key": "main", "count": 1}]
     assert by_name["teach"]["activated_sessions"] == 0

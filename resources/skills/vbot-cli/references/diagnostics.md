@@ -39,10 +39,10 @@ vbot statistics skills   [--since <iso>] [--until <iso>]
 
 - `--since`/`--until` take ISO-8601 UTC timestamps (e.g. `2026-06-01T00:00:00Z`); omit both for all time. The server rejects malformed or inverted windows.
 - `overview` = totals and activity; `usage` = tokens per provider/model incl. cache figures; `runs` = durations and cancel/failure rates; `errors` = failures by kind/provider/model; `tools` = per-tool call counts and error rates.
-- `skills` reports skill usage for delete/improve decisions: it leads with the never-used list, then per skill shows origins, `offered` (sessions where the skill was available), `activated` (sessions that loaded it), `usage_rate`, and last activation.
+- `skills` reports Skill usage for delete/improve decisions: it separates Skills whose recorded offers produced no conversion from Skills with no offer data, then per Skill shows origins, `offered` (Sessions whose catalog recorded it), `activated` (all Sessions that loaded it), `activated_after_offer`, `offer_conversion`, and last activation.
 
 Reading `skills` numbers correctly:
 
 - Judge by **opportunity, not calendar age**: many offers with zero activations → strong delete/rework candidate; few offers → too new to judge, regardless of dates.
-- `usage_rate` `0.00` means offered but never activated; `-` means never offered at all (e.g. no session started since the skill appeared).
+- `offer_conversion` counts only Sessions where the Skill was both recorded in the offered catalog and activated. `0.00` means observed offers but no matching activation; `-` means there is no offer data. Older Sessions without catalog metadata may still contribute to `activated`, but cannot inflate this rate.
 - Deleted skills are not listed — the report covers the current skill inventory only.

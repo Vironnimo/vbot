@@ -93,6 +93,7 @@ def test_offered_counted_from_seen_skills() -> None:
 
     assert _row(section, "deploy").offered_sessions == 1
     assert _row(section, "deploy").activated_sessions == 0
+    assert _row(section, "deploy").activated_offered_sessions == 0
     # Offered once, activated zero → rate 0.0 (null is reserved for offered == 0).
     assert _row(section, "deploy").usage_rate == 0.0
     assert _row(section, "deploy").first_offered == _iso()
@@ -140,12 +141,13 @@ def test_activated_counted_once_per_session_from_notes() -> None:
 
     assert row.offered_sessions == 2
     assert row.activated_sessions == 2
+    assert row.activated_offered_sessions == 2
     assert row.usage_rate == 1.0
     assert row.first_activated == _iso(1)
     assert row.last_activated == _iso(11)
 
 
-def test_usage_rate_is_activated_over_offered() -> None:
+def test_usage_rate_is_activation_among_sessions_with_offer_data() -> None:
     accumulator = _accumulator()
     for index in range(4):
         accumulator.observe_session(
@@ -163,7 +165,37 @@ def test_usage_rate_is_activated_over_offered() -> None:
 
     assert row.offered_sessions == 4
     assert row.activated_sessions == 1
+    assert row.activated_offered_sessions == 1
     assert row.usage_rate == 0.25
+
+
+def test_usage_rate_excludes_activations_without_offer_metadata() -> None:
+    accumulator = _accumulator()
+    accumulator.observe_session(
+        display_key="main",
+        created_at=_iso(),
+        offered_names=["deploy"],
+        activations=[],
+    )
+    accumulator.observe_session(
+        display_key="main",
+        created_at=_iso(10),
+        offered_names=[],
+        activations=[("deploy", _iso(11))],
+    )
+    inventory = _FakeInventory(global_skills=[("deploy", "global")])
+
+    section = accumulator.build(
+        resolve_inventory(inventory, agent_ids=frozenset(), project_ids=frozenset())
+    )
+    row = _row(section, "deploy")
+
+    assert row.offered_sessions == 1
+    assert row.activated_sessions == 1
+    assert row.activated_offered_sessions == 0
+    assert row.usage_rate == 0.0
+    assert section.offered_unactivated_skills == 1
+    assert section.skills_without_offer_data == 0
 
 
 # -- inventory join ---------------------------------------------------------
@@ -204,6 +236,7 @@ def test_never_used_inventory_skill_listed_with_zero_counts() -> None:
 
     assert unused.offered_sessions == 0
     assert unused.activated_sessions == 0
+    assert unused.activated_offered_sessions == 0
     assert unused.usage_rate is None
     assert unused.first_offered is None
     assert unused.first_activated is None
@@ -211,6 +244,8 @@ def test_never_used_inventory_skill_listed_with_zero_counts() -> None:
     assert section.total_skills == 2
     assert section.used_skills == 1
     assert section.never_used_skills == 1
+    assert section.offered_unactivated_skills == 0
+    assert section.skills_without_offer_data == 1
 
 
 def test_rows_sorted_by_offered_desc_then_name() -> None:
@@ -310,6 +345,8 @@ def test_activation_filtered_by_note_timestamp() -> None:
     # Offered dropped (created_at before window), but the in-window note counts.
     assert row.offered_sessions == 0
     assert row.activated_sessions == 1
+    assert row.activated_offered_sessions == 0
+    assert row.usage_rate is None
     assert row.first_activated == _iso(200)
 
 
@@ -398,6 +435,8 @@ def test_empty_inventory_drops_all_usage_with_zero_counts() -> None:
     assert section.total_skills == 0
     assert section.used_skills == 0
     assert section.never_used_skills == 0
+    assert section.offered_unactivated_skills == 0
+    assert section.skills_without_offer_data == 0
 
 
 def test_fake_inventory_satisfies_protocol() -> None:

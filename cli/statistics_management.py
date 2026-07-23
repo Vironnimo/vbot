@@ -86,7 +86,7 @@ def _format_overview(section: Mapping[str, Any], window: object) -> str:
     lines.append(f"sessions: {_int(section.get('total_sessions'))}")
     lines.append(f"runs: {_int(section.get('total_runs'))}")
     lines.append(f"open run groups: {_int(section.get('open_run_groups'))}")
-    lines.append(f"chat messages: {_int(section.get('total_chat_messages'))}")
+    lines.append(f"visible chat messages: {_int(section.get('total_chat_messages'))}")
     lines.append(f"stored session records: {_int(section.get('total_session_records'))}")
     lines.append(f"last activity: {_timestamp(section.get('last_activity'))}")
 
@@ -104,7 +104,7 @@ def _format_overview(section: Mapping[str, Any], window: object) -> str:
     lines.append(f"total tool calls: {_int(section.get('total_tool_calls'))}")
 
     lines.append("")
-    lines.append("chat messages by role:")
+    lines.append("visible chat messages by role:")
     lines.extend(_role_count_lines(section.get("chat_messages_by_role")))
 
     lines.append("")
@@ -146,9 +146,9 @@ def _format_usage(section: Mapping[str, Any], window: object) -> str:
 
     totals = section.get("totals")
     if isinstance(totals, dict):
-        lines.append(f"assistant messages: {_int(totals.get('assistant_messages'))}")
-        lines.append(f"measured turns: {_int(totals.get('measured_turns'))}")
-        lines.append(f"estimated turns: {_int(totals.get('estimated_turns'))}")
+        lines.append(f"model steps: {_int(totals.get('assistant_messages'))}")
+        lines.append(f"measured model steps: {_int(totals.get('measured_turns'))}")
+        lines.append(f"estimated model steps: {_int(totals.get('estimated_turns'))}")
         lines.append(f"measured input tokens: {_int(totals.get('measured_input_tokens'))}")
         lines.append(f"measured output tokens: {_int(totals.get('measured_output_tokens'))}")
         lines.append(f"estimated input tokens: {_int(totals.get('estimated_input_tokens'))}")
@@ -229,6 +229,14 @@ def _format_runs(section: Mapping[str, Any], window: object) -> str:
     lines.append(
         f"average tool calls per run: {_number(section.get('average_tool_calls_per_run'))}"
     )
+    lines.append(f"agent messages: {_int(section.get('agent_messages'))}")
+    lines.append(f"model steps: {_int(section.get('model_steps'))}")
+    lines.append(
+        f"average agent messages per run: {_number(section.get('average_agent_messages_per_run'))}"
+    )
+    lines.append(
+        f"average model steps per run: {_number(section.get('average_model_steps_per_run'))}"
+    )
     lines.append(f"derived fallback runs: {_int(section.get('derived_fallback_runs'))}")
 
     lines.append("")
@@ -266,6 +274,10 @@ def _longest_run_lines(runs: object) -> list[str]:
 def _format_errors(section: Mapping[str, Any], window: object) -> str:
     lines = ["errors:", *_window_lines(window)]
     lines.append(f"total errors: {_int(section.get('total_errors'))}")
+    lines.append(
+        "attribution: persisted Run errors; provider/model use the last preceding "
+        "Assistant Model step (proxy); Tool failures are separate"
+    )
 
     lines.append("")
     lines.append("by kind:")
@@ -295,6 +307,7 @@ def _count_entry_lines(entries: object) -> list[str]:
 def _format_tools(section: Mapping[str, Any], window: object) -> str:
     lines = ["tools:", *_window_lines(window)]
     lines.append(f"total calls: {_int(section.get('total_calls'))}")
+    lines.append("arguments: not read or included by Statistics")
 
     lines.append("")
     lines.append("tools:")
@@ -331,23 +344,23 @@ def _tool_by_agent_lines(entries: object) -> list[str]:
 
 
 def _format_skills(section: Mapping[str, Any], window: object) -> str:
-    """Render the skills section: never-used list first, then the usage table.
-
-    The never-used list leads because it is the agent's primary decision input
-    for deleting or improving unused skills; the per-skill table follows with
-    the usage detail behind each name.
-    """
+    """Render evidence-backed Skill candidates separately from missing offer data."""
 
     lines = ["skills:", *_window_lines(window)]
     lines.append(f"total skills: {_int(section.get('total_skills'))}")
-    lines.append(f"used skills: {_int(section.get('used_skills'))}")
-    lines.append(f"never used skills: {_int(section.get('never_used_skills'))}")
+    lines.append(f"activated skills: {_int(section.get('used_skills'))}")
+    lines.append(f"without offer conversion: {_int(section.get('offered_unactivated_skills'))}")
+    lines.append(f"without offer data: {_int(section.get('skills_without_offer_data'))}")
 
     rows = _dict_rows(section.get("skills"))
 
     lines.append("")
-    lines.append("never used:")
-    lines.extend(_never_used_lines(rows))
+    lines.append("without offer conversion:")
+    lines.extend(_offered_unactivated_lines(rows))
+
+    lines.append("")
+    lines.append("without offer data:")
+    lines.extend(_without_offer_data_lines(rows))
 
     lines.append("")
     lines.append("per skill:")
@@ -355,17 +368,27 @@ def _format_skills(section: Mapping[str, Any], window: object) -> str:
     return "\n".join(lines)
 
 
-def _never_used_lines(rows: Sequence[Mapping[str, Any]]) -> list[str]:
-    """List inventory skills with zero lifetime activations, origins included."""
+def _offered_unactivated_lines(rows: Sequence[Mapping[str, Any]]) -> list[str]:
+    candidates = [
+        row
+        for row in rows
+        if _int(row.get("offered_sessions")) > 0
+        and _int(row.get("activated_offered_sessions")) == 0
+    ]
+    if not candidates:
+        return ["  no evidence-backed candidates"]
+    return [f"  {_text(row.get('name'))} [{_join(row.get('origins'))}]" for row in candidates]
 
-    never_used = [row for row in rows if _int(row.get("activated_sessions")) == 0]
-    if not never_used:
-        return ["  no unused skills"]
-    return [f"  {_text(row.get('name'))} [{_join(row.get('origins'))}]" for row in never_used]
+
+def _without_offer_data_lines(rows: Sequence[Mapping[str, Any]]) -> list[str]:
+    missing = [row for row in rows if _int(row.get("offered_sessions")) == 0]
+    if not missing:
+        return ["  all skills have offer data"]
+    return [f"  {_text(row.get('name'))} [{_join(row.get('origins'))}]" for row in missing]
 
 
 def _skill_usage_lines(rows: Sequence[Mapping[str, Any]]) -> list[str]:
-    """Per-skill usage rows: name, origins, offered, activated, rate, last used."""
+    """Per-Skill usage rows with conversion limited to observed offers."""
 
     if not rows:
         return ["  no skills recorded"]
@@ -375,7 +398,8 @@ def _skill_usage_lines(rows: Sequence[Mapping[str, Any]]) -> list[str]:
             f"  {_text(row.get('name'))} [{_join(row.get('origins'))}]: "
             f"offered={_int(row.get('offered_sessions'))} "
             f"activated={_int(row.get('activated_sessions'))} "
-            f"usage_rate={_usage_rate(row.get('usage_rate'))} "
+            f"activated_after_offer={_int(row.get('activated_offered_sessions'))} "
+            f"offer_conversion={_usage_rate(row.get('usage_rate'))} "
             f"last_activated={_timestamp(row.get('last_activated'))}"
         )
     return lines

@@ -187,6 +187,10 @@ function makeReport(overrides = {}) {
       runs_with_tool_calls: 2,
       total_tool_calls: 7,
       average_tool_calls_per_run: 1.75,
+      agent_messages: 6,
+      model_steps: 10,
+      average_agent_messages_per_run: 1.5,
+      average_model_steps_per_run: 2.5,
       derived_fallback_runs: 1,
       runs_per_agent: [{ agent_id: 'main', runs: 3 }],
       top_sessions_by_runs: [],
@@ -238,13 +242,16 @@ function makeReport(overrides = {}) {
     skills: {
       total_skills: 3,
       used_skills: 1,
-      never_used_skills: 1,
+      never_used_skills: 2,
+      offered_unactivated_skills: 1,
+      skills_without_offer_data: 1,
       skills: [
         {
           name: 'deploy',
           origins: ['bundled'],
           offered_sessions: 10,
           activated_sessions: 4,
+          activated_offered_sessions: 4,
           usage_rate: 0.4,
           first_offered: '2026-06-10T08:00:00+00:00',
           last_offered: '2026-06-13T09:00:00+00:00',
@@ -260,6 +267,7 @@ function makeReport(overrides = {}) {
           origins: ['global', 'project:vBot'],
           offered_sessions: 8,
           activated_sessions: 0,
+          activated_offered_sessions: 0,
           usage_rate: 0,
           first_offered: '2026-06-09T08:00:00+00:00',
           last_offered: '2026-06-12T09:00:00+00:00',
@@ -272,6 +280,7 @@ function makeReport(overrides = {}) {
           origins: ['agent:assistant'],
           offered_sessions: 0,
           activated_sessions: 0,
+          activated_offered_sessions: 0,
           usage_rate: null,
           first_offered: null,
           last_offered: null,
@@ -389,7 +398,10 @@ describe('StatisticsView', () => {
       (card) => card.textContent.includes('Chat messages'),
     );
     expect(chatMessagesCard.textContent).toContain('11');
-    expect(document.body.textContent).toContain('Chat messages by role');
+    expect(document.body.textContent).toContain(
+      'Visible chat messages by role',
+    );
+    expect(document.body.textContent).toContain('Model steps');
     expect(document.body.textContent).toContain('Stored Session records');
     expect(document.body.textContent).toContain('System reminder');
     expect(document.body.textContent).toContain('Run summary');
@@ -489,6 +501,9 @@ describe('StatisticsView', () => {
       'openrouter/anthropic/claude-sonnet-4',
     );
     expect(document.body.textContent).toContain('~ estimated');
+    expect(document.body.textContent).toContain(
+      'A fallback Run can appear in multiple rows',
+    );
   });
 
   it('renders cache hit rate, worst sessions and suspected breaks in the usage sub-view', async () => {
@@ -536,7 +551,12 @@ describe('StatisticsView', () => {
     expect(document.body.textContent).toContain('Fallback runs (derived)');
     expect(document.body.textContent).toContain('Open run groups');
     expect(document.body.textContent).toContain('Longest runs');
-    expect(document.body.textContent).toContain('By hour of day');
+    expect(document.body.textContent).toContain('Avg Agent messages / Run');
+    expect(document.body.textContent).toContain('Avg Model steps / Run');
+    expect(document.body.textContent).toContain('By UTC hour');
+    expect(document.body.textContent).toContain(
+      'These are persisted Run errors',
+    );
   });
 
   it('renders the tools sub-view without exposing arguments', async () => {
@@ -557,7 +577,7 @@ describe('StatisticsView', () => {
     expect(document.body.textContent).toContain('read');
     expect(document.body.textContent).toContain('not_found');
     expect(document.body.textContent).toContain(
-      'Tool arguments are never collected.',
+      'Statistics never reads or includes Tool arguments',
     );
   });
 
@@ -577,8 +597,10 @@ describe('StatisticsView', () => {
 
     const text = document.body.textContent;
     expect(text).toContain('Per skill');
-    // Summary cards: 3 total, 1 used, 1 never used.
-    expect(text).toContain('Never used');
+    // Summary cards distinguish evidence-backed candidates from new Skills
+    // whose catalogs have not been observed yet.
+    expect(text).toContain('No offer conversion');
+    expect(text).toContain('No offer data');
     // Per-skill rows.
     expect(text).toContain('deploy');
     expect(text).toContain('lonely-skill');
@@ -594,7 +616,7 @@ describe('StatisticsView', () => {
     expect(text).toContain('builder');
   });
 
-  it('highlights zero-activation skills as delete/improve candidates', async () => {
+  it('highlights only offered zero-activation skills as candidates', async () => {
     rpcMock.mockResolvedValue(makeReport());
 
     mountedComponent = mount(StatisticsView, { target: document.body });
@@ -608,17 +630,21 @@ describe('StatisticsView', () => {
     skillsTab.click();
     flushSync();
 
-    // Two skills have zero activations (lonely-skill, fresh-skill); each gets a
-    // highlighted row and the "Never activated" badge.
-    const neverRows = document.querySelectorAll('.stats-skill-row--never');
-    expect(neverRows.length).toBe(2);
-    expect(document.body.textContent).toContain('Never activated');
+    // lonely-skill has observed opportunities and no activation, so it is the
+    // only candidate. fresh-skill has no offer evidence and stays neutral.
+    const candidateRows = document.querySelectorAll(
+      '.stats-skill-row--candidate',
+    );
+    expect(candidateRows.length).toBe(1);
+    expect(candidateRows[0].textContent).toContain('lonely-skill');
+    expect(document.body.textContent).toContain('No offer conversion');
+    expect(document.body.textContent).toContain('No offer data');
     // The activated skill (deploy) is not highlighted.
     const rows = [...document.querySelectorAll('.stats-table tbody tr')].filter(
       (row) => row.textContent.includes('deploy'),
     );
     expect(
-      rows.some((row) => row.classList.contains('stats-skill-row--never')),
+      rows.some((row) => row.classList.contains('stats-skill-row--candidate')),
     ).toBe(false);
   });
 
@@ -629,6 +655,8 @@ describe('StatisticsView', () => {
           total_skills: 0,
           used_skills: 0,
           never_used_skills: 0,
+          offered_unactivated_skills: 0,
+          skills_without_offer_data: 0,
           skills: [],
         },
       }),

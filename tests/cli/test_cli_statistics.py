@@ -39,12 +39,15 @@ def _populated_skills_section() -> dict[str, Any]:
         "total_skills": 3,
         "used_skills": 1,
         "never_used_skills": 2,
+        "offered_unactivated_skills": 1,
+        "skills_without_offer_data": 1,
         "skills": [
             {
                 "name": "vbot-cli",
                 "origins": ["bundled"],
                 "offered_sessions": 10,
                 "activated_sessions": 4,
+                "activated_offered_sessions": 4,
                 "usage_rate": 0.4,
                 "first_offered": "2026-06-01T09:00:00+00:00",
                 "last_offered": "2026-07-01T09:00:00+00:00",
@@ -57,7 +60,8 @@ def _populated_skills_section() -> dict[str, Any]:
                 "origins": ["global", "project:vBot"],
                 "offered_sessions": 8,
                 "activated_sessions": 0,
-                "usage_rate": None,
+                "activated_offered_sessions": 0,
+                "usage_rate": 0.0,
                 "first_offered": "2026-06-01T09:00:00+00:00",
                 "last_offered": "2026-06-20T09:00:00+00:00",
                 "first_activated": None,
@@ -69,6 +73,7 @@ def _populated_skills_section() -> dict[str, Any]:
                 "origins": ["global"],
                 "offered_sessions": 0,
                 "activated_sessions": 0,
+                "activated_offered_sessions": 0,
                 "usage_rate": None,
                 "first_offered": None,
                 "last_offered": None,
@@ -114,18 +119,24 @@ def test_statistics_skills_posts_report_rpc_and_formats_section(
         "skills:\n"
         "window: all time\n"
         "total skills: 3\n"
-        "used skills: 1\n"
-        "never used skills: 2\n"
+        "activated skills: 1\n"
+        "without offer conversion: 1\n"
+        "without offer data: 1\n"
         "\n"
-        "never used:\n"
+        "without offer conversion:\n"
         "  glossary [global, project:vBot]\n"
+        "\n"
+        "without offer data:\n"
         "  deep-research [global]\n"
         "\n"
         "per skill:\n"
-        "  vbot-cli [bundled]: offered=10 activated=4 usage_rate=0.40 "
+        "  vbot-cli [bundled]: offered=10 activated=4 activated_after_offer=4 "
+        "offer_conversion=0.40 "
         "last_activated=2026-07-01T10:00:00+00:00\n"
-        "  glossary [global, project:vBot]: offered=8 activated=0 usage_rate=- last_activated=-\n"
-        "  deep-research [global]: offered=0 activated=0 usage_rate=- last_activated=-"
+        "  glossary [global, project:vBot]: offered=8 activated=0 activated_after_offer=0 "
+        "offer_conversion=0.00 last_activated=-\n"
+        "  deep-research [global]: offered=0 activated=0 activated_after_offer=0 "
+        "offer_conversion=- last_activated=-"
     )
 
 
@@ -139,6 +150,8 @@ def test_statistics_skills_empty_section_shows_explicit_empty_states(
         "total_skills": 0,
         "used_skills": 0,
         "never_used_skills": 0,
+        "offered_unactivated_skills": 0,
+        "skills_without_offer_data": 0,
         "skills": [],
     }
     result_payload = _skills_report(empty_section)
@@ -153,11 +166,15 @@ def test_statistics_skills_empty_section_shows_explicit_empty_states(
         "skills:\n"
         "window: all time\n"
         "total skills: 0\n"
-        "used skills: 0\n"
-        "never used skills: 0\n"
+        "activated skills: 0\n"
+        "without offer conversion: 0\n"
+        "without offer data: 0\n"
         "\n"
-        "never used:\n"
-        "  no unused skills\n"
+        "without offer conversion:\n"
+        "  no evidence-backed candidates\n"
+        "\n"
+        "without offer data:\n"
+        "  all skills have offer data\n"
         "\n"
         "per skill:\n"
         "  no skills recorded"
@@ -261,9 +278,9 @@ def test_statistics_overview_formats_from_report(
     assert result.ok is True
     assert "overview:" in result.message
     assert "agents: 2" in result.message
-    assert "chat messages: 85" in result.message
+    assert "visible chat messages: 85" in result.message
     assert "stored session records: 200" in result.message
-    assert "chat messages by role:\n  user: 40\n  assistant: 45" in result.message
+    assert "visible chat messages by role:\n  user: 40\n  assistant: 45" in result.message
     assert "stored session records by role:" in result.message
     assert "  note: 55" in result.message
     assert "  run_summary: 60" in result.message
@@ -272,6 +289,54 @@ def test_statistics_overview_formats_from_report(
         "  assistant: sessions=5 runs=12 chat_messages=85 session_records=200 errors=2 "
         "last_activity=2026-07-01T10:00:00+00:00"
     ) in result.message
+
+
+def test_statistics_runs_formats_agent_messages_and_model_steps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    captured: dict[str, Any] = {}
+    result_payload = {
+        "window": {"since": None, "until": None},
+        "runs": {
+            "total_runs": 4,
+            "open_run_groups": 1,
+            "status": {"completed": 3, "failed": 1, "cancelled": 0},
+            "cancel_rate": 0.0,
+            "failure_rate": 0.25,
+            "duration": {
+                "count": 4,
+                "average_ms": 1000.0,
+                "p50_ms": 900.0,
+                "p90_ms": 1500.0,
+                "p95_ms": 1600.0,
+            },
+            "runs_with_tool_calls": 3,
+            "total_tool_calls": 9,
+            "average_tool_calls_per_run": 2.25,
+            "agent_messages": 6,
+            "model_steps": 14,
+            "average_agent_messages_per_run": 1.5,
+            "average_model_steps_per_run": 3.5,
+            "derived_fallback_runs": 1,
+            "runs_per_agent": [],
+            "top_sessions_by_runs": [],
+            "longest_runs": [],
+            "daily": [],
+        },
+    }
+    monkeypatch.setattr(
+        statistics_management.httpx, "post", _fake_post_returning(result_payload, captured)
+    )
+
+    result = statistics_management.statistics_report(instance, "runs")
+
+    assert result.ok is True
+    assert "agent messages: 6" in result.message
+    assert "model steps: 14" in result.message
+    assert "average agent messages per run: 1.50" in result.message
+    assert "average model steps per run: 3.50" in result.message
 
 
 def test_statistics_report_surfaces_rpc_error(

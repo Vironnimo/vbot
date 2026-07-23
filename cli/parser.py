@@ -149,7 +149,7 @@ STATISTICS_HELP = {
     "runs": "Show the runs section: counts, status rates, and durations",
     "errors": "Show the errors section: totals and breakdowns by kind, provider, and agent",
     "tools": "Show the tools section: call counts and per-tool success rates",
-    "skills": "Show the skills section: never-used skills and per-skill usage rates",
+    "skills": "Show Skill offers, activations, and evidence-backed offer conversion",
 }
 CONFIG_HELP = {
     "list": "List public Settings paths and metadata",
