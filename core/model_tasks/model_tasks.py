@@ -6,7 +6,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
-from core.model_tasks.constants import SUPPORTED_TASK_TYPES, TASK_TEXT_EMBEDDING
+from core.model_tasks.constants import (
+    SUPPORTED_TASK_TYPES,
+    TASK_IMAGE_UNDERSTANDING,
+    TASK_TEXT_EMBEDDING,
+)
 from core.model_tasks.local_targets import (
     DEFAULT_LOCAL_TASK_TARGET_REGISTRY,
     LocalTaskTargetRegistry,
@@ -166,6 +170,24 @@ def public_provider_target_id(provider_id: str, model_id: str, local_connection_
     return f"{provider_id}/{model_id}::{local_connection_id}"
 
 
+def model_supports_task(model: Any, task_type: str) -> bool:
+    """Return whether a Model can execute one specialized task.
+
+    Image understanding is defined by the request and response modalities
+    actually used at runtime. Provider catalogs may carry an incomplete
+    ``task_types`` list even when their modality declarations are accurate, so
+    that task must not depend on a redundant derived tag.
+    """
+
+    capabilities = getattr(model, "capabilities", None)
+    if task_type == TASK_IMAGE_UNDERSTANDING:
+        input_modalities = set(getattr(capabilities, "input_modalities", ()) or ())
+        output_modalities = set(getattr(capabilities, "output_modalities", ()) or ())
+        return {"text", "image"}.issubset(input_modalities) and "text" in output_modalities
+    task_types = getattr(capabilities, "task_types", ()) or ()
+    return task_type in task_types
+
+
 class TaskModelService:
     """Resolve specialized task-model settings, targets, and option schemas."""
 
@@ -261,9 +283,7 @@ class TaskModelService:
         model = self._resolve_model(target_ref.provider_id, target_ref.model_id)
         if model is None:
             return False
-        capabilities = getattr(model, "capabilities", None)
-        task_types = getattr(capabilities, "task_types", ()) or ()
-        if task_type not in task_types:
+        if not model_supports_task(model, task_type):
             return False
         allows_connection = getattr(model, "allows_connection", None)
         if callable(allows_connection) and not allows_connection(target_ref.local_connection_id):
@@ -365,12 +385,11 @@ class TaskModelService:
     def _provider_targets(self, task_type: str) -> list[TaskModelTarget]:
         """Return provider targets for *task_type*, filtered by capability and credentials.
 
-        Capability / task matching is delegated to the shared :class:`ModelQuery`
-        in :mod:`core.models` so that the same vocabulary and matching rules
-        are used by ``model.list`` and ``task_model.list_targets``. This
-        method owns the provider-side concerns: credential gating (which
-        connections are usable) and multi-connection expansion (one target
-        per usable connection). The query itself is credential-free.
+        Capability matching is delegated to the shared :class:`ModelQuery` in
+        :mod:`core.models`. Most tasks use their explicit task-type tag; image
+        understanding uses the request's actual modality contract instead:
+        text and image input with text output. This method owns provider-side
+        credential gating and multi-connection expansion.
         """
 
         targets: list[TaskModelTarget] = []
@@ -385,9 +404,16 @@ class TaskModelService:
                 continue
 
             multiple_connections = len(usable_connections) > 1
-            for matched_provider_id, model in self._models.query(
-                ModelQuery(provider_id=provider_id, tasks=(task_type,))
-            ):
+            model_query = (
+                ModelQuery(
+                    provider_id=provider_id,
+                    input_modalities=("text", "image"),
+                    output_modalities=("text",),
+                )
+                if task_type == TASK_IMAGE_UNDERSTANDING
+                else ModelQuery(provider_id=provider_id, tasks=(task_type,))
+            )
+            for matched_provider_id, model in self._models.query(model_query):
                 for connection in usable_connections:
                     if not model.allows_connection(connection.id):
                         continue
@@ -406,7 +432,9 @@ class TaskModelService:
                             connection_id=f"{matched_provider_id}:{connection.id}",
                             connection_label=connection_label,
                             label=label,
-                            task_types=tuple(model.capabilities.task_types),
+                            task_types=tuple(
+                                dict.fromkeys((*model.capabilities.task_types, task_type))
+                            ),
                             usable=True,
                         )
                     )

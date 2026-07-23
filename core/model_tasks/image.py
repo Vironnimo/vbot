@@ -19,6 +19,7 @@ from core.model_tasks.image_types import (
     ImageUnderstandingResult,
     JsonObject,
 )
+from core.model_tasks.model_tasks import model_supports_task
 from core.model_tasks.task_execution import TaskBindingResolver
 from core.providers.task_client import TaskClientRuntime
 from core.utils.errors import TaskError, VBotError
@@ -200,16 +201,7 @@ class ImageService:
             )
 
         model = self._model_tasks.model_for_target(target_ref)
-        capabilities = getattr(model, "capabilities", None)
-        task_types = getattr(capabilities, "task_types", ()) or ()
-        input_modalities = getattr(capabilities, "input_modalities", ()) or ()
-        output_modalities = getattr(capabilities, "output_modalities", ()) or ()
-        if (
-            model is None
-            or TASK_IMAGE_UNDERSTANDING not in task_types
-            or "image" not in input_modalities
-            or "text" not in output_modalities
-        ):
+        if model is None or not model_supports_task(model, TASK_IMAGE_UNDERSTANDING):
             raise ImageUnsupportedTargetError(
                 f"Configured target is not an image-understanding model: {target_ref.target}"
             )

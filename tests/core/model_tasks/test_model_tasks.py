@@ -158,22 +158,45 @@ def test_list_targets_for_image_generation() -> None:
 
 
 def test_list_targets_for_image_understanding_filters_by_capability() -> None:
+    providers = _Providers([_provider("opencode-go", "OpenCode Go", [("api-key", "API Key")])])
     models = _Models(
         [
             _model(
-                "vision-model",
-                (TASK_IMAGE_UNDERSTANDING,),
-                name="Vision Model",
+                "kimi-k2.5",
+                ("chat", "text_output"),
+                name="Kimi K2.5",
+                provider_id="opencode-go",
+                connections=("api-key",),
                 input_modalities=("text", "image"),
             ),
-            _model("text-model", ("chat",), name="Text Model"),
+            _model(
+                "image-only-input",
+                ("text_output",),
+                name="Image-only Input",
+                provider_id="opencode-go",
+                connections=("api-key",),
+                input_modalities=("image",),
+            ),
+            _model(
+                "text-model",
+                ("chat", "text_output"),
+                name="Text Model",
+                provider_id="opencode-go",
+                connections=("api-key",),
+            ),
         ]
     )
-    service = TaskModelService(_Providers(), models, _Credentials(), _Storage())
+    service = TaskModelService(
+        providers,
+        models,
+        _Credentials({"opencode-go:api-key"}),
+        _Storage(),
+    )
 
     targets = service.list_targets(TASK_IMAGE_UNDERSTANDING)
 
-    assert [target.id for target in targets] == ["openrouter/vision-model::api-key"]
+    assert [target.id for target in targets] == ["opencode-go/kimi-k2.5::api-key"]
+    assert TASK_IMAGE_UNDERSTANDING in targets[0].task_types
 
 
 def test_image_understanding_is_a_supported_task_type() -> None:
@@ -186,7 +209,7 @@ def test_binding_is_usable_validates_live_image_understanding_target() -> None:
     target = "openrouter/vision-model::api-key"
     model = _model(
         "vision-model",
-        (TASK_IMAGE_UNDERSTANDING,),
+        ("chat", "text_output"),
         name="Vision Model",
         input_modalities=("text", "image"),
     )

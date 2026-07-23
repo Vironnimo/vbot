@@ -450,7 +450,11 @@ async def test_analyze_sends_fixed_isolated_prompt_and_ordered_images(
     second = _png(tmp_path / "second.png", b"second")
     adapter = _UnderstandingAdapter()
     runtime = _UnderstandingRuntime(adapter)
-    service = ImageService(_UnderstandingModelTasks(), cast(Any, runtime), tmp_path)
+    service = ImageService(
+        _UnderstandingModelTasks(task_types=("chat", "text_output")),
+        cast(Any, runtime),
+        tmp_path,
+    )
 
     result = await service.analyze(
         "List the recipe ingredients exactly.",
@@ -494,6 +498,11 @@ async def test_analyze_rejects_non_understanding_model_and_unsupported_wire(
         cast(Any, _UnderstandingRuntime(_UnderstandingAdapter())),
         tmp_path / "text-only",
     )
+    image_only = ImageService(
+        _UnderstandingModelTasks(input_modalities=("image",)),
+        cast(Any, _UnderstandingRuntime(_UnderstandingAdapter())),
+        tmp_path / "image-only",
+    )
     adapter = _UnderstandingAdapter(wire_media_types=frozenset())
     unsupported_wire = ImageService(
         _UnderstandingModelTasks(),
@@ -503,6 +512,8 @@ async def test_analyze_rejects_non_understanding_model_and_unsupported_wire(
 
     with pytest.raises(ImageUnsupportedTargetError, match="not an image-understanding"):
         await text_only.analyze("Describe it", image_paths=[source])
+    with pytest.raises(ImageUnsupportedTargetError, match="not an image-understanding"):
+        await image_only.analyze("Describe it", image_paths=[source])
     with pytest.raises(ImageUnsupportedTargetError, match="cannot carry"):
         await unsupported_wire.analyze("Describe it", image_paths=[source])
 
