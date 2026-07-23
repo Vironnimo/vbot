@@ -1,8 +1,9 @@
 name: E2E
 
-# The suite is intentionally observational while the WebUI is changing. It is
-# only run by explicit manual dispatch and does not gate pushes or releases.
+# The reusable CI workflow calls this suite as a release gate. Maintainers can
+# still dispatch it directly when they need an isolated E2E result.
 on:
+  workflow_call:
   workflow_dispatch:
 
 permissions:

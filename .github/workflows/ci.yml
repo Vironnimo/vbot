@@ -52,8 +52,40 @@ jobs:
       - name: Run frontend quality gate
         run: python scripts/quality-frontend.py
 
-  install-linux:
-    name: install-linux (${{ matrix.architecture }})
+  e2e:
+    uses: ./.github/workflows/e2e.yml
+
+  candidate-webui:
+    name: build release candidate WebUI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+      - name: Install WebUI dependencies
+        working-directory: webui
+        run: npm ci
+      - name: Build WebUI
+        working-directory: webui
+        run: npm run build
+      - name: Package release candidate WebUI
+        run: |
+          test -s webui/dist/index.html
+          tar -czf webui-dist.tar.gz -C webui dist
+      - name: Upload release candidate WebUI
+        uses: actions/upload-artifact@v5
+        with:
+          name: webui-release-candidate
+          path: webui-dist.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  candidate-smoke-linux:
+    name: candidate-smoke-linux (${{ matrix.architecture }})
+    needs: candidate-webui
     strategy:
       fail-fast: false
       matrix:
@@ -63,53 +95,137 @@ jobs:
           - architecture: arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
+    env:
+      CANDIDATE_PORT: "8420"
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
-      - name: Prepare prebuilt WebUI fixture
-        run: mkdir -p webui/dist && printf '<!doctype html>\n' > webui/dist/index.html
-      - name: Install into an isolated environment
+      - name: Download release candidate WebUI
+        uses: actions/download-artifact@v5
+        with:
+          name: webui-release-candidate
+          path: .tmp/release-candidate
+      - name: Prepare release candidate WebUI
+        run: |
+          tar -tzf .tmp/release-candidate/webui-dist.tar.gz >/dev/null
+          tar -xzf .tmp/release-candidate/webui-dist.tar.gz -C webui
+          test -s webui/dist/index.html
+      - name: Install release candidate into an isolated environment
         run: |
           python -m venv .tmp/install-venv
           . .tmp/install-venv/bin/activate
-          bash scripts/setup.sh --no-autostart --skip-webui-build --data-dir .tmp/data
+          bash scripts/setup.sh \
+            --no-autostart \
+            --skip-webui-build \
+            --host 127.0.0.1 \
+            --port "$CANDIDATE_PORT" \
+            --data-dir "${RUNNER_TEMP}/vbot-candidate-data"
           python -c 'import json, pathlib; state=json.loads(pathlib.Path(".vbot-install.json").read_text()); assert state["install_shape"] == "server"; assert state["dependency_groups"] == ["server", "cli"]'
-      - name: Uninstall through the recorded interpreter
+      - name: Start, probe, and uninstall the release candidate
         run: |
+          vbot=".tmp/install-venv/bin/vbot"
+          candidate_data_dir="${RUNNER_TEMP}/vbot-candidate-data"
+          "$vbot" server start \
+            --host 127.0.0.1 \
+            --port "$CANDIDATE_PORT" \
+            --data-dir "$candidate_data_dir"
+          curl -fsSL "http://127.0.0.1:${CANDIDATE_PORT}/health" \
+            | python -c 'import json, sys; assert json.load(sys.stdin) == {"status": "ok"}'
+          curl -fsSL "http://127.0.0.1:${CANDIDATE_PORT}/" -o "${RUNNER_TEMP}/candidate-webui-index.html"
+          test -s "${RUNNER_TEMP}/candidate-webui-index.html"
           bash scripts/uninstall.sh
           test ! -f .vbot-install.json
+          test -d "$candidate_data_dir"
           ! .tmp/install-venv/bin/python -m pip show vbot
+      - name: Stop candidate server after a failure
+        if: failure()
+        run: |
+          if [ -x .tmp/install-venv/bin/vbot ]; then
+            .tmp/install-venv/bin/vbot server stop \
+              --host 127.0.0.1 \
+              --port "$CANDIDATE_PORT" \
+              --data-dir "${RUNNER_TEMP}/vbot-candidate-data" || true
+          fi
 
-  install-windows:
+  candidate-smoke-windows:
+    name: candidate-smoke-windows
+    needs: candidate-webui
     runs-on: windows-latest
+    env:
+      CANDIDATE_PORT: "8420"
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
-      - name: Prepare prebuilt WebUI fixture
+      - name: Download release candidate WebUI
+        uses: actions/download-artifact@v5
+        with:
+          name: webui-release-candidate
+          path: .tmp/release-candidate
+      - name: Prepare release candidate WebUI
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path webui/dist -Force | Out-Null
-          Set-Content -LiteralPath webui/dist/index.html -Value '<!doctype html>' -Encoding utf8
-      - name: Install into an isolated environment
+          tar.exe -tf .tmp/release-candidate/webui-dist.tar.gz | Out-Null
+          tar.exe -xzf .tmp/release-candidate/webui-dist.tar.gz -C webui
+          if (-not (Test-Path -LiteralPath webui/dist/index.html -PathType Leaf)) {
+            throw "Release candidate WebUI is missing index.html"
+          }
+      - name: Install release candidate into an isolated environment
         shell: pwsh
         run: |
+          $candidateDataDir = Join-Path $env:RUNNER_TEMP 'vbot-candidate-data'
           python -m venv .tmp/install-venv
           $env:Path = "$(Resolve-Path .tmp/install-venv/Scripts);$env:Path"
-          & scripts/setup.ps1 -NoAutostart -SkipWebuiBuild -SkipPathUpdate -DataDir .tmp/data
+          & scripts/setup.ps1 `
+            -NoAutostart `
+            -SkipWebuiBuild `
+            -SkipPathUpdate `
+            -HostName 127.0.0.1 `
+            -Port $env:CANDIDATE_PORT `
+            -DataDir $candidateDataDir
           $state = Get-Content -Raw .vbot-install.json | ConvertFrom-Json
           if ($state.install_shape -ne 'server') { throw 'wrong install shape' }
           if (($state.dependency_groups -join ',') -ne 'server,cli') { throw 'wrong dependency groups' }
-      - name: Uninstall through the recorded interpreter
+      - name: Start, probe, and uninstall the release candidate
         shell: pwsh
         run: |
+          $candidateDataDir = Join-Path $env:RUNNER_TEMP 'vbot-candidate-data'
+          $vbot = (Resolve-Path .tmp/install-venv/Scripts/vbot.exe).Path
+          & $vbot server start `
+            --host 127.0.0.1 `
+            --port $env:CANDIDATE_PORT `
+            --data-dir $candidateDataDir
+          if ($LASTEXITCODE -ne 0) { throw 'server start failed' }
+          $health = Invoke-RestMethod -Uri "http://127.0.0.1:$env:CANDIDATE_PORT/health"
+          if ($health.status -ne 'ok') { throw 'health probe returned an unexpected response' }
+          $webui = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:CANDIDATE_PORT/"
+          if ($webui.StatusCode -ne 200 -or [string]::IsNullOrWhiteSpace($webui.Content)) {
+            throw 'WebUI probe failed'
+          }
           & scripts/uninstall.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'uninstall failed' }
           if (Test-Path .vbot-install.json) { throw 'installation manifest was not removed' }
+          if (-not (Test-Path -LiteralPath $candidateDataDir -PathType Container)) {
+            throw 'uninstall removed the data directory'
+          }
           & .tmp/install-venv/Scripts/python.exe -m pip show vbot
           if ($LASTEXITCODE -eq 0) { throw 'vbot is still installed' }
+          exit 0
+      - name: Stop candidate server after a failure
+        if: failure()
+        shell: pwsh
+        run: |
+          $candidateDataDir = Join-Path $env:RUNNER_TEMP 'vbot-candidate-data'
+          $vbot = '.tmp/install-venv/Scripts/vbot.exe'
+          if (Test-Path -LiteralPath $vbot -PathType Leaf) {
+            & $vbot server stop `
+              --host 127.0.0.1 `
+              --port $env:CANDIDATE_PORT `
+              --data-dir $candidateDataDir
+          }
           exit 0

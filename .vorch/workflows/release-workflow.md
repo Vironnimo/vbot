@@ -46,9 +46,9 @@ Dispatch `.github/workflows/release.yml` from `main`. Pass the version without t
 gh workflow run release.yml --ref main -f version=X.Y.Z
 ```
 
-The workflow calls the complete reusable CI workflow first, covering the full Backend gate on Linux x64, Linux ARM64, and Windows; the Frontend gate; Linux x64 and ARM64 install/uninstall; and Windows install/uninstall. `.github/workflows/ci.yml` has no push, pull-request, schedule, or manual trigger: this seven-job matrix runs only when the Release workflow calls it. Only after all seven job instances pass does the workflow build the WebUI and create `vX.Y.Z` at the exact commit that was dispatched. The release is created with the mandatory `webui-dist.tar.gz` already attached, so GitHub never exposes an incomplete installable release.
+The workflow calls the complete reusable CI workflow first. In parallel where dependencies allow, CI runs the full Backend gate on Linux x64, Linux ARM64, and Windows; the Frontend gate; the complete Chromium E2E suite; and one WebUI release-candidate build. The exact resulting `webui-dist.tar.gz` then feeds pre-publish Candidate Smokes on Linux x64, Linux ARM64, and Windows. Those smokes install the checked-out candidate with the real packaged WebUI, start the server, probe `/health` and the WebUI, uninstall through the recorded interpreter, and verify that product data survived. `.github/workflows/ci.yml` remains callable-only, so this release matrix runs when the Release workflow calls it. Only after every gate passes does the workflow create `vX.Y.Z` at the exact dispatched commit and attach the already-tested `webui-dist.tar.gz`; the publish job never rebuilds or repackages the candidate.
 
-After publication, the workflow calls `.github/workflows/release-smoke.yml`. That reusable workflow downloads the public Installer from the dispatched commit, installs the exact new tag from GitHub on Linux x64, Linux ARM64, and Windows, validates the checked-out tag and project version, starts the installed server, probes `/health` and the WebUI, then runs the Uninstaller and verifies that product data survived. Publication must happen first because the Installer consumes the real GitHub Release and asset; therefore a smoke failure marks the Release workflow red but cannot unpublish the already-created release. The smoke workflow is also manually dispatchable for any existing release tag.
+After publication, the workflow calls `.github/workflows/release-smoke.yml` as a thin Public Distribution canary. It validates the public tag and mandatory asset, then exercises the two public Installer implementations on Linux x64 and Windows against the exact new tag: install from GitHub, validate the checked-out tag and project version, start the installed server, probe `/health` and the WebUI, uninstall, and confirm that product data survived. Linux ARM64 behavior is already covered by the pre-publish Candidate Smoke, while the Unix public acquisition path is shared with Linux x64. Publication must happen first because the Installer consumes the real GitHub Release and asset; therefore a canary failure still marks the Release workflow red but cannot unpublish the already-created release. The canary should now expose only public GitHub acquisition discrepancies rather than first discovering candidate runtime or platform-install failures. The smoke workflow remains manually dispatchable for any existing release tag.
 
 To re-run only the public-distribution smoke test without creating or changing a release:
 
@@ -69,7 +69,7 @@ gh run watch <run-id> --exit-status                      # wait until it succeed
 gh release view vX.Y.Z --json tagName,assets --jq '{tag: .tagName, assets: [.assets[].name]}'
 ```
 
-Expect: all CI, publish, and release-smoke jobs succeed; `assets` includes `webui-dist.tar.gz`; and `releases/latest` resolves to `vX.Y.Z`.
+Expect: all Backend, Frontend, E2E, Candidate Build, Candidate Smoke, publish, and Public Distribution canary jobs succeed; `assets` includes the gated `webui-dist.tar.gz`; and `releases/latest` resolves to `vX.Y.Z`.
 
 ## Fixing notes after the fact
 
@@ -85,6 +85,8 @@ gh api repos/Vironnimo/vbot/releases/generate-notes \
 
 - **Notes**: only the auto-generated Full Changelog line — no custom prose. A custom `--notes` replaces it and breaks the convention every prior release follows.
 - **Asset is mandatory**: a release without `webui-dist.tar.gz` cannot be installed by the public Installer or reached by `vbot update`. Never skip step 6.
+- **Candidate identity**: CI builds `webui-dist.tar.gz` once; Candidate Smokes test that exact artifact, and publish downloads and attaches it without rebuilding or repackaging.
+- **Post-publish scope**: the Public Distribution canary exists because the real public GitHub tag and asset cannot be acquired before publication. Candidate behavior belongs in the pre-publish gates; the canary only proves the final public acquisition path.
 - **Tag = version**: `vX.Y.Z` must equal the `pyproject.toml` version, with a leading `v`.
 - **Remote state first**: fetch tags and confirm GitHub's latest release before choosing the version; a stale local tag set is not release evidence.
 - **Model DB is separate**: never refresh or stage `resources/models/` as part of a release.

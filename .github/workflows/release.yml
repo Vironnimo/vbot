@@ -1,9 +1,9 @@
 name: Release
 
-# Runs the complete CI workflow before creating the tag and published release.
-# The WebUI asset is attached during creation so an installable release is never
-# publicly visible without its prebuilt frontend. Source-only repo: webui/dist
-# stays untracked.
+# Runs the complete CI workflow against one release-candidate WebUI artifact
+# before creating the tag and published release. The exact gated artifact is
+# attached during creation, so an installable release is never publicly visible
+# without its tested frontend. Source-only repo: webui/dist stays untracked.
 on:
   workflow_dispatch:
     inputs:
@@ -56,25 +56,16 @@ jobs:
             exit 1
           fi
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v5
+      - name: Download gated release candidate WebUI
+        uses: actions/download-artifact@v5
         with:
-          node-version: lts/*
-          cache: npm
-          cache-dependency-path: webui/package-lock.json
+          name: webui-release-candidate
+          path: .
 
-      - name: Install WebUI dependencies
-        working-directory: webui
-        run: npm ci
-
-      - name: Build WebUI
-        working-directory: webui
-        run: npm run build
-
-      - name: Package built WebUI
+      - name: Validate gated release candidate WebUI
         run: |
-          test -f webui/dist/index.html
-          tar -czf webui-dist.tar.gz -C webui dist
+          test -s webui-dist.tar.gz
+          tar -tzf webui-dist.tar.gz | grep -Fx 'dist/index.html'
 
       - name: Publish release with prebuilt WebUI
         env:
