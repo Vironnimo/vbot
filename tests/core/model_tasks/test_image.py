@@ -12,6 +12,7 @@ import pytest
 
 from core.model_tasks import (
     TASK_IMAGE_GENERATION,
+    TASK_IMAGE_UNDERSTANDING,
     ImageConfigurationError,
     ImageExecutionError,
     ImageInputError,
@@ -19,7 +20,10 @@ from core.model_tasks import (
     ImageUnsupportedTargetError,
     TaskModelError,
 )
-from core.model_tasks.image import split_image_call_options
+from core.model_tasks.image import (
+    IMAGE_UNDERSTANDING_SYSTEM_PROMPT,
+    split_image_call_options,
+)
 from core.model_tasks.image_types import ImageGenerationResult
 from core.providers.errors import ProviderError
 
@@ -347,3 +351,229 @@ class _FailingProviderImageClient:
 
     async def generate(self, *_args: object, **_kwargs: object) -> object:
         raise self._exception
+
+
+# ---------------------------------------------------------------------------
+# ImageService.analyze — isolated image-understanding execution
+# ---------------------------------------------------------------------------
+
+
+class _UnderstandingModelTasks:
+    def __init__(
+        self,
+        *,
+        target: str = "openrouter/vision-model::api-key",
+        input_modalities: tuple[str, ...] = ("text", "image"),
+        output_modalities: tuple[str, ...] = ("text",),
+        task_types: tuple[str, ...] = (TASK_IMAGE_UNDERSTANDING,),
+    ) -> None:
+        self._target = target
+        self._model = SimpleNamespace(
+            capabilities=SimpleNamespace(
+                input_modalities=input_modalities,
+                output_modalities=output_modalities,
+                task_types=task_types,
+            )
+        )
+
+    def binding_for(self, task_type: str) -> object:
+        assert task_type == TASK_IMAGE_UNDERSTANDING
+        return SimpleNamespace(task_type=task_type, target=self._target, options={})
+
+    def model_for_target(self, _target_ref: object) -> Any:
+        return self._model
+
+
+class _UnderstandingAdapter:
+    def __init__(
+        self,
+        response: object | None = None,
+        *,
+        wire_media_types: frozenset[str] = frozenset({"image/png"}),
+    ) -> None:
+        self.response = response or {
+            "content": "Visible ingredients: flour and salt.",
+            "usage": {"input_tokens": 12, "output_tokens": 7},
+        }
+        self.wire_media_types = wire_media_types
+        self.requests: list[dict[str, Any]] = []
+        self.closed = False
+
+    def wire_media_support(self, _model_id: str) -> frozenset[str]:
+        return self.wire_media_types
+
+    async def send(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model_id: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        self.requests.append({"messages": messages, "model_id": model_id, "kwargs": kwargs})
+        if isinstance(self.response, Exception):
+            raise self.response
+        return cast(dict[str, Any], self.response)
+
+    def normalize_response(
+        self,
+        response: dict[str, Any],
+        *,
+        model_id: str | None = None,
+    ) -> dict[str, Any]:
+        del model_id
+        return response
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class _UnderstandingRuntime:
+    def __init__(self, adapter: _UnderstandingAdapter) -> None:
+        self.adapter = adapter
+        self.calls: list[tuple[str, str]] = []
+
+    def get_adapter(self, provider_id: str, connection_id: str) -> _UnderstandingAdapter:
+        self.calls.append((provider_id, connection_id))
+        return self.adapter
+
+
+def _png(path: Path, suffix: bytes = b"pixels") -> Path:
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + suffix)
+    return path
+
+
+@pytest.mark.asyncio
+async def test_analyze_sends_fixed_isolated_prompt_and_ordered_images(
+    tmp_path: Path,
+) -> None:
+    first = _png(tmp_path / "first.png", b"first")
+    second = _png(tmp_path / "second.png", b"second")
+    adapter = _UnderstandingAdapter()
+    runtime = _UnderstandingRuntime(adapter)
+    service = ImageService(_UnderstandingModelTasks(), cast(Any, runtime), tmp_path)
+
+    result = await service.analyze(
+        "List the recipe ingredients exactly.",
+        image_paths=[first, second],
+    )
+
+    assert result.to_dict() == {
+        "analysis": "Visible ingredients: flour and salt.",
+        "model": "vision-model",
+        "image_count": 2,
+        "usage": {"input_tokens": 12, "output_tokens": 7},
+    }
+    assert runtime.calls == [("openrouter", "openrouter:api-key")]
+    request = adapter.requests[0]
+    assert request["model_id"] == "vision-model"
+    assert request["kwargs"] == {"temperature": 0.0, "tools": []}
+    assert request["messages"][0] == {
+        "role": "system",
+        "content": IMAGE_UNDERSTANDING_SYSTEM_PROMPT,
+    }
+    user_content = request["messages"][1]["content"]
+    assert user_content[0] == {
+        "type": "text",
+        "text": "List the recipe ingredients exactly.",
+    }
+    assert [block["media_type"] for block in user_content[1:]] == [
+        "image/png",
+        "image/png",
+    ]
+    assert user_content[1]["base64"] != user_content[2]["base64"]
+    assert adapter.closed is True
+
+
+@pytest.mark.asyncio
+async def test_analyze_rejects_non_understanding_model_and_unsupported_wire(
+    tmp_path: Path,
+) -> None:
+    source = _png(tmp_path / "source.png")
+    text_only = ImageService(
+        _UnderstandingModelTasks(input_modalities=("text",)),
+        cast(Any, _UnderstandingRuntime(_UnderstandingAdapter())),
+        tmp_path / "text-only",
+    )
+    adapter = _UnderstandingAdapter(wire_media_types=frozenset())
+    unsupported_wire = ImageService(
+        _UnderstandingModelTasks(),
+        cast(Any, _UnderstandingRuntime(adapter)),
+        tmp_path / "wire",
+    )
+
+    with pytest.raises(ImageUnsupportedTargetError, match="not an image-understanding"):
+        await text_only.analyze("Describe it", image_paths=[source])
+    with pytest.raises(ImageUnsupportedTargetError, match="cannot carry"):
+        await unsupported_wire.analyze("Describe it", image_paths=[source])
+
+    assert adapter.closed is True
+
+
+@pytest.mark.asyncio
+async def test_analyze_rejects_missing_non_image_and_oversize_input(
+    tmp_path: Path,
+) -> None:
+    runtime = _UnderstandingRuntime(_UnderstandingAdapter())
+    service = ImageService(
+        _UnderstandingModelTasks(),
+        cast(Any, runtime),
+        tmp_path / "data",
+        max_input_bytes=12,
+    )
+    text_file = tmp_path / "notes.txt"
+    text_file.write_text("plain text", encoding="utf-8")
+    oversize = _png(tmp_path / "large.png", b"too-many-pixels")
+
+    with pytest.raises(ImageInputError, match="not found"):
+        await service.analyze("Describe it", image_paths=[tmp_path / "missing.png"])
+    with pytest.raises(ImageInputError, match="not a supported image"):
+        await service.analyze("Describe it", image_paths=[text_file])
+    with pytest.raises(ImageInputError, match="size limit"):
+        await service.analyze("Describe it", image_paths=[oversize])
+
+    assert runtime.calls == []
+
+
+@pytest.mark.asyncio
+async def test_analyze_maps_provider_failure_and_empty_output_and_closes_adapter(
+    tmp_path: Path,
+) -> None:
+    source = _png(tmp_path / "source.png")
+    failing_adapter = _UnderstandingAdapter(ProviderError("rate limited"))
+    failing = ImageService(
+        _UnderstandingModelTasks(),
+        cast(Any, _UnderstandingRuntime(failing_adapter)),
+        tmp_path / "failing",
+    )
+    empty_adapter = _UnderstandingAdapter({"content": "   "})
+    empty = ImageService(
+        _UnderstandingModelTasks(),
+        cast(Any, _UnderstandingRuntime(empty_adapter)),
+        tmp_path / "empty",
+    )
+
+    with pytest.raises(ImageExecutionError, match="rate limited"):
+        await failing.analyze("Describe it", image_paths=[source])
+    with pytest.raises(ImageExecutionError, match="no text analysis"):
+        await empty.analyze("Describe it", image_paths=[source])
+
+    assert failing_adapter.closed is True
+    assert empty_adapter.closed is True
+
+
+@pytest.mark.asyncio
+async def test_analyze_requires_binding_prompt_and_images(tmp_path: Path) -> None:
+    source = _png(tmp_path / "source.png")
+    missing = ImageService(_MissingModelTasks(), cast(Any, object()), tmp_path / "missing")
+    configured = ImageService(
+        _UnderstandingModelTasks(),
+        cast(Any, _UnderstandingRuntime(_UnderstandingAdapter())),
+        tmp_path / "configured",
+    )
+
+    with pytest.raises(ImageConfigurationError, match="configured"):
+        await missing.analyze("Describe it", image_paths=[source])
+    with pytest.raises(ImageConfigurationError, match="Prompt"):
+        await configured.analyze("  ", image_paths=[source])
+    with pytest.raises(ImageInputError, match="At least one"):
+        await configured.analyze("Describe it", image_paths=[])

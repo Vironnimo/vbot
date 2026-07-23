@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import cast
 
@@ -10,6 +11,7 @@ import pytest
 from core.model_tasks import (
     SUPPORTED_TASK_TYPES,
     TASK_IMAGE_GENERATION,
+    TASK_IMAGE_UNDERSTANDING,
     TASK_SPEECH_TO_TEXT,
     TASK_TEXT_EMBEDDING,
     TASK_TEXT_TO_SPEECH,
@@ -153,6 +155,113 @@ def test_list_targets_for_image_generation() -> None:
         "openrouter/dall-e-3::api-key",
         "openrouter/gpt-image-1::api-key",
     ]
+
+
+def test_list_targets_for_image_understanding_filters_by_capability() -> None:
+    models = _Models(
+        [
+            _model(
+                "vision-model",
+                (TASK_IMAGE_UNDERSTANDING,),
+                name="Vision Model",
+                input_modalities=("text", "image"),
+            ),
+            _model("text-model", ("chat",), name="Text Model"),
+        ]
+    )
+    service = TaskModelService(_Providers(), models, _Credentials(), _Storage())
+
+    targets = service.list_targets(TASK_IMAGE_UNDERSTANDING)
+
+    assert [target.id for target in targets] == ["openrouter/vision-model::api-key"]
+
+
+def test_image_understanding_is_a_supported_task_type() -> None:
+    assert TASK_IMAGE_UNDERSTANDING == "image_understanding"
+    assert TASK_IMAGE_UNDERSTANDING in SUPPORTED_TASK_TYPES
+    assert validate_task_type(TASK_IMAGE_UNDERSTANDING) == TASK_IMAGE_UNDERSTANDING
+
+
+def test_binding_is_usable_validates_live_image_understanding_target() -> None:
+    target = "openrouter/vision-model::api-key"
+    model = _model(
+        "vision-model",
+        (TASK_IMAGE_UNDERSTANDING,),
+        name="Vision Model",
+        input_modalities=("text", "image"),
+    )
+    settings = {TASK_IMAGE_UNDERSTANDING: {"target": target, "options": {}}}
+
+    usable = TaskModelService(
+        _Providers(),
+        _Models([model]),
+        _Credentials(),
+        _Storage(settings),
+    )
+    stale = TaskModelService(
+        _Providers(),
+        _Models([]),
+        _Credentials(),
+        _Storage(settings),
+    )
+    uncredentialed = TaskModelService(
+        _Providers(),
+        _Models([model]),
+        _Credentials(granted=set()),
+        _Storage(settings),
+    )
+    missing = TaskModelService(
+        _Providers(),
+        _Models([model]),
+        _Credentials(),
+        _Storage(),
+    )
+
+    assert usable.binding_is_usable(TASK_IMAGE_UNDERSTANDING) is True
+    assert stale.binding_is_usable(TASK_IMAGE_UNDERSTANDING) is False
+    assert uncredentialed.binding_is_usable(TASK_IMAGE_UNDERSTANDING) is False
+    assert missing.binding_is_usable(TASK_IMAGE_UNDERSTANDING) is False
+
+
+def test_binding_is_usable_rejects_forbidden_connection_and_local_target() -> None:
+    forbidden_model = _model(
+        "vision-model",
+        (TASK_IMAGE_UNDERSTANDING,),
+        name="Vision Model",
+        connections=("oauth",),
+        input_modalities=("text", "image"),
+    )
+    provider_settings = {
+        TASK_IMAGE_UNDERSTANDING: {
+            "target": "openrouter/vision-model::api-key",
+            "options": {},
+        }
+    }
+    local_settings = {
+        TASK_IMAGE_UNDERSTANDING: {
+            "target": "local/vision",
+            "options": {},
+        }
+    }
+
+    assert (
+        TaskModelService(
+            _Providers(),
+            _Models([forbidden_model]),
+            _Credentials(),
+            _Storage(provider_settings),
+        ).binding_is_usable(TASK_IMAGE_UNDERSTANDING)
+        is False
+    )
+    assert (
+        TaskModelService(
+            _Providers(),
+            _Models([forbidden_model]),
+            _Credentials(),
+            _Storage(local_settings),
+        ).binding_is_usable(TASK_IMAGE_UNDERSTANDING)
+        is False
+    )
 
 
 def test_list_targets_expands_multiple_usable_connections() -> None:
@@ -985,6 +1094,8 @@ def _model(
     supported_parameters: tuple[str, ...] = (),
     connections: tuple[str, ...] = (),
     task_options: dict | None = None,
+    input_modalities: tuple[str, ...] = ("text",),
+    output_modalities: tuple[str, ...] = ("text",),
 ) -> SimpleNamespace:
     """Build a model stub that satisfies ``ModelQuery.matches``.
 
@@ -1018,8 +1129,8 @@ def _model(
         allows_connection=lambda connection_id: not connections or connection_id in connections,
         capabilities=SimpleNamespace(
             task_types=task_types,
-            input_modalities=("text",),
-            output_modalities=("text",),
+            input_modalities=input_modalities,
+            output_modalities=output_modalities,
             vision=False,
             tools=False,
             json_mode=False,
@@ -1095,8 +1206,11 @@ class _Credentials:
 
 
 class _Storage:
+    def __init__(self, settings: Mapping[str, object] | None = None) -> None:
+        self._settings = dict(settings or {})
+
     def load_model_task_settings(self) -> dict[str, object]:
-        return {}
+        return dict(self._settings)
 
     def update_model_task_settings(self, model_tasks: object) -> object:
         return model_tasks

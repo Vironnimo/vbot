@@ -107,6 +107,7 @@ from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
 from core.tools import (
     FileReadState,
+    register_analyze_image_tool,
     register_bash_tool,
     register_edit_tool,
     register_glob_tool,
@@ -483,7 +484,12 @@ class Runtime:
             self._storage,
         )
         self._speech = SpeechService(self._model_tasks, self, self._storage.data_dir)
-        self._image = ImageService(self._model_tasks, self, self._storage.data_dir)
+        self._image = ImageService(
+            self._model_tasks,
+            self,
+            self._storage.data_dir,
+            max_input_bytes=self._attachment_store.max_size_bytes,
+        )
         self._embeddings = EmbeddingService(self._model_tasks, self)
         self._agents = AgentStore(
             self._storage.data_dir,
@@ -524,6 +530,7 @@ class Runtime:
         )
         register_process_tool(self._tools, self._process_manager)
         register_text_to_speech_tool(self._tools, self._speech)
+        register_analyze_image_tool(self._tools, self._image)
         register_image_generation_tool(self._tools, self._image)
         extension_dirs = self._extra_extension_directories(settings)
         disabled_extensions, extension_config = self._extension_load_options(settings)
@@ -644,6 +651,7 @@ class Runtime:
             get_adapter=self.get_adapter,
             resolve_skills=self.skills_for,
             get_local_context_windows=self.local_context_windows,
+            task_model_available=self._model_tasks.binding_is_usable,
         )
         self._chat_loop = ChatLoop(
             chat_dependencies,

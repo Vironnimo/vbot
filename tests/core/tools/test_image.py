@@ -7,9 +7,13 @@ from types import SimpleNamespace
 
 import pytest
 
+from core.model_tasks import ImageInputError
 from core.tools.image import (
+    ANALYZE_IMAGE_TOOL_DESCRIPTION,
+    ANALYZE_IMAGE_TOOL_NAME,
     IMAGE_GENERATION_TOOL_DESCRIPTION,
     IMAGE_GENERATION_TOOL_NAME,
+    register_analyze_image_tool,
     register_image_generation_tool,
 )
 from core.tools.tools import ToolContext, ToolRegistry
@@ -158,13 +162,90 @@ async def test_image_generation_tool_rejects_invalid_source_paths_shape(tmp_path
     assert result["error"]["code"] == "invalid_arguments"
 
 
-def _make_context(tmp_path: Path) -> ToolContext:
+@pytest.mark.asyncio
+async def test_analyze_image_tool_resolves_paths_and_returns_analysis(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    first = workspace / "first.png"
+    second = workspace / "second.png"
+    service = _ImageService(tmp_path / "unused.png")
+    registry = ToolRegistry()
+    register_analyze_image_tool(registry, service)
+
+    result = await registry.dispatch(
+        _make_context(workspace, tool_name=ANALYZE_IMAGE_TOOL_NAME),
+        {
+            "prompt": "Read the ingredients.",
+            "images": ["first.png", str(second)],
+        },
+    )
+
+    assert result["ok"] is True
+    assert result["data"] == {
+        "analysis": "Visible details",
+        "model": "vision-model",
+        "image_count": 2,
+    }
+    assert service.received_analysis_prompt == "Read the ingredients."
+    assert service.received_analysis_paths == (first.resolve(), second.resolve())
+    assert "untrusted content" in ANALYZE_IMAGE_TOOL_DESCRIPTION
+
+
+@pytest.mark.asyncio
+async def test_analyze_image_tool_accepts_single_path_string(tmp_path: Path) -> None:
+    service = _ImageService(tmp_path / "unused.png")
+    registry = ToolRegistry()
+    register_analyze_image_tool(registry, service)
+
+    result = await registry.dispatch(
+        _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME),
+        {"prompt": "Describe it.", "images": "photo.png"},
+    )
+
+    assert result["ok"] is True
+    assert service.received_analysis_paths == ((tmp_path / "photo.png").resolve(),)
+
+
+@pytest.mark.asyncio
+async def test_analyze_image_tool_rejects_invalid_arguments_and_maps_image_error(
+    tmp_path: Path,
+) -> None:
+    registry = ToolRegistry()
+    service = _ImageService(
+        tmp_path / "unused.png",
+        analysis_error=ImageInputError("bad image"),
+    )
+    register_analyze_image_tool(registry, service)
+    context = _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME)
+
+    empty = await registry.dispatch(context, {"prompt": "Describe it.", "images": []})
+    unknown = await registry.dispatch(
+        context,
+        {"prompt": "Describe it.", "images": ["photo.png"], "extra": True},
+    )
+    image_error = await registry.dispatch(
+        context,
+        {"prompt": "Describe it.", "images": ["photo.png"]},
+    )
+
+    assert empty["error"]["code"] == "invalid_arguments"
+    assert unknown["error"]["code"] == "invalid_arguments"
+    assert image_error["error"]["code"] == "image_understanding_error"
+
+
+def _make_context(
+    tmp_path: Path,
+    *,
+    tool_name: str = IMAGE_GENERATION_TOOL_NAME,
+) -> ToolContext:
     return ToolContext(
         agent_id="agent",
         session_id="session",
         run_id="run",
         tool_call_id="tool-call",
-        tool_name=IMAGE_GENERATION_TOOL_NAME,
+        tool_name=tool_name,
         tool_call_index=0,
         workspace=tmp_path,
         app_root=tmp_path,
@@ -184,11 +265,19 @@ _ARTIFACT_PAYLOAD = {
 
 
 class _ImageService:
-    def __init__(self, file_path: Path) -> None:
+    def __init__(
+        self,
+        file_path: Path,
+        *,
+        analysis_error: Exception | None = None,
+    ) -> None:
         self._file_path = file_path
+        self._analysis_error = analysis_error
         self.received_prompt: str | None = None
         self.received_call_options: dict[str, object] | None = None
         self.received_source_paths: tuple[Path, ...] | None = None
+        self.received_analysis_prompt: str | None = None
+        self.received_analysis_paths: tuple[Path, ...] | None = None
 
     async def generate_artifacts(
         self,
@@ -205,4 +294,22 @@ class _ImageService:
                 file_path=self._file_path,
                 to_dict=lambda: dict(_ARTIFACT_PAYLOAD),
             ),
+        )
+
+    async def analyze(
+        self,
+        prompt: str,
+        *,
+        image_paths: tuple[Path, ...],
+    ) -> object:
+        self.received_analysis_prompt = prompt
+        self.received_analysis_paths = image_paths
+        if self._analysis_error is not None:
+            raise self._analysis_error
+        return SimpleNamespace(
+            to_dict=lambda: {
+                "analysis": "Visible details",
+                "model": "vision-model",
+                "image_count": len(image_paths),
+            }
         )

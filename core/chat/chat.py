@@ -107,6 +107,7 @@ from core.chat.model_resolution import (
     _first_usable_connection_id,
     _model_connection_allowlist,
     _model_input_modalities,
+    _model_input_modalities_for_target,
     _resolve_agent_connection,
     _resolve_fallback,
     _split_agent_model,
@@ -137,6 +138,7 @@ from core.chat.tool_dispatch import (
 from core.chat.usage import add_session_turn_usage, aggregate_session_usage
 from core.debug import DebugContext
 from core.extensions import HookContext
+from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.projects import (
     resolve_prompt_project,
     resolve_skill_scope,
@@ -158,7 +160,7 @@ from core.runs import (
     WaitingWorkAdmission,
 )
 from core.sessions import SKILL_AVAILABLE_NOTE_PREFIX, ChatSession, skill_activation_names
-from core.tools import HISTORY_TOOL_NAME
+from core.tools import ANALYZE_IMAGE_TOOL_NAME, HISTORY_TOOL_NAME
 from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.logging import get_logger
 
@@ -224,6 +226,7 @@ class ChatLoopDependencies:
     get_adapter: Callable[[str, str], ProviderAdapter]
     resolve_skills: Callable[[str | None, str | None], SkillRegistry]
     get_local_context_windows: Callable[[], Mapping[str, Any]]
+    task_model_available: Callable[[str], bool]
 
 
 @dataclass(frozen=True)
@@ -248,6 +251,7 @@ class _ModelTarget:
     model_id: str
     adapter: ProviderAdapter
     replay_policy: ReasoningReplayPolicy
+    input_modalities: frozenset[str]
     wire_media_types: frozenset[str]
     chunk_timeout_seconds: float | None
 
@@ -729,6 +733,11 @@ class ChatLoop:
                 agent,
                 session,
                 replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
+                input_modalities=_model_input_modalities_for_target(
+                    self._dependencies,
+                    provider_id,
+                    model_id,
+                ),
                 wire_media_types=_resolve_wire_media_support(adapter, model_id),
                 agent_body=runtime_agent_body(agent),
                 project_context=prompt_context,
@@ -924,6 +933,11 @@ class ChatLoop:
             model_id=model_id,
             adapter=adapter,
             replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
+            input_modalities=_model_input_modalities_for_target(
+                self._dependencies,
+                provider_id,
+                model_id,
+            ),
             wire_media_types=_resolve_wire_media_support(adapter, model_id),
             chunk_timeout_seconds=self._resolve_chunk_timeout(provider_id, connection_id),
         )
@@ -1030,6 +1044,7 @@ class ChatLoop:
                 agent,
                 session,
                 replay_policy=target.replay_policy,
+                input_modalities=target.input_modalities,
                 wire_media_types=target.wire_media_types,
                 agent_body=runtime_agent_body(agent),
                 project_context=context.project_prompt_context,
@@ -1087,10 +1102,32 @@ class ChatLoop:
                             "Primary model unavailable. Switched to "
                             f"{fallback_model_str} for this run."
                         )
-                        # The reused messages list may carry current-turn
-                        # reasoning/reasoning_meta from the primary provider;
-                        # stale meta must never reach the fallback provider.
-                        assert context.request_state is not None
+                        context.request_state = await self._build_request_state(
+                            agent,
+                            session,
+                            replay_policy=fallback_target.replay_policy,
+                            input_modalities=fallback_target.input_modalities,
+                            wire_media_types=fallback_target.wire_media_types,
+                            agent_body=runtime_agent_body(agent),
+                            project_context=context.project_prompt_context,
+                            agent_project_id=context.project_id,
+                            skill_registry=context.skill_registry,
+                            skill_catalog=context.skill_catalog,
+                        )
+                        if context.continuation_reminder is not None:
+                            context.request_state = _RequestState(
+                                inject_continuation_reminder(
+                                    context.request_state.messages,
+                                    context.continuation_reminder,
+                                ),
+                                context.request_state.tools,
+                                context.request_state.allowed_tool_names,
+                                context.request_state.session_tool_grants,
+                            )
+                        # Rebuilding applies the fallback route's media and Tool
+                        # capabilities. The persisted primary tool cycle may
+                        # still carry Provider-specific reasoning, which must
+                        # never cross the Provider boundary.
                         _strip_assistant_reasoning_fields(context.request_state.messages)
                         try:
                             completed_assistant = await self._send_until_final(
@@ -1356,6 +1393,7 @@ class ChatLoop:
         session: ChatSession,
         *,
         replay_policy: ReasoningReplayPolicy = REASONING_REPLAY_CURRENT_RUN,
+        input_modalities: frozenset[str] | None = None,
         wire_media_types: frozenset[str] = frozenset(),
         agent_body: str = "",
         project_context: ProjectPromptContext | None = None,
@@ -1367,6 +1405,7 @@ class ChatLoop:
             agent,
             session,
             replay_policy=replay_policy,
+            input_modalities=input_modalities,
             wire_media_types=wire_media_types,
             agent_body=agent_body,
             project_context=project_context,
@@ -1382,6 +1421,7 @@ class ChatLoop:
         session: ChatSession,
         *,
         replay_policy: ReasoningReplayPolicy = REASONING_REPLAY_CURRENT_RUN,
+        input_modalities: frozenset[str] | None = None,
         wire_media_types: frozenset[str] = frozenset(),
         agent_body: str = "",
         project_context: ProjectPromptContext | None = None,
@@ -1398,9 +1438,19 @@ class ChatLoop:
         session_messages = session.load()
         session_tool_grants = (HISTORY_TOOL_NAME,) if history_available(session_messages) else ()
         system_prompts = self._dependencies.get_system_prompts()
+        effective_input_modalities = (
+            input_modalities
+            if input_modalities is not None
+            else _model_input_modalities(self._dependencies, agent)
+        )
         tools = system_prompts.provider_tool_definitions(
             agent,
             session_tool_grants=session_tool_grants,
+        )
+        tools = self._route_tool_definitions(
+            tools,
+            input_modalities=effective_input_modalities,
+            wire_media_types=wire_media_types,
         )
         allowed_tool_names = tuple(
             str(definition["name"])
@@ -1481,13 +1531,38 @@ class ChatLoop:
             await self._attachment_resolver.resolve_messages(
                 request_messages,
                 current_user_message_id=current_user_message.id,
-                input_modalities=_model_input_modalities(self._dependencies, agent),
+                input_modalities=effective_input_modalities,
                 wire_media_types=wire_media_types,
             ),
             tools,
             allowed_tool_names,
             session_tool_grants,
         )
+
+    def _route_tool_definitions(
+        self,
+        tools: list[JsonObject],
+        *,
+        input_modalities: frozenset[str],
+        wire_media_types: frozenset[str],
+    ) -> list[JsonObject]:
+        """Apply effective Model-route gates to route-dependent Tools."""
+
+        if not any(definition.get("name") == ANALYZE_IMAGE_TOOL_NAME for definition in tools):
+            return tools
+        route_can_view_images = "image" in input_modalities and any(
+            media_type.startswith("image/") for media_type in wire_media_types
+        )
+        image_task_available = (
+            False
+            if route_can_view_images
+            else self._dependencies.task_model_available(TASK_IMAGE_UNDERSTANDING)
+        )
+        if image_task_available:
+            return tools
+        return [
+            definition for definition in tools if definition.get("name") != ANALYZE_IMAGE_TOOL_NAME
+        ]
 
     async def _send_until_final(
         self,
@@ -1684,10 +1759,10 @@ class ChatLoop:
                     # is preserved.
                     for injection in media_injections:
                         await self._inject_read_media(
-                            agent,
                             session,
                             messages,
                             injection,
+                            target.input_modalities,
                             target.wire_media_types,
                         )
                     # Honored only after every sibling tool result is persisted, so
@@ -1717,10 +1792,10 @@ class ChatLoop:
 
     async def _inject_read_media(
         self,
-        agent: Any,
         session: ChatSession,
         messages: list[JsonObject],
         injection: JsonObject,
+        input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
     ) -> None:
         """Inject a tool-loaded media file as a synthetic current-turn user message.
@@ -1744,7 +1819,6 @@ class ChatLoop:
         user_message = ChatMessage.user([media_block])
         session.append(user_message)
 
-        input_modalities = _model_input_modalities(self._dependencies, agent)
         vision_unavailable = media_type.startswith("image/") and "image" not in input_modalities
         if self._attachment_resolver is None or vision_unavailable:
             messages.append(_read_media_text_note(filename, media_type))
@@ -1887,6 +1961,7 @@ class ChatLoop:
             agent,
             session,
             replay_policy=target.replay_policy,
+            input_modalities=target.input_modalities,
             wire_media_types=target.wire_media_types,
             agent_body=runtime_agent_body(agent),
             project_context=context.project_prompt_context,

@@ -4,6 +4,7 @@ from core.model_tasks.constants import (
     SPEECH_TASK_TYPES,
     SUPPORTED_TASK_TYPES,
     TASK_IMAGE_GENERATION,
+    TASK_IMAGE_UNDERSTANDING,
     TASK_SPEECH_TO_TEXT,
     TASK_TEXT_EMBEDDING,
     TASK_TEXT_TO_SPEECH,
@@ -29,7 +30,11 @@ from core.model_tasks.image import (
     ImageUnsupportedTargetError,
 )
 from core.model_tasks.image_providers import ProviderImageClient
-from core.model_tasks.image_types import ImageArtifact, ImageGenerationResult
+from core.model_tasks.image_types import (
+    ImageArtifact,
+    ImageGenerationResult,
+    ImageUnderstandingResult,
+)
 from core.model_tasks.local_targets import (
     DEFAULT_LOCAL_TASK_TARGET_REGISTRY,
     LocalTaskTargetDescriptor,
@@ -81,6 +86,7 @@ __all__ = [
     "ImageError",
     "ImageExecutionError",
     "ImageGenerationResult",
+    "ImageUnderstandingResult",
     "ImageInputError",
     "ImageService",
     "ImageUnsupportedTargetError",
@@ -103,6 +109,7 @@ __all__ = [
     "SpeechTranscriptionResult",
     "SpeechUnsupportedTargetError",
     "TASK_IMAGE_GENERATION",
+    "TASK_IMAGE_UNDERSTANDING",
     "TASK_SPEECH_TO_TEXT",
     "TASK_TEXT_EMBEDDING",
     "TASK_TEXT_TO_SPEECH",

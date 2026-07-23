@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.providers.errors import (
     ProviderAuthError,
     ProviderRateLimitError,
@@ -17,6 +18,7 @@ from core.runs import (
     RunStatus,
 )
 from core.tools import (
+    ANALYZE_IMAGE_TOOL_NAME,
     ToolRegistry,
     tool_success,
 )
@@ -25,12 +27,67 @@ from tests.core.chat.chat_loop_support import (
     ClosingStubAdapter,
     StubAdapter,
     StubAgent,
+    StubModels,
     StubRuntime,
     build_chat_loop,
     persisted_roles,
 )
 
 JsonObject = dict[str, Any]
+
+
+@pytest.mark.asyncio
+async def test_fallback_rebuilds_route_gated_image_tool_visibility(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/vision-model",
+        fallback_model="anthropic/text-model::api-key",
+        allowed_tools=[ANALYZE_IMAGE_TOOL_NAME],
+    )
+    primary_adapter = StubAdapter(
+        [ProviderRateLimitError("primary rate limited")],  # type: ignore[list-item]
+        wire_media_types=frozenset({"image/png"}),
+    )
+    fallback_adapter = StubAdapter([{"content": "Recovered", "tool_calls": None}])
+    tools = ToolRegistry()
+    tools.register(
+        ANALYZE_IMAGE_TOOL_NAME,
+        "Analyze images.",
+        {"type": "object"},
+        lambda _context, _arguments: tool_success({"analysis": "ok"}),
+    )
+    models = StubModels(
+        {
+            ("openai", "vision-model"): 128_000,
+            ("anthropic", "text-model"): 128_000,
+        },
+        input_modalities={
+            ("openai", "vision-model"): ("text", "image"),
+            ("anthropic", "text-model"): ("text",),
+        },
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=primary_adapter,
+        adapters_by_connection={
+            "openai:api-key": primary_adapter,
+            "anthropic:api-key": fallback_adapter,
+        },
+        provider_ids={"openai", "anthropic"},
+        tools=tools,
+        models=models,
+        available_task_models={TASK_IMAGE_UNDERSTANDING},
+    )
+
+    await build_chat_loop(runtime).send("coder", "Inspect it", session_id="s1")
+
+    primary_tools = primary_adapter.requests[0]["kwargs"]["tools"]
+    fallback_tools = fallback_adapter.requests[0]["kwargs"]["tools"]
+    assert ANALYZE_IMAGE_TOOL_NAME not in {definition["name"] for definition in primary_tools}
+    assert ANALYZE_IMAGE_TOOL_NAME in {definition["name"] for definition in fallback_tools}
 
 
 @pytest.mark.asyncio

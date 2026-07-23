@@ -77,8 +77,7 @@ def _model_input_modalities(
     """
     try:
         provider_id, model_id = _split_agent_model(agent.model)
-        model = dependencies.models.get(provider_id, model_id)
-    except (ChatError, KeyError) as error:
+    except ChatError as error:
         _LOGGER.warning(
             "Could not resolve input modalities for model %r; "
             "treating model as having no input modalities: %s",
@@ -86,7 +85,26 @@ def _model_input_modalities(
             error,
         )
         return frozenset()
+    return _model_input_modalities_for_target(dependencies, provider_id, model_id)
 
+
+def _model_input_modalities_for_target(
+    dependencies: ModelResolutionDependencies,
+    provider_id: str,
+    model_id: str,
+) -> frozenset[str]:
+    """Return input modalities for one resolved Provider/Model target."""
+
+    try:
+        model = dependencies.models.get(provider_id, model_id)
+    except (AttributeError, ChatError, KeyError) as error:
+        _LOGGER.warning(
+            "Could not resolve input modalities for model %r; "
+            "treating model as having no input modalities: %s",
+            f"{provider_id}/{model_id}",
+            error,
+        )
+        return frozenset()
     capabilities = getattr(model, "capabilities", None)
     modalities = getattr(capabilities, "input_modalities", ()) or ()
     return frozenset(str(modality) for modality in modalities)

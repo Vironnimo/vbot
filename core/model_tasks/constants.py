@@ -4,6 +4,7 @@ from __future__ import annotations
 
 TASK_SPEECH_TO_TEXT = "speech_to_text"
 TASK_TEXT_TO_SPEECH = "text_to_speech"
+TASK_IMAGE_UNDERSTANDING = "image_understanding"
 TASK_IMAGE_GENERATION = "image_generation"
 TASK_VIDEO_GENERATION = "video_generation"
 TASK_TEXT_EMBEDDING = "text_embedding"
@@ -12,6 +13,7 @@ SUPPORTED_TASK_TYPES = frozenset(
     {
         TASK_SPEECH_TO_TEXT,
         TASK_TEXT_TO_SPEECH,
+        TASK_IMAGE_UNDERSTANDING,
         TASK_IMAGE_GENERATION,
         TASK_VIDEO_GENERATION,
         TASK_TEXT_EMBEDDING,

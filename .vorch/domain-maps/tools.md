@@ -4,7 +4,7 @@ Tool metadata registry, allowlist filtering, provider definitions, context-aware
 
 ## Overview
 
-`core/tools/` owns the registry of callable tools available to the agentic loop. It exposes provider/prompt definitions, filters tools by Agent allowlists, dispatches calls with `ToolContext`, and turns expected tool failures into stable result envelopes. Concrete built-in tool behavior lives in child maps under `.vorch/domain-maps/tools/`.
+`core/tools/` owns the registry of callable tools available to the agentic loop. It exposes provider/prompt definitions, filters tools by Agent allowlists, dispatches calls with `ToolContext`, and turns expected tool failures into stable result envelopes. Chat may apply an additional route-specific visibility filter after registry definitions are built; this currently gates `analyze_image` from the effective Model modalities, Adapter wire support, and live task-model binding usability, without changing Tool registration or permissions. Concrete built-in tool behavior lives in child maps under `.vorch/domain-maps/tools/`.
 
 ## Terms
 
@@ -65,7 +65,7 @@ Domain-specific vocabulary for tools. The core Tool term lives in `.vorch/GLOSSA
 - `tools/process.md` - `process` and `ProcessManager`
 - `tools/status.md` - `status`
 - `tools/memory.md` - `memory`
-- `tools/image.md` - `image_generation`
+- `tools/image.md` - `analyze_image` and `image_generation`
 - `tools/session_search.md` - `session_search`
 - `tools/history.md` - Session-scoped `history` access after Compaction
 - `tools/project.md` - Identity-only explicit Project Context loading

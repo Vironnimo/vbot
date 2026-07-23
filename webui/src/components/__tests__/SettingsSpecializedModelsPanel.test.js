@@ -69,6 +69,25 @@ describe('SettingsSpecializedModelsPanel', () => {
     expect(listTaskModelTargetsMock.mock.calls.length).toBeGreaterThan(before);
   });
 
+  it('loads image-understanding targets with the other specialized models', async () => {
+    const props = reactiveProps({ settings: {}, modelsRefreshToken: 0 });
+    mountedComponent = mount(SettingsSpecializedModelsPanel, {
+      target: document.body,
+      props,
+    });
+    flushSync();
+    await waitForCondition(() =>
+      listTaskModelTargetsMock.mock.calls.some(
+        ([taskType]) => taskType === 'image_understanding',
+      ),
+    );
+
+    expect(listTaskModelTargetsMock).toHaveBeenCalledWith(
+      'image_understanding',
+    );
+    expect(document.body.textContent).toContain('Image understanding');
+  });
+
   it('auto-saves after a boolean option toggle is flipped', async () => {
     // The boolean option field is the shared Toggle (role="switch"); flipping it
     // must arm the same autosave flow as the other option controls.
