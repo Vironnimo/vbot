@@ -18,34 +18,48 @@
 
 .agents-view .agent-item {
   display: flex;
-  width: auto;
+  width: 100%;
   min-width: 0;
-  flex: 1;
   align-items: stretch;
   color: inherit;
   text-align: left;
 }
 
 .agents-view .agent-list-row {
-  display: flex;
+  position: relative;
+  display: block;
   min-width: 0;
-  align-items: stretch;
-  gap: 4px;
 }
 
 .agents-view .agent-order-handle {
-  display: inline-flex;
+  position: absolute;
+  z-index: 1;
+  top: 4px;
+  right: 4px;
+  display: flex;
   width: 28px;
-  min-height: 100%;
-  flex-shrink: 0;
+  height: 28px;
   align-items: center;
   justify-content: center;
   padding: 0;
   border: 1px solid transparent;
   border-radius: var(--r-sm);
   color: var(--text-lo);
-  background: transparent;
+  background: var(--surface-2);
   cursor: grab;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    background 120ms ease;
+}
+
+.agents-view .agent-list-row:hover .agent-order-handle:not(:disabled),
+.agents-view .agent-list-row:focus-within .agent-order-handle:not(:disabled) {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .agents-view .agent-order-handle:hover:not(:disabled) {
@@ -58,7 +72,9 @@
   border-color: var(--accent);
   box-shadow: var(--focus-ring);
   color: var(--accent);
+  opacity: 1;
   outline: none;
+  pointer-events: auto;
 }
 
 .agents-view .agent-order-handle:active:not(:disabled) {
@@ -67,7 +83,7 @@
 
 .agents-view .agent-order-handle:disabled {
   cursor: default;
-  opacity: 0.35;
+  opacity: 0;
 }
 
 .agents-view .agent-list-row--drop-target .agent-item {
@@ -486,9 +502,5 @@
 
   .agents-view .agent-list-pane {
     max-height: min(220px, 32vh);
-  }
-
-  .agents-view .agent-order-handle {
-    width: 40px;
   }
 }

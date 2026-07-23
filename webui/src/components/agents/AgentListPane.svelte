@@ -156,6 +156,21 @@
           ondrop={(event) => handleDrop(index, event)}
         >
           <button
+            class:active={agent.id === selectedAgentId}
+            class="agent-item secondary-list__item"
+            type="button"
+            onclick={() => onSelect(agent.id)}
+          >
+            <div class="agent-item-inner">
+              <div class="agent-item-name">{agent.name || agent.id}</div>
+              <div class="agent-item-sub">
+                {modelShortName(agent.model) ||
+                  agent.id ||
+                  t('common.unknown', 'Unknown')}
+              </div>
+            </div>
+          </button>
+          <button
             type="button"
             class="agent-order-handle"
             draggable={!isReordering && agents.length > 1}
@@ -184,21 +199,6 @@
               <circle cx="3.5" cy="9.5" r="1.1" fill="currentColor" />
               <circle cx="8.5" cy="9.5" r="1.1" fill="currentColor" />
             </svg>
-          </button>
-          <button
-            class:active={agent.id === selectedAgentId}
-            class="agent-item secondary-list__item"
-            type="button"
-            onclick={() => onSelect(agent.id)}
-          >
-            <div class="agent-item-inner">
-              <div class="agent-item-name">{agent.name || agent.id}</div>
-              <div class="agent-item-sub">
-                {modelShortName(agent.model) ||
-                  agent.id ||
-                  t('common.unknown', 'Unknown')}
-              </div>
-            </div>
           </button>
         </div>
       {/each}
