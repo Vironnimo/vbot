@@ -1561,7 +1561,7 @@ textarea::placeholder {
    surface stays clear of the pane edges, with a flush accent rail and a soft
    radius only on the free right edge. Feature styles own the row contents. */
 .secondary-list {
-  padding: 4px 12px;
+  padding: 12px;
   scrollbar-gutter: auto;
 }
 
