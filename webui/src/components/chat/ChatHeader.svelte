@@ -51,7 +51,7 @@
   // "No project" (Personal) plus one option per project, mirroring the chosen
   // project's display name back into the trigger label.
   let projectOptions = $derived([
-    { value: '', label: t('chat.project.none', 'Personal — no project') },
+    { value: '', label: t('chat.project.none', 'No project selected') },
     ...projects.map((project) => ({
       value: project.project_id,
       label: project.display_name || project.project_id,
