@@ -183,6 +183,8 @@ async def test_cancel_then_immediate_queued_correction_receives_finalized_checkp
     request_texts = [str(message.get("content") or "") for message in request_messages]
     correction_index = request_texts.index("Not this folder; use the second one")
     assert "<continuation-checkpoint" in request_texts[correction_index - 1]
+    assert "The previous Run was interrupted." in request_texts[correction_index - 1]
+    assert "Resume the interrupted work" not in request_texts[correction_index - 1]
     assert "Thinking hard." in request_texts[correction_index - 1]
     persisted = runtime.chat_sessions.get("coder", "session-one").load()
     assert [message.content for message in persisted if message.role == "user"] == [
