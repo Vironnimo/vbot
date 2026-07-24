@@ -841,6 +841,8 @@ export const englishCatalog = Object.freeze({
   'settings.skills.newSkill': 'New skill',
   'settings.skills.newSkillHelp':
     'A skill is a Markdown playbook: a header with a name and a short description, followed by the instructions.\n\nThe description matters most — it is what the agent reads to decide when to apply the skill, so state clearly what task it is for.',
+  'settings.skills.nameLabel': 'Skill name',
+  'settings.skills.contentLabel': 'SKILL.md content',
   'settings.skills.namePlaceholder': 'skill-name',
   'settings.skills.contentPlaceholder':
     '---\nname: skill-name\ndescription: When to use this skill.\n---\n\n# Overview',

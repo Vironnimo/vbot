@@ -94,14 +94,42 @@ describe('SettingsSkillManagerPanel', () => {
   it('loads and renders the global scope skills', async () => {
     await mountPanel();
 
-    expect(document.body.textContent).toContain('deploy');
-    expect(document.body.textContent).toContain('Ship the app.');
+    expect(
+      document.body.querySelector('.s-skill-manager-name').textContent,
+    ).toBe('deploy');
+    expect(
+      document.body.querySelector('.s-skill-manager-desc').textContent,
+    ).toBe('Ship the app.');
+    expect(document.body.querySelector('.s-skill-manager-create')).toBeNull();
     expect(rpcMock).toHaveBeenCalledWith('skill.read', { scope: 'global' });
     expect(rpcMock).toHaveBeenCalledWith('agent.list');
   });
 
+  it('opens and cancels the labeled create form on demand', async () => {
+    await mountPanel();
+
+    buttonByText('New skill').click();
+    await flushAsync();
+
+    expect(document.body.querySelector('.s-skill-manager-create')).toBeTruthy();
+    expect(
+      document.querySelector('label[for="new-skill-name"]').textContent,
+    ).toContain('Skill name');
+    expect(
+      document.querySelector('label[for="new-skill-content"]').textContent,
+    ).toContain('SKILL.md content');
+
+    buttonByText('Cancel').click();
+    await flushAsync();
+
+    expect(document.body.querySelector('.s-skill-manager-create')).toBeNull();
+  });
+
   it('creates a skill in the global scope', async () => {
     await mountPanel();
+
+    buttonByText('New skill').click();
+    await flushAsync();
 
     const input = document.body.querySelector('input');
     input.value = 'newskill';
@@ -122,6 +150,7 @@ describe('SettingsSkillManagerPanel', () => {
     expect(call[1].name).toBe('newskill');
     expect(call[1].content).toContain('name: newskill');
     expect(onToast).toHaveBeenCalled();
+    expect(document.body.querySelector('.s-skill-manager-create')).toBeNull();
   });
 
   it('edits an existing skill', async () => {
@@ -182,6 +211,9 @@ describe('SettingsSkillManagerPanel', () => {
       return defaultRpc(method);
     });
     await mountPanel();
+
+    buttonByText('New skill').click();
+    await flushAsync();
 
     const input = document.body.querySelector('input');
     input.value = 'bad';
