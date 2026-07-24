@@ -1,40 +1,217 @@
 {
-  "_comment": "Hand layer for the opencode-go gateway, rebuilt 2026-06-16. Everything models.dev knows about these models (context_window, max_output_tokens, modalities, family, reasoning) is pulled into the generated opencode-go.json at refresh, so this file carries ONLY what neither the endpoint nor models.dev provides: (1) the per-model wire protocol (metadata.opencode_go.protocol: anthropic|openai) that routes the adapter — a vBot-internal fact, and (2) for hy3-preview, a canonical pointer to tencent/hy3-preview because the opencode-go models.dev section carries no limit block for it (the canonical base fills context_window/max_output_tokens at load), and (3) for glm-5.2, the effort reasoning ladder (control: levels, levels: high|max) that models.dev publishes but assembly drops for this model — its gateway wire-id 'glm-5.2' cannot join the lab-prefixed canonical 'zhipuai/glm-5.2', and the gateway's own non-deviating ladder is not stamped onto opencode-go.json, so without this entry the model loads with a bare reasoning:{supported:true} and no selectable effort. Values taken verbatim from the models.dev reasoning_options for glm-5.2. No hand-guessed numbers.",
+  "_comment": "Hand layer for OpenCode Go, verified 2026-07-24 against its official endpoint table, current models.dev feed, upstream model documentation, and two-turn live gateway probes. Each profile keeps protocol, reasoning replay scope, response field, and model-specific request controls independent. Override metadata is wholesale at load, so OpenAI-route profiles repeat reasoning_response_field instead of accidentally discarding the generated value.",
   "models": {
-    "deepseek-v4-flash": {"metadata": {"opencode_go": {"protocol": "openai"}}},
-    "deepseek-v4-pro": {"metadata": {"opencode_go": {"protocol": "openai"}}},
-    "glm-5": {"metadata": {"opencode_go": {"protocol": "openai"}}},
-    "glm-5.1": {"metadata": {"opencode_go": {"protocol": "openai"}}},
-    "glm-5.2": {
-      "capabilities": {
-        "reasoning": {"control": "levels", "levels": ["high", "max"], "supported": true}
-      },
-      "metadata": {"opencode_go": {"protocol": "openai", "reasoning_response_field": "reasoning_content"}}
-    },
-    "hy3-preview": {
-      "canonical": "tencent/hy3-preview",
-      "metadata": {"opencode_go": {"protocol": "openai"}}
-    },
-    "kimi-k2.5": {"metadata": {"opencode_go": {"protocol": "openai"}}},
-    "kimi-k2.6": {
+    "deepseek-v4-flash": {
       "metadata": {
         "opencode_go": {
           "protocol": "openai",
+          "reasoning_replay": "full_history",
+          "reasoning_response_field": "reasoning_content"
+        }
+      }
+    },
+    "deepseek-v4-pro": {
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai",
+          "reasoning_replay": "full_history",
+          "reasoning_response_field": "reasoning_content"
+        }
+      }
+    },
+    "glm-5": {
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai",
+          "reasoning_replay": "full_history",
+          "reasoning_response_field": "reasoning_content"
+        }
+      }
+    },
+    "glm-5.1": {
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai",
+          "reasoning_replay": "full_history",
+          "reasoning_response_field": "reasoning_content"
+        }
+      }
+    },
+    "glm-5.2": {
+      "capabilities": {
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "high",
+            "max"
+          ],
+          "supported": true
+        }
+      },
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai",
+          "reasoning_replay": "full_history",
+          "reasoning_response_field": "reasoning_content"
+        }
+      }
+    },
+    "grok-4.5": {
+      "metadata": {
+        "opencode_go": {
+          "minimum_reasoning_effort": "low",
+          "protocol": "openai",
+          "reasoning_replay": "full_history",
+          "reasoning_response_field": "reasoning_content"
+        }
+      }
+    },
+    "hy3": {
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai",
+          "reasoning_replay": "full_history",
+          "reasoning_response_field": "reasoning_details"
+        }
+      }
+    },
+    "kimi-k2.5": {
+      "capabilities": {
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        }
+      },
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai",
+          "reasoning_replay": "current_run",
+          "reasoning_response_field": "reasoning_content",
+          "thinking_control": "toggle"
+        }
+      }
+    },
+    "kimi-k2.6": {
+      "capabilities": {
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        }
+      },
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai",
+          "reasoning_replay": "full_history",
+          "reasoning_response_field": "reasoning_content",
+          "thinking_control": "toggle",
           "thinking_keep": "all"
         }
       }
     },
-    "kimi-k2.7-code": {"metadata": {"opencode_go": {"protocol": "openai"}}},
-    "mimo-v2-omni": {"metadata": {"opencode_go": {"protocol": "openai"}}},
-    "mimo-v2-pro": {"metadata": {"opencode_go": {"protocol": "openai"}}},
-    "mimo-v2.5": {"metadata": {"opencode_go": {"protocol": "openai"}}},
-    "mimo-v2.5-pro": {"metadata": {"opencode_go": {"protocol": "openai"}}},
-    "minimax-m2.5": {"metadata": {"opencode_go": {"protocol": "anthropic"}}},
-    "minimax-m2.7": {"metadata": {"opencode_go": {"protocol": "anthropic"}}},
-    "minimax-m3": {"metadata": {"opencode_go": {"protocol": "anthropic"}}},
-    "qwen3.5-plus": {"metadata": {"opencode_go": {"protocol": "anthropic"}}},
-    "qwen3.6-plus": {"metadata": {"opencode_go": {"protocol": "anthropic"}}},
-    "qwen3.7-max": {"metadata": {"opencode_go": {"protocol": "anthropic"}}},
-    "qwen3.7-plus": {"metadata": {"opencode_go": {"protocol": "anthropic"}}}
+    "kimi-k2.7-code": {
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai",
+          "reasoning_replay": "current_run",
+          "reasoning_response_field": "reasoning_content",
+          "thinking_control": "always_enabled"
+        }
+      }
+    },
+    "kimi-k3": {
+      "capabilities": {
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ],
+          "supported": true
+        }
+      },
+      "metadata": {
+        "opencode_go": {
+          "minimum_reasoning_effort": "low",
+          "protocol": "openai",
+          "reasoning_replay": "full_history",
+          "reasoning_response_field": "reasoning_content"
+        }
+      }
+    },
+    "mimo-v2.5": {
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai",
+          "reasoning_replay": "full_history",
+          "reasoning_response_field": "reasoning_details"
+        }
+      }
+    },
+    "mimo-v2.5-pro": {
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai",
+          "reasoning_replay": "full_history",
+          "reasoning_response_field": "reasoning_details"
+        }
+      }
+    },
+    "minimax-m2.5": {
+      "metadata": {
+        "opencode_go": {
+          "protocol": "anthropic",
+          "reasoning_replay": "full_history"
+        }
+      }
+    },
+    "minimax-m2.7": {
+      "metadata": {
+        "opencode_go": {
+          "protocol": "anthropic",
+          "reasoning_replay": "full_history"
+        }
+      }
+    },
+    "minimax-m3": {
+      "metadata": {
+        "opencode_go": {
+          "protocol": "anthropic",
+          "reasoning_replay": "full_history"
+        }
+      }
+    },
+    "qwen3.5-plus": {
+      "metadata": {
+        "opencode_go": {
+          "protocol": "anthropic",
+          "reasoning_replay": "full_history"
+        }
+      }
+    },
+    "qwen3.6-plus": {
+      "metadata": {
+        "opencode_go": {
+          "protocol": "anthropic",
+          "reasoning_replay": "full_history"
+        }
+      }
+    },
+    "qwen3.7-max": {
+      "metadata": {
+        "opencode_go": {
+          "protocol": "anthropic",
+          "reasoning_replay": "full_history"
+        }
+      }
+    },
+    "qwen3.7-plus": {
+      "metadata": {
+        "opencode_go": {
+          "protocol": "anthropic",
+          "reasoning_replay": "full_history"
+        }
+      }
+    }
   }
 }

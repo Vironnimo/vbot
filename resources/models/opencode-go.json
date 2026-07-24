@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-07-20T17:31:50.597850+00:00",
+  "fetched_at": "2026-07-24T20:40:29.105405+00:00",
   "models": {
     "deepseek-v4-flash": {
       "capabilities": {
@@ -222,7 +222,7 @@
       "max_output_tokens": 500000,
       "name": "grok-4.5"
     },
-    "hy3-preview": {
+    "hy3": {
       "capabilities": {
         "input_modalities": [
           "text"
@@ -232,7 +232,13 @@
           "text"
         ],
         "reasoning": {
-          "supported": false
+          "control": "levels",
+          "levels": [
+            "none",
+            "low",
+            "high"
+          ],
+          "supported": true
         },
         "supported_parameters": [],
         "supported_voices": [],
@@ -246,9 +252,10 @@
       "connections": [
         "api-key"
       ],
-      "context_window": null,
-      "max_output_tokens": null,
-      "name": "hy3-preview"
+      "context_window": 256000,
+      "family": "Hy",
+      "max_output_tokens": 64000,
+      "name": "hy3"
     },
     "kimi-k2.5": {
       "capabilities": {
@@ -397,77 +404,6 @@
         }
       },
       "name": "kimi-k3"
-    },
-    "mimo-v2-omni": {
-      "capabilities": {
-        "input_modalities": [
-          "text",
-          "image",
-          "audio",
-          "pdf"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": true
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 262144,
-      "family": "mimo-v2-omni",
-      "max_output_tokens": 128000,
-      "metadata": {
-        "opencode_go": {
-          "reasoning_response_field": "reasoning_content"
-        }
-      },
-      "name": "mimo-v2-omni"
-    },
-    "mimo-v2-pro": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "supported": true
-        },
-        "supported_parameters": [],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 1048576,
-      "family": "mimo-v2-pro",
-      "max_output_tokens": 128000,
-      "metadata": {
-        "opencode_go": {
-          "reasoning_response_field": "reasoning_content"
-        }
-      },
-      "name": "mimo-v2-pro"
     },
     "mimo-v2.5": {
       "capabilities": {

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
@@ -18,8 +18,9 @@ from core.providers.openai_compatible import OpenAICompatibleAdapter, _to_openai
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import (
     REASONING_REPLAY_CURRENT_RUN,
-    REASONING_REPLAY_FULL_HISTORY,
+    REASONING_REPLAY_POLICIES,
     ReasoningReplayPolicy,
+    normalize_thinking_effort,
 )
 from core.providers.token_getter import TokenGetter
 from core.utils.logging import get_logger
@@ -35,8 +36,13 @@ OPENCODE_GO_METADATA_KEY = "opencode_go"
 PROTOCOL_METADATA_KEY = "protocol"
 PROTOCOL_ANTHROPIC = "anthropic"
 PROTOCOL_OPENAI = "openai"
+REASONING_REPLAY_METADATA_KEY = "reasoning_replay"
 THINKING_KEEP_METADATA_KEY = "thinking_keep"
 THINKING_KEEP_ALL = "all"
+THINKING_CONTROL_METADATA_KEY = "thinking_control"
+THINKING_CONTROL_TOGGLE = "toggle"
+THINKING_CONTROL_ALWAYS_ENABLED = "always_enabled"
+MINIMUM_REASONING_EFFORT_METADATA_KEY = "minimum_reasoning_effort"
 # The endpoint returns bare ids with no protocol, so a model the override does
 # not mark is unknown: route it the SAFE default (OpenAI chat/completions) and
 # warn, so a newly added model is never silently misrouted onto the wrong wire.
@@ -55,13 +61,11 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
     Models with reasoning capability (DeepSeek, Kimi, GLM, ...) return
     ``reasoning_content`` in assistant messages.
 
-    Both routes replay assistant reasoning for the full same-model history
-    (``full_history`` policy): the OpenAI ``/chat/completions`` route expects
-    ``reasoning_content`` round-tripping for every historical assistant
-    message, and the Anthropic ``/messages`` route accepts replayed signed
-    thinking blocks across run boundaries (both verified against the real
-    gateway, 2026-06-13). History shaping is owned by the chat layer; this
-    adapter only translates whatever reasoning survives shaping onto the wire.
+    Replay scope and request controls are explicit per-Model facts. Both wire
+    routes can carry historical reasoning, but acceptance by a protocol does
+    not prove that every underlying Model uses reasoning from earlier Runs.
+    History shaping is owned by the chat layer; this adapter translates only
+    the reasoning that survives the selected Model profile.
     """
 
     def __init__(
@@ -116,15 +120,14 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
     def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
         """Replay persisted reasoning only for explicitly profiled Models.
 
-        Verified against the real gateway (2026-06-13): the OpenAI route
-        accepts ``reasoning_content`` on completed historical assistant
-        messages, the Anthropic route accepts replayed signed thinking blocks
-        across run boundaries. An unprofiled Model is not covered by either
-        probe, so it keeps only active-Run reasoning instead of inheriting a
-        Provider-wide assumption.
+        ``metadata.opencode_go.reasoning_replay`` is independent of the wire
+        protocol: two Models on the same endpoint may have different history
+        semantics. An absent or malformed profile keeps only active-Run
+        reasoning instead of inheriting a Provider-wide assumption.
         """
-        if self._lookup_protocol(model_id) in (PROTOCOL_ANTHROPIC, PROTOCOL_OPENAI):
-            return REASONING_REPLAY_FULL_HISTORY
+        replay = self._profile_value(model_id, REASONING_REPLAY_METADATA_KEY)
+        if replay in REASONING_REPLAY_POLICIES:
+            return cast(ReasoningReplayPolicy, replay)
         return REASONING_REPLAY_CURRENT_RUN
 
     def wire_media_support(self, model_id: str) -> frozenset[str]:
@@ -190,9 +193,30 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        selected_effort = normalize_thinking_effort(
+            kwargs.get("thinking_effort") or kwargs.get("reasoning_effort")
+        )
         payload = super()._build_payload(messages, model_id, **kwargs)
-        if self._thinking_keep(model_id) == THINKING_KEEP_ALL:
-            payload["thinking"] = {"type": "enabled", "keep": THINKING_KEEP_ALL}
+        thinking_control = self._profile_value(model_id, THINKING_CONTROL_METADATA_KEY)
+        if thinking_control in (THINKING_CONTROL_TOGGLE, THINKING_CONTROL_ALWAYS_ENABLED):
+            # Kimi K2.5/K2.6/K2.7 use the ``thinking`` object, not the generic
+            # OpenAI-compatible ``reasoning_effort`` field. K2.7 is always-on;
+            # K2.5/K2.6 expose only a binary toggle.
+            payload.pop("reasoning_effort", None)
+            thinking_enabled = (
+                thinking_control == THINKING_CONTROL_ALWAYS_ENABLED or selected_effort != "none"
+            )
+            thinking: dict[str, str] = {"type": "enabled" if thinking_enabled else "disabled"}
+            if thinking_enabled and self._thinking_keep(model_id) == THINKING_KEEP_ALL:
+                thinking["keep"] = THINKING_KEEP_ALL
+            payload["thinking"] = thinking
+        elif selected_effort == "none" and (
+            minimum_effort := self._profile_value(model_id, MINIMUM_REASONING_EFFORT_METADATA_KEY)
+        ) in {"minimal", "low", "medium", "high", "xhigh", "max"}:
+            # Always-reasoning effort models cannot honor ``none``. Explicitly
+            # request their cheapest supported rung instead of omitting the
+            # field and accidentally falling back to a much higher default.
+            payload["reasoning_effort"] = minimum_effort
         return payload
 
     def _kwargs_with_model_output_limit(
@@ -271,6 +295,10 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         return _DEFAULT_PROTOCOL
 
     def _lookup_protocol(self, model_id: str) -> str | None:
+        value = self._profile_value(model_id, PROTOCOL_METADATA_KEY)
+        return value if isinstance(value, str) else None
+
+    def _profile_value(self, model_id: str, key: str) -> Any:
         if self._model_lookup is None:
             return None
         for candidate in _model_lookup_candidates(model_id):
@@ -279,27 +307,15 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
                 continue
             opencode_go = model.metadata.get(OPENCODE_GO_METADATA_KEY)
             if isinstance(opencode_go, Mapping):
-                protocol = opencode_go.get(PROTOCOL_METADATA_KEY)
-                if isinstance(protocol, str):
-                    return protocol
-            # The model exists but carries no protocol fact — stop here so the
-            # caller warns and defaults rather than scanning weaker candidates.
+                return opencode_go.get(key)
+            # The model exists but carries no profile — stop here so callers do
+            # not scan weaker candidates after resolving an exact Model.
             return None
         return None
 
     def _thinking_keep(self, model_id: str) -> str | None:
-        if self._model_lookup is None:
-            return None
-        for candidate in _model_lookup_candidates(model_id):
-            model = self._model_lookup(candidate)
-            if model is None:
-                continue
-            opencode_go = model.metadata.get(OPENCODE_GO_METADATA_KEY)
-            if not isinstance(opencode_go, Mapping):
-                return None
-            value = opencode_go.get(THINKING_KEEP_METADATA_KEY)
-            return value if isinstance(value, str) else None
-        return None
+        value = self._profile_value(model_id, THINKING_KEEP_METADATA_KEY)
+        return value if isinstance(value, str) else None
 
 
 def _model_lookup_candidates(model_id: str) -> tuple[str, ...]:

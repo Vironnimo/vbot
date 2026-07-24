@@ -38,7 +38,7 @@ Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB
 
 ## Boundaries and invariants
 
-- `ProviderRegistry` owns immutable Provider/Connection configuration parsed from disk. `ProviderCredentialResolver` owns credentials, Accounts, enabled overrides, and usability. Runtime owns wiring them into live Adapters.
+- `ProviderRegistry` owns immutable Provider/Connection configuration parsed from disk, including exact `catalog_exclusions` for ids a Provider advertises but cannot serve. `ProviderCredentialResolver` owns credentials, Accounts, enabled overrides, and usability. Runtime owns wiring them into live Adapters.
 - Connection identity determines wire/auth/catalog behavior; Account identity determines only which credential is used. Discovery and task-target expansion stay Connection-scoped and never multiply catalogs per Account.
 - `ProviderAdapter.send()`, `stream()`, and `normalize_response()` are the Chat-facing translation boundary. Streaming yields normalized deltas; raw SSE event names, response chunks, opaque auth state, and Provider payloads never escape the Adapter layer.
 - Provider-specific wire selectors and replay profiles are scoped to the resolved Connection/Wire plus Model; mechanics stay in the Adapter. A Provider-wide default may be a conservative fallback, never evidence that every Model shares the same reasoning contract. Do not add generic Model fields for one Provider's protocol quirk or route Provider Models in Runtime/Chat.
@@ -64,6 +64,7 @@ Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB
 - Adapters rebuild authorization headers inside retry attempts so a refreshed OAuth token is used after backoff. Do not cache raw OAuth tokens outside `TokenGetter`.
 - `NetworkError` is retryable but deliberately not Provider-specific, so it must not trigger model fallback. Only `ProviderStreamingUnsupportedError` permits Chat's streaming-to-nonstreaming fallback.
 - Generated Provider catalogs are refresh artifacts. Durable behavior belongs in Adapter code or verified override files, not hand edits to generated `resources/models/<provider>.json`.
+- A Provider listing that contains proven-unusable ids uses `catalog_exclusions` in its static Provider config; discovery preserves the raw response and omits only those exact ids from the usable Model projection. Do not use this as a preference allow/deny list.
 
 ## References
 

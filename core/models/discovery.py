@@ -205,6 +205,13 @@ async def refresh_models(
                     exc,
                 )
                 continue
+            if model.model_id in provider_config.catalog_exclusions:
+                _LOGGER.info(
+                    "Excluding unusable catalog model '%s' for provider '%s'",
+                    model.model_id,
+                    provider_config.id,
+                )
+                continue
             if model_filter.accepts(model):
                 normalized_models[model.model_id] = model
 

@@ -18,5 +18,10 @@
   "defaults": {
     "max_tokens": 8192
   },
-  "models_endpoint": "/models"
+  "models_endpoint": "/models",
+  "catalog_exclusions": [
+    "hy3-preview",
+    "mimo-v2-omni",
+    "mimo-v2-pro"
+  ]
 }
