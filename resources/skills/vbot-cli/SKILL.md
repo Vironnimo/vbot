@@ -1,11 +1,25 @@
 ---
 name: vbot-cli
-description: Configure and operate vBot through the vbot CLI. Use when asked to start, stop, restart, update, or uninstall vBot, set up provider credentials (API key or OAuth), or list/add/edit/remove agents, projects, sessions, channels (Telegram, Discord), cron jobs, task-model bindings, prompts, skills, extensions, or settings — or to inspect models, tools, logs, debug traces, Provider subscription usage, and Session usage statistics (tokens, runs, errors, tool and skill usage).
+description: Configure, inspect, and operate vBot through the vbot CLI, including locating the application and runtime data. Use when asked to start, stop, restart, update, or uninstall vBot, set up provider credentials (API key or OAuth), find vBot files or diagnose stored state, or list/add/edit/remove agents, projects, sessions, channels (Telegram, Discord), cron jobs, task-model bindings, prompts, skills, extensions, or settings — or to inspect models, tools, logs, debug traces, Provider subscription usage, and Session usage statistics (tokens, runs, errors, tool and skill usage).
 ---
 
 # vBot CLI
 
-The `vbot` CLI is the automation surface for configuring and operating a vBot instance: run the command, verify the result, report what changed.
+The `vbot` CLI is the automation surface for configuring and operating a vBot instance: run the command, verify the result, report what changed. One async Runtime lives behind the server; the CLI, WebUI, Desktop, and Channels are Accessors to that same system rather than separate stores.
+
+## System and paths
+
+Keep these boundaries separate:
+
+- `app_dir` is the checkout or installation containing vBot code and bundled resources.
+- `data_dir` is the server instance's local runtime state and credentials. `~/.vbot` is only the product default, not a path to assume.
+- A Project `cwd` is the external working directory where file and shell Tools operate for that Project; it is referenced by Project state but is not contained by the data directory.
+- An Identity Agent's Workspace is its identity and Memory home. It defaults inside the Agent's data directory but may be configured as an external absolute path.
+- A Session is persisted conversation history owned by one Agent; a Run is one active execution inside it and is not a separate top-level data directory.
+
+Run `vbot home` before local filesystem investigation to resolve `app_dir` and `data_dir`. The command reports the machine where it runs and does not query a server selected with `--host`; when targeting a remote vBot server, use its CLI/RPC diagnostics unless you separately have filesystem access to that server host.
+
+Read `references/system-layout.md` before searching runtime files, diagnosing missing or corrupt stored state, making an unavoidable manual edit, or planning a data backup, move, or reset. Use the owning CLI area first and inspect files only when the semantic command cannot answer the question.
 
 ## Rules
 
