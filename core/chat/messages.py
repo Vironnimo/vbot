@@ -19,7 +19,6 @@ from core.chat.content_blocks import (
     content_block_to_dict,
 )
 from core.chat.errors import ChatError, ChatMessageValidationError
-from core.chat.model_resolution import parse_bare_model
 from core.providers.reasoning import (
     REASONING_REPLAY_CURRENT_RUN,
     REASONING_REPLAY_FULL_HISTORY,
@@ -242,6 +241,35 @@ class ReplySurface:
         )
 
 
+def _compaction_projection_without_provider_state(
+    projection: Sequence[ChatMessage],
+) -> list[ChatMessage]:
+    """Make a provider-neutral checkpoint projection.
+
+    vBot Compaction is a textual Summary+Tail projection, not a Provider-native
+    opaque-state compaction token. Reasoning artifacts therefore end at this
+    boundary. Active-Run rebuilds restore their live reasoning fields separately;
+    later Runs cannot accidentally treat a textual checkpoint as continuous
+    Provider reasoning state.
+    """
+
+    projected: list[ChatMessage] = []
+    for message in projection:
+        if message.role != "assistant":
+            projected.append(message)
+            continue
+        sanitized = replace(
+            message,
+            reasoning=None,
+            reasoning_meta=None,
+            reasoning_scope=None,
+        )
+        if sanitized.content is None and not sanitized.tool_calls:
+            continue
+        projected.append(sanitized)
+    return projected
+
+
 @dataclass(frozen=True)
 class ChatMessage:
     """Canonical message persisted to session JSONL files."""
@@ -253,6 +281,8 @@ class ChatMessage:
     model: str | None = None
     reasoning: str | None = None
     reasoning_meta: JsonObject | None = None
+    reasoning_scope: str | None = None
+    phase: str | None = None
     usage: JsonObject | None = None
     timing: JsonObject | None = None
     tool_calls: list[ToolCall] | None = None
@@ -331,6 +361,8 @@ class ChatMessage:
         content: str | None,
         reasoning: str | None = None,
         reasoning_meta: JsonObject | None = None,
+        reasoning_scope: str | None = None,
+        phase: str | None = None,
         usage: JsonObject | None = None,
         tool_calls: list[ToolCall] | None = None,
         interrupted: bool = False,
@@ -350,6 +382,8 @@ class ChatMessage:
             content=content,
             reasoning=reasoning,
             reasoning_meta=dict(reasoning_meta) if reasoning_meta is not None else None,
+            reasoning_scope=reasoning_scope,
+            phase=phase,
             usage=dict(usage) if usage is not None else None,
             tool_calls=list(tool_calls) if tool_calls is not None else None,
             interrupted=interrupted,
@@ -408,7 +442,7 @@ class ChatMessage:
     ) -> ChatMessage:
         """Create a self-contained compaction checkpoint projection."""
         summary_note = f"{COMPACTION_SUMMARY_NOTE_PREFIX}{summary}"
-        projected = list(projection)
+        projected = _compaction_projection_without_provider_state(projection)
         if not (projected and projected[0].role == "note" and projected[0].content == summary_note):
             projected.insert(0, cls.note(summary_note, timestamp=timestamp))
         return cls(
@@ -465,6 +499,8 @@ class ChatMessage:
                 message["content"] = self.content
         _add_if_not_none(message, "reasoning", self.reasoning)
         _add_if_not_none(message, "reasoning_meta", self.reasoning_meta)
+        _add_if_not_none(message, "reasoning_scope", self.reasoning_scope)
+        _add_if_not_none(message, "phase", self.phase)
         _add_if_not_none(message, "usage", self.usage)
         _add_if_not_none(message, "timing", self.timing)
         if self.tool_calls is not None:
@@ -521,6 +557,8 @@ class ChatMessage:
             model=_optional_string(data, "model"),
             reasoning=_optional_string(data, "reasoning"),
             reasoning_meta=dict(reasoning_meta) if reasoning_meta is not None else None,
+            reasoning_scope=_optional_string(data, "reasoning_scope"),
+            phase=_optional_string(data, "phase"),
             usage=dict(usage) if usage is not None else None,
             timing=dict(timing) if timing is not None else None,
             tool_calls=tool_calls,
@@ -683,6 +721,7 @@ def _message_to_request_dict(
         if not _replays_assistant_reasoning(message, replay_policy, agent_model):
             data.pop("reasoning", None)
             data.pop("reasoning_meta", None)
+        data.pop("reasoning_scope", None)
         data.pop("usage", None)
         # ``interrupted`` is a vBot-internal turn annotation, never a wire field.
         data.pop("interrupted", None)
@@ -703,16 +742,16 @@ def _replays_assistant_reasoning(
     """Return whether history shaping keeps this assistant turn's reasoning fields.
 
     Only ``full_history`` replays persisted reasoning across runs, and only when
-    the entry's persisted model passes the same-model gate against the agent's
-    current model (optional ``::<connection>[:<account>]`` suffixes stripped on
-    both sides). A mismatch means the reasoning belongs to a different model and
-    is stripped exactly like under ``current_run``.
+    the entry's persisted Provider/Model/Connection identity exactly matches the
+    active resolved request scope. A Model, wire, Connection, or account mismatch
+    means the opaque reasoning belongs to a different context and is stripped
+    exactly like under ``current_run``.
     """
     if replay_policy != REASONING_REPLAY_FULL_HISTORY:
         return False
     if agent_model is None or message.model is None:
         return False
-    return parse_bare_model(message.model) == parse_bare_model(agent_model)
+    return (message.reasoning_scope or message.model) == agent_model
 
 
 # Characters removed from sender tag parts so a display name cannot forge the
@@ -756,6 +795,7 @@ def _assistant_continuation_dict(
     data.pop("usage", None)
     data.pop("timing", None)
     data.pop("interrupted", None)
+    data.pop("reasoning_scope", None)
     if replay_policy == REASONING_REPLAY_NONE:
         data.pop("reasoning", None)
         data.pop("reasoning_meta", None)
@@ -773,6 +813,7 @@ def _strip_assistant_reasoning_fields(messages: list[JsonObject]) -> None:
         if message.get("role") == "assistant":
             message.pop("reasoning", None)
             message.pop("reasoning_meta", None)
+            message.pop("reasoning_scope", None)
 
 
 def _restore_in_run_assistant_reasoning(
@@ -1207,14 +1248,21 @@ def _assistant_message_from_response(
     model: str,
     response: JsonObject,
     *,
+    reasoning_scope: str | None = None,
     interrupted: bool = False,
 ) -> ChatMessage:
     tool_calls = _parse_tool_calls(response.get("tool_calls"))
+    reasoning = _nullable_response_string(response, "reasoning")
+    reasoning_meta = _response_reasoning_meta(response)
     return ChatMessage.assistant(
         model=model,
         content=_nullable_response_string(response, "content"),
-        reasoning=_nullable_response_string(response, "reasoning"),
-        reasoning_meta=_response_reasoning_meta(response),
+        reasoning=reasoning,
+        reasoning_meta=reasoning_meta,
+        reasoning_scope=(
+            reasoning_scope if reasoning is not None or reasoning_meta is not None else None
+        ),
+        phase=_response_phase(response),
         usage=response.get("usage"),
         tool_calls=tool_calls,
         interrupted=interrupted,
@@ -1252,6 +1300,27 @@ def _response_reasoning_meta(response: JsonObject) -> JsonObject | None:
     if not isinstance(reasoning_meta, dict):
         raise ChatMessageValidationError("assistant response reasoning_meta must be an object")
     return dict(reasoning_meta)
+
+
+def _response_phase(response: JsonObject) -> str | None:
+    phase = response.get("phase")
+    if phase is not None:
+        if not isinstance(phase, str):
+            raise ChatMessageValidationError("assistant response phase must be a string or null")
+        return phase
+    reasoning_meta = response.get("reasoning_meta")
+    if not isinstance(reasoning_meta, dict):
+        return None
+    response_output = reasoning_meta.get("response_output")
+    if not isinstance(response_output, list):
+        return None
+    for item in response_output:
+        if not isinstance(item, dict) or item.get("type") != "message":
+            continue
+        item_phase = item.get("phase")
+        if isinstance(item_phase, str) and item_phase:
+            return item_phase
+    return None
 
 
 def _new_message_id() -> str:
@@ -1351,6 +1420,10 @@ def _validate_core_fields(message: ChatMessage) -> None:
         raise ChatMessageValidationError("timestamp must be a non-empty string")
     if not _has_explicit_utc_offset(message.timestamp):
         raise ChatMessageValidationError("timestamp must include explicit UTC offset")
+    if message.role != "assistant" and message.phase is not None:
+        raise ChatMessageValidationError(f"{message.role} messages cannot include phase")
+    if message.role != "assistant" and message.reasoning_scope is not None:
+        raise ChatMessageValidationError(f"{message.role} messages cannot include reasoning_scope")
     if message.role != "compaction_checkpoint":
         _reject_fields(
             message,
@@ -1453,6 +1526,14 @@ def _validate_assistant_message(message: ChatMessage) -> None:
         raise ChatMessageValidationError("assistant messages require model")
     if message.content is not None and not isinstance(message.content, str):
         raise ChatMessageValidationError("assistant messages content must be a string")
+    if message.phase is not None and (not isinstance(message.phase, str) or not message.phase):
+        raise ChatMessageValidationError("assistant messages phase must be a non-empty string")
+    if message.reasoning_scope is not None and (
+        not isinstance(message.reasoning_scope, str) or not message.reasoning_scope
+    ):
+        raise ChatMessageValidationError(
+            "assistant messages reasoning_scope must be a non-empty string"
+        )
     has_tool_calls = bool(message.tool_calls)
     has_visible_reasoning = message.reasoning is not None
     has_reasoning_meta = message.reasoning_meta is not None
@@ -1477,6 +1558,8 @@ def _validate_assistant_message(message: ChatMessage) -> None:
     )
     if message.reasoning_meta is not None and not isinstance(message.reasoning_meta, dict):
         raise ChatMessageValidationError("reasoning_meta must be an object")
+    if message.phase is not None and not message.phase:
+        raise ChatMessageValidationError("assistant phase must be a non-empty string")
     if message.usage is not None and not isinstance(message.usage, dict):
         raise ChatMessageValidationError("usage must be an object")
 

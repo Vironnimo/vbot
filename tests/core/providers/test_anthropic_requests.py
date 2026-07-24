@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from .anthropic_test_support import (
     ANTHROPIC_CONFIG,
     ANTHROPIC_URL,
@@ -1058,6 +1060,36 @@ class TestSendRequestFormat:
 
         request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         assert request_body["thinking"] == {"type": "disabled"}
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_adaptive_required_model_never_sends_rejected_disabled_shape(self):
+        route = respx.post(MINIMAL_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        adaptive_model = replace(
+            _anthropic_control_model("claude-fable-5", control="levels"),
+            metadata={
+                "anthropic": {
+                    "requires_adaptive_thinking": True,
+                    "supports_temperature": False,
+                }
+            },
+        )
+        adapter = AnthropicAdapter(
+            NO_DEFAULTS_CONFIG,
+            API_KEY,
+            model_lookup=lambda _model_id: adaptive_model,
+        )
+
+        await adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="claude-fable-5",
+            thinking_effort="none",
+        )
+
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
+        assert "thinking" not in request_body
 
     @respx.mock
     @pytest.mark.asyncio

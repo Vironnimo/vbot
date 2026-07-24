@@ -94,7 +94,7 @@ The merged record (pointer stripped) is constructed into a typed `Model` by `_mo
 
 ## Wire selectors as data
 
-Per-model wire **facts** live in a **Provider-scoped** `metadata` blob keyed by the underscored Provider id, so one Provider's quirk never pollutes the schema for all: `metadata.opencode_go.protocol` (Anthropic vs OpenAI routing), `metadata.mistral.prompt_mode`, `metadata.<provider>.reasoning_response_field` (projected at refresh from models.dev `interleaved`). The wire **mechanics** stay in the Adapter — it reads the fact via its injected `model_lookup` and owns only the *how*. Generalizes the original `metadata.github_copilot` pattern. The full convention lives in `providers/request-policy.md` → Adapter ownership.
+Per-model wire **facts** live in a **Provider-scoped** `metadata` blob keyed by the underscored Provider id, so one Provider's quirk never pollutes the schema for all: `metadata.opencode_go.protocol` (Anthropic vs OpenAI routing), `metadata.mistral.prompt_mode`, `metadata.ollama.reasoning_replay`, and connection-keyed `metadata.openai.wire_policies` (protocol, replay scope, and public reasoning context). The effective behavior may depend on Connection/Wire plus Model; a Provider-wide default is only a conservative fallback. The wire **mechanics** stay in the Adapter — it reads the fact via its injected `model_lookup` and owns only the *how*. Generalizes the original `metadata.github_copilot` pattern. The full convention lives in `providers/request-policy.md` → Adapter ownership.
 
 ## Optional `context_window`
 

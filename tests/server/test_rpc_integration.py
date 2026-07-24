@@ -20,6 +20,7 @@ from core.providers.accounts import ProviderAccount
 from core.runs import ChatRunManager
 from core.skills.skills import SkillRegistry
 from core.tools import FileReadState, ToolContext, ToolRegistry, tool_success
+from core.utils.errors import ConfigError
 from server.app import create_app
 from server.rpc.methods import dispatch_rpc
 from tests.core.chat.chat_loop_support import build_chat_loop
@@ -457,6 +458,22 @@ class IntegrationRuntime:
                         credential_key=connection.auth.credential_key,
                     )
                 ]
+
+            def resolve_account_id(
+                self,
+                provider_id: str,
+                local_connection_id: str,
+                account_id: str | None = None,
+            ) -> str:
+                accounts = self.list_accounts(provider_id, local_connection_id)
+                if account_id is not None:
+                    if any(account.id == account_id and account.usable for account in accounts):
+                        return account_id
+                    raise ConfigError(f"Provider account not usable: {account_id}")
+                for account in accounts:
+                    if account.usable:
+                        return account.id
+                raise ConfigError(f"Provider has no usable accounts: {provider_id}")
 
         return CredentialResolver()
 

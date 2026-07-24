@@ -298,6 +298,45 @@ class TestChatMessageFactories:
             ],
         }
 
+    def test_assistant_message_round_trips_provider_phase(self):
+        message = ChatMessage.assistant(
+            model="openai/gpt-5.5",
+            content="I will inspect this.",
+            reasoning="Working.",
+            reasoning_scope="openai/gpt-5.5::api-key",
+            phase="commentary",
+            timestamp=FIXED_TIMESTAMP,
+        )
+
+        assert message.to_dict()["phase"] == "commentary"
+        restored = ChatMessage.from_dict(message.to_dict())
+        assert restored.phase == "commentary"
+        assert restored.reasoning_scope == "openai/gpt-5.5::api-key"
+
+    def test_non_assistant_message_rejects_phase(self):
+        with pytest.raises(ChatMessageValidationError, match="cannot include phase"):
+            ChatMessage.from_dict(
+                {
+                    "id": "u1",
+                    "timestamp": "2026-05-03T14:30:01+00:00",
+                    "role": "user",
+                    "content": "hi",
+                    "phase": "commentary",
+                }
+            )
+
+    def test_assistant_message_rejects_non_string_phase(self):
+        with pytest.raises(
+            ChatMessageValidationError,
+            match="phase must be a non-empty string",
+        ):
+            ChatMessage.assistant(
+                model="openai/gpt-5.5",
+                content="Checking.",
+                phase=1,  # type: ignore[arg-type]
+                timestamp=FIXED_TIMESTAMP,
+            ).to_dict()
+
     def test_tool_message_contains_tool_correlation_fields(self):
         message = ChatMessage.tool(
             tool_call_id="call_abc",

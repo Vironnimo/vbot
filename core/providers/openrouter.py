@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import replace
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import quote
 
@@ -17,6 +17,13 @@ from core.providers._http_shared import (
     classify_http_status,
     decode_response_json,
     wrap_network_error,
+)
+from core.providers.errors import NetworkError, ProviderError
+from core.providers.github_copilot_responses import (
+    ResponsesStreamState,
+    build_responses_payload,
+    iter_responses_sse_deltas_with_state,
+    normalize_responses_response,
 )
 from core.providers.openai_compatible import (
     OpenAICompatibleAdapter,
@@ -30,10 +37,15 @@ from core.providers.reasoning import (
     REASONING_INTENT_EFFORT,
     REASONING_INTENT_OFF,
     REASONING_INTENT_ON,
+    REASONING_REPLAY_CURRENT_RUN,
+    REASONING_REPLAY_FULL_HISTORY,
     ReasoningIntent,
+    ReasoningReplayPolicy,
+    closest_supported_effort,
     model_reasoning_budget_max,
     model_reasoning_control,
     model_reasoning_levels,
+    normalize_thinking_effort,
     resolve_reasoning_intent,
 )
 from core.settings.settings import parse_openrouter_routing
@@ -46,6 +58,18 @@ OPENROUTER_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhi
 # rung) keeps the byte-identical ``{"effort": "none"}`` instead — see the render.
 OPENROUTER_REASONING_OFF = {"enabled": False}
 OPENROUTER_NONE_EFFORT = "none"
+OPENROUTER_RESPONSES_ENDPOINT = "/responses"
+OPENROUTER_ALL_TURNS_RESPONSES_MODELS = frozenset(
+    {
+        "openai/gpt-5.6-luna",
+        "openai/gpt-5.6-luna-pro",
+        "openai/gpt-5.6-sol",
+        "openai/gpt-5.6-sol-pro",
+        "openai/gpt-5.6-terra",
+        "openai/gpt-5.6-terra-pro",
+    }
+)
+OPENROUTER_RESPONSES_REQUEST_PARAMETERS = frozenset({"max_tokens", "max_output_tokens", "top_p"})
 
 # Prompt caching for Claude-family models routed through OpenRouter. Anthropic
 # caches nothing unless a content block carries ``cache_control`` (verified live:
@@ -105,6 +129,220 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
     ) -> None:
         super().__init__(*args, **kwargs)
         self._routing = parse_openrouter_routing(routing or {})
+
+    def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
+        """Replay complete reasoning details for catalog-known reasoning Models.
+
+        OpenRouter documents unchanged multi-turn ``reasoning`` /
+        ``reasoning_details`` replay as its gateway contract. Unknown Models do
+        not inherit that guarantee: they remain active-Run only until discovery
+        confirms reasoning support.
+        """
+
+        if self._model_reasoning_supported(model_id) is True:
+            return REASONING_REPLAY_FULL_HISTORY
+        return REASONING_REPLAY_CURRENT_RUN
+
+    async def send(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model_id: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Route GPT-5.6 Models through OpenRouter's stateless Responses wire."""
+
+        if not self._uses_all_turns_responses(model_id):
+            return await super().send(messages, model_id=model_id, **kwargs)
+        payload = self._build_openrouter_responses_payload(
+            messages,
+            model_id=model_id,
+            **self._request_kwargs_with_defaults(kwargs),
+        )
+        return await self._post_responses_json(payload)
+
+    async def stream(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model_id: str,
+        **kwargs: Any,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Stream GPT-5.6 via Responses; retain Chat Completions for other Models."""
+
+        if not self._uses_all_turns_responses(model_id):
+            async for delta in super().stream(messages, model_id=model_id, **kwargs):
+                yield delta
+            return
+        payload = self._build_openrouter_responses_payload(
+            messages,
+            model_id=model_id,
+            stream=True,
+            **self._request_kwargs_with_defaults(kwargs),
+        )
+        async for delta in self._stream_responses(payload):
+            yield delta
+
+    def normalize_response(
+        self,
+        response: dict[str, Any],
+        *,
+        model_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Normalize either OpenRouter endpoint family."""
+
+        if isinstance(response.get("output"), list):
+            return normalize_responses_response(response)
+        return super().normalize_response(response, model_id=model_id)
+
+    def _uses_all_turns_responses(self, model_id: str) -> bool:
+        return model_id.split("::", 1)[0] in OPENROUTER_ALL_TURNS_RESPONSES_MODELS
+
+    def _request_kwargs_with_defaults(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
+        request_kwargs: dict[str, Any] = {}
+        if self._config.defaults:
+            request_kwargs.update(self._config.defaults)
+        request_kwargs.update(kwargs)
+        return request_kwargs
+
+    def _build_openrouter_responses_payload(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model_id: str,
+        stream: bool = False,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        session_id = kwargs.pop("session_id", None)
+        payload = build_responses_payload(
+            messages,
+            model_id=model_id,
+            policy=self._responses_policy_for_model(model_id),
+            stream=stream,
+            **kwargs,
+        )
+        payload["store"] = False
+        if isinstance(session_id, str) and session_id:
+            payload["session_id"] = session_id
+        provider_preferences = _openrouter_provider_preferences(self._routing, model_id)
+        if provider_preferences:
+            payload["provider"] = provider_preferences
+        return payload
+
+    def _responses_policy_for_model(self, model_id: str) -> OpenRouterResponsesPolicy:
+        model = (
+            self._model_lookup(model_id.split("::", 1)[0])
+            if self._model_lookup is not None
+            else None
+        )
+        capabilities = model.capabilities if model is not None else None
+        reasoning_supported = capabilities.reasoning.supported if capabilities is not None else True
+        supports_tools = capabilities.tools if capabilities is not None else True
+        supported_parameters = set(capabilities.supported_parameters) if capabilities else set()
+        return OpenRouterResponsesPolicy(
+            allowed_reasoning_efforts=(
+                frozenset(model_reasoning_levels(self._model_lookup, model_id) or ())
+                if reasoning_supported
+                else frozenset()
+            )
+            or (frozenset(OPENROUTER_REASONING_EFFORTS) if reasoning_supported else frozenset()),
+            supports_tools=supports_tools,
+            supports_parallel_tool_calls=(
+                supports_tools
+                and (
+                    not supported_parameters
+                    or "parallel_tool_calls" in supported_parameters
+                    or "tools" in supported_parameters
+                )
+            ),
+            supports_structured_outputs=(
+                capabilities.json_mode if capabilities is not None else True
+            ),
+        )
+
+    async def _post_responses_json(self, payload: dict[str, Any]) -> dict[str, Any]:
+        async def _do_request() -> dict[str, Any]:
+            headers = await self._build_headers()
+            try:
+                response = await self._client.post(
+                    OPENROUTER_RESPONSES_ENDPOINT,
+                    json=payload,
+                    headers=headers,
+                )
+            except httpx.TransportError as exc:
+                raise wrap_network_error(exc) from exc
+            classify_http_status(
+                response.status_code,
+                detail=_openrouter_http_error_detail(response),
+                response_headers=response.headers,
+            )
+            return dict(decode_response_json(response, "OpenRouter Responses"))
+
+        return await retry_async(_do_request)
+
+    async def _stream_responses(
+        self,
+        payload: dict[str, Any],
+    ) -> AsyncIterator[dict[str, Any]]:
+        response = await self._connect_responses_stream(payload)
+        state = ResponsesStreamState()
+        event_lines: list[str] = []
+        seen_finish_delta = False
+        try:
+            async for line in response.aiter_lines():
+                if line:
+                    event_lines.append(line)
+                    continue
+                for delta in iter_responses_sse_deltas_with_state(event_lines, state):
+                    if delta.get("type") == "finish":
+                        seen_finish_delta = True
+                    yield delta
+                event_lines = []
+            if event_lines:
+                for delta in iter_responses_sse_deltas_with_state(event_lines, state):
+                    if delta.get("type") == "finish":
+                        seen_finish_delta = True
+                    yield delta
+            if not seen_finish_delta:
+                raise NetworkError("Stream ended without response completion event")
+        except httpx.TimeoutException as exc:
+            raise wrap_network_error(exc) from exc
+        except httpx.TransportError as exc:
+            raise NetworkError(f"Stream read failed: {exc}") from exc
+        finally:
+            await response.aclose()
+
+    async def _connect_responses_stream(
+        self,
+        payload: dict[str, Any],
+    ) -> httpx.Response:
+        async def _connect() -> httpx.Response:
+            headers = await self._build_headers()
+            request = self._client.build_request(
+                "POST",
+                OPENROUTER_RESPONSES_ENDPOINT,
+                json=payload,
+                headers=headers,
+            )
+            try:
+                response = await self._client.send(request, stream=True)
+            except httpx.TransportError as exc:
+                raise wrap_network_error(exc) from exc
+            if response.status_code >= 400:
+                body = (await response.aread()).decode("utf-8", errors="replace")
+                await response.aclose()
+                classify_http_status(
+                    response.status_code,
+                    detail=_openrouter_http_error_detail(response, body),
+                    response_headers=response.headers,
+                )
+                raise ProviderError(
+                    f"Provider error: {response.status_code}",
+                    retryable=False,
+                )
+            return response
+
+        return await retry_async(_connect)
 
     def request_context_kwargs(
         self,
@@ -333,6 +571,72 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         return payload
 
 
+@dataclass(frozen=True)
+class OpenRouterResponsesPolicy:
+    """Request-shaping facts for an exact OpenRouter Responses-routed Model."""
+
+    allowed_reasoning_efforts: frozenset[str]
+    supports_tools: bool
+    supports_parallel_tool_calls: bool
+    supports_structured_outputs: bool
+
+    @property
+    def allows_any_reasoning_controls(self) -> bool:
+        return bool(self.allowed_reasoning_efforts)
+
+    def filter_request_kwargs(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
+        filtered = {key: value for key, value in kwargs.items() if value is not None}
+        if not self.supports_tools:
+            for name in ("tools", "tool_choice", "parallel_tool_calls"):
+                filtered.pop(name, None)
+        elif not self.supports_parallel_tool_calls:
+            filtered.pop("parallel_tool_calls", None)
+
+        if not self.supports_structured_outputs:
+            for name in ("response_format", "structured_outputs", "json_mode", "text"):
+                filtered.pop(name, None)
+
+        if not self.allows_any_reasoning_controls:
+            for name in ("thinking_effort", "reasoning_effort", "reasoning", "include_reasoning"):
+                filtered.pop(name, None)
+        else:
+            self._normalize_effort(filtered, "thinking_effort")
+            self._normalize_effort(filtered, "reasoning_effort")
+
+        for name in ("max_tokens", "max_output_tokens", "temperature", "top_p", "top_k"):
+            if name in filtered and name not in OPENROUTER_RESPONSES_REQUEST_PARAMETERS:
+                filtered.pop(name, None)
+        return filtered
+
+    def closest_reasoning_effort(self, effort: Any) -> str | None:
+        normalized = normalize_thinking_effort(effort)
+        if not normalized:
+            return None
+        if normalized == OPENROUTER_NONE_EFFORT:
+            return (
+                OPENROUTER_NONE_EFFORT
+                if OPENROUTER_NONE_EFFORT in self.allowed_reasoning_efforts
+                else None
+            )
+        return closest_supported_effort(normalized, self.allowed_reasoning_efforts)
+
+    def supports_request_parameter(self, parameter_name: str) -> bool:
+        return parameter_name in OPENROUTER_RESPONSES_REQUEST_PARAMETERS
+
+    def _normalize_effort(
+        self,
+        filtered: dict[str, Any],
+        parameter_name: str,
+    ) -> None:
+        if parameter_name not in filtered:
+            return
+        safe_effort = self.closest_reasoning_effort(filtered[parameter_name])
+        if safe_effort is None:
+            filtered.pop(parameter_name, None)
+        else:
+            filtered[parameter_name] = safe_effort
+
+
 def _openrouter_provider_preferences(
     routing: Mapping[str, Any],
     model_id: str,
@@ -358,6 +662,14 @@ def _openrouter_provider_preferences(
     if policy["allow_fallbacks"] is False:
         preferences["allow_fallbacks"] = False
     return preferences
+
+
+def _openrouter_http_error_detail(
+    response: httpx.Response,
+    body: str | None = None,
+) -> str:
+    reason = response.text if body is None else body
+    return f"{response.status_code} {reason}".strip() if reason else str(response.status_code)
 
 
 def _openrouter_routing_options(

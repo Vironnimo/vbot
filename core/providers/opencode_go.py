@@ -16,7 +16,11 @@ from core.providers.anthropic_compatible import (
 )
 from core.providers.openai_compatible import OpenAICompatibleAdapter, _to_openai_assistant_message
 from core.providers.providers import AuthConfig, ProviderConfig
-from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY, ReasoningReplayPolicy
+from core.providers.reasoning import (
+    REASONING_REPLAY_CURRENT_RUN,
+    REASONING_REPLAY_FULL_HISTORY,
+    ReasoningReplayPolicy,
+)
 from core.providers.token_getter import TokenGetter
 from core.utils.logging import get_logger
 
@@ -31,6 +35,8 @@ OPENCODE_GO_METADATA_KEY = "opencode_go"
 PROTOCOL_METADATA_KEY = "protocol"
 PROTOCOL_ANTHROPIC = "anthropic"
 PROTOCOL_OPENAI = "openai"
+THINKING_KEEP_METADATA_KEY = "thinking_keep"
+THINKING_KEEP_ALL = "all"
 # The endpoint returns bare ids with no protocol, so a model the override does
 # not mark is unknown: route it the SAFE default (OpenAI chat/completions) and
 # warn, so a newly added model is never silently misrouted onto the wrong wire.
@@ -108,15 +114,18 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         await super().aclose()
 
     def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
-        """Replay persisted reasoning across runs on both gateway routes.
+        """Replay persisted reasoning only for explicitly profiled Models.
 
         Verified against the real gateway (2026-06-13): the OpenAI route
         accepts ``reasoning_content`` on completed historical assistant
         messages, the Anthropic route accepts replayed signed thinking blocks
-        across run boundaries.
+        across run boundaries. An unprofiled Model is not covered by either
+        probe, so it keeps only active-Run reasoning instead of inheriting a
+        Provider-wide assumption.
         """
-        del model_id
-        return REASONING_REPLAY_FULL_HISTORY
+        if self._lookup_protocol(model_id) in (PROTOCOL_ANTHROPIC, PROTOCOL_OPENAI):
+            return REASONING_REPLAY_FULL_HISTORY
+        return REASONING_REPLAY_CURRENT_RUN
 
     def wire_media_support(self, model_id: str) -> frozenset[str]:
         """Resolve media support from the wire selected for this model."""
@@ -174,6 +183,17 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         if isinstance(reasoning, str) and reasoning:
             wire["reasoning_content"] = reasoning
         return wire
+
+    def _build_payload(
+        self,
+        messages: list[dict[str, Any]],
+        model_id: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        payload = super()._build_payload(messages, model_id, **kwargs)
+        if self._thinking_keep(model_id) == THINKING_KEEP_ALL:
+            payload["thinking"] = {"type": "enabled", "keep": THINKING_KEEP_ALL}
+        return payload
 
     def _kwargs_with_model_output_limit(
         self,
@@ -265,6 +285,20 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             # The model exists but carries no protocol fact — stop here so the
             # caller warns and defaults rather than scanning weaker candidates.
             return None
+        return None
+
+    def _thinking_keep(self, model_id: str) -> str | None:
+        if self._model_lookup is None:
+            return None
+        for candidate in _model_lookup_candidates(model_id):
+            model = self._model_lookup(candidate)
+            if model is None:
+                continue
+            opencode_go = model.metadata.get(OPENCODE_GO_METADATA_KEY)
+            if not isinstance(opencode_go, Mapping):
+                return None
+            value = opencode_go.get(THINKING_KEEP_METADATA_KEY)
+            return value if isinstance(value, str) else None
         return None
 
 

@@ -11,7 +11,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
-from core.providers.reasoning import closest_supported_effort, normalize_thinking_effort
+from core.providers.reasoning import (
+    REASONING_REPLAY_CURRENT_RUN,
+    REASONING_REPLAY_FULL_HISTORY,
+    ReasoningReplayPolicy,
+    closest_supported_effort,
+    normalize_thinking_effort,
+)
 
 CHAT_COMPLETIONS_ENDPOINT = "/chat/completions"
 RESPONSES_ENDPOINT = "/responses"
@@ -158,6 +164,7 @@ class GitHubCopilotModelPolicy:
 
     facts: CopilotModelFacts
     endpoint_path: str = CHAT_COMPLETIONS_ENDPOINT
+    reasoning_replay: ReasoningReplayPolicy = REASONING_REPLAY_CURRENT_RUN
     supported_request_parameters: frozenset[str] = frozenset()
     allowed_reasoning_efforts: frozenset[str] = frozenset()
     supports_thinking_budget: bool = False
@@ -503,5 +510,9 @@ _STATIC_EXACT_OVERRIDES_BY_ID: dict[str, dict[str, Any]] = {
     "gemini-3.1-pro-preview": {
         "allowed_reasoning_efforts": frozenset(),
     },
-    "claude-sonnet-4.6": {"omit_temperature_when_thinking_active": True},
+    "claude-sonnet-4.6": {
+        "omit_temperature_when_thinking_active": True,
+        "reasoning_replay": REASONING_REPLAY_FULL_HISTORY,
+    },
+    "gpt-5-mini": {"reasoning_replay": REASONING_REPLAY_FULL_HISTORY},
 }

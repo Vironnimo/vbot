@@ -87,6 +87,7 @@ async def test_streaming_mode_emits_deltas_then_final_authoritative_message(
     assert run.events[3].payload == {"content_delta": "Hello"}
     assert run.events[6].payload["message"]["content"] == "Hello world"
     assert "reasoning_meta" not in run.events[6].payload["message"]
+    assert "reasoning_scope" not in run.events[6].payload["message"]
     assert adapter.requests == []
     assert adapter.stream_requests[0]["kwargs"]["thinking_effort"] == "high"
 
@@ -180,6 +181,7 @@ async def test_streaming_mode_persists_only_final_messages_and_continues_tool_lo
     assert tool_result.payload["timing"]["duration_ms"] >= 0
     assert all(
         "reasoning_meta" not in event.payload.get("message", {})
+        and "reasoning_scope" not in event.payload.get("message", {})
         for event in run.events
         if isinstance(event.payload, dict)
     )

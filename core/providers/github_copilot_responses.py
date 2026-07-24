@@ -1,9 +1,8 @@
-"""GitHub Copilot ``/responses`` protocol helpers.
+"""Shared stateless ``/responses`` protocol helpers.
 
-The functions in this module are intentionally adapter-independent.  Phase 3
-will wire them into ``GitHubCopilotAdapter``; until then they provide the
-request, response, and SSE normalization rules for Copilot's Responses-shaped
-endpoint without changing generic OpenAI-compatible code.
+The helpers preserve the complete Responses item stream so OpenAI, OpenRouter,
+and GitHub Copilot adapters can replay provider-owned reasoning, phase, and
+future item kinds without reconstructing a lossy approximation.
 """
 
 from __future__ import annotations
@@ -18,12 +17,14 @@ from core.providers.errors import ProviderError
 RESPONSES_DONE_MARKER = "[DONE]"
 REASONING_ENCRYPTED_CONTENT_INCLUDE = "reasoning.encrypted_content"
 REASONING_SUMMARY_DELTA_EVENTS = {
+    "response.reasoning.delta",
     "response.reasoning_summary_text.delta",
     "response.reasoning_text.delta",
     "response.output_item.reasoning_summary_text.delta",
 }
 RESPONSES_ERROR_EVENTS = {"error", "response.failed", "response.incomplete"}
 _REASONING_META_KEYS = ("reasoning_items", "response_output")
+RESPONSES_RESPONSE_OUTPUT_META_KEY = "response_output"
 
 
 class ResponsesRequestPolicy(Protocol):
@@ -60,6 +61,7 @@ class ResponsesStreamState:
     emitted_output_text: str = ""
     emitted_reasoning_text: str = ""
     reasoning_meta: dict[str, Any] | None = None
+    output_items_by_index: dict[int, dict[str, Any]] = field(default_factory=dict)
     usage: dict[str, int] | None = None
     completed_response: dict[str, Any] | None = None
 
@@ -91,6 +93,9 @@ class ResponsesStreamState:
             ),
             "tool_calls": tool_calls or None,
         }
+        phase = _assistant_phase_from_output(_response_output_from_meta(self.reasoning_meta))
+        if phase is not None:
+            result["phase"] = phase
         if self.usage is not None:
             result["usage"] = dict(self.usage)
         return result
@@ -102,14 +107,18 @@ def build_responses_payload(
     model_id: str,
     policy: ResponsesRequestPolicy,
     stream: bool = False,
+    document_media_types: frozenset[str] = frozenset(),
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """Build a Copilot ``/responses`` request payload from canonical messages."""
+    """Build a stateless ``/responses`` request payload from canonical messages."""
 
     request_kwargs = policy.filter_request_kwargs(kwargs)
     payload: dict[str, Any] = {
         "model": model_id,
-        "input": _messages_to_responses_input(messages),
+        "input": _messages_to_responses_input(
+            messages,
+            document_media_types=document_media_types,
+        ),
     }
     instructions = _system_instructions(messages)
     if instructions:
@@ -135,6 +144,9 @@ def normalize_responses_response(response: Mapping[str, Any]) -> dict[str, Any]:
         "reasoning_meta": _extract_reasoning_meta(response, output_items),
         "tool_calls": _extract_function_calls(output_items),
     }
+    phase = _assistant_phase_from_output(output_items)
+    if phase is not None:
+        normalized["phase"] = phase
     usage = _extract_responses_usage(response.get("usage"))
     if usage is not None:
         normalized["usage"] = usage
@@ -184,7 +196,11 @@ def _system_instructions(messages: list[dict[str, Any]]) -> str | None:
     return "\n\n".join(text_parts) or None
 
 
-def _messages_to_responses_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _messages_to_responses_input(
+    messages: list[dict[str, Any]],
+    *,
+    document_media_types: frozenset[str],
+) -> list[dict[str, Any]]:
     input_items: list[dict[str, Any]] = []
     for message in messages:
         role = message.get("role")
@@ -197,32 +213,69 @@ def _messages_to_responses_input(messages: list[dict[str, Any]]) -> list[dict[st
             input_items.append(_tool_message_to_function_output(message))
             continue
         if role == "user":
-            input_items.append(_user_message_to_input_item(message.get("content", "")))
+            input_items.append(
+                _user_message_to_input_item(
+                    message.get("content", ""),
+                    document_media_types=document_media_types,
+                )
+            )
     return input_items
 
 
 def _assistant_message_to_input_items(message: dict[str, Any]) -> list[dict[str, Any]]:
+    response_output = _response_output_from_meta(message.get("reasoning_meta"))
+    if response_output:
+        # Stateless Responses continuation is an item protocol, not a message
+        # reconstruction protocol. Preserve every output item verbatim so opaque
+        # reasoning, assistant phase, program items, and future item kinds keep
+        # their original ordering and identifiers.
+        return [dict(item) for item in response_output]
+
     input_items: list[dict[str, Any]] = []
     input_items.extend(_reasoning_meta_input_items(message.get("reasoning_meta")))
     content = message.get("content")
     if isinstance(content, str) and content:
-        input_items.append(_text_message_to_input_item("assistant", content))
+        input_items.append(
+            _text_message_to_input_item("assistant", content, phase=message.get("phase"))
+        )
     for tool_call in _mapping_list(message.get("tool_calls")):
         input_items.append(_tool_call_to_function_call(tool_call))
     return input_items
 
 
-def _text_message_to_input_item(role: str, content: Any) -> dict[str, Any]:
+def _text_message_to_input_item(
+    role: str,
+    content: Any,
+    *,
+    phase: Any = None,
+) -> dict[str, Any]:
     text = content if isinstance(content, str) else ""
     content_type = "output_text" if role == "assistant" else "input_text"
-    return {"role": role, "content": [{"type": content_type, "text": text}]}
+    item = {"role": role, "content": [{"type": content_type, "text": text}]}
+    if role == "assistant" and isinstance(phase, str) and phase:
+        item["phase"] = phase
+    return item
 
 
-def _user_message_to_input_item(content: Any) -> dict[str, Any]:
-    return {"role": "user", "content": _user_content_parts(content)}
+def _user_message_to_input_item(
+    content: Any,
+    *,
+    document_media_types: frozenset[str],
+) -> dict[str, Any]:
+    return {
+        "role": "user",
+        "content": _user_content_parts(
+            content,
+            document_media_types=document_media_types,
+        ),
+    }
 
 
-def _user_content_parts(content: Any) -> list[dict[str, Any]]:
+def _user_content_parts(
+    content: Any,
+    *,
+    document_media_types: frozenset[str],
+) -> list[dict[str, Any]]:
     if not isinstance(content, list):
         text = content if isinstance(content, str) else ""
         return [{"type": "input_text", "text": text}]
@@ -238,6 +291,13 @@ def _user_content_parts(content: Any) -> list[dict[str, Any]]:
                 parts.append({"type": "input_text", "text": block_text})
         elif block_type == "media":
             parts.append(_input_image_from_media(block))
+        elif block_type == "document":
+            parts.append(
+                _input_file_from_document(
+                    block,
+                    document_media_types=document_media_types,
+                )
+            )
     return parts
 
 
@@ -254,13 +314,43 @@ def _input_image_from_media(block: Mapping[str, Any]) -> dict[str, Any]:
         )
     if not media_type.startswith("image/"):
         raise ProviderError(
-            "GitHub Copilot responses adapter supports only image media blocks; "
-            f"received {media_type}",
+            f"Responses adapter supports only image media blocks; received {media_type}",
             retryable=False,
         )
     return {
         "type": "input_image",
         "image_url": f"data:{media_type};base64,{base64_data}",
+    }
+
+
+def _input_file_from_document(
+    block: Mapping[str, Any],
+    *,
+    document_media_types: frozenset[str],
+) -> dict[str, Any]:
+    base64_data = block.get("base64")
+    media_type = block.get("media_type")
+    filename = block.get("filename")
+    if (
+        not isinstance(base64_data, str)
+        or not isinstance(media_type, str)
+        or not media_type
+        or not isinstance(filename, str)
+        or not filename
+    ):
+        raise ProviderError(
+            "document content block requires string base64, media_type, and filename fields",
+            retryable=False,
+        )
+    if media_type not in document_media_types:
+        raise ProviderError(
+            f"Responses adapter does not support document media type {media_type}",
+            retryable=False,
+        )
+    return {
+        "type": "input_file",
+        "filename": filename,
+        "file_data": f"data:{media_type};base64,{base64_data}",
     }
 
 
@@ -289,6 +379,15 @@ def _reasoning_meta_input_items(reasoning_meta: Any) -> list[dict[str, Any]]:
         if isinstance(items, list):
             return [dict(item) for item in items if _is_reasoning_item(item)]
     return []
+
+
+def _response_output_from_meta(reasoning_meta: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(reasoning_meta, Mapping):
+        return []
+    items = reasoning_meta.get(RESPONSES_RESPONSE_OUTPUT_META_KEY)
+    if not isinstance(items, list) or not all(isinstance(item, Mapping) for item in items):
+        return []
+    return items
 
 
 def _is_reasoning_item(item: Any) -> bool:
@@ -485,11 +584,28 @@ def _extract_reasoning_meta(
     response_id = response.get("id")
     if isinstance(response_id, str) and response_id:
         meta["response_id"] = response_id
+    response_reasoning = response.get("reasoning")
+    if isinstance(response_reasoning, Mapping):
+        reasoning_context = response_reasoning.get("context")
+        if isinstance(reasoning_context, str) and reasoning_context:
+            meta["reasoning_context"] = reasoning_context
+    if output_items:
+        meta[RESPONSES_RESPONSE_OUTPUT_META_KEY] = [dict(item) for item in output_items]
     if reasoning_items:
         meta["reasoning_items"] = reasoning_items
     if encrypted_items:
         meta["encrypted_content"] = [item["encrypted_content"] for item in encrypted_items]
     return meta or None
+
+
+def _assistant_phase_from_output(output_items: list[Mapping[str, Any]]) -> str | None:
+    for item in output_items:
+        if item.get("type") != "message" or item.get("role", "assistant") != "assistant":
+            continue
+        phase = item.get("phase")
+        if isinstance(phase, str) and phase:
+            return phase
+    return None
 
 
 def _extract_responses_usage(usage: Any) -> dict[str, int] | None:
@@ -628,6 +744,7 @@ def _output_item_event_deltas(
     item = event_data.get("item")
     if not isinstance(item, Mapping):
         return []
+    _record_stream_output_item(event_data, item, state)
     if item.get("type") == "reasoning":
         reasoning_deltas: list[dict[str, Any]] = []
         reasoning = _joined_or_none(_extract_reasoning_parts([item]))
@@ -700,7 +817,12 @@ def _completed_event_deltas(
         response = event_data
     state.completed_response = dict(response)
     deltas: list[dict[str, Any]] = []
-    output_items = _mapping_list(response.get("output"))
+    completed_output_items = _mapping_list(response.get("output"))
+    if completed_output_items:
+        state.output_items_by_index = {
+            output_index: dict(item) for output_index, item in enumerate(completed_output_items)
+        }
+    output_items = completed_output_items or _ordered_stream_output_items(state)
     content = _joined_or_none(_extract_output_text_parts(output_items))
     content_backfill = _text_backfill_delta(content, state.emitted_output_text)
     if content_backfill is not None:
@@ -726,6 +848,30 @@ def _completed_event_deltas(
             )
     deltas.append({"type": "finish", "reason": _responses_finish_reason(response, state)})
     return deltas
+
+
+def _record_stream_output_item(
+    event_data: Mapping[str, Any],
+    item: Mapping[str, Any],
+    state: ResponsesStreamState,
+) -> None:
+    output_index = event_data.get("output_index")
+    if isinstance(output_index, int) and output_index >= 0:
+        state.output_items_by_index[output_index] = dict(item)
+        return
+    stable_id = item.get("id") or item.get("call_id")
+    if isinstance(stable_id, str) and stable_id:
+        for existing_index, existing_item in state.output_items_by_index.items():
+            existing_id = existing_item.get("id") or existing_item.get("call_id")
+            if existing_id == stable_id:
+                state.output_items_by_index[existing_index] = dict(item)
+                return
+    next_index = max(state.output_items_by_index, default=-1) + 1
+    state.output_items_by_index[next_index] = dict(item)
+
+
+def _ordered_stream_output_items(state: ResponsesStreamState) -> list[Mapping[str, Any]]:
+    return [state.output_items_by_index[index] for index in sorted(state.output_items_by_index)]
 
 
 def _record_reasoning_meta(meta: Mapping[str, Any], state: ResponsesStreamState) -> None:

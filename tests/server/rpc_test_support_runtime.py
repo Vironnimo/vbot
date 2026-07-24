@@ -877,6 +877,25 @@ class StubRuntime:
             def is_usable(self, provider_id: str, connection_id: str | None = None) -> bool:
                 return self.has_credentials(provider_id, connection_id)
 
+            def resolve_account_id(
+                self,
+                provider_id: str,
+                local_connection_id: str,
+                account_id: str | None = None,
+            ) -> str:
+                accounts = self.list_accounts(provider_id, local_connection_id)
+                if account_id is not None:
+                    if any(account.id == account_id and account.usable for account in accounts):
+                        return account_id
+                    raise ConfigError(f"Provider account not usable: {account_id}")
+                for account in accounts:
+                    if account.usable:
+                        return account.id
+                # This lightweight runtime can inject a fake adapter without a
+                # backing environment credential; keep that legacy test seam on
+                # the implicit default account.
+                return DEFAULT_ACCOUNT_ID
+
             def get_credentials(self, provider_id: str, connection_id: str | None = None) -> str:
                 provider = cast(Any, runtime.providers.get(provider_id))
                 if connection_id is None:

@@ -277,7 +277,10 @@ def test_agent_update_rpc_accepts_workspace_mutation(tmp_path: Path) -> None:
 
 
 def test_history_strips_opaque_provider_metadata(tmp_path: Path) -> None:
-    runtime = StubRuntime(Config(data_dir=tmp_path / "data"))
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / ".env").write_text("OPENAI_API_KEY=test-key\n", encoding="utf-8")
+    runtime = StubRuntime(Config(data_dir=data_dir))
     app = create_app(runtime=runtime)
 
     with TestClient(app) as client:
@@ -320,7 +323,10 @@ def test_history_strips_opaque_provider_metadata(tmp_path: Path) -> None:
 
 def test_stream_cancel_path_remains_compatible(tmp_path: Path) -> None:
     adapter = StubAdapter(block=True)
-    runtime = StubRuntime(Config(data_dir=tmp_path / "data"), adapter=adapter)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / ".env").write_text("OPENAI_API_KEY=test-key\n", encoding="utf-8")
+    runtime = StubRuntime(Config(data_dir=data_dir), adapter=adapter)
     app = create_app(runtime=cast(Any, runtime))
 
     with TestClient(app) as client:

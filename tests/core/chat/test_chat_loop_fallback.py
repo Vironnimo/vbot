@@ -365,7 +365,16 @@ async def test_fallback_request_strips_primary_provider_reasoning_meta(tmp_path:
             ProviderRateLimitError("primary rate limited"),
         ]
     )
-    fallback_adapter = StubAdapter([{"content": "Done", "tool_calls": None}])
+    fallback_adapter = StubAdapter(
+        [
+            {
+                "content": "Done",
+                "reasoning": "Fallback reasoning",
+                "reasoning_meta": {"content_blocks": [{"type": "thinking", "signature": "fb"}]},
+                "tool_calls": None,
+            }
+        ]
+    )
     tools = ToolRegistry()
     tools.register(
         "echo",
@@ -388,6 +397,7 @@ async def test_fallback_request_strips_primary_provider_reasoning_meta(tmp_path:
     assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
     assert assistant.content == "Done"
+    assert assistant.reasoning_scope == "anthropic/claude-sonnet-4::api-key"
     # The primary's own tool-continuation request still round-trips its meta.
     primary_followup_assistants = [
         message

@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
 
 from core.models.models import (
+    REASONING_CONTROL_LEVELS,
     REASONING_CONTROL_ON_OFF,
     Capabilities,
     Model,
@@ -57,7 +58,11 @@ from core.providers.errors import NetworkError, ProviderError
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import (
     REASONING_INTENT_DEFAULT,
+    REASONING_INTENT_EFFORT,
     REASONING_INTENT_OFF,
+    REASONING_REPLAY_CURRENT_RUN,
+    REASONING_REPLAY_FULL_HISTORY,
+    ReasoningReplayPolicy,
     model_reasoning_budget_max,
     model_reasoning_control,
     model_reasoning_levels,
@@ -78,6 +83,7 @@ SHOW_ENDPOINT = "/api/show"
 OLLAMA_METADATA_KEY = "ollama"
 LOCAL_METADATA_FIELD = "local"
 REMOTE_METADATA_FIELD = "remote"
+REASONING_REPLAY_METADATA_FIELD = "reasoning_replay"
 
 # ``/api/show`` capability strings.
 _CAPABILITY_TOOLS = "tools"
@@ -89,6 +95,8 @@ _CAPABILITY_EMBEDDING = "embedding"
 # Effort ladder used only for snapping when a model has no feed ladder; the
 # ``on_off`` render is binary, so the snapped level never reaches the wire.
 OLLAMA_EFFORT_FLOOR = ("low", "medium", "high")
+OLLAMA_GPT_OSS_EFFORTS = ("low", "medium", "high")
+OLLAMA_FULL_HISTORY_MODEL_PREFIXES = ("glm-4.7",)
 
 # Per-model ``/api/show`` enrichment calls run concurrently but bounded, so a
 # host with many installed models is not hit with dozens of simultaneous
@@ -340,6 +348,21 @@ class OllamaAdapter(ProviderAdapter):
             payload["options"] = options
         return payload
 
+    def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
+        """Resolve native Thinking replay from the discovered Model profile."""
+
+        if self._model_lookup is not None:
+            model = self._model_lookup(model_id.split("::", 1)[0])
+            if model is not None:
+                metadata = model.metadata.get(OLLAMA_METADATA_KEY)
+                if (
+                    isinstance(metadata, Mapping)
+                    and metadata.get(REASONING_REPLAY_METADATA_FIELD)
+                    == REASONING_REPLAY_FULL_HISTORY
+                ):
+                    return REASONING_REPLAY_FULL_HISTORY
+        return REASONING_REPLAY_CURRENT_RUN
+
     def _resolve_enforced_context(self, model_id: str) -> int | None:
         """Return the enforced ``num_ctx`` for flagged-local models, else ``None``."""
 
@@ -353,13 +376,13 @@ class OllamaAdapter(ProviderAdapter):
         request_kwargs: dict[str, Any],
         model_id: str,
     ) -> None:
-        """Render the shared reasoning intent onto Ollama's binary ``think`` toggle.
+        """Render the shared reasoning intent onto the Model's Ollama ``think`` control.
 
         The toggle is only sent when the catalog positively marks the model as
         thinking-capable — Ollama rejects ``think`` on models that cannot
-        reason, so unknown support means the field stays absent (provider
-        default). ``off`` → ``think: false``; ``effort``/``budget``/``on`` →
-        ``think: true`` (v1 policy: binary, no level strings).
+        reason, so unknown support means the field stays absent. Most Models use
+        a boolean; GPT-OSS is profiled with its documented level-only ladder and
+        receives ``low``/``medium``/``high`` strings instead.
         """
 
         thinking_effort = request_kwargs.pop("thinking_effort", "")
@@ -375,6 +398,13 @@ class OllamaAdapter(ProviderAdapter):
             max_tokens=None,
         )
         if intent.kind == REASONING_INTENT_DEFAULT:
+            return
+        if model_reasoning_control(self._model_lookup, model_id) == REASONING_CONTROL_LEVELS:
+            if intent.kind == REASONING_INTENT_EFFORT and intent.effort_level is not None:
+                payload["think"] = intent.effort_level
+            # GPT-OSS cannot disable thinking and ignores booleans. Omitting the
+            # field is the only truthful representation of an unsupported off
+            # request; the provider keeps its default.
             return
         payload["think"] = intent.kind != REASONING_INTENT_OFF
 
@@ -724,11 +754,7 @@ def _enrich_from_show(model: Model, show_response: Mapping[str, Any]) -> Model:
     vision = _CAPABILITY_VISION in capability_names
     thinking = _CAPABILITY_THINKING in capability_names
 
-    reasoning = (
-        ReasoningCapabilities(supported=True, control=REASONING_CONTROL_ON_OFF)
-        if thinking
-        else ReasoningCapabilities(supported=False)
-    )
+    reasoning = _ollama_reasoning_capabilities(model.model_id, thinking)
     input_modalities = ("text", "image") if vision else ("text",)
 
     return Model(
@@ -745,9 +771,39 @@ def _enrich_from_show(model: Model, show_response: Mapping[str, Any]) -> Model:
         context_window=_context_window_from_show(show_response),
         max_output_tokens=model.max_output_tokens,
         family=model.family,
-        metadata=model.metadata,
+        metadata=_ollama_enriched_metadata(model),
         connections=model.connections,
     )
+
+
+def _ollama_reasoning_capabilities(
+    model_id: str,
+    thinking: bool,
+) -> ReasoningCapabilities:
+    if not thinking:
+        return ReasoningCapabilities(supported=False)
+    bare_id = model_id.split(":", 1)[0].lower()
+    if bare_id == "gpt-oss":
+        return ReasoningCapabilities(
+            supported=True,
+            control=REASONING_CONTROL_LEVELS,
+            levels=OLLAMA_GPT_OSS_EFFORTS,
+        )
+    return ReasoningCapabilities(supported=True, control=REASONING_CONTROL_ON_OFF)
+
+
+def _ollama_enriched_metadata(model: Model) -> dict[str, Any]:
+    metadata = {
+        key: dict(value) if isinstance(value, Mapping) else value
+        for key, value in model.metadata.items()
+    }
+    ollama_metadata = metadata.get(OLLAMA_METADATA_KEY)
+    provider_metadata = dict(ollama_metadata) if isinstance(ollama_metadata, Mapping) else {}
+    bare_id = model.model_id.split(":", 1)[0].lower()
+    if bare_id.startswith(OLLAMA_FULL_HISTORY_MODEL_PREFIXES):
+        provider_metadata[REASONING_REPLAY_METADATA_FIELD] = REASONING_REPLAY_FULL_HISTORY
+    metadata[OLLAMA_METADATA_KEY] = provider_metadata
+    return metadata
 
 
 def _context_window_from_show(show_response: Mapping[str, Any]) -> int | None:

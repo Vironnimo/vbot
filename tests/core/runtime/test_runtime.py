@@ -1426,6 +1426,14 @@ class _StubCredentials:
     def is_usable(self, _provider_id: str, _connection_id: str | None = None) -> bool:
         return True
 
+    def resolve_account_id(
+        self,
+        _provider_id: str,
+        _local_connection_id: str,
+        account_id: str | None = None,
+    ) -> str:
+        return account_id or "default"
+
 
 class _StubPrompts:
     def build_system_prompt(

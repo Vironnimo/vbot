@@ -187,6 +187,35 @@ async def test_chat_loop_model_without_suffix_prefers_first_usable_in_provider_o
     assert runtime.adapter_connection_id == "openai:subscription"
 
 
+@pytest.mark.asyncio
+async def test_reasoning_scope_includes_resolved_named_account(tmp_path: Path) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.6-sol",
+        allowed_tools=["*"],
+    )
+    adapter = StubAdapter(
+        [
+            {
+                "content": "Hello",
+                "reasoning": "Private state",
+                "reasoning_meta": {"encrypted_content": "opaque"},
+                "tool_calls": None,
+            }
+        ]
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.provider_credentials = StubProviderCredentials({"openai:api-key:work"})
+
+    assistant = await build_chat_loop(runtime).send(
+        "coder",
+        "Hi",
+        session_id="session-one",
+    )
+
+    assert assistant.reasoning_scope == "openai/gpt-5.6-sol::api-key:work"
+
+
 class TestParseModelWithConnection:
     def test_no_suffix(self) -> None:
         from core.chat.chat import parse_model_with_connection

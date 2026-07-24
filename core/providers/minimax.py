@@ -14,6 +14,7 @@ from core.providers.openai_compatible import (
 from core.providers.reasoning import (
     REASONING_INTENT_DEFAULT,
     REASONING_INTENT_OFF,
+    REASONING_REPLAY_CURRENT_RUN,
     REASONING_REPLAY_FULL_HISTORY,
     ReasoningIntent,
     ReasoningReplayPolicy,
@@ -209,8 +210,9 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
         environment); the implemented behavior is pinned by unit tests and the
         deferred live verification is recorded in ``.vorch/FLAGGED.md``.
         """
-        del model_id
-        return REASONING_REPLAY_FULL_HISTORY
+        if model_id.split("::", 1)[0] in MINIMAX_MODEL_FACTS:
+            return REASONING_REPLAY_FULL_HISTORY
+        return REASONING_REPLAY_CURRENT_RUN
 
     def normalize_response(
         self, response: dict[str, Any], *, model_id: str | None = None

@@ -12,6 +12,7 @@ import respx
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.models.query import ModelQuery
 from core.providers.openrouter import (
+    OPENROUTER_RESPONSES_ENDPOINT,
     SUPPLEMENTARY_OUTPUT_MODALITIES,
     OpenRouterAdapter,
     _is_claude_family,
@@ -22,6 +23,7 @@ from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfi
 
 API_KEY = "test-openrouter-key"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_RESPONSES_URL = f"https://openrouter.ai/api/v1{OPENROUTER_RESPONSES_ENDPOINT}"
 SUCCESS_RESPONSE = {
     "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}]
 }
@@ -55,6 +57,156 @@ def openrouter_config() -> ProviderConfig:
 @pytest.fixture()
 def openrouter_adapter(openrouter_config: ProviderConfig) -> OpenRouterAdapter:
     return OpenRouterAdapter(openrouter_config, API_KEY)
+
+
+def _gpt_5_6_model(model_id: str) -> Model:
+    return Model(
+        model_id=model_id,
+        name=model_id,
+        capabilities=Capabilities(
+            vision=True,
+            tools=True,
+            json_mode=True,
+            reasoning=ReasoningCapabilities(
+                supported=True,
+                control="levels",
+                levels=("low", "medium", "high", "xhigh"),
+            ),
+            supported_parameters=(
+                "tools",
+                "parallel_tool_calls",
+                "response_format",
+                "reasoning",
+            ),
+        ),
+        context_window=400000,
+        max_output_tokens=128000,
+    )
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_gpt_5_6_uses_responses_and_replays_exact_output(
+    openrouter_config: ProviderConfig,
+) -> None:
+    route = respx.post(OPENROUTER_RESPONSES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "resp_new",
+                "output": [
+                    {"type": "reasoning", "id": "rs_new", "encrypted_content": "cipher-new"},
+                    {
+                        "type": "message",
+                        "id": "msg_new",
+                        "role": "assistant",
+                        "phase": "final_answer",
+                        "content": [{"type": "output_text", "text": "Done"}],
+                    },
+                ],
+                "usage": {"input_tokens": 9, "output_tokens": 4},
+            },
+        )
+    )
+    adapter = OpenRouterAdapter(
+        openrouter_config,
+        API_KEY,
+        model_lookup=lambda model_id: _gpt_5_6_model(model_id),
+    )
+    prior_output = [
+        {"type": "reasoning", "id": "rs_old", "encrypted_content": "cipher-old"},
+        {
+            "type": "message",
+            "id": "msg_old",
+            "role": "assistant",
+            "phase": "commentary",
+            "content": [{"type": "output_text", "text": "Earlier"}],
+        },
+    ]
+
+    response = await adapter.send(
+        [
+            {"role": "user", "content": "First"},
+            {
+                "role": "assistant",
+                "content": "Earlier",
+                "phase": "commentary",
+                "reasoning_meta": {"response_output": prior_output},
+            },
+            {"role": "user", "content": "Continue"},
+        ],
+        model_id="openai/gpt-5.6-sol",
+        thinking_effort="high",
+        session_id="vbot-session",
+    )
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body["input"][1:3] == prior_output
+    assert request_body["reasoning"] == {"effort": "high", "summary": "auto"}
+    assert request_body["include"] == ["reasoning.encrypted_content"]
+    assert request_body["store"] is False
+    assert request_body["session_id"] == "vbot-session"
+    assert "temperature" not in request_body
+    assert adapter.reasoning_replay_policy("openai/gpt-5.6-sol") == "full_history"
+
+    normalized = adapter.normalize_response(response)
+    assert normalized["content"] == "Done"
+    assert normalized["phase"] == "final_answer"
+    assert normalized["reasoning_meta"]["response_output"] == response["output"]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_gpt_5_6_responses_stream_uses_same_replay_policy(
+    openrouter_config: ProviderConfig,
+) -> None:
+    completed = {
+        "id": "resp_stream",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_stream",
+                "role": "assistant",
+                "phase": "final_answer",
+                "content": [{"type": "output_text", "text": "Hi"}],
+            }
+        ],
+        "usage": {"input_tokens": 2, "output_tokens": 1},
+    }
+    route = respx.post(OPENROUTER_RESPONSES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            text=(
+                'event: response.output_text.delta\ndata: {"delta":"Hi"}\n\n'
+                f"event: response.completed\ndata: {json.dumps({'response': completed})}\n\n"
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    adapter = OpenRouterAdapter(
+        openrouter_config,
+        API_KEY,
+        model_lookup=lambda model_id: _gpt_5_6_model(model_id),
+    )
+
+    deltas = [
+        delta
+        async for delta in adapter.stream(
+            SAMPLE_MESSAGES,
+            model_id="openai/gpt-5.6-terra",
+            thinking_effort="medium",
+        )
+    ]
+
+    request_body = json.loads(route.calls.last.request.content)
+    assert request_body["stream"] is True
+    assert request_body["reasoning"] == {"effort": "medium", "summary": "auto"}
+    assert [delta["type"] for delta in deltas] == [
+        "content_delta",
+        "reasoning_meta",
+        "usage",
+        "finish",
+    ]
 
 
 def raw_openrouter_model(
@@ -529,18 +681,44 @@ async def test_openrouter_routing_options_normalize_global_and_model_catalogs(
     ]
 
 
-def test_reasoning_replay_policy_stays_current_run(
-    openrouter_adapter: OpenRouterAdapter,
+def test_reasoning_replay_policy_is_model_specific(
+    openrouter_config: ProviderConfig,
 ) -> None:
-    """current_run is the genuinely correct target, not a placeholder.
+    models = {
+        "google/gemini-2.5-pro": Model(
+            model_id="google/gemini-2.5-pro",
+            name="Gemini",
+            capabilities=Capabilities(
+                vision=True,
+                tools=True,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(supported=True),
+            ),
+            context_window=1_000_000,
+            max_output_tokens=64_000,
+        ),
+        "openai/gpt-4o": Model(
+            model_id="openai/gpt-4o",
+            name="GPT-4o",
+            capabilities=Capabilities(
+                vision=True,
+                tools=True,
+                json_mode=True,
+                reasoning=ReasoningCapabilities(supported=False),
+            ),
+            context_window=128_000,
+            max_output_tokens=16_384,
+        ),
+    }
+    adapter = OpenRouterAdapter(
+        openrouter_config,
+        API_KEY,
+        model_lookup=models.get,
+    )
 
-    OpenRouter's docs frame reasoning preservation as in-run ("useful for tool
-    calling"); cross-run replay is undocumented. The in-run hard requirements
-    (e.g. Gemini thought signatures) are satisfied because current_run keeps
-    reasoning_meta within the run — pinned by the round-trip test below.
-    """
-    assert openrouter_adapter.reasoning_replay_policy("anthropic/claude-sonnet-4") == "current_run"
-    assert openrouter_adapter.reasoning_replay_policy("google/gemini-2.5-pro") == "current_run"
+    assert adapter.reasoning_replay_policy("google/gemini-2.5-pro") == "full_history"
+    assert adapter.reasoning_replay_policy("openai/gpt-4o") == "current_run"
+    assert adapter.reasoning_replay_policy("unknown/new-model") == "current_run"
 
 
 @respx.mock

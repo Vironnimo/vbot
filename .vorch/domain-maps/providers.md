@@ -41,7 +41,7 @@ Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB
 - `ProviderRegistry` owns immutable Provider/Connection configuration parsed from disk. `ProviderCredentialResolver` owns credentials, Accounts, enabled overrides, and usability. Runtime owns wiring them into live Adapters.
 - Connection identity determines wire/auth/catalog behavior; Account identity determines only which credential is used. Discovery and task-target expansion stay Connection-scoped and never multiply catalogs per Account.
 - `ProviderAdapter.send()`, `stream()`, and `normalize_response()` are the Chat-facing translation boundary. Streaming yields normalized deltas; raw SSE event names, response chunks, opaque auth state, and Provider payloads never escape the Adapter layer.
-- Provider-specific wire selectors are Provider-scoped Model metadata; mechanics stay in the Adapter. Do not add generic Model fields for one Provider's protocol quirk or route Provider Models in Runtime/Chat.
+- Provider-specific wire selectors and replay profiles are scoped to the resolved Connection/Wire plus Model; mechanics stay in the Adapter. A Provider-wide default may be a conservative fallback, never evidence that every Model shares the same reasoning contract. Do not add generic Model fields for one Provider's protocol quirk or route Provider Models in Runtime/Chat.
 - Model facts remain honest. Unknown context/output limits remain absent in catalogs; read-side helpers resolve safe effective values without writing fake facts back to generated files.
 - All secrets and tokens remain behind credential resolvers or token getters. Never log API keys, access/refresh tokens, authorization/user codes, Provider Account ids, or raw auth headers.
 

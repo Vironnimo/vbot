@@ -16,6 +16,7 @@ import pytest
 import respx
 
 from core.models.models import (
+    REASONING_CONTROL_LEVELS,
     REASONING_CONTROL_ON_OFF,
     Capabilities,
     Model,
@@ -134,7 +135,28 @@ PLAIN_MODEL = Model(
     max_output_tokens=None,
 )
 
-_MODELS = {"thinking-model": THINKING_MODEL, "plain-model": PLAIN_MODEL}
+GPT_OSS_MODEL = Model(
+    model_id="gpt-oss:20b",
+    name="GPT-OSS 20B",
+    capabilities=Capabilities(
+        vision=False,
+        tools=True,
+        json_mode=False,
+        reasoning=ReasoningCapabilities(
+            supported=True,
+            control=REASONING_CONTROL_LEVELS,
+            levels=("low", "medium", "high"),
+        ),
+    ),
+    context_window=131_072,
+    max_output_tokens=None,
+)
+
+_MODELS = {
+    "thinking-model": THINKING_MODEL,
+    "plain-model": PLAIN_MODEL,
+    "gpt-oss:20b": GPT_OSS_MODEL,
+}
 
 
 def _model_lookup(model_id: str) -> Model | None:
@@ -403,6 +425,42 @@ class TestReasoningToggle:
         await adapter.send(SAMPLE_MESSAGES, model_id="unknown-model", thinking_effort="high")
 
         # Assert
+        assert "think" not in _last_request_payload(route)
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_gpt_oss_receives_level_string_instead_of_ignored_boolean(
+        self,
+        adapter: OllamaAdapter,
+    ) -> None:
+        route = respx.post(OLLAMA_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=TEXT_RESPONSE)
+        )
+
+        await adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="gpt-oss:20b",
+            thinking_effort="xhigh",
+        )
+
+        assert _last_request_payload(route)["think"] == "high"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_gpt_oss_unsupported_off_omits_think_instead_of_sending_boolean(
+        self,
+        adapter: OllamaAdapter,
+    ) -> None:
+        route = respx.post(OLLAMA_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=TEXT_RESPONSE)
+        )
+
+        await adapter.send(
+            SAMPLE_MESSAGES,
+            model_id="gpt-oss:20b",
+            thinking_effort="none",
+        )
+
         assert "think" not in _last_request_payload(route)
 
 
@@ -850,6 +908,43 @@ class TestEnrichment:
         reasoning = enriched["kimi-k2.6:cloud"].capabilities.reasoning
         assert reasoning.supported is True
         assert reasoning.control == REASONING_CONTROL_ON_OFF
+
+    @pytest.mark.asyncio
+    async def test_gpt_oss_thinking_capability_maps_to_level_control(self) -> None:
+        base = OllamaAdapter.normalize_catalog_entry({"model": "gpt-oss:20b"})
+        show = {"capabilities": ["completion", "tools", "thinking"], "model_info": {}}
+
+        async def post_json(endpoint: str, payload: dict[str, Any]) -> Any:
+            return show
+
+        enriched = await OllamaAdapter.enrich_discovered_models(
+            {"gpt-oss:20b": base},
+            post_json,
+        )
+
+        reasoning = enriched["gpt-oss:20b"].capabilities.reasoning
+        assert reasoning.control == REASONING_CONTROL_LEVELS
+        assert reasoning.levels == ("low", "medium", "high")
+
+    @pytest.mark.asyncio
+    async def test_glm_4_7_discovery_profiles_full_history_thinking_replay(self) -> None:
+        base = OllamaAdapter.normalize_catalog_entry({"model": "glm-4.7:latest"})
+        show = {"capabilities": ["completion", "thinking"], "model_info": {}}
+
+        async def post_json(endpoint: str, payload: dict[str, Any]) -> Any:
+            return show
+
+        enriched = await OllamaAdapter.enrich_discovered_models(
+            {"glm-4.7:latest": base},
+            post_json,
+        )
+        model = enriched["glm-4.7:latest"]
+        lookup = {"glm-4.7:latest": model}.get
+        adapter = OllamaAdapter(OLLAMA_CONFIG, "", model_lookup=lookup)
+
+        assert model.metadata["ollama"]["reasoning_replay"] == "full_history"
+        assert adapter.reasoning_replay_policy("glm-4.7:latest") == "full_history"
+        await adapter.aclose()
 
     @pytest.mark.asyncio
     async def test_failed_show_keeps_conservative_baseline(self) -> None:

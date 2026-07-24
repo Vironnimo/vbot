@@ -16,7 +16,9 @@ Local-first provider speaking Ollama's **native** `/api/chat` wire (not the Open
 
 ## Reasoning
 
-Binary `think: true|false` toggle; `/api/show` `capabilities` containing `"thinking"` marks support (projected to `reasoning: {supported: true, control: "on_off"}`). The shared intent resolver applies; render policy (v1): the toggle is sent **only when the catalog positively marks the model thinking-capable** (Ollama rejects `think` on models that cannot reason — unknown support means the field stays absent). `off` → `think: false`; `effort`/`budget`/`on` → `think: true` (no level strings yet).
+Ollama thinking controls and replay are Model/template-specific. `/api/show` `capabilities` containing `"thinking"` marks support; unknown support leaves `think` absent because Ollama rejects it on non-reasoning Models. GPT-OSS Models accept only the level strings `low`, `medium`, or `high`: active intent snaps to one of those strings and off omits `think` because boolean `false` is unsupported. Other thinking-capable Models use the binary `think: true|false` shape.
+
+Discovery stamps a conservative replay profile into `metadata.ollama.reasoning_replay`: GLM-4.7 template families use `full_history` because their template retains historical thinking, while all other and unknown templates use `current_run`. This describes what vBot returns; which historical thinking the local Model renders is still controlled by that installed Model's Ollama template.
 
 ## Catalog discovery
 

@@ -147,6 +147,7 @@ from core.projects import (
     runtime_agent_body,
 )
 from core.prompts import PinnedSkillCatalog, ProjectPromptContext
+from core.providers.accounts import DEFAULT_ACCOUNT_ID, split_connection_id
 from core.providers.errors import NetworkError
 from core.providers.providers import resolve_effective_context_window
 from core.providers.reasoning import REASONING_REPLAY_CURRENT_RUN, ReasoningReplayPolicy
@@ -260,6 +261,7 @@ class _ModelTarget:
     provider_id: str
     connection_id: str
     model_id: str
+    model_reference: str
     adapter: ProviderAdapter
     replay_policy: ReasoningReplayPolicy
     input_modalities: frozenset[str]
@@ -403,6 +405,27 @@ def _connection_local_id(provider_id: str, connection_id: str) -> str | None:
         return None
     remainder = connection_id[len(prefix) :]
     return remainder.split(":", 1)[0] or None
+
+
+def _resolved_model_reference(
+    dependencies: ChatLoopDependencies,
+    provider_id: str,
+    connection_id: str,
+    model_id: str,
+) -> str:
+    """Return the exact Provider/Model/Connection/Account scope for one request."""
+
+    local_connection_id, explicit_account_id = split_connection_id(provider_id, connection_id)
+    resolved_account_id = dependencies.provider_credentials.resolve_account_id(
+        provider_id,
+        local_connection_id,
+        explicit_account_id,
+    )
+    connection_suffix = local_connection_id
+    if resolved_account_id != DEFAULT_ACCOUNT_ID:
+        connection_suffix = f"{connection_suffix}:{resolved_account_id}"
+    bare_reference = f"{provider_id}/{model_id}"
+    return f"{bare_reference}::{connection_suffix}"
 
 
 def _usage_token_count(usage: Any, key: str) -> int:
@@ -757,6 +780,12 @@ class ChatLoop:
                 agent,
                 session,
                 replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
+                reasoning_scope_model=_resolved_model_reference(
+                    self._dependencies,
+                    provider_id,
+                    connection_id,
+                    model_id,
+                ),
                 input_modalities=_model_input_modalities_for_target(
                     self._dependencies,
                     provider_id,
@@ -1002,6 +1031,12 @@ class ChatLoop:
             provider_id=provider_id,
             connection_id=connection_id,
             model_id=model_id,
+            model_reference=_resolved_model_reference(
+                self._dependencies,
+                provider_id,
+                connection_id,
+                model_id,
+            ),
             adapter=adapter,
             replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
             input_modalities=_model_input_modalities_for_target(
@@ -1115,6 +1150,7 @@ class ChatLoop:
                 agent,
                 session,
                 replay_policy=target.replay_policy,
+                reasoning_scope_model=target.model_reference,
                 input_modalities=target.input_modalities,
                 wire_media_types=target.wire_media_types,
                 agent_body=runtime_agent_body(agent),
@@ -1178,6 +1214,7 @@ class ChatLoop:
                             agent,
                             session,
                             replay_policy=fallback_target.replay_policy,
+                            reasoning_scope_model=fallback_target.model_reference,
                             input_modalities=fallback_target.input_modalities,
                             wire_media_types=fallback_target.wire_media_types,
                             agent_body=runtime_agent_body(agent),
@@ -1503,6 +1540,7 @@ class ChatLoop:
         session: ChatSession,
         *,
         replay_policy: ReasoningReplayPolicy = REASONING_REPLAY_CURRENT_RUN,
+        reasoning_scope_model: str | None = None,
         input_modalities: frozenset[str] | None = None,
         wire_media_types: frozenset[str] = frozenset(),
         agent_body: str = "",
@@ -1516,6 +1554,7 @@ class ChatLoop:
             agent,
             session,
             replay_policy=replay_policy,
+            reasoning_scope_model=reasoning_scope_model,
             input_modalities=input_modalities,
             wire_media_types=wire_media_types,
             agent_body=agent_body,
@@ -1533,6 +1572,7 @@ class ChatLoop:
         session: ChatSession,
         *,
         replay_policy: ReasoningReplayPolicy = REASONING_REPLAY_CURRENT_RUN,
+        reasoning_scope_model: str | None = None,
         input_modalities: frozenset[str] | None = None,
         wire_media_types: frozenset[str] = frozenset(),
         agent_body: str = "",
@@ -1599,7 +1639,7 @@ class ChatLoop:
         history = _embed_notes_into_request(
             effective_messages,
             replay_policy=replay_policy,
-            agent_model=agent.model,
+            agent_model=reasoning_scope_model or agent.model,
         )
         skill_context_messages: list[JsonObject] = []
         if checkpoint is not None:
@@ -1744,6 +1784,7 @@ class ChatLoop:
                 agent,
                 target.adapter,
                 target.model_id,
+                target.model_reference,
                 messages_for_request,
                 tools,
                 run,
@@ -2078,6 +2119,7 @@ class ChatLoop:
             agent,
             session,
             replay_policy=target.replay_policy,
+            reasoning_scope_model=target.model_reference,
             input_modalities=target.input_modalities,
             wire_media_types=target.wire_media_types,
             agent_body=runtime_agent_body(agent),
@@ -2241,6 +2283,7 @@ class ChatLoop:
         agent: Any,
         adapter: Any,
         model_id: str,
+        response_model: str,
         messages: list[JsonObject],
         tools: list[JsonObject],
         run: Run,
@@ -2253,6 +2296,7 @@ class ChatLoop:
                 agent,
                 adapter,
                 model_id,
+                response_model,
                 messages,
                 tools,
                 run,
@@ -2262,7 +2306,13 @@ class ChatLoop:
             )
 
         return await self._send_non_streaming_assistant_request(
-            agent, adapter, model_id, messages, tools, request_context=request_context
+            agent,
+            adapter,
+            model_id,
+            response_model,
+            messages,
+            tools,
+            request_context=request_context,
         )
 
     async def _send_non_streaming_assistant_request(
@@ -2270,6 +2320,7 @@ class ChatLoop:
         agent: Any,
         adapter: Any,
         model_id: str,
+        response_model: str,
         messages: list[JsonObject],
         tools: list[JsonObject],
         *,
@@ -2284,13 +2335,18 @@ class ChatLoop:
             **request_context,
         )
         normalized = adapter.normalize_response(response, model_id=model_id)
-        return _assistant_message_from_response(agent.model, normalized)
+        return _assistant_message_from_response(
+            agent.model,
+            normalized,
+            reasoning_scope=response_model,
+        )
 
     async def _send_streaming_assistant_request(
         self,
         agent: Any,
         adapter: Any,
         model_id: str,
+        response_model: str,
         messages: list[JsonObject],
         tools: list[JsonObject],
         run: Run,
@@ -2308,6 +2364,7 @@ class ChatLoop:
                     agent,
                     adapter,
                     model_id,
+                    response_model,
                     messages,
                     tools,
                     run,
@@ -2334,6 +2391,7 @@ class ChatLoop:
         agent: Any,
         adapter: Any,
         model_id: str,
+        response_model: str,
         messages: list[JsonObject],
         tools: list[JsonObject],
         run: Run,
@@ -2396,6 +2454,7 @@ class ChatLoop:
                     agent,
                     adapter,
                     model_id,
+                    response_model,
                     messages,
                     tools,
                     request_context=request_context or {},
@@ -2407,7 +2466,12 @@ class ChatLoop:
             elif action is StreamRecoveryAction.PRESERVE_PARTIAL:
                 if continuation_tracker is not None:
                     continuation_tracker.mark_interruption_cause(normalize_interruption_cause(exc))
-                return self._finalize_interrupted_partial(agent, accumulator, run)
+                return self._finalize_interrupted_partial(
+                    agent,
+                    response_model,
+                    accumulator,
+                    run,
+                )
             else:
                 raise
         except asyncio.CancelledError:
@@ -2421,12 +2485,18 @@ class ChatLoop:
             if run.cancel_requested and (
                 accumulator.partial_content is not None or accumulator.partial_reasoning is not None
             ):
-                return self._finalize_interrupted_partial(agent, accumulator, run)
+                return self._finalize_interrupted_partial(
+                    agent,
+                    response_model,
+                    accumulator,
+                    run,
+                )
             raise
 
         assistant_message = _assistant_message_from_response(
             agent.model,
             assistant_fields.to_response_dict(),
+            reasoning_scope=response_model,
         )
         _emit_streaming_assistant_events(run, assistant_message)
         return assistant_message
@@ -2434,6 +2504,7 @@ class ChatLoop:
     def _finalize_interrupted_partial(
         self,
         agent: Any,
+        response_model: str,
         accumulator: StreamingAccumulator,
         run: Run,
     ) -> ChatMessage:
@@ -2454,6 +2525,7 @@ class ChatLoop:
         assistant_message = _assistant_message_from_response(
             agent.model,
             accumulator.finalize_partial_fields().to_response_dict(),
+            reasoning_scope=response_model,
             interrupted=True,
         )
         _emit_streaming_assistant_events(run, assistant_message, allow_after_cancel=True)

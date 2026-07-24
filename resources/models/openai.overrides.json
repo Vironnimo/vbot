@@ -1,6 +1,96 @@
 {
   "provider_id": "openai",
   "models": {
+    "gpt-5.6": {
+      "canonical": "openai/gpt-5.6-sol",
+      "connections": ["api-key", "subscription"],
+      "metadata": {
+        "openai": {
+          "wire_policies": {
+            "api-key": {
+              "protocol": "responses",
+              "reasoning_replay": "full_history",
+              "reasoning_context": "all_turns"
+            },
+            "subscription": {
+              "protocol": "responses",
+              "reasoning_replay": "full_history"
+            }
+          }
+        }
+      }
+    },
+    "gpt-5.5": {
+      "connections": ["api-key", "subscription"],
+      "metadata": {
+        "openai": {
+          "wire_policies": {
+            "api-key": {
+              "protocol": "responses",
+              "reasoning_replay": "current_run"
+            },
+            "subscription": {
+              "protocol": "responses",
+              "reasoning_replay": "current_run"
+            }
+          }
+        }
+      }
+    },
+    "gpt-5.6-luna": {
+      "connections": ["api-key", "subscription"],
+      "metadata": {
+        "openai": {
+          "wire_policies": {
+            "api-key": {
+              "protocol": "responses",
+              "reasoning_replay": "full_history",
+              "reasoning_context": "all_turns"
+            },
+            "subscription": {
+              "protocol": "responses",
+              "reasoning_replay": "full_history"
+            }
+          }
+        }
+      }
+    },
+    "gpt-5.6-sol": {
+      "connections": ["api-key", "subscription"],
+      "metadata": {
+        "openai": {
+          "wire_policies": {
+            "api-key": {
+              "protocol": "responses",
+              "reasoning_replay": "full_history",
+              "reasoning_context": "all_turns"
+            },
+            "subscription": {
+              "protocol": "responses",
+              "reasoning_replay": "full_history"
+            }
+          }
+        }
+      }
+    },
+    "gpt-5.6-terra": {
+      "connections": ["api-key", "subscription"],
+      "metadata": {
+        "openai": {
+          "wire_policies": {
+            "api-key": {
+              "protocol": "responses",
+              "reasoning_replay": "full_history",
+              "reasoning_context": "all_turns"
+            },
+            "subscription": {
+              "protocol": "responses",
+              "reasoning_replay": "full_history"
+            }
+          }
+        }
+      }
+    },
     "tts-1": {
       "name": "TTS-1",
       "connections": ["api-key"],

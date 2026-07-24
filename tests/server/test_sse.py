@@ -111,6 +111,7 @@ def test_chat_stream_returns_sse_url_and_endpoint_replays_visible_timeline(tmp_p
     assert assistant_delta_data["payload"]["content_delta"] == "Done"
     assert assistant_data["payload"]["message"]["content"] == "Done"
     assert "reasoning_meta" not in response.text
+    assert "reasoning_scope" not in response.text
 
 
 def test_sse_endpoint_returns_not_found_for_unknown_run(tmp_path: Path) -> None:

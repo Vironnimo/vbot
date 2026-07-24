@@ -653,6 +653,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         response = await retry_async(_connect_stream)
 
         tool_call_ids_by_index: dict[int, str] = {}
+        normalization_state: dict[str, Any] = {}
         seen_done_marker = False
 
         try:
@@ -672,6 +673,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 for normalized_delta in self._normalize_stream_chunk(
                     raw_chunk,
                     tool_call_ids_by_index,
+                    normalization_state,
                 ):
                     yield normalized_delta
             if not seen_done_marker:
@@ -687,7 +689,9 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         self,
         raw_chunk: dict[str, Any],
         tool_call_ids_by_index: dict[int, str],
+        normalization_state: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
+        del normalization_state
         return _normalize_openai_stream_chunk(raw_chunk, tool_call_ids_by_index)
 
 

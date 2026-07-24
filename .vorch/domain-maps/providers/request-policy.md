@@ -20,9 +20,13 @@ Adapters must not reimplement this decision policy. Provider-specific maps docum
 
 ### Chain of Thought
 
-CoT is opaque reasoning output: readable text plus signatures/encrypted/provider metadata required for round-trip continuity. `reasoning_replay_policy(model_id)` declares `none`, `current_run`, or `full_history`; Chat queries it and owns history shaping, including same-Model rules. Adapters serialize whatever reasoning survives shaping and must not apply a second history-wide strip.
+CoT is opaque reasoning output: readable text plus signatures/encrypted/provider metadata required for round-trip continuity. Replay is not a Provider-global capability. The effective policy is scoped to `(Provider Adapter instance, resolved Connection/Wire, Model)`: `reasoning_replay_policy(model_id)` declares `none`, `current_run`, or `full_history`, and an Adapter may combine injected Model facts, Connection mode, exact verified profiles, and conservative fallback. Unknown or unverified Models default to `current_run`; endpoint resemblance alone is not evidence that opaque state is portable.
 
-The ABC default is `current_run`. Within Tool loops, dropping Provider-required signatures or opaque blocks can break continuity even though vBot never reads them.
+Keep three facts separate. Replay scope says which canonical Assistant turns vBot may return; wire fidelity says whether it must return exact original blocks/items instead of reconstructing them; Provider render scope says which returned historical reasoning the remote Model actually makes available to the next sample. A `full_history` replay policy does not by itself prove all historical reasoning is rendered.
+
+Chat owns history shaping. `full_history` survives only when the persisted `reasoning_scope` exactly matches the resolved Provider/Model/Connection/Account identity; Model switches, Connection or Account switches, run-local fallback, and textual vBot Compaction are hard boundaries. `phase` is semantic assistant history, not opaque reasoning state, so it survives ordinary request shaping and Compaction. Adapters serialize whatever reasoning survives shaping and must not apply a second history-wide strip except for a documented wire incompatibility such as explicitly disabled thinking.
+
+Responses-shaped adapters persist and replay every original response output item in order; that preserves encrypted reasoning, message `phase`, function/program items, ids, and future item kinds without lossy reconstruction. The ABC default is `current_run`. Within Tool loops, dropping Provider-required signatures or opaque blocks can break continuity even though vBot never reads them.
 
 Reasoning rejection/ignored-effort warnings are diagnostic only. They may warn conservatively on a relevant HTTP 400 or zero reported reasoning tokens, but they do not reclassify status/retry behavior and never log token values.
 

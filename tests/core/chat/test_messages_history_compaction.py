@@ -49,6 +49,33 @@ class TestHistoryCompactionPrimitives:
         assert finalized_again.to_dict() == finalized.to_dict()
         assert checkpoint.projection != finalized.projection
 
+    def test_textual_checkpoint_ends_provider_reasoning_state_but_keeps_phase(self) -> None:
+        assistant = ChatMessage.assistant(
+            model="openai/gpt-5.6-sol",
+            content="Prior answer",
+            reasoning="Readable summary",
+            reasoning_meta={
+                "response_output": [
+                    {"type": "reasoning", "id": "rs_1", "encrypted_content": "opaque"}
+                ]
+            },
+            reasoning_scope="openai/gpt-5.6-sol::api-key",
+            phase="final_answer",
+        )
+
+        checkpoint = ChatMessage.compaction_checkpoint(
+            summary="Earlier context.",
+            projection=[assistant],
+            compacted_token_count=10,
+        )
+
+        assert checkpoint.projection is not None
+        projected_assistant = ChatMessage.from_dict(checkpoint.projection[1])
+        assert projected_assistant.reasoning is None
+        assert projected_assistant.reasoning_meta is None
+        assert projected_assistant.reasoning_scope is None
+        assert projected_assistant.phase == "final_answer"
+
     def test_post_compaction_context_overlays_complete_unconsumed_tool_batch(self) -> None:
         carrier = ChatMessage.assistant(
             model="openai/gpt",

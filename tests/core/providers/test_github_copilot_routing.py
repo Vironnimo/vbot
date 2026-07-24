@@ -102,7 +102,12 @@ async def test_send_routes_gpt_5_mini_to_responses_from_metadata(
         "role": "assistant",
         "content": "Hi",
         "reasoning": None,
-        "reasoning_meta": {"response_id": "resp-1"},
+        "reasoning_meta": {
+            "response_id": "resp-1",
+            "response_output": [
+                {"type": "message", "content": [{"type": "output_text", "text": "Hi"}]}
+            ],
+        },
         "tool_calls": None,
         "usage": {"input_tokens": 3, "output_tokens": 4},
     }
@@ -148,12 +153,14 @@ async def test_send_routes_claude_to_messages_from_metadata(
 @pytest.mark.parametrize(
     ("model_id", "expected_policy"),
     [
-        ("gpt-5.4", "full_history"),
-        ("claude-haiku-4.5", "full_history"),
+        ("gpt-5-mini", "full_history"),
+        ("claude-sonnet-4.6", "full_history"),
+        ("gpt-5.4", "current_run"),
+        ("claude-haiku-4.5", "current_run"),
         ("gemini-3.1-pro-preview", "current_run"),
     ],
 )
-def test_reasoning_replay_policy_follows_endpoint_family(
+def test_reasoning_replay_policy_is_scoped_to_verified_model(
     metadata_copilot_adapter: GitHubCopilotAdapter,
     model_id: str,
     expected_policy: str,

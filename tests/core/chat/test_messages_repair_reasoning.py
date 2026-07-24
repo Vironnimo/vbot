@@ -335,7 +335,7 @@ class TestReasoningReplayShaping:
         request = _embed_notes_into_request(
             messages,
             replay_policy=REASONING_REPLAY_FULL_HISTORY,
-            agent_model="anthropic/claude-sonnet-4",
+            agent_model="anthropic/claude-sonnet-4::api-key",
         )
 
         assert request[1]["reasoning"] == "Readable thinking."
@@ -343,6 +343,29 @@ class TestReasoningReplayShaping:
             "content_blocks": [{"type": "thinking", "signature": "signed"}]
         }
         assert "usage" not in request[1]
+
+    def test_full_history_strips_reasoning_on_connection_mismatch(self) -> None:
+        messages = [
+            ChatMessage.user("Question", timestamp=FIXED_TIMESTAMP),
+            ChatMessage.assistant(
+                model="openai/gpt-5.6-sol::api-key",
+                content="Answer",
+                reasoning="Readable thinking.",
+                reasoning_meta={"response_output": [{"type": "reasoning", "id": "rs_1"}]},
+                reasoning_scope="openai/gpt-5.6-sol::api-key:work",
+                timestamp=FIXED_TIMESTAMP,
+            ),
+        ]
+
+        request = _embed_notes_into_request(
+            messages,
+            replay_policy=REASONING_REPLAY_FULL_HISTORY,
+            agent_model="openai/gpt-5.6-sol::subscription",
+        )
+
+        assert "reasoning" not in request[1]
+        assert "reasoning_meta" not in request[1]
+        assert "reasoning_scope" not in request[1]
 
     def test_full_history_strips_reasoning_on_model_mismatch(self) -> None:
         messages = [
@@ -367,6 +390,25 @@ class TestReasoningReplayShaping:
 
         request = _embed_notes_into_request(messages, agent_model="anthropic/claude-sonnet-4")
 
+        assert "reasoning" not in request[1]
+        assert "reasoning_meta" not in request[1]
+
+    def test_current_run_strips_opaque_reasoning_but_preserves_phase(self) -> None:
+        messages = [
+            ChatMessage.user("Question", timestamp=FIXED_TIMESTAMP),
+            ChatMessage.assistant(
+                model="openai/gpt-5.5",
+                content="Answer",
+                reasoning="Readable thinking.",
+                reasoning_meta={"response_output": [{"type": "reasoning", "id": "rs_1"}]},
+                phase="commentary",
+                timestamp=FIXED_TIMESTAMP,
+            ),
+        ]
+
+        request = _embed_notes_into_request(messages, agent_model="openai/gpt-5.5")
+
+        assert request[1]["phase"] == "commentary"
         assert "reasoning" not in request[1]
         assert "reasoning_meta" not in request[1]
 

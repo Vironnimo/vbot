@@ -447,6 +447,8 @@ async def test_full_history_adapter_replays_prior_run_reasoning_in_next_run(
         assert prior_assistant["reasoning"] == "Run-one thinking"
         assert prior_assistant["reasoning_meta"] == RUN_ONE_REASONING_META
         assert "usage" not in prior_assistant
+        persisted = runtime.chat_sessions.get("coder", "session-one").load()
+        assert persisted[1].reasoning_scope == "fake-provider/fake-model-v1::api-key"
     finally:
         runtime.stop()
 
@@ -490,7 +492,7 @@ async def test_full_history_adapter_strips_reasoning_after_model_switch(
 
 
 @pytest.mark.asyncio
-async def test_full_history_adapter_replays_reasoning_for_compaction_tail_turns(
+async def test_textual_compaction_ends_full_history_reasoning_replay(
     tmp_path: Path,
     resources_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -539,12 +541,8 @@ async def test_full_history_adapter_replays_reasoning_for_compaction_tail_turns(
         ]
         assert "Compacted summary" in request[1]["content"]
         request_tail_assistant = request[3]
-        assert request_tail_assistant["reasoning"] == "Tail thinking"
-        assert request_tail_assistant["reasoning_meta"] == {
-            "content_blocks": [
-                {"type": "thinking", "thinking": "Tail thinking", "signature": "sig-tail"}
-            ]
-        }
+        assert "reasoning" not in request_tail_assistant
+        assert "reasoning_meta" not in request_tail_assistant
     finally:
         runtime.stop()
 
