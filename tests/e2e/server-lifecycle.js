@@ -41,6 +41,10 @@ function prepareTestResources() {
       recursive: true,
     },
   );
+  rmSync(
+    path.join(environment.resourcesDir, "models", "openai.overrides.json"),
+    { force: true },
+  );
 
   writeFileSync(
     path.join(environment.resourcesDir, "providers", "fake.json"),

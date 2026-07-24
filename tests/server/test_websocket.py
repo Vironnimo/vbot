@@ -360,8 +360,14 @@ def test_websocket_with_after_sequence_param_connects_successfully(tmp_path: Pat
     app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
 
     with TestClient(app) as client:
-        with client.websocket_connect("/ws?after_sequence=3"):
-            assert app.state.event_bus.subscriber_count == 1
+        with client.websocket_connect("/ws?after_sequence=3") as websocket:
+            hello = websocket.receive_json()
+            app.state.event_bus.publish(APP_ERROR_EVENT, {"message": "Connected"})
+            event = websocket.receive_json()
+
+            assert hello["type"] == "connection_ready"
+            assert event["type"] == APP_ERROR_EVENT
+            assert event["payload"] == {"message": "Connected"}
 
         assert app.state.event_bus.subscriber_count == 0
 
