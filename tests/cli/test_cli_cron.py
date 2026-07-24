@@ -31,6 +31,8 @@ def test_parse_args_supports_cron_create_recurring() -> None:
             "cron",
             "create",
             "assistant",
+            "--name",
+            "Morning news",
             "--prompt",
             "Check the news",
             "--cron",
@@ -43,6 +45,7 @@ def test_parse_args_supports_cron_create_recurring() -> None:
     assert args.area == "cron"
     assert args.command == "create"
     assert args.agent == "assistant"
+    assert args.name == "Morning news"
     assert args.prompt == "Check the news"
     assert args.cron == "0 9 * * *"
     assert args.at is None
@@ -58,6 +61,8 @@ def test_parse_args_cron_create_rejects_cron_and_at_together(
                 "cron",
                 "create",
                 "assistant",
+                "--name",
+                "Test job",
                 "--prompt",
                 "x",
                 "--cron",
@@ -73,7 +78,7 @@ def test_parse_args_cron_create_rejects_cron_and_at_together(
 
 def test_parse_args_cron_create_requires_schedule(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as exc_info:
-        cli_main.parse_args(["cron", "create", "assistant", "--prompt", "x"])
+        cli_main.parse_args(["cron", "create", "assistant", "--name", "Test job", "--prompt", "x"])
 
     assert exc_info.value.code == 2
     assert "--cron" in capsys.readouterr().err
@@ -88,6 +93,8 @@ def test_parse_args_cron_create_rejects_per_job_timezone(
                 "cron",
                 "create",
                 "assistant",
+                "--name",
+                "Test job",
                 "--prompt",
                 "x",
                 "--cron",
@@ -129,6 +136,7 @@ def test_cron_create_posts_recurring_fields(
         instance,
         {
             "agent_id": "assistant",
+            "name": "Morning news",
             "prompt": "Check the news",
             "schedule_type": "cron",
             "cron_expression": "0 9 * * *",
@@ -141,6 +149,7 @@ def test_cron_create_posts_recurring_fields(
             "method": "cron.create",
             "params": {
                 "agent_id": "assistant",
+                "name": "Morning news",
                 "prompt": "Check the news",
                 "schedule_type": "cron",
                 "cron_expression": "0 9 * * *",
@@ -165,6 +174,7 @@ def test_cron_list_formats_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
                         {
                             "id": "job-1",
                             "agent_id": "assistant",
+                            "name": "Morning news",
                             "prompt": "Check the news",
                             "schedule_type": "cron",
                             "cron_expression": "0 9 * * *",
@@ -175,6 +185,7 @@ def test_cron_list_formats_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
                         {
                             "id": "job-2",
                             "agent_id": "coder",
+                            "name": "One-time audit",
                             "prompt": "A" * 100,
                             "schedule_type": "once",
                             "cron_expression": None,
@@ -195,11 +206,12 @@ def test_cron_list_formats_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert result.message.splitlines() == [
         "cron jobs:",
         (
-            "- id=job-1 agent=assistant status=active schedule=cron[0 9 * * *] "
+            "- name=Morning news id=job-1 agent=assistant status=active "
+            "schedule=cron[0 9 * * *] "
             "next_fire_at=2026-06-12T07:00:00+00:00 last_outcome=- prompt=Check the news"
         ),
         (
-            "- id=job-2 agent=coder status=paused "
+            "- name=One-time audit id=job-2 agent=coder status=paused "
             "schedule=once[2026-07-01T09:00:00+00:00] next_fire_at=- last_outcome=- "
             "prompt=" + "A" * 57 + "..."
         ),
@@ -229,8 +241,8 @@ def test_cron_update_rejects_empty_changes(tmp_path: Path) -> None:
     assert result == CommandResult(
         ok=False,
         message=(
-            "no cron fields provided; use one of: --agent, --prompt, --cron, --at, "
-            "--session, --status"
+            "no cron fields provided; use one of: --agent, --name, --prompt, --cron, "
+            "--at, --session, --status"
         ),
         instance=instance,
     )
@@ -285,6 +297,7 @@ def test_run_dispatches_cron_create_with_once_schedule(
             "method": "cron.create",
             "params": {
                 "agent_id": "assistant",
+                "name": "One-off reminder",
                 "prompt": "One-off reminder",
                 "schedule_type": "once",
                 "run_at": "2026-07-01T09:00:00+00:00",
@@ -299,6 +312,8 @@ def test_run_dispatches_cron_create_with_once_schedule(
             "cron",
             "create",
             "assistant",
+            "--name",
+            "One-off reminder",
             "--prompt",
             "One-off reminder",
             "--at",
@@ -364,6 +379,7 @@ def test_cron_create_full_response_confirms_schedule_and_next_fire(
                     "agent_id": "builder",
                     "project_id": "vbot",
                     "target": "builder@vbot",
+                    "name": "Build check",
                     "prompt": "Check the build",
                     "schedule_type": "cron",
                     "cron_expression": "0 9 * * *",
@@ -381,6 +397,7 @@ def test_cron_create_full_response_confirms_schedule_and_next_fire(
         instance,
         {
             "agent_id": "builder@vbot",
+            "name": "Build check",
             "prompt": "Check the build",
             "schedule_type": "cron",
             "cron_expression": "0 9 * * *",
@@ -388,6 +405,7 @@ def test_cron_create_full_response_confirms_schedule_and_next_fire(
     )
 
     assert result.ok is True
-    assert result.message.splitlines()[0] == "created cron job job-1"
+    assert result.message.splitlines()[0] == "created cron job Build check (job-1)"
+    assert "name=Build check" in result.message
     assert "agent=builder@vbot" in result.message
     assert "next_fire_at=2026-07-21T07:00:00+00:00" in result.message

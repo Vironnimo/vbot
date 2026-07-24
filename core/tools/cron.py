@@ -25,7 +25,7 @@ CronScheduleType = Literal["cron", "once"]
 
 CRON_TOOL_NAME = "cron"
 CRON_TOOL_DESCRIPTION = (
-    "Create and manage persisted schedules that start Runs. Calls are flat: set action to "
+    "Create and manage named persisted schedules that start Runs. Calls are flat: set action to "
     'create, list, update, delete, enable, or disable. List with {"action":"list"}. New '
     "jobs are enabled immediately, use the server timezone, and start a fresh Session on "
     "every fire. Use list to obtain job ids; disable pauses a job without deleting it."
@@ -37,6 +37,7 @@ CRON_SCHEDULE_TYPES = frozenset(("cron", "once"))
 _CREATE_ARGUMENTS = frozenset(
     {
         "target",
+        "name",
         "prompt",
         "schedule_type",
         "cron_expression",
@@ -48,6 +49,7 @@ _UPDATE_ARGUMENTS = frozenset(
     {
         "id",
         "target",
+        "name",
         "prompt",
         "schedule_type",
         "cron_expression",
@@ -65,14 +67,16 @@ _ACTION_ARGUMENTS: dict[str, frozenset[str]] = {
 }
 _ACTION_RECOMMENDATIONS = {
     "create": (
-        'For a recurring job use {"action":"create","prompt":"<instruction>",'
+        'For a recurring job use {"action":"create","name":"<job name>",'
+        '"prompt":"<instruction>",'
         '"schedule_type":"cron","cron_expression":"0 9 * * *"}. For a one-time job use '
-        '{"action":"create","prompt":"<instruction>","schedule_type":"once",'
+        '{"action":"create","name":"<job name>","prompt":"<instruction>",'
+        '"schedule_type":"once",'
         '"run_at":"2026-07-25T09:00:00+02:00"}'
     ),
     "list": 'Use {"action":"list"}',
     "update": (
-        'Use {"action":"update","id":"<job-id>","prompt":"<replacement instruction>"}; '
+        'Use {"action":"update","id":"<job-id>","name":"<replacement name>"}; '
         "include only fields that should change"
     ),
     "delete": 'Use {"action":"delete","id":"<job-id>"}',
@@ -88,7 +92,8 @@ CRON_TOOL_PARAMETERS: JsonObject = {
             "enum": sorted(CRON_ACTIONS),
             "description": (
                 "Operation to perform. Use list by itself to obtain current job ids before "
-                "changing or deleting a job."
+                "changing or deleting a job. Create requires name, prompt, schedule_type, "
+                "and the matching schedule field."
             ),
         },
         "id": {
@@ -102,6 +107,13 @@ CRON_TOOL_PARAMETERS: JsonObject = {
             "description": (
                 "Agent address for create or update: agent or agent@project. Create defaults "
                 "to the current Agent and Project."
+            ),
+        },
+        "name": {
+            "type": "string",
+            "description": (
+                "Human-readable job name. Required for create; optional replacement for "
+                "update. It does not need to be unique."
             ),
         },
         "prompt": {
@@ -227,6 +239,7 @@ def _handle_create(
         agent_id, project_id = context.agent_id, context.project_id
     else:
         agent_id, project_id = parse_agent_address(target)
+    name = required_string(arguments.get("name"), field_name="name")
     prompt = required_string(arguments.get("prompt"), field_name="prompt")
     schedule_type = _required_enum(
         arguments.get("schedule_type"),
@@ -249,6 +262,7 @@ def _handle_create(
 
     job = cron_service.create_job(
         agent_id=agent_id,
+        name=name,
         prompt=prompt,
         schedule_type=cast(CronScheduleType, schedule_type),
         cron_expression=cron_expression,
@@ -276,6 +290,8 @@ def _handle_update(cron_service: CronService, arguments: JsonObject) -> JsonObje
         agent_id, project_id = parse_agent_address(target)
         updates["agent_id"] = agent_id
         updates["project_id"] = project_id
+    if "name" in arguments:
+        updates["name"] = required_string(arguments.get("name"), field_name="name")
     if "prompt" in arguments:
         updates["prompt"] = required_string(arguments.get("prompt"), field_name="prompt")
     if "schedule_type" in arguments:
@@ -393,7 +409,7 @@ def _cron_display_summary(arguments: JsonObject) -> str:
         return ""
     action, operation_arguments = operation
     parts = [action]
-    for field_name in ("id", "target", "schedule_type"):
+    for field_name in ("name", "id", "target", "schedule_type"):
         value = operation_arguments.get(field_name)
         if isinstance(value, str) and value.strip():
             parts.append(value.strip())

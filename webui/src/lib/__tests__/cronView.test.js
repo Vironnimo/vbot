@@ -24,6 +24,7 @@ describe('cron time and history projection', () => {
     const job = {
       id: 'job-once',
       agent_id: 'main',
+      name: 'One-time run',
       prompt: 'Run once',
       schedule_type: 'once',
       run_at: '2026-07-18T16:00:00+00:00',
@@ -34,6 +35,7 @@ describe('cron time and history projection', () => {
     const form = createCronFormValues(job, 'Europe/Berlin');
 
     expect(normalized.schedule_description).toContain('18:00');
+    expect(form.name).toBe('One-time run');
     expect(form.run_at).toBe('2026-07-18T18:00');
     expect(formatTimestamp(job.run_at, 'Europe/Berlin')).toContain('18:00');
     expect(toDateTimeLocalInput(job.run_at, 'Europe/Berlin')).toBe(
@@ -63,6 +65,21 @@ describe('cron time and history projection', () => {
     expect(state.systemTimezone).toBe('Europe/Berlin');
   });
 
+  it('uses the prompt as a readable fallback for legacy payloads without a name', () => {
+    const [job] = visibleCronJobs([
+      {
+        id: 'legacy-job',
+        agent_id: 'main',
+        prompt: 'Review weekly reports',
+        schedule_type: 'cron',
+        cron_expression: '0 9 * * 1',
+        status: 'active',
+      },
+    ]);
+
+    expect(job.name).toBe('Review weekly reports');
+  });
+
   it('detects form edits without including server-only execution state', () => {
     const form = createCronFormValues(null, 'UTC');
     const baseline = cronFormFingerprint(form);
@@ -75,6 +92,7 @@ describe('cron time and history projection', () => {
       {
         id: 'job-once',
         agent_id: 'main',
+        name: 'One-time run',
         prompt: 'Run once',
         schedule_type: 'once',
         run_at: '2026-07-18T16:00:00+00:00',
@@ -164,12 +182,14 @@ describe('cron job target normalization (project-aware)', () => {
       agent_id: 'builder',
       project_id: 'vbot',
       target: 'builder@vbot',
+      name: 'Project work',
       prompt: 'do work',
       schedule_type: 'cron',
       cron_expression: '0 9 * * *',
       status: 'active',
     });
     form.prompt = 'do work';
+    expect(buildCreateCronPayload(form).name).toBe('Project work');
     expect(buildCreateCronPayload(form).agent_id).toBe('builder@vbot');
     expect(buildUpdateCronPayload(form).agent_id).toBe('builder@vbot');
   });
@@ -180,12 +200,14 @@ describe('cron job target normalization (project-aware)', () => {
       agent_id: 'researcher',
       project_id: null,
       target: 'researcher',
+      name: 'Research work',
       prompt: 'do work',
       schedule_type: 'cron',
       cron_expression: '0 9 * * *',
       status: 'active',
     });
     form.prompt = 'do work';
+    expect(buildUpdateCronPayload(form).name).toBe('Research work');
     expect(buildCreateCronPayload(form).agent_id).toBe('researcher');
     expect(buildUpdateCronPayload(form).agent_id).toBe('researcher');
   });

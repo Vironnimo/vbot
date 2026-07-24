@@ -819,6 +819,7 @@ def test_run_forwards_cron_create_project_address(
             "method": "cron.create",
             "params": {
                 "agent_id": "builder@vbot",
+                "name": "Nightly build",
                 "prompt": "Nightly build",
                 "schedule_type": "cron",
                 "cron_expression": "0 2 * * *",
@@ -834,6 +835,8 @@ def test_run_forwards_cron_create_project_address(
             "cron",
             "create",
             "builder@vbot",
+            "--name",
+            "Nightly build",
             "--prompt",
             "Nightly build",
             "--cron",

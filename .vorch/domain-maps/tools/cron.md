@@ -7,14 +7,14 @@ Manages persisted time-based automation jobs through `CronService`.
 - Tool name: `cron`
 - Registration: `register_cron_tool(registry, cron_service)`
 - Schema: one flat object with required `action` (`create`, `list`, `update`, `delete`, `enable`, or `disable`) plus only the fields needed by that action. The parameterless list call is exactly `{"action":"list"}`; do not reintroduce empty nested operation objects.
-- Display: the operation-specific summary uses the job `id`, target, and schedule type when available.
+- Display: the operation-specific summary leads with the human-readable job `name`, followed by `id`, target, and schedule type when available.
 
 ## Conventions
 
 - `create` defaults an omitted `target` to `ToolContext.agent_id` + `ToolContext.project_id`; an explicit target is parsed as `agent` or `agent@project`. Cross-Agent and cross-Project administration is intentional: `list` returns all jobs and every mutating operation may address a job owned by another target. CronService owns target existence validation.
 - `create` and `update` validate schedule fields through `CronService`. Cron uses exactly five fields with a minimum one-minute cadence; Once accepts ISO 8601 and interprets offset-free values in the server timezone.
-- The Agent-facing Tool does not expose `session_id`, `timezone`, or `status`. Every created job starts a fresh Session on each fire, new jobs are active immediately, and state changes use the dedicated `enable` and `disable` operations. Fixed Sessions and direct status updates remain service/RPC/CLI/WebUI capabilities.
-- Tool list payloads use `CronService.next_fire_at()` and include `system_timezone`, the formatted target, terminal history, and persisted execution-health fields. `next_fire_at` is available for active Cron and Once jobs and is `null` for non-active jobs.
+- The Agent-facing Tool requires a non-empty, non-unique `name` on `create` and accepts it on `update`; exact-call error recommendations include it. It does not expose `session_id`, `timezone`, or `status`. Every created job starts a fresh Session on each fire, new jobs are active immediately, and state changes use the dedicated `enable` and `disable` operations. Fixed Sessions and direct status updates remain service/RPC/CLI/WebUI capabilities.
+- Tool list payloads use `CronService.next_fire_at()` and include `name`, `system_timezone`, the formatted target, terminal history, and persisted execution-health fields. `next_fire_at` is available for active Cron and Once jobs and is `null` for non-active jobs.
 
 ## Constraints & Gotchas
 

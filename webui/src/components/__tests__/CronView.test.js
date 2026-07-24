@@ -82,6 +82,7 @@ describe('CronView', () => {
       jobs: [
         cronJob({
           id: 'job-active',
+          name: 'Nightly summary job',
           prompt: 'Nightly summary',
           status: 'active',
         }),
@@ -142,6 +143,7 @@ describe('CronView', () => {
     expect(document.querySelector('.cron-bar')).toBeNull();
     expect(document.body.textContent).toContain('Failed');
     expect(document.body.textContent).toContain('Missed');
+    expect(document.body.textContent).toContain('Nightly summary job');
     expect(document.getElementById('cron-job-timezone')).toBeNull();
     expect(document.body.textContent).not.toContain('Schedule timezone');
   });
@@ -165,6 +167,9 @@ describe('CronView', () => {
     ).toBeTruthy();
     expect(document.getElementById('cron-job-prompt').value).toBe(
       'Default cron prompt',
+    );
+    expect(document.getElementById('cron-job-name').value).toBe(
+      'Default scheduled run',
     );
   });
 
@@ -228,6 +233,10 @@ describe('CronView', () => {
 
     await waitForCondition(() => document.getElementById('cron-job-prompt'));
 
+    inputById('cron-job-name').value = 'Morning digest';
+    inputById('cron-job-name').dispatchEvent(
+      new Event('input', { bubbles: true }),
+    );
     inputById('cron-job-prompt').value = 'Prepare morning digest';
     inputById('cron-job-prompt').dispatchEvent(
       new Event('input', { bubbles: true }),
@@ -244,6 +253,7 @@ describe('CronView', () => {
     await waitForCondition(() => createCronJobMock.mock.calls.length === 1);
     expect(createCronJobMock).toHaveBeenCalledWith({
       agent_id: 'agent-alpha',
+      name: 'Morning digest',
       prompt: 'Prepare morning digest',
       schedule_type: 'cron',
       cron_expression: '0 6 * * *',
@@ -253,6 +263,7 @@ describe('CronView', () => {
   it('can update a newly created job without selecting its list row again', async () => {
     const createdJob = cronJob({
       id: 'job-created',
+      name: 'Morning digest',
       prompt: 'Prepare morning digest',
       cron_expression: '0 6 * * *',
     });
@@ -271,6 +282,10 @@ describe('CronView', () => {
     flushSync();
 
     await waitForCondition(() => document.getElementById('cron-job-prompt'));
+    inputById('cron-job-name').value = 'Morning digest';
+    inputById('cron-job-name').dispatchEvent(
+      new Event('input', { bubbles: true }),
+    );
     inputById('cron-job-prompt').value = 'Prepare morning digest';
     inputById('cron-job-prompt').dispatchEvent(
       new Event('input', { bubbles: true }),
@@ -299,6 +314,7 @@ describe('CronView', () => {
     expect(updateCronJobMock).toHaveBeenCalledWith({
       id: 'job-created',
       agent_id: 'agent-alpha',
+      name: 'Morning digest',
       prompt: 'Prepare updated digest',
       schedule_type: 'cron',
       cron_expression: '0 6 * * *',
@@ -367,6 +383,7 @@ describe('CronView', () => {
     expect(updateCronJobMock).toHaveBeenCalledWith({
       id: 'job-once',
       agent_id: 'agent-alpha',
+      name: 'Default scheduled run',
       prompt: 'Updated once prompt',
       schedule_type: 'once',
       run_at: storedRunAt,
@@ -562,6 +579,7 @@ function cronJob(overrides = {}) {
   return {
     id: 'job-default',
     agent_id: 'agent-alpha',
+    name: 'Default scheduled run',
     prompt: 'Default cron prompt',
     schedule_type: 'cron',
     cron_expression: '*/30 * * * *',

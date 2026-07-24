@@ -24,6 +24,7 @@ CRON_JOB_STATUSES = frozenset(("active", "paused"))
 async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
     supported_fields = {
         "agent_id",
+        "name",
         "prompt",
         "schedule_type",
         "cron_expression",
@@ -36,6 +37,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
     # the edge into a bare ``agent_id`` plus the optional ``project_id`` stored on
     # the job — never an ``@`` string kept in ``agent_id``.
     agent_id, project_id = _required_agent_address(params, "agent_id")
+    name = _required_string(params, "name")
     prompt = _required_string(params, "prompt")
     schedule_type = _required_string(params, "schedule_type")
     if schedule_type not in CRON_SCHEDULE_TYPES:
@@ -68,6 +70,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
         async with _agent_reference_lock(state):
             job = state.runtime.cron_service.create_job(
                 agent_id=agent_id,
+                name=name,
                 prompt=prompt,
                 schedule_type=schedule_type,
                 cron_expression=cron_expression,
@@ -99,6 +102,7 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
     supported_fields = {
         "id",
         "agent_id",
+        "name",
         "prompt",
         "schedule_type",
         "cron_expression",
@@ -117,6 +121,8 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
         target_agent_id, target_project_id = _required_agent_address(params, "agent_id")
         updates["agent_id"] = target_agent_id
         updates["project_id"] = target_project_id
+    if "name" in params:
+        updates["name"] = _required_string(params, "name")
     if "prompt" in params:
         updates["prompt"] = _required_string(params, "prompt")
     if "schedule_type" in params:
@@ -200,6 +206,7 @@ def _cron_job_response(cron_service: Any, job: Any) -> JsonObject:
         # The address form keeps "builder" unambiguous across projects in
         # listings: a bare target shows ``builder``, a project target ``builder@projekt``.
         "target": format_agent_address(job.agent_id, job.project_id),
+        "name": job.name,
         "prompt": job.prompt,
         "schedule_type": job.schedule_type,
         "cron_expression": job.cron_expression,

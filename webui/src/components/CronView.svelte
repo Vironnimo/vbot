@@ -118,7 +118,7 @@
   let detailTitle = $derived(
     isCreating
       ? t('cron.detail.createTitle', 'Create Scheduled Run')
-      : t('cron.detail.editTitle', 'Edit Scheduled Run'),
+      : selectedJob?.name || t('cron.detail.editTitle', 'Edit Scheduled Run'),
   );
   let presetOptions = $derived(
     buildCronPresetOptions((key) =>
@@ -412,6 +412,7 @@
   function validateFormValues() {
     const hasCoreValues =
       formValues.agent_id.trim().length > 0 &&
+      formValues.name.trim().length > 0 &&
       formValues.prompt.trim().length > 0;
     const hasScheduleValue =
       formValues.schedule_type === CRON_SCHEDULE_TYPE_CRON
@@ -421,7 +422,7 @@
     if (!hasCoreValues || !hasScheduleValue) {
       formErrorMessage = t(
         'cron.errors.missingRequired',
-        'Agent, prompt, and schedule details are required.',
+        'Name, agent, prompt, and schedule details are required.',
       );
       return false;
     }
@@ -730,7 +731,7 @@
                   <span class="cron-item-inner">
                     <span class="cron-item-head">
                       <span class="cron-item-name">
-                        {agentLabel(job.agent_id)}
+                        {job.name}
                       </span>
                       <StatusChip variant={statusChipVariant(job)}>
                         {statusLabel(job.status)}
@@ -740,6 +741,7 @@
                       class="cron-item-schedule"
                       use:tooltip={describeCronExpression(job.cron_expression)}
                     >
+                      {agentLabel(job.agent_id)} ·
                       {displayValue(job.schedule_description)}
                     </span>
                     <span class="cron-item-prompt">{job.prompt}</span>
@@ -888,6 +890,20 @@
             {/if}
 
             <div class="cron-fields">
+              <label class="cron-field">
+                <span class="cron-label">{t('cron.form.name', 'Name')}</span>
+                <TextField
+                  id="cron-job-name"
+                  value={formValues.name}
+                  placeholder={t(
+                    'cron.form.namePlaceholder',
+                    'Morning news digest',
+                  )}
+                  disabled={submittingForm}
+                  onInput={(value) => updateFormField('name', value)}
+                />
+              </label>
+
               <label class="cron-field">
                 <span class="cron-label">{t('cron.form.agent', 'Agent')}</span>
                 <Dropdown

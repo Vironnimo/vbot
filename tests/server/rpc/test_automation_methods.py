@@ -34,6 +34,7 @@ def _cron_job(**changes: Any) -> SimpleNamespace:
         "id": "job-123",
         "agent_id": "main",
         "project_id": None,
+        "name": "Status check",
         "prompt": "Run status check",
         "schedule_type": "cron",
         "cron_expression": "*/5 * * * *",
@@ -65,6 +66,7 @@ async def test_cron_create_happy_path() -> None:
             "method": "cron.create",
             "params": {
                 "agent_id": "main",
+                "name": "Status check",
                 "prompt": "Run status check",
                 "schedule_type": "cron",
                 "cron_expression": "*/5 * * * *",
@@ -75,10 +77,12 @@ async def test_cron_create_happy_path() -> None:
 
     assert response["ok"] is True
     assert response["result"]["id"] == "job-123"
+    assert response["result"]["name"] == "Status check"
     assert response["result"]["target"] == "main"
     assert response["result"]["status"] == "active"
     cron_service.create_job.assert_called_once_with(
         agent_id="main",
+        name="Status check",
         prompt="Run status check",
         schedule_type="cron",
         cron_expression="*/5 * * * *",
@@ -102,6 +106,7 @@ async def test_cron_create_parses_project_qualified_target() -> None:
             "method": "cron.create",
             "params": {
                 "agent_id": "builder@vbot",
+                "name": "Status check",
                 "prompt": "Run status check",
                 "schedule_type": "cron",
                 "cron_expression": "*/5 * * * *",
@@ -116,6 +121,7 @@ async def test_cron_create_parses_project_qualified_target() -> None:
     # "@" string in agent_id. CronService owns target validation.
     cron_service.create_job.assert_called_once_with(
         agent_id="builder",
+        name="Status check",
         prompt="Run status check",
         schedule_type="cron",
         cron_expression="*/5 * * * *",
@@ -131,6 +137,7 @@ async def test_cron_list_happy_path_includes_canonical_service_projection() -> N
         id="job-1",
         agent_id="builder",
         project_id="vbot",
+        name="Report check",
         prompt="Check reports",
         schedule_type="cron",
         cron_expression="*/5 * * * *",
@@ -163,6 +170,7 @@ async def test_cron_list_happy_path_includes_canonical_service_projection() -> N
                     "agent_id": "builder",
                     "project_id": "vbot",
                     "target": "builder@vbot",
+                    "name": "Report check",
                     "prompt": "Check reports",
                     "schedule_type": "cron",
                     "cron_expression": "*/5 * * * *",
@@ -189,7 +197,11 @@ async def test_cron_list_happy_path_includes_canonical_service_projection() -> N
 @pytest.mark.asyncio
 async def test_cron_update_happy_path() -> None:
     cron_service = Mock()
-    cron_service.update_job.return_value = _cron_job(prompt="Updated prompt", status="paused")
+    cron_service.update_job.return_value = _cron_job(
+        name="Updated status check",
+        prompt="Updated prompt",
+        status="paused",
+    )
     state = _state_with_cron_service(cron_service)
 
     response = await dispatch_rpc(
@@ -198,6 +210,7 @@ async def test_cron_update_happy_path() -> None:
             "method": "cron.update",
             "params": {
                 "id": "job-1",
+                "name": "Updated status check",
                 "prompt": "Updated prompt",
                 "status": "paused",
             },
@@ -206,9 +219,11 @@ async def test_cron_update_happy_path() -> None:
 
     assert response["ok"] is True
     assert response["result"]["id"] == "job-123"
+    assert response["result"]["name"] == "Updated status check"
     assert response["result"]["status"] == "paused"
     cron_service.update_job.assert_called_once_with(
         "job-1",
+        name="Updated status check",
         prompt="Updated prompt",
         status="paused",
     )
@@ -298,6 +313,7 @@ async def test_cron_disable_happy_path() -> None:
         (
             "cron.create",
             {
+                "name": "Status check",
                 "prompt": "Run status check",
                 "schedule_type": "cron",
                 "cron_expression": "*/5 * * * *",
@@ -307,10 +323,20 @@ async def test_cron_disable_happy_path() -> None:
             "cron.create",
             {
                 "agent_id": "main",
+                "name": "Status check",
                 "prompt": "Run status check",
                 "schedule_type": "cron",
                 "cron_expression": "*/5 * * * *",
                 "timezone": "Europe/Berlin",
+            },
+        ),
+        (
+            "cron.create",
+            {
+                "agent_id": "main",
+                "prompt": "Run status check",
+                "schedule_type": "cron",
+                "cron_expression": "*/5 * * * *",
             },
         ),
         ("cron.list", {"extra": True}),
@@ -342,6 +368,7 @@ async def test_cron_create_wraps_expected_domain_errors() -> None:
             "method": "cron.create",
             "params": {
                 "agent_id": "main",
+                "name": "Status check",
                 "prompt": "Run status check",
                 "schedule_type": "cron",
                 "cron_expression": "*/5 * * * *",
@@ -369,6 +396,7 @@ async def test_cron_create_rejects_unknown_agent() -> None:
             "method": "cron.create",
             "params": {
                 "agent_id": "missing",
+                "name": "Status check",
                 "prompt": "Run status check",
                 "schedule_type": "cron",
                 "cron_expression": "*/5 * * * *",
@@ -397,6 +425,7 @@ async def test_cron_create_rejects_unknown_project_target() -> None:
             "method": "cron.create",
             "params": {
                 "agent_id": "ghost@vbot",
+                "name": "Status check",
                 "prompt": "Run status check",
                 "schedule_type": "cron",
                 "cron_expression": "*/5 * * * *",

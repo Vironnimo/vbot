@@ -12,6 +12,7 @@ from cli.server_management import CommandResult, ServerInstance
 
 CRON_UPDATE_FLAGS = (
     "--agent",
+    "--name",
     "--prompt",
     "--cron",
     "--at",
@@ -117,6 +118,7 @@ def _format_job_row(job: object) -> str:
         return "- invalid cron job entry"
 
     job_id = _string_or_default(job.get("id"), "?")
+    name = _string_or_default(job.get("name"), _prompt_preview(job.get("prompt")))
     # Prefer the server-provided address form so a project target shows as
     # ``builder@projekt`` and a bare identity target stays ``builder``; fall back
     # to the raw agent id for older payloads without ``target``.
@@ -127,7 +129,8 @@ def _format_job_row(job: object) -> str:
     last_outcome = _string_or_default(job.get("last_outcome"), "-")
     prompt = _prompt_preview(job.get("prompt"))
     return (
-        f"- id={job_id}"
+        f"- name={name}"
+        f" id={job_id}"
         f" agent={agent_id}"
         f" status={status}"
         f" schedule={schedule}"
@@ -141,7 +144,8 @@ def _format_job_operation(action: str, job: Mapping[str, Any], *, fallback_id: s
     job_id = _string_or_default(job.get("id"), fallback_id)
     if set(job) <= {"id", "ok"}:
         return f"{action} cron job {job_id}"
-    return f"{action} cron job {job_id}\n{_format_job_row(job)}"
+    name = _string_or_default(job.get("name"), _prompt_preview(job.get("prompt")))
+    return f"{action} cron job {name} ({job_id})\n{_format_job_row(job)}"
 
 
 def _format_schedule(job: Mapping[str, Any]) -> str:

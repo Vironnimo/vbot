@@ -49,20 +49,27 @@ def test_cron_service_crud_operations(tmp_path: Path, caplog: pytest.LogCaptureF
     with caplog.at_level(logging.INFO, logger="vbot.automation.cron"):
         created = service.create_job(
             agent_id="agent-one",
+            name="Private status check",
             prompt="private cron prompt",
             schedule_type="once",
             run_at=run_at,
         )
         listed = service.list_jobs()
         loaded = service.get_job(created.id)
-        updated = service.update_job(created.id, prompt="private updated prompt")
+        updated = service.update_job(
+            created.id,
+            name="Updated status check",
+            prompt="private updated prompt",
+        )
         paused = service.disable_job(created.id)
         enabled = service.enable_job(created.id)
         service.delete_job(created.id)
 
     # Assert
     assert [job.id for job in listed] == [created.id]
+    assert loaded.name == "Private status check"
     assert loaded.prompt == "private cron prompt"
+    assert updated.name == "Updated status check"
     assert updated.prompt == "private updated prompt"
     assert paused.status == "paused"
     assert enabled.status == "active"
@@ -73,7 +80,7 @@ def test_cron_service_crud_operations(tmp_path: Path, caplog: pytest.LogCaptureF
         record.getMessage() for record in caplog.records if record.name == "vbot.automation.cron"
     ]
     assert any(message.startswith("Cron job created") for message in messages)
-    assert any("fields=prompt" in message for message in messages)
+    assert any("fields=name,prompt" in message for message in messages)
     assert any(message.startswith("Cron job disabled") for message in messages)
     assert any(message.startswith("Cron job enabled") for message in messages)
     assert any(message.startswith("Cron job deleted") for message in messages)
@@ -234,9 +241,39 @@ def test_legacy_timezone_is_ignored_and_removed_on_next_save(tmp_path: Path) -> 
     service.update_job("legacy-job", prompt="Migrated schedule")
 
     assert [job.id for job in loaded] == ["legacy-job"]
+    assert loaded[0].name == "Legacy schedule"
     assert not hasattr(loaded[0], "timezone")
     persisted = json.loads(jobs_path.read_text(encoding="utf-8"))
+    assert persisted[0]["name"] == "Legacy schedule"
     assert "timezone" not in persisted[0]
+
+
+def test_create_derives_name_for_internal_legacy_callers(tmp_path: Path) -> None:
+    service, _trigger_service = make_service(tmp_path)
+
+    created = service.create_job(
+        agent_id="agent-one",
+        prompt="  Review   the weekly reports  ",
+        schedule_type="cron",
+        cron_expression="0 9 * * 1",
+    )
+
+    assert created.name == "Review the weekly reports"
+    persisted = json.loads((tmp_path / "cron" / "jobs.json").read_text(encoding="utf-8"))
+    assert persisted[0]["name"] == "Review the weekly reports"
+
+
+def test_explicit_empty_name_is_rejected(tmp_path: Path) -> None:
+    service, _trigger_service = make_service(tmp_path)
+
+    with pytest.raises(CronJobValidationError, match="name must be a non-empty string"):
+        service.create_job(
+            agent_id="agent-one",
+            name=" ",
+            prompt="Run task",
+            schedule_type="cron",
+            cron_expression="0 9 * * *",
+        )
 
 
 def test_cron_expression_rejects_seconds_field(tmp_path: Path) -> None:

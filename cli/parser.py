@@ -1422,10 +1422,16 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
         cron_subparsers,
         "create",
         CRON_HELP["create"],
-        example='cron create builder@vbot --prompt "Check the news" --cron "0 9 * * *"',
+        example=(
+            'cron create builder@vbot --name "Morning news" '
+            '--prompt "Check the news" --cron "0 9 * * *"'
+        ),
     )
     create_parser.add_argument(
         "agent", metavar="<agent>", help="Agent that runs the job, as agent or agent@projekt"
+    )
+    create_parser.add_argument(
+        "--name", required=True, help="Human-readable job name; it does not need to be unique"
     )
     create_parser.add_argument(
         "--prompt", required=True, help="Prompt text injected when the job fires"
@@ -1444,6 +1450,7 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     update_parser.add_argument(
         "--agent", metavar="<agent>", help="Agent that runs the job, as agent or agent@projekt"
     )
+    update_parser.add_argument("--name", help="Replace the human-readable job name")
     update_parser.add_argument("--prompt", help="Prompt text injected when the job fires")
     update_schedule_group = update_parser.add_mutually_exclusive_group()
     _add_cron_schedule_arguments(update_schedule_group)
