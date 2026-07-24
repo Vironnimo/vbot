@@ -17,6 +17,10 @@
     setExtensionSecret,
     updateSettings,
   } from '$lib/api.js';
+  import {
+    createAutosaveParticipant,
+    useAutosaveContext,
+  } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
   import {
     applyExtensionsPanelList,
@@ -72,12 +76,23 @@
       savingConfigName.length > 0 ||
       savingSecret.length > 0,
   );
+  const autosaveContext = useAutosaveContext();
+  const extensionConfigAutosave = createAutosaveParticipant({
+    cancelPending: clearAllAutoSaveTimers,
+    getSnapshot: extensionAutosaveSnapshot,
+    hasChanges: () => extensions.some(extensionDraftHasChanges),
+    save: saveExtensionConfigs,
+  });
+  const unregisterExtensionConfigAutosave = autosaveContext.register(
+    extensionConfigAutosave,
+  );
 
   onMount(() => {
     void loadExtensions();
   });
 
   onDestroy(() => {
+    unregisterExtensionConfigAutosave();
     clearAllAutoSaveTimers();
   });
 
@@ -126,6 +141,30 @@
     );
   }
 
+  function extensionDraftHasChanges(extension) {
+    if (hasSettingsSchema(extension)) {
+      return (
+        JSON.stringify(formStates[extension.name] ?? {}) !==
+        JSON.stringify(
+          buildSchemaFormState(extension.settingsSchema, extension.config),
+        )
+      );
+    }
+    return (
+      (configDrafts[extension.name] ?? '') !==
+      formatExtensionConfig(extension.config)
+    );
+  }
+
+  function extensionAutosaveSnapshot() {
+    return extensions.filter(extensionDraftHasChanges).map((extension) => ({
+      name: extension.name,
+      value: hasSettingsSchema(extension)
+        ? (formStates[extension.name] ?? {})
+        : (configDrafts[extension.name] ?? ''),
+    }));
+  }
+
   // Debounce a non-secret-config autosave for one extension after an edit. A
   // clean or invalid form never schedules a save; a fresh edit resets the timer.
   function scheduleExtensionAutoSave(extension) {
@@ -135,11 +174,7 @@
     }
     const timer = setTimeout(() => {
       autoSaveTimers.delete(extension.name);
-      if (hasSettingsSchema(extension)) {
-        void saveSchemaConfig(extension);
-      } else {
-        void saveExtensionConfig(extension);
-      }
+      void extensionConfigAutosave.runSave();
     }, AUTO_SAVE_DEBOUNCE_MS);
     autoSaveTimers.set(extension.name, timer);
   }
@@ -256,33 +291,77 @@
       return;
     }
     clearAutoSaveTimer(extension.name);
-    void saveSchemaConfig(extension);
+    void extensionConfigAutosave.runSave('manual');
   }
 
-  async function saveSchemaConfig(extension) {
+  async function saveExtensionConfigs() {
     if (panelBusy) {
-      return;
+      return false;
     }
 
-    const built = buildSchemaConfigFromForm(
-      extension.settingsSchema,
-      formStates[extension.name] ?? {},
-    );
-    if (!built.ok) {
-      formFieldErrors = { ...formFieldErrors, [extension.name]: built.errors };
-      return;
+    const changedExtensions = extensions.filter(extensionDraftHasChanges);
+    if (changedExtensions.length === 0) {
+      return true;
     }
 
-    savingConfigName = extension.name;
+    let invalid = false;
+    let hasPersistentChanges = false;
+    const nextFormFieldErrors = { ...formFieldErrors };
+    const nextConfigErrors = { ...configErrors };
+    const nextConfigs = new SvelteMap();
+
+    for (const extension of changedExtensions) {
+      if (hasSettingsSchema(extension)) {
+        const built = buildSchemaConfigFromForm(
+          extension.settingsSchema,
+          formStates[extension.name] ?? {},
+        );
+        if (!built.ok) {
+          nextFormFieldErrors[extension.name] = built.errors;
+          invalid = true;
+          continue;
+        }
+        delete nextFormFieldErrors[extension.name];
+        nextConfigs.set(extension.name, built.config);
+        hasPersistentChanges ||= !configsMatch(built.config, extension.config);
+        continue;
+      }
+
+      const parsed = parseExtensionConfigDraft(
+        configDrafts[extension.name] ?? '',
+      );
+      if (!parsed.ok) {
+        nextConfigErrors[extension.name] = t(
+          'settings.extensions.configInvalid',
+          'Config must be a JSON object.',
+        );
+        invalid = true;
+        continue;
+      }
+      delete nextConfigErrors[extension.name];
+      nextConfigs.set(extension.name, parsed.value);
+      hasPersistentChanges ||= !configsMatch(parsed.value, extension.config);
+    }
+
+    formFieldErrors = nextFormFieldErrors;
+    configErrors = nextConfigErrors;
+    if (invalid) {
+      return false;
+    }
+    if (!hasPersistentChanges) {
+      return true;
+    }
+
+    savingConfigName = changedExtensions[0].name;
     onError('');
-
-    const payload = buildExtensionsUpdatePayload(extensions, {
-      name: extension.name,
-      config: built.config,
-    });
+    const nextExtensions = extensions.map((extension) =>
+      nextConfigs.has(extension.name)
+        ? { ...extension, config: nextConfigs.get(extension.name) }
+        : extension,
+    );
 
     try {
-      await updateSettings(payload);
+      await updateSettings(buildExtensionsUpdatePayload(nextExtensions));
       onToast({
         title: t(
           'settings.extensions.configSaveSuccess',
@@ -291,10 +370,12 @@
         variant: 'success',
       });
       await loadExtensions();
+      return true;
     } catch (error) {
       onError(
         `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
       );
+      return false;
     } finally {
       savingConfigName = '';
     }
@@ -416,51 +497,7 @@
       return;
     }
     clearAutoSaveTimer(extension.name);
-    void saveExtensionConfig(extension);
-  }
-
-  async function saveExtensionConfig(extension) {
-    if (panelBusy) {
-      return;
-    }
-
-    const parsed = parseExtensionConfigDraft(configDrafts[extension.name]);
-    if (!parsed.ok) {
-      configErrors = {
-        ...configErrors,
-        [extension.name]: t(
-          'settings.extensions.configInvalid',
-          'Config must be a JSON object.',
-        ),
-      };
-      return;
-    }
-
-    savingConfigName = extension.name;
-    onError('');
-
-    const payload = buildExtensionsUpdatePayload(extensions, {
-      name: extension.name,
-      config: parsed.value,
-    });
-
-    try {
-      await updateSettings(payload);
-      onToast({
-        title: t(
-          'settings.extensions.configSaveSuccess',
-          'Extension config saved.',
-        ),
-        variant: 'success',
-      });
-      await loadExtensions();
-    } catch (error) {
-      onError(
-        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
-      );
-    } finally {
-      savingConfigName = '';
-    }
+    void extensionConfigAutosave.runSave('manual');
   }
 </script>
 

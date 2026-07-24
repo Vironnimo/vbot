@@ -41,6 +41,10 @@
     effortOptionsForReasoning,
     reasoningForModelValue,
   } from '$lib/agentForm.js';
+  import {
+    createAutosaveParticipant,
+    useAutosaveContext,
+  } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
   import InfoHint from './ui/InfoHint.svelte';
@@ -219,6 +223,16 @@
   let saveDisabled = $derived(
     projectsState.editSaving || !hasManageChanges(pendingChanges),
   );
+  const autosaveContext = useAutosaveContext();
+  const projectAutosave = createAutosaveParticipant({
+    cancelPending: () =>
+      projectsController.clearAutoSave({ flushPending: false }),
+    getSnapshot: () => pendingChanges,
+    hasChanges: () => hasManageChanges(projectsController.pendingChanges()),
+    save: (reason) =>
+      projectsController.saveSelectedProject({ manual: reason === 'manual' }),
+  });
+  const unregisterProjectAutosave = autosaveContext.register(projectAutosave);
 
   let temperatureIsInherit = $derived(
     projectsState.editForm.default_temperature === '',
@@ -279,6 +293,7 @@
   });
 
   onDestroy(() => {
+    unregisterProjectAutosave();
     projectsController.destroy();
   });
 
@@ -288,9 +303,7 @@
       return;
     }
 
-    projectsController.scheduleAutoSave(() =>
-      projectsController.saveSelectedProject(),
-    );
+    projectsController.scheduleAutoSave(() => projectAutosave.runSave());
 
     return () => {
       projectsController.clearAutoSave();
@@ -361,7 +374,12 @@
   }
 
   function selectProject(projectId) {
-    projectsController.selectProject(projectId);
+    if (projectId === projectsState.selectedProjectId) {
+      return;
+    }
+    autosaveContext.requestTransition(() =>
+      projectsController.selectProject(projectId),
+    );
   }
 
   function refreshScan() {
@@ -449,7 +467,7 @@
 
   function handleManualSave(event) {
     event.preventDefault();
-    void projectsController.saveSelectedProject({ manual: true });
+    void projectAutosave.runSave('manual', { force: true });
   }
 
   function toggleMember(agentId) {

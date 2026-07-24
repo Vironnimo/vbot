@@ -14,6 +14,10 @@
     listTaskModelTargets,
     updateTaskModelSettings,
   } from '$lib/api.js';
+  import {
+    createAutosaveParticipant,
+    useAutosaveContext,
+  } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
   import {
     JSON_OPTION_TYPE,
@@ -88,12 +92,27 @@
   let taskSurfaceBusy = $derived(
     taskModelLoading || taskModelSaving || (autoSaveArmed && !saveDisabled),
   );
+  const autosaveContext = useAutosaveContext();
+  const taskModelsAutosave = createAutosaveParticipant({
+    cancelPending: clearAutoSaveTimer,
+    getSnapshot: () => taskModelBindings,
+    hasChanges: () =>
+      autoSaveArmed &&
+      !taskModelBindingsMatch(
+        taskModelBindings,
+        normalizeTaskModelSettings(settings),
+      ),
+    save: saveTaskModelBindings,
+  });
+  const unregisterTaskModelsAutosave =
+    autosaveContext.register(taskModelsAutosave);
 
   onMount(() => {
     void loadTaskModelPanel();
   });
 
   onDestroy(() => {
+    unregisterTaskModelsAutosave();
     clearAutoSaveTimer();
   });
 
@@ -106,7 +125,7 @@
 
     autoSaveTimer = setTimeout(() => {
       autoSaveTimer = null;
-      void saveTaskModelBindings();
+      void taskModelsAutosave.runSave();
     }, AUTO_SAVE_DEBOUNCE_MS);
 
     return () => {
@@ -215,12 +234,18 @@
     }
 
     clearAutoSaveTimer();
-    void saveTaskModelBindings();
+    void taskModelsAutosave.runSave('manual');
   }
 
   async function saveTaskModelBindings() {
-    if (saveDisabled) {
-      return;
+    if (
+      !autoSaveArmed ||
+      taskModelBindingsMatch(
+        taskModelBindings,
+        normalizeTaskModelSettings(settings),
+      )
+    ) {
+      return true;
     }
 
     taskModelSaving = true;
@@ -244,10 +269,12 @@
         ),
         variant: 'success',
       });
+      return true;
     } catch (error) {
       onError(
         `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
       );
+      return false;
     } finally {
       taskModelSaving = false;
     }

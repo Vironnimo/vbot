@@ -7,6 +7,10 @@
   import InfoHint from '../ui/InfoHint.svelte';
   import TextField from '../ui/TextField.svelte';
   import { listConnections, listModels } from '$lib/api.js';
+  import {
+    createAutosaveParticipant,
+    useAutosaveContext,
+  } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
   import { runSettingsSave } from '$lib/settingsSave.js';
   import {
@@ -146,12 +150,23 @@
   let saveDisabled = $derived(
     saving || agentDefaultsMatch(agentDefaults, settings),
   );
+  const autosaveContext = useAutosaveContext();
+  const agentDefaultsAutosave = createAutosaveParticipant({
+    cancelPending: clearAutoSaveTimer,
+    getSnapshot: () => ({ ...agentDefaults }),
+    hasChanges: agentDefaultsDraftHasChanges,
+    save: saveAgentDefaults,
+  });
+  const unregisterAgentDefaultsAutosave = autosaveContext.register(
+    agentDefaultsAutosave,
+  );
 
   onMount(() => {
     void loadModelCatalogs();
   });
 
   onDestroy(() => {
+    unregisterAgentDefaultsAutosave();
     clearAutoSaveTimer();
   });
 
@@ -162,7 +177,7 @@
 
     autoSaveTimer = setTimeout(() => {
       autoSaveTimer = null;
-      void saveAgentDefaults();
+      void agentDefaultsAutosave.runSave();
     }, AUTO_SAVE_DEBOUNCE_MS);
 
     return () => {
@@ -272,6 +287,13 @@
     );
   }
 
+  function agentDefaultsDraftHasChanges() {
+    const persisted = normalizeAgentDefaultsFormValues(settings);
+    return Object.keys(persisted).some(
+      (key) => agentDefaults[key] !== persisted[key],
+    );
+  }
+
   function handleAgentDefaultsChange(key, value) {
     agentDefaults = {
       ...agentDefaults,
@@ -302,15 +324,15 @@
     }
 
     clearAutoSaveTimer();
-    void saveAgentDefaults();
+    void agentDefaultsAutosave.runSave('manual');
   }
 
   async function saveAgentDefaults() {
-    if (saveDisabled) {
-      return;
+    if (!agentDefaultsDraftHasChanges()) {
+      return true;
     }
 
-    await runSettingsSave({
+    return runSettingsSave({
       onCommit,
       onToast,
       onError,

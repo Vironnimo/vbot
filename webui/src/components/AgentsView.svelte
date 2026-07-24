@@ -13,6 +13,7 @@
     showProject,
   } from '$lib/api.js';
   import { buildAgentTargetCatalog } from '$lib/agentForm.js';
+  import { useAutosaveContext } from '$lib/autosave.js';
   import {
     projectIdsFromList,
     projectTeamEntry,
@@ -28,6 +29,7 @@
   import AgentListPane from './agents/AgentListPane.svelte';
 
   const noop = () => {};
+  const autosaveContext = useAutosaveContext();
 
   let {
     sharedSelectedAgentId = '',
@@ -295,7 +297,7 @@
         ? result.order_revision
         : 0;
       const preferredAgentId = options.preferredAgentId ?? selectedAgentId;
-      selectAgent(resolveSelectedAgentId(agents, preferredAgentId));
+      applyAgentSelection(resolveSelectedAgentId(agents, preferredAgentId));
       if (options.notify !== false) {
         notifyAgentsChanged();
       }
@@ -376,11 +378,21 @@
   }
 
   function selectAgent(agentId) {
+    if (agentId === selectedAgentId) {
+      return false;
+    }
+    return autosaveContext.requestTransition(() =>
+      applyAgentSelection(agentId),
+    );
+  }
+
+  function applyAgentSelection(agentId) {
     selectedAgentId = agentId;
     const agent = agents.find((item) => item.id === agentId) ?? null;
     if (agent) {
       onAgentSelected?.(agent);
     }
+    return true;
   }
 
   function handleAgentUpdated(nextAgent, options = {}) {
@@ -403,7 +415,11 @@
     notifyAgentsChanged();
   }
 
-  async function openCreateModal() {
+  function openCreateModal() {
+    return autosaveContext.requestTransition(openCreateModalAfterSave);
+  }
+
+  async function openCreateModalAfterSave() {
     // Fetch the global agent defaults so the modal can label its inherit options.
     // Best-effort: an empty object (fetch failure) makes the modal render the
     // absent-case labels.
@@ -424,7 +440,7 @@
     // Creation also emits a roster invalidation. Make the intended selection
     // authoritative before either reload can finish so a competing refresh
     // cannot preserve the previously selected Agent.
-    selectAgent(agentId);
+    applyAgentSelection(agentId);
     await loadAgents({ preferredAgentId: agentId });
   }
 

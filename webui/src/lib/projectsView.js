@@ -631,7 +631,7 @@ export function createProjectsController({
   async function saveSelectedProject({ manual = false } = {}) {
     const project = selectedProject();
     if (!project || state.editSaving) {
-      return;
+      return false;
     }
     const changes = pendingChanges();
     if (!hasManageChanges(changes)) {
@@ -641,31 +641,49 @@ export function createProjectsController({
           variant: 'success',
         });
       }
-      return;
+      return true;
     }
     clearAutoSave({ flushPending: false });
     state.editSaving = true;
     state.editError = '';
     state.statusMessage = '';
+    const savedEditFormSnapshot = JSON.stringify(state.editForm);
     try {
       const result = await operations.setProject(project.project_id, changes);
       if (!active) {
-        return;
+        return true;
       }
-      await loadProjects();
+      await loadProjects({ reload: true });
       if (!active) {
-        return;
+        return true;
       }
-      state.editForm = createProjectEditForm(normalizeProject(result?.project));
+      const savedProject = normalizeProject(result?.project);
+      if (pendingProjectList) {
+        state.projects = pendingProjectList;
+        pendingProjectList = null;
+      } else if (savedProject.project_id) {
+        state.projects = state.projects.map((candidate) =>
+          candidate.project_id === savedProject.project_id
+            ? savedProject
+            : candidate,
+        );
+      }
+      if (JSON.stringify(state.editForm) === savedEditFormSnapshot) {
+        state.editForm = createProjectEditForm(
+          selectedProject() ?? savedProject,
+        );
+      }
       applyScan(result?.scan);
       onToast({
         title: translate('projects.manage.saveSuccess', 'Project updated.'),
         variant: 'success',
       });
+      return true;
     } catch (error) {
       if (active) {
         state.editError = `${translate('projects.manage.saveError', 'Project changes could not be saved.')} ${errorText(error)}`;
       }
+      return false;
     } finally {
       if (active) {
         state.editSaving = false;

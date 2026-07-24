@@ -190,6 +190,56 @@ describe('Projects controller', () => {
     expect(state.editForm.source_format).toBe('claude');
   });
 
+  it('preserves edits made while a Project save is in flight', async () => {
+    const firstSave = deferred();
+    let persistedProject = {
+      project_id: 'project-one',
+      display_name: 'Project one',
+      cwd: 'C:/repo',
+    };
+    const setProject = vi
+      .fn()
+      .mockImplementationOnce(async (_projectId, changes) => {
+        await firstSave.promise;
+        persistedProject = { ...persistedProject, ...changes };
+        return { project: persistedProject, scan: {} };
+      })
+      .mockImplementationOnce(async (_projectId, changes) => {
+        persistedProject = { ...persistedProject, ...changes };
+        return { project: persistedProject, scan: {} };
+      });
+    const state = createProjectsState({ selectedProjectId: 'project-one' });
+    state.projects = [persistedProject];
+    state.editForm = createProjectsState().editForm;
+    state.editForm.display_name = persistedProject.display_name;
+    const controller = createProjectsController({
+      operations: operations({
+        listProjects: vi.fn(() => ({
+          projects: [{ ...persistedProject }],
+        })),
+        setProject,
+        showProject: vi.fn().mockResolvedValue({ scan: {} }),
+      }),
+      state,
+    });
+
+    controller.updateEditField('display_name', 'First draft');
+    const initialSave = controller.saveSelectedProject();
+    controller.updateEditField('display_name', 'Latest draft');
+    firstSave.resolve();
+    await expect(initialSave).resolves.toBe(true);
+
+    expect(state.editForm.display_name).toBe('Latest draft');
+    expect(controller.pendingChanges()).toEqual({
+      display_name: 'Latest draft',
+    });
+
+    await expect(controller.saveSelectedProject()).resolves.toBe(true);
+    expect(setProject).toHaveBeenNthCalledWith(2, 'project-one', {
+      display_name: 'Latest draft',
+    });
+  });
+
   it('owns overrides and re-pointing without leaking transport details', async () => {
     const setOverride = vi.fn().mockResolvedValue({ scan: {} });
     const clearOverride = vi.fn().mockResolvedValue({ scan: {} });

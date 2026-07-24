@@ -10,6 +10,8 @@ The App shell retains the Settings document's reading anchor while another main 
 
 `settingsView.js` owns normalization and payload builders shared by the panels. Each panel loads and submits through `api.js`, keeps editable values local until save, and adopts server responses after mutation. Decimal settings remain strings during editing and are normalized only when building the payload.
 
+Settings-style panels register their pending local draft and save lifecycle with the App autosave coordinator. The normal 800ms debounce and explicit Save action share that tracked operation, so leaving Settings waits for an in-flight request and persists a newer snapshot when the user edits during that request. Failed unchanged snapshots are not retried in a background loop; an internal context transition remains blocked until the App-level Retry succeeds or the user explicitly discards the draft.
+
 ## Providers and models
 
 - Provider rows distinguish configured connections, usable accounts, reachability, and enabled state. Those values come from backend contracts; the UI must not infer connectivity from the presence of a masked credential or a model result.
@@ -23,6 +25,7 @@ The App shell retains the Settings document's reading anchor while another main 
 ## Extensions, Skills, Agents, and channels
 
 - Extension management renders the backend-provided capability, status, schema, waiting, and configuration projections. Schema forms preserve unknown/non-secret config through the backend contract; secrets use the dedicated secret operation and are never rehydrated into normal form state.
+- A transition flush batches all changed non-secret Extension configs into one complete `settings.update` projection so independently edited rows cannot overwrite each other. Invalid schema or raw-JSON drafts fail the transition in place. Secret values remain outside autosave and retain their explicit per-secret operation.
 - Reload, enable/disable, and configuration changes are separate operations. Live capability ownership remains in the Extensions domain even when the panel displays its result.
 - Skill and Tool selectors use the shared catalog/chip behavior and explicit scope. Creating or editing Skill content uses the Skill API; selecting an allowed Skill or Tool for an Agent or Project only changes that owner's policy.
 - Agent editors preserve inheritance versus explicit override. System Prompt block editing, preview, reset, and layout changes use their dedicated backend contracts rather than treating the composed prompt as one editable blob.
@@ -49,7 +52,7 @@ The App shell retains the Settings document's reading anchor while another main 
 
 ## Source and tests
 
-- Shared normalization and payloads: `webui/src/lib/settingsView.js`
+- Shared normalization, payloads, and tracked save lifecycle: `webui/src/lib/settingsView.js`, `webui/src/lib/settingsSave.js`, `webui/src/lib/autosave.js`
 - Settings composition: `webui/src/components/SettingsView.svelte`, `webui/src/components/settings/`
 - Onboarding: `webui/src/lib/onboarding.js` and onboarding components under `webui/src/components/`
 - Desktop Voice: `webui/src/lib/desktopBridge.js`, `webui/src/lib/wakewordSettings.js`, and the Voice settings panel

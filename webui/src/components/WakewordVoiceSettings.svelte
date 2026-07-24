@@ -5,6 +5,7 @@
   import Badge from './ui/Badge.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import Toggle from './ui/Toggle.svelte';
+  import { useAutosaveContext } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
   import {
     getWakewordStatus,
@@ -27,6 +28,7 @@
     snapshotVoiceSettings,
   } from '$lib/wakewordSettings.js';
 
+  const MAX_VOICE_FLUSH_PASSES = 10;
   const SESSION_BEHAVIOR_OPTIONS = Object.freeze([
     {
       value: 'active',
@@ -89,6 +91,14 @@
     !loaded ||
       (!voiceState.enabled &&
         (!voiceState.target_agent_id || voiceState.mode === 'unavailable')),
+  );
+  const autosaveContext = useAutosaveContext();
+  const voiceAutosaveParticipant = {
+    flush: flushVoiceAutosave,
+    hasPending: () => saveState === 'saving' || voiceConfigHasChanges(),
+  };
+  const unregisterVoiceAutosave = autosaveContext.register(
+    voiceAutosaveParticipant,
   );
 
   function liveStateText(state) {
@@ -201,6 +211,7 @@
   }
 
   onDestroy(() => {
+    unregisterVoiceAutosave();
     if (cleanupStatusPoll) {
       cleanupStatusPoll();
       cleanupStatusPoll = null;
@@ -258,15 +269,42 @@
     return saveChain;
   }
 
+  function voiceConfigHasChanges() {
+    return (
+      Object.keys(buildVoiceSettingsPayload(voiceState, lastSaved)).length > 0
+    );
+  }
+
+  async function flushVoiceAutosave() {
+    for (let pass = 0; pass < MAX_VOICE_FLUSH_PASSES; pass += 1) {
+      const observedChain = saveChain;
+      const saved = await observedChain;
+      if (observedChain !== saveChain) {
+        continue;
+      }
+      if (saved === false) {
+        return false;
+      }
+      if (!voiceConfigHasChanges()) {
+        return true;
+      }
+      if ((await saveConfig()) === false) {
+        return false;
+      }
+    }
+    return false;
+  }
+
   async function persistCurrentConfig() {
     const payload = buildVoiceSettingsPayload(voiceState, lastSaved);
-    if (Object.keys(payload).length === 0) return;
+    if (Object.keys(payload).length === 0) return true;
     const savedSnapshot = snapshotVoiceSettings(voiceState);
     saveState = 'saving';
     try {
       await setWakewordConfig(payload);
       lastSaved = savedSnapshot;
       saveState = 'saved';
+      return true;
     } catch (error) {
       saveState = 'error';
       onToast({
@@ -274,6 +312,7 @@
         message: error?.message || '',
         variant: 'error',
       });
+      return false;
     }
   }
 

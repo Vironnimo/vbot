@@ -4,6 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import {
+  baseAgent,
+  createAgentsRpcMock,
+} from '../components/__tests__/AgentsView.support.js';
+import {
   activeAgentTab,
   agentTabByName,
   App,
@@ -16,6 +20,7 @@ import {
   resetAppHarness,
   returnToCurrentSessionButton,
   rpcMock,
+  settingsPanelButton,
   sidebarNavButton,
   subscribeLogEventsMock,
   viewSessionButton,
@@ -279,6 +284,217 @@ describe('App', () => {
       expect(restoredContainer).toBeTruthy();
       expect(restoredContainer).not.toBe(firstScrollContainer);
       expect(restoredContainer.scrollTop).toBe(640);
+    });
+  });
+
+  it('flushes a pending Settings autosave before switching app tabs', async () => {
+    const settingsRpc = createSettingsRpcMock();
+    let resolveUpdate;
+    rpcMock.mockImplementation((method, params) => {
+      if (method === 'settings.update') {
+        return new Promise((resolve) => {
+          resolveUpdate = () => resolve(settingsRpc(method, params));
+        });
+      }
+      return settingsRpc(method, params);
+    });
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    sidebarNavButton('Settings')?.click();
+    await waitForCondition(() => {
+      expect(settingsPanelButton('Sub-Agents')).toBeTruthy();
+    });
+    settingsPanelButton('Sub-Agents')?.click();
+    const depthInput = document.querySelector(
+      'input[aria-label="Max sub-agent depth"]',
+    );
+    depthInput.value = '5';
+    depthInput.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+
+    sidebarNavButton('Logs')?.click();
+    await waitForCondition(() => {
+      expect(rpcMock).toHaveBeenCalledWith('settings.update', {
+        subagents: {
+          max_subagent_depth: 5,
+          max_subagents_per_turn: 8,
+          subagent_timeout_minutes: 60,
+        },
+      });
+    });
+    expect(sidebarNavButton('Settings')?.getAttribute('aria-current')).toBe(
+      'page',
+    );
+    expect(document.querySelector('#logs-title')).toBeFalsy();
+
+    resolveUpdate();
+    await waitForCondition(() => {
+      expect(document.querySelector('#logs-title')).toBeTruthy();
+    });
+  });
+
+  it('saves an Agent tool change before leaving the Agents tab', async () => {
+    const agents = [
+      baseAgent(),
+      { ...baseAgent(), id: 'bravo', name: 'Bravo' },
+    ];
+    let resolveAgentUpdate;
+    const agentsRpc = createAgentsRpcMock({
+      agents,
+      tools: [
+        { name: 'bash', description: 'Run shell commands.' },
+        { name: 'write', description: 'Write files.' },
+      ],
+      agentUpdate: (params) =>
+        new Promise((resolve) => {
+          resolveAgentUpdate = () =>
+            resolve({
+              ...baseAgent(),
+              ...params,
+              current_session_id: 'session-1',
+            });
+        }),
+    });
+    rpcMock.mockImplementation((method, params) => {
+      if (method === 'chat.commands') {
+        return { items: [] };
+      }
+      if (method === 'chat.history') {
+        return {
+          agent_id: params?.agent_id ?? '',
+          session_id: params?.session_id ?? '',
+          messages: [],
+        };
+      }
+      if (method === 'chat.queue_list') {
+        return { items: [] };
+      }
+      return agentsRpc(method, params);
+    });
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    sidebarNavButton('Agents')?.click();
+    await waitForCondition(() => {
+      expect(
+        document.querySelector('button[aria-label="Toggle tool write"]'),
+      ).toBeTruthy();
+    });
+    document.querySelector('button[aria-label="Toggle tool write"]')?.click();
+    flushSync();
+    sidebarNavButton('Chat')?.click();
+
+    await waitForCondition(() => {
+      expect(rpcMock).toHaveBeenCalledWith('agent.update', {
+        id: 'alpha',
+        allowed_tools: ['bash'],
+      });
+    });
+    expect(sidebarNavButton('Agents')?.getAttribute('aria-current')).toBe(
+      'page',
+    );
+
+    resolveAgentUpdate();
+    await waitForCondition(() => {
+      expect(sidebarNavButton('Chat')?.getAttribute('aria-current')).toBe(
+        'page',
+      );
+    });
+  });
+
+  it('keeps the editor open after a failed transition save and retries it', async () => {
+    const settingsRpc = createSettingsRpcMock();
+    let updateAttempt = 0;
+    rpcMock.mockImplementation((method, params) => {
+      if (method === 'settings.update' && updateAttempt++ === 0) {
+        return Promise.reject(new Error('save unavailable'));
+      }
+      return settingsRpc(method, params);
+    });
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    sidebarNavButton('Settings')?.click();
+    await waitForCondition(() => {
+      expect(settingsPanelButton('Sub-Agents')).toBeTruthy();
+    });
+    const depthInput = document.querySelector(
+      'input[aria-label="Max sub-agent depth"]',
+    );
+    depthInput.value = '5';
+    depthInput.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    sidebarNavButton('Logs')?.click();
+
+    await waitForCondition(() => {
+      expect(document.body.textContent).toContain('Changes could not be saved');
+    });
+    expect(sidebarNavButton('Settings')?.getAttribute('aria-current')).toBe(
+      'page',
+    );
+    const failureDialog = document.querySelector(
+      '[role="dialog"][aria-labelledby="autosave-transition-failure-title"]',
+    );
+    expect(
+      Array.from(failureDialog.querySelectorAll('button')).some(
+        (button) => button.textContent?.trim() === 'Discard and continue',
+      ),
+    ).toBe(true);
+
+    Array.from(failureDialog.querySelectorAll('button'))
+      .find((button) => button.textContent?.trim() === 'Retry')
+      ?.click();
+    await waitForCondition(() => {
+      expect(updateAttempt).toBeGreaterThanOrEqual(2);
+      expect(document.querySelector('#logs-title')).toBeTruthy();
+    });
+  });
+
+  it('can discard an unsaved draft after a failed transition save', async () => {
+    const settingsRpc = createSettingsRpcMock();
+    rpcMock.mockImplementation((method, params) => {
+      if (method === 'settings.update') {
+        return Promise.reject(new Error('save unavailable'));
+      }
+      return settingsRpc(method, params);
+    });
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+
+    sidebarNavButton('Settings')?.click();
+    await waitForCondition(() => {
+      expect(settingsPanelButton('Sub-Agents')).toBeTruthy();
+    });
+    const depthInput = document.querySelector(
+      'input[aria-label="Max sub-agent depth"]',
+    );
+    depthInput.value = '5';
+    depthInput.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    sidebarNavButton('Logs')?.click();
+
+    await waitForCondition(() => {
+      expect(
+        document.querySelector(
+          '[role="dialog"][aria-labelledby="autosave-transition-failure-title"]',
+        ),
+      ).toBeTruthy();
+    });
+    const failureDialog = document.querySelector(
+      '[role="dialog"][aria-labelledby="autosave-transition-failure-title"]',
+    );
+    Array.from(failureDialog.querySelectorAll('button'))
+      .find((button) => button.textContent?.trim() === 'Discard and continue')
+      ?.click();
+
+    await waitForCondition(() => {
+      expect(document.querySelector('#logs-title')).toBeTruthy();
+      expect(
+        document.querySelector(
+          '[role="dialog"][aria-labelledby="autosave-transition-failure-title"]',
+        ),
+      ).toBeFalsy();
     });
   });
 

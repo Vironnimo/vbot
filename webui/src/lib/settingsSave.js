@@ -39,10 +39,12 @@ export async function runSettingsSave({
     onCommit(nextSettings);
     applyResult?.(nextSettings);
     onToast({ title: t(successKey, successFallback), variant: 'success' });
+    return true;
   } catch (error) {
     onError(
       `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
     );
+    return false;
   } finally {
     setSaving(false);
   }

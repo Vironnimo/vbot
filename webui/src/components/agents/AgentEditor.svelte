@@ -20,6 +20,10 @@
     updateAgent,
   } from '$lib/api.js';
   import {
+    createAutosaveParticipant,
+    useAutosaveContext,
+  } from '$lib/autosave.js';
+  import {
     AGENT_MEMORY_PROMPT_MODES,
     AGENT_FORM_MODE_CREATE,
     AGENT_FORM_MODE_EDIT,
@@ -246,6 +250,14 @@
     })),
   );
   let projectDropdownOptions = $derived(buildProjectDropdownOptions());
+  const autosaveContext = useAutosaveContext();
+  const agentAutosave = createAutosaveParticipant({
+    cancelPending: clearAgentAutoSaveTimer,
+    getSnapshot: () => cloneAgentFormValues(formValues),
+    hasChanges: agentAutosaveHasChanges,
+    save: (source) => persistAgent(null, { source }),
+  });
+  const unregisterAgentAutosave = autosaveContext.register(agentAutosave);
 
   $effect(() => {
     if (loadError) {
@@ -261,7 +273,7 @@
 
     agentAutoSaveTimer = setTimeout(() => {
       agentAutoSaveTimer = null;
-      void saveAgent(null, { source: 'auto' });
+      void agentAutosave.runSave('auto');
     }, AUTO_SAVE_DEBOUNCE_MS);
 
     return () => {
@@ -271,10 +283,16 @@
 
   onDestroy(() => {
     destroyed = true;
+    unregisterAgentAutosave();
     clearAgentAutoSaveTimer();
   });
 
-  async function saveAgent(event = null, options = {}) {
+  function handleAgentSubmit(event) {
+    event?.preventDefault?.();
+    void agentAutosave.runSave('manual', { force: true });
+  }
+
+  async function persistAgent(event = null, options = {}) {
     event?.preventDefault?.();
 
     const source = options.source ?? 'manual';
@@ -283,7 +301,7 @@
     }
 
     if (isSaving || isDeleting || workspaceDecisionOpen || renameDialogOpen) {
-      return;
+      return false;
     }
 
     const result = normalizeAgentForm(formValues, {
@@ -292,19 +310,19 @@
         formMode === AGENT_FORM_MODE_EDIT ? editBaselineValues : null,
     });
 
-    if (source === 'manual') {
+    if (source !== 'auto') {
       formErrors = result.errors;
       errorMessage = '';
     }
 
     if (!result.isValid) {
-      if (source === 'manual') {
+      if (source !== 'auto') {
         errorMessage = t(
           'errors.validation',
           'Check the highlighted fields and try again.',
         );
       }
-      return;
+      return false;
     }
 
     if (
@@ -314,7 +332,7 @@
       if (source === 'manual') {
         showAgentToast(t('common.alreadySaved', 'Already saved'));
       }
-      return;
+      return true;
     }
 
     if (
@@ -324,7 +342,7 @@
       options.workspaceCopyChoice === undefined
     ) {
       workspaceDecisionOpen = true;
-      return;
+      return false;
     }
 
     if (
@@ -359,6 +377,7 @@
           showAgentToast(t('agents.updated', 'Agent updated.'));
         }
       }
+      return true;
     } catch (error) {
       if (
         saveMode === AGENT_FORM_MODE_CREATE ||
@@ -366,6 +385,7 @@
       ) {
         errorMessage = viewErrorMessage(error, t('agents.saveError'));
       }
+      return false;
     } finally {
       isSaving = false;
     }
@@ -383,13 +403,24 @@
       return false;
     }
 
+    return agentAutosaveHasChanges();
+  }
+
+  function agentAutosaveHasChanges() {
+    if (formMode !== AGENT_FORM_MODE_EDIT) {
+      return false;
+    }
+
     const result = normalizeAgentForm(formValues, {
       mode: AGENT_FORM_MODE_EDIT,
       initialValues: editBaselineValues,
     });
 
+    if (!result.isValid) {
+      return !formValuesMatch(formValues, editBaselineValues);
+    }
+
     return (
-      result.isValid &&
       !Object.hasOwn(result.payload, 'workspace') &&
       !Object.hasOwn(result.payload, 'root_project_id') &&
       agentPayloadHasChanges(result.payload)
@@ -409,12 +440,12 @@
     // previous custom location are left untouched — it may be a repo the agent
     // was rooted in — so this only changes which directory the agent uses.
     formValues.workspace = agent.default_workspace;
-    await saveAgent(null, { source: 'manual' });
+    await agentAutosave.runSave('manual', { force: true });
   }
 
   function chooseWorkspaceCopy(copyFiles) {
     workspaceDecisionOpen = false;
-    void saveAgent(null, {
+    void persistAgent(null, {
       source: 'manual',
       workspaceCopyChoice: copyFiles,
     });
@@ -533,6 +564,10 @@
     if (!agent || isSaving || isDeleting) {
       return;
     }
+    autosaveContext.requestTransition(openRenameDialogAfterSave);
+  }
+
+  function openRenameDialogAfterSave() {
     clearAgentAutoSaveTimer();
     renameValue = agent.id;
     renameError = '';
@@ -1047,7 +1082,7 @@
   {/if}
 {/snippet}
 
-<form class="agent-detail-pane" onsubmit={saveAgent}>
+<form class="agent-detail-pane" onsubmit={handleAgentSubmit}>
   <div class="agent-detail-scroll">
     <div class="detail-top">
       <div>

@@ -4,6 +4,10 @@
   import Dropdown from '../Dropdown.svelte';
   import Button from '../ui/Button.svelte';
   import TextField from '../ui/TextField.svelte';
+  import {
+    createAutosaveParticipant,
+    useAutosaveContext,
+  } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
   import { runSettingsSave } from '$lib/settingsSave.js';
   import {
@@ -35,6 +39,18 @@
     saving ||
       webSearchSettingsMatch(webSearchSettings, getWebSearchSettings(settings)),
   );
+  const autosaveContext = useAutosaveContext();
+  const webSearchAutosave = createAutosaveParticipant({
+    cancelPending: clearAutoSaveTimer,
+    getSnapshot: () => ({
+      ...webSearchSettings,
+      searxng: { ...(webSearchSettings.searxng ?? {}) },
+    }),
+    hasChanges: webSearchDraftHasChanges,
+    save: saveWebSearchSettings,
+  });
+  const unregisterWebSearchAutosave =
+    autosaveContext.register(webSearchAutosave);
 
   $effect(() => {
     if (saveDisabled) {
@@ -43,7 +59,7 @@
 
     autoSaveTimer = setTimeout(() => {
       autoSaveTimer = null;
-      void saveWebSearchSettings();
+      void webSearchAutosave.runSave();
     }, AUTO_SAVE_DEBOUNCE_MS);
 
     return () => {
@@ -52,6 +68,7 @@
   });
 
   onDestroy(() => {
+    unregisterWebSearchAutosave();
     clearAutoSaveTimer();
   });
 
@@ -70,6 +87,16 @@
       normalizedLeft.provider === normalizedRight.provider &&
       normalizedLeft.default_count === normalizedRight.default_count &&
       normalizedLeft.searxng.base_url === normalizedRight.searxng.base_url
+    );
+  }
+
+  function webSearchDraftHasChanges() {
+    const persisted = getWebSearchSettings(settings);
+    return (
+      webSearchSettings.provider !== persisted.provider ||
+      String(webSearchSettings.default_count) !==
+        String(persisted.default_count) ||
+      webSearchSettings.searxng?.base_url !== persisted.searxng.base_url
     );
   }
 
@@ -114,15 +141,15 @@
     }
 
     clearAutoSaveTimer();
-    void saveWebSearchSettings();
+    void webSearchAutosave.runSave('manual');
   }
 
   async function saveWebSearchSettings() {
-    if (saveDisabled) {
-      return;
+    if (!webSearchDraftHasChanges()) {
+      return true;
     }
 
-    await runSettingsSave({
+    return runSettingsSave({
       onCommit,
       onToast,
       onError,
