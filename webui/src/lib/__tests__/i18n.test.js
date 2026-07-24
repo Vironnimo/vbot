@@ -563,6 +563,8 @@ describe('i18n t()', () => {
       'settings.skills.loadError',
       'settings.skills.empty',
       'settings.skills.newSkill',
+      'settings.skills.nameLabel',
+      'settings.skills.contentLabel',
       'settings.skills.namePlaceholder',
       'settings.skills.contentPlaceholder',
       'settings.skills.create',

@@ -318,6 +318,134 @@
   font-size: 11.5px;
 }
 
+.s-skill-manager-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+
+.s-skill-manager-scope {
+  width: min(240px, 100%);
+}
+
+.s-skill-manager-scope .dropdown {
+  width: 100%;
+}
+
+.s-skill-manager-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.s-skill-manager-item {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+}
+
+.s-skill-manager-item-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-lg);
+  padding: var(--space-md);
+}
+
+.s-skill-manager-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.s-skill-manager-name {
+  display: block;
+  color: var(--text-hi);
+  font-family: var(--font-mono);
+  font-size: var(--fs-label-md);
+  font-weight: 500;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.s-skill-manager-desc {
+  display: block;
+  margin-top: var(--space-xs);
+  color: var(--text-med);
+  font-size: var(--fs-body-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.s-skill-manager-actions,
+.s-skill-manager-editor-actions,
+.s-skill-manager-create-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+}
+
+.s-skill-manager-actions {
+  flex-shrink: 0;
+}
+
+.s-skill-manager-editor {
+  padding: var(--space-md);
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.s-skill-manager-editor .text-area {
+  margin-top: var(--space-sm);
+}
+
+.s-skill-manager-editor-actions {
+  margin-top: var(--space-md);
+}
+
+.s-skill-manager-create {
+  padding: var(--space-md);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+}
+
+.s-skill-manager-create-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-bottom: var(--space-md);
+  color: var(--text-hi);
+  font-size: var(--fs-heading-sm);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.s-skill-manager-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.s-skill-manager-field + .s-skill-manager-field {
+  margin-top: var(--space-md);
+}
+
+.s-skill-manager-field-label {
+  color: var(--text-med);
+  font-size: var(--fs-label-sm);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.s-skill-manager-create-actions {
+  margin-top: var(--space-lg);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--border);
+}
+
 .s-row-control {
   display: flex;
   min-width: fit-content;
@@ -1289,6 +1417,33 @@
     min-width: 0;
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .s-skill-manager-toolbar,
+  .s-skill-manager-item-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .s-skill-manager-toolbar {
+    width: 100%;
+  }
+
+  .s-skill-manager-scope,
+  .s-skill-manager-new-button {
+    width: 100%;
+  }
+
+  .s-skill-manager-actions {
+    width: 100%;
+    margin-top: var(--space-xs);
+  }
+
+  .s-skill-manager-actions .btn-secondary,
+  .s-skill-manager-actions .btn-danger,
+  .s-skill-manager-create-actions .btn-primary,
+  .s-skill-manager-create-actions .btn-secondary {
+    flex: 1;
   }
 
   .s-skill-directory-add,

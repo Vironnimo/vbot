@@ -32,6 +32,7 @@
 
   let editingName = $state(null);
   let editContent = $state('');
+  let createExpanded = $state(false);
   let newName = $state('');
   let newContent = $state('');
   // The skill name awaiting delete confirmation (null = dialog closed). The
@@ -87,11 +88,13 @@
     }
     scope = next;
     cancelEdit();
+    cancelCreate();
     onError('');
     void loadSkills();
   }
 
   function startEdit(skill) {
+    cancelCreate();
     editingName = skill.name;
     editContent = skill.content;
     onError('');
@@ -100,6 +103,18 @@
   function cancelEdit() {
     editingName = null;
     editContent = '';
+  }
+
+  function startCreate() {
+    cancelEdit();
+    createExpanded = true;
+    onError('');
+  }
+
+  function cancelCreate() {
+    createExpanded = false;
+    newName = '';
+    newContent = '';
   }
 
   async function saveEdit() {
@@ -183,8 +198,7 @@
         title: t('settings.skills.created', 'Skill created.'),
         variant: 'success',
       });
-      newName = '';
-      newContent = '';
+      cancelCreate();
       await loadSkills();
     } catch (error) {
       onError(
@@ -209,13 +223,26 @@
     </div>
   </div>
 
-  <div class="s-skill-manager-scope">
-    <Dropdown
-      value={scope}
-      options={scopeOptions}
-      onValueChange={(next) => selectScope(next)}
-      ariaLabel={t('settings.skills.scopeLabel', 'Skill scope')}
-    />
+  <div class="s-skill-manager-toolbar">
+    <div class="s-skill-manager-scope">
+      <Dropdown
+        value={scope}
+        options={scopeOptions}
+        onValueChange={(next) => selectScope(next)}
+        ariaLabel={t('settings.skills.scopeLabel', 'Skill scope')}
+      />
+    </div>
+    {#if !createExpanded}
+      <Button
+        class="s-skill-manager-new-button"
+        variant="primary"
+        disabled={loading || Boolean(loadError) || busy}
+        onClick={startCreate}
+      >
+        <span aria-hidden="true">+</span>
+        {t('settings.skills.newSkill', 'New skill')}
+      </Button>
+    {/if}
   </div>
 
   {#if loadError}
@@ -225,6 +252,59 @@
       {t('settings.loading', 'Loading…')}
     </Banner>
   {:else}
+    {#if createExpanded}
+      <div class="s-skill-manager-create">
+        <div class="s-skill-manager-create-title">
+          <span>{t('settings.skills.newSkill', 'New skill')}</span>
+          <InfoHint
+            text={t(
+              'settings.skills.newSkillHelp',
+              'A skill is a Markdown playbook: a header with a name and a short description, followed by the instructions.\n\nThe description matters most — it is what the agent reads to decide when to apply the skill, so state clearly what task it is for.',
+            )}
+          />
+        </div>
+        <div class="s-skill-manager-field">
+          <label class="s-skill-manager-field-label" for="new-skill-name">
+            {t('settings.skills.nameLabel', 'Skill name')}
+          </label>
+          <TextField
+            id="new-skill-name"
+            value={newName}
+            onInput={(next) => (newName = next)}
+            placeholder={t('settings.skills.namePlaceholder', 'skill-name')}
+          />
+        </div>
+        <div class="s-skill-manager-field">
+          <label class="s-skill-manager-field-label" for="new-skill-content">
+            {t('settings.skills.contentLabel', 'SKILL.md content')}
+          </label>
+          <TextArea
+            id="new-skill-content"
+            code
+            rows="10"
+            value={newContent}
+            onInput={(value) => (newContent = value)}
+            placeholder={t(
+              'settings.skills.contentPlaceholder',
+              '---\nname: skill-name\ndescription: When to use this skill.\n---\n\n# Overview',
+            )}
+          />
+        </div>
+        <div class="s-skill-manager-create-actions">
+          <Button variant="secondary" disabled={busy} onClick={cancelCreate}>
+            {t('common.cancel', 'Cancel')}
+          </Button>
+          <Button
+            variant="primary"
+            disabled={createDisabled}
+            onClick={createSkill}
+          >
+            {t('settings.skills.create', 'Create skill')}
+          </Button>
+        </div>
+      </div>
+    {/if}
+
     <div class="s-skill-manager-list">
       {#if skills.length === 0}
         <EmptyState
@@ -238,8 +318,10 @@
         {#each skills as skill (skill.name)}
           <div class="s-skill-manager-item">
             <div class="s-skill-manager-item-head">
-              <span class="s-skill-manager-name">{skill.name}</span>
-              <span class="s-skill-manager-desc">{skill.description}</span>
+              <div class="s-skill-manager-copy">
+                <span class="s-skill-manager-name">{skill.name}</span>
+                <span class="s-skill-manager-desc">{skill.description}</span>
+              </div>
               <div class="s-skill-manager-actions">
                 <Button
                   variant="secondary"
@@ -258,58 +340,39 @@
               </div>
             </div>
             {#if editingName === skill.name}
-              <TextArea
-                rows="10"
-                value={editContent}
-                onInput={(value) => (editContent = value)}
-              />
-              <div class="s-skill-manager-editor-actions">
-                <Button variant="primary" disabled={busy} onClick={saveEdit}>
-                  {busy
-                    ? t('common.saving', 'Saving…')
-                    : t('common.save', 'Save')}
-                </Button>
-                <Button
-                  variant="secondary"
-                  disabled={busy}
-                  onClick={cancelEdit}
+              <div class="s-skill-manager-editor">
+                <label
+                  class="s-skill-manager-field-label"
+                  for={`skill-content-${skill.name}`}
                 >
-                  {t('common.cancel', 'Cancel')}
-                </Button>
+                  {t('settings.skills.contentLabel', 'SKILL.md content')}
+                </label>
+                <TextArea
+                  id={`skill-content-${skill.name}`}
+                  code
+                  rows="10"
+                  value={editContent}
+                  onInput={(value) => (editContent = value)}
+                />
+                <div class="s-skill-manager-editor-actions">
+                  <Button variant="primary" disabled={busy} onClick={saveEdit}>
+                    {busy
+                      ? t('common.saving', 'Saving…')
+                      : t('common.save', 'Save')}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={cancelEdit}
+                  >
+                    {t('common.cancel', 'Cancel')}
+                  </Button>
+                </div>
               </div>
             {/if}
           </div>
         {/each}
       {/if}
-    </div>
-
-    <div class="s-skill-manager-create">
-      <div class="s-row-label">
-        {t('settings.skills.newSkill', 'New skill')}
-        <InfoHint
-          text={t(
-            'settings.skills.newSkillHelp',
-            'A skill is a Markdown playbook: a header with a name and a short description, followed by the instructions.\n\nThe description matters most — it is what the agent reads to decide when to apply the skill, so state clearly what task it is for.',
-          )}
-        />
-      </div>
-      <TextField
-        value={newName}
-        onInput={(next) => (newName = next)}
-        placeholder={t('settings.skills.namePlaceholder', 'skill-name')}
-      />
-      <TextArea
-        rows="10"
-        value={newContent}
-        onInput={(value) => (newContent = value)}
-        placeholder={t(
-          'settings.skills.contentPlaceholder',
-          '---\nname: skill-name\ndescription: When to use this skill.\n---\n\n# Overview',
-        )}
-      />
-      <Button variant="primary" disabled={createDisabled} onClick={createSkill}>
-        {t('settings.skills.create', 'Create skill')}
-      </Button>
     </div>
   {/if}
 </div>
