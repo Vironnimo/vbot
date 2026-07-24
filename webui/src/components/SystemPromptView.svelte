@@ -1070,7 +1070,6 @@
           {#each blocks as block, index (block.id)}
             <li
               class="sp-block"
-              class:sp-block--data={block.kind === 'data'}
               class:sp-block--off={!block.enabled}
               class:sp-block--inherited={isAgentScope && isInherited(block)}
               ondragover={(event) => handleDragOver(index, event)}
@@ -1571,11 +1570,7 @@
     border: 1px solid var(--border);
     border-radius: var(--r-lg);
     overflow: hidden;
-    background: var(--bg);
-  }
-
-  .sp-block--data {
-    background: var(--surface);
+    background: var(--prompt-content-surface);
   }
 
   .sp-block--off {
@@ -1599,11 +1594,7 @@
     gap: 10px;
     padding: 8px 12px;
     border-bottom: 1px solid var(--border);
-    background: var(--surface);
-  }
-
-  .sp-block--data .sp-block-row {
-    background: var(--surface-2);
+    background: var(--prompt-header-surface);
   }
 
   .sp-drag-handle {
@@ -1687,7 +1678,7 @@
     flex-direction: column;
     gap: 8px;
     padding: 10px 14px;
-    background: var(--surface);
+    background: var(--prompt-content-surface);
   }
 
   .sp-data-block-head {
@@ -1767,7 +1758,7 @@
     gap: 12px;
     padding: 10px 14px;
     border-bottom: 1px solid var(--border-2);
-    background: var(--surface-2);
+    background: var(--prompt-header-surface);
     flex-shrink: 0;
     flex-wrap: wrap;
   }

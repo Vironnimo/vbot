@@ -91,21 +91,39 @@ describe('UI primitive guard', () => {
     expect(APP_CSS).toMatch(/\.secondary-list\s*\{\s*padding:\s*12px;/);
   });
 
-  it('keeps field, Chat composer, and preview surfaces independently themed', () => {
+  it('keeps form, Chat, Prompt block, and preview surfaces independently themed', () => {
     expect(APP_CSS).toMatch(/--field-surface:\s*var\(--surface-2\);/);
     expect(APP_CSS).toMatch(/--composer-surface:\s*var\(--surface\);/);
+    expect(APP_CSS).toMatch(/--prompt-header-surface:\s*var\(--surface-2\);/);
+    expect(APP_CSS).toMatch(/--prompt-content-surface:\s*var\(--surface\);/);
     expect(APP_CSS).toMatch(/--preview-surface:\s*var\(--surface\);/);
     expect(APP_CSS).toMatch(
-      /\.text-area--inset\s*\{[^}]*background:\s*var\(--field-surface\);/s,
+      /\.text-area--inset\s*\{[^}]*background:\s*var\(--prompt-content-surface\);/s,
     );
     expect(APP_CSS).toMatch(
       /\.input-wrap\s*\{[^}]*background:\s*var\(--composer-surface\);/s,
     );
     expect(SYSTEM_PROMPT_SOURCE).toMatch(
+      /\.sp-block\s*\{[^}]*background:\s*var\(--prompt-content-surface\);/s,
+    );
+    expect(SYSTEM_PROMPT_SOURCE).toMatch(
+      /\.sp-block-row\s*\{[^}]*background:\s*var\(--prompt-header-surface\);/s,
+    );
+    expect(SYSTEM_PROMPT_SOURCE).toMatch(
+      /\.sp-data-block\s*\{[^}]*background:\s*var\(--prompt-content-surface\);/s,
+    );
+    expect(SYSTEM_PROMPT_SOURCE).not.toMatch(/\.sp-block--data \.sp-block-row/);
+    expect(SYSTEM_PROMPT_SOURCE).toContain(
+      'class:sp-block--off={!block.enabled}',
+    );
+    expect(SYSTEM_PROMPT_SOURCE).toMatch(
+      /\.sp-block--off\s*\{[^}]*opacity:\s*0\.55;/s,
+    );
+    expect(SYSTEM_PROMPT_SOURCE).toMatch(
       /\.sp-preview-section\s*\{[^}]*border:\s*1px solid var\(--border-2\);[^}]*background:\s*var\(--preview-surface\);/s,
     );
     expect(SYSTEM_PROMPT_SOURCE).toMatch(
-      /\.sp-preview-header\s*\{[^}]*border-bottom:\s*1px solid var\(--border-2\);[^}]*background:\s*var\(--surface-2\);/s,
+      /\.sp-preview-header\s*\{[^}]*border-bottom:\s*1px solid var\(--border-2\);[^}]*background:\s*var\(--prompt-header-surface\);/s,
     );
     expect(SYSTEM_PROMPT_SOURCE).toMatch(
       /\.sp-preview-body\s*\{[^}]*background:\s*var\(--preview-surface\);/s,

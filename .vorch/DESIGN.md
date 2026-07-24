@@ -23,6 +23,8 @@ colors:
 surfaceRoles:
   field:       "{colors.surface-2}"
   composer:    "{colors.surface}"
+  promptHeader: "{colors.surface-2}"
+  promptContent: "{colors.surface}"
   preview:     "{colors.surface}"
 typography:
   display:
@@ -232,7 +234,7 @@ The palette is organized around five layers of warm dark surface and three seman
 
 Accent tints (fills, borders, hover states) come only from the tint ramp tokens `--accent-06 … --accent-40` in `webui/src/styles/app.css` — never hand-write `rgba(232, 135, 10, …)`. If a needed step is missing, extend the ramp there rather than inlining a literal. `--accent-dim` / `--accent-pale` are semantic aliases onto the ramp (08 / 12). The input focus glow is the single `--focus-ring` token.
 
-Semantic surface roles prevent unrelated controls from being coupled merely because they currently share a palette step. `--field-surface` owns ordinary editable fields and inset Prompt editors (`surface-2`); `--composer-surface` owns only the Chat composer (`surface`, preserving its established appearance); `--preview-surface` owns read-only preview content (`surface`). Change a role rather than a raw palette token when one interaction category needs more or less contrast.
+Semantic surface roles prevent unrelated controls from being coupled merely because they currently share a palette step. `--field-surface` owns ordinary editable fields (`surface-2`); `--composer-surface` owns only the Chat composer (`surface`, preserving its established appearance); `--prompt-header-surface` and `--prompt-content-surface` enforce one System Prompt block hierarchy (`surface-2` title bar over `surface` content) for editable and generated blocks alike; `--preview-surface` owns read-only preview content (`surface`). Change a role rather than a raw palette token when one interaction category needs more or less contrast.
 
 ## Typography
 
@@ -366,7 +368,9 @@ Primary save buttons inside long editor panels stay enabled even when the form i
 
 **Read-only value (`readonly` → `s-value-box`)** — Renders a non-interactive `<div>` with the same geometry and mono type as the default input but a structural `border` (not `border-2`), transparent background, and `text-med` color. Read-only facts (server host, data directory, default skill directory) must never wear the editable input chrome.
 
-**Every ordinary multi-line form field is the shared `TextArea` component (`webui/src/components/ui/TextArea.svelte`).** It follows the same `value` / `onInput(next, event)` callback contract as `TextField` and owns the default, inset, code, invalid, disabled, and read-only states. `variant="default"` is the bordered `--field-surface` field used by Cron and Settings; `variant="inset"` is the borderless `--field-surface` editor integrated into a bounded System Prompt block, so editable Prompt content remains visibly distinct from its `surface` header and page `bg`. `code` preserves whitespace, enables horizontal overflow, and raises the minimum height for JSON editors; `invalid` keeps a red border/ring and sets `aria-invalid`. The guard allows raw textareas only in the specialized Chat Composer and queued-message editor and rejects every retired form-textarea class.
+**Every ordinary multi-line form field is the shared `TextArea` component (`webui/src/components/ui/TextArea.svelte`).** It follows the same `value` / `onInput(next, event)` callback contract as `TextField` and owns the default, inset, code, invalid, disabled, and read-only states. `variant="default"` is the bordered `--field-surface` field used by Cron and Settings; `variant="inset"` is the borderless `--prompt-content-surface` editor integrated into a bounded System Prompt block. Its darker content surface sits below the shared lighter `--prompt-header-surface`, matching generated and editable blocks instead of reversing their hierarchy. `code` preserves whitespace, enables horizontal overflow, and raises the minimum height for JSON editors; `invalid` keeps a red border/ring and sets `aria-invalid`. The guard allows raw textareas only in the specialized Chat Composer and queued-message editor and rejects every retired form-textarea class.
+
+**System Prompt block state** — Editable and generated blocks share the same lighter-title/darker-content hierarchy, but enabled state remains independent from block type. A disabled block keeps that structural orientation while the complete card is dimmed to 55% opacity and its Toggle is off, so it cannot read as active.
 
 **Chat composer** — Its full-width outer area continues the Chat `bg` without a structural border, so the composer sits directly in the conversation surface. The interactive composer is a `--composer-surface`-filled rounded rectangle (10px radius) with a `border-2` border; that semantic token currently resolves to `surface` and is deliberately independent from ordinary input/editor colors. Its specialized auto-resizing textarea (max 182px, hidden scrollbar) and action buttons sit flush to the bottom-right; it is deliberately not `TextArea`. Focus applies the accent border + glow. Slash/Skill and Files autocomplete panels open above the composer, share its centered `--chat-measure` width and responsive horizontal inset, and scroll internally within their viewport-relative height cap; the `full` Chat width preference expands both panels with the composer. Slash/Skill rows use a compact shared name track followed by the description track, keeping descriptions aligned without leaving a large dead zone after short command names; mobile rows stack both tracks. The queued-message editor is the other deliberate raw-textarea exception because it owns inline queue-edit behavior.
 
