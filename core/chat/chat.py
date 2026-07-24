@@ -140,6 +140,7 @@ from core.debug import DebugContext
 from core.extensions import HookContext
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.projects import (
+    ProjectError,
     resolve_prompt_project,
     resolve_skill_scope,
     resolve_working_project_id,
@@ -159,7 +160,13 @@ from core.runs import (
     RunExecutor,
     WaitingWorkAdmission,
 )
-from core.sessions import SKILL_AVAILABLE_NOTE_PREFIX, ChatSession, skill_activation_names
+from core.sessions import (
+    SKILL_AVAILABLE_NOTE_PREFIX,
+    ChatSession,
+    latest_project_tool_context_id,
+    project_tool_context_id,
+    skill_activation_names,
+)
 from core.tools import ANALYZE_IMAGE_TOOL_NAME, HISTORY_TOOL_NAME
 from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.logging import get_logger
@@ -935,7 +942,7 @@ class ChatLoop:
             skill_registry,
             project_id,
         )
-        return _RunExecutionContext(
+        context = _RunExecutionContext(
             run=run,
             request=request,
             session=session,
@@ -952,6 +959,37 @@ class ChatLoop:
             continuation_tracker=continuation_tracker,
             continuation_reminder=continuation_reminder,
         )
+        if project_id is None:
+            loaded_project_id = latest_project_tool_context_id(session.load())
+            if loaded_project_id is not None:
+                self._apply_project_skill_context(context, loaded_project_id)
+        return context
+
+    def _apply_project_skill_context(
+        self,
+        context: _RunExecutionContext,
+        project_id: str,
+    ) -> None:
+        """Make one explicitly loaded Project's Skills active for an Identity Run.
+
+        The Project Tool Result remains the sole persisted context carrier. This
+        updates only the Run-local Skill resolver used by activation and Tool
+        dispatch; the Session-pinned Skill catalog and therefore the System Prompt
+        remain unchanged.
+        """
+        try:
+            registry = self._dependencies.resolve_skills(project_id, context.run.agent_id)
+        except (ProjectError, OSError) as error:
+            _LOGGER.warning(
+                "Loaded Project Skill context is unavailable (agent=%s session=%s project=%s): %s",
+                context.run.agent_id,
+                context.run.session_id,
+                project_id,
+                error,
+            )
+            return
+        context.skill_project_id = project_id
+        context.skill_registry = registry
 
     def _create_model_target(
         self,
@@ -1827,6 +1865,9 @@ class ChatLoop:
                         assert tool_message.tool_call_id is not None
                         tool_dispatch_context.notify_result_persisted(tool_message.tool_call_id)
                         messages.append(_message_to_request_dict(tool_message))
+                        loaded_project_id = project_tool_context_id(tool_message)
+                        if project_id is None and loaded_project_id is not None:
+                            self._apply_project_skill_context(context, loaded_project_id)
                     if context.continuation_tracker is not None:
                         context.continuation_tracker.record_tool_results(tool_messages)
                     # A tool may ask to show media (e.g. read on an image): inject it

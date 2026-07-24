@@ -1346,20 +1346,17 @@ class SystemPromptManager:
     def render_project_skills(
         self, project_name: str, skills: Sequence[ProjectContextSkill]
     ) -> str:
-        """Render a Project's skills as a path-bearing context section.
+        """Render a Project's Skills in its explicit Tool-result context section.
 
-        Unlike the system-prompt catalog (deliberately path-free), the explicit
-        Project Context names each skill's absolute ``SKILL.md`` path and tells the
-        Identity Agent to read it with the ``read`` tool — loading a foreign Project
-        does not change the run's Skill scope. Returns ``""`` when the Project has no
-        skills, so no empty section is emitted.
+        The Session-pinned System Prompt catalog remains unchanged. The explicit
+        Project Context names each Skill and tells the Identity Agent to activate it
+        through the ordinary ``skill`` Tool, whose Run-local resolver follows the
+        latest successful Project Tool Result. Returns ``""`` when the Project has
+        no Skills, so no empty section is emitted.
         """
         if not skills:
             return ""
-        lines = [
-            f"Skills from project '{project_name}' — read a skill's SKILL.md with the "
-            "`read` tool to use it:"
-        ]
+        lines = [f"Skills from project '{project_name}' — load one by name with the `skill` Tool:"]
         lines.extend(
             f"- {skill.name}: {skill.description} ({skill.path})"
             for skill in sorted(skills, key=lambda item: item.name)
