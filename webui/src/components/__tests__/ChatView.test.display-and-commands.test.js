@@ -273,6 +273,119 @@ describe('ChatView', () => {
     ).toBeNull();
   });
 
+  it('clears a delivered child result and lands on the Agent user session', async () => {
+    const alpha = createAgent({
+      current_session_id: 'parent-session',
+    });
+    const beta = createAgent({
+      id: 'beta',
+      name: 'Beta',
+      current_session_id: 'beta-user-session',
+    });
+    let childDelivered = false;
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        agents: [alpha, beta],
+        sessionMessages: {
+          'parent-session': [],
+          'beta-user-session': [
+            {
+              id: 'beta-user-message',
+              role: 'assistant',
+              content: 'Beta user conversation',
+            },
+          ],
+          'beta-child-session': [
+            {
+              id: 'beta-child-summary',
+              role: 'run_summary',
+              run_id: 'beta-child-run',
+              status: 'completed',
+            },
+          ],
+        },
+      }),
+    );
+    listSessionsMock.mockImplementation(async (agentId) => ({
+      sessions:
+        agentId === 'beta'
+          ? [
+              {
+                id: 'beta-user-session',
+                last_active_at: '2026-07-20T09:00:00+00:00',
+                latest_completion_run_id: null,
+                has_unread_completion: false,
+              },
+              {
+                id: 'beta-child-session',
+                last_active_at: '2026-07-20T10:00:00+00:00',
+                latest_completion_run_id: 'beta-child-run',
+                has_unread_completion: !childDelivered,
+                unread_run_id: childDelivered ? null : 'beta-child-run',
+                unread_run_status: childDelivered ? null : 'completed',
+                unread_run_at: childDelivered
+                  ? null
+                  : '2026-07-20T10:00:00+00:00',
+                is_subagent_session: true,
+              },
+            ]
+          : [],
+    }));
+    const { createChatViewParentHarness } =
+      await import('./chatViewParentHarness.svelte.js');
+    const parentHarness = createChatViewParentHarness();
+
+    chatViewTest.mount({
+      target: document.body,
+      props: {
+        sharedAgents: [alpha, beta],
+        get sharedSelectedAgentId() {
+          return parentHarness.selectedAgentId;
+        },
+        onAgentSelected: (agentId) => parentHarness.setSelectedAgentId(agentId),
+        get sessionsRefreshToken() {
+          return parentHarness.sessionsRefreshToken;
+        },
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        Boolean(
+          findButtonByText('Beta')?.querySelector('.tab-indicator--unread'),
+        ),
+      100,
+    );
+
+    childDelivered = true;
+    parentHarness.bumpSessionsRefreshToken();
+    flushSync();
+    await waitForCondition(
+      () => !findButtonByText('Beta')?.querySelector('.tab-indicator--unread'),
+      100,
+    );
+
+    findButtonByText('Beta').click();
+    await waitForCondition(
+      () =>
+        findButtonByText('Beta')?.classList.contains('active') &&
+        document.body.textContent.includes('Beta user conversation'),
+      100,
+    );
+
+    expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+      agent_id: 'beta',
+      session_id: 'beta-user-session',
+      limit: 100,
+    });
+    expect(rpcMock).not.toHaveBeenCalledWith('chat.history', {
+      agent_id: 'beta',
+      session_id: 'beta-child-session',
+      limit: 100,
+    });
+  });
+
   it('keeps a displayed terminal result idle before read acknowledgement returns', async () => {
     let resolveMarkRead;
     const defaultRpc = createChatRpcMock();

@@ -537,12 +537,6 @@ def _mark_session_read(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
-    if activity.get("marked_read") is True:
-        publish_resource_changed(
-            state,
-            RESOURCE_KIND_SESSIONS,
-            scope={"agent_id": agent_id},
-        )
     return {
         "agent_id": format_agent_address(agent_id, project_id),
         "session_id": session_id,

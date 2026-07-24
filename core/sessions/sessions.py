@@ -513,6 +513,7 @@ class ChatSessionManager:
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = data_dir
         self._title_changed_callbacks: list[Callable[[str, str, str | None], None]] = []
+        self._completion_read_callbacks: list[Callable[[str, str, str | None], None]] = []
 
     def add_title_changed_callback(
         self, callback: Callable[[str, str, str | None], None]
@@ -523,6 +524,18 @@ class ChatSessionManager:
         def unsubscribe() -> None:
             if callback in self._title_changed_callbacks:
                 self._title_changed_callbacks.remove(callback)
+
+        return unsubscribe
+
+    def add_completion_read_callback(
+        self, callback: Callable[[str, str, str | None], None]
+    ) -> Callable[[], None]:
+        """Register a successful completion-read callback and return its unsubscribe."""
+        self._completion_read_callbacks.append(callback)
+
+        def unsubscribe() -> None:
+            if callback in self._completion_read_callbacks:
+                self._completion_read_callbacks.remove(callback)
 
         return unsubscribe
 
@@ -778,7 +791,9 @@ class ChatSessionManager:
                 marked_read = True
             payload = _completion_activity_payload(activity)
             payload["marked_read"] = marked_read
-            return payload
+        if marked_read:
+            self._notify_completion_read(agent_id, session_id, project_id)
+        return payload
 
     def set_title(
         self,
@@ -861,6 +876,20 @@ class ChatSessionManager:
             except Exception:
                 _LOGGER.warning(
                     "Session title change callback failed (agent=%s session=%s)",
+                    agent_id,
+                    session_id,
+                    exc_info=True,
+                )
+
+    def _notify_completion_read(
+        self, agent_id: str, session_id: str, project_id: str | None
+    ) -> None:
+        for callback in list(self._completion_read_callbacks):
+            try:
+                callback(agent_id, session_id, project_id)
+            except Exception:
+                _LOGGER.warning(
+                    "Session completion-read callback failed (agent=%s session=%s)",
                     agent_id,
                     session_id,
                     exc_info=True,

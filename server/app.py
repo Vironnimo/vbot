@@ -151,6 +151,7 @@ def create_app(
             )
             _unregister_run_event_bridge(app.state)
             _unregister_session_title_bridge(app.state)
+            _unregister_session_completion_read_bridge(app.state)
             _unregister_cron_change_bridge(app.state)
             await _shutdown_log_viewer(app.state.log_viewer, server_logger)
             await _shutdown_device_flow_engine(
@@ -372,6 +373,9 @@ def _initialize_app_state(
     app.state.run_event_bridge_run_ids = OrderedDict()
     app.state.run_event_bridge_unsubscribe = _register_run_event_bridge(app.state)
     app.state.session_title_bridge_unsubscribe = _register_session_title_bridge(app.state)
+    app.state.session_completion_read_bridge_unsubscribe = _register_session_completion_read_bridge(
+        app.state
+    )
     app.state.cron_change_bridge_unsubscribe = _register_cron_change_bridge(app.state)
     app.state.chat_loop = runtime.chat_loop
     app.state.streaming_chat_loop = runtime.streaming_chat_loop
@@ -415,6 +419,27 @@ def _unregister_session_title_bridge(state: Any) -> None:
     if callable(unsubscribe):
         unsubscribe()
     state.session_title_bridge_unsubscribe = None
+
+
+def _register_session_completion_read_bridge(state: Any) -> Any:
+    sessions = getattr(state.runtime, "chat_sessions", None)
+    add_callback = getattr(sessions, "add_completion_read_callback", None)
+    if not callable(add_callback):
+        return None
+    return add_callback(
+        lambda agent_id, _session_id, _project_id: publish_resource_changed(
+            state,
+            RESOURCE_KIND_SESSIONS,
+            scope={"agent_id": agent_id},
+        )
+    )
+
+
+def _unregister_session_completion_read_bridge(state: Any) -> None:
+    unsubscribe = getattr(state, "session_completion_read_bridge_unsubscribe", None)
+    if callable(unsubscribe):
+        unsubscribe()
+    state.session_completion_read_bridge_unsubscribe = None
 
 
 def _register_cron_change_bridge(state: Any) -> Any:

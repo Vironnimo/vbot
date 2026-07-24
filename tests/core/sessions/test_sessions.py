@@ -805,6 +805,40 @@ class TestChatSessionManager:
         }
         assert manager.list_with_metadata("coder")[0]["has_unread_completion"] is False
 
+    def test_successful_completion_read_notifies_subscribers(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        manager.create("coder", session_id="session-a")
+        notifications: list[tuple[str, str, str | None]] = []
+        unsubscribe = manager.add_completion_read_callback(
+            lambda agent_id, session_id, project_id: notifications.append(
+                (agent_id, session_id, project_id)
+            )
+        )
+        manager.record_terminal_run(
+            "coder",
+            "session-a",
+            "run-one",
+            "completed",
+            "2026-07-20T10:00:00+00:00",
+        )
+
+        manager.mark_terminal_run_read("coder", "session-a", "stale-run")
+        assert notifications == []
+
+        manager.mark_terminal_run_read("coder", "session-a", "run-one")
+        assert notifications == [("coder", "session-a", None)]
+
+        unsubscribe()
+        manager.record_terminal_run(
+            "coder",
+            "session-a",
+            "run-two",
+            "completed",
+            "2026-07-20T10:05:00+00:00",
+        )
+        manager.mark_terminal_run_read("coder", "session-a", "run-two")
+        assert notifications == [("coder", "session-a", None)]
+
     def test_list_with_metadata_recovers_timestamps_from_partial_trailing_line(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         session = manager.create("coder", session_id="session-a")
