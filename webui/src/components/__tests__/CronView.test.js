@@ -83,7 +83,7 @@ describe('CronView', () => {
         cronJob({
           id: 'job-active',
           name: 'Nightly summary job',
-          prompt: 'Nightly summary',
+          prompt: 'Prompt content must stay out',
           status: 'active',
         }),
         cronJob({
@@ -144,6 +144,15 @@ describe('CronView', () => {
     expect(document.body.textContent).toContain('Failed');
     expect(document.body.textContent).toContain('Missed');
     expect(document.body.textContent).toContain('Nightly summary job');
+    const activeRow = document.querySelector(
+      '[data-testid="cron-item-job-active"]',
+    );
+    expect(activeRow.textContent).toContain('Next ·');
+    expect(activeRow.textContent).not.toContain('Prompt content must stay out');
+    expect(activeRow.textContent).not.toContain('Agent Alpha');
+    expect(activeRow.textContent).not.toContain('*/30 * * * *');
+    expect(activeRow.querySelector('.cron-item-prompt')).toBeNull();
+    expect(activeRow.querySelector('.cron-item-schedule')).toBeNull();
     expect(document.getElementById('cron-job-timezone')).toBeNull();
     expect(document.body.textContent).not.toContain('Schedule timezone');
   });
@@ -157,8 +166,8 @@ describe('CronView', () => {
 
     await waitForCondition(() => document.getElementById('cron-job-prompt'));
 
-    // The first job is selected: its toggle/delete controls live in the detail
-    // header, and the prompt field is pre-filled from that job.
+    // The first job is selected: status and Enabled remain in the header, while
+    // deletion is available under Technical details and the editor is grouped.
     expect(
       document.querySelector('[data-testid="cron-toggle-job-first"]'),
     ).toBeTruthy();
@@ -171,6 +180,18 @@ describe('CronView', () => {
     expect(document.getElementById('cron-job-name').value).toBe(
       'Default scheduled run',
     );
+    expect(document.querySelectorAll('.cron-summary-item')).toHaveLength(4);
+    expect(document.body.textContent).toContain('Cadence');
+    expect(document.body.textContent).toContain('Last result');
+    expect(document.body.textContent).toContain('Target');
+    expect(document.body.textContent).toContain('Task');
+    expect(document.body.textContent).toContain('Timing');
+    expect(document.body.textContent).toContain('Session');
+    expect(document.body.textContent).toContain('Technical details');
+    expect(document.querySelector('.detail-sub').textContent).not.toContain(
+      'job-first',
+    );
+    expect(document.querySelectorAll('.cron-card .form-field').length).toBe(6);
   });
 
   it('disables the selected job via the detail toggle', async () => {
