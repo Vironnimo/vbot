@@ -210,52 +210,33 @@ def test_malformed_jobs_file_disables_cron_without_overwriting_it(
     assert jobs_path.read_text(encoding="utf-8") == "{"
 
 
-def test_utc_timezone_is_accepted_when_zoneinfo_database_is_unavailable(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Arrange
-    service, _trigger_service = make_service(tmp_path)
-
-    def missing_zoneinfo(_timezone_name: str) -> Any:
-        raise cron_module.ZoneInfoNotFoundError("timezone data unavailable")
-
-    monkeypatch.setattr(cron_module, "ZoneInfo", missing_zoneinfo)
-
-    # Act
-    created = service.create_job(
-        agent_id="agent-one",
-        prompt="Cron job",
-        schedule_type="cron",
-        cron_expression="* * * * *",
-        timezone="UTC",
+def test_legacy_timezone_is_ignored_and_removed_on_next_save(tmp_path: Path) -> None:
+    jobs_path = tmp_path / "cron" / "jobs.json"
+    jobs_path.parent.mkdir(parents=True)
+    jobs_path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "legacy-job",
+                    "agent_id": "agent-one",
+                    "prompt": "Legacy schedule",
+                    "schedule_type": "cron",
+                    "cron_expression": "0 9 * * *",
+                    "timezone": "Europe/Paris",
+                }
+            ]
+        ),
+        encoding="utf-8",
     )
-
-    # Assert
-    assert created.timezone == "UTC"
-
-
-def test_non_utc_timezone_still_fails_when_zoneinfo_database_is_unavailable(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Arrange
     service, _trigger_service = make_service(tmp_path)
 
-    def missing_zoneinfo(_timezone_name: str) -> Any:
-        raise cron_module.ZoneInfoNotFoundError("timezone data unavailable")
+    loaded = service.list_jobs()
+    service.update_job("legacy-job", prompt="Migrated schedule")
 
-    monkeypatch.setattr(cron_module, "ZoneInfo", missing_zoneinfo)
-
-    # Act / Assert
-    with pytest.raises(CronJobValidationError, match="Unknown timezone: Europe/Paris"):
-        service.create_job(
-            agent_id="agent-one",
-            prompt="Cron job",
-            schedule_type="cron",
-            cron_expression="* * * * *",
-            timezone="Europe/Paris",
-        )
+    assert [job.id for job in loaded] == ["legacy-job"]
+    assert not hasattr(loaded[0], "timezone")
+    persisted = json.loads(jobs_path.read_text(encoding="utf-8"))
+    assert "timezone" not in persisted[0]
 
 
 def test_cron_expression_rejects_seconds_field(tmp_path: Path) -> None:
@@ -270,15 +251,18 @@ def test_cron_expression_rejects_seconds_field(tmp_path: Path) -> None:
         )
 
 
-def test_once_timestamp_is_normalized_to_explicit_utc(tmp_path: Path) -> None:
+def test_once_timestamp_is_normalized_from_server_timezone_to_explicit_utc(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     service, _trigger_service = make_service(tmp_path)
+    monkeypatch.setattr(cron_module, "get_localzone", lambda: ZoneInfo("Europe/Berlin"))
 
     created = service.create_job(
         agent_id="agent-one",
         prompt="Run at local wall time",
         schedule_type="once",
         run_at="2026-07-18T16:00",
-        timezone="Europe/Berlin",
     )
 
     assert created.run_at == "2026-07-18T14:00:00+00:00"
@@ -340,7 +324,6 @@ async def test_start_creates_active_tasks_and_records_missed_once_jobs(
         prompt="Cron active",
         schedule_type="cron",
         cron_expression="* * * * *",
-        timezone="UTC",
     )
 
     async def hold_cron_task(_job: cron_module.CronJob) -> None:
@@ -377,7 +360,6 @@ async def test_cron_service_aclose_awaits_cancelled_job_tasks(
         prompt="Cron active",
         schedule_type="cron",
         cron_expression="* * * * *",
-        timezone="UTC",
     )
     started = asyncio.Event()
     cancelled = asyncio.Event()
@@ -672,7 +654,6 @@ async def test_run_cron_job_fires_and_updates_last_fired_at(
         prompt="Cron prompt",
         schedule_type="cron",
         cron_expression="* * * * *",
-        timezone="UTC",
     )
 
     class ImmediateCronIter:
@@ -723,7 +704,6 @@ async def test_run_cron_job_continues_after_trigger_failure(
         prompt="Cron prompt",
         schedule_type="cron",
         cron_expression="* * * * *",
-        timezone="UTC",
     )
 
     class ImmediateCronIter:
@@ -774,7 +754,6 @@ def test_crud_status_or_schedule_changes_restart_tasks(
         prompt="Cron prompt",
         schedule_type="cron",
         cron_expression="* * * * *",
-        timezone="UTC",
     )
     service._started = True
 

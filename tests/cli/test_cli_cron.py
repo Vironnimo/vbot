@@ -35,8 +35,6 @@ def test_parse_args_supports_cron_create_recurring() -> None:
             "Check the news",
             "--cron",
             "0 9 * * *",
-            "--timezone",
-            "Europe/Berlin",
             "--session",
             "session-one",
         ]
@@ -48,7 +46,6 @@ def test_parse_args_supports_cron_create_recurring() -> None:
     assert args.prompt == "Check the news"
     assert args.cron == "0 9 * * *"
     assert args.at is None
-    assert args.timezone == "Europe/Berlin"
     assert args.session == "session-one"
 
 
@@ -80,6 +77,28 @@ def test_parse_args_cron_create_requires_schedule(capsys: pytest.CaptureFixture[
 
     assert exc_info.value.code == 2
     assert "--cron" in capsys.readouterr().err
+
+
+def test_parse_args_cron_create_rejects_per_job_timezone(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        cli_main.parse_args(
+            [
+                "cron",
+                "create",
+                "assistant",
+                "--prompt",
+                "x",
+                "--cron",
+                "0 9 * * *",
+                "--timezone",
+                "Europe/Berlin",
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    assert "unrecognized arguments: --timezone" in capsys.readouterr().err
 
 
 def test_parse_args_supports_cron_update_status() -> None:
@@ -211,7 +230,7 @@ def test_cron_update_rejects_empty_changes(tmp_path: Path) -> None:
         ok=False,
         message=(
             "no cron fields provided; use one of: --agent, --prompt, --cron, --at, "
-            "--timezone, --session, --status"
+            "--session, --status"
         ),
         instance=instance,
     )

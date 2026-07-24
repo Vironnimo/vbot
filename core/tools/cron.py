@@ -24,47 +24,36 @@ CronScheduleType = Literal["cron", "once"]
 
 CRON_TOOL_NAME = "cron"
 CRON_TOOL_DESCRIPTION = (
-    "Manage scheduled Runs. A cron schedule uses exactly five fields (minute, hour, "
-    "day-of-month, month, day-of-week; minimum cadence one minute); once uses an ISO 8601 "
-    "run_at interpreted in timezone when no offset is present. Omit agent_id to target the "
-    "current Agent and Project, or use agent / agent@project explicitly. Omit session_id to "
-    "create a fresh Session for every fire; otherwise it must name an existing Session. "
-    "Missed once jobs do not catch up after restart. List includes terminal history and the "
-    "last Run outcome."
+    "Create and manage persisted schedules that start Runs. Each call must contain exactly "
+    "one operation. New jobs are enabled immediately, use the server timezone, and start a "
+    "fresh Session on every fire. Use list to obtain job ids; disable pauses a job without "
+    "deleting it."
 )
 
 CRON_ACTIONS = frozenset(("create", "list", "update", "delete", "enable", "disable"))
 CRON_SCHEDULE_TYPES = frozenset(("cron", "once"))
-CRON_STATUSES = frozenset(("active", "paused"))
 
 _CREATE_ARGUMENTS = frozenset(
     {
-        "action",
-        "agent_id",
+        "target",
         "prompt",
         "schedule_type",
         "cron_expression",
         "run_at",
-        "timezone",
-        "session_id",
     }
 )
-_LIST_ARGUMENTS = frozenset({"action"})
+_LIST_ARGUMENTS: frozenset[str] = frozenset()
 _UPDATE_ARGUMENTS = frozenset(
     {
-        "action",
         "id",
-        "agent_id",
+        "target",
         "prompt",
         "schedule_type",
         "cron_expression",
         "run_at",
-        "timezone",
-        "session_id",
-        "status",
     }
 )
-_ID_ONLY_ARGUMENTS = frozenset({"action", "id"})
+_ID_ONLY_ARGUMENTS = frozenset({"id"})
 _ACTION_ARGUMENTS: dict[str, frozenset[str]] = {
     "create": _CREATE_ARGUMENTS,
     "list": _LIST_ARGUMENTS,
@@ -77,63 +66,139 @@ _ACTION_ARGUMENTS: dict[str, frozenset[str]] = {
 CRON_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
-        "action": {
-            "type": "string",
-            "enum": sorted(CRON_ACTIONS),
-            "description": "Action to perform for cron job management.",
-        },
-        "id": {
-            "type": "string",
-            "description": "Cron job id for update/delete/enable/disable actions.",
-        },
-        "agent_id": {
-            "type": "string",
+        "create": {
+            "type": "object",
             "description": (
-                "Optional target address (agent or agent@project). Create defaults to the "
-                "current Agent and Project."
+                "Create an enabled schedule. The prompt must be self-contained because each "
+                "fire starts a fresh Session."
             ),
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": (
+                        "Agent address that runs the prompt: agent or agent@project. Omit to "
+                        "use the current Agent and Project."
+                    ),
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": (
+                        "Self-contained instruction sent to the target Agent on every fire."
+                    ),
+                },
+                "schedule_type": {
+                    "type": "string",
+                    "enum": sorted(CRON_SCHEDULE_TYPES),
+                    "description": "cron for a recurring schedule; once for one execution.",
+                },
+                "cron_expression": {
+                    "type": "string",
+                    "description": (
+                        "Required for cron. Exactly five fields: minute hour day-of-month "
+                        "month day-of-week. Seconds are unsupported; minimum cadence is one "
+                        "minute."
+                    ),
+                },
+                "run_at": {
+                    "type": "string",
+                    "description": (
+                        "Required for once. ISO 8601 date-time; a value without an offset uses "
+                        "the server timezone."
+                    ),
+                },
+            },
+            "required": ["prompt", "schedule_type"],
+            "additionalProperties": False,
         },
-        "prompt": {
-            "type": "string",
-            "description": "Prompt sent to the target agent when the schedule fires.",
-        },
-        "schedule_type": {
-            "type": "string",
-            "enum": sorted(CRON_SCHEDULE_TYPES),
-            "description": "Schedule type for create/update actions: cron or once.",
-        },
-        "cron_expression": {
-            "type": "string",
+        "list": {
+            "type": "object",
             "description": (
-                "Exactly five cron fields: minute hour day-of-month month day-of-week. "
-                "The minimum cadence is one minute."
+                "List all jobs, including terminal history, ids, schedules, status, and the "
+                "last Run outcome."
             ),
+            "properties": {},
+            "additionalProperties": False,
         },
-        "run_at": {
-            "type": "string",
+        "update": {
+            "type": "object",
             "description": (
-                "ISO 8601 timestamp for once jobs. A timestamp without an offset is "
-                "interpreted in timezone."
+                "Change one job. Include id and at least one field to change. Use enable or "
+                "disable for status changes."
             ),
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": "Job id returned by create or list.",
+                },
+                "target": {
+                    "type": "string",
+                    "description": "Replacement target address: agent or agent@project.",
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "Replacement self-contained instruction for every fire.",
+                },
+                "schedule_type": {
+                    "type": "string",
+                    "enum": sorted(CRON_SCHEDULE_TYPES),
+                    "description": "cron for a recurring schedule; once for one execution.",
+                },
+                "cron_expression": {
+                    "type": "string",
+                    "description": (
+                        "Recurring five-field expression. Required when changing to cron."
+                    ),
+                },
+                "run_at": {
+                    "type": "string",
+                    "description": (
+                        "One-time ISO 8601 date-time. Required when changing to once; a value "
+                        "without an offset uses the server timezone."
+                    ),
+                },
+            },
+            "required": ["id"],
+            "additionalProperties": False,
         },
-        "timezone": {
-            "type": "string",
-            "description": "Optional IANA timezone name. Defaults to system timezone.",
+        "delete": {
+            "type": "object",
+            "description": "Permanently delete one job. Use disable to pause it reversibly.",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": "Job id returned by create or list.",
+                }
+            },
+            "required": ["id"],
+            "additionalProperties": False,
         },
-        "session_id": {
-            "type": "string",
-            "description": (
-                "Optional existing Session id owned by the target. Omit it to create a fresh "
-                "Session for every fire."
-            ),
+        "enable": {
+            "type": "object",
+            "description": "Enable a paused or failed job.",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": "Job id returned by create or list.",
+                }
+            },
+            "required": ["id"],
+            "additionalProperties": False,
         },
-        "status": {
-            "type": "string",
-            "enum": sorted(CRON_STATUSES),
-            "description": "Optional status for update action.",
+        "disable": {
+            "type": "object",
+            "description": "Pause a job without deleting it.",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": "Job id returned by create or list.",
+                }
+            },
+            "required": ["id"],
+            "additionalProperties": False,
         },
     },
-    "required": ["action"],
+    "minProperties": 1,
+    "maxProperties": 1,
     "additionalProperties": False,
 }
 
@@ -151,7 +216,7 @@ def register_cron_tool(registry: ToolRegistry, cron_service: CronService) -> Non
         CRON_TOOL_DESCRIPTION,
         CRON_TOOL_PARAMETERS,
         handler,
-        display=ToolDisplay(summary_fields=("action", "id", "agent_id", "schedule_type")),
+        display=ToolDisplay(summary_builder=_cron_display_summary),
     )
 
 
@@ -160,40 +225,38 @@ def _handle_cron_tool(
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
-    action_value = arguments.get("action")
-    if not isinstance(action_value, str) or action_value not in CRON_ACTIONS:
-        return tool_failure(
-            "invalid_arguments",
-            "action must be one of: create, delete, disable, enable, list, update",
-        )
+    operation = _extract_operation(arguments)
+    if isinstance(operation, str):
+        return tool_failure("invalid_arguments", operation, retryable=False)
+    action, operation_arguments = operation
 
-    action = action_value
-    unknown_arguments = sorted(set(arguments) - _ACTION_ARGUMENTS[action])
+    unknown_arguments = sorted(set(operation_arguments) - _ACTION_ARGUMENTS[action])
     if unknown_arguments:
         names = ", ".join(unknown_arguments)
         return tool_failure(
             "invalid_arguments",
             f"Unknown argument(s) for action '{action}': {names}",
+            retryable=False,
         )
 
     try:
         if action == "create":
-            return _handle_create(cron_service, context, arguments)
+            return _handle_create(cron_service, context, operation_arguments)
         if action == "list":
             return _handle_list(cron_service)
         if action == "update":
-            return _handle_update(cron_service, arguments)
+            return _handle_update(cron_service, operation_arguments)
         if action == "delete":
-            return _handle_delete(cron_service, arguments)
+            return _handle_delete(cron_service, operation_arguments)
         if action == "enable":
-            return _handle_enable(cron_service, arguments)
-        return _handle_disable(cron_service, arguments)
+            return _handle_enable(cron_service, operation_arguments)
+        return _handle_disable(cron_service, operation_arguments)
     except ValueError as error:
-        return tool_failure("invalid_arguments", str(error))
+        return tool_failure("invalid_arguments", str(error), retryable=False)
     except CronJobNotFoundError as error:
-        return tool_failure("job_not_found", str(error))
+        return tool_failure("job_not_found", str(error), retryable=False)
     except CronJobValidationError as error:
-        return tool_failure("invalid_arguments", str(error))
+        return tool_failure("invalid_arguments", str(error), retryable=False)
     except CronServiceError as error:
         _LOGGER.warning("Cron service error for action=%s: %s", action, error)
         return tool_failure("cron_service_error", str(error))
@@ -202,7 +265,7 @@ def _handle_cron_tool(
 def _handle_create(
     cron_service: CronService, context: ToolContext, arguments: JsonObject
 ) -> JsonObject:
-    target = optional_string(arguments.get("agent_id"), field_name="agent_id")
+    target = optional_string(arguments.get("target"), field_name="target")
     if target is None:
         agent_id, project_id = context.agent_id, context.project_id
     else:
@@ -218,9 +281,6 @@ def _handle_create(
         arguments.get("cron_expression"), field_name="cron_expression"
     )
     run_at = optional_string(arguments.get("run_at"), field_name="run_at")
-    timezone = optional_string(arguments.get("timezone"), field_name="timezone")
-    session_id = optional_string(arguments.get("session_id"), field_name="session_id")
-
     if schedule_type == "cron":
         if cron_expression is None:
             raise ValueError("cron_expression is required when schedule_type is 'cron'")
@@ -236,8 +296,7 @@ def _handle_create(
         schedule_type=cast(CronScheduleType, schedule_type),
         cron_expression=cron_expression,
         run_at=run_at,
-        timezone=timezone,
-        session_id=session_id,
+        session_id=None,
         project_id=project_id,
     )
     return tool_success({"job": _job_payload(cron_service, job)})
@@ -252,10 +311,10 @@ def _handle_update(cron_service: CronService, arguments: JsonObject) -> JsonObje
     job_id = required_string(arguments.get("id"), field_name="id")
     updates: dict[str, str | None] = {}
 
-    if "agent_id" in arguments:
+    if "target" in arguments:
         target = required_string(
-            arguments.get("agent_id"),
-            field_name="agent_id",
+            arguments.get("target"),
+            field_name="target",
         )
         agent_id, project_id = parse_agent_address(target)
         updates["agent_id"] = agent_id
@@ -274,18 +333,8 @@ def _handle_update(cron_service: CronService, arguments: JsonObject) -> JsonObje
         )
     if "run_at" in arguments:
         updates["run_at"] = required_string(arguments.get("run_at"), field_name="run_at")
-    if "timezone" in arguments:
-        updates["timezone"] = optional_string(arguments.get("timezone"), field_name="timezone")
-    if "session_id" in arguments:
-        updates["session_id"] = optional_string(
-            arguments.get("session_id"), field_name="session_id"
-        )
-    if "status" in arguments:
-        updates["status"] = _required_enum(
-            arguments.get("status"),
-            field_name="status",
-            allowed=CRON_STATUSES,
-        )
+    if not updates:
+        raise ValueError("update requires at least one field to change")
 
     job = cron_service.update_job(job_id, **updates)
     return tool_success({"job": _job_payload(cron_service, job)})
@@ -312,9 +361,45 @@ def _handle_disable(cron_service: CronService, arguments: JsonObject) -> JsonObj
 def _job_payload(cron_service: CronService, job: CronJob) -> JsonObject:
     payload = dict(job.to_dict())
     payload["target"] = format_agent_address(job.agent_id, job.project_id)
-    payload["effective_timezone"] = cron_service.effective_timezone_name(job)
     payload["next_fire_at"] = cron_service.next_fire_at(job)
     return payload
+
+
+def _extract_operation(arguments: JsonObject) -> tuple[str, JsonObject] | str:
+    """Normalize the operation envelope and the legacy flat action shape."""
+
+    if "action" in arguments:
+        action = arguments.get("action")
+        if not isinstance(action, str) or action not in CRON_ACTIONS:
+            return "action must be one of: create, delete, disable, enable, list, update"
+        legacy_arguments = {key: value for key, value in arguments.items() if key != "action"}
+        if "agent_id" in legacy_arguments:
+            if "target" in legacy_arguments:
+                return "Use only target, not both target and legacy agent_id"
+            legacy_arguments["target"] = legacy_arguments.pop("agent_id")
+        return action, legacy_arguments
+
+    if len(arguments) != 1:
+        return "Exactly one operation is required: create, delete, disable, enable, list, or update"
+    action, operation_arguments = next(iter(arguments.items()))
+    if action not in CRON_ACTIONS:
+        return f"Unknown operation: {action}"
+    if not isinstance(operation_arguments, dict):
+        return f"{action} must be a JSON object"
+    return action, dict(operation_arguments)
+
+
+def _cron_display_summary(arguments: JsonObject) -> str:
+    operation = _extract_operation(arguments)
+    if isinstance(operation, str):
+        return ""
+    action, operation_arguments = operation
+    parts = [action]
+    for field_name in ("id", "target", "schedule_type"):
+        value = operation_arguments.get(field_name)
+        if isinstance(value, str) and value.strip():
+            parts.append(value.strip())
+    return " · ".join(parts)
 
 
 def _required_enum(value: object, *, field_name: str, allowed: frozenset[str]) -> str:

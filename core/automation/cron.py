@@ -11,7 +11,6 @@ from datetime import UTC, datetime, tzinfo
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import croniter  # type: ignore[import-untyped]
 from tzlocal import get_localzone, get_localzone_name
@@ -48,7 +47,7 @@ CronRunOutcome = Literal["success", "failed", "cancelled", "missed", "unknown"]
 _ALLOWED_SCHEDULE_TYPES = frozenset(("cron", "once"))
 _ALLOWED_STATUSES = frozenset(("active", "paused", "completed", "failed", "missed"))
 _ALLOWED_RUN_OUTCOMES = frozenset(("success", "failed", "cancelled", "missed", "unknown"))
-_RESTART_FIELDS = frozenset(("schedule_type", "cron_expression", "run_at", "timezone", "status"))
+_RESTART_FIELDS = frozenset(("schedule_type", "cron_expression", "run_at", "status"))
 CRON_EXPRESSION_FIELD_COUNT = 5
 MAX_ACTIVE_CRON_JOBS = 64
 MAX_STORED_CRON_JOBS = 512
@@ -77,7 +76,6 @@ _MUTABLE_FIELDS = frozenset(
         "schedule_type",
         "cron_expression",
         "run_at",
-        "timezone",
         "session_id",
         "status",
         "project_id",
@@ -94,6 +92,7 @@ _CRON_JOB_FIELDS = _MUTABLE_FIELDS | {
     "last_outcome",
     "last_run_id",
 }
+_LEGACY_CRON_JOB_FIELDS = frozenset(("timezone",))
 
 _LOGGER = get_logger("automation.cron")
 
@@ -173,7 +172,13 @@ def _validate_cron_job_data(diagnostics: list[JsonDiagnostic], index: int, item:
     if not isinstance(item, dict):
         add_error(diagnostics, item_path, "Expected a JSON object")
         return
-    warn_unknown_keys(diagnostics, item_path, item, _CRON_JOB_FIELDS, "cron job field")
+    warn_unknown_keys(
+        diagnostics,
+        item_path,
+        item,
+        _CRON_JOB_FIELDS | _LEGACY_CRON_JOB_FIELDS,
+        "cron job field",
+    )
     validate_non_empty_string(diagnostics, f"{item_path}.id", item.get("id"), required=True)
     _validate_cron_agent_id(diagnostics, f"{item_path}.agent_id", item.get("agent_id"))
     validate_non_empty_string(diagnostics, f"{item_path}.prompt", item.get("prompt"), required=True)
@@ -192,6 +197,8 @@ def _validate_cron_job_data(diagnostics: list[JsonDiagnostic], index: int, item:
     for field_name in (
         "cron_expression",
         "run_at",
+        # Accepted only so installations with pre-migration data can load. The
+        # runtime ignores this legacy per-job override and the next save drops it.
         "timezone",
         "session_id",
         "project_id",
@@ -256,7 +263,6 @@ class CronJob:
     schedule_type: ScheduleType
     cron_expression: str | None
     run_at: str | None
-    timezone: str | None
     session_id: str | None
     status: CronJobStatus
     last_fired_at: str | None
@@ -278,7 +284,6 @@ class CronJob:
             "schedule_type": self.schedule_type,
             "cron_expression": self.cron_expression,
             "run_at": self.run_at,
-            "timezone": self.timezone,
             "session_id": self.session_id,
             "status": self.status,
             "last_fired_at": self.last_fired_at,
@@ -302,7 +307,6 @@ class CronJob:
             schedule_type=payload["schedule_type"],
             cron_expression=payload.get("cron_expression"),
             run_at=payload.get("run_at"),
-            timezone=payload.get("timezone"),
             session_id=payload.get("session_id"),
             status=payload.get("status") or "active",
             last_fired_at=payload.get("last_fired_at"),
@@ -361,7 +365,6 @@ class CronService:
         schedule_type: ScheduleType,
         cron_expression: str | None = None,
         run_at: str | None = None,
-        timezone: str | None = None,
         session_id: str | None = None,
         status: CronJobStatus = "active",
         project_id: str | None = None,
@@ -383,7 +386,6 @@ class CronService:
             schedule_type=schedule_type,
             cron_expression=cron_expression,
             run_at=run_at,
-            timezone=timezone,
             session_id=session_id,
             status=status,
             last_fired_at=None,
@@ -434,10 +436,6 @@ class CronService:
             _LOGGER.warning("Could not resolve system timezone name: %s", error)
             return "UTC"
 
-    def effective_timezone_name(self, job: CronJob) -> str:
-        """Return the IANA timezone that defines one job's wall-clock schedule."""
-        return job.timezone or self.system_timezone_name()
-
     def next_fire_at(self, job: CronJob, *, reference_time: datetime | None = None) -> str | None:
         """Project the next UTC fire instant from the canonical schedule rules."""
         if job.status != "active":
@@ -447,7 +445,7 @@ class CronService:
         if job.cron_expression is None:
             return None
 
-        timezone = self._resolve_timezone(job.timezone)
+        timezone = self._system_timezone()
         reference_utc = reference_time or _utc_now()
         if reference_utc.tzinfo is None:
             reference_utc = reference_utc.replace(tzinfo=UTC)
@@ -1014,17 +1012,6 @@ class CronService:
                 )
             job.project_id = normalized_project_id or None
 
-        if job.timezone is not None and not isinstance(job.timezone, str):
-            raise CronJobValidationError("timezone must be a string when provided")
-
-        if job.timezone is not None:
-            timezone = job.timezone.strip()
-            if not timezone:
-                job.timezone = None
-            else:
-                self._resolve_timezone(timezone)
-                job.timezone = timezone
-
         self._parse_utc_timestamp(job.created_at, field_name="created_at")
         if job.last_fired_at is not None:
             self._parse_utc_timestamp(job.last_fired_at, field_name="last_fired_at")
@@ -1108,7 +1095,7 @@ class CronService:
 
         parsed = _parse_iso_datetime(job.run_at, field_name="run_at", allow_naive=True)
         if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=self._resolve_timezone(job.timezone))
+            parsed = parsed.replace(tzinfo=self._system_timezone())
         return parsed.astimezone(UTC)
 
     def _parse_utc_timestamp(self, value: str, *, field_name: str) -> datetime:
@@ -1117,16 +1104,7 @@ class CronService:
             raise CronJobValidationError(f"{field_name} must be a UTC timestamp")
         return parsed
 
-    def _resolve_timezone(self, timezone_name: str | None) -> tzinfo:
-        if timezone_name:
-            normalized_timezone = timezone_name.strip()
-            if normalized_timezone.upper() == "UTC":
-                return UTC
-            try:
-                return ZoneInfo(normalized_timezone)
-            except ZoneInfoNotFoundError as error:
-                raise CronJobValidationError(f"Unknown timezone: {timezone_name}") from error
-
+    def _system_timezone(self) -> tzinfo:
         try:
             return get_localzone()
         except Exception as error:

@@ -20,23 +20,21 @@ import {
 } from '../cronView.js';
 
 describe('cron time and history projection', () => {
-  it('shows a persisted instant in the schedule timezone in list and form', () => {
+  it('shows persisted instants in the server timezone in list and form', () => {
     const job = {
       id: 'job-once',
       agent_id: 'main',
       prompt: 'Run once',
       schedule_type: 'once',
       run_at: '2026-07-18T16:00:00+00:00',
-      timezone: 'UTC',
-      effective_timezone: 'UTC',
       status: 'active',
     };
 
-    const [normalized] = visibleCronJobs([job]);
+    const [normalized] = visibleCronJobs([job], 'Europe/Berlin');
     const form = createCronFormValues(job, 'Europe/Berlin');
 
-    expect(normalized.schedule_description).toContain('16:00');
-    expect(form.run_at).toBe('2026-07-18T16:00');
+    expect(normalized.schedule_description).toContain('18:00');
+    expect(form.run_at).toBe('2026-07-18T18:00');
     expect(formatTimestamp(job.run_at, 'Europe/Berlin')).toContain('18:00');
     expect(toDateTimeLocalInput(job.run_at, 'Europe/Berlin')).toBe(
       '2026-07-18T18:00',
@@ -70,6 +68,26 @@ describe('cron time and history projection', () => {
     const baseline = cronFormFingerprint(form);
     form.prompt = 'Changed';
     expect(cronFormFingerprint(form)).not.toBe(baseline);
+  });
+
+  it('never sends a per-job timezone from create or update forms', () => {
+    const form = createCronFormValues(
+      {
+        id: 'job-once',
+        agent_id: 'main',
+        prompt: 'Run once',
+        schedule_type: 'once',
+        run_at: '2026-07-18T16:00:00+00:00',
+        status: 'active',
+      },
+      'Europe/Berlin',
+    );
+
+    expect(buildCreateCronPayload(form)).not.toHaveProperty('timezone');
+    expect(buildUpdateCronPayload(form)).not.toHaveProperty('timezone');
+    expect(buildUpdateCronPayload(form).run_at).toBe(
+      '2026-07-18T16:00:00+00:00',
+    );
   });
 });
 

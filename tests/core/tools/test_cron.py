@@ -10,7 +10,7 @@ from unittest.mock import Mock
 import pytest
 
 from core.automation.cron import CronJob, CronJobNotFoundError, CronJobValidationError
-from core.tools.cron import CRON_TOOL_NAME, register_cron_tool
+from core.tools.cron import CRON_TOOL_NAME, CRON_TOOL_PARAMETERS, register_cron_tool
 from core.tools.tools import ToolContext, ToolRegistry, tool_failure
 
 ScheduleType = Literal["cron", "once"]
@@ -51,7 +51,6 @@ def _make_job(
     schedule_type: ScheduleType = "cron",
     cron_expression: str | None = "*/5 * * * *",
     run_at: str | None = None,
-    timezone: str | None = "UTC",
     session_id: str | None = None,
     status: CronStatus = "active",
     last_fired_at: str | None = None,
@@ -63,7 +62,6 @@ def _make_job(
         schedule_type=schedule_type,
         cron_expression=cron_expression,
         run_at=run_at,
-        timezone=timezone,
         session_id=session_id,
         status=status,
         last_fired_at=last_fired_at,
@@ -74,7 +72,6 @@ def _make_job(
 def _cron_service_mock() -> Mock:
     service = Mock()
     service.system_timezone_name.return_value = "UTC"
-    service.effective_timezone_name.side_effect = lambda job: job.timezone or "UTC"
     service.next_fire_at.side_effect = lambda job: (
         "2026-05-14T12:05:00+00:00"
         if job.status == "active" and job.schedule_type == "cron"
@@ -83,6 +80,24 @@ def _cron_service_mock() -> Mock:
         else None
     )
     return service
+
+
+def test_schema_separates_operations_and_omits_agent_inapplicable_fields() -> None:
+    properties = cast(dict[str, dict[str, Any]], CRON_TOOL_PARAMETERS["properties"])
+
+    assert set(properties) == {"create", "list", "update", "delete", "enable", "disable"}
+    assert CRON_TOOL_PARAMETERS["minProperties"] == 1
+    assert CRON_TOOL_PARAMETERS["maxProperties"] == 1
+    assert properties["create"]["required"] == ["prompt", "schedule_type"]
+    assert properties["update"]["required"] == ["id"]
+
+    create_fields = cast(dict[str, Any], properties["create"]["properties"])
+    update_fields = cast(dict[str, Any], properties["update"]["properties"])
+    for removed_field in ("status", "session_id", "timezone", "agent_id"):
+        assert removed_field not in create_fields
+        assert removed_field not in update_fields
+    assert "target" in create_fields
+    assert "target" in update_fields
 
 
 def test_create_action_returns_success(tmp_path: Path) -> None:
@@ -96,13 +111,12 @@ def test_create_action_returns_success(tmp_path: Path) -> None:
             registry,
             tmp_path,
             {
-                "action": "create",
-                "agent_id": "agent-one",
-                "prompt": "Run this later",
-                "schedule_type": "cron",
-                "cron_expression": "*/5 * * * *",
-                "timezone": "UTC",
-                "session_id": "session-one",
+                "create": {
+                    "target": "agent-one",
+                    "prompt": "Run this later",
+                    "schedule_type": "cron",
+                    "cron_expression": "*/5 * * * *",
+                }
             },
         )
     )
@@ -118,8 +132,7 @@ def test_create_action_returns_success(tmp_path: Path) -> None:
         schedule_type="cron",
         cron_expression="*/5 * * * *",
         run_at=None,
-        timezone="UTC",
-        session_id="session-one",
+        session_id=None,
         project_id=None,
     )
 
@@ -135,10 +148,11 @@ def test_create_defaults_to_current_agent_and_project(tmp_path: Path) -> None:
             registry,
             tmp_path,
             {
-                "action": "create",
-                "prompt": "Continue project work",
-                "schedule_type": "cron",
-                "cron_expression": "0 9 * * *",
+                "create": {
+                    "prompt": "Continue project work",
+                    "schedule_type": "cron",
+                    "cron_expression": "0 9 * * *",
+                }
             },
             project_id="vbot",
         )
@@ -151,7 +165,6 @@ def test_create_defaults_to_current_agent_and_project(tmp_path: Path) -> None:
         schedule_type="cron",
         cron_expression="0 9 * * *",
         run_at=None,
-        timezone=None,
         session_id=None,
         project_id="vbot",
     )
@@ -173,7 +186,7 @@ def test_list_action_returns_success_and_next_fire_at(tmp_path: Path) -> None:
     registry = ToolRegistry()
     register_cron_tool(registry, cron_service)
 
-    result = asyncio.run(_dispatch(registry, tmp_path, {"action": "list"}))
+    result = asyncio.run(_dispatch(registry, tmp_path, {"list": {}}))
 
     assert result["ok"] is True
     data = cast(dict[str, Any], result["data"])
@@ -188,12 +201,12 @@ def test_list_action_returns_success_and_next_fire_at(tmp_path: Path) -> None:
 def test_list_action_uses_canonical_service_projection(tmp_path: Path) -> None:
     cron_service = _cron_service_mock()
     cron_service.list_jobs.return_value = [
-        _make_job(job_id="job-cron", schedule_type="cron", status="active", timezone="UTC")
+        _make_job(job_id="job-cron", schedule_type="cron", status="active")
     ]
     registry = ToolRegistry()
     register_cron_tool(registry, cron_service)
 
-    result = asyncio.run(_dispatch(registry, tmp_path, {"action": "list"}))
+    result = asyncio.run(_dispatch(registry, tmp_path, {"list": {}}))
 
     assert result["ok"] is True
     data = cast(dict[str, Any], result["data"])
@@ -212,9 +225,10 @@ def test_update_action_returns_success(tmp_path: Path) -> None:
             registry,
             tmp_path,
             {
-                "action": "update",
-                "id": "job-update",
-                "prompt": "Updated prompt",
+                "update": {
+                    "id": "job-update",
+                    "prompt": "Updated prompt",
+                }
             },
         )
     )
@@ -236,10 +250,7 @@ def test_delete_action_returns_success(tmp_path: Path) -> None:
         _dispatch(
             registry,
             tmp_path,
-            {
-                "action": "delete",
-                "id": "job-delete",
-            },
+            {"delete": {"id": "job-delete"}},
         )
     )
 
@@ -261,10 +272,7 @@ def test_enable_action_returns_success(tmp_path: Path) -> None:
         _dispatch(
             registry,
             tmp_path,
-            {
-                "action": "enable",
-                "id": "job-enable",
-            },
+            {"enable": {"id": "job-enable"}},
         )
     )
 
@@ -289,10 +297,7 @@ def test_disable_action_returns_success(tmp_path: Path) -> None:
         _dispatch(
             registry,
             tmp_path,
-            {
-                "action": "disable",
-                "id": "job-disable",
-            },
+            {"disable": {"id": "job-disable"}},
         )
     )
 
@@ -314,6 +319,105 @@ def test_invalid_action_returns_failure(tmp_path: Path) -> None:
     assert result == tool_failure(
         "invalid_arguments",
         "action must be one of: create, delete, disable, enable, list, update",
+        retryable=False,
+    )
+
+
+def test_multiple_operations_return_non_retryable_failure(tmp_path: Path) -> None:
+    cron_service = _cron_service_mock()
+    registry = ToolRegistry()
+    register_cron_tool(registry, cron_service)
+
+    result = asyncio.run(
+        _dispatch(
+            registry,
+            tmp_path,
+            {"list": {}, "delete": {"id": "job-delete"}},
+        )
+    )
+
+    assert result == tool_failure(
+        "invalid_arguments",
+        "Exactly one operation is required: create, delete, disable, enable, list, or update",
+        retryable=False,
+    )
+
+
+def test_update_requires_a_change_beyond_id(tmp_path: Path) -> None:
+    cron_service = _cron_service_mock()
+    registry = ToolRegistry()
+    register_cron_tool(registry, cron_service)
+
+    result = asyncio.run(
+        _dispatch(
+            registry,
+            tmp_path,
+            {"update": {"id": "job-update"}},
+        )
+    )
+
+    assert result == tool_failure(
+        "invalid_arguments",
+        "update requires at least one field to change",
+        retryable=False,
+    )
+    cron_service.update_job.assert_not_called()
+
+
+@pytest.mark.parametrize("removed_field", ["status", "session_id", "timezone"])
+def test_removed_agent_fields_are_rejected(
+    tmp_path: Path,
+    removed_field: str,
+) -> None:
+    cron_service = _cron_service_mock()
+    registry = ToolRegistry()
+    register_cron_tool(registry, cron_service)
+    arguments: dict[str, object] = {
+        "prompt": "Run this later",
+        "schedule_type": "cron",
+        "cron_expression": "*/5 * * * *",
+        removed_field: "active",
+    }
+
+    result = asyncio.run(_dispatch(registry, tmp_path, {"create": arguments}))
+
+    assert result == tool_failure(
+        "invalid_arguments",
+        f"Unknown argument(s) for action 'create': {removed_field}",
+        retryable=False,
+    )
+    cron_service.create_job.assert_not_called()
+
+
+def test_legacy_flat_shape_maps_agent_id_to_target(tmp_path: Path) -> None:
+    cron_service = _cron_service_mock()
+    cron_service.create_job.return_value = _make_job(job_id="job-legacy")
+    registry = ToolRegistry()
+    register_cron_tool(registry, cron_service)
+
+    result = asyncio.run(
+        _dispatch(
+            registry,
+            tmp_path,
+            {
+                "action": "create",
+                "agent_id": "builder@vbot",
+                "prompt": "Run this later",
+                "schedule_type": "cron",
+                "cron_expression": "*/5 * * * *",
+            },
+        )
+    )
+
+    assert result["ok"] is True
+    cron_service.create_job.assert_called_once_with(
+        agent_id="builder",
+        prompt="Run this later",
+        schedule_type="cron",
+        cron_expression="*/5 * * * *",
+        run_at=None,
+        session_id=None,
+        project_id="vbot",
     )
 
 
@@ -328,26 +432,29 @@ def test_create_invalid_cron_expression_returns_failure(tmp_path: Path) -> None:
             registry,
             tmp_path,
             {
-                "action": "create",
-                "agent_id": "agent-one",
-                "prompt": "Run this later",
-                "schedule_type": "cron",
-                "cron_expression": "not-a-cron-expression",
+                "create": {
+                    "target": "agent-one",
+                    "prompt": "Run this later",
+                    "schedule_type": "cron",
+                    "cron_expression": "not-a-cron-expression",
+                }
             },
         )
     )
 
-    assert result == tool_failure("invalid_arguments", "cron_expression is invalid")
+    assert result == tool_failure(
+        "invalid_arguments", "cron_expression is invalid", retryable=False
+    )
     cron_service.create_job.assert_called_once()
 
 
 @pytest.mark.parametrize(
     ("action", "method_name", "arguments"),
     [
-        ("update", "update_job", {"action": "update", "id": "missing", "prompt": "Updated"}),
-        ("delete", "delete_job", {"action": "delete", "id": "missing"}),
-        ("enable", "enable_job", {"action": "enable", "id": "missing"}),
-        ("disable", "disable_job", {"action": "disable", "id": "missing"}),
+        ("update", "update_job", {"update": {"id": "missing", "prompt": "Updated"}}),
+        ("delete", "delete_job", {"delete": {"id": "missing"}}),
+        ("enable", "enable_job", {"enable": {"id": "missing"}}),
+        ("disable", "disable_job", {"disable": {"id": "missing"}}),
     ],
 )
 def test_unknown_id_failures_return_job_not_found(
@@ -365,5 +472,5 @@ def test_unknown_id_failures_return_job_not_found(
 
     result = asyncio.run(_dispatch(registry, tmp_path, arguments))
 
-    assert result == tool_failure("job_not_found", "Cron job not found: missing")
+    assert result == tool_failure("job_not_found", "Cron job not found: missing", retryable=False)
     getattr(cron_service, method_name).assert_called_once()

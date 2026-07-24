@@ -38,7 +38,6 @@ def _cron_job(**changes: Any) -> SimpleNamespace:
         "schedule_type": "cron",
         "cron_expression": "*/5 * * * *",
         "run_at": None,
-        "timezone": "UTC",
         "session_id": "session-1",
         "status": "active",
         "last_fired_at": None,
@@ -69,7 +68,6 @@ async def test_cron_create_happy_path() -> None:
                 "prompt": "Run status check",
                 "schedule_type": "cron",
                 "cron_expression": "*/5 * * * *",
-                "timezone": "UTC",
                 "session_id": "session-1",
             },
         },
@@ -85,7 +83,6 @@ async def test_cron_create_happy_path() -> None:
         schedule_type="cron",
         cron_expression="*/5 * * * *",
         run_at=None,
-        timezone="UTC",
         session_id="session-1",
         project_id=None,
     )
@@ -95,7 +92,7 @@ async def test_cron_create_happy_path() -> None:
 async def test_cron_create_parses_project_qualified_target() -> None:
     cron_service = Mock()
     cron_service.create_job.return_value = _cron_job(
-        agent_id="builder", project_id="vbot", timezone=None, session_id=None
+        agent_id="builder", project_id="vbot", session_id=None
     )
     state = _state_with_cron_service(cron_service)
 
@@ -123,7 +120,6 @@ async def test_cron_create_parses_project_qualified_target() -> None:
         schedule_type="cron",
         cron_expression="*/5 * * * *",
         run_at=None,
-        timezone=None,
         session_id=None,
         project_id="vbot",
     )
@@ -139,7 +135,6 @@ async def test_cron_list_happy_path_includes_canonical_service_projection() -> N
         schedule_type="cron",
         cron_expression="*/5 * * * *",
         run_at=None,
-        timezone="UTC",
         session_id="session-1",
         status="active",
         last_fired_at="2026-05-14T09:55:00+00:00",
@@ -154,7 +149,6 @@ async def test_cron_list_happy_path_includes_canonical_service_projection() -> N
     cron_service = Mock()
     cron_service.list_jobs.return_value = [job]
     cron_service.system_timezone_name.return_value = "Europe/Berlin"
-    cron_service.effective_timezone_name.return_value = "UTC"
     cron_service.next_fire_at.return_value = "2026-05-14T10:05:00+00:00"
     state = _state_with_cron_service(cron_service)
 
@@ -173,7 +167,6 @@ async def test_cron_list_happy_path_includes_canonical_service_projection() -> N
                     "schedule_type": "cron",
                     "cron_expression": "*/5 * * * *",
                     "run_at": None,
-                    "timezone": "UTC",
                     "session_id": "session-1",
                     "status": "active",
                     "last_fired_at": "2026-05-14T09:55:00+00:00",
@@ -183,7 +176,6 @@ async def test_cron_list_happy_path_includes_canonical_service_projection() -> N
                     "last_outcome": "success",
                     "last_error": None,
                     "consecutive_failures": 0,
-                    "effective_timezone": "UTC",
                     "next_fire_at": "2026-05-14T10:05:00+00:00",
                     "created_at": "2026-05-14T09:00:00+00:00",
                 }
@@ -309,6 +301,16 @@ async def test_cron_disable_happy_path() -> None:
                 "prompt": "Run status check",
                 "schedule_type": "cron",
                 "cron_expression": "*/5 * * * *",
+            },
+        ),
+        (
+            "cron.create",
+            {
+                "agent_id": "main",
+                "prompt": "Run status check",
+                "schedule_type": "cron",
+                "cron_expression": "*/5 * * * *",
+                "timezone": "Europe/Berlin",
             },
         ),
         ("cron.list", {"extra": True}),

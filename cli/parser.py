@@ -1432,13 +1432,13 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     )
     create_schedule_group = create_parser.add_mutually_exclusive_group(required=True)
     _add_cron_schedule_arguments(create_schedule_group)
-    _add_cron_optional_arguments(create_parser)
+    _add_cron_session_argument(create_parser)
 
     update_parser = _add_command_parser(
         cron_subparsers,
         "update",
         CRON_HELP["update"],
-        example="cron update <job-id> --status paused",
+        example='cron update <job-id> --prompt "Check status and report"',
     )
     update_parser.add_argument("id", metavar="<job-id>", help="Cron job id to update")
     update_parser.add_argument(
@@ -1447,7 +1447,7 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     update_parser.add_argument("--prompt", help="Prompt text injected when the job fires")
     update_schedule_group = update_parser.add_mutually_exclusive_group()
     _add_cron_schedule_arguments(update_schedule_group)
-    _add_cron_optional_arguments(update_parser)
+    _add_cron_session_argument(update_parser)
     update_parser.add_argument(
         "--status", choices=CRON_STATUSES, help="Set the job status directly"
     )
@@ -1475,12 +1475,7 @@ def _add_cron_schedule_arguments(group: argparse._MutuallyExclusiveGroup) -> Non
     )
 
 
-def _add_cron_optional_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--timezone",
-        metavar="<iana-timezone>",
-        help="IANA timezone for the schedule, for example Europe/Berlin",
-    )
+def _add_cron_session_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--session",
         metavar="<session-id>",

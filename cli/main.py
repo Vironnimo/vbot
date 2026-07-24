@@ -1206,8 +1206,6 @@ def _cron_create_fields_from_args(args: argparse.Namespace) -> dict[str, Any]:
     else:
         fields["schedule_type"] = "once"
         fields["run_at"] = args.at
-    if args.timezone is not None:
-        fields["timezone"] = args.timezone
     if args.session is not None:
         fields["session_id"] = args.session
     return fields
@@ -1225,8 +1223,6 @@ def _cron_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
     elif args.at is not None:
         changes["schedule_type"] = "once"
         changes["run_at"] = args.at
-    if args.timezone is not None:
-        changes["timezone"] = args.timezone
     if args.session is not None:
         changes["session_id"] = args.session
     if args.status is not None:

@@ -497,7 +497,7 @@ Channels serialize work per conversation and share bounded Queue capacity. Only 
 Cron schedules one-time or recurring Agent Runs. A job may target an Identity Agent or `agent@project`, use an existing Session, or create a fresh Session each time it fires.
 
 ```bash
-vbot cron create assistant --prompt "Summarize today's priorities" --cron "0 9 * * *" --timezone Europe/Berlin
+vbot cron create assistant --prompt "Summarize today's priorities" --cron "0 9 * * *"
 vbot cron create reviewer@my-project --prompt "Review the repository status" --at "2026-07-20T10:00:00+02:00"
 vbot cron list
 vbot cron update JOB_ID --status paused

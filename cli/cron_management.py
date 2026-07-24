@@ -15,7 +15,6 @@ CRON_UPDATE_FLAGS = (
     "--prompt",
     "--cron",
     "--at",
-    "--timezone",
     "--session",
     "--status",
 )
