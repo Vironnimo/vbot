@@ -20,7 +20,7 @@ test("Statistics aggregates persisted Run and Tool activity across its views", a
   const metricValue = (label) =>
     statistics
       .locator(".stats-card")
-      .filter({ has: page.getByText(label, { exact: true }) })
+      .filter({ hasText: new RegExp(`^${label}`) })
       .locator(".stats-card__value");
   await expect(metricValue("Runs")).toHaveText(/^[1-9]\d*$/);
   await expect(metricValue("Chat messages")).toHaveText(/^[1-9]\d*$/);
