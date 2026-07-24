@@ -10,7 +10,7 @@
     isRowCancellable,
     isRunChildWorking,
     isStartingForegroundSubAgent,
-    isSubAgentTool,
+    isSubAgentSpawnTool,
     isTextToSpeechTool,
     isToolPreparing,
     runMetaParts,
@@ -100,7 +100,7 @@
   // spawns into the same child session each fetch their own result.
   const subAgentResultFetchTargets = $derived(
     visibleRunChildren(item)
-      .filter((child) => isSubAgentTool(child))
+      .filter((child) => isSubAgentSpawnTool(child))
       .filter((child) =>
         subAgentShouldFetchResult(
           child,
@@ -113,14 +113,25 @@
           return null;
         }
         const target = subAgentNavigationTarget(child);
-        return target ? { ...target, key } : null;
+        return target
+          ? {
+              ...target,
+              key,
+              runId: subAgentEffectiveRunId(child, subAgentStatuses),
+            }
+          : null;
       })
       .filter(Boolean),
   );
 
   $effect(() => {
     for (const target of subAgentResultFetchTargets) {
-      onRequestSubAgentResult(target.agentId, target.sessionId, target.key);
+      onRequestSubAgentResult(
+        target.agentId,
+        target.sessionId,
+        target.key,
+        target.runId,
+      );
     }
   });
 
@@ -131,7 +142,7 @@
   // call; we just surface the rows that need it.
   const subAgentVerificationTargets = $derived(
     visibleRunChildren(item)
-      .filter((child) => isSubAgentTool(child))
+      .filter((child) => isSubAgentSpawnTool(child))
       .filter((child) =>
         subAgentNeedsStatusVerification(
           child,
@@ -276,7 +287,7 @@
           </div>
         </details>
       {:else if child.type === 'tool_call'}
-        {#if isSubAgentTool(child)}
+        {#if isSubAgentSpawnTool(child)}
           {@const dotStatus = subAgentDotStatus(child, item, subAgentStatuses)}
           {@const subAgentResult =
             subAgentResults[subAgentResultKey(child, subAgentStatuses)]}

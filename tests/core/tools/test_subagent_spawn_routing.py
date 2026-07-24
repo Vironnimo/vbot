@@ -60,8 +60,8 @@ async def test_register_subagent_tools_registers_both_public_tools() -> None:
         "Delegate work by starting or queueing a Run in a persisted Sub-Agent Session."
     )
     assert subagent_result.description == (
-        "Fetch the queued status or final result of a spawned Sub-Agent Run. A running "
-        "Run is awaited; a returned final result is marked as retrieved."
+        "Return the current queued or running status, or the terminal result, of a spawned "
+        "Sub-Agent Run without waiting for active work to finish."
     )
     assert subagent.parameters == SUBAGENT_TOOL_PARAMETERS
     assert subagent_result.parameters == SUBAGENT_RESULT_TOOL_PARAMETERS

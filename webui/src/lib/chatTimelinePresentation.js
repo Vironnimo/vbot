@@ -479,8 +479,8 @@ const streamingPreviewArguments = (tool) =>
     ? tool.previewArguments
     : undefined;
 
-export const isSubAgentTool = (tool) =>
-  SUBAGENT_TOOL_NAMES.has(toolNameForRunTool(tool));
+export const isSubAgentSpawnTool = (tool) =>
+  toolNameForRunTool(tool) === 'subagent';
 
 export const isStartingForegroundSubAgent = (tool) => {
   if (toolNameForRunTool(tool) !== 'subagent' || !tool.startedEvent) {
@@ -744,13 +744,50 @@ export const subAgentDisplayResult = (tool, fetchedResult = null) => {
   return { ok: true, error: null, data: payload, artifacts: [] };
 };
 
-// Extracts a sub-agent session's final response: the last assistant message with
-// text content. Handles both string content and text content-block arrays.
-export const subAgentResultTextFromMessages = (messages) => {
+// Extracts one terminal sub-agent Run's final response. A visible Assistant turn
+// is not final until its exact Run Summary follows it.
+export const subAgentResultTextFromMessages = (messages, runId = '') => {
   if (!Array.isArray(messages)) {
     return '';
   }
+
+  let summaryIndex = -1;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (
+      !isPlainObject(message) ||
+      message.role !== 'run_summary' ||
+      (runId && message.run_id !== runId)
+    ) {
+      continue;
+    }
+    summaryIndex = index;
+    break;
+  }
+  if (summaryIndex < 0) {
+    return '';
+  }
+
+  if (
+    !runId &&
+    messages
+      .slice(summaryIndex + 1)
+      .some((message) =>
+        ['user', 'assistant', 'tool', 'error'].includes(message?.role),
+      )
+  ) {
+    return '';
+  }
+
+  let segmentStart = 0;
+  for (let index = summaryIndex - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === 'run_summary') {
+      segmentStart = index + 1;
+      break;
+    }
+  }
+
+  for (let index = summaryIndex - 1; index >= segmentStart; index -= 1) {
     const message = messages[index];
     if (!isPlainObject(message) || message.role !== 'assistant') {
       continue;
@@ -989,7 +1026,7 @@ function attachmentUrlForId(attachmentId) {
 }
 
 function shouldRenderToolCall(tool) {
-  if (isSubAgentTool(tool)) {
+  if (isSubAgentSpawnTool(tool)) {
     return Boolean(
       subAgentNavigationTarget(tool) ||
       tool.resultEvent ||

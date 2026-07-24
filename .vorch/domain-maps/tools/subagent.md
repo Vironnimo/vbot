@@ -27,7 +27,7 @@ Registers the public sub-agent tools and delegates orchestration to `core/subage
 - Busy target Sessions enqueue a follow-up Run through `ChatRunManager`.
 - Foreground mode waits for completion and returns the result payload; spawn/result payloads carry `activity_file: string | null` for the matching Run. Every successful `subagent` result whose file was allocated also carries `activity_note` with the concrete path and the instruction to read it if the Sub-Agent's status or progress becomes relevant.
 - Background mode returns a running descriptor when a Run has started. If the target Session is still busy and the child Run is only queued, it returns a queued descriptor containing `agent_id`, `session_id`, `queue_item_id`, `status: "queued"`, and the already-created `activity_file` instead of waiting for the child Run to start.
-- `subagent_result` checks live Run result first, then falls back to the last non-empty assistant message in the target Session.
+- `subagent_result` is a non-blocking status snapshot: it returns tracked or manager-owned `queued`/`running` work immediately, otherwise returns a terminal result only when the target Session contains the matching terminal Run Summary. An Assistant turn without that summary is intermediate output, not completion.
 - `subagent_result` returns a queued descriptor while the tracked child Run is still queued and has no `run_id` yet. The activity path points to a live temporary Markdown projection of visible Assistant text and concise Tool activity, not the canonical child Session or full Tool output. This lookup result keeps the structured `activity_file` field but does not repeat the spawn-only `activity_note`.
 
 ## Constraints & Gotchas

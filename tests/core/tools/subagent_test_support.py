@@ -178,7 +178,10 @@ class FakeRunManager:
         self.hold_enqueued_starts = False
         self._pending_enqueued_starts: list[tuple[SimpleNamespace, Run]] = []
         self.runs: dict[str, Run] = {self.parent_run.id: self.parent_run}
-        self.busy_sessions: dict[tuple[str, str], Run] = {}
+        self.busy_sessions: dict[
+            tuple[str, str] | tuple[str | None, str, str],
+            Run,
+        ] = {}
         self.start_error: BaseException | None = None
         self.next_result: Any | None = None
         self.next_error: BaseException | None = None
@@ -287,7 +290,21 @@ class FakeRunManager:
     def active_run(
         self, *, agent_id: str, session_id: str, project_id: str | None = None
     ) -> Run | None:
-        return self.busy_sessions.get((agent_id, session_id))
+        return self.busy_sessions.get((project_id, agent_id, session_id)) or self.busy_sessions.get(
+            (agent_id, session_id)
+        )
+
+    def list_queued(
+        self, agent_id: str, session_id: str, *, project_id: str | None = None
+    ) -> list[Any]:
+        return [
+            record["item"]
+            for record in self.enqueued
+            if record["agent_id"] == agent_id
+            and record["session_id"] == session_id
+            and record["project_id"] == project_id
+            and not record["item"].future.done()
+        ]
 
     def _schedule_terminal_state(self, run: Run) -> None:
         if self.next_error is not None:

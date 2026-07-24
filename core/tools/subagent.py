@@ -15,8 +15,8 @@ SUBAGENT_TOOL_DESCRIPTION = (
     "Delegate work by starting or queueing a Run in a persisted Sub-Agent Session."
 )
 SUBAGENT_RESULT_TOOL_DESCRIPTION = (
-    "Fetch the queued status or final result of a spawned Sub-Agent Run. A running "
-    "Run is awaited; a returned final result is marked as retrieved."
+    "Return the current queued or running status, or the terminal result, of a spawned "
+    "Sub-Agent Run without waiting for active work to finish."
 )
 
 SUBAGENT_PROMPT_BLOCK_TEMPLATE = (
