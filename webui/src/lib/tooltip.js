@@ -13,9 +13,17 @@
 // Browsers do not dispatch pointer events on disabled form controls, so a
 // tooltip that must show on a disabled button (e.g. "why is this disabled")
 // goes on a wrapping <span class="tooltip-anchor"> instead of the button.
+//
+// Rich hover cards use `use:floatingHoverCard` on the card element. The action
+// takes its initial parent as the anchor, portals the card to <body>, and owns
+// hover/focus/viewport cleanup. This is for structured or interactive content
+// that cannot be flattened into the one-line quick tooltip.
+
+import { portal } from './dropdownPanel.js';
 
 // Exported so tests can wait out the hover delay instead of hardcoding it.
 export const TOOLTIP_SHOW_DELAY_MS = 150;
+export const FLOATING_HOVER_CLOSE_DELAY_MS = 150;
 
 const ANCHOR_OFFSET = 6;
 const EDGE_PADDING = 8;
@@ -24,6 +32,8 @@ const TOOLTIP_ID = 'app-tooltip';
 let tooltipElement = null;
 let activeAnchor = null;
 let showTimer = null;
+let activeHoverCardHide = null;
+let hoverCardSequence = 0;
 
 /**
  * Position `element` (position: fixed, already measurable) anchored to
@@ -150,6 +160,177 @@ export function tooltip(node, text = '') {
       node.removeEventListener('pointerdown', cancelOrHide);
       node.removeEventListener('focus', scheduleShow);
       node.removeEventListener('blur', cancelOrHide);
+    },
+  };
+}
+
+/**
+ * Portal a structured hover card out of every ancestor overflow/stacking
+ * context and position it against its initial parent.
+ *
+ * `accessible: false` keeps decorative previews out of the accessibility tree.
+ * Accessible cards are linked to the hovered/focused anchor through
+ * `aria-describedby` while visible.
+ */
+export function floatingHoverCard(node, options = {}) {
+  const anchor = node.parentElement;
+  if (!anchor) {
+    return {};
+  }
+
+  let currentOptions = normalizeFloatingHoverOptions(options);
+  let closeTimer = null;
+  let descriptionTarget = null;
+  let open = false;
+  const cardId = node.id || `floating-hover-card-${++hoverCardSequence}`;
+  const portalAction = portal(node);
+
+  node.id = cardId;
+  node.dataset.floatingHoverCard = '';
+  node.dataset.floatingOpen = 'false';
+  node.setAttribute('aria-hidden', 'true');
+
+  function normalizeFloatingHoverOptions(value) {
+    return {
+      accessible: value?.accessible !== false,
+    };
+  }
+
+  function cancelScheduledClose() {
+    if (closeTimer !== null) {
+      clearTimeout(closeTimer);
+      closeTimer = null;
+    }
+  }
+
+  function unlinkDescription() {
+    if (!descriptionTarget) {
+      return;
+    }
+    const ids = (descriptionTarget.getAttribute('aria-describedby') ?? '')
+      .split(/\s+/)
+      .filter((id) => id && id !== cardId);
+    if (ids.length > 0) {
+      descriptionTarget.setAttribute('aria-describedby', ids.join(' '));
+    } else {
+      descriptionTarget.removeAttribute('aria-describedby');
+    }
+    descriptionTarget = null;
+  }
+
+  function linkDescription(target) {
+    unlinkDescription();
+    if (!currentOptions.accessible || !(target instanceof Element)) {
+      return;
+    }
+    const ids = (target.getAttribute('aria-describedby') ?? '')
+      .split(/\s+/)
+      .filter(Boolean);
+    if (!ids.includes(cardId)) {
+      ids.push(cardId);
+    }
+    target.setAttribute('aria-describedby', ids.join(' '));
+    descriptionTarget = target;
+  }
+
+  function removeWindowListeners() {
+    window.removeEventListener('keydown', onWindowKeydown, true);
+    window.removeEventListener('resize', hide, true);
+    window.removeEventListener('scroll', onWindowScroll, true);
+  }
+
+  function hide() {
+    cancelScheduledClose();
+    if (!open) {
+      return;
+    }
+    open = false;
+    node.dataset.floatingOpen = 'false';
+    node.setAttribute('aria-hidden', 'true');
+    unlinkDescription();
+    removeWindowListeners();
+    if (activeHoverCardHide === hide) {
+      activeHoverCardHide = null;
+    }
+  }
+
+  function show(event) {
+    cancelScheduledClose();
+    if (activeHoverCardHide && activeHoverCardHide !== hide) {
+      activeHoverCardHide();
+    }
+    activeHoverCardHide = hide;
+    open = true;
+    node.dataset.floatingOpen = 'true';
+    if (currentOptions.accessible) {
+      node.setAttribute('aria-hidden', 'false');
+      const eventTarget =
+        event?.type === 'focusin' && event.target instanceof Element
+          ? event.target
+          : anchor;
+      linkDescription(eventTarget);
+    }
+    positionFloating(anchor, node);
+    window.addEventListener('keydown', onWindowKeydown, true);
+    window.addEventListener('resize', hide, true);
+    window.addEventListener('scroll', onWindowScroll, true);
+  }
+
+  function scheduleClose() {
+    cancelScheduledClose();
+    closeTimer = setTimeout(hide, FLOATING_HOVER_CLOSE_DELAY_MS);
+  }
+
+  function onWindowKeydown(event) {
+    if (event.key === 'Escape') {
+      hide();
+    }
+  }
+
+  function onWindowScroll(event) {
+    const target = event.target instanceof Node ? event.target : null;
+    if (target && node.contains(target)) {
+      return;
+    }
+    hide();
+  }
+
+  anchor.addEventListener('pointerenter', show);
+  anchor.addEventListener('pointerleave', scheduleClose);
+  anchor.addEventListener('focusin', show);
+  anchor.addEventListener('focusout', scheduleClose);
+  node.addEventListener('pointerenter', cancelScheduledClose);
+  node.addEventListener('pointerleave', scheduleClose);
+  node.addEventListener('focusin', cancelScheduledClose);
+  node.addEventListener('focusout', scheduleClose);
+
+  return {
+    update(nextOptions = {}) {
+      currentOptions = normalizeFloatingHoverOptions(nextOptions);
+      if (!open) {
+        node.setAttribute('aria-hidden', 'true');
+        unlinkDescription();
+      } else if (currentOptions.accessible) {
+        node.setAttribute('aria-hidden', 'false');
+        linkDescription(anchor);
+      } else {
+        node.setAttribute('aria-hidden', 'true');
+        unlinkDescription();
+      }
+    },
+    destroy() {
+      hide();
+      anchor.removeEventListener('pointerenter', show);
+      anchor.removeEventListener('pointerleave', scheduleClose);
+      anchor.removeEventListener('focusin', show);
+      anchor.removeEventListener('focusout', scheduleClose);
+      node.removeEventListener('pointerenter', cancelScheduledClose);
+      node.removeEventListener('pointerleave', scheduleClose);
+      node.removeEventListener('focusin', cancelScheduledClose);
+      node.removeEventListener('focusout', scheduleClose);
+      delete node.dataset.floatingHoverCard;
+      delete node.dataset.floatingOpen;
+      portalAction.destroy();
     },
   };
 }
