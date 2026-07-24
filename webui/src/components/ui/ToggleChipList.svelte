@@ -19,6 +19,7 @@
 
   import { countAllowed, filterChipsByQuery } from '$lib/accessChips.js';
   import { t } from '$lib/i18n.js';
+  import { floatingHoverCard } from '$lib/tooltip.js';
 
   const noop = () => {};
 
@@ -149,7 +150,11 @@
               </button>
             {/if}
             {#if hasTip(item)}
-              <div class="access-chip__tip" role="tooltip">
+              <div
+                class="access-chip__tip"
+                role="tooltip"
+                use:floatingHoverCard
+              >
                 {#if item.description}
                   <p class="access-chip__desc">{item.description}</p>
                 {/if}
@@ -355,40 +360,33 @@
     line-height: 1.4;
   }
 
-  /* Plain hover card. A transparent ::before bridges the gap so moving the
-     cursor from the chip onto the card keeps it open. */
+  /* Structured hover cards are fixed and portaled to <body> by
+     `floatingHoverCard`, so no ancestor overflow or stacking context can clip
+     them. */
   .access-chip__tip {
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 0;
-    z-index: 50;
+    position: fixed;
+    z-index: var(--z-floating);
     width: max-content;
-    max-width: 320px;
+    max-width: min(320px, calc(100vw - 16px));
+    max-height: min(340px, 50vh);
     padding: 9px 11px;
+    overflow: auto;
     background: var(--surface-3);
     border: 1px solid var(--border-2);
     border-radius: 6px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
     opacity: 0;
     visibility: hidden;
+    pointer-events: none;
     transition:
       opacity 0.1s,
       visibility 0.1s;
   }
 
-  .access-chip__tip::before {
-    content: '';
-    position: absolute;
-    top: -6px;
-    left: 0;
-    right: 0;
-    height: 6px;
-  }
-
-  .access-chip-wrap:hover .access-chip__tip,
-  .access-chip__tip:hover {
+  .access-chip__tip:global([data-floating-open='true']) {
     opacity: 1;
     visibility: visible;
+    pointer-events: auto;
   }
 
   .access-chip__desc {

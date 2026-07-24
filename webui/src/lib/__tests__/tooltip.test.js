@@ -3,7 +3,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  FLOATING_HOVER_CLOSE_DELAY_MS,
   TOOLTIP_SHOW_DELAY_MS as SHOW_DELAY_MS,
+  floatingHoverCard,
   positionFloating,
   tooltip,
 } from '../tooltip.js';
@@ -195,5 +197,84 @@ describe('positionFloating', () => {
       element,
     );
     expect(element.style.left).toBe(`${1200 - 200 - 8}px`);
+  });
+});
+
+describe('floatingHoverCard action', () => {
+  let anchor;
+  let card;
+  let action;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    anchor = document.createElement('div');
+    card = document.createElement('div');
+    card.setAttribute('role', 'tooltip');
+    anchor.appendChild(card);
+    document.body.appendChild(anchor);
+  });
+
+  afterEach(() => {
+    action?.destroy();
+    action = null;
+    anchor.remove();
+    card.remove();
+    vi.useRealTimers();
+  });
+
+  it('portals rich content to body and opens it against the anchor', () => {
+    action = floatingHoverCard(card);
+
+    expect(card.parentElement).toBe(document.body);
+    expect(card.dataset.floatingOpen).toBe('false');
+
+    anchor.dispatchEvent(new Event('pointerenter'));
+
+    expect(card.dataset.floatingOpen).toBe('true');
+    expect(card.getAttribute('aria-hidden')).toBe('false');
+    expect(anchor.getAttribute('aria-describedby')).toBe(card.id);
+    expect(card.style.left).not.toBe('');
+    expect(card.style.top).not.toBe('');
+  });
+
+  it('keeps an interactive card open while the pointer crosses the gap', () => {
+    action = floatingHoverCard(card);
+    anchor.dispatchEvent(new Event('pointerenter'));
+    anchor.dispatchEvent(new Event('pointerleave'));
+    card.dispatchEvent(new Event('pointerenter'));
+    vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS);
+
+    expect(card.dataset.floatingOpen).toBe('true');
+
+    card.dispatchEvent(new Event('pointerleave'));
+    vi.advanceTimersByTime(FLOATING_HOVER_CLOSE_DELAY_MS);
+    expect(card.dataset.floatingOpen).toBe('false');
+  });
+
+  it('links keyboard focus and closes on Escape or ancestor scrolling', () => {
+    const button = document.createElement('button');
+    anchor.prepend(button);
+    action = floatingHoverCard(card);
+
+    button.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    expect(button.getAttribute('aria-describedby')).toBe(card.id);
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(card.dataset.floatingOpen).toBe('false');
+    expect(button.hasAttribute('aria-describedby')).toBe(false);
+
+    anchor.dispatchEvent(new Event('pointerenter'));
+    document.dispatchEvent(new Event('scroll'));
+    expect(card.dataset.floatingOpen).toBe('false');
+  });
+
+  it('keeps decorative previews out of the accessibility tree', () => {
+    action = floatingHoverCard(card, { accessible: false });
+
+    anchor.dispatchEvent(new Event('pointerenter'));
+
+    expect(card.dataset.floatingOpen).toBe('true');
+    expect(card.getAttribute('aria-hidden')).toBe('true');
+    expect(anchor.hasAttribute('aria-describedby')).toBe(false);
   });
 });

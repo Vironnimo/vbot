@@ -1,6 +1,6 @@
 <script>
   import { t } from '$lib/i18n.js';
-  import { tooltip } from '$lib/tooltip.js';
+  import { floatingHoverCard, tooltip } from '$lib/tooltip.js';
   import { reasoningMarkdownSource } from '$lib/markdown.js';
   import {
     attachmentFilename,
@@ -169,7 +169,11 @@
             loading="lazy"
           />
         </a>
-        <div class="attachment-hover-preview" aria-hidden="true">
+        <div
+          class="attachment-hover-preview"
+          aria-hidden="true"
+          use:floatingHoverCard={{ accessible: false }}
+        >
           <img class="attachment-hover-image" src={mediaUrl} alt="" />
         </div>
         <div class="attachment-meta">

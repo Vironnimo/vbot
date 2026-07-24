@@ -18,7 +18,7 @@
     matchMentionCandidates,
   } from '$lib/fileMentions.js';
   import { t } from '$lib/i18n.js';
-  import { tooltip } from '$lib/tooltip.js';
+  import { floatingHoverCard, tooltip } from '$lib/tooltip.js';
   import FileAutocomplete from './FileAutocomplete.svelte';
   import SkillAutocomplete from './SkillAutocomplete.svelte';
   import Button from './ui/Button.svelte';
@@ -1219,7 +1219,11 @@
                 class="attachment-thumb"
               />
             </button>
-            <div class="attachment-hover-preview" aria-hidden="true">
+            <div
+              class="attachment-hover-preview"
+              aria-hidden="true"
+              use:floatingHoverCard={{ accessible: false }}
+            >
               <img
                 src={attachment.preview_url}
                 alt=""
