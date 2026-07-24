@@ -17,19 +17,14 @@ test("Statistics aggregates persisted Run and Tool activity across its views", a
   await expect(
     statistics.getByRole("tab", { name: "Overview" }),
   ).toHaveAttribute("aria-selected", "true");
-  await expect(
-    statistics.locator(".stats-card").filter({ hasText: /^Runs\s+[1-9]/ }),
-  ).toBeVisible();
-  await expect(
+  const metricValue = (label) =>
     statistics
       .locator(".stats-card")
-      .filter({ hasText: /^Chat messages\s+[1-9]/ }),
-  ).toBeVisible();
-  await expect(
-    statistics
-      .locator(".stats-card")
-      .filter({ hasText: /^Tool calls\s+[1-9]/ }),
-  ).toBeVisible();
+      .filter({ has: page.getByText(label, { exact: true }) })
+      .locator(".stats-card__value");
+  await expect(metricValue("Runs")).toHaveText(/^[1-9]\d*$/);
+  await expect(metricValue("Chat messages")).toHaveText(/^[1-9]\d*$/);
+  await expect(metricValue("Tool calls")).toHaveText(/^[1-9]\d*$/);
 
   await statistics.getByRole("tab", { name: "Tools" }).click();
   const toolTable = statistics.getByRole("table").filter({ hasText: "status" });
