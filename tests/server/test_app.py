@@ -27,6 +27,7 @@ from server.app import (
     _queues_snapshot,
     _register_cron_change_bridge,
     _register_run_event_bridge,
+    _register_session_completion_read_bridge,
     _register_session_title_bridge,
     _shutdown_local_catalog_refresh,
     _stream_log_events,
@@ -283,6 +284,35 @@ def test_session_title_bridge_publishes_sessions_invalidation(tmp_path: Path) ->
 
     try:
         sessions.set_auto_title("coder", "session-one", "Local title")
+    finally:
+        if callable(unsubscribe):
+            unsubscribe()
+
+    assert state.event_bus.events[-1]["type"] == "resource_changed"
+    assert state.event_bus.events[-1]["payload"] == {
+        "kind": "sessions",
+        "scope": {"agent_id": "coder"},
+    }
+
+
+def test_session_completion_read_bridge_publishes_sessions_invalidation(tmp_path: Path) -> None:
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="session-one")
+    sessions.record_terminal_run(
+        "coder",
+        "session-one",
+        "run-one",
+        "completed",
+        "2026-07-20T10:00:00+00:00",
+    )
+    state = SimpleNamespace(
+        runtime=SimpleNamespace(chat_sessions=sessions),
+        event_bus=ServerEventBus(),
+    )
+    unsubscribe = _register_session_completion_read_bridge(state)
+
+    try:
+        sessions.mark_terminal_run_read("coder", "session-one", "run-one")
     finally:
         if callable(unsubscribe):
             unsubscribe()

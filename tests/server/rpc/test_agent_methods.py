@@ -290,7 +290,7 @@ def test_list_bare_agent_is_identity() -> None:
     assert sessions.listed == [("builder", None)]
 
 
-def test_mark_session_read_acknowledges_exact_project_run_and_invalidates_sessions() -> None:
+def test_mark_session_read_acknowledges_exact_project_run() -> None:
     state, resolver, sessions = _make_state()
 
     result = _mark_session_read(
@@ -302,9 +302,7 @@ def test_mark_session_read_acknowledges_exact_project_run_and_invalidates_sessio
     assert sessions.marked_read == [("builder", "s1", "run-one", "vbot")]
     assert result["agent_id"] == "builder@vbot"
     assert result["marked_read"] is True
-    assert _sessions_resource_events(state) == [
-        {"kind": "sessions", "scope": {"agent_id": "builder"}}
-    ]
+    assert _sessions_resource_events(state) == []
 
 
 def test_mark_session_read_stale_ack_does_not_invalidate_sessions() -> None:
