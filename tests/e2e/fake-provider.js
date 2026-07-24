@@ -449,27 +449,27 @@ function plannedToolResponse(prompt, results, offeredTools) {
       return {
         calls: [
           toolCall("cron", {
-            create: {
-              prompt: "E2E tool-created scheduled prompt",
-              schedule_type: "cron",
-              cron_expression: "15 4 * * *",
-            },
+            action: "create",
+            name: "E2E tool-created schedule",
+            prompt: "E2E tool-created scheduled prompt",
+            schedule_type: "cron",
+            cron_expression: "15 4 * * *",
           }),
         ],
       };
     }
     const jobId = cronResults[0]?.envelope?.data?.job?.id ?? "";
     if (cronResults.length === 1) {
-      return { calls: [toolCall("cron", { disable: { id: jobId } })] };
+      return { calls: [toolCall("cron", { action: "disable", id: jobId })] };
     }
     if (cronResults.length === 2) {
-      return { calls: [toolCall("cron", { enable: { id: jobId } })] };
+      return { calls: [toolCall("cron", { action: "enable", id: jobId })] };
     }
     if (cronResults.length === 3) {
-      return { calls: [toolCall("cron", { list: {} })] };
+      return { calls: [toolCall("cron", { action: "list" })] };
     }
     if (cronResults.length === 4) {
-      return { calls: [toolCall("cron", { delete: { id: jobId } })] };
+      return { calls: [toolCall("cron", { action: "delete", id: jobId })] };
     }
     return { text: "Schedule tool lifecycle completed." };
   }

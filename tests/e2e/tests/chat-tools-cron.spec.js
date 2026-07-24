@@ -22,7 +22,7 @@ test("the cron tool creates, pauses, resumes, lists, and deletes a Scheduled Run
   }
   const list = await expectToolSucceeded(page, chat, "cron", 3);
   await openToolRow(list);
-  await expect(list).toContainText("E2E tool-created scheduled prompt");
+  await expect(list).toContainText("E2E tool-created schedule");
 
   await page.goto("/#cron");
   await expect(

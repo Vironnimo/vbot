@@ -179,6 +179,45 @@ async def test_websocket_disconnect_during_hello_unregisters_client(tmp_path: Pa
         assert app.state.client_registry.list() == []
 
 
+@pytest.mark.asyncio
+async def test_idle_websocket_disconnect_unregisters_client(tmp_path: Path) -> None:
+    app = create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter())))
+    endpoint = next(
+        cast(Any, route).endpoint for route in app.routes if getattr(route, "path", None) == "/ws"
+    )
+
+    class IdleDisconnectingWebSocket:
+        def __init__(self) -> None:
+            self.app = app
+            self.query_params: dict[str, str] = {
+                "connection_id": "idle-tab",
+                "accessor": "browser",
+            }
+            self.headers: dict[str, str] = {}
+            self.sent: list[dict[str, Any]] = []
+
+        async def accept(self) -> None:
+            return None
+
+        async def send_json(self, payload: dict[str, Any]) -> None:
+            self.sent.append(payload)
+
+        async def receive(self) -> dict[str, Any]:
+            return {"type": "websocket.disconnect", "code": 1000}
+
+    websocket = IdleDisconnectingWebSocket()
+    with TestClient(app):
+        await endpoint(websocket)
+
+    assert websocket.sent[0]["type"] == "connection_ready"
+    assert app.state.client_registry.list() == []
+    assert [
+        event["payload"]
+        for event in app.state.event_bus.events
+        if event["type"] == "resource_changed"
+    ] == [{"kind": "clients"}, {"kind": "clients"}]
+
+
 def test_websocket_receives_resource_changed_on_agent_create_via_rpc(tmp_path: Path) -> None:
     """Agent CRUD rides the generic reload-on-change channel: agent.create
     publishes resource_changed(kind="agents") over /ws, carrying no agent data
