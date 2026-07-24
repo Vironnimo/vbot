@@ -28,7 +28,6 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
         "schedule_type",
         "cron_expression",
         "run_at",
-        "timezone",
         "session_id",
     }
     _reject_unsupported(params, supported_fields, "cron.create")
@@ -48,7 +47,6 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
 
     cron_expression = _optional_string(params, "cron_expression")
     run_at = _optional_string(params, "run_at")
-    timezone = _optional_string(params, "timezone")
     session_id = _optional_string(params, "session_id")
 
     if schedule_type == "cron":
@@ -74,7 +72,6 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
                 schedule_type=schedule_type,
                 cron_expression=cron_expression,
                 run_at=run_at,
-                timezone=timezone,
                 session_id=session_id,
                 project_id=project_id,
             )
@@ -106,7 +103,6 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
         "schedule_type",
         "cron_expression",
         "run_at",
-        "timezone",
         "session_id",
         "status",
     }
@@ -136,8 +132,6 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
         updates["cron_expression"] = _required_string(params, "cron_expression")
     if "run_at" in params:
         updates["run_at"] = _required_string(params, "run_at")
-    if "timezone" in params:
-        updates["timezone"] = _optional_string(params, "timezone")
     if "session_id" in params:
         updates["session_id"] = _optional_string(params, "session_id")
     if "status" in params:
@@ -210,7 +204,6 @@ def _cron_job_response(cron_service: Any, job: Any) -> JsonObject:
         "schedule_type": job.schedule_type,
         "cron_expression": job.cron_expression,
         "run_at": job.run_at,
-        "timezone": job.timezone,
         "session_id": job.session_id,
         "status": job.status,
         "last_fired_at": job.last_fired_at,
@@ -220,7 +213,6 @@ def _cron_job_response(cron_service: Any, job: Any) -> JsonObject:
         "last_outcome": job.last_outcome,
         "last_error": job.last_error,
         "consecutive_failures": job.consecutive_failures,
-        "effective_timezone": cron_service.effective_timezone_name(job),
         "next_fire_at": cron_service.next_fire_at(job),
         "created_at": job.created_at,
     }

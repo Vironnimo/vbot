@@ -2,7 +2,6 @@
   import { onMount } from 'svelte';
 
   import Dropdown from './Dropdown.svelte';
-  import SearchableDropdown from './SearchableDropdown.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
@@ -44,7 +43,6 @@
     describeCronExpression,
     projectIdsFromList,
     projectTeamEntry,
-    cronTimezoneOptions,
     visibleCronJobs,
   } from '$lib/cronView.js';
   import { t } from '$lib/i18n.js';
@@ -100,7 +98,9 @@
 
   let hasAgents = $derived(viewState.agents.length > 0);
   let isLoading = $derived(viewState.loadingAgents || viewState.loadingJobs);
-  let jobs = $derived(visibleCronJobs(viewState.jobs));
+  let jobs = $derived(
+    visibleCronJobs(viewState.jobs, viewState.systemTimezone),
+  );
   let selectedJob = $derived(
     jobs.find((job) => job.id === selectedJobId) ?? null,
   );
@@ -147,8 +147,6 @@
       ]),
     ),
   );
-  let timezoneOptions = $derived(cronTimezoneOptions(viewState.systemTimezone));
-
   onMount(() => {
     loadInitialData();
 
@@ -881,14 +879,6 @@
                     {displayValue(selectedJob.last_run_id)}
                   </span>
                 </div>
-                <div class="cron-info-row">
-                  <span class="cron-info-label">
-                    {t('cron.detail.timezone', 'Schedule timezone')}
-                  </span>
-                  <span class="cron-info-value">
-                    {selectedJob.effective_timezone}
-                  </span>
-                </div>
               </div>
               {#if selectedJob.last_error}
                 <Banner variant="error" role="status">
@@ -1019,33 +1009,6 @@
                   />
                 </label>
               {/if}
-
-              <label class="cron-field">
-                <span class="cron-label">
-                  {t('cron.form.timezone', 'Timezone')}
-                  <InfoHint
-                    text={t(
-                      'cron.form.timezoneHelp',
-                      'Timezone name like Europe/Berlin. Leave empty to use the timezone of the machine the server runs on.',
-                    )}
-                  />
-                </span>
-                <SearchableDropdown
-                  id="cron-job-timezone"
-                  value={formValues.timezone}
-                  options={timezoneOptions}
-                  placeholder={viewState.systemTimezone}
-                  searchPlaceholder={t(
-                    'cron.form.timezoneSearch',
-                    'Filter timezones…',
-                  )}
-                  ariaLabel={t('cron.form.timezone', 'Timezone')}
-                  disabled={submittingForm}
-                  triggerClass="cron-dropdown"
-                  panelClass="cron-dropdown-list"
-                  onValueChange={(next) => updateFormField('timezone', next)}
-                />
-              </label>
 
               <label class="cron-field">
                 <span class="cron-label">

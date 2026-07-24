@@ -103,14 +103,13 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
       schedule_type: CRON_SCHEDULE_TYPE_CRON,
       cron_expression: '',
       run_at: '',
-      timezone: systemTimezone,
       session_id: '',
       original_run_at: '',
-      original_timezone: '',
+      system_timezone: systemTimezone,
     };
   }
 
-  const normalized = normalizeCronJob(job);
+  const normalized = normalizeCronJob(job, systemTimezone);
 
   return {
     id: normalized.id,
@@ -118,15 +117,10 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
     prompt: normalized.prompt,
     schedule_type: normalized.schedule_type,
     cron_expression: normalized.cron_expression ?? '',
-    run_at: toDateTimeLocalInput(
-      normalized.run_at,
-      normalized.effective_timezone ?? systemTimezone,
-    ),
-    timezone:
-      normalized.timezone ?? normalized.effective_timezone ?? systemTimezone,
+    run_at: toDateTimeLocalInput(normalized.run_at, systemTimezone),
     session_id: normalized.session_id ?? '',
     original_run_at: normalized.run_at ?? '',
-    original_timezone: normalized.timezone ?? '',
+    system_timezone: systemTimezone,
   };
 }
 
@@ -143,17 +137,17 @@ export function applyAgentListResponse(state, result) {
 
 export function applyCronListResponse(state, result) {
   state.systemTimezone = optionalText(result?.system_timezone) ?? 'UTC';
-  state.jobs = normalizeCronJobs(result?.jobs);
+  state.jobs = normalizeCronJobs(result?.jobs, state.systemTimezone);
   return state.jobs;
 }
 
-function normalizeCronJobs(jobs) {
+function normalizeCronJobs(jobs, systemTimezone = 'UTC') {
   const rawJobs = Array.isArray(jobs) ? jobs : [];
-  return rawJobs.map((job) => normalizeCronJob(job));
+  return rawJobs.map((job) => normalizeCronJob(job, systemTimezone));
 }
 
-export function visibleCronJobs(jobs) {
-  return normalizeCronJobs(jobs);
+export function visibleCronJobs(jobs, systemTimezone = 'UTC') {
+  return normalizeCronJobs(jobs, systemTimezone);
 }
 
 export function cronFormFingerprint(formValues) {
@@ -164,21 +158,8 @@ export function cronFormFingerprint(formValues) {
     schedule_type: normalizeScheduleType(values.schedule_type),
     cron_expression: asText(values.cron_expression),
     run_at: asText(values.run_at),
-    timezone: asText(values.timezone),
     session_id: asText(values.session_id),
   });
-}
-
-export function cronTimezoneOptions(systemTimezone = 'UTC') {
-  let names = [];
-  try {
-    names = Intl.supportedValuesOf('timeZone');
-  } catch {
-    names = ['UTC', systemTimezone];
-  }
-  return [...new Set(['UTC', systemTimezone, ...names])]
-    .filter(Boolean)
-    .map((timezone) => ({ value: timezone, label: timezone }));
 }
 
 export function buildCreateCronPayload(formValues) {
@@ -194,11 +175,6 @@ export function buildCreateCronPayload(formValues) {
     payload.cron_expression = requiredText(formValues?.cron_expression);
   } else {
     payload.run_at = requiredText(formValues?.run_at);
-  }
-
-  const timezone = optionalText(formValues?.timezone);
-  if (timezone !== null) {
-    payload.timezone = timezone;
   }
 
   const sessionId = optionalText(formValues?.session_id);
@@ -217,7 +193,6 @@ export function buildUpdateCronPayload(formValues) {
     agent_id: requiredText(formValues?.agent_id),
     prompt: requiredText(formValues?.prompt),
     schedule_type: scheduleType,
-    timezone: optionalText(formValues?.timezone),
     session_id: optionalText(formValues?.session_id),
   };
 
@@ -233,17 +208,11 @@ export function buildUpdateCronPayload(formValues) {
 function resolveOnceRunAtValue(formValues) {
   const runAt = requiredText(formValues?.run_at);
   const originalRunAt = optionalText(formValues?.original_run_at);
-  const timezone = optionalText(formValues?.timezone);
-  const originalTimezone = optionalText(formValues?.original_timezone);
+  const systemTimezone = optionalText(formValues?.system_timezone) ?? 'UTC';
 
   if (
     originalRunAt !== null &&
-    runAt ===
-      toDateTimeLocalInput(
-        originalRunAt,
-        timezone ?? originalTimezone ?? 'UTC',
-      ) &&
-    timezone === originalTimezone
+    runAt === toDateTimeLocalInput(originalRunAt, systemTimezone)
   ) {
     return originalRunAt;
   }
@@ -251,7 +220,7 @@ function resolveOnceRunAtValue(formValues) {
   return runAt;
 }
 
-function normalizeCronJob(job) {
+function normalizeCronJob(job, systemTimezone = 'UTC') {
   const scheduleType = normalizeScheduleType(job?.schedule_type);
   const cronExpression = optionalText(job?.cron_expression);
   const runAt = optionalText(job?.run_at);
@@ -259,11 +228,6 @@ function normalizeCronJob(job) {
   const lastAttemptAt = optionalText(job?.last_attempt_at);
   const lastCompletedAt = optionalText(job?.last_completed_at);
   const nextFireAt = optionalText(job?.next_fire_at);
-  const effectiveTimezone =
-    optionalText(job?.effective_timezone) ??
-    optionalText(job?.timezone) ??
-    'UTC';
-
   return {
     id: asText(job?.id),
     // The form pre-fill and save round-trip key on the full outside address so a
@@ -276,8 +240,6 @@ function normalizeCronJob(job) {
     schedule_type: scheduleType,
     cron_expression: cronExpression,
     run_at: runAt,
-    timezone: optionalText(job?.timezone),
-    effective_timezone: effectiveTimezone,
     session_id: optionalText(job?.session_id),
     status: normalizeStatus(job?.status),
     last_fired_at: lastFiredAt,
@@ -295,15 +257,12 @@ function normalizeCronJob(job) {
       scheduleType,
       cronExpression,
       runAt,
-      effectiveTimezone,
+      systemTimezone,
     ),
-    last_attempt_at_display: formatTimestamp(lastAttemptAt, effectiveTimezone),
-    last_fired_at_display: formatTimestamp(lastFiredAt, effectiveTimezone),
-    last_completed_at_display: formatTimestamp(
-      lastCompletedAt,
-      effectiveTimezone,
-    ),
-    next_fire_at_display: formatTimestamp(nextFireAt, effectiveTimezone),
+    last_attempt_at_display: formatTimestamp(lastAttemptAt, systemTimezone),
+    last_fired_at_display: formatTimestamp(lastFiredAt, systemTimezone),
+    last_completed_at_display: formatTimestamp(lastCompletedAt, systemTimezone),
+    next_fire_at_display: formatTimestamp(nextFireAt, systemTimezone),
   };
 }
 
@@ -311,13 +270,13 @@ function deriveScheduleDescription(
   scheduleType,
   cronExpression,
   runAt,
-  effectiveTimezone,
+  systemTimezone,
 ) {
   if (scheduleType === CRON_SCHEDULE_TYPE_CRON) {
     return cronExpression ?? '';
   }
 
-  return formatTimestamp(runAt, effectiveTimezone);
+  return formatTimestamp(runAt, systemTimezone);
 }
 
 export function toDateTimeLocalInput(value, timezone = 'UTC') {

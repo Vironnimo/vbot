@@ -424,7 +424,6 @@ export const englishCatalog = Object.freeze({
   'cron.detail.nextFire': 'Next fire',
   'cron.detail.lastOutcome': 'Last outcome',
   'cron.detail.lastRun': 'Last Run',
-  'cron.detail.timezone': 'Schedule timezone',
   'cron.detail.consecutiveFailures': 'consecutive failures',
   'cron.outcome.success': 'Succeeded',
   'cron.outcome.failed': 'Failed',
@@ -451,17 +450,12 @@ export const englishCatalog = Object.freeze({
   'cron.form.cronExpression': 'Cron expression',
   'cron.form.cronExpressionPlaceholder': '0 9 * * 1-5',
   'cron.form.runAt': 'Run at',
-  'cron.form.timezone': 'Timezone',
-  'cron.form.timezonePlaceholder': 'System default',
-  'cron.form.timezoneSearch': 'Filter timezones…',
   'cron.form.sessionId': 'Session ID',
   'cron.form.sessionIdPlaceholder': 'Optional',
   'cron.form.sessionIdHelp':
     'Optional: run inside one fixed, existing Session owned by the target. Leave empty to create a fresh Session for every fire.',
   'cron.form.cronExpressionHelp':
     'Exactly five space-separated fields: minute, hour, day of month, month, weekday. The minimum cadence is one minute; seconds are not supported.\n\nExample: 0 9 * * 1-5 runs at 09:00 on weekdays. * matches any value; ranges (1-5) and lists (1,3,5) work in every field.',
-  'cron.form.timezoneHelp':
-    'Cron and offset-free Once times are evaluated in this IANA timezone. Existing Once times are shown in the same zone.',
   'cron.deleteConfirmTitle': 'Delete Scheduled Run',
   'cron.deleteConfirm': 'Delete this job permanently? It will no longer run.',
   'cron.discardConfirmTitle': 'Discard unsaved changes?',

@@ -142,6 +142,8 @@ describe('CronView', () => {
     expect(document.querySelector('.cron-bar')).toBeNull();
     expect(document.body.textContent).toContain('Failed');
     expect(document.body.textContent).toContain('Missed');
+    expect(document.getElementById('cron-job-timezone')).toBeNull();
+    expect(document.body.textContent).not.toContain('Schedule timezone');
   });
 
   it('auto-selects the first job so its detail form renders on load', async () => {
@@ -245,7 +247,6 @@ describe('CronView', () => {
       prompt: 'Prepare morning digest',
       schedule_type: 'cron',
       cron_expression: '0 6 * * *',
-      timezone: 'UTC',
     });
   });
 
@@ -301,7 +302,6 @@ describe('CronView', () => {
       prompt: 'Prepare updated digest',
       schedule_type: 'cron',
       cron_expression: '0 6 * * *',
-      timezone: 'UTC',
       session_id: null,
     });
   });
@@ -344,7 +344,6 @@ describe('CronView', () => {
           schedule_type: 'once',
           cron_expression: null,
           run_at: storedRunAt,
-          timezone: 'UTC',
           session_id: 'session-preserve',
         }),
       ],
@@ -371,7 +370,6 @@ describe('CronView', () => {
       prompt: 'Updated once prompt',
       schedule_type: 'once',
       run_at: storedRunAt,
-      timezone: 'UTC',
       session_id: 'session-preserve',
     });
   });
@@ -568,7 +566,6 @@ function cronJob(overrides = {}) {
     schedule_type: 'cron',
     cron_expression: '*/30 * * * *',
     run_at: null,
-    timezone: 'UTC',
     session_id: null,
     status: 'active',
     last_fired_at: '2026-05-14T10:00:00+00:00',
@@ -578,7 +575,6 @@ function cronJob(overrides = {}) {
     last_outcome: 'success',
     last_error: null,
     consecutive_failures: 0,
-    effective_timezone: 'UTC',
     next_fire_at: '2026-05-14T10:30:00+00:00',
     created_at: '2026-05-14T09:00:00+00:00',
     ...overrides,
