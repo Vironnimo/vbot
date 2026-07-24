@@ -20,10 +20,12 @@ from core.providers.openai_compatible import (
     _read_string,
 )
 from core.providers.reasoning import (
+    REASONING_REPLAY_CURRENT_RUN,
     REASONING_REPLAY_FULL_HISTORY,
     ReasoningReplayPolicy,
     closest_supported_effort,
     model_reasoning_levels,
+    model_reasoning_supported,
 )
 
 MISTRAL_REASONING_EFFORTS = {"none", "high"}
@@ -37,6 +39,7 @@ MISTRAL_REASONING_EFFORTS = {"none", "high"}
 MISTRAL_METADATA_KEY = "mistral"
 PROMPT_MODE_METADATA_KEY = "prompt_mode"
 PROMPT_MODE_REASONING = "reasoning"
+MISTRAL_CONTENT_CHUNKS_META_KEY = "content_chunks"
 
 
 def _flatten_thinking(value: Any) -> str:
@@ -190,20 +193,24 @@ class MistralAdapter(OpenAICompatibleAdapter):
         thinking-disabled guard is needed. The chat layer's same-model gate
         strips cross-model entries.
         """
-        del model_id
-        return REASONING_REPLAY_FULL_HISTORY
+        if model_reasoning_supported(self._model_lookup, model_id) is True:
+            return REASONING_REPLAY_FULL_HISTORY
+        return REASONING_REPLAY_CURRENT_RUN
 
     def _format_assistant_message(self, message: dict[str, Any]) -> dict[str, Any]:
-        """Render replayed reasoning as a Mistral ThinkChunk ahead of the answer.
-
-        Mistral emits reasoning as a ``content`` chunk list
-        (``[{"type": "thinking", "thinking": [TextChunk]}, {"type": "text", …}]``)
-        and expects the same shape replayed back. The chat layer keeps the
-        visible ``reasoning`` text on replayed (and in-run) assistant turns, so
-        the trace is reconstructed here from that text. When no reasoning is
-        present the generic plain-string content is kept unchanged.
-        """
+        """Replay the original Mistral content chunks whenever they are available."""
         wire = super()._format_assistant_message(message)
+        reasoning_meta = message.get("reasoning_meta")
+        if isinstance(reasoning_meta, Mapping):
+            stored_chunks = reasoning_meta.get(MISTRAL_CONTENT_CHUNKS_META_KEY)
+            if isinstance(stored_chunks, list) and all(
+                isinstance(item, Mapping) for item in stored_chunks
+            ):
+                wire["content"] = [dict(item) for item in stored_chunks]
+                return wire
+
+        # Backward compatibility for Sessions written before exact chunks were
+        # persisted. New responses never take this lossy reconstruction path.
         reasoning = message.get("reasoning")
         if not isinstance(reasoning, str) or not reasoning:
             return wire
@@ -243,7 +250,7 @@ class MistralAdapter(OpenAICompatibleAdapter):
             "role": "assistant",
             "content": "".join(content_parts) or None,
             "reasoning": "".join(reasoning_parts) or None,
-            "reasoning_meta": _extract_openai_reasoning_meta(message),
+            "reasoning_meta": _mistral_reasoning_meta(message, content),
             "tool_calls": _extract_openai_tool_calls(message),
         }
         usage = _extract_openai_usage(response)
@@ -255,21 +262,32 @@ class MistralAdapter(OpenAICompatibleAdapter):
         self,
         raw_chunk: dict[str, Any],
         tool_call_ids_by_index: dict[int, str],
+        normalization_state: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         choices_raw = raw_chunk.get("choices", [])
         if not isinstance(choices_raw, list):
             return super()._normalize_stream_chunk(raw_chunk, tool_call_ids_by_index)
 
         choices = [choice for choice in choices_raw if isinstance(choice, dict)]
+        state = normalization_state if normalization_state is not None else {}
+        recorded_chunks = state.get(MISTRAL_CONTENT_CHUNKS_META_KEY)
         has_typed_content_delta = any(
             isinstance(choice.get("delta"), dict)
             and isinstance(choice["delta"].get("content"), list)
             for choice in choices
         )
-        if not has_typed_content_delta:
-            return super()._normalize_stream_chunk(raw_chunk, tool_call_ids_by_index)
+        if not has_typed_content_delta and not isinstance(recorded_chunks, list):
+            return super()._normalize_stream_chunk(
+                raw_chunk,
+                tool_call_ids_by_index,
+                normalization_state,
+            )
 
         normalized_deltas: list[dict[str, Any]] = []
+        content_chunks = state.setdefault(MISTRAL_CONTENT_CHUNKS_META_KEY, [])
+        if not isinstance(content_chunks, list):
+            content_chunks = []
+            state[MISTRAL_CONTENT_CHUNKS_META_KEY] = content_chunks
         for choice in choices:
             delta = choice.get("delta", {})
             if isinstance(delta, dict):
@@ -278,6 +296,7 @@ class MistralAdapter(OpenAICompatibleAdapter):
                     for item in content:
                         if not isinstance(item, dict):
                             continue
+                        content_chunks.append(dict(item))
                         item_type = item.get("type")
                         if item_type == "thinking":
                             thinking = _flatten_thinking(item.get("thinking"))
@@ -292,6 +311,19 @@ class MistralAdapter(OpenAICompatibleAdapter):
 
             finish_reason = choice.get("finish_reason")
             if finish_reason is not None:
+                if content_chunks:
+                    normalized_deltas.append(
+                        {
+                            "type": "reasoning_meta",
+                            "reasoning_meta": {
+                                MISTRAL_CONTENT_CHUNKS_META_KEY: [
+                                    dict(item)
+                                    for item in content_chunks
+                                    if isinstance(item, Mapping)
+                                ]
+                            },
+                        }
+                    )
                 normalized_deltas.append(
                     {
                         "type": "finish",
@@ -307,3 +339,14 @@ class MistralAdapter(OpenAICompatibleAdapter):
             normalized_deltas.append(usage_delta)
 
         return normalized_deltas
+
+
+def _mistral_reasoning_meta(
+    message: Mapping[str, Any],
+    content_chunks: list[Any],
+) -> dict[str, Any]:
+    meta = _extract_openai_reasoning_meta(dict(message)) or {}
+    meta[MISTRAL_CONTENT_CHUNKS_META_KEY] = [
+        dict(item) for item in content_chunks if isinstance(item, Mapping)
+    ]
+    return meta

@@ -279,18 +279,18 @@ def _invalid_skill_response(diagnostic: Any) -> JsonObject:
 
 
 def remove_opaque_provider_metadata(value: Any) -> Any:
-    """Recursively strip ``reasoning_meta`` from an outbound payload.
+    """Recursively strip internal Provider reasoning state from an outbound payload.
 
-    The opaque provider reasoning metadata is round-trip state for adapters, never
-    something a client should receive. Shared by the RPC response mappers, the SSE
-    stream (``app.py``), and the event bridge so all client-facing paths scrub it
-    the same way.
+    Opaque reasoning metadata and its Provider/Model/Connection/Account scope are
+    adapter round-trip state, never something a client should receive. Shared by
+    the RPC response mappers, the SSE stream (``app.py``), and the event bridge so
+    all client-facing paths scrub them the same way.
     """
     if isinstance(value, dict):
         return {
             key: remove_opaque_provider_metadata(item)
             for key, item in value.items()
-            if key != "reasoning_meta"
+            if key not in {"reasoning_meta", "reasoning_scope"}
         }
     if isinstance(value, list):
         return [remove_opaque_provider_metadata(item) for item in value]

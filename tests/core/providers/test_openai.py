@@ -53,6 +53,7 @@ def _subscription_model_lookup(levels: tuple[str, ...]):
 
 
 OPENAI_API_KEY_URL = f"https://api.openai.com/v1{CHAT_COMPLETIONS_ENDPOINT}"
+OPENAI_PLATFORM_RESPONSES_URL = "https://api.openai.com/v1/responses"
 OPENAI_SUBSCRIPTION_URL = f"https://chatgpt.com/backend-api{CODEX_RESPONSES_ENDPOINT}"
 SAMPLE_MESSAGES = [
     {"role": "system", "content": "Use concise answers."},
@@ -136,6 +137,46 @@ def _codex_sse_response(response: dict[str, object]) -> httpx.Response:
         f"data: {json.dumps({'type': 'response.completed', 'response': response})}\n\n"
     )
     return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+
+
+def _model_lookup_with_openai_wire_policies(model_id: str) -> Model:
+    replay = "full_history" if model_id.startswith("gpt-5.6") else "current_run"
+    api_key_policy: dict[str, str] = {
+        "protocol": "responses",
+        "reasoning_replay": replay,
+    }
+    if replay == "full_history":
+        api_key_policy["reasoning_context"] = "all_turns"
+    return Model(
+        model_id=model_id,
+        name=model_id,
+        capabilities=Capabilities(
+            vision=True,
+            tools=True,
+            json_mode=True,
+            reasoning=ReasoningCapabilities(
+                supported=True,
+                control="levels",
+                levels=("none", "low", "medium", "high", "xhigh", "max"),
+            ),
+            input_modalities=("text", "image", "pdf"),
+            output_modalities=("text",),
+            supported_parameters=("parallel_tool_calls", "reasoning", "response_format", "tools"),
+        ),
+        context_window=1_050_000,
+        max_output_tokens=128_000,
+        metadata={
+            "openai": {
+                "wire_policies": {
+                    "api-key": api_key_policy,
+                    "subscription": {
+                        "protocol": "responses",
+                        "reasoning_replay": replay,
+                    },
+                }
+            }
+        },
+    )
 
 
 # ------------------------------------------------------------------
@@ -227,7 +268,15 @@ async def test_codex_send_posts_responses_payload_with_account_and_beta_headers(
         "role": "assistant",
         "content": "Hi",
         "reasoning": None,
-        "reasoning_meta": {"response_id": "resp_1"},
+        "reasoning_meta": {
+            "response_id": "resp_1",
+            "response_output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "Hi"}],
+                }
+            ],
+        },
         "tool_calls": None,
         "usage": {"input_tokens": 2, "output_tokens": 3},
     }
@@ -367,6 +416,142 @@ async def test_chat_completions_send_ignores_conversation_id() -> None:
     request = route.calls.last.request
     assert "session_id" not in request.headers
     assert "conversation_id" not in json.loads(request.content)
+
+
+@pytest.mark.parametrize(
+    ("model_id", "expected"),
+    [
+        ("gpt-5.5", "current_run"),
+        ("gpt-5.6", "full_history"),
+        ("gpt-5.6-sol", "full_history"),
+        ("gpt-5.6-terra", "full_history"),
+        ("gpt-5.6-luna", "full_history"),
+    ],
+)
+def test_reasoning_replay_policy_is_connection_and_model_specific(
+    model_id: str,
+    expected: str,
+) -> None:
+    platform = OpenAIAdapter(
+        _platform_config(),
+        "sk-test",
+        model_lookup=_model_lookup_with_openai_wire_policies,
+    )
+    subscription = OpenAIAdapter(
+        _subscription_config(),
+        _jwt_with_account(),
+        connection_mode=CODEX_RESPONSES_MODE,
+        model_lookup=_model_lookup_with_openai_wire_policies,
+    )
+
+    assert platform.reasoning_replay_policy(model_id) == expected
+    assert subscription.reasoning_replay_policy(model_id) == expected
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_platform_gpt_5_6_uses_responses_all_turns_and_preserves_phase() -> None:
+    adapter = OpenAIAdapter(
+        _platform_config(),
+        "sk-test",
+        model_lookup=_model_lookup_with_openai_wire_policies,
+    )
+    output = [
+        {"type": "reasoning", "id": "rs_1", "encrypted_content": "opaque"},
+        {
+            "type": "message",
+            "role": "assistant",
+            "phase": "final_answer",
+            "content": [{"type": "output_text", "text": "Done."}],
+        },
+    ]
+    route = respx.post(OPENAI_PLATFORM_RESPONSES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "resp_1",
+                "status": "completed",
+                "reasoning": {"context": "all_turns"},
+                "output": output,
+            },
+        )
+    )
+
+    response = await adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="gpt-5.6-sol",
+        thinking_effort="high",
+    )
+    payload = json.loads(route.calls.last.request.content)
+    normalized = adapter.normalize_response(response, model_id="gpt-5.6-sol")
+
+    assert payload["reasoning"] == {
+        "effort": "high",
+        "summary": "auto",
+        "context": "all_turns",
+    }
+    assert payload["store"] is False
+    assert payload.get("stream", False) is False
+    assert normalized["phase"] == "final_answer"
+    assert normalized["reasoning_meta"]["reasoning_context"] == "all_turns"
+    assert normalized["reasoning_meta"]["response_output"] == output
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_subscription_gpt_5_6_does_not_assume_public_reasoning_context() -> None:
+    adapter = OpenAIAdapter(
+        _subscription_config(),
+        _jwt_with_account(),
+        connection_mode=CODEX_RESPONSES_MODE,
+        model_lookup=_model_lookup_with_openai_wire_policies,
+    )
+    route = respx.post(OPENAI_SUBSCRIPTION_URL).mock(
+        return_value=_codex_sse_response({"id": "resp_sub_56", "status": "completed", "output": []})
+    )
+
+    await adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="gpt-5.6-sol",
+        thinking_effort="high",
+    )
+
+    payload = json.loads(route.calls.last.request.content)
+    assert payload["reasoning"] == {"effort": "high", "summary": "auto"}
+    assert adapter.reasoning_replay_policy("gpt-5.6-sol") == "full_history"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_platform_gpt_5_5_uses_responses_without_all_turns() -> None:
+    adapter = OpenAIAdapter(
+        _platform_config(),
+        "sk-test",
+        model_lookup=_model_lookup_with_openai_wire_policies,
+    )
+    route = respx.post(OPENAI_PLATFORM_RESPONSES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "resp_55",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "phase": "commentary",
+                        "content": [{"type": "output_text", "text": "Checking."}],
+                    }
+                ],
+            },
+        )
+    )
+
+    response = await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.5")
+    payload = json.loads(route.calls.last.request.content)
+    normalized = adapter.normalize_response(response, model_id="gpt-5.5")
+
+    assert "reasoning" not in payload
+    assert normalized["phase"] == "commentary"
 
 
 @respx.mock

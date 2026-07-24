@@ -255,6 +255,101 @@ def test_build_payload_replays_tool_calls_tool_results_and_reasoning_meta() -> N
     ]
 
 
+def test_build_payload_replays_complete_response_output_without_reconstruction() -> None:
+    response_output = [
+        {"type": "reasoning", "id": "rs_1", "encrypted_content": "opaque"},
+        {
+            "type": "message",
+            "role": "assistant",
+            "phase": "commentary",
+            "content": [{"type": "output_text", "text": "I will inspect this."}],
+        },
+        {
+            "type": "function_call",
+            "id": "fc_1",
+            "call_id": "call_1",
+            "name": "search",
+            "arguments": '{"q":"docs"}',
+        },
+    ]
+
+    payload = build_responses_payload(
+        [
+            {
+                "role": "assistant",
+                "content": "A reconstructed copy that must not be used.",
+                "phase": "final_answer",
+                "reasoning_meta": {"response_output": response_output},
+                "tool_calls": [{"id": "duplicate", "name": "search", "arguments": {}}],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "name": "search", "content": "result"},
+        ],
+        model_id="gpt-5.6-sol",
+        policy=responses_policy("gpt-5.6-sol"),
+    )
+
+    assert payload["input"] == [
+        *response_output,
+        {"type": "function_call_output", "call_id": "call_1", "output": "result"},
+    ]
+
+
+def test_build_payload_replays_phase_from_canonical_fallback_message() -> None:
+    payload = build_responses_payload(
+        [
+            {
+                "role": "assistant",
+                "content": "Intermediate update.",
+                "phase": "commentary",
+            }
+        ],
+        model_id="gpt-5.5",
+        policy=responses_policy("gpt-5.5"),
+    )
+
+    assert payload["input"] == [
+        {
+            "role": "assistant",
+            "phase": "commentary",
+            "content": [{"type": "output_text", "text": "Intermediate update."}],
+        }
+    ]
+
+
+def test_build_payload_maps_allowed_pdf_document_to_input_file() -> None:
+    payload = build_responses_payload(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "filename": "report.pdf",
+                        "media_type": "application/pdf",
+                        "base64": "cGRm",
+                    }
+                ],
+            }
+        ],
+        model_id="gpt-5.6-sol",
+        policy=responses_policy("gpt-5.6-sol"),
+        document_media_types=frozenset({"application/pdf"}),
+    )
+
+    assert payload["input"] == [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_file",
+                    "filename": "report.pdf",
+                    "file_data": "data:application/pdf;base64,cGRm",
+                }
+            ],
+        }
+    ]
+
+
 def test_build_payload_replays_nested_function_tool_call_name_shape() -> None:
     payload = build_responses_payload(
         [
@@ -383,6 +478,7 @@ def test_normalize_response_extracts_text_tool_calls_usage_and_reasoning_meta() 
         "reasoning": "Considered evidence.",
         "reasoning_meta": {
             "response_id": "resp_1",
+            "response_output": response["output"],
             "reasoning_items": [reasoning_item],
             "encrypted_content": ["opaque"],
         },
@@ -503,6 +599,7 @@ def test_normalize_response_extracts_nested_function_call_name_and_visible_reaso
         "reasoning": "Need docs lookup.",
         "reasoning_meta": {
             "response_id": "resp_1",
+            "response_output": response["output"],
             "reasoning_items": [response["output"][0]],
             "encrypted_content": ["opaque"],
         },
@@ -580,6 +677,7 @@ def test_normalize_response_extracts_reasoning_text_from_reasoning_content_block
     assert normalized["reasoning"] == "Need docs lookup."
     assert normalized["reasoning_meta"] == {
         "response_id": "resp_1",
+        "response_output": response["output"],
         "reasoning_items": [response["output"][0]],
         "encrypted_content": ["opaque"],
     }
@@ -646,6 +744,9 @@ def test_stream_normalizes_text_reasoning_tool_usage_and_finish() -> None:
             "type": "reasoning_meta",
             "reasoning_meta": {
                 "response_id": "resp_1",
+                "response_output": [
+                    {"type": "reasoning", "id": "rs_1", "encrypted_content": "opaque"}
+                ],
                 "reasoning_items": [
                     {"type": "reasoning", "id": "rs_1", "encrypted_content": "opaque"}
                 ],
@@ -655,6 +756,12 @@ def test_stream_normalizes_text_reasoning_tool_usage_and_finish() -> None:
         {"type": "usage", "input_tokens": 5, "output_tokens": 3},
         {"type": "finish", "reason": "tool_calls"},
     ]
+
+
+def test_stream_accepts_openrouter_reasoning_delta_event() -> None:
+    lines = [_sse("response.reasoning.delta", {"delta": "Thinking"})]
+
+    assert list(_iter_deltas(lines)) == [{"type": "reasoning_delta", "text": "Thinking"}]
 
 
 def test_stream_emits_tool_name_from_nested_function_call_item() -> None:
@@ -971,6 +1078,7 @@ def test_stream_emits_visible_reasoning_from_completed_response_output() -> None
             "type": "reasoning_meta",
             "reasoning_meta": {
                 "response_id": "resp_1",
+                "response_output": [reasoning_item],
                 "reasoning_items": [reasoning_item],
                 "encrypted_content": ["opaque"],
             },
@@ -1011,12 +1119,49 @@ def test_stream_emits_visible_reasoning_from_reasoning_output_item() -> None:
             "type": "reasoning_meta",
             "reasoning_meta": {
                 "response_id": "resp_1",
+                "response_output": [reasoning_item],
                 "reasoning_items": [reasoning_item],
                 "encrypted_content": ["opaque"],
             },
         },
         {"type": "finish", "reason": "stop"},
     ]
+
+
+def test_stream_replaces_same_item_without_output_index_before_empty_completion() -> None:
+    partial_item = {"type": "message", "id": "msg_1", "role": "assistant", "content": []}
+    completed_item = {
+        "type": "message",
+        "id": "msg_1",
+        "role": "assistant",
+        "phase": "final_answer",
+        "content": [{"type": "output_text", "text": "Done"}],
+    }
+    lines = [
+        _sse("response.output_item.added", {"item": partial_item}),
+        _sse("response.output_item.done", {"item": completed_item}),
+        _sse(
+            "response.completed",
+            {
+                "response": {
+                    "id": "resp_1",
+                    "status": "completed",
+                    "output": [],
+                }
+            },
+        ),
+    ]
+
+    deltas = list(_iter_deltas(lines))
+
+    assert deltas[-2] == {
+        "type": "reasoning_meta",
+        "reasoning_meta": {
+            "response_id": "resp_1",
+            "response_output": [completed_item],
+        },
+    }
+    assert deltas[-1] == {"type": "finish", "reason": "stop"}
 
 
 def test_stream_completed_event_prefers_tool_calls_finish_over_completed_status() -> None:
@@ -1040,7 +1185,19 @@ def test_stream_completed_event_prefers_tool_calls_finish_over_completed_status(
     ]
 
     assert list(_iter_deltas(lines)) == [
-        {"type": "reasoning_meta", "reasoning_meta": {"response_id": "resp_tool"}},
+        {
+            "type": "reasoning_meta",
+            "reasoning_meta": {
+                "response_id": "resp_tool",
+                "response_output": [
+                    {
+                        "type": "function_call",
+                        "call_id": "call_1",
+                        "function": {"name": "search", "arguments": '{"q":"docs"}'},
+                    }
+                ],
+            },
+        },
         {"type": "finish", "reason": "tool_calls"},
     ]
 
@@ -1116,6 +1273,7 @@ def test_responses_policy_variants_cover_same_nested_tool_name_and_visible_reaso
             "type": "reasoning_meta",
             "reasoning_meta": {
                 "response_id": f"resp_{model_id}",
+                "response_output": [reasoning_item],
                 "reasoning_items": [reasoning_item],
                 "encrypted_content": ["opaque"],
             },
@@ -1151,6 +1309,7 @@ def test_stream_does_not_duplicate_reasoning_when_completed_repeats_streamed_tex
             "type": "reasoning_meta",
             "reasoning_meta": {
                 "response_id": "resp_1",
+                "response_output": [reasoning_item],
                 "reasoning_items": [reasoning_item],
                 "encrypted_content": ["opaque"],
             },
@@ -1188,6 +1347,7 @@ def test_stream_backfills_only_missing_reasoning_suffix_from_completed_response(
             "type": "reasoning_meta",
             "reasoning_meta": {
                 "response_id": "resp_1",
+                "response_output": [reasoning_item],
                 "reasoning_items": [reasoning_item],
                 "encrypted_content": ["opaque"],
             },

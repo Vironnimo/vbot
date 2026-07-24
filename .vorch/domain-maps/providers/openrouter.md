@@ -1,13 +1,13 @@
 # OpenRouter Provider
 
-OpenAI-compatible Provider with OpenRouter-specific reasoning, routing policy, prompt-cache affinity, and multi-modality catalog normalization.
+OpenAI-compatible Provider with OpenRouter-specific reasoning, per-Model Chat Completions/Responses routing, routing policy, prompt-cache affinity, and multi-modality catalog normalization.
 
 ## Interfaces
 
 - Provider config: `resources/providers/openrouter.json`
 - Adapter selector: `openrouter`
 - Adapter class: `OpenRouterAdapter`
-- Runtime endpoint: OpenAI-compatible `POST /chat/completions`
+- Runtime endpoints: OpenAI-compatible `POST /chat/completions` by default; stateless `POST /responses` for the exact OpenRouter GPT-5.6 Sol/Terra/Luna and `-pro` Model ids.
 - Catalog endpoint: `GET /models`
 - Routing catalogs: `GET /providers` for base Provider slugs and `GET /models/{author}/{slug}/endpoints` for one Model's exact endpoint tags, exposed to Settings through `provider.routing_options`
 
@@ -28,7 +28,8 @@ OpenAI-compatible Provider with OpenRouter-specific reasoning, routing policy, p
   - **off** → the byte-identical `reasoning: {effort: "none"}` for an effort-spelled-off wire (a `levels`/unknown control whose ladder has a `none` rung), else the documented toggle off-shape `reasoning: {enabled: false}` for an `on_off` model. `include_reasoning` is always omitted for this intent: some upstreams honor that output toggle even when they ignore the requested effort, so an off request must never ask for returned Reasoning. The exact `on_off` off-shape is **not live-verified** (no OpenRouter probe in this environment — see FLAGGED.md).
   - **default** (no effort selected) → no `reasoning` field.
 - If injected `model_lookup` says reasoning is unsupported, `reasoning`, `include_reasoning`, and generic `reasoning_effort` controls are stripped.
-- Reasoning replay policy: `current_run`, and this is the genuinely correct target (not a deferred placeholder). OpenRouter's [reasoning-tokens docs](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens) frame `reasoning`/`reasoning_details` preservation as in-run ("useful specifically for tool calling"); cross-run replay is undocumented. The in-run hard requirements are met — some upstreams 400 without echoed reasoning (Gemini "thought_signature" in `reasoning_details` of the `reasoning.encrypted` type), and `current_run` keeps `reasoning_meta` within the run, round-tripped by `_apply_openai_reasoning_meta` and pinned by a test. Replayed blocks must match the original sequence unmodified (docs: "you cannot rearrange or modify the sequence of these blocks"). **Billing of replayed `reasoning_details` is inferred, not documented** — the docs only state that generation bills as output. Revisit `full_history` only per upstream family (the hook's `model_id` supports a split) and only with probes; the same-model gate already blocks cross-model replay.
+- Reasoning replay is per Model: a catalog-known reasoning Model uses `full_history`, while an unknown or catalog-unresolved Model remains `current_run`. OpenRouter requires complete `reasoning_details` to be preserved unmodified across conversation history, including encrypted/signature blocks; the exact reasoning scope gate prevents cross-Model/Connection/Account replay. **Billing of replayed `reasoning_details` is inferred, not documented** — the docs only state that generation bills as output.
+- The six GPT-5.6 OpenRouter ids use its stateless Responses API. vBot sends the complete history on every request with `store: false`, preserves every original response output item, forwards the stable `session_id` and resolved `provider` routing policy, and accepts OpenRouter's `response.reasoning.delta` SSE event. OpenRouter rejects `previous_response_id`/stored-response chaining and does not document OpenAI's `reasoning.context` field, so vBot does not send that field on this wire; full-history continuity comes from complete item replay.
 
 ## Prompt Caching
 

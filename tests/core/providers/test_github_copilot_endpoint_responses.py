@@ -237,6 +237,14 @@ async def test_stream_responses_does_not_duplicate_reasoning_from_completed_even
             "type": "reasoning_meta",
             "reasoning_meta": {
                 "response_id": "resp-1",
+                "response_output": [
+                    {
+                        "type": "reasoning",
+                        "id": "rs_1",
+                        "summary": [{"type": "summary_text", "text": "Need docs lookup."}],
+                        "encrypted_content": "opaque",
+                    }
+                ],
                 "reasoning_items": [
                     {
                         "type": "reasoning",
@@ -330,6 +338,22 @@ async def test_send_routes_gpt_5_4_responses_with_nested_tool_name_and_visible_r
         "reasoning": "Need docs lookup.",
         "reasoning_meta": {
             "response_id": "resp-1",
+            "response_output": [
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": [{"type": "summary_text", "text": "Need docs lookup."}],
+                    "encrypted_content": "opaque",
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "function": {
+                        "name": "search",
+                        "arguments": '{"q":"docs"}',
+                    },
+                },
+            ],
             "reasoning_items": [
                 {
                     "type": "reasoning",
@@ -422,6 +446,22 @@ async def test_send_routes_gpt_5_4_family_responses_with_nested_tool_name(
         "reasoning": "Need docs lookup.",
         "reasoning_meta": {
             "response_id": "resp-1",
+            "response_output": [
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": [{"type": "summary_text", "text": "Need docs lookup."}],
+                    "encrypted_content": "opaque",
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "function": {
+                        "name": "search",
+                        "arguments": '{"q":"docs"}',
+                    },
+                },
+            ],
             "reasoning_items": [
                 {
                     "type": "reasoning",
@@ -657,6 +697,14 @@ async def test_stream_gpt_5_4_family_responses_surfaces_nested_tool_name(
             "type": "reasoning_meta",
             "reasoning_meta": {
                 "response_id": "resp-1",
+                "response_output": [
+                    {
+                        "type": "reasoning",
+                        "id": "rs_1",
+                        "summary": [{"type": "summary_text", "text": "Need docs lookup."}],
+                        "encrypted_content": "opaque",
+                    }
+                ],
                 "reasoning_items": [
                     {
                         "type": "reasoning",
@@ -707,6 +755,24 @@ async def test_stream_gpt_5_4_family_responses_deduplicates_replayed_arguments(
             "id": "call_1",
             "name_delta": "search",
             "arguments_delta": '{"q":"docs"}',
+        },
+        {
+            "type": "reasoning_meta",
+            "reasoning_meta": {
+                "response_output": [
+                    {
+                        "type": "function_call",
+                        "id": "fc_1",
+                        "call_id": "call_1",
+                        "name": "",
+                        "arguments": "",
+                        "function": {
+                            "name": "search",
+                            "arguments": '{"q":"docs"}',
+                        },
+                    }
+                ]
+            },
         },
         {"type": "finish", "reason": "tool_calls"},
     ]
@@ -789,6 +855,21 @@ async def test_stream_responses_backfills_only_missing_tool_argument_suffix(
             "id": "call_stable",
             "name_delta": "",
             "arguments_delta": ':"docs"}',
+        },
+        {
+            "type": "reasoning_meta",
+            "reasoning_meta": {
+                "response_output": [
+                    {
+                        "type": "function_call",
+                        "call_id": "call_stable",
+                        "function": {
+                            "name": "search",
+                            "arguments": '{"q"',
+                        },
+                    }
+                ]
+            },
         },
         {"type": "finish", "reason": "tool_calls"},
     ]

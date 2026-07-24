@@ -86,6 +86,7 @@ def _emit_message_event(
 def _visible_message_payload(message: ChatMessage) -> JsonObject:
     data = message.to_dict()
     data.pop("reasoning_meta", None)
+    data.pop("reasoning_scope", None)
     return data
 
 

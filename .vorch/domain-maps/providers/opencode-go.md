@@ -1,6 +1,6 @@
 # OpenCode Go Provider
 
-OpenAI-compatible gateway with full-history reasoning replay and a small set of Anthropic-routed models.
+OpenAI-compatible gateway with per-Model protocol and reasoning profiles plus a small set of Anthropic-routed Models.
 
 ## Interfaces
 
@@ -35,10 +35,11 @@ Since `metadata` is replaced **wholesale** by the highest layer at load (assembl
 
 ## Reasoning Replay
 
-- `reasoning_replay_policy()` returns `full_history` for every model id — both routes. The chat layer owns history shaping (same-model gate); the adapter no longer strips reasoning from history itself (`_bound_assistant_reasoning_replay` was retired in the Phase-3 rollout, 2026-06-13).
+- `reasoning_replay_policy()` returns `full_history` only for Models with an explicit `metadata.opencode_go.protocol` profile; an unknown Model remains `current_run` even though it takes the conservative OpenAI route. The chat layer owns exact-scope history shaping; the adapter no longer strips reasoning from history itself.
 - Live probe against the real gateway (2026-06-13): the OpenAI route accepted `reasoning_content` on a completed historical assistant message across a run boundary (`deepseek-v4-flash`, 200), and the Anthropic route accepted a replayed signed `thinking` block across a run boundary (`minimax-m2.5`, 200).
 - OpenAI-routed assistant messages with non-empty visible `reasoning` are echoed on the wire as `reasoning_content` (the gateway expects round-tripping); `reasoning_meta` keys (`reasoning_details`, `encrypted_content`) are applied by the shared OpenAI-compatible formatter.
 - Anthropic-routed models render replayed `reasoning_meta.content_blocks` through the inner `AnthropicCompatibleAdapter`, including its thinking-disabled guard.
+- `kimi-k2.6` carries the additional protocol fact `metadata.opencode_go.thinking_keep: "all"`; the request renders `thinking: {type: enabled, keep: all}` so the gateway preserves its complete thinking history rather than applying a route default.
 
 ## Prompt Caching
 

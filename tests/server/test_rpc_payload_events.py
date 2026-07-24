@@ -124,6 +124,15 @@ class TestRemoveOpaqueProviderMetadata:
         )
         assert result == {"role": "assistant"}
 
+    def test_strips_reasoning_scope(self) -> None:
+        result = payloads.remove_opaque_provider_metadata(
+            {
+                "role": "assistant",
+                "reasoning_scope": "openai/gpt-5.6-sol::api-key:work",
+            }
+        )
+        assert result == {"role": "assistant"}
+
     def test_preserves_usage(self) -> None:
         result = payloads.remove_opaque_provider_metadata(
             {"role": "assistant", "usage": {"input_tokens": 100, "output_tokens": 50}}
@@ -204,9 +213,11 @@ class TestVisibleMessage:
             model="openai/gpt-5.2",
             content="Hello",
             reasoning_meta={"secret": "opaque"},
+            reasoning_scope="openai/gpt-5.2::api-key:work",
         )
         result = payloads._visible_message(message)
         assert "reasoning_meta" not in result
+        assert "reasoning_scope" not in result
 
     def test_visible_message_preserves_usage_and_strips_reasoning_meta(self) -> None:
         message = ChatMessage.assistant(

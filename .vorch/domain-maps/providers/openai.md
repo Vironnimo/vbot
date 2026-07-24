@@ -1,6 +1,6 @@
 # OpenAI Provider
 
-Single `openai` provider covering both OpenAI Platform API-key access and ChatGPT Plus/Pro subscription access. One `OpenAIAdapter` class branches on a per-connection `mode` to pick between `/chat/completions` and `/codex/responses`.
+Single `openai` provider covering both OpenAI Platform API-key access and ChatGPT Plus/Pro subscription access. One `OpenAIAdapter` class resolves the runtime wire from both the Connection and the selected Model: Platform API-key Models may use `/chat/completions` or `/responses`, while subscription Models use `/codex/responses`.
 
 ## Interfaces
 
@@ -8,9 +8,9 @@ Single `openai` provider covering both OpenAI Platform API-key access and ChatGP
 - Adapter selector: `openai`
 - Adapter class: `OpenAIAdapter` (subclass of `OpenAICompatibleAdapter`)
 - Connections:
-  - `openai:api-key` — `type: api_key`, `auth.credential_key: OPENAI_API_KEY`, `base_url` defaults to the provider-level OpenAI Platform URL. Default mode (`/chat/completions`).
+  - `openai:api-key` — `type: api_key`, `auth.credential_key: OPENAI_API_KEY`, `base_url` defaults to the provider-level OpenAI Platform URL. Per-Model `metadata.openai.wire_policies.api-key.protocol` selects public Responses; absent metadata keeps the conservative `/chat/completions` fallback.
   - `openai:subscription` — `type: oauth`, `base_url: https://chatgpt.com/backend-api`, `mode: codex_responses`, `models_endpoint: /codex/models`. ChatGPT Plus/Pro Codex OAuth device flow.
-- Runtime endpoints: `POST <base_url>/chat/completions` (api-key) and `POST <base_url>/codex/responses` (subscription).
+- Runtime endpoints: `POST <base_url>/chat/completions` or `POST <base_url>/responses` (api-key, selected per Model) and `POST <base_url>/codex/responses` (subscription).
 - Catalog: the provider has no provider-level `models_endpoint`. Only the `subscription` connection carries `models_endpoint`; refresh of the `api-key` connection is not supported in this provider.
 
 ## Connection Configuration
@@ -27,7 +27,7 @@ The adapter is selected by provider `adapter`, not by connection, so the same `O
 
 ## Wire Contract
 
-### Chat Completions (default — `api-key` connection)
+### Chat Completions (conservative `api-key` fallback)
 
 Used when `connection_mode` is `None` or `chat_completions`. Delegates to `OpenAICompatibleAdapter`; behavior is unchanged from the generic OpenAI-compatible contract:
 
@@ -37,6 +37,12 @@ Used when `connection_mode` is `None` or `chat_completions`. Delegates to `OpenA
 - Provider tool definitions become `{"type":"function","function":{...}}` entries.
 - Streaming uses `stream: true`, SSE `data:` frames, `[DONE]`, and `stream_options.include_usage: true`; caller-provided `stream_options` are preserved except `include_usage` is forced true.
 - The Codex extra headers (`OpenAI-Beta`, `originator`) must **not** be added on this path.
+
+### Platform Responses (`api-key` connection, selected Models)
+
+- A Model whose `metadata.openai.wire_policies.api-key.protocol` is `responses` uses public `POST /responses`; currently the durable profiles cover GPT-5.5, the `gpt-5.6` alias, and GPT-5.6 Sol/Terra/Luna. Unprofiled Platform Models remain on Chat Completions.
+- Requests use the shared Responses item protocol with `store: false`. Assistant history replays each original output item verbatim from `reasoning_meta.response_output`, preserving encrypted reasoning, ids, Tool items, ordering, and assistant `phase`; reconstruction exists only for legacy Sessions that predate item capture.
+- Public Responses may send native PDF `input_file` parts. Its optional request-parameter set is distinct from the private subscription wire.
 
 ### Codex Responses (`subscription` connection — `mode: codex_responses`)
 
@@ -85,7 +91,9 @@ The ChatGPT Codex backend routes its prompt cache by **per-request HTTP headers 
 - vBot `thinking_effort` and raw `reasoning_effort` map to the nearest safe OpenAI effort: `minimal -> low`, `low/medium/high` stay exact, `xhigh/max -> high`.
 - Generic OpenAI-compatible gateways omit explicit `none`; the direct OpenAI provider may send `none` only when catalog data confirms reasoning support.
 - If injected `model_lookup` says reasoning is unsupported, reasoning request controls are stripped.
-- Opaque reasoning fields such as `encrypted_content` and `reasoning_details` stay in `reasoning_meta` for round-tripping.
+- Replay and wire policy are resolved from `metadata.openai.wire_policies.<connection>` for the exact Model. GPT-5.5 uses Responses but remains `current_run`; its original assistant `phase` is preserved across Runs as semantic history. The `gpt-5.6` alias and GPT-5.6 Sol/Terra/Luna use `full_history` on both Connections.
+- On public Platform Responses, GPT-5.6 sends `reasoning.context: "all_turns"` so prior output items are available as Session-wide reasoning context. The private subscription `/codex/responses` contract is also full-history replay for those Models, but vBot does not send the public `reasoning.context` field there because support is not documented or live-verified.
+- Opaque reasoning fields such as `encrypted_content` and the complete Responses `output` array stay in `reasoning_meta` for exact round-tripping. A GPT-5.6 full-history context therefore depends on both the all-turns request control where supported and the prior output items actually being present.
 - On the Codex Responses path, supported reasoning efforts are `low`, `medium`, `high`, and `xhigh`; `max` maps to `xhigh`.
 
 ## Response And Catalog Normalization

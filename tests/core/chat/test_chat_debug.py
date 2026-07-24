@@ -233,6 +233,15 @@ class StubProviderCredentials:
     def is_usable(self, provider_id: str, connection_id: str | None = None) -> bool:
         return self.has_credentials(provider_id, connection_id)
 
+    def resolve_account_id(
+        self,
+        provider_id: str,
+        local_connection_id: str,
+        account_id: str | None = None,
+    ) -> str:
+        del provider_id, local_connection_id
+        return account_id or "default"
+
 
 class StubProcessManager:
     def cancel_scope(self, run_id: str) -> None:

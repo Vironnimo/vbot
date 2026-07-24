@@ -16,7 +16,14 @@
       "metadata": {"opencode_go": {"protocol": "openai"}}
     },
     "kimi-k2.5": {"metadata": {"opencode_go": {"protocol": "openai"}}},
-    "kimi-k2.6": {"metadata": {"opencode_go": {"protocol": "openai"}}},
+    "kimi-k2.6": {
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai",
+          "thinking_keep": "all"
+        }
+      }
+    },
     "kimi-k2.7-code": {"metadata": {"opencode_go": {"protocol": "openai"}}},
     "mimo-v2-omni": {"metadata": {"opencode_go": {"protocol": "openai"}}},
     "mimo-v2-pro": {"metadata": {"opencode_go": {"protocol": "openai"}}},

@@ -53,6 +53,7 @@ def test_reasoning_replay_policy_is_full_history(minimax_adapter: MiniMaxAdapter
     """MiniMax's own guidance requires cross-turn reasoning replay (probe deferred)."""
     assert minimax_adapter.reasoning_replay_policy("MiniMax-M3") == "full_history"
     assert minimax_adapter.reasoning_replay_policy("MiniMax-M2.7") == "full_history"
+    assert minimax_adapter.reasoning_replay_policy("MiniMax-future") == "current_run"
 
 
 def test_normalize_catalog_entry_maps_m3_capabilities() -> None:

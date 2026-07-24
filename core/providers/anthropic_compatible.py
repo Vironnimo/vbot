@@ -18,7 +18,7 @@ Key differences from the OpenAI-compatible adapter:
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -96,6 +96,8 @@ TOOL_USE_BLOCK_TYPE = "tool_use"
 THINKING_BLOCK_TYPE = "thinking"
 REDACTED_THINKING_BLOCK_TYPE = "redacted_thinking"
 REASONING_META_CONTENT_BLOCKS = "content_blocks"
+ANTHROPIC_METADATA_KEY = "anthropic"
+REQUIRES_ADAPTIVE_THINKING_METADATA_KEY = "requires_adaptive_thinking"
 
 # Prompt caching. A ``cache_control`` marker on a content block tells Anthropic
 # to cache the request prefix up to that block (cache reads cost ~0.1x input,
@@ -686,7 +688,21 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
                 return
             payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
         elif intent.kind == REASONING_INTENT_OFF:
+            if self._model_requires_adaptive_thinking(model_id):
+                return
             payload["thinking"] = {"type": "disabled"}
+
+    def _model_requires_adaptive_thinking(self, model_id: str) -> bool:
+        if self._model_lookup is None:
+            return False
+        model = self._model_lookup(model_id.split("::", 1)[0])
+        if model is None:
+            return False
+        metadata = model.metadata.get(ANTHROPIC_METADATA_KEY)
+        return (
+            isinstance(metadata, Mapping)
+            and metadata.get(REQUIRES_ADAPTIVE_THINKING_METADATA_KEY) is True
+        )
 
     def _resolve_max_tokens(
         self,

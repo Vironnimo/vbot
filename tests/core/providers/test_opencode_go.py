@@ -42,6 +42,7 @@ _PROTOCOL_BY_MODEL: dict[str, str] = {
     "qwen3.6-plus": "anthropic",
     "deepseek-v4-flash": "openai",
     "deepseek-v4-pro": "openai",
+    "kimi-k2.6": "openai",
     "qwen3.6-plus-openai": "openai",
 }
 
@@ -49,7 +50,10 @@ _PROTOCOL_BY_MODEL: dict[str, str] = {
 def _model_with_protocol(model_id: str, protocol: str | None) -> Model:
     metadata: dict[str, object] = {}
     if protocol is not None:
-        metadata = {"opencode_go": {"protocol": protocol}}
+        protocol_metadata = {"protocol": protocol}
+        if model_id == "kimi-k2.6":
+            protocol_metadata["thinking_keep"] = "all"
+        metadata = {"opencode_go": protocol_metadata}
     return Model(
         model_id=model_id,
         name=model_id,
@@ -144,6 +148,23 @@ class TestOpenCodeGoAdapter:
         model_id: str,
     ) -> None:
         assert opencode_go_adapter.reasoning_replay_policy(model_id) == "full_history"
+
+    def test_unknown_model_reasoning_replay_is_current_run(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        assert opencode_go_adapter.reasoning_replay_policy("new-unprofiled-model") == "current_run"
+
+    def test_kimi_k2_6_enables_full_history_rendering(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        payload = opencode_go_adapter._build_payload(
+            [{"role": "user", "content": "Continue"}],
+            "kimi-k2.6",
+        )
+
+        assert payload["thinking"] == {"type": "enabled", "keep": "all"}
 
     def test_format_assistant_message_adds_reasoning_content(
         self,

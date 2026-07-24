@@ -1,10 +1,26 @@
 {
   "models": {
+    "claude-fable-5": {
+      "metadata": {
+        "anthropic": {
+          "requires_adaptive_thinking": true,
+          "supports_temperature": false
+        }
+      }
+    },
     "claude-opus-4-5-20251101": {
       "capabilities": {
         "reasoning": {
           "supported": true,
           "control": "budget"
+        }
+      }
+    },
+    "claude-opus-4-7": {
+      "metadata": {
+        "anthropic": {
+          "requires_adaptive_thinking": true,
+          "supports_temperature": false
         }
       }
     }

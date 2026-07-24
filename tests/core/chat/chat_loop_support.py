@@ -727,10 +727,37 @@ class StubProviderCredentials:
         self._usable_connection_ids = usable_connection_ids
 
     def has_credentials(self, _provider_id: str, connection_id: str | None = None) -> bool:
-        return connection_id in self._usable_connection_ids
+        if connection_id in self._usable_connection_ids:
+            return True
+        return (
+            isinstance(connection_id, str)
+            and connection_id.count(":") == 1
+            and any(
+                candidate.startswith(f"{connection_id}:")
+                for candidate in self._usable_connection_ids
+            )
+        )
 
     def is_usable(self, provider_id: str, connection_id: str | None = None) -> bool:
         return self.has_credentials(provider_id, connection_id)
+
+    def resolve_account_id(
+        self,
+        provider_id: str,
+        local_connection_id: str,
+        account_id: str | None = None,
+    ) -> str:
+        if account_id is not None:
+            return account_id
+        prefix = f"{provider_id}:{local_connection_id}:"
+        named_accounts = sorted(
+            connection_id.removeprefix(prefix)
+            for connection_id in self._usable_connection_ids
+            if connection_id.startswith(prefix)
+        )
+        if f"{provider_id}:{local_connection_id}" in self._usable_connection_ids:
+            return "default"
+        return named_accounts[0] if named_accounts else "default"
 
 
 @dataclass(frozen=True)
