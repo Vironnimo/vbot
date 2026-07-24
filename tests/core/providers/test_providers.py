@@ -1157,6 +1157,52 @@ class TestProviderModelsDevId:
 
 
 # ---------------------------------------------------------------------------
+# catalog_exclusions — provider listings that advertise unusable wire ids
+# ---------------------------------------------------------------------------
+
+
+class TestProviderCatalogExclusions:
+    def test_defaults_to_empty(self) -> None:
+        config = ProviderConfig(
+            id="opencode-go",
+            name="OpenCode Go",
+            adapter="opencode_go",
+            base_url="https://example.test/v1",
+        )
+
+        assert config.catalog_exclusions == frozenset()
+
+    def test_registry_parses_exact_model_ids(self, tmp_path: Path) -> None:
+        prov_dir = tmp_path / "providers"
+        prov_dir.mkdir()
+        data = dict(OPENROUTER_DATA)
+        data["catalog_exclusions"] = ["broken-preview", "legacy-model"]
+        (prov_dir / "openrouter.json").write_text(json.dumps(data), encoding="utf-8")
+
+        config = ProviderRegistry.load(tmp_path).get("openrouter")
+
+        assert config.catalog_exclusions == frozenset({"broken-preview", "legacy-model"})
+
+    @pytest.mark.parametrize(
+        "value",
+        ["broken-preview", [""], [123]],
+    )
+    def test_registry_rejects_invalid_catalog_exclusions(
+        self,
+        tmp_path: Path,
+        value: object,
+    ) -> None:
+        prov_dir = tmp_path / "providers"
+        prov_dir.mkdir()
+        data = dict(OPENROUTER_DATA)
+        data["catalog_exclusions"] = value
+        (prov_dir / "openrouter.json").write_text(json.dumps(data), encoding="utf-8")
+
+        with pytest.raises(ConfigError, match="catalog_exclusions must be a list"):
+            ProviderRegistry.load(tmp_path)
+
+
+# ---------------------------------------------------------------------------
 # Registry: empty directory
 # ---------------------------------------------------------------------------
 

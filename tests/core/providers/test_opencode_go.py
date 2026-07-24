@@ -30,30 +30,73 @@ ANTHROPIC_MESSAGES_MODELS: tuple[str, ...] = (
     "minimax-m2.5",
     "qwen3.7-plus",
 )
-# A small per-model protocol map mirroring what the opencode-go override carries
-# on ``metadata.opencode_go.protocol`` (the published table). Models not listed
-# here are "unknown" to the adapter and route to the safe OpenAI default.
-_PROTOCOL_BY_MODEL: dict[str, str] = {
-    "minimax-m2.7": "anthropic",
-    "minimax-m2.5": "anthropic",
-    "minimax-m3": "anthropic",
-    "qwen3.7-plus": "anthropic",
-    "qwen3.7-max": "anthropic",
-    "qwen3.6-plus": "anthropic",
-    "deepseek-v4-flash": "openai",
-    "deepseek-v4-pro": "openai",
-    "kimi-k2.6": "openai",
-    "qwen3.6-plus-openai": "openai",
+# Small per-model profiles mirroring the independent facts carried by
+# ``metadata.opencode_go``. Models absent here are unknown to the adapter.
+_PROFILE_BY_MODEL: dict[str, dict[str, object]] = {
+    "minimax-m2.7": {"protocol": "anthropic", "reasoning_replay": "full_history"},
+    "minimax-m2.5": {"protocol": "anthropic", "reasoning_replay": "full_history"},
+    "minimax-m3": {"protocol": "anthropic", "reasoning_replay": "full_history"},
+    "qwen3.7-plus": {"protocol": "anthropic", "reasoning_replay": "full_history"},
+    "qwen3.7-max": {"protocol": "anthropic", "reasoning_replay": "full_history"},
+    "qwen3.6-plus": {"protocol": "anthropic", "reasoning_replay": "full_history"},
+    "deepseek-v4-flash": {"protocol": "openai", "reasoning_replay": "full_history"},
+    "deepseek-v4-pro": {"protocol": "openai", "reasoning_replay": "full_history"},
+    "grok-4.5": {
+        "minimum_reasoning_effort": "low",
+        "protocol": "openai",
+        "reasoning_replay": "full_history",
+    },
+    "hy3": {"protocol": "openai", "reasoning_replay": "full_history"},
+    "kimi-k2.5": {
+        "protocol": "openai",
+        "reasoning_replay": "current_run",
+        "thinking_control": "toggle",
+    },
+    "kimi-k2.6": {
+        "protocol": "openai",
+        "reasoning_replay": "full_history",
+        "thinking_control": "toggle",
+        "thinking_keep": "all",
+    },
+    "kimi-k2.7-code": {
+        "protocol": "openai",
+        "reasoning_replay": "current_run",
+        "thinking_control": "always_enabled",
+    },
+    "kimi-k3": {
+        "minimum_reasoning_effort": "low",
+        "protocol": "openai",
+        "reasoning_replay": "full_history",
+    },
+    "qwen3.6-plus-openai": {
+        "protocol": "openai",
+        "reasoning_replay": "full_history",
+    },
 }
 
 
-def _model_with_protocol(model_id: str, protocol: str | None) -> Model:
+def _model_with_profile(
+    model_id: str,
+    profile: dict[str, object] | None,
+) -> Model:
     metadata: dict[str, object] = {}
-    if protocol is not None:
-        protocol_metadata = {"protocol": protocol}
-        if model_id == "kimi-k2.6":
-            protocol_metadata["thinking_keep"] = "all"
-        metadata = {"opencode_go": protocol_metadata}
+    if profile is not None:
+        metadata = {"opencode_go": profile}
+    reasoning = ReasoningCapabilities(supported=True)
+    if model_id in {"kimi-k2.5", "kimi-k2.6"}:
+        reasoning = ReasoningCapabilities(supported=True, control="on_off")
+    elif model_id == "grok-4.5":
+        reasoning = ReasoningCapabilities(
+            supported=True,
+            control="levels",
+            levels=("low", "medium", "high"),
+        )
+    elif model_id == "kimi-k3":
+        reasoning = ReasoningCapabilities(
+            supported=True,
+            control="levels",
+            levels=("low", "high", "max"),
+        )
     return Model(
         model_id=model_id,
         name=model_id,
@@ -61,7 +104,7 @@ def _model_with_protocol(model_id: str, protocol: str | None) -> Model:
             vision=False,
             tools=True,
             json_mode=True,
-            reasoning=ReasoningCapabilities(supported=True),
+            reasoning=reasoning,
         ),
         context_window=1_000_000,
         max_output_tokens=131_072,
@@ -77,8 +120,8 @@ def _protocol_lookup(model_id: str) -> Model | None:
     if "/" in bare:
         candidates.append(bare.rsplit("/", 1)[-1])
     for candidate in candidates:
-        if candidate in _PROTOCOL_BY_MODEL:
-            return _model_with_protocol(candidate, _PROTOCOL_BY_MODEL[candidate])
+        if candidate in _PROFILE_BY_MODEL:
+            return _model_with_profile(candidate, _PROFILE_BY_MODEL[candidate])
     return None
 
 
@@ -155,6 +198,14 @@ class TestOpenCodeGoAdapter:
     ) -> None:
         assert opencode_go_adapter.reasoning_replay_policy("new-unprofiled-model") == "current_run"
 
+    @pytest.mark.parametrize("model_id", ["kimi-k2.5", "kimi-k2.7-code"])
+    def test_kimi_models_without_verified_cross_run_semantics_keep_current_run_replay(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+        model_id: str,
+    ) -> None:
+        assert opencode_go_adapter.reasoning_replay_policy(model_id) == "current_run"
+
     def test_kimi_k2_6_enables_full_history_rendering(
         self,
         opencode_go_adapter: OpenCodeGoAdapter,
@@ -165,6 +216,47 @@ class TestOpenCodeGoAdapter:
         )
 
         assert payload["thinking"] == {"type": "enabled", "keep": "all"}
+        assert "reasoning_effort" not in payload
+
+    def test_kimi_k2_6_respects_explicit_thinking_off(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        payload = opencode_go_adapter._build_payload(
+            [{"role": "user", "content": "Continue"}],
+            "kimi-k2.6",
+            thinking_effort="none",
+        )
+
+        assert payload["thinking"] == {"type": "disabled"}
+        assert "reasoning_effort" not in payload
+
+    def test_kimi_k2_7_never_sends_unsupported_reasoning_effort_or_disables_thinking(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        payload = opencode_go_adapter._build_payload(
+            [{"role": "user", "content": "Continue"}],
+            "kimi-k2.7-code",
+            thinking_effort="none",
+        )
+
+        assert payload["thinking"] == {"type": "enabled"}
+        assert "reasoning_effort" not in payload
+
+    @pytest.mark.parametrize("model_id", ["grok-4.5", "kimi-k3"])
+    def test_always_reasoning_effort_models_map_none_to_lowest_supported_level(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+        model_id: str,
+    ) -> None:
+        payload = opencode_go_adapter._build_payload(
+            [{"role": "user", "content": "Continue"}],
+            model_id,
+            thinking_effort="none",
+        )
+
+        assert payload["reasoning_effort"] == "low"
 
     def test_format_assistant_message_adds_reasoning_content(
         self,

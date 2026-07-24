@@ -855,7 +855,8 @@
       "capabilities": {
         "input_modalities": [
           "text",
-          "image"
+          "image",
+          "video"
         ],
         "json_mode": false,
         "output_modalities": [
@@ -878,6 +879,34 @@
       "max_output_tokens": 64000,
       "name": "Qwen3.7 Plus",
       "release_date": "2026-06-02",
+      "temperature": true
+    },
+    "alibaba/qwen3.8-max-preview": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "family": "qwen",
+      "last_updated": "2026-07-19",
+      "max_output_tokens": 131072,
+      "name": "Qwen3.8 Max Preview",
+      "release_date": "2026-07-19",
       "temperature": true
     },
     "alibaba/qwq-plus": {
@@ -1407,6 +1436,40 @@
       "max_output_tokens": 128000,
       "name": "Claude Opus 4.8",
       "release_date": "2026-05-28",
+      "temperature": false
+    },
+    "anthropic/claude-opus-5": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "family": "claude-opus",
+      "knowledge": "2026-05",
+      "last_updated": "2026-07-24",
+      "max_output_tokens": 128000,
+      "name": "Claude Opus 5",
+      "release_date": "2026-07-24",
       "temperature": false
     },
     "anthropic/claude-sonnet-4-0": {
@@ -2231,6 +2294,64 @@
       "release_date": "2026-04-24",
       "temperature": true
     },
+    "google/deep-research-max-preview-04-2026": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text",
+          "image"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1048576,
+      "family": "gemini-pro",
+      "knowledge": "2025-01",
+      "last_updated": "2026-04-21",
+      "max_output_tokens": 65536,
+      "name": "Deep Research Max Preview",
+      "release_date": "2026-04-21",
+      "temperature": false
+    },
+    "google/deep-research-preview-04-2026": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text",
+          "image"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1048576,
+      "family": "gemini-pro",
+      "knowledge": "2025-01",
+      "last_updated": "2026-04-21",
+      "max_output_tokens": 65536,
+      "name": "Gemini Deep Research Preview",
+      "release_date": "2026-04-21",
+      "temperature": false
+    },
     "google/gemini-2.0-flash": {
       "capabilities": {
         "input_modalities": [
@@ -2291,6 +2412,34 @@
       "max_output_tokens": 8192,
       "name": "Gemini 2.0 Flash-Lite",
       "release_date": "2024-12-11",
+      "temperature": true
+    },
+    "google/gemini-2.5-computer-use-preview-10-2025": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 128000,
+      "family": "gemini-pro",
+      "knowledge": "2025-01",
+      "last_updated": "2025-10-07",
+      "max_output_tokens": 64000,
+      "name": "Gemini 2.5 Computer Use Preview",
+      "release_date": "2025-10-07",
       "temperature": true
     },
     "google/gemini-2.5-flash": {
@@ -2522,6 +2671,11 @@
           "image"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -2618,6 +2772,11 @@
           "image"
         ],
         "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "high"
+          ],
           "supported": true
         },
         "supported_parameters": [
@@ -2708,6 +2867,40 @@
       "release_date": "2026-05-07",
       "temperature": true
     },
+    "google/gemini-3.1-flash-lite-image": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text",
+          "image"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 65536,
+      "family": "gemini-flash-lite",
+      "knowledge": "2025-01",
+      "last_updated": "2026-06-30",
+      "max_output_tokens": 4096,
+      "name": "Nano Banana 2 Lite",
+      "release_date": "2026-06-30",
+      "temperature": true
+    },
     "google/gemini-3.1-flash-lite-preview": {
       "capabilities": {
         "input_modalities": [
@@ -2744,6 +2937,71 @@
       "max_output_tokens": 65536,
       "name": "Gemini 3.1 Flash Lite Preview",
       "release_date": "2026-03-03",
+      "temperature": true
+    },
+    "google/gemini-3.1-flash-live-preview": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text",
+          "audio"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 131072,
+      "family": "gemini-flash",
+      "knowledge": "2025-01",
+      "last_updated": "2026-03-26",
+      "max_output_tokens": 65536,
+      "name": "Gemini 3.1 Flash Live Preview",
+      "release_date": "2026-03-26",
+      "temperature": true
+    },
+    "google/gemini-3.1-flash-tts-preview": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "audio"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 8192,
+      "family": "gemini-flash",
+      "knowledge": "2025-01",
+      "last_updated": "2026-04-15",
+      "max_output_tokens": 16384,
+      "name": "Gemini 3.1 Flash TTS Preview",
+      "release_date": "2026-04-15",
       "temperature": true
     },
     "google/gemini-3.1-pro-preview": {
@@ -2858,6 +3116,107 @@
       "release_date": "2026-05-19",
       "temperature": true
     },
+    "google/gemini-3.5-flash-lite": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1048576,
+      "family": "gemini-flash-lite",
+      "knowledge": "2026-03",
+      "last_updated": "2026-07-21",
+      "max_output_tokens": 65536,
+      "name": "Gemini 3.5 Flash Lite",
+      "release_date": "2026-07-21",
+      "temperature": true
+    },
+    "google/gemini-3.5-live-translate-preview": {
+      "capabilities": {
+        "input_modalities": [
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "audio",
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 131072,
+      "family": "gemini-pro",
+      "knowledge": "2025-01",
+      "last_updated": "2026-06-09",
+      "max_output_tokens": 65536,
+      "name": "Gemini 3.5 Live Translate Preview",
+      "release_date": "2026-06-09",
+      "temperature": false
+    },
+    "google/gemini-3.6-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "minimal",
+            "low",
+            "medium",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1048576,
+      "family": "gemini-flash",
+      "knowledge": "2026-03",
+      "last_updated": "2026-07-21",
+      "max_output_tokens": 65536,
+      "name": "Gemini 3.6 Flash",
+      "release_date": "2026-07-21",
+      "temperature": true
+    },
     "google/gemini-embedding-001": {
       "capabilities": {
         "input_modalities": [
@@ -2880,6 +3239,34 @@
       "max_output_tokens": 1,
       "name": "Gemini Embedding 001",
       "release_date": "2025-05-20",
+      "temperature": false
+    },
+    "google/gemini-embedding-2": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "audio",
+          "video",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 8192,
+      "family": "gemini",
+      "knowledge": "2025-11",
+      "last_updated": "2026-04-22",
+      "max_output_tokens": 3072,
+      "name": "Gemini Embedding 2",
+      "release_date": "2026-04-22",
       "temperature": false
     },
     "google/gemini-flash-latest": {
@@ -2981,6 +3368,37 @@
       "max_output_tokens": 57920,
       "name": "Gemini Omni Flash Preview",
       "release_date": "2026-06-30"
+    },
+    "google/gemini-robotics-er-1.6-preview": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "budget",
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 131072,
+      "family": "gemini",
+      "knowledge": "2025-01",
+      "last_updated": "2026-04-14",
+      "max_output_tokens": 65536,
+      "name": "Gemini Robotics-ER 1.6 Preview",
+      "release_date": "2026-04-14",
+      "temperature": true
     },
     "google/gemma-4-26b-a4b-it": {
       "capabilities": {
@@ -3093,6 +3511,135 @@
       "name": "Gemma 4 E4B IT",
       "release_date": "2026-04-02",
       "temperature": true
+    },
+    "google/lyria-3-clip-preview": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text",
+          "audio"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 131072,
+      "family": "lyria",
+      "last_updated": "2026-03-25",
+      "max_output_tokens": 65536,
+      "name": "Lyria 3 Clip Preview",
+      "release_date": "2026-03-25",
+      "temperature": true
+    },
+    "google/lyria-3-pro-preview": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text",
+          "audio"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 131072,
+      "family": "lyria",
+      "last_updated": "2026-03-25",
+      "max_output_tokens": 8192,
+      "name": "Lyria 3 Pro Preview",
+      "release_date": "2026-03-25",
+      "temperature": true
+    },
+    "google/veo-3.1-fast-generate-preview": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 1024,
+      "family": "veo",
+      "last_updated": "2026-01-01",
+      "max_output_tokens": 0,
+      "name": "Veo 3.1 Fast Preview",
+      "release_date": "2025-10-15",
+      "temperature": false
+    },
+    "google/veo-3.1-generate-preview": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 1024,
+      "family": "veo",
+      "last_updated": "2026-01",
+      "max_output_tokens": 1,
+      "name": "Veo 3.1 Preview",
+      "release_date": "2025-10-15",
+      "temperature": false
+    },
+    "google/veo-3.1-lite-generate-preview": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 1024,
+      "family": "veo",
+      "last_updated": "2026-03-31",
+      "max_output_tokens": 0,
+      "name": "Veo 3.1 Lite Preview",
+      "release_date": "2026-03-31",
+      "temperature": false
     },
     "meituan/longcat-2.0": {
       "capabilities": {
@@ -5055,12 +5602,6 @@
           "text"
         ],
         "reasoning": {
-          "control": "levels",
-          "levels": [
-            "low",
-            "medium",
-            "high"
-          ],
           "supported": true
         },
         "tools": true,
@@ -5211,10 +5752,6 @@
           "text"
         ],
         "reasoning": {
-          "control": "levels",
-          "levels": [
-            "medium"
-          ],
           "supported": true
         },
         "tools": true,
@@ -5240,12 +5777,6 @@
           "text"
         ],
         "reasoning": {
-          "control": "levels",
-          "levels": [
-            "low",
-            "medium",
-            "high"
-          ],
           "supported": true
         },
         "tools": true,
@@ -5271,13 +5802,6 @@
           "text"
         ],
         "reasoning": {
-          "control": "levels",
-          "levels": [
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ],
           "supported": true
         },
         "tools": true,
@@ -5303,12 +5827,6 @@
           "text"
         ],
         "reasoning": {
-          "control": "levels",
-          "levels": [
-            "low",
-            "medium",
-            "high"
-          ],
           "supported": true
         },
         "tools": true,
@@ -5397,13 +5915,6 @@
           "text"
         ],
         "reasoning": {
-          "control": "levels",
-          "levels": [
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ],
           "supported": true
         },
         "tools": true,
@@ -6159,10 +6670,6 @@
           "text"
         ],
         "reasoning": {
-          "control": "levels",
-          "levels": [
-            "medium"
-          ],
           "supported": true
         },
         "tools": true,
@@ -6280,10 +6787,6 @@
           "text"
         ],
         "reasoning": {
-          "control": "levels",
-          "levels": [
-            "medium"
-          ],
           "supported": true
         },
         "tools": true,
@@ -6456,6 +6959,32 @@
       "max_output_tokens": 32768,
       "name": "Laguna M.1",
       "release_date": "2026-04-28",
+      "temperature": true
+    },
+    "poolside/laguna-s-2.1": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 1048576,
+      "family": "laguna",
+      "last_updated": "2026-07-21",
+      "max_output_tokens": 32768,
+      "name": "Laguna S 2.1",
+      "release_date": "2026-07-21",
       "temperature": true
     },
     "poolside/laguna-xs-2.1": {
@@ -6728,6 +7257,32 @@
       "release_date": "2026-05-29",
       "temperature": true
     },
+    "tencent/hy3": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 256000,
+      "family": "Hy",
+      "last_updated": "2026-07-06",
+      "max_output_tokens": 64000,
+      "name": "Hy3",
+      "release_date": "2026-07-06",
+      "temperature": true
+    },
     "tencent/hy3-preview": {
       "capabilities": {
         "input_modalities": [
@@ -6759,23 +7314,13 @@
         "input_modalities": [
           "text",
           "image",
-          "audio",
-          "pdf"
+          "audio"
         ],
         "json_mode": false,
         "output_modalities": [
           "text"
         ],
         "reasoning": {
-          "control": "levels",
-          "levels": [
-            "none",
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "xhigh"
-          ],
           "supported": true
         },
         "supported_parameters": [
@@ -6784,10 +7329,10 @@
         "tools": true,
         "vision": true
       },
-      "context_window": 256000,
+      "context_window": 1048576,
       "family": "ling",
       "last_updated": "2026-07-15",
-      "max_output_tokens": 256000,
+      "max_output_tokens": null,
       "name": "Inkling",
       "release_date": "2026-07-15",
       "temperature": true
@@ -6943,6 +7488,31 @@
       "name": "Grok Build 0.1",
       "release_date": "2026-04-16",
       "temperature": true
+    },
+    "xai/grok-imagine-video-1.5": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "tools": false,
+        "vision": true
+      },
+      "context_window": 1024,
+      "family": "grok",
+      "last_updated": "2026-05-30",
+      "max_output_tokens": 0,
+      "name": "Grok Imagine Video 1.5",
+      "release_date": "2026-05-30",
+      "temperature": false
     },
     "xiaomi/mimo-v2-flash": {
       "capabilities": {

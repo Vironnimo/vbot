@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from .discovery_test_support import (
     _SIMPLE_MODELS_URL,
     API_KEY,
@@ -348,6 +350,45 @@ class TestRefreshModels:
         assert result["model_count"] == 1
         assert model.name == "DeepSeek R1"
         assert route.calls.last.request.headers["Authorization"] == f"Bearer {API_KEY}"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_refresh_keeps_catalog_exclusions_only_in_raw_inspection_dump(
+        self,
+        tmp_path: Path,
+        opencode_go_config: ProviderConfig,
+    ) -> None:
+        resources_dir = tmp_path / "resources"
+        config = replace(
+            opencode_go_config,
+            catalog_exclusions=frozenset({"broken-preview"}),
+        )
+        respx.get(OPENCODE_GO_MODELS_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "data": [
+                        raw_openrouter_model(model_id="working", name="Working"),
+                        raw_openrouter_model(model_id="broken-preview", name="Broken"),
+                    ]
+                },
+            )
+        )
+
+        result = await refresh_models(config, API_KEY, resources_dir)
+
+        raw = json.loads(
+            (resources_dir / "models" / "opencode-go.raw.json").read_text(encoding="utf-8")
+        )
+        projected = json.loads(
+            (resources_dir / "models" / "opencode-go.json").read_text(encoding="utf-8")
+        )
+        assert result["model_count"] == 1
+        assert {entry["id"] for entry in raw["raw_response"]["data"]} == {
+            "working",
+            "broken-preview",
+        }
+        assert set(projected["models"]) == {"working"}
 
     @respx.mock
     @pytest.mark.asyncio

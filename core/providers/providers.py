@@ -224,6 +224,9 @@ class ProviderConfig:
             case). Used by the refresh-time lift mechanism to find a provider's
             section inside the models.dev catalog; the at-load canonical join
             does *not* depend on it. Read via :meth:`effective_models_dev_id`.
+        catalog_exclusions: Exact wire model ids a provider's listing endpoint
+            advertises but cannot currently serve. Discovery retains them in
+            the raw inspection dump and omits them from the usable projection.
         context_window: Optional per-provider read-side default context window,
             applied when a model on this provider has no window of its own
             (``Model.context_window is None``). This is a READ-SIDE FACT
@@ -245,6 +248,7 @@ class ProviderConfig:
     models_endpoint: str | None = None
     models_dev_id: str | None = None
     context_window: int | None = None
+    catalog_exclusions: frozenset[str] = frozenset()
 
     def effective_models_dev_id(self) -> str:
         """Return the models.dev provider key for this provider.
@@ -495,6 +499,14 @@ class ProviderRegistry:
             raise ConfigError(
                 f"Provider '{provider_id}' context_window must be a positive integer when set"
             )
+        raw_catalog_exclusions = data.get("catalog_exclusions", [])
+        if not isinstance(raw_catalog_exclusions, list) or not all(
+            isinstance(model_id, str) and model_id.strip() for model_id in raw_catalog_exclusions
+        ):
+            raise ConfigError(
+                f"Provider '{provider_id}' catalog_exclusions must be a list "
+                "of non-empty model-id strings"
+            )
         return ProviderConfig(
             id=provider_id,
             name=data["name"],
@@ -506,6 +518,7 @@ class ProviderRegistry:
             models_endpoint=data.get("models_endpoint"),
             models_dev_id=models_dev_id,
             context_window=context_window,
+            catalog_exclusions=frozenset(model_id.strip() for model_id in raw_catalog_exclusions),
         )
 
     @staticmethod
