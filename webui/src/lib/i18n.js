@@ -430,6 +430,8 @@ export const englishCatalog = Object.freeze({
   'cron.outcome.cancelled': 'Cancelled',
   'cron.outcome.missed': 'Missed',
   'cron.outcome.unknown': 'Outcome unknown after restart',
+  'cron.form.name': 'Name',
+  'cron.form.namePlaceholder': 'Morning news digest',
   'cron.form.agent': 'Agent',
   'cron.form.agentPlaceholder': 'Select an agent',
   'cron.form.agentGroup.identity': 'Identity agents',
@@ -467,7 +469,7 @@ export const englishCatalog = Object.freeze({
   'cron.errors.delete': 'Cron job could not be deleted.',
   'cron.errors.toggle': 'Cron job status could not be updated.',
   'cron.errors.missingRequired':
-    'Agent, prompt, and schedule details are required.',
+    'Name, agent, prompt, and schedule details are required.',
   'cron.messages.created': 'Cron job created.',
   'cron.messages.updated': 'Cron job updated.',
   'cron.messages.deleted': 'Cron job deleted.',

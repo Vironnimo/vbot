@@ -1199,7 +1199,11 @@ def dispatch_cron_command(
 
 
 def _cron_create_fields_from_args(args: argparse.Namespace) -> dict[str, Any]:
-    fields: dict[str, Any] = {"agent_id": args.agent, "prompt": args.prompt}
+    fields: dict[str, Any] = {
+        "agent_id": args.agent,
+        "name": args.name,
+        "prompt": args.prompt,
+    }
     if args.cron is not None:
         fields["schedule_type"] = "cron"
         fields["cron_expression"] = args.cron
@@ -1215,6 +1219,8 @@ def _cron_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
     changes: dict[str, Any] = {}
     if args.agent is not None:
         changes["agent_id"] = args.agent
+    if args.name is not None:
+        changes["name"] = args.name
     if args.prompt is not None:
         changes["prompt"] = args.prompt
     if args.cron is not None:

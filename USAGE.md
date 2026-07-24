@@ -494,11 +494,11 @@ Channels serialize work per conversation and share bounded Queue capacity. Only 
 
 ## Cron
 
-Cron schedules one-time or recurring Agent Runs. A job may target an Identity Agent or `agent@project`, use an existing Session, or create a fresh Session each time it fires.
+Cron schedules one-time or recurring Agent Runs. Every job has a required human-readable name; names need not be unique because the generated job id remains its identity. A job may target an Identity Agent or `agent@project`, use an existing Session, or create a fresh Session each time it fires.
 
 ```bash
-vbot cron create assistant --prompt "Summarize today's priorities" --cron "0 9 * * *"
-vbot cron create reviewer@my-project --prompt "Review the repository status" --at "2026-07-20T10:00:00+02:00"
+vbot cron create assistant --name "Morning priorities" --prompt "Summarize today's priorities" --cron "0 9 * * *"
+vbot cron create reviewer@my-project --name "Repository review" --prompt "Review the repository status" --at "2026-07-20T10:00:00+02:00"
 vbot cron list
 vbot cron update JOB_ID --status paused
 vbot cron enable JOB_ID

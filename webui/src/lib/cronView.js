@@ -99,6 +99,7 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
     return {
       id: '',
       agent_id: '',
+      name: '',
       prompt: '',
       schedule_type: CRON_SCHEDULE_TYPE_CRON,
       cron_expression: '',
@@ -114,6 +115,7 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
   return {
     id: normalized.id,
     agent_id: normalized.agent_id,
+    name: normalized.name,
     prompt: normalized.prompt,
     schedule_type: normalized.schedule_type,
     cron_expression: normalized.cron_expression ?? '',
@@ -154,6 +156,7 @@ export function cronFormFingerprint(formValues) {
   const values = formValues ?? {};
   return JSON.stringify({
     agent_id: asText(values.agent_id),
+    name: asText(values.name),
     prompt: asText(values.prompt),
     schedule_type: normalizeScheduleType(values.schedule_type),
     cron_expression: asText(values.cron_expression),
@@ -167,6 +170,7 @@ export function buildCreateCronPayload(formValues) {
 
   const payload = {
     agent_id: requiredText(formValues?.agent_id),
+    name: requiredText(formValues?.name),
     prompt: requiredText(formValues?.prompt),
     schedule_type: scheduleType,
   };
@@ -191,6 +195,7 @@ export function buildUpdateCronPayload(formValues) {
   const payload = {
     id: requiredText(formValues?.id),
     agent_id: requiredText(formValues?.agent_id),
+    name: requiredText(formValues?.name),
     prompt: requiredText(formValues?.prompt),
     schedule_type: scheduleType,
     session_id: optionalText(formValues?.session_id),
@@ -236,6 +241,7 @@ function normalizeCronJob(job, systemTimezone = 'UTC') {
     // strip the project). `cron.list` formats `target` server-side; we fall back
     // to building it from `agent_id` + `project_id` if `target` is ever absent.
     agent_id: cronJobTarget(job),
+    name: asText(job?.name) || asText(job?.prompt),
     prompt: asText(job?.prompt),
     schedule_type: scheduleType,
     cron_expression: cronExpression,

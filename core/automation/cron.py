@@ -69,9 +69,11 @@ _ONCE_FIRE_CLAIMS_DIR_NAME = "once-fire-claims"
 # wall clock, re-aligning the wake-up to within one interval of the corrected
 # clock.
 _WALL_CLOCK_RECHECK_SECONDS = 60.0
+_LEGACY_CRON_JOB_NAME_MAX_LENGTH = 80
 _MUTABLE_FIELDS = frozenset(
     (
         "agent_id",
+        "name",
         "prompt",
         "schedule_type",
         "cron_expression",
@@ -181,6 +183,12 @@ def _validate_cron_job_data(diagnostics: list[JsonDiagnostic], index: int, item:
     )
     validate_non_empty_string(diagnostics, f"{item_path}.id", item.get("id"), required=True)
     _validate_cron_agent_id(diagnostics, f"{item_path}.agent_id", item.get("agent_id"))
+    validate_non_empty_string(
+        diagnostics,
+        f"{item_path}.name",
+        item.get("name"),
+        required=False,
+    )
     validate_non_empty_string(diagnostics, f"{item_path}.prompt", item.get("prompt"), required=True)
     validate_allowed_string(
         diagnostics,
@@ -259,6 +267,7 @@ class CronJob:
 
     id: str
     agent_id: str
+    name: str
     prompt: str
     schedule_type: ScheduleType
     cron_expression: str | None
@@ -280,6 +289,7 @@ class CronJob:
         return {
             "id": self.id,
             "agent_id": self.agent_id,
+            "name": self.name,
             "prompt": self.prompt,
             "schedule_type": self.schedule_type,
             "cron_expression": self.cron_expression,
@@ -303,6 +313,7 @@ class CronJob:
         return cls(
             id=str(payload["id"]),
             agent_id=str(payload["agent_id"]),
+            name=str(payload.get("name") or _derive_legacy_cron_job_name(payload["prompt"])),
             prompt=str(payload["prompt"]),
             schedule_type=payload["schedule_type"],
             cron_expression=payload.get("cron_expression"),
@@ -361,6 +372,7 @@ class CronService:
         self,
         *,
         agent_id: str,
+        name: str | None = None,
         prompt: str,
         schedule_type: ScheduleType,
         cron_expression: str | None = None,
@@ -382,6 +394,7 @@ class CronService:
         job = CronJob(
             id=str(uuid4()),
             agent_id=agent_id,
+            name=name if name is not None else _derive_legacy_cron_job_name(prompt),
             prompt=prompt,
             schedule_type=schedule_type,
             cron_expression=cron_expression,
@@ -983,6 +996,10 @@ class CronService:
             )
         job.agent_id = job.agent_id.strip()
 
+        if not isinstance(job.name, str) or not job.name.strip():
+            raise CronJobValidationError("name must be a non-empty string")
+        job.name = job.name.strip()
+
         if not isinstance(job.prompt, str) or not job.prompt.strip():
             raise CronJobValidationError("prompt must be a non-empty string")
         job.prompt = job.prompt.strip()
@@ -1176,6 +1193,14 @@ def _once_retry_delay(attempt: int) -> float:
     exponent = max(attempt - 1, 0)
     delay = _ONCE_RETRY_DELAY_SECONDS * (_ONCE_RETRY_BACKOFF_FACTOR**exponent)
     return min(delay, _ONCE_RETRY_MAX_DELAY_SECONDS)
+
+
+def _derive_legacy_cron_job_name(prompt: object) -> str:
+    """Derive a stable readable name for records created before names existed."""
+    collapsed_prompt = " ".join(str(prompt).split())
+    if not collapsed_prompt:
+        return "Scheduled Run"
+    return collapsed_prompt[:_LEGACY_CRON_JOB_NAME_MAX_LENGTH]
 
 
 def _truncate_error(message: str) -> str:
