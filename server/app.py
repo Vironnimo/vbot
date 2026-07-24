@@ -334,8 +334,10 @@ def create_app(
                 subscribe_after_sequence = client_after_sequence
             else:
                 subscribe_after_sequence = last_sequence_at_hello
-            async for event in event_bus.subscribe(after_sequence=subscribe_after_sequence):
-                await websocket.send_json(event)
+            await _stream_websocket_events(
+                websocket,
+                event_bus.subscribe(after_sequence=subscribe_after_sequence),
+            )
         except WebSocketDisconnect:
             return
         finally:
@@ -348,7 +350,7 @@ def create_app(
         cursor = websocket.query_params.get("cursor")
         stream = websocket.app.state.log_viewer.subscribe(file_name or "", cursor=cursor)
         try:
-            await _stream_log_events(websocket, stream)
+            await _stream_websocket_events(websocket, stream)
         except ValueError as exc:
             await websocket.close(code=1008, reason=str(exc))
         except FileNotFoundError as exc:
@@ -627,12 +629,12 @@ def _mount_webui(app: FastAPIType) -> None:
         return FileResponse(webui_index_file)
 
 
-async def _stream_log_events(websocket: WebSocket, stream: Any) -> None:
+async def _stream_websocket_events(websocket: WebSocket, stream: Any) -> None:
     stream_iter = stream.__aiter__()
     disconnect_task = asyncio.create_task(websocket.receive())
-    # The pending log read survives across loop iterations: cancelling it to
-    # handle a stray client frame would finalize the tail's async generator
-    # (a cancelled __anext__ closes the generator), silently ending the stream.
+    # The pending stream read survives across loop iterations: cancelling it to
+    # handle a stray client frame would finalize the async generator and
+    # silently end server-push delivery.
     event_task: asyncio.Task[Any] | None = None
     try:
         while True:

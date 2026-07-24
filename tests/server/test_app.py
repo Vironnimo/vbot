@@ -30,7 +30,7 @@ from server.app import (
     _register_session_completion_read_bridge,
     _register_session_title_bridge,
     _shutdown_local_catalog_refresh,
-    _stream_log_events,
+    _stream_websocket_events,
     create_app,
 )
 from server.clients import ClientRegistry
@@ -518,12 +518,12 @@ def _queue_log_stream(queue: asyncio.Queue[Any]) -> Any:
 
 
 @pytest.mark.asyncio
-async def test_stream_log_events_survives_stray_client_frames() -> None:
+async def test_stream_websocket_events_survives_stray_client_frames() -> None:
     # Arrange
     websocket = _ScriptedLogWebSocket()
     log_events: asyncio.Queue[Any] = asyncio.Queue()
     streamer = asyncio.create_task(
-        _stream_log_events(cast(Any, websocket), _queue_log_stream(log_events))
+        _stream_websocket_events(cast(Any, websocket), _queue_log_stream(log_events))
     )
 
     # Act: a stray client frame arrives while no log event is pending; a log
