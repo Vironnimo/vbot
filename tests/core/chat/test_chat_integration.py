@@ -714,7 +714,7 @@ def _write_model_resource(resources: Path) -> None:
                             "json_mode": True,
                             "reasoning": {"supported": True},
                         },
-                        "context_window": 4096,
+                        "context_window": 16_384,
                         "max_output_tokens": 1024,
                     },
                 },
