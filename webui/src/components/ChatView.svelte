@@ -987,10 +987,15 @@
 
   // Background sub-agent spawns only return a "running" descriptor, so once the
   // child run finishes the timeline asks for its final output here. We fetch the
-  // child session's last assistant message and cache it under the row's cache
-  // key (run-scoped when the child run id is known, so repeated spawns into the
-  // same child session each get their own result — see handoff3 B6).
-  const requestSubAgentResult = async (agentId, sessionId, cacheKey = '') => {
+  // child session's exact terminal Run segment and cache it under the row's
+  // run-scoped key, so repeated spawns into one child session cannot borrow a
+  // later Run's Assistant output.
+  const requestSubAgentResult = async (
+    agentId,
+    sessionId,
+    cacheKey = '',
+    runId = '',
+  ) => {
     if (!agentId || !sessionId) {
       return;
     }
@@ -1007,7 +1012,10 @@
         session_id: sessionId,
         limit: SUBAGENT_RESULT_HISTORY_LIMIT,
       });
-      const result = subAgentResultTextFromMessages(history.messages ?? []);
+      const result = subAgentResultTextFromMessages(
+        history.messages ?? [],
+        runId,
+      );
       setSubAgentResultEntry(key, { loading: false, result });
     } catch {
       // Non-critical: the user can still open the sub-agent session directly.

@@ -265,6 +265,16 @@ class FakeRunManager:
         except KeyError as exc:
             raise RunNotFoundError(f"run not found: {run_id}") from exc
 
+    def active_run(
+        self, *, agent_id: str, session_id: str, project_id: str | None = None
+    ) -> Run | None:
+        return self.busy_sessions.get((agent_id, session_id))
+
+    def list_queued(
+        self, agent_id: str, session_id: str, *, project_id: str | None = None
+    ) -> list[Any]:
+        return []
+
 
 class FakeChildLoop:
     def __init__(self, runtime: Any) -> None:
@@ -552,6 +562,17 @@ async def test_qualified_subagent_result_uses_target_project_for_persisted_fallb
     context = make_context(project_id=None)
     session = runtime.chat_sessions.create("worker", session_id="project-child", project_id="vbot")
     session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="project result"))
+    session.append(
+        ChatMessage.run_summary(
+            run_id="missing-run",
+            status="completed",
+            timing={
+                "started_at": "2026-07-24T10:00:00+00:00",
+                "completed_at": "2026-07-24T10:00:01+00:00",
+                "duration_ms": 1000,
+            },
+        )
+    )
     tracker.register(
         (context.agent_id, context.session_id, context.run_id),
         "worker",

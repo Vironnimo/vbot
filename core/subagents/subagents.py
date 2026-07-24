@@ -535,19 +535,13 @@ async def _handle_subagent_result(
         project_id=target_project_id,
     )
 
-    batch_tracker.mark_fetched(
-        parent_key,
-        session_id,
-        resolved_run_id,
-        sub_agent_id=agent_id,
-        project_id=target_project_id,
-    )
     result: JsonObject
+    terminal_result = False
     if resolved_run_id:
         try:
             run = runtime.chat_run_manager.get(resolved_run_id)
         except RunNotFoundError:
-            result = await _poll_result_from_session(
+            result, terminal_result = await _poll_result_from_session(
                 runtime,
                 agent_id,
                 session_id,
@@ -561,9 +555,19 @@ async def _handle_subagent_result(
                     "run_not_found",
                     f"run does not belong to target sub-agent session: {resolved_run_id}",
                 )
+            if run.status == RunStatus.RUNNING:
+                return tool_success(
+                    _result_dict(
+                        run,
+                        status=RunStatus.RUNNING.value,
+                        message=None,
+                        activity_file=activity_file,
+                    )
+                )
             result = await _wait_for_subagent_result(run, activity_file)
+            terminal_result = True
             if _should_poll_session_result(result):
-                session_result = await _poll_result_from_session(
+                session_result, session_terminal = await _poll_result_from_session(
                     runtime,
                     agent_id,
                     session_id,
@@ -571,10 +575,41 @@ async def _handle_subagent_result(
                     project_id=target_project_id,
                     activity_file=activity_file,
                 )
-                if _session_result_has_output(session_result) or not result.get("result"):
+                if session_terminal and (
+                    _session_result_has_output(session_result) or not result.get("result")
+                ):
                     result = session_result
     else:
-        result = await _poll_result_from_session(
+        active_run = runtime.chat_run_manager.active_run(
+            agent_id=agent_id,
+            session_id=session_id,
+            project_id=target_project_id,
+        )
+        if active_run is not None:
+            return tool_success(
+                _result_dict(
+                    active_run,
+                    status=RunStatus.RUNNING.value,
+                    message=None,
+                    activity_file=activity_file,
+                )
+            )
+        queued_items = runtime.chat_run_manager.list_queued(
+            agent_id,
+            session_id,
+            project_id=target_project_id,
+        )
+        if queued_items:
+            return tool_success(
+                _queued_manager_result_dict(
+                    agent_id,
+                    session_id,
+                    queued_items[-1],
+                    target_project_id,
+                    activity_file,
+                )
+            )
+        result, terminal_result = await _poll_result_from_session(
             runtime,
             agent_id,
             session_id,
@@ -583,15 +618,24 @@ async def _handle_subagent_result(
             activity_file=activity_file,
         )
 
-    result_run_id = result.get("run_id")
-    _register_result_read_after_parent_persistence(
-        context,
-        runtime,
-        agent_id,
-        session_id,
-        result_run_id if isinstance(result_run_id, str) else None,
-        target_project_id,
-    )
+    if terminal_result:
+        result_run_id = result.get("run_id")
+        terminal_run_id = result_run_id if isinstance(result_run_id, str) else None
+        batch_tracker.mark_fetched(
+            parent_key,
+            session_id,
+            terminal_run_id,
+            sub_agent_id=agent_id,
+            project_id=target_project_id,
+        )
+        _register_result_read_after_parent_persistence(
+            context,
+            runtime,
+            agent_id,
+            session_id,
+            terminal_run_id,
+            target_project_id,
+        )
     return tool_success(result)
 
 
@@ -770,55 +814,65 @@ def _result_from_session(
     run_id: str | None,
     project_id: str | None = None,
     activity_file: str | None = None,
-) -> JsonObject:
+) -> tuple[JsonObject, bool]:
     try:
         # Read the child session under its target project anchor;
         # ``None`` keeps the identity layout.
         session = runtime.chat_sessions.get(agent_id, session_id, project_id)
         messages = session.load()
     except ChatSessionError as error:
-        return _with_target_project(
-            {
-                "agent_id": agent_id,
-                "session_id": session_id,
-                "run_id": run_id,
-                "status": RunStatus.FAILED.value,
-                "result": None,
-                "usage": None,
-                "activity_file": activity_file,
-                "note": str(error),
-            },
-            project_id,
+        return (
+            _with_target_project(
+                {
+                    "agent_id": agent_id,
+                    "session_id": session_id,
+                    "run_id": run_id,
+                    "status": RunStatus.FAILED.value,
+                    "result": None,
+                    "usage": None,
+                    "activity_file": activity_file,
+                    "note": str(error),
+                },
+                project_id,
+            ),
+            False,
         )
 
-    assistant, persisted_run_id = _last_assistant_result(messages)
-    if assistant is None:
-        return _with_target_project(
-            {
-                "agent_id": agent_id,
-                "session_id": session_id,
-                "run_id": run_id,
-                "status": RunStatus.FAILED.value,
-                "result": None,
-                "usage": None,
-                "activity_file": activity_file,
-                "note": "No assistant output found in sub-agent session.",
-            },
-            project_id,
+    terminal_result = _terminal_session_result(messages, run_id)
+    if terminal_result is None:
+        return (
+            _with_target_project(
+                {
+                    "agent_id": agent_id,
+                    "session_id": session_id,
+                    "run_id": run_id,
+                    "status": RunStatus.FAILED.value,
+                    "result": None,
+                    "usage": None,
+                    "activity_file": activity_file,
+                    "note": "No terminal Run summary found in sub-agent session.",
+                },
+                project_id,
+            ),
+            False,
         )
 
-    return _with_target_project(
+    assistant, summary = terminal_result
+    result = _with_target_project(
         {
             "agent_id": agent_id,
             "session_id": session_id,
-            "run_id": run_id or persisted_run_id,
-            "status": RunStatus.COMPLETED.value,
-            "result": assistant.content,
-            "usage": assistant.usage,
+            "run_id": summary.run_id,
+            "status": summary.status,
+            "result": assistant.content if assistant is not None else None,
+            "usage": assistant.usage if assistant is not None else None,
             "activity_file": activity_file,
         },
         project_id,
     )
+    if assistant is None:
+        result["note"] = "Sub-agent Run finished without assistant output."
+    return result, True
 
 
 async def _poll_result_from_session(
@@ -831,9 +885,9 @@ async def _poll_result_from_session(
     activity_file: str | None = None,
     attempts: int = SESSION_RESULT_RETRY_ATTEMPTS,
     delay_seconds: float = SESSION_RESULT_RETRY_DELAY_SECONDS,
-) -> JsonObject:
+) -> tuple[JsonObject, bool]:
     bounded_attempts = max(1, attempts)
-    result = _result_from_session(
+    result, terminal = _result_from_session(
         runtime,
         agent_id,
         session_id,
@@ -842,10 +896,10 @@ async def _poll_result_from_session(
         activity_file,
     )
     for _ in range(1, bounded_attempts):
-        if _session_result_has_output(result):
-            return result
+        if terminal:
+            return result, True
         await asyncio.sleep(delay_seconds)
-        result = _result_from_session(
+        result, terminal = _result_from_session(
             runtime,
             agent_id,
             session_id,
@@ -853,7 +907,7 @@ async def _poll_result_from_session(
             project_id,
             activity_file,
         )
-    return result
+    return result, terminal
 
 
 def _result_dict(
@@ -912,29 +966,83 @@ def _queued_result_dict(entry: _SubAgentEntry) -> JsonObject:
     )
 
 
+def _queued_manager_result_dict(
+    agent_id: str,
+    session_id: str,
+    item: Any,
+    project_id: str | None,
+    activity_file: str | None,
+) -> JsonObject:
+    return _with_target_project(
+        {
+            "agent_id": agent_id,
+            "session_id": session_id,
+            "run_id": None,
+            "queue_item_id": item.item_id,
+            "status": SUBAGENT_STATUS_QUEUED,
+            "result": None,
+            "usage": None,
+            "activity_file": activity_file,
+        },
+        project_id,
+    )
+
+
 def _should_poll_session_result(result: JsonObject) -> bool:
-    if result.get("status") == RunStatus.FAILED.value:
-        return True
-    return result.get("status") == RunStatus.COMPLETED.value and not result.get("result")
+    return result.get("status") in {
+        RunStatus.FAILED.value,
+        RunStatus.CANCELLED.value,
+    } or (result.get("status") == RunStatus.COMPLETED.value and not result.get("result"))
 
 
 def _session_result_has_output(result: JsonObject) -> bool:
-    return result.get("status") == RunStatus.COMPLETED.value and bool(result.get("result"))
+    return bool(result.get("result"))
 
 
-def _last_assistant_result(
+def _terminal_session_result(
     messages: list[ChatMessage],
-) -> tuple[ChatMessage | None, str | None]:
-    terminal_run_id: str | None = None
-    for message in reversed(messages):
-        if message.role == "run_summary":
-            terminal_run_id = message.run_id
+    run_id: str | None,
+) -> tuple[ChatMessage | None, ChatMessage] | None:
+    summary_index: int | None = None
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if message.role != "run_summary":
             continue
-        if message.role == "assistant":
-            if message.content:
-                return message, terminal_run_id
-            terminal_run_id = None
-    return None, None
+        if run_id is None or message.run_id == run_id:
+            summary_index = index
+            break
+    if summary_index is None:
+        return None
+
+    summary = messages[summary_index]
+    if summary.run_id is None or summary.status not in {
+        RunStatus.COMPLETED.value,
+        RunStatus.FAILED.value,
+        RunStatus.CANCELLED.value,
+    }:
+        return None
+
+    if run_id is None and any(
+        message.role in {"user", "assistant", "tool", "error"}
+        for message in messages[summary_index + 1 :]
+    ):
+        return None
+
+    segment_start = 0
+    for index in range(summary_index - 1, -1, -1):
+        if messages[index].role == "run_summary":
+            segment_start = index + 1
+            break
+
+    assistant = next(
+        (
+            message
+            for message in reversed(messages[segment_start:summary_index])
+            if message.role == "assistant" and message.content
+        ),
+        None,
+    )
+    return assistant, summary
 
 
 def _load_subagent_settings(runtime: RuntimeServices) -> dict[str, int]:

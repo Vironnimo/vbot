@@ -35,7 +35,7 @@ describe('ChatTimeline', () => {
     vi.useRealTimers();
   });
 
-  it('updates spawned sub-agent rows when a matching result is completed', () => {
+  it('updates the spawn row while rendering subagent_result as an ordinary tool call', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -130,12 +130,25 @@ describe('ChatTimeline', () => {
     const subagentRows = document.querySelectorAll(
       '.subagent-tool-event .subagent-line',
     );
+    const ordinaryToolRows = Array.from(
+      document.querySelectorAll(
+        '.run-tool-event:not(.subagent-tool-event) .tool-event-line',
+      ),
+    );
+    const resultRow = ordinaryToolRows.find(
+      (row) => row.querySelector('.te-fn')?.textContent === 'subagent_result',
+    );
 
-    expect(subagentRows).toHaveLength(2);
+    expect(subagentRows).toHaveLength(1);
     expect(subagentRows[0].textContent).not.toContain('Status: completed');
     expect(subagentRows[0].querySelector('.subagent-status')).toBeNull();
     expect(subagentRows[0].querySelector('.te-dot.done')).not.toBeNull();
     expect(subagentRows[0].querySelector('.te-dot.running')).toBeNull();
+    expect(resultRow).toBeTruthy();
+    expect(resultRow.textContent).toContain('beta · sub-session-1');
+    expect(resultRow.textContent).not.toContain('Sub-agent');
+    expect(resultRow.querySelector('.subagent-link')).toBeNull();
+    expect(resultRow.querySelector('[data-cancel="subagent"]')).toBeNull();
   });
 
   it('keeps a spawned background sub-agent tool row running while the child runs', () => {
@@ -330,6 +343,7 @@ describe('ChatTimeline', () => {
       'beta',
       'sub-session-running',
       'beta::sub-session-running::sub-run-completed',
+      'sub-run-completed',
     );
   });
 

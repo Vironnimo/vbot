@@ -5,6 +5,7 @@ import {
   errorMessagePresentation,
   isRowCancellable,
   isRunChildWorking,
+  isSubAgentSpawnTool,
   isToolPreparing,
   labelForEvent,
   labelForMessage,
@@ -369,6 +370,16 @@ describe('chatTimelinePresentation', () => {
     ).toBe(false);
   });
 
+  it('reserves the special Sub-Agent row for spawn calls', () => {
+    expect(isSubAgentSpawnTool(runningSubAgentTool())).toBe(true);
+    expect(
+      isSubAgentSpawnTool({
+        ...runningSubAgentTool(),
+        name: 'subagent_result',
+      }),
+    ).toBe(false);
+  });
+
   it('does not request a result when a blocking spawn already carries one', () => {
     const blockingTool = runningSubAgentTool({
       result: {
@@ -412,15 +423,33 @@ describe('chatTimelinePresentation', () => {
     );
   });
 
-  it('extracts the last assistant message text from session history', () => {
+  it('extracts the final assistant message from a terminal Run segment', () => {
     const messages = [
       { role: 'user', content: 'Do the work' },
       { role: 'assistant', content: 'Working on it' },
       { role: 'tool', content: 'tool output' },
       { role: 'assistant', content: 'All done.' },
+      { role: 'run_summary', run_id: 'run-child', status: 'completed' },
     ];
 
-    expect(subAgentResultTextFromMessages(messages)).toBe('All done.');
+    expect(subAgentResultTextFromMessages(messages, 'run-child')).toBe(
+      'All done.',
+    );
+  });
+
+  it('does not treat newer intermediate Assistant output as a final result', () => {
+    const messages = [
+      { role: 'user', content: 'First task' },
+      { role: 'assistant', content: 'First answer.' },
+      { role: 'run_summary', run_id: 'run-one', status: 'completed' },
+      { role: 'user', content: 'Continue' },
+      { role: 'assistant', content: 'Still working.' },
+    ];
+
+    expect(subAgentResultTextFromMessages(messages)).toBe('');
+    expect(subAgentResultTextFromMessages(messages, 'run-one')).toBe(
+      'First answer.',
+    );
   });
 
   it('resolves the child run duration strictly by run id when it is known', () => {
@@ -545,9 +574,10 @@ describe('chatTimelinePresentation', () => {
           { type: 'text', text: 'Second part.' },
         ],
       },
+      { role: 'run_summary', run_id: 'run-child', status: 'completed' },
     ];
 
-    expect(subAgentResultTextFromMessages(messages)).toBe(
+    expect(subAgentResultTextFromMessages(messages, 'run-child')).toBe(
       'First part.\n\nSecond part.',
     );
     expect(subAgentResultTextFromMessages([])).toBe('');

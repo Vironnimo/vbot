@@ -21,6 +21,12 @@ from .subagent_test_support import (
 
 pytestmark = pytest.mark.asyncio
 
+TERMINAL_TIMING = {
+    "started_at": "2026-07-24T10:00:00+00:00",
+    "completed_at": "2026-07-24T10:00:01+00:00",
+    "duration_ms": 1000,
+}
+
 
 async def test_subagent_result_reflects_user_cancelled_child(tmp_path: Path) -> None:
     """subagent_result on a user-cancelled child reports cancelled_by_user."""
@@ -65,6 +71,13 @@ async def test_subagent_result_falls_back_to_jsonl_when_run_is_missing(tmp_path:
             usage={"input_tokens": 3, "output_tokens": 5},
         )
     )
+    session.append(
+        ChatMessage.run_summary(
+            run_id="missing-run",
+            status="completed",
+            timing=TERMINAL_TIMING,
+        )
+    )
     tracker = SubAgentBatchTracker(RecordingTriggerService())
     context = make_context(tool_name=SUBAGENT_RESULT_TOOL_NAME)
     tracker.register(
@@ -92,7 +105,7 @@ async def test_subagent_result_falls_back_to_jsonl_when_run_is_missing(tmp_path:
     }
 
 
-async def test_subagent_result_marks_live_run_fetched_before_wait_race(tmp_path: Path) -> None:
+async def test_subagent_result_returns_running_without_fetching_or_waiting(tmp_path: Path) -> None:
     # Arrange
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
@@ -104,17 +117,6 @@ async def test_subagent_result_marks_live_run_fetched_before_wait_race(tmp_path:
     manager.runs[sub_run.id] = sub_run
     tracker.register(parent_key, "worker", "sub-session", sub_run.id)
 
-    async def complete_after_fetch() -> None:
-        while True:
-            batch = tracker._batches[parent_key]  # noqa: SLF001 - test observes race state.
-            if batch.entries[sub_run.id].fetched:
-                break
-            await asyncio.sleep(0)
-        sub_run.mark_completed(ChatMessage.assistant(model="openai/gpt-5.2", content="done"))
-        tracker.on_sub_agent_complete(parent_key, sub_run.id, {"result": "done"})
-
-    completion = asyncio.create_task(complete_after_fetch())
-
     # Act
     result = await _handle_subagent_result(
         context,
@@ -122,15 +124,20 @@ async def test_subagent_result_marks_live_run_fetched_before_wait_race(tmp_path:
         runtime=runtime,
         batch_tracker=tracker,
     )
-    await completion
+    fetched = tracker._batches[parent_key].entries[sub_run.id].fetched  # noqa: SLF001
+    sub_run.mark_completed(ChatMessage.assistant(model="openai/gpt-5.2", content="done"))
+    tracker.on_sub_agent_complete(parent_key, sub_run.id, {"result": "done"})
     for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
         await asyncio.sleep(0)
 
     # Assert
     assert result["ok"] is True
-    assert result["data"]["status"] == "completed"
-    assert result["data"]["result"] == "done"
-    assert trigger_service.calls == []
+    assert result["data"]["status"] == "running"
+    assert result["data"]["run_id"] == "sub-run"
+    assert result["data"]["result"] is None
+    assert fetched is False
+    assert len(trigger_service.calls) == 1
+    assert "done" in trigger_service.calls[0][1]
 
 
 async def test_subagent_result_without_run_id_resolves_live_run_from_tracker(
@@ -146,18 +153,6 @@ async def test_subagent_result_without_run_id_resolves_live_run_from_tracker(
     manager.runs[sub_run.id] = sub_run
     tracker.register(parent_key, "worker", "sub-session", sub_run.id)
 
-    async def complete_run() -> None:
-        await asyncio.sleep(0)
-        sub_run.mark_completed(
-            ChatMessage.assistant(
-                model="openai/gpt-5.2",
-                content="live answer",
-                usage={"input_tokens": 13, "output_tokens": 17},
-            )
-        )
-
-    completion = asyncio.create_task(complete_run())
-
     # Act
     result = await _handle_subagent_result(
         context,
@@ -165,7 +160,6 @@ async def test_subagent_result_without_run_id_resolves_live_run_from_tracker(
         runtime=runtime,
         batch_tracker=tracker,
     )
-    await completion
 
     # Assert
     assert result["ok"] is True
@@ -173,37 +167,30 @@ async def test_subagent_result_without_run_id_resolves_live_run_from_tracker(
         "agent_id": "worker",
         "session_id": "sub-session",
         "run_id": "sub-run",
-        "status": "completed",
-        "result": "live answer",
-        "usage": {"input_tokens": 13, "output_tokens": 17},
+        "status": "running",
+        "result": None,
+        "usage": None,
         "activity_file": None,
     }
 
 
-async def test_subagent_result_without_run_id_marks_fetched_before_batch_completion(
+async def test_subagent_result_from_later_parent_run_resolves_active_session_run(
     tmp_path: Path,
 ) -> None:
     # Arrange
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
-    trigger_service = RecordingTriggerService()
-    tracker = SubAgentBatchTracker(trigger_service)
-    context = make_context(tool_name=SUBAGENT_RESULT_TOOL_NAME)
-    parent_key = (context.agent_id, context.session_id, context.run_id)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(
+        tool_name=SUBAGENT_RESULT_TOOL_NAME,
+        run_id="later-parent-run",
+    )
     sub_run = Run(run_id="sub-run", agent_id="worker", session_id="sub-session")
     manager.runs[sub_run.id] = sub_run
-    tracker.register(parent_key, "worker", "sub-session", sub_run.id)
-
-    async def complete_after_fetch() -> None:
-        while True:
-            batch = tracker._batches[parent_key]  # noqa: SLF001 - test observes race state.
-            if batch.entries[sub_run.id].fetched:
-                break
-            await asyncio.sleep(0)
-        sub_run.mark_completed(ChatMessage.assistant(model="openai/gpt-5.2", content="done"))
-        tracker.on_sub_agent_complete(parent_key, sub_run.id, {"result": "done"})
-
-    completion = asyncio.create_task(complete_after_fetch())
+    manager.busy_sessions[("worker", "sub-session")] = sub_run
+    session = runtime.chat_sessions.create("worker", session_id="sub-session")
+    session.append(ChatMessage.user("do the work"))
+    session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="Still working."))
 
     # Act
     result = await _handle_subagent_result(
@@ -212,15 +199,45 @@ async def test_subagent_result_without_run_id_marks_fetched_before_batch_complet
         runtime=runtime,
         batch_tracker=tracker,
     )
-    await completion
-    for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
-        await asyncio.sleep(0)
 
     # Assert
     assert result["ok"] is True
-    assert result["data"]["status"] == "completed"
-    assert result["data"]["result"] == "done"
-    assert trigger_service.calls == []
+    assert result["data"]["run_id"] == "sub-run"
+    assert result["data"]["status"] == "running"
+    assert result["data"]["result"] is None
+
+
+async def test_subagent_result_from_later_parent_run_resolves_queued_session_run(
+    tmp_path: Path,
+) -> None:
+    # Arrange
+    manager = FakeRunManager()
+    manager.hold_enqueued_starts = True
+    queued_item = await manager.enqueue(
+        agent_id="worker",
+        session_id="sub-session",
+        executor=lambda run: run,
+    )
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(
+        tool_name=SUBAGENT_RESULT_TOOL_NAME,
+        run_id="later-parent-run",
+    )
+
+    # Act
+    result = await _handle_subagent_result(
+        context,
+        {"agent_id": "worker", "session_id": "sub-session"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    # Assert
+    assert result["ok"] is True
+    assert result["data"]["queue_item_id"] == queued_item.item_id
+    assert result["data"]["status"] == "queued"
+    assert result["data"]["run_id"] is None
 
 
 async def test_subagent_result_fetch_marks_only_requested_run_for_reused_session(
@@ -279,6 +296,13 @@ async def test_subagent_result_falls_back_to_jsonl_when_live_run_has_no_output(
             usage={"input_tokens": 7, "output_tokens": 11},
         )
     )
+    session.append(
+        ChatMessage.run_summary(
+            run_id="sub-run",
+            status="completed",
+            timing=TERMINAL_TIMING,
+        )
+    )
     sub_run = Run(run_id="sub-run", agent_id="worker", session_id="sub-session")
     sub_run.mark_completed(None)
     manager.runs[sub_run.id] = sub_run
@@ -315,6 +339,13 @@ async def test_subagent_result_failed_live_run_error_falls_back_to_jsonl_output(
     session = runtime.chat_sessions.create("worker", session_id="sub-session")
     session.append(ChatMessage.user("question"))
     session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="jsonl answer"))
+    session.append(
+        ChatMessage.run_summary(
+            run_id="sub-run",
+            status="failed",
+            timing=TERMINAL_TIMING,
+        )
+    )
     sub_run = Run(run_id="sub-run", agent_id="worker", session_id="sub-session")
     sub_run.mark_failed(RuntimeError("provider failed after persistence"))
     manager.runs[sub_run.id] = sub_run
@@ -331,7 +362,7 @@ async def test_subagent_result_failed_live_run_error_falls_back_to_jsonl_output(
 
     # Assert
     assert result["ok"] is True
-    assert result["data"]["status"] == "completed"
+    assert result["data"]["status"] == "failed"
     assert result["data"]["result"] == "jsonl answer"
 
 
@@ -355,6 +386,13 @@ async def test_subagent_result_polls_jsonl_until_assistant_output_appears(
     async def append_after_first_poll(delay_seconds: float) -> None:
         sleeps.append(delay_seconds)
         session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="late answer"))
+        session.append(
+            ChatMessage.run_summary(
+                run_id="sub-run",
+                status="failed",
+                timing=TERMINAL_TIMING,
+            )
+        )
         await real_sleep(0)
 
     monkeypatch.setattr(subagent_module.asyncio, "sleep", append_after_first_poll)
@@ -369,9 +407,72 @@ async def test_subagent_result_polls_jsonl_until_assistant_output_appears(
 
     # Assert
     assert result["ok"] is True
-    assert result["data"]["status"] == "completed"
+    assert result["data"]["status"] == "failed"
     assert result["data"]["result"] == "late answer"
     assert sleeps == [subagent_module.SESSION_RESULT_RETRY_DELAY_SECONDS]
+
+
+async def test_subagent_result_does_not_complete_from_intermediate_assistant_output(
+    tmp_path: Path,
+) -> None:
+    # Arrange
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    session = runtime.chat_sessions.create("worker", session_id="sub-session")
+    session.append(ChatMessage.user("question"))
+    session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="Still reading."))
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(tool_name=SUBAGENT_RESULT_TOOL_NAME)
+
+    # Act
+    result = await _handle_subagent_result(
+        context,
+        {"agent_id": "worker", "session_id": "sub-session"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    # Assert
+    assert result["ok"] is True
+    assert result["data"]["status"] == "failed"
+    assert result["data"]["result"] is None
+    assert result["data"]["note"] == "No terminal Run summary found in sub-agent session."
+
+
+async def test_subagent_result_ignores_prior_terminal_run_when_new_output_is_unfinished(
+    tmp_path: Path,
+) -> None:
+    # Arrange
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    session = runtime.chat_sessions.create("worker", session_id="sub-session")
+    session.append(ChatMessage.user("first question"))
+    session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="First answer."))
+    session.append(
+        ChatMessage.run_summary(
+            run_id="first-run",
+            status="completed",
+            timing=TERMINAL_TIMING,
+        )
+    )
+    session.append(ChatMessage.user("continue"))
+    session.append(ChatMessage.assistant(model="openai/gpt-5.2", content="Still working."))
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(tool_name=SUBAGENT_RESULT_TOOL_NAME)
+
+    # Act
+    result = await _handle_subagent_result(
+        context,
+        {"agent_id": "worker", "session_id": "sub-session"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    # Assert
+    assert result["ok"] is True
+    assert result["data"]["status"] == "failed"
+    assert result["data"]["run_id"] is None
+    assert result["data"]["result"] is None
 
 
 async def test_subagent_result_reports_failed_when_jsonl_has_no_output(tmp_path: Path) -> None:
@@ -394,7 +495,7 @@ async def test_subagent_result_reports_failed_when_jsonl_has_no_output(tmp_path:
     assert result["ok"] is True
     assert result["data"]["status"] == "failed"
     assert result["data"]["result"] is None
-    assert result["data"]["note"] == "No assistant output found in sub-agent session."
+    assert result["data"]["note"] == "No terminal Run summary found in sub-agent session."
 
 
 async def test_subagent_result_reports_failed_after_bounded_jsonl_poll(
