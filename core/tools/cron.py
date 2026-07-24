@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Literal, cast
 
 from core.automation.cron import CronJobNotFoundError, CronJobValidationError, CronServiceError
@@ -24,10 +25,10 @@ CronScheduleType = Literal["cron", "once"]
 
 CRON_TOOL_NAME = "cron"
 CRON_TOOL_DESCRIPTION = (
-    "Create and manage persisted schedules that start Runs. Each call must contain exactly "
-    "one operation. New jobs are enabled immediately, use the server timezone, and start a "
-    "fresh Session on every fire. Use list to obtain job ids; disable pauses a job without "
-    "deleting it."
+    "Create and manage persisted schedules that start Runs. Calls are flat: set action to "
+    'create, list, update, delete, enable, or disable. List with {"action":"list"}. New '
+    "jobs are enabled immediately, use the server timezone, and start a fresh Session on "
+    "every fire. Use list to obtain job ids; disable pauses a job without deleting it."
 )
 
 CRON_ACTIONS = frozenset(("create", "list", "update", "delete", "enable", "disable"))
@@ -62,143 +63,79 @@ _ACTION_ARGUMENTS: dict[str, frozenset[str]] = {
     "enable": _ID_ONLY_ARGUMENTS,
     "disable": _ID_ONLY_ARGUMENTS,
 }
+_ACTION_RECOMMENDATIONS = {
+    "create": (
+        'For a recurring job use {"action":"create","prompt":"<instruction>",'
+        '"schedule_type":"cron","cron_expression":"0 9 * * *"}. For a one-time job use '
+        '{"action":"create","prompt":"<instruction>","schedule_type":"once",'
+        '"run_at":"2026-07-25T09:00:00+02:00"}'
+    ),
+    "list": 'Use {"action":"list"}',
+    "update": (
+        'Use {"action":"update","id":"<job-id>","prompt":"<replacement instruction>"}; '
+        "include only fields that should change"
+    ),
+    "delete": 'Use {"action":"delete","id":"<job-id>"}',
+    "enable": 'Use {"action":"enable","id":"<job-id>"}',
+    "disable": 'Use {"action":"disable","id":"<job-id>"}',
+}
 
 CRON_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
-        "create": {
-            "type": "object",
+        "action": {
+            "type": "string",
+            "enum": sorted(CRON_ACTIONS),
             "description": (
-                "Create an enabled schedule. The prompt must be self-contained because each "
-                "fire starts a fresh Session."
+                "Operation to perform. Use list by itself to obtain current job ids before "
+                "changing or deleting a job."
             ),
-            "properties": {
-                "target": {
-                    "type": "string",
-                    "description": (
-                        "Agent address that runs the prompt: agent or agent@project. Omit to "
-                        "use the current Agent and Project."
-                    ),
-                },
-                "prompt": {
-                    "type": "string",
-                    "description": (
-                        "Self-contained instruction sent to the target Agent on every fire."
-                    ),
-                },
-                "schedule_type": {
-                    "type": "string",
-                    "enum": sorted(CRON_SCHEDULE_TYPES),
-                    "description": "cron for a recurring schedule; once for one execution.",
-                },
-                "cron_expression": {
-                    "type": "string",
-                    "description": (
-                        "Required for cron. Exactly five fields: minute hour day-of-month "
-                        "month day-of-week. Seconds are unsupported; minimum cadence is one "
-                        "minute."
-                    ),
-                },
-                "run_at": {
-                    "type": "string",
-                    "description": (
-                        "Required for once. ISO 8601 date-time; a value without an offset uses "
-                        "the server timezone."
-                    ),
-                },
-            },
-            "required": ["prompt", "schedule_type"],
-            "additionalProperties": False,
         },
-        "list": {
-            "type": "object",
+        "id": {
+            "type": "string",
             "description": (
-                "List all jobs, including terminal history, ids, schedules, status, and the "
-                "last Run outcome."
+                "Existing job id from list. Required for update, delete, enable, and disable."
             ),
-            "properties": {},
-            "additionalProperties": False,
         },
-        "update": {
-            "type": "object",
+        "target": {
+            "type": "string",
             "description": (
-                "Change one job. Include id and at least one field to change. Use enable or "
-                "disable for status changes."
+                "Agent address for create or update: agent or agent@project. Create defaults "
+                "to the current Agent and Project."
             ),
-            "properties": {
-                "id": {
-                    "type": "string",
-                    "description": "Job id returned by create or list.",
-                },
-                "target": {
-                    "type": "string",
-                    "description": "Replacement target address: agent or agent@project.",
-                },
-                "prompt": {
-                    "type": "string",
-                    "description": "Replacement self-contained instruction for every fire.",
-                },
-                "schedule_type": {
-                    "type": "string",
-                    "enum": sorted(CRON_SCHEDULE_TYPES),
-                    "description": "cron for a recurring schedule; once for one execution.",
-                },
-                "cron_expression": {
-                    "type": "string",
-                    "description": (
-                        "Recurring five-field expression. Required when changing to cron."
-                    ),
-                },
-                "run_at": {
-                    "type": "string",
-                    "description": (
-                        "One-time ISO 8601 date-time. Required when changing to once; a value "
-                        "without an offset uses the server timezone."
-                    ),
-                },
-            },
-            "required": ["id"],
-            "additionalProperties": False,
         },
-        "delete": {
-            "type": "object",
-            "description": "Permanently delete one job. Use disable to pause it reversibly.",
-            "properties": {
-                "id": {
-                    "type": "string",
-                    "description": "Job id returned by create or list.",
-                }
-            },
-            "required": ["id"],
-            "additionalProperties": False,
+        "prompt": {
+            "type": "string",
+            "description": (
+                "Self-contained instruction for create, or a replacement instruction for "
+                "update. Required for create because every fire starts a fresh Session."
+            ),
         },
-        "enable": {
-            "type": "object",
-            "description": "Enable a paused or failed job.",
-            "properties": {
-                "id": {
-                    "type": "string",
-                    "description": "Job id returned by create or list.",
-                }
-            },
-            "required": ["id"],
-            "additionalProperties": False,
+        "schedule_type": {
+            "type": "string",
+            "enum": sorted(CRON_SCHEDULE_TYPES),
+            "description": (
+                "Schedule type for create or update: cron for recurring, once for one fire. "
+                "Required for create."
+            ),
         },
-        "disable": {
-            "type": "object",
-            "description": "Pause a job without deleting it.",
-            "properties": {
-                "id": {
-                    "type": "string",
-                    "description": "Job id returned by create or list.",
-                }
-            },
-            "required": ["id"],
-            "additionalProperties": False,
+        "cron_expression": {
+            "type": "string",
+            "description": (
+                "Recurring schedule for create or update. Exactly five fields: minute hour "
+                "day-of-month month day-of-week. Required with schedule_type cron. Seconds "
+                "are unsupported; minimum cadence is one minute."
+            ),
+        },
+        "run_at": {
+            "type": "string",
+            "description": (
+                "One-time ISO 8601 date-time for create or update. Required with "
+                "schedule_type once; a value without an offset uses the server timezone."
+            ),
         },
     },
-    "minProperties": 1,
-    "maxProperties": 1,
+    "required": ["action"],
     "additionalProperties": False,
 }
 
@@ -233,9 +170,13 @@ def _handle_cron_tool(
     unknown_arguments = sorted(set(operation_arguments) - _ACTION_ARGUMENTS[action])
     if unknown_arguments:
         names = ", ".join(unknown_arguments)
+        allowed = ", ".join(sorted(_ACTION_ARGUMENTS[action])) or "no additional fields"
         return tool_failure(
             "invalid_arguments",
-            f"Unknown argument(s) for action '{action}': {names}",
+            _with_action_recommendation(
+                action,
+                f"Action '{action}' does not accept: {names}. Allowed: {allowed}",
+            ),
             retryable=False,
         )
 
@@ -252,14 +193,30 @@ def _handle_cron_tool(
             return _handle_enable(cron_service, operation_arguments)
         return _handle_disable(cron_service, operation_arguments)
     except ValueError as error:
-        return tool_failure("invalid_arguments", str(error), retryable=False)
+        return tool_failure(
+            "invalid_arguments",
+            _with_action_recommendation(action, str(error)),
+            retryable=False,
+        )
     except CronJobNotFoundError as error:
-        return tool_failure("job_not_found", str(error), retryable=False)
+        return tool_failure(
+            "job_not_found",
+            f'{error}. Use {{"action":"list"}} to get current job ids',
+            retryable=False,
+        )
     except CronJobValidationError as error:
-        return tool_failure("invalid_arguments", str(error), retryable=False)
+        return tool_failure(
+            "invalid_arguments",
+            _with_action_recommendation(action, str(error)),
+            retryable=False,
+        )
     except CronServiceError as error:
         _LOGGER.warning("Cron service error for action=%s: %s", action, error)
-        return tool_failure("cron_service_error", str(error))
+        return tool_failure(
+            "cron_service_error",
+            f"{error}. Do not repeat the same call unchanged",
+            retryable=False,
+        )
 
 
 def _handle_create(
@@ -366,27 +323,68 @@ def _job_payload(cron_service: CronService, job: CronJob) -> JsonObject:
 
 
 def _extract_operation(arguments: JsonObject) -> tuple[str, JsonObject] | str:
-    """Normalize the operation envelope and the legacy flat action shape."""
+    """Normalize the flat action contract and the legacy operation envelope."""
 
     if "action" in arguments:
         action = arguments.get("action")
         if not isinstance(action, str) or action not in CRON_ACTIONS:
-            return "action must be one of: create, delete, disable, enable, list, update"
-        legacy_arguments = {key: value for key, value in arguments.items() if key != "action"}
-        if "agent_id" in legacy_arguments:
-            if "target" in legacy_arguments:
+            return (
+                "action must be one of: create, delete, disable, enable, list, update. "
+                'To inspect jobs use {"action":"list"}'
+            )
+        action_arguments = {key: value for key, value in arguments.items() if key != "action"}
+        if "agent_id" in action_arguments:
+            if "target" in action_arguments:
                 return "Use only target, not both target and legacy agent_id"
-            legacy_arguments["target"] = legacy_arguments.pop("agent_id")
-        return action, legacy_arguments
+            action_arguments["target"] = action_arguments.pop("agent_id")
+        return action, action_arguments
 
     if len(arguments) != 1:
-        return "Exactly one operation is required: create, delete, disable, enable, list, or update"
+        return (
+            "Missing flat action. Set action to create, list, update, delete, enable, or "
+            'disable. To inspect jobs use {"action":"list"}'
+        )
     action, operation_arguments = next(iter(arguments.items()))
     if action not in CRON_ACTIONS:
-        return f"Unknown operation: {action}"
-    if not isinstance(operation_arguments, dict):
-        return f"{action} must be a JSON object"
-    return action, dict(operation_arguments)
+        return (
+            f"Unknown action: {action}. Set action to create, list, update, delete, enable, "
+            'or disable. To inspect jobs use {"action":"list"}'
+        )
+
+    normalized_arguments = _normalize_legacy_operation_arguments(action, operation_arguments)
+    if isinstance(normalized_arguments, str):
+        return normalized_arguments
+    return action, normalized_arguments
+
+
+def _normalize_legacy_operation_arguments(
+    action: str, operation_arguments: object
+) -> JsonObject | str:
+    """Accept the retired envelope without making its quirks model-facing."""
+
+    if isinstance(operation_arguments, dict):
+        return dict(operation_arguments)
+
+    if action == "list" and operation_arguments in (None, True, ""):
+        return {}
+
+    if isinstance(operation_arguments, str):
+        try:
+            decoded_arguments = json.loads(operation_arguments)
+        except json.JSONDecodeError:
+            decoded_arguments = None
+        if isinstance(decoded_arguments, dict):
+            return decoded_arguments
+
+    return _with_action_recommendation(
+        action,
+        f"Legacy field '{action}' could not be interpreted as operation arguments",
+    )
+
+
+def _with_action_recommendation(action: str, message: str) -> str:
+    recommendation = _ACTION_RECOMMENDATIONS[action]
+    return f"{message.rstrip('. ')}. {recommendation}"
 
 
 def _cron_display_summary(arguments: JsonObject) -> str:
