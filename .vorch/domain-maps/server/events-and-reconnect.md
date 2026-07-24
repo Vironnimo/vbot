@@ -26,6 +26,8 @@ The client may reconnect with `epoch` and `after_sequence`. A matching epoch plu
 
 Connect registers and publishes `resource_changed(kind="clients")` before the hello high-water mark is read. Therefore the connecting window's own presence event is at or below its live-only floor while other windows receive it. Disconnect unregisters in the WebSocket handler's `finally`, so every exit path cleans up and publishes another clients invalidation.
 
+The registry emits one `INFO` log at each logical app-window presence boundary: the first active registration for a client-minted `connection_id` logs connect, and removal of its last active registration logs disconnect with the elapsed duration. Overlapping old/new sockets during a reconnect therefore remain one logged presence cycle even though both momentary socket entries may briefly exist in the roster. Log rows use only the normalized accessor/browser/OS labels and the first eight characters of the client id; they never include the raw User-Agent. Connections without a client-minted id are treated as independent registrations.
+
 ## Run bridge
 
 `server/rpc/event_bridge.py` subscribes to every Run started by the shared `ChatRunManager`, including RPC starts, queued starts, Automation, and Sub-Agent work. The bridge is idempotent within a bounded Run-id retention window so manager callbacks and explicit RPC bridging cannot duplicate summaries.
