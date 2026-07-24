@@ -34,6 +34,7 @@ from tests.core.chat.chat_loop_support import (
     BlockingReasoningStreamingStubAdapter,
     BlockingStreamingStubAdapter,
     MidStreamCancelledStubAdapter,
+    SilentBlockingStreamingStubAdapter,
     SlowStreamingStubAdapter,
     StalledStreamingStubAdapter,
     StubAdapter,
@@ -617,7 +618,7 @@ async def test_user_cancel_after_visible_stream_preserves_partial_and_stays_canc
 
 
 @pytest.mark.asyncio
-async def test_user_cancel_without_visible_output_retains_checkpoint_for_next_message(
+async def test_user_cancel_after_visible_reasoning_persists_it_and_retains_checkpoint(
     tmp_path: Path,
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
@@ -636,12 +637,45 @@ async def test_user_cancel_without_visible_output_retains_checkpoint_for_next_me
         await run.wait()
 
     messages = runtime.chat_sessions.get("coder", "session-one").load()
-    # Reasoning-only cancel: no assistant text or recovery note is persisted in
-    # canonical history; the durable checkpoint owns the readable working state.
     assert run.status == RunStatus.CANCELLED
-    assert persisted_roles(messages) == ["user"]
+    assert persisted_roles(messages) == ["user", "assistant"]
+    assert messages[1].content is None
+    assert messages[1].reasoning == "Thinking hard."
+    assert messages[1].interrupted is True
+
+    reasoning_events = [event for event in run.events if event.type == "reasoning"]
+    assistant_events = [event for event in run.events if event.type == "assistant_output"]
+    assert reasoning_events[-1].payload["message"]["reasoning"] == "Thinking hard."
+    assert "reasoning_meta" not in reasoning_events[-1].payload["message"]
+    assert assistant_events[-1].payload["message"]["interrupted"] is True
+
     state = recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
     assert state is not None
     assert state.reasoning == "Thinking hard."
     summaries = [message for message in messages if message.role == "run_summary"]
     assert summaries[-1].status == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_user_cancel_before_visible_output_does_not_persist_assistant(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = SilentBlockingStreamingStubAdapter()
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    runtime.chat_sessions.create("coder", session_id="session-one")
+
+    run = await build_chat_loop(runtime, streaming=True).start_run(
+        "coder", "Hi", session_id="session-one"
+    )
+    await adapter.stream_started.wait()
+    run.request_cancel(reason="user")
+    await asyncio.sleep(0)
+
+    with pytest.raises(RunCancelledError):
+        await run.wait()
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert run.status == RunStatus.CANCELLED
+    assert persisted_roles(messages) == ["user"]
+    assert not any(event.type == "assistant_output" for event in run.events)

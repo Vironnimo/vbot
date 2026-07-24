@@ -465,7 +465,7 @@ class BlockingStreamingStubAdapter(ClosingStubAdapter):
 
 
 class BlockingReasoningStreamingStubAdapter(ClosingStubAdapter):
-    """Streams only reasoning, then blocks — the zero-visible-output cancel case."""
+    """Stream only readable reasoning, then block until cancellation."""
 
     def __init__(self) -> None:
         super().__init__([])
@@ -483,6 +483,29 @@ class BlockingReasoningStreamingStubAdapter(ClosingStubAdapter):
             {"messages": deepcopy(messages), "model_id": model_id, "kwargs": deepcopy(kwargs)}
         )
         yield {"type": "reasoning_delta", "text": "Thinking hard."}
+        self.stream_started.set()
+        await self.release.wait()
+        yield {"type": "content_delta", "text": "late"}
+
+
+class SilentBlockingStreamingStubAdapter(ClosingStubAdapter):
+    """Block before emitting any visible stream output."""
+
+    def __init__(self) -> None:
+        super().__init__([])
+        self.stream_started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def stream(
+        self,
+        messages: list[JsonObject],
+        *,
+        model_id: str,
+        **kwargs: Any,
+    ) -> Any:
+        self.stream_requests.append(
+            {"messages": deepcopy(messages), "model_id": model_id, "kwargs": deepcopy(kwargs)}
+        )
         self.stream_started.set()
         await self.release.wait()
         yield {"type": "content_delta", "text": "late"}
