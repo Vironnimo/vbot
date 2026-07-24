@@ -455,13 +455,13 @@ def render_continuation_reminder(
         )
         warning = (
             "\nSAFETY: Results are missing or unknown for these write/edit/bash operations: "
-            f"{names}. Inspect the actual filesystem/process state before repeating any of them."
+            f"{names}. Their actual filesystem or process effects may be uncertain."
         )
     header = (
         f'<continuation-checkpoint id="{state.checkpoint_id}" '
         f'cause="{state.cause or "interrupted"}">\n'
-        "Resume the interrupted work from this provider-neutral checkpoint. "
-        "Treat canonical Tool Calls and Tool Results in the conversation as authoritative.\n"
+        "The previous Run was interrupted. "
+        "The checkpoint below records what happened before the interruption.\n"
     )
     body = (
         f"Original request(s):\n{requests or '[not recorded]'}\n\n"

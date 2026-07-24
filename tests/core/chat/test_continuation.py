@@ -221,7 +221,7 @@ def test_prompt_warns_before_repeating_unknown_write_edit_or_bash() -> None:
 
     reminder = render_continuation_reminder(state, context_window=32_000)
 
-    assert "Inspect the actual filesystem/process state before repeating" in reminder
+    assert "Their actual filesystem or process effects may be uncertain." in reminder
     assert "write (write-1)" in reminder
     assert "read (read-1): unknown" in reminder
 
@@ -264,9 +264,12 @@ def test_fold_references_ten_completed_tools_and_keeps_one_dangling_unknown() ->
     assert len(state.operations) == 11
     assert sum(operation["status"] == "completed" for operation in state.operations.values()) == 10
     assert state.operations["edit-dangling"]["status"] == "unknown"
-    assert "Inspect the actual filesystem/process state" in render_continuation_reminder(
-        state,
-        context_window=32_000,
+    assert (
+        "Their actual filesystem or process effects may be uncertain."
+        in render_continuation_reminder(
+            state,
+            context_window=32_000,
+        )
     )
 
 
@@ -297,6 +300,31 @@ def test_prompt_truncation_keeps_original_request_operations_warning_and_marker(
     assert "bash-1" in reminder
     assert "SAFETY:" in reminder
     assert "truncated to fit" in reminder
+
+
+def test_reminder_neutrally_describes_interruption_without_directing_model() -> None:
+    state = fold_continuation_records(
+        [
+            _record(
+                "run_started",
+                checkpoint_id="checkpoint",
+                origin_run_id="run-one",
+                request="Original request",
+            ),
+            _record("stream_delta", step=1, reasoning_delta="Recorded plan"),
+            _record("run_interrupted", cause="user"),
+        ]
+    )
+    assert state is not None
+
+    reminder = render_continuation_reminder(state, context_window=32_000)
+
+    assert (
+        "The previous Run was interrupted. "
+        "The checkpoint below records what happened before the interruption."
+    ) in reminder
+    assert "Resume the interrupted work" not in reminder
+    assert "Treat canonical Tool Calls" not in reminder
 
 
 def test_injection_places_reminder_immediately_before_new_turn_and_deduplicates() -> None:
