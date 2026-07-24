@@ -27,6 +27,11 @@
   --surface-3: #3d3124;
   --border: #4a3928;
   --border-2: #5d4a35;
+  /* Semantic surface roles keep controls with different meanings independently
+     themeable even when two roles currently resolve to the same palette step. */
+  --field-surface: var(--surface-2);
+  --composer-surface: var(--surface);
+  --preview-surface: var(--surface);
   --text-hi: #eee7dc;
   --text-med: #9a8c7e;
   --text-lo: #5e4c38;
@@ -773,7 +778,7 @@ svg {
   border: 1px solid var(--border-2);
   border-radius: var(--r-md);
   color: var(--text-hi);
-  background: var(--surface-2);
+  background: var(--field-surface);
   font-family: var(--font-mono);
   font-size: 12.5px;
   outline: none;
@@ -798,7 +803,8 @@ svg {
 }
 
 /* Canonical multi-line form control. Default is the bordered form field;
-   inset is the editor integrated into an already-bounded parent surface. */
+   inset is the editor integrated into an already-bounded parent surface. Both
+   remain independent from the Chat composer's dedicated surface role. */
 .text-area {
   box-sizing: border-box;
   width: 100%;
@@ -810,7 +816,7 @@ svg {
   border-radius: var(--r-md);
   outline: none;
   color: var(--text-hi);
-  background: var(--surface-2);
+  background: var(--field-surface);
   font-family: var(--font-mono);
   font-size: 12.5px;
   line-height: 1.5;
@@ -834,7 +840,7 @@ svg {
   padding: 12px 14px;
   border: 0;
   border-radius: 0;
-  background: var(--surface);
+  background: var(--field-surface);
   font-size: 12px;
   line-height: 1.6;
 }
@@ -885,7 +891,7 @@ svg {
   padding: 11px 14px;
   border: 1px solid var(--border-2);
   border-radius: var(--r-lg);
-  background: var(--surface);
+  background: var(--composer-surface);
   transition:
     border-color 150ms ease,
     box-shadow 150ms ease;

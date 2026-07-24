@@ -20,6 +20,10 @@ colors:
   amber:       "#F59E0B"
   blue:        "#60A5FA"
   red:         "#FC8181"
+surfaceRoles:
+  field:       "{colors.surface-2}"
+  composer:    "{colors.surface}"
+  preview:     "{colors.surface}"
 typography:
   display:
     fontFamily: IBM Plex Sans
@@ -124,7 +128,7 @@ components:
     textColor: "{colors.red}"
     backgroundColor: "rgba(252,129,129,0.07)"
   input-default:
-    backgroundColor: "{colors.surface-2}"
+    backgroundColor: "{surfaceRoles.field}"
     borderColor: "{colors.border-2}"
     textColor: "{colors.text-hi}"
     typography: "{typography.mono-body}"
@@ -134,7 +138,7 @@ components:
     borderColor: "rgba(232,135,10,0.40)"
     boxShadow: "0 0 0 3px rgba(232,135,10,0.06)"
   input-composer:
-    backgroundColor: "{colors.surface}"
+    backgroundColor: "{surfaceRoles.composer}"
     borderColor: "{colors.border-2}"
     textColor: "{colors.text-hi}"
     typography: "{typography.body-lg}"
@@ -214,7 +218,7 @@ The palette is organized around five layers of warm dark surface and three seman
 
 - **Bg (#221A12):** The page foundation — darkest, used behind content areas, the chat message stream, and the unbordered composer area. Warm near-black with a distinct brown cast.
 - **Secondary-surface (#271E15):** The narrow intermediate layer used only by Secondary bars. It sits exactly between the main navigation and content backgrounds so the app descends from light on the left to dark on the right without adding elevation.
-- **Surface (#2B2217):** Primary panel surface — Main menu, section cards, the interactive Chat composer, and inset multiline editors. One step up from the Secondary bar.
+- **Surface (#2B2217):** Primary panel surface — Main menu, section cards, the interactive Chat composer, and read-only preview bodies. One step up from the Secondary bar.
 - **Surface-2 (#33291D):** Elevated cards, dropdown backgrounds, user message bubbles. Used whenever a component needs to sit above its container.
 - **Surface-3 (#3D3124):** Tertiary highlight layer — toggle tracks, code block backgrounds, hover surfaces for dropdowns.
 - **Border (#4A3928) / Border-2 (#5D4A35):** Two border strengths. `border` for structural dividers (sidebar edge, section separators). `border-2` for interactive element outlines (inputs, buttons, dropdowns).
@@ -227,6 +231,8 @@ The palette is organized around five layers of warm dark surface and three seman
 - **Red (#FC8181):** Error state (failed tool call, destructive button hover).
 
 Accent tints (fills, borders, hover states) come only from the tint ramp tokens `--accent-06 … --accent-40` in `webui/src/styles/app.css` — never hand-write `rgba(232, 135, 10, …)`. If a needed step is missing, extend the ramp there rather than inlining a literal. `--accent-dim` / `--accent-pale` are semantic aliases onto the ramp (08 / 12). The input focus glow is the single `--focus-ring` token.
+
+Semantic surface roles prevent unrelated controls from being coupled merely because they currently share a palette step. `--field-surface` owns ordinary editable fields and inset Prompt editors (`surface-2`); `--composer-surface` owns only the Chat composer (`surface`, preserving its established appearance); `--preview-surface` owns read-only preview content (`surface`). Change a role rather than a raw palette token when one interaction category needs more or less contrast.
 
 ## Typography
 
@@ -354,15 +360,17 @@ Primary save buttons inside long editor panels stay enabled even when the form i
 
 **Every single-line text field is the shared `TextField` component (`webui/src/components/ui/TextField.svelte`).** It uses the callback-prop pattern (`value` in, `onInput(next, event)` out — never `bind:`) and takes `type`, `variant`, `readonly`, `invalid`, `disabled`, `inputmode`, `placeholder`, `ariaLabel`. The guard scan fails the build if a raw `<input class="s-input">`/`modal-input` or a raw `s-value-box` appears outside the component.
 
-**Default input (`variant="default"` → `s-input`)** — Mono font at 12.5px, `surface-2` background, `border-2` border, 6px radius. Focus: accent border + glow ring. `invalid` adds a red border (`s-input--invalid`) that wins over the focus glow.
+**Default input (`variant="default"` → `s-input`)** — Mono font at 12.5px, `--field-surface` background, `border-2` border, 6px radius. Focus: accent border + glow ring. `invalid` adds a red border (`s-input--invalid`) that wins over the focus glow.
 
 **Modal input (`variant="modal"` → `modal-input`)** — Same as default but uses the deepest `bg` as background for contrast against the `surface` modal backdrop.
 
 **Read-only value (`readonly` → `s-value-box`)** — Renders a non-interactive `<div>` with the same geometry and mono type as the default input but a structural `border` (not `border-2`), transparent background, and `text-med` color. Read-only facts (server host, data directory, default skill directory) must never wear the editable input chrome.
 
-**Every ordinary multi-line form field is the shared `TextArea` component (`webui/src/components/ui/TextArea.svelte`).** It follows the same `value` / `onInput(next, event)` callback contract as `TextField` and owns the default, inset, code, invalid, disabled, and read-only states. `variant="default"` is the bordered `surface-2` field used by Cron and Settings; `variant="inset"` is the borderless `surface` editor integrated into a bounded System Prompt block. `code` preserves whitespace, enables horizontal overflow, and raises the minimum height for JSON editors; `invalid` keeps a red border/ring and sets `aria-invalid`. The guard allows raw textareas only in the specialized Chat Composer and queued-message editor and rejects every retired form-textarea class.
+**Every ordinary multi-line form field is the shared `TextArea` component (`webui/src/components/ui/TextArea.svelte`).** It follows the same `value` / `onInput(next, event)` callback contract as `TextField` and owns the default, inset, code, invalid, disabled, and read-only states. `variant="default"` is the bordered `--field-surface` field used by Cron and Settings; `variant="inset"` is the borderless `--field-surface` editor integrated into a bounded System Prompt block, so editable Prompt content remains visibly distinct from its `surface` header and page `bg`. `code` preserves whitespace, enables horizontal overflow, and raises the minimum height for JSON editors; `invalid` keeps a red border/ring and sets `aria-invalid`. The guard allows raw textareas only in the specialized Chat Composer and queued-message editor and rejects every retired form-textarea class.
 
-**Chat composer** — Its full-width outer area continues the Chat `bg` without a structural border, so the composer sits directly in the conversation surface. The interactive composer is a `surface`-filled rounded rectangle (10px radius) with a `border-2` border, giving the editable field one tonal step of lift without rebuilding a full-width footer panel. Its specialized auto-resizing textarea (max 182px, hidden scrollbar) and action buttons sit flush to the bottom-right; it is deliberately not `TextArea`. Focus applies the accent border + glow. Slash/Skill and Files autocomplete panels open above the composer, share its centered `--chat-measure` width and responsive horizontal inset, and scroll internally within their viewport-relative height cap; the `full` Chat width preference expands both panels with the composer. Slash/Skill rows use a compact shared name track followed by the description track, keeping descriptions aligned without leaving a large dead zone after short command names; mobile rows stack both tracks. The queued-message editor is the other deliberate raw-textarea exception because it owns inline queue-edit behavior.
+**Chat composer** — Its full-width outer area continues the Chat `bg` without a structural border, so the composer sits directly in the conversation surface. The interactive composer is a `--composer-surface`-filled rounded rectangle (10px radius) with a `border-2` border; that semantic token currently resolves to `surface` and is deliberately independent from ordinary input/editor colors. Its specialized auto-resizing textarea (max 182px, hidden scrollbar) and action buttons sit flush to the bottom-right; it is deliberately not `TextArea`. Focus applies the accent border + glow. Slash/Skill and Files autocomplete panels open above the composer, share its centered `--chat-measure` width and responsive horizontal inset, and scroll internally within their viewport-relative height cap; the `full` Chat width preference expands both panels with the composer. Slash/Skill rows use a compact shared name track followed by the description track, keeping descriptions aligned without leaving a large dead zone after short command names; mobile rows stack both tracks. The queued-message editor is the other deliberate raw-textarea exception because it owns inline queue-edit behavior.
+
+**Prompt preview** — The read-only System Prompt preview is one bounded content surface, not an input. Its body uses `--preview-surface`, its header lifts to `surface-2`, and both the outer outline and header divider use `border-2`. This tonal hierarchy must remain visible against the page `bg`; a border alone is not sufficient separation.
 
 ### Toggles
 
@@ -447,7 +455,7 @@ The surface uses a low-contrast `surface-2` tint, dashed `border`, `lg` radius (
 
 ### Log viewer
 
-- The Logs tab uses the standard input/dropdown styling (`surface-2`, `border-2`, mono text) for file selection, level filtering, sort order, and search. Use the shared **simple** dropdown style for the file, level, and order controls.
+- The Logs tab uses the standard field/dropdown styling (`--field-surface` for editable inputs, `surface-2` for dropdowns, `border-2`, mono text) for file selection, level filtering, sort order, and search. Use the shared **simple** dropdown style for the file, level, and order controls.
 - Live connection state uses the shared `StatusChip` (it is a status, not a metadata tag): `neutral` by default, `success` for connected, `warn` for reconnecting, `error` for stream errors.
 - Log entries render as dense single-row list items, not roomy stacked cards. Each row keeps timestamp, level, logger, and message on one line on normal desktop widths, with truncation acceptable for long content.
 - Rows keep a 3px semantic left border: accent for info, amber for warn, red for error, neutral `border-2` for unknown/other levels. Warn treatment should be visibly stronger than info, not just a near-match.

@@ -12,6 +12,10 @@ import { describe, expect, it } from 'vitest';
 
 const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const APP_CSS = readFileSync(join(SRC_DIR, 'styles', 'app.css'), 'utf8');
+const SYSTEM_PROMPT_SOURCE = readFileSync(
+  join(SRC_DIR, 'components', 'SystemPromptView.svelte'),
+  'utf8',
+);
 
 function collectSvelteFiles(directory) {
   const files = [];
@@ -85,6 +89,27 @@ const ANY_ELEMENT = '[a-z][\\w-]*';
 describe('UI primitive guard', () => {
   it('keeps secondary-list content equally inset on every edge', () => {
     expect(APP_CSS).toMatch(/\.secondary-list\s*\{\s*padding:\s*12px;/);
+  });
+
+  it('keeps field, Chat composer, and preview surfaces independently themed', () => {
+    expect(APP_CSS).toMatch(/--field-surface:\s*var\(--surface-2\);/);
+    expect(APP_CSS).toMatch(/--composer-surface:\s*var\(--surface\);/);
+    expect(APP_CSS).toMatch(/--preview-surface:\s*var\(--surface\);/);
+    expect(APP_CSS).toMatch(
+      /\.text-area--inset\s*\{[^}]*background:\s*var\(--field-surface\);/s,
+    );
+    expect(APP_CSS).toMatch(
+      /\.input-wrap\s*\{[^}]*background:\s*var\(--composer-surface\);/s,
+    );
+    expect(SYSTEM_PROMPT_SOURCE).toMatch(
+      /\.sp-preview-section\s*\{[^}]*border:\s*1px solid var\(--border-2\);[^}]*background:\s*var\(--preview-surface\);/s,
+    );
+    expect(SYSTEM_PROMPT_SOURCE).toMatch(
+      /\.sp-preview-header\s*\{[^}]*border-bottom:\s*1px solid var\(--border-2\);[^}]*background:\s*var\(--surface-2\);/s,
+    );
+    expect(SYSTEM_PROMPT_SOURCE).toMatch(
+      /\.sp-preview-body\s*\{[^}]*background:\s*var\(--preview-surface\);/s,
+    );
   });
 
   it('routes every button through components/ui/Button.svelte', () => {

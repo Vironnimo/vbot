@@ -1753,9 +1753,10 @@
   .sp-preview-section {
     display: flex;
     flex-direction: column;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-2);
     border-radius: var(--r-lg);
     overflow: hidden;
+    background: var(--preview-surface);
     flex-shrink: 0;
   }
 
@@ -1765,8 +1766,8 @@
     justify-content: space-between;
     gap: 12px;
     padding: 10px 14px;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface);
+    border-bottom: 1px solid var(--border-2);
+    background: var(--surface-2);
     flex-shrink: 0;
     flex-wrap: wrap;
   }
@@ -1825,7 +1826,7 @@
 
   .sp-preview-body {
     min-height: 120px;
-    background: var(--bg);
+    background: var(--preview-surface);
   }
 
   .sp-preview-pre {
