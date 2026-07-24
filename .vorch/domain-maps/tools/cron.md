@@ -6,7 +6,7 @@ Manages persisted time-based automation jobs through `CronService`.
 
 - Tool name: `cron`
 - Registration: `register_cron_tool(registry, cron_service)`
-- Schema: one root operation envelope containing exactly one of `create`, `list`, `update`, `delete`, `enable`, or `disable`; fields inside that operation object are flat and operation-specific.
+- Schema: one flat object with required `action` (`create`, `list`, `update`, `delete`, `enable`, or `disable`) plus only the fields needed by that action. The parameterless list call is exactly `{"action":"list"}`; do not reintroduce empty nested operation objects.
 - Display: the operation-specific summary uses the job `id`, target, and schedule type when available.
 
 ## Conventions
@@ -18,7 +18,7 @@ Manages persisted time-based automation jobs through `CronService`.
 
 ## Constraints & Gotchas
 
-- Unknown operation-specific arguments, multiple operations, missing required arguments, domain validation failures, and missing jobs return non-retryable failure envelopes.
-- The handler accepts the legacy flat `{action, ...}` structural shape for compatibility, mapping `agent_id` to `target`, but still rejects the removed `timezone`, `session_id`, and `status` arguments.
+- Unknown action-specific arguments, missing required arguments, domain validation failures, and missing jobs return non-retryable failure envelopes whose message includes an exact valid call or directs the Agent to `{"action":"list"}` for current ids.
+- The handler accepts the retired nested operation envelope for compatibility, including JSON-stringified object values such as the observed `{"list":"{}"}`, but that shape is not model-facing. The legacy flat `agent_id` spelling maps to `target`; removed `timezone`, `session_id`, and `status` arguments remain rejected.
 - The Tool never accepts a timezone. Cron expressions and offset-free Once values use the server's IANA system timezone, including future DST rules; an explicit Once offset remains an absolute instant.
 - Missed Once jobs do not catch up after restart; list reports them as `missed`. Repeated recurring Run failures eventually stop a job as `failed`; enable retries it after resetting the consecutive-failure streak.
