@@ -148,6 +148,49 @@ describe('chat state helpers', () => {
     ]);
   });
 
+  it('rehydrates interrupted reasoning-only output from persisted history', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'Inspect the evidence' },
+      {
+        id: 'assistant-reasoning',
+        role: 'assistant',
+        content: null,
+        reasoning: 'Inspect the evidence.',
+        interrupted: true,
+      },
+      {
+        id: 'summary-one',
+        role: 'run_summary',
+        run_id: 'run-cancelled',
+        status: 'cancelled',
+      },
+    ]);
+
+    const assistantRun = visibleTimelineItemsForRender(sessionState).find(
+      (item) => item.type === 'assistant_run',
+    );
+
+    expect(assistantRun).toEqual(
+      expect.objectContaining({
+        source: 'history',
+        status: 'cancelled',
+        outputs: [],
+        reasoning: [
+          expect.objectContaining({
+            content: 'Inspect the evidence.',
+            streaming: false,
+          }),
+        ],
+      }),
+    );
+  });
+
   it('uses persisted suffix history only when terminal live events overlap the same turn', () => {
     const sessionState = ensureSessionState(
       createChatState(),

@@ -51,7 +51,7 @@ The checkpoint and its interruption cause remain internal to Chat and are not pr
 
 Cancel is best effort. `Run.request_cancel` suppresses late non-terminal output, prevents new Tool progression, and calls the runtime ProcessManager cancellation scope. Already persisted history is never rolled back.
 
-When visible streamed content already exists at cancellation, Chat uses the same partial finalization path as other interruptions so text the user saw remains persisted; the Run still terminates `cancelled`. With no visible content no Assistant message is added, but the checkpoint may retain readable reasoning and the `run_summary` remains the timeline anchor. During Tool dispatch, computed sibling Results persist before cancellation is honored.
+When readable reasoning or answer content already exists at cancellation, Chat uses the same partial finalization path as other interruptions so every readable block the user saw remains persisted in an `interrupted` Assistant message; a reasoning-only message has no answer content, and the Run still terminates `cancelled`. With neither readable reasoning nor answer content no Assistant message is added; the private checkpoint separately retains recovery state and the `run_summary` remains the timeline anchor. During Tool dispatch, computed sibling Results persist before cancellation is honored.
 
 ## Source and tests
 

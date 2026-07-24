@@ -2414,9 +2414,13 @@ class ChatLoop:
             # User cancel mid-stream. Output the user already saw must not
             # vanish (GLOSSARY → Cancel), so accumulated visible content is
             # finalized like a stream break after visible output; the caller
-            # persists it and the Run still ends as cancelled. Readable
-            # reasoning-only state already belongs to the Continuation Checkpoint.
-            if run.cancel_requested and accumulator.partial_content is not None:
+            # persists it and the Run still ends as cancelled. This includes
+            # readable reasoning even when answer text has not started yet;
+            # the private Continuation Checkpoint separately preserves the
+            # same working state for the next visible Run.
+            if run.cancel_requested and (
+                accumulator.partial_content is not None or accumulator.partial_reasoning is not None
+            ):
                 return self._finalize_interrupted_partial(agent, accumulator, run)
             raise
 

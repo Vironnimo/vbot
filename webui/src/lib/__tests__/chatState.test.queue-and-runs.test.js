@@ -652,6 +652,72 @@ describe('chat state helpers', () => {
     expect(assistantRun.tools[0].resultEvent).toBeNull();
   });
 
+  it('keeps finalized reasoning visible when a reasoning-only run is cancelled', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-cancelled',
+      sse_url: '/api/runs/run-cancelled/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+
+    appendRunEvent(sessionState, {
+      type: 'reasoning_delta',
+      run_id: 'run-cancelled',
+      sequence: 1,
+      payload: { reasoning_delta: 'Inspect the evidence.' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'reasoning',
+      run_id: 'run-cancelled',
+      sequence: 2,
+      payload: {
+        message: {
+          id: 'assistant-reasoning',
+          role: 'assistant',
+          content: null,
+          reasoning: 'Inspect the evidence.',
+          interrupted: true,
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-cancelled',
+      sequence: 3,
+      payload: {
+        message: {
+          id: 'assistant-reasoning',
+          role: 'assistant',
+          content: null,
+          reasoning: 'Inspect the evidence.',
+          interrupted: true,
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_cancelled',
+      run_id: 'run-cancelled',
+      sequence: 4,
+      payload: { status: CHAT_STATUS_CANCELLED },
+    });
+
+    const [assistantRun] = visibleTimelineItemsForRender(sessionState);
+
+    expect(sessionState.streamingRunEvents).toEqual([]);
+    expect(assistantRun.status).toBe(CHAT_STATUS_CANCELLED);
+    expect(assistantRun.reasoning).toEqual([
+      expect.objectContaining({
+        content: 'Inspect the evidence.',
+        streaming: false,
+      }),
+    ]);
+    expect(assistantRun.outputs).toEqual([]);
+  });
+
   it('keeps new runs ordered after older runs without nesting tool rows', () => {
     const sessionState = ensureSessionState(
       createChatState(),
