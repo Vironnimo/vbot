@@ -279,10 +279,7 @@ class StubPrompts:
     def render_project_skills(self, project_name: str, skills: Any) -> str:
         if not skills:
             return ""
-        lines = [
-            f"Skills from project '{project_name}' — read a skill's SKILL.md "
-            "with the `read` tool to use it:"
-        ]
+        lines = [f"Skills from project '{project_name}' — load one by name with the `skill` Tool:"]
         lines.extend(f"- {skill.name}: {skill.description} ({skill.path})" for skill in skills)
         return "\n".join(lines)
 

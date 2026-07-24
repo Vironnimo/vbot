@@ -62,7 +62,7 @@ def test_render_project_skills_lists_names_descriptions_and_paths(tmp_path: Path
     rendered = manager.render_project_skills("vBot", skills)
 
     assert "Skills from project 'vBot'" in rendered
-    assert "`read` tool" in rendered
+    assert "load one by name with the `skill` Tool" in rendered
     assert f"- deploy: Ship it. ({deploy_path})" in rendered
     # Sorted by name: audit before deploy.
     assert rendered.index("audit") < rendered.index("deploy")

@@ -83,6 +83,7 @@ def test_project_tool_loads_context_skills_and_stamps_files_read(tmp_path: Path)
     assert data["cwd"] == str(repo.resolve())
     assert "Project Context loaded for 'vBot'" in data["content"]
     assert "This call did not change your home Workspace, cwd, Rooting" in data["content"]
+    assert "available through the `skill` Tool in this Session" in data["content"]
     assert "on every `bash` call; each call starts a new shell" in data["content"]
     assert "Follow the Project rules." in data["content"]
     assert "Skills from project 'vBot'" in data["content"]

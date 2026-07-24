@@ -81,6 +81,11 @@ SKILL_CONTEXT_NOTE_PREFIX = "[skill-context] "
 # into the skills domain). Drift is guarded by tests against the tool's constants.
 SKILL_TOOL_MESSAGE_NAME = "skill"
 SKILL_TOOL_LOADED_STATUS = "loaded"
+# The explicit Project Context Tool persists its successful selection as an ordinary
+# Tool Result. Chat scans that carrier to recover the latest Project whose Skills
+# should be available to an Identity Agent without adding parallel Session state.
+PROJECT_TOOL_MESSAGE_NAME = "project"
+PROJECT_TOOL_LOADED_STATUS = "loaded"
 CHANNEL_MESSAGE_NOTE_PREFIX = "[channel-message] "
 SKILL_AVAILABLE_NOTE_PREFIX = "[skill-available] "
 _TAIL_CHUNK_SIZE = 8192
@@ -1346,6 +1351,41 @@ def skill_tool_activation_name(message: ChatMessage) -> str | None:
     """Return the skill name from a loading ``skill`` tool result, or ``None``."""
     activation = skill_tool_activation(message)
     return activation[0] if activation is not None else None
+
+
+def project_tool_context_id(message: ChatMessage) -> str | None:
+    """Return the Project id from a successful Project Context Tool Result.
+
+    The Project Tool Result is the durable context carrier. Failures, malformed
+    envelopes, and unrelated Tool messages yield ``None`` so callers can scan
+    Session history without special error handling.
+    """
+    if message.role != "tool" or message.name != PROJECT_TOOL_MESSAGE_NAME:
+        return None
+    if not isinstance(message.content, str):
+        return None
+    try:
+        envelope = json.loads(message.content)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(envelope, dict) or envelope.get("ok") is not True:
+        return None
+    data = envelope.get("data")
+    if not isinstance(data, dict) or data.get("status") != PROJECT_TOOL_LOADED_STATUS:
+        return None
+    project_id = data.get("project_id")
+    if isinstance(project_id, str) and project_id:
+        return project_id
+    return None
+
+
+def latest_project_tool_context_id(messages: list[ChatMessage]) -> str | None:
+    """Return the most recently loaded explicit Project Context, if any."""
+    for message in reversed(messages):
+        project_id = project_tool_context_id(message)
+        if project_id is not None:
+            return project_id
+    return None
 
 
 def skill_activation_names(messages: list[ChatMessage]) -> frozenset[str]:

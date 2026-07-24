@@ -1197,9 +1197,9 @@ class Runtime:
 
         Scans only the Project's own Skill directory (its declared Source Format's
         location), so the result is exactly the Project-owned Skills with their
-        ``SKILL.md`` paths. An Identity Agent reads those files directly because
-        loading Project Context does not change Skill scope. A missing directory
-        yields an empty list.
+        ``SKILL.md`` paths. The Project Tool lists them in its persisted result, and
+        Chat routes later Skill activation through that loaded Project context. A
+        missing directory yields an empty list.
         """
         self._ensure_started()
         project = self.projects.get(project_id)

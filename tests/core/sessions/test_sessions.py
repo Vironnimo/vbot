@@ -15,6 +15,8 @@ from core.sessions import (
     ChatSessionError,
     ChatSessionManager,
     is_skill_context_note,
+    latest_project_tool_context_id,
+    project_tool_context_id,
     skill_context_note_name,
 )
 from core.sessions.sessions import (
@@ -422,6 +424,58 @@ class TestSkillContextNoteName:
 
         assert skill_context_note_name(empty) is None
         assert skill_context_note_name(non_string) is None
+
+
+class TestProjectToolContext:
+    @staticmethod
+    def _result(project_id: str, *, ok: bool = True) -> ChatMessage:
+        result = (
+            tool_success({"status": "loaded", "project_id": project_id})
+            if ok
+            else tool_failure("project_not_found", "missing")
+        )
+        return ChatMessage.tool(
+            tool_call_id=f"call-{project_id}",
+            name="project",
+            content=json.dumps(result),
+        )
+
+    def test_reads_successful_project_context_tool_result(self):
+        message = self._result("vbot")
+
+        assert project_tool_context_id(message) == "vbot"
+
+    def test_ignores_failed_malformed_and_unrelated_tool_results(self):
+        assert project_tool_context_id(self._result("missing", ok=False)) is None
+        assert (
+            project_tool_context_id(
+                ChatMessage.tool(
+                    tool_call_id="call-bad",
+                    name="project",
+                    content="{not-json",
+                )
+            )
+            is None
+        )
+        assert (
+            project_tool_context_id(
+                ChatMessage.tool(
+                    tool_call_id="call-skill",
+                    name="skill",
+                    content=json.dumps(tool_success({"status": "loaded", "project_id": "vbot"})),
+                )
+            )
+            is None
+        )
+
+    def test_latest_context_wins(self):
+        messages = [
+            self._result("first"),
+            ChatMessage.user("switch"),
+            self._result("second"),
+        ]
+
+        assert latest_project_tool_context_id(messages) == "second"
 
 
 class TestChatSessionManager:
