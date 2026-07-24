@@ -3,6 +3,10 @@
 
   import Dropdown from '../Dropdown.svelte';
   import Button from '../ui/Button.svelte';
+  import {
+    createAutosaveParticipant,
+    useAutosaveContext,
+  } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
   import { runSettingsSave } from '$lib/settingsSave.js';
   import {
@@ -33,6 +37,15 @@
   let saveDisabled = $derived(
     saving || recallSettingsMatch(recallSettings, getRecallSettings(settings)),
   );
+  const autosaveContext = useAutosaveContext();
+  const recallAutosave = createAutosaveParticipant({
+    cancelPending: clearAutoSaveTimer,
+    getSnapshot: () => ({ ...recallSettings }),
+    hasChanges: () =>
+      !recallSettingsMatch(recallSettings, getRecallSettings(settings)),
+    save: saveRecallSettings,
+  });
+  const unregisterRecallAutosave = autosaveContext.register(recallAutosave);
 
   $effect(() => {
     if (saveDisabled) {
@@ -41,7 +54,7 @@
 
     autoSaveTimer = setTimeout(() => {
       autoSaveTimer = null;
-      void saveRecallSettings();
+      void recallAutosave.runSave();
     }, AUTO_SAVE_DEBOUNCE_MS);
 
     return () => {
@@ -50,6 +63,7 @@
   });
 
   onDestroy(() => {
+    unregisterRecallAutosave();
     clearAutoSaveTimer();
   });
 
@@ -89,15 +103,15 @@
     }
 
     clearAutoSaveTimer();
-    void saveRecallSettings();
+    void recallAutosave.runSave('manual');
   }
 
   async function saveRecallSettings() {
-    if (saveDisabled) {
-      return;
+    if (recallSettingsMatch(recallSettings, getRecallSettings(settings))) {
+      return true;
     }
 
-    await runSettingsSave({
+    return runSettingsSave({
       onCommit,
       onToast,
       onError,

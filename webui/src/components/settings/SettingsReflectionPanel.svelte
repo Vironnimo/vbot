@@ -4,6 +4,10 @@
   import Button from '../ui/Button.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
+  import {
+    createAutosaveParticipant,
+    useAutosaveContext,
+  } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
   import { runSettingsSave } from '$lib/settingsSave.js';
 
@@ -62,6 +66,19 @@
         getReflectionSettings(settings),
       ),
   );
+  const autosaveContext = useAutosaveContext();
+  const reflectionAutosave = createAutosaveParticipant({
+    cancelPending: clearAutoSaveTimer,
+    getSnapshot: () => ({ ...reflectionSettings }),
+    hasChanges: () =>
+      !reflectionSettingsMatch(
+        reflectionSettings,
+        getReflectionSettings(settings),
+      ),
+    save: saveReflectionSettings,
+  });
+  const unregisterReflectionAutosave =
+    autosaveContext.register(reflectionAutosave);
 
   $effect(() => {
     if (saveDisabled) {
@@ -70,7 +87,7 @@
 
     autoSaveTimer = setTimeout(() => {
       autoSaveTimer = null;
-      void saveReflectionSettings();
+      void reflectionAutosave.runSave();
     }, AUTO_SAVE_DEBOUNCE_MS);
 
     return () => {
@@ -79,6 +96,7 @@
   });
 
   onDestroy(() => {
+    unregisterReflectionAutosave();
     clearAutoSaveTimer();
   });
 
@@ -135,15 +153,20 @@
     }
 
     clearAutoSaveTimer();
-    void saveReflectionSettings();
+    void reflectionAutosave.runSave('manual');
   }
 
   async function saveReflectionSettings() {
-    if (saveDisabled) {
-      return;
+    if (
+      reflectionSettingsMatch(
+        reflectionSettings,
+        getReflectionSettings(settings),
+      )
+    ) {
+      return true;
     }
 
-    await runSettingsSave({
+    return runSettingsSave({
       onCommit,
       onToast,
       onError,

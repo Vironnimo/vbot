@@ -5,6 +5,10 @@
   import Button from '../ui/Button.svelte';
   import { listConnections, listModels } from '$lib/api.js';
   import {
+    createAutosaveParticipant,
+    useAutosaveContext,
+  } from '$lib/autosave.js';
+  import {
     compactionPoliciesEqual,
     normalizeCompactionPolicy,
   } from '$lib/compactionPolicy.js';
@@ -54,8 +58,20 @@
   let saveDisabled = $derived(
     saving || compactionPoliciesEqual(policy, settings?.compaction),
   );
+  const autosaveContext = useAutosaveContext();
+  const compactionAutosave = createAutosaveParticipant({
+    cancelPending: clearTimer,
+    getSnapshot: () => normalizeCompactionPolicy(policy),
+    hasChanges: () => !compactionPoliciesEqual(policy, settings?.compaction),
+    save,
+  });
+  const unregisterCompactionAutosave =
+    autosaveContext.register(compactionAutosave);
 
-  onDestroy(() => clearTimer());
+  onDestroy(() => {
+    unregisterCompactionAutosave();
+    clearTimer();
+  });
   onMount(() => void loadModelCatalogs());
 
   $effect(() => {
@@ -73,7 +89,7 @@
     if (saveDisabled) return;
     timer = setTimeout(() => {
       timer = null;
-      void save();
+      void compactionAutosave.runSave();
     }, AUTO_SAVE_DEBOUNCE_MS);
     return clearTimer;
   });
@@ -124,8 +140,8 @@
   }
 
   async function save() {
-    if (saveDisabled) return;
-    await runSettingsSave({
+    if (compactionPoliciesEqual(policy, settings?.compaction)) return true;
+    return runSettingsSave({
       onCommit,
       onToast,
       onError,
@@ -145,7 +161,7 @@
       return;
     }
     clearTimer();
-    void save();
+    void compactionAutosave.runSave('manual');
   }
 </script>
 

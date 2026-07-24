@@ -42,6 +42,11 @@ export const englishCatalog = Object.freeze({
   'common.saving': 'Saving…',
   'common.unknown': 'Unknown',
 
+  'autosave.transitionFailureTitle': 'Changes could not be saved',
+  'autosave.transitionFailureBody':
+    'Your changes are still open. Try saving again, or discard them and continue.',
+  'autosave.discardAndContinue': 'Discard and continue',
+
   'inherit.option': 'Inherited: {value} (global default)',
   'inherit.optionNotConfigured': 'Inherit (not configured)',
   'inherit.optionProviderDefault': 'Inherit (provider default)',

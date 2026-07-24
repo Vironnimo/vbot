@@ -4,6 +4,10 @@
   import Dropdown from '../Dropdown.svelte';
   import Button from '../ui/Button.svelte';
   import { updateSettings } from '$lib/api.js';
+  import {
+    createAutosaveParticipant,
+    useAutosaveContext,
+  } from '$lib/autosave.js';
   import { init, t } from '$lib/i18n.js';
   import { setChatWidth } from '$lib/appearancePrefs.svelte.js';
   import {
@@ -63,6 +67,18 @@
       persistedChatWidth,
     }),
   );
+  const autosaveContext = useAutosaveContext();
+  const appearanceAutosave = createAutosaveParticipant({
+    cancelPending: clearAutoSaveTimer,
+    getSnapshot: () => ({
+      language: selectedLanguageId,
+      chatWidth: selectedChatWidth,
+    }),
+    hasChanges: appearanceHasChanges,
+    save: saveAppearance,
+  });
+  const unregisterAppearanceAutosave =
+    autosaveContext.register(appearanceAutosave);
 
   $effect(() => {
     if (saveDisabled) {
@@ -71,7 +87,7 @@
 
     autoSaveTimer = setTimeout(() => {
       autoSaveTimer = null;
-      void saveAppearance();
+      void appearanceAutosave.runSave();
     }, AUTO_SAVE_DEBOUNCE_MS);
 
     return () => {
@@ -80,6 +96,7 @@
   });
 
   onDestroy(() => {
+    unregisterAppearanceAutosave();
     clearAutoSaveTimer();
   });
 
@@ -114,12 +131,23 @@
     }
 
     clearAutoSaveTimer();
-    void saveAppearance();
+    void appearanceAutosave.runSave('manual');
+  }
+
+  function appearanceHasChanges() {
+    return !isAppearanceSaveDisabled({
+      loading: false,
+      saving: false,
+      selectedLanguageId,
+      selectedChatWidth,
+      persistedLanguageId,
+      persistedChatWidth,
+    });
   }
 
   async function saveAppearance() {
-    if (saveDisabled) {
-      return;
+    if (!appearanceHasChanges()) {
+      return true;
     }
 
     saving = true;
@@ -141,10 +169,12 @@
         title: t('settings.appearance.saveSuccess', 'Appearance updated.'),
         variant: 'success',
       });
+      return true;
     } catch (error) {
       onError(
         `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
       );
+      return false;
     } finally {
       saving = false;
     }

@@ -12,6 +12,7 @@ Domain controllers still own their data. The app shell may request a refresh or 
 
 - Startup loads the server-backed resources required to decide which views are available, then mounts view state through `createAppController`. Failure to load one optional surface must not turn the whole accessor into a second source of truth.
 - View availability is derived from current capabilities and server state. If the active view becomes unavailable, navigation resolves to a valid view instead of leaving an unreachable route selected.
+- User-initiated context changes that would replace an autosave editor—main-view navigation, Agent or Project selection, System Prompt scope selection, and editor deep links—go through the coordinator in `autosave.js`. Registered editors cancel their debounce, wait for any in-flight save, and keep saving newer snapshots until stable; the requested transition runs only after every pending participant succeeds. A failure leaves the editor mounted and opens the App-owned Retry / Discard and continue modal. Browser tab visibility is outside this contract, and explicit confirmation or special-operation flows do not become autosave operations.
 - Browser history is coordinated through `navigationHistory.js`; forward/back navigation changes the active view without inventing a separate route state inside each view.
 - Onboarding is a Settings-owned flow that the app shell can open based on operational readiness. Its detailed policy belongs in `webui/settings.md`.
 
@@ -44,5 +45,5 @@ Domain controllers still own their data. The app shell may request a refresh or 
 
 - Composition and lifecycle: `webui/src/App.svelte`, `webui/src/lib/appController.js`
 - Connection and replay state: `webui/src/lib/connectionState.js`, `webui/src/lib/api.js`
-- Navigation and invalidation: `webui/src/lib/navigationHistory.js`, `webui/src/lib/resourceInvalidation.js`
+- Navigation, autosave coordination, and invalidation: `webui/src/lib/navigationHistory.js`, `webui/src/lib/autosave.js`, `webui/src/lib/resourceInvalidation.js`
 - Focused coverage: `webui/src/lib/__tests__/api.test.js`, `appController.test.js`, `connectionState.test.js`, `navigationHistory.test.js`, `resourceInvalidation.test.js`, plus `webui/src/__tests__/App*.test.js`

@@ -6,6 +6,10 @@
   import TextField from '../ui/TextField.svelte';
   import SettingsSkillManagerPanel from './SettingsSkillManagerPanel.svelte';
   import { updateSettings } from '$lib/api.js';
+  import {
+    createAutosaveParticipant,
+    useAutosaveContext,
+  } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
   import {
     createSkillDirectoriesUpdatePayload,
@@ -36,6 +40,17 @@
   let saveDisabled = $derived(
     saving || directoriesMatch(skillDirectories, getSkillDirectories(settings)),
   );
+  const autosaveContext = useAutosaveContext();
+  const skillDirectoriesAutosave = createAutosaveParticipant({
+    cancelPending: clearAutoSaveTimer,
+    getSnapshot: () => [...skillDirectories],
+    hasChanges: () =>
+      !directoriesMatch(skillDirectories, getSkillDirectories(settings)),
+    save: saveSkillDirectories,
+  });
+  const unregisterSkillDirectoriesAutosave = autosaveContext.register(
+    skillDirectoriesAutosave,
+  );
 
   $effect(() => {
     if (saveDisabled) {
@@ -44,7 +59,7 @@
 
     autoSaveTimer = setTimeout(() => {
       autoSaveTimer = null;
-      void saveSkillDirectories();
+      void skillDirectoriesAutosave.runSave();
     }, AUTO_SAVE_DEBOUNCE_MS);
 
     return () => {
@@ -53,6 +68,7 @@
   });
 
   onDestroy(() => {
+    unregisterSkillDirectoriesAutosave();
     clearAutoSaveTimer();
   });
 
@@ -113,12 +129,12 @@
     }
 
     clearAutoSaveTimer();
-    void saveSkillDirectories();
+    void skillDirectoriesAutosave.runSave('manual');
   }
 
   async function saveSkillDirectories() {
-    if (saveDisabled) {
-      return;
+    if (directoriesMatch(skillDirectories, getSkillDirectories(settings))) {
+      return true;
     }
 
     saving = true;
@@ -133,10 +149,12 @@
         title: t('settings.skills.saveSuccess', 'Skill directories updated.'),
         variant: 'success',
       });
+      return true;
     } catch (error) {
       onError(
         `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
       );
+      return false;
     } finally {
       saving = false;
     }

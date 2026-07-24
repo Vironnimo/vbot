@@ -92,6 +92,10 @@
     appearancePrefs,
     setChatWidth,
   } from '$lib/appearancePrefs.svelte.js';
+  import {
+    createAutosaveCoordinator,
+    provideAutosaveContext,
+  } from '$lib/autosave.js';
   import { viewIdFromLocationHash } from '$lib/navigationHistory.js';
   import { createToastState, addToast, dismissToast } from '$lib/toastState.js';
   import { isOperational } from '$lib/onboarding.js';
@@ -213,8 +217,12 @@
   };
 
   const appControllerState = $state(createAppControllerState(initialViewId()));
+  const autosaveCoordinator = createAutosaveCoordinator();
   let appController;
   let activeViewId = $derived(appControllerState.activeViewId);
+  let autosaveTransitionSaving = $state(false);
+  let autosaveFailureOpen = $state(false);
+  let pendingAutosaveTransition = null;
   let debugEnabled = $state(false);
   let agents = $state([]);
   let selectedAgentId = $state(readStoredSelectedAgentId());
@@ -502,18 +510,71 @@
     projectAgentId: selectedProjectAgentId,
   });
 
-  const selectView = (viewId) => {
-    // Capture synchronously while Settings still owns its DOM. Browser scroll
-    // events usually keep this current already, but the navigation boundary
-    // must not depend on a final event or destroy-hook ordering.
-    if (activeViewId === 'settings' && viewId !== 'settings') {
-      const position = settingsView?.getScrollPosition?.();
-      if (position) {
-        settingsScrollPosition = position;
-      }
+  const runAutosaveTransition = async (action) => {
+    autosaveTransitionSaving = true;
+    const saved = await autosaveCoordinator.flushPending();
+    autosaveTransitionSaving = false;
+
+    if (!saved) {
+      pendingAutosaveTransition = action;
+      autosaveFailureOpen = true;
+      return false;
     }
-    return appController.selectView(viewId);
+
+    pendingAutosaveTransition = null;
+    autosaveFailureOpen = false;
+    return action();
   };
+
+  const requestAutosaveTransition = (action) => {
+    if (
+      typeof action !== 'function' ||
+      autosaveTransitionSaving ||
+      autosaveFailureOpen
+    ) {
+      return false;
+    }
+    if (!autosaveCoordinator.hasPending()) {
+      return action();
+    }
+    return runAutosaveTransition(action);
+  };
+
+  provideAutosaveContext({
+    register: autosaveCoordinator.register,
+    requestTransition: requestAutosaveTransition,
+  });
+
+  const retryAutosaveTransition = () => {
+    if (!pendingAutosaveTransition || autosaveTransitionSaving) {
+      return;
+    }
+    void runAutosaveTransition(pendingAutosaveTransition);
+  };
+
+  const discardAutosaveTransition = () => {
+    if (!pendingAutosaveTransition || autosaveTransitionSaving) {
+      return;
+    }
+    const action = pendingAutosaveTransition;
+    pendingAutosaveTransition = null;
+    autosaveFailureOpen = false;
+    action();
+  };
+
+  const selectView = (viewId) =>
+    requestAutosaveTransition(() => {
+      // Capture while Settings still owns its DOM. Browser scroll events usually
+      // keep this current already, but the navigation boundary must not depend
+      // on destroy-hook ordering.
+      if (activeViewId === 'settings' && viewId !== 'settings') {
+        const position = settingsView?.getScrollPosition?.();
+        if (position) {
+          settingsScrollPosition = position;
+        }
+      }
+      return appController.selectView(viewId);
+    });
   const handleChatSessionNavigation = (override) =>
     appController.handleChatSessionNavigation(override);
 
@@ -547,7 +608,9 @@
   };
 
   const navigateToSubAgent = (targetOrAgentId, maybeSessionId) =>
-    appController.navigateToSubAgent(targetOrAgentId, maybeSessionId);
+    requestAutosaveTransition(() =>
+      appController.navigateToSubAgent(targetOrAgentId, maybeSessionId),
+    );
 
   const refreshAgents = (nextAgents = []) => {
     syncAgents(nextAgents);
@@ -629,10 +692,12 @@
   // Sets the target + a fresh request id, then switches to the Settings view;
   // SettingsView selects the panel when the request id changes.
   const navigateToSettingsPanel = (panelId) => {
-    // A deliberate deep link (for example "Edit global defaults") owns the
-    // next Settings position; ordinary tab switches leave the memory intact.
-    settingsScrollPosition = null;
-    appController.navigateToSettingsPanel(panelId);
+    requestAutosaveTransition(() => {
+      // A deliberate deep link (for example "Edit global defaults") owns the
+      // next Settings position; ordinary tab switches leave the memory intact.
+      settingsScrollPosition = null;
+      return appController.navigateToSettingsPanel(panelId);
+    });
   };
 
   const rememberSettingsScrollPosition = (position) => {
@@ -754,7 +819,9 @@
   // SystemPromptView reacts to once scopes have loaded, falling back to the
   // default scope when the target scope is absent.
   const navigateToAgentPromptScope = (agentId) => {
-    appController.navigateToPromptScope(agentId);
+    requestAutosaveTransition(() =>
+      appController.navigateToPromptScope(agentId),
+    );
   };
 
   const handleDebugEnabledChange = (enabled) => {
@@ -1031,6 +1098,44 @@
   {/key}
   <ToastStack toasts={toastState.toasts} onDismiss={dismissAppToast} />
 </AppShell>
+
+{#if autosaveFailureOpen}
+  <Modal
+    title={t('autosave.transitionFailureTitle', 'Changes could not be saved')}
+    labelledById="autosave-transition-failure-title"
+    closeDisabled={true}
+    onClose={() => {}}
+  >
+    {#snippet body()}
+      <div class="modal-body">
+        <p>
+          {t(
+            'autosave.transitionFailureBody',
+            'Your changes are still open. Try saving again, or discard them and continue.',
+          )}
+        </p>
+      </div>
+    {/snippet}
+    {#snippet footer()}
+      <Button
+        variant="primary"
+        disabled={autosaveTransitionSaving}
+        onClick={retryAutosaveTransition}
+      >
+        {autosaveTransitionSaving
+          ? t('common.saving', 'Saving…')
+          : t('common.retry', 'Retry')}
+      </Button>
+      <Button
+        variant="danger"
+        disabled={autosaveTransitionSaving}
+        onClick={discardAutosaveTransition}
+      >
+        {t('autosave.discardAndContinue', 'Discard and continue')}
+      </Button>
+    {/snippet}
+  </Modal>
+{/if}
 
 {#if serverSwitcherOpen}
   <Modal

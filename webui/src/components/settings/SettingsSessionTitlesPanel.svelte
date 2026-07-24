@@ -5,6 +5,10 @@
   import Button from '../ui/Button.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import { listConnections, listModels } from '$lib/api.js';
+  import {
+    createAutosaveParticipant,
+    useAutosaveContext,
+  } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
   import {
     buildModelSelectOptions,
@@ -72,9 +76,22 @@
   let saveDisabled = $derived(
     saving || sessionTitleSettingsMatch(formValues, settings),
   );
+  const autosaveContext = useAutosaveContext();
+  const sessionTitlesAutosave = createAutosaveParticipant({
+    cancelPending: clearTimer,
+    getSnapshot: () => ({ ...formValues }),
+    hasChanges: () => !sessionTitleSettingsMatch(formValues, settings),
+    save,
+  });
+  const unregisterSessionTitlesAutosave = autosaveContext.register(
+    sessionTitlesAutosave,
+  );
 
   onMount(() => void loadModelCatalogs());
-  onDestroy(() => clearTimer());
+  onDestroy(() => {
+    unregisterSessionTitlesAutosave();
+    clearTimer();
+  });
 
   $effect(() => {
     if (lastModelsRefreshToken === null) {
@@ -91,7 +108,7 @@
     if (saveDisabled) return;
     timer = setTimeout(() => {
       timer = null;
-      void save();
+      void sessionTitlesAutosave.runSave();
     }, AUTO_SAVE_DEBOUNCE_MS);
     return clearTimer;
   });
@@ -144,8 +161,8 @@
   }
 
   async function save() {
-    if (saveDisabled) return;
-    await runSettingsSave({
+    if (sessionTitleSettingsMatch(formValues, settings)) return true;
+    return runSettingsSave({
       onCommit,
       onToast,
       onError,
@@ -166,7 +183,7 @@
       return;
     }
     clearTimer();
-    void save();
+    void sessionTitlesAutosave.runSave('manual');
   }
 </script>
 

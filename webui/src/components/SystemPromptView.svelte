@@ -1,5 +1,6 @@
 <script>
   import { onMount, tick } from 'svelte';
+  import { SvelteMap } from 'svelte/reactivity';
 
   import Dropdown from './Dropdown.svelte';
   import Badge from './ui/Badge.svelte';
@@ -27,11 +28,13 @@
     showProject,
     updatePromptBlock,
   } from '$lib/api.js';
+  import { useAutosaveContext } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
 
   const AUTO_SAVE_DEBOUNCE_MS = 800;
   const PREVIEW_REFRESH_DEBOUNCE_MS = 100;
+  const MAX_PROMPT_FLUSH_PASSES = 10;
   // The custom-block slug rule mirrors the backend agent-id rule (validated again
   // at the RPC edge and the store): letters/digits plus `-`/`_`, alphanumeric
   // start, bounded length. This is a UX pre-check; the server stays authoritative.
@@ -75,6 +78,18 @@
   // different block, which an index key would do). A plain null-proto object,
   // not reactive state — it only holds setTimeout handles.
   const autoSaveTimers = Object.create(null);
+  const blockSavePromises = new SvelteMap();
+  const autosaveContext = useAutosaveContext();
+  const promptAutosaveParticipant = {
+    flush: flushPendingPromptAutosaves,
+    hasPending: () =>
+      blockSavePromises.size > 0 ||
+      Object.keys(autoSaveTimers).length > 0 ||
+      blocks.some((block) => block.editable && block.isDirty),
+  };
+  const unregisterPromptAutosave = autosaveContext.register(
+    promptAutosaveParticipant,
+  );
   // The block id whose reorder handle should regain focus after a keyboard move,
   // so the focus follows the moving row across the DOM re-render.
   let pendingFocusBlockId = null;
@@ -141,6 +156,7 @@
     loadData();
     loadProjectTeams();
     return () => {
+      unregisterPromptAutosave();
       clearAutoSaveTimers();
       clearPreviewRefreshTimer();
     };
@@ -247,11 +263,16 @@
     }
   }
 
-  async function selectScope(nextScopeKey) {
+  function selectScope(nextScopeKey) {
     if (nextScopeKey === selectedScopeKey) {
-      return;
+      return false;
     }
+    return autosaveContext.requestTransition(() =>
+      applyScopeSelection(nextScopeKey),
+    );
+  }
 
+  async function applyScopeSelection(nextScopeKey) {
     selectedScopeKey = nextScopeKey;
     previewText = '';
     previewTokens = null;
@@ -260,6 +281,7 @@
     reorderAnnouncement = '';
     clearAutoSaveTimers();
     await loadBlocksForScope(nextScopeKey);
+    return true;
   }
 
   async function loadBlocksForScope(scopeKey) {
@@ -528,7 +550,52 @@
     }
   }
 
-  async function saveBlock(blockId, options = {}) {
+  async function flushPendingPromptAutosaves() {
+    clearAutoSaveTimers();
+
+    for (let pass = 0; pass < MAX_PROMPT_FLUSH_PASSES; pass += 1) {
+      const activeResults = await Promise.all(blockSavePromises.values());
+      if (!activeResults.every(Boolean)) {
+        return false;
+      }
+
+      const dirtyIds = blocks
+        .filter((block) => block.editable && block.isDirty)
+        .map((block) => block.id);
+      if (dirtyIds.length === 0) {
+        return true;
+      }
+
+      const results = await Promise.all(
+        dirtyIds.map((blockId) =>
+          saveBlock(blockId, { showSuccessToast: false }),
+        ),
+      );
+      if (!results.every(Boolean)) {
+        return false;
+      }
+    }
+
+    return false;
+  }
+
+  function saveBlock(blockId, options = {}) {
+    const activeSave = blockSavePromises.get(blockId);
+    if (activeSave) {
+      return activeSave;
+    }
+
+    const operation = persistBlock(blockId, options);
+    blockSavePromises.set(blockId, operation);
+    void operation.finally(() => {
+      if (blockSavePromises.get(blockId) === operation) {
+        blockSavePromises.delete(blockId);
+      }
+    });
+    return operation;
+  }
+
+  async function persistBlock(blockId, options = {}) {
     const index = blockIndexById(blockId);
     if (index === -1) {
       return false;

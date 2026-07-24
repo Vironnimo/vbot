@@ -3,6 +3,10 @@
 
   import Button from '../ui/Button.svelte';
   import TextField from '../ui/TextField.svelte';
+  import {
+    createAutosaveParticipant,
+    useAutosaveContext,
+  } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
   import { runSettingsSave } from '$lib/settingsSave.js';
   import {
@@ -35,6 +39,15 @@
         normalizeSubAgentSettings(settings),
       ),
   );
+  const autosaveContext = useAutosaveContext();
+  const subAgentsAutosave = createAutosaveParticipant({
+    cancelPending: clearAutoSaveTimer,
+    getSnapshot: () => ({ ...subAgentSettings }),
+    hasChanges: subAgentDraftHasChanges,
+    save: saveSubAgentSettings,
+  });
+  const unregisterSubAgentsAutosave =
+    autosaveContext.register(subAgentsAutosave);
 
   $effect(() => {
     if (saveDisabled) {
@@ -43,7 +56,7 @@
 
     autoSaveTimer = setTimeout(() => {
       autoSaveTimer = null;
-      void saveSubAgentSettings();
+      void subAgentsAutosave.runSave();
     }, AUTO_SAVE_DEBOUNCE_MS);
 
     return () => {
@@ -52,6 +65,7 @@
   });
 
   onDestroy(() => {
+    unregisterSubAgentsAutosave();
     clearAutoSaveTimer();
   });
 
@@ -76,6 +90,15 @@
     );
   }
 
+  function subAgentDraftHasChanges() {
+    const persisted = normalizeSubAgentSettings(settings);
+    return [
+      'max_subagent_depth',
+      'max_subagents_per_turn',
+      'subagent_timeout_minutes',
+    ].some((key) => String(subAgentSettings[key]) !== String(persisted[key]));
+  }
+
   function handleSubAgentSettingChange(key, event) {
     subAgentSettings = {
       ...subAgentSettings,
@@ -98,15 +121,15 @@
     }
 
     clearAutoSaveTimer();
-    void saveSubAgentSettings();
+    void subAgentsAutosave.runSave('manual');
   }
 
   async function saveSubAgentSettings() {
-    if (saveDisabled) {
-      return;
+    if (!subAgentDraftHasChanges()) {
+      return true;
     }
 
-    await runSettingsSave({
+    return runSettingsSave({
       onCommit,
       onToast,
       onError,

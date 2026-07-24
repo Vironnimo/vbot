@@ -5,6 +5,10 @@
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import { updateSettings } from '$lib/api.js';
+  import {
+    createAutosaveParticipant,
+    useAutosaveContext,
+  } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
 
   const AUTO_SAVE_DEBOUNCE_MS = 800;
@@ -48,6 +52,15 @@
   let saveDisabled = $derived(
     saving || debugSettingsMatch(debugSettings, getDebugSettings(settings)),
   );
+  const autosaveContext = useAutosaveContext();
+  const debugAutosave = createAutosaveParticipant({
+    cancelPending: clearAutoSaveTimer,
+    getSnapshot: () => ({ ...debugSettings }),
+    hasChanges: () =>
+      !debugSettingsMatch(debugSettings, getDebugSettings(settings)),
+    save: saveDebugSettings,
+  });
+  const unregisterDebugAutosave = autosaveContext.register(debugAutosave);
 
   $effect(() => {
     if (saveDisabled) {
@@ -56,7 +69,7 @@
 
     autoSaveTimer = setTimeout(() => {
       autoSaveTimer = null;
-      void saveDebugSettings();
+      void debugAutosave.runSave();
     }, AUTO_SAVE_DEBOUNCE_MS);
 
     return () => {
@@ -65,6 +78,7 @@
   });
 
   onDestroy(() => {
+    unregisterDebugAutosave();
     clearAutoSaveTimer();
   });
 
@@ -99,12 +113,12 @@
     }
 
     clearAutoSaveTimer();
-    void saveDebugSettings();
+    void debugAutosave.runSave('manual');
   }
 
   async function saveDebugSettings() {
-    if (saveDisabled) {
-      return;
+    if (debugSettingsMatch(debugSettings, getDebugSettings(settings))) {
+      return true;
     }
 
     const nextEnabled = debugSettings.enabled === true;
@@ -119,10 +133,12 @@
       debugSettings = getDebugSettings(nextSettings);
       onDebugEnabledChange(nextEnabled);
       onToast({ title: t('debug.settings', 'Debug'), variant: 'success' });
+      return true;
     } catch (error) {
       onError(
         `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
       );
+      return false;
     } finally {
       saving = false;
     }

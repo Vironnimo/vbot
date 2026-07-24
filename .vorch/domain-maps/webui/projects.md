@@ -13,6 +13,7 @@ The view forwards user intent to the controller; the controller alone sequences 
 - Add-project input is a user-selected `cwd` plus optional source format and import choices. Detection results are advisory presentation from the server; the browser must not probe the local filesystem itself.
 - Supported source formats and detection findings are normalized by `projectsView.js` for rendering. The server remains authoritative for whether a path can be registered and what was imported.
 - Manage-project payloads include only supported editable fields. Unchanged values do not need to be rewritten, and UI-only draft state must not leak into backend configuration.
+- Project selection and navigation away from Projects flush the tracked manage-project autosave first. If a request is already in flight, the controller reconciles its returned Project into the persisted baseline without replacing newer form values; the coordinator then submits the remaining delta before the transition proceeds.
 - Re-pointing a Project changes its configured root through the dedicated update path, then refreshes Project and scan state. It does not move files on disk.
 - Remove uses a confirmation surface and the backend's rooted-Agent handling choice. Removing a Project and deciding what happens to Project-rooted Agents are one explicit operation, not an implicit client-side cascade.
 
