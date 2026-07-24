@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from server.clients import (
@@ -52,6 +55,63 @@ def test_register_mints_unique_registration_id_per_call() -> None:
     # distinct registry entries keyed by the server-minted id.
     assert first.id != second.id
     assert len(registry.list()) == 2
+
+
+def test_register_and_unregister_log_client_details_and_duration(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    connected_at = datetime(2026, 7, 24, 10, 0, tzinfo=UTC)
+    clock = iter((connected_at, connected_at + timedelta(minutes=18, seconds=4)))
+    registry = ClientRegistry(now_provider=lambda: next(clock))
+
+    with caplog.at_level(logging.INFO, logger="vbot.server.clients"):
+        entry = registry.register(
+            connection_id="12345678-abcd",
+            accessor="browser",
+            user_agent=_CHROME_WINDOWS,
+        )
+        registry.unregister(entry.id)
+
+    assert [record.getMessage() for record in caplog.records] == [
+        "Client connected: Browser · Chrome on Windows (client_id=12345678)",
+        (
+            "Client disconnected: Browser · Chrome on Windows "
+            "(client_id=12345678, connected_for=18m 4s)"
+        ),
+    ]
+
+
+def test_overlapping_reconnect_logs_one_logical_presence_cycle(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    connected_at = datetime(2026, 7, 24, 10, 0, tzinfo=UTC)
+    clock = iter(
+        (
+            connected_at,
+            connected_at + timedelta(seconds=5),
+            connected_at + timedelta(minutes=2),
+        )
+    )
+    registry = ClientRegistry(now_provider=lambda: next(clock))
+
+    with caplog.at_level(logging.INFO, logger="vbot.server.clients"):
+        original = registry.register(
+            connection_id="same-tab-id",
+            accessor="desktop",
+            user_agent=_EDGE_WINDOWS,
+        )
+        replacement = registry.register(
+            connection_id="same-tab-id",
+            accessor="desktop",
+            user_agent=_EDGE_WINDOWS,
+        )
+        registry.unregister(original.id)
+        registry.unregister(replacement.id)
+
+    assert [record.getMessage() for record in caplog.records] == [
+        "Client connected: Desktop · Edge on Windows (client_id=same-tab)",
+        ("Client disconnected: Desktop · Edge on Windows (client_id=same-tab, connected_for=2m)"),
+    ]
 
 
 def test_unregister_removes_only_the_named_entry() -> None:
