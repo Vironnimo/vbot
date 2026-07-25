@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-import { expect, test } from "@playwright/test";
+import { expect, request as playwrightRequest, test } from "@playwright/test";
 
 import { environment } from "../environment.js";
 import { sendChatMessage, startIsolatedChat } from "./chat-run-support.js";
@@ -89,6 +89,9 @@ test("a Custom Provider and manual Model work live and keep their key secret", a
   page,
   request,
 }) => {
+  const cleanupRequest = await playwrightRequest.newContext({
+    baseURL: `http://${environment.host}:${environment.port}`,
+  });
   try {
     let providers = await openProviders(page);
     await providers.getByRole("button", { name: "Add custom" }).click();
@@ -202,7 +205,9 @@ test("a Custom Provider and manual Model work live and keep their key secret", a
     dialog = page.getByRole("dialog", { name: "Edit Custom Provider" });
     await expect(dialog.getByLabel("Provider id")).toBeDisabled();
     await expect(dialog.getByLabel("Replace API key (optional)")).toBeEmpty();
-    await dialog.getByLabel("Name").fill(UPDATED_PROVIDER_NAME);
+    await dialog
+      .getByRole("textbox", { exact: true, name: "Name" })
+      .fill(UPDATED_PROVIDER_NAME);
     await dialog.getByLabel("Display name").fill(UPDATED_MODEL_NAME);
 
     const updateResponse = waitForRpcResponse(page, "provider.custom_save");
@@ -270,16 +275,23 @@ test("a Custom Provider and manual Model work live and keep their key secret", a
     );
     expect(environmentAfterDelete).not.toContain(API_KEY);
   } finally {
-    await rpc(request, "agent.update", { id: "main", model: "" });
-    const remainingProviders = await rpc(request, "provider.custom_list");
-    if (
-      remainingProviders.providers.some(
-        (provider) => provider.id === PROVIDER_ID,
-      )
-    ) {
-      await rpc(request, "provider.custom_delete", {
-        provider_id: PROVIDER_ID,
-      });
+    try {
+      await rpc(cleanupRequest, "agent.update", { id: "main", model: "" });
+      const remainingProviders = await rpc(
+        cleanupRequest,
+        "provider.custom_list",
+      );
+      if (
+        remainingProviders.providers.some(
+          (provider) => provider.id === PROVIDER_ID,
+        )
+      ) {
+        await rpc(cleanupRequest, "provider.custom_delete", {
+          provider_id: PROVIDER_ID,
+        });
+      }
+    } finally {
+      await cleanupRequest.dispose();
     }
   }
 });
