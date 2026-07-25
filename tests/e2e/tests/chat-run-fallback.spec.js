@@ -13,7 +13,7 @@ test("a retryable primary failure switches the Chat Run to its fallback model", 
   await chat.getByRole("button", { name: "Send message" }).click();
 
   await expect(
-    chat.getByText("Switched to fake/e2e-fallback::local", { exact: true }),
+    chat.getByText("Switched to fake/e2e-fallback::default", { exact: true }),
   ).toBeVisible({
     timeout: 45_000,
   });

@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from core.runtime.runtime import Runtime
+from core.utils.config import Config
 from server.rpc.methods import dispatch_rpc
 from tests.server.rpc_test_support import (
     StubAdapter,
@@ -17,6 +19,29 @@ from tests.server.rpc_test_support import (
 )
 
 __all__ = ["_no_models_dev_fetch"]
+
+
+def _custom_provider_payload(name: str = "Local AI") -> dict:
+    return {
+        "id": "local-ai",
+        "name": name,
+        "adapter": "openai_compatible",
+        "base_url": "http://127.0.0.1:8080/v1",
+        "auth": "api_key",
+        "models_endpoint": "/models",
+        "models": {
+            "chat-model": {
+                "name": "Chat Model",
+                "context_window": 65_536,
+                "max_output_tokens": 2_048,
+                "capabilities": {
+                    "tools": True,
+                    "input_modalities": ["text"],
+                    "output_modalities": ["text"],
+                },
+            }
+        },
+    }
 
 
 @pytest.mark.asyncio
@@ -89,6 +114,95 @@ async def test_connection_list_returns_connections_with_usability(
             ]
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_custom_provider_rpc_crud_is_live_and_keeps_key_out_of_settings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("VBOT_CUSTOM_LOCAL_AI_API_KEY", raising=False)
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    runtime.start()
+    state = SimpleNamespace(runtime=runtime)
+    providers = runtime.providers
+    models = runtime.models
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "provider.custom_save",
+            "params": {
+                "provider": _custom_provider_payload(),
+                "api_key": "secret-value",
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["provider"]["usable"] is True
+    assert "api_key" not in response["result"]["provider"]
+    assert runtime.providers is providers
+    assert runtime.models is models
+    assert providers.get("local-ai").custom is True
+    assert models.get("local-ai", "chat-model").context_window == 65_536
+    assert runtime.storage.load_environment()["VBOT_CUSTOM_LOCAL_AI_API_KEY"] == "secret-value"
+    assert "secret-value" not in runtime.storage.settings_path.read_text(encoding="utf-8")
+
+    updated = _custom_provider_payload("Renamed")
+    updated["models"]["chat-model"]["name"] = "Renamed Model"
+    update_response = await dispatch_rpc(
+        state,
+        {
+            "method": "provider.custom_save",
+            "params": {"provider": updated},
+        },
+    )
+
+    assert update_response["ok"] is True
+    assert providers.get("local-ai").name == "Renamed"
+    assert models.get("local-ai", "chat-model").name == "Renamed Model"
+
+    list_response = await dispatch_rpc(
+        state,
+        {"method": "provider.custom_list", "params": {}},
+    )
+    assert [item["id"] for item in list_response["result"]["providers"]] == ["local-ai"]
+
+    delete_response = await dispatch_rpc(
+        state,
+        {
+            "method": "provider.custom_delete",
+            "params": {"provider_id": "local-ai"},
+        },
+    )
+
+    assert delete_response["ok"] is True
+    assert runtime.storage.load_custom_providers_settings() == {}
+    assert "VBOT_CUSTOM_LOCAL_AI_API_KEY" not in runtime.storage.load_environment()
+    with pytest.raises(KeyError):
+        providers.get("local-ai")
+
+
+@pytest.mark.asyncio
+async def test_custom_provider_rpc_rejects_bundled_id(tmp_path: Path) -> None:
+    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    runtime.start()
+    state = SimpleNamespace(runtime=runtime)
+    provider = _custom_provider_payload()
+    provider["id"] = "openai"
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "provider.custom_save",
+            "params": {"provider": provider},
+        },
+    )
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert "bundled Provider" in response["error"]["message"]
 
 
 @pytest.mark.asyncio

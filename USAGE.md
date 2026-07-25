@@ -195,6 +195,59 @@ A Provider describes an external model service and Adapter behavior. A Connectio
 
 API keys resolve from the process environment first and `<data-dir>/.env` second. OAuth tokens live under `<data-dir>/oauth/`. A keyless local Connection such as Ollama still has enabled and reachability state even though it has no credential.
 
+### Custom Providers
+
+Settings can add a user-owned OpenAI-compatible endpoint without adding files under `resources/`. Use **Settings → Providers → Add custom** to set its stable id, display name, endpoint URL, authentication, optional Model discovery path, and manual Models. The initial Adapter choice is `openai_compatible`; each Custom Provider has one implicit `default` Connection. API keys are write-only and are stored as `VBOT_CUSTOM_<ID>_API_KEY` in the selected data directory's `.env`, never in `settings.json`.
+
+The equivalent secret-free `settings.json` shape is:
+
+```json
+{
+  "providers": {
+    "custom": {
+      "local-ai": {
+        "name": "Local AI",
+        "adapter": "openai_compatible",
+        "base_url": "http://127.0.0.1:8080/v1",
+        "auth": "none",
+        "models_endpoint": "/models",
+        "defaults": {},
+        "models": {
+          "chat-model": {
+            "name": "Chat Model",
+            "context_window": 32768,
+            "max_output_tokens": 4096,
+            "capabilities": {
+              "input_modalities": ["text"],
+              "output_modalities": ["text"],
+              "task_types": ["chat", "text_output"],
+              "tools": true,
+              "vision": false,
+              "json_mode": false,
+              "reasoning": false,
+              "supported_parameters": [],
+              "supported_voices": [],
+              "task_options": {}
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Use `"auth": "api_key"` for standard `Authorization: Bearer` authentication and enter the key through Settings or `provider custom-save --api-key`. Omit or clear `models_endpoint` to use manual Models only. Discovery and manual Models can coexist: a manual record overrides discovered facts for the same wire id, while other discovered Models remain available. Saving through the WebUI/RPC reloads Providers and Models immediately; after direct file editing, validate with `vbot doctor settings` and restart vBot.
+
+```bash
+vbot provider custom-save local-ai --name "Local AI" --base-url http://127.0.0.1:8080/v1 --auth none --models-endpoint /models --model chat-model
+vbot provider custom-list
+vbot model refresh local-ai
+vbot provider custom-delete local-ai
+```
+
+`custom-save` replaces the complete Custom Provider record; repeated `--model` flags create conservative chat Model entries. Use the WebUI for the full manual capability editor. Deleting a Custom Provider removes its generated data-directory API keys but deliberately keeps Agent/default/task Model references, which remain visible as unavailable until reconfigured.
+
 ## Data directory and configuration
 
 The normal runtime data directory is `~/.vbot`. Select another target with `--data-dir` on server and RPC-backed CLI commands, or set `VBOT_DATA_DIR`. Run `vbot home` to print the absolute application and currently selected data directories; pass `--data-dir` to inspect an explicit target.
@@ -617,7 +670,7 @@ Installed commands use `vbot`. From a source checkout, `python cli/main.py` expo
 | Channels | `channel add`, `channel list`, `channel update`, `channel enable`, `channel disable`, `channel status`, `channel remove` |
 | Tools and Skills | `tool list`, `skill list`, `skill read`, `skill create`, `skill update`, `skill delete`, `skill write-file`, `skill remove-file` |
 | System Prompt | `prompt list`, `prompt update`, `prompt reset`, `prompt create`, `prompt remove`, `prompt set-layout`, `prompt reset-layout`, `prompt preview` |
-| Providers | `provider list`, `provider status`, `provider usage`, `provider set-key`, `provider unset-key`, `provider enable`, `provider disable`, `provider connect`, `provider disconnect`, `provider connect-status` |
+| Providers | `provider list`, `provider status`, `provider usage`, `provider custom-list`, `provider custom-save`, `provider custom-delete`, `provider set-key`, `provider unset-key`, `provider enable`, `provider disable`, `provider connect`, `provider disconnect`, `provider connect-status` |
 | Models | `model list`, `model refresh`, `task-model list`, `task-model targets`, `task-model options`, `task-model set`, `task-model clear` |
 | Extensions | `extensions list`, `extensions reload`, `extensions enable`, `extensions disable`, `extensions <name>`, `extensions <name> set` |
 | Cron | `cron list`, `cron create`, `cron update`, `cron delete`, `cron enable`, `cron disable` |

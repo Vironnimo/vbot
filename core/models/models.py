@@ -334,6 +334,7 @@ class ModelRegistry:
         resources_dir: Path,
         *,
         runtime_models_dir: Path | None = None,
+        custom_providers: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> ModelRegistry:
         """Assemble the registry from the canonical, provider, and override layers.
 
@@ -358,10 +359,17 @@ class ModelRegistry:
         resolved_runtime = runtime_models_dir.resolve() if runtime_models_dir is not None else None
         cache_key = (resolved, resolved_runtime)
         if cache_key in cls._cache:
-            return cls._cache[cache_key]
+            registry = cls._cache[cache_key]
+            if custom_providers is not None:
+                registry.reload(
+                    resources_dir,
+                    runtime_models_dir=runtime_models_dir,
+                    custom_providers=custom_providers,
+                )
+            return registry
 
         models_dir = select_model_database_dir(resolved, resolved_runtime)
-        registry = cls(cls._assemble_models(models_dir))
+        registry = cls(cls._assemble_models(models_dir, custom_providers or {}))
         registry._active_models_dir = models_dir
         cls._cache[cache_key] = registry
         return registry
@@ -371,6 +379,7 @@ class ModelRegistry:
         resources_dir: Path,
         *,
         runtime_models_dir: Path | None = None,
+        custom_providers: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> None:
         """Re-assemble the registry in place from disk, keeping object identity.
 
@@ -385,12 +394,16 @@ class ModelRegistry:
         resolved = resources_dir.resolve()
         resolved_runtime = runtime_models_dir.resolve() if runtime_models_dir is not None else None
         models_dir = select_model_database_dir(resolved, resolved_runtime)
-        self._models = self._assemble_models(models_dir)
+        self._models = self._assemble_models(models_dir, custom_providers or {})
         self._active_models_dir = models_dir
         type(self)._cache[(resolved, resolved_runtime)] = self
 
     @classmethod
-    def _assemble_models(cls, models_dir: Path) -> dict[tuple[str, str], Model]:
+    def _assemble_models(
+        cls,
+        models_dir: Path,
+        custom_providers: Mapping[str, Mapping[str, Any]],
+    ) -> dict[tuple[str, str], Model]:
         """Assemble every effective model from the on-disk layers (no cache).
 
         ``models_dir`` is one already-selected complete database root. Shared
@@ -432,7 +445,38 @@ class ModelRegistry:
                 )
                 models[(provider_id, wire_id)] = _model_from_record(wire_id, record)
 
+        for provider_id, provider in custom_providers.items():
+            for model_id, custom_model in provider.get("models", {}).items():
+                models[(provider_id, model_id)] = _model_from_record(
+                    model_id,
+                    cls._custom_model_record(custom_model),
+                )
+
         return models
+
+    @staticmethod
+    def _custom_model_record(model: Mapping[str, Any]) -> dict[str, Any]:
+        """Convert a normalized Settings Model into the registry record shape."""
+
+        capabilities = model["capabilities"]
+        return {
+            "name": model["name"],
+            "context_window": model.get("context_window"),
+            "max_output_tokens": model.get("max_output_tokens"),
+            "connections": ["default"],
+            "capabilities": {
+                "vision": capabilities["vision"],
+                "tools": capabilities["tools"],
+                "json_mode": capabilities["json_mode"],
+                "reasoning": {"supported": capabilities["reasoning"]},
+                "input_modalities": list(capabilities["input_modalities"]),
+                "output_modalities": list(capabilities["output_modalities"]),
+                "supported_parameters": list(capabilities["supported_parameters"]),
+                "supported_voices": list(capabilities["supported_voices"]),
+                "task_types": list(capabilities["task_types"]),
+                "task_options": dict(capabilities["task_options"]),
+            },
+        }
 
     @staticmethod
     def _read_override_models(models_dir: Path, provider_id: str) -> dict[str, Any]:

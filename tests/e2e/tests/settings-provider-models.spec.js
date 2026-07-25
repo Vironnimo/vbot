@@ -11,18 +11,18 @@ test("Settings exposes the fake Provider connections and seeded Model bindings",
     .click();
   const providers = settings.getByRole("region", { name: "Providers" });
   await expect(
-    providers.getByText("E2E Fake Provider", { exact: true }),
+    providers.getByText("Fake Provider", { exact: true }),
   ).toBeVisible();
   const fakeProvider = providers
     .locator(".s-provider-card")
-    .filter({ hasText: /^E2E Fake Provider\b/ });
+    .filter({ hasText: /^Fake Provider\b/ });
   await fakeProvider.getByRole("button", { name: "Details for fake" }).click();
   await expect(
-    fakeProvider.getByText("Local E2E", { exact: true }),
+    fakeProvider.getByText("Default", { exact: true }),
   ).toBeVisible();
   await expect(
     fakeProvider.getByRole("button", {
-      name: "Disable connection fake:local",
+      name: "Disable connection fake:default",
     }),
   ).toBeVisible();
 
@@ -45,11 +45,11 @@ test("Settings exposes the fake Provider connections and seeded Model bindings",
   });
   await expect(
     specialized.getByRole("button", { exact: true, name: "Text to speech" }),
-  ).toContainText("E2E Text to Speech");
+  ).toContainText("Fake Text to Speech");
   await expect(
     specialized.getByRole("button", {
       exact: true,
       name: "Image generation",
     }),
-  ).toContainText("E2E Image");
+  ).toContainText("Fake Image");
 });

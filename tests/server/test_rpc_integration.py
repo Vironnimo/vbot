@@ -603,7 +603,7 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                         "editable": False,
                     },
                 ],
-                "custom_endpoints": {"supported": False, "items": []},
+                "custom_endpoints": {"supported": True, "items": []},
             },
             "appearance": {
                 "language": "en",

@@ -231,11 +231,45 @@ def test_cmd_create_initializes_canonical_data_dir_without_agent(tmp_path, monke
     assert (data_dir / ".env").read_bytes() == (
         PROJECT_ROOT / "resources" / "data-dir" / ".env.example"
     ).read_bytes()
-    assert json.loads((data_dir / "settings.json").read_text(encoding="utf-8")) == {
-        "server_port": 8422
-    }
+    expected_settings = json.loads(
+        (PROJECT_ROOT / "tests" / "e2e" / "fake-provider-settings.json").read_text(encoding="utf-8")
+    )
+    expected_settings["providers"]["custom"]["fake"]["base_url"] = "http://127.0.0.1:18422/v1"
+    expected_settings["server_port"] = 8422
+    assert json.loads((data_dir / "settings.json").read_text(encoding="utf-8")) == expected_settings
     assert all((data_dir / path).is_dir() for path in DATA_DIRECTORY_RELATIVE_PATHS)
     assert not (data_dir / "agents" / "main").exists()
+
+
+def test_find_free_port_skips_server_when_paired_provider_port_is_bound(tmp_path, monkeypatch):
+    module = _load_worktree_module()
+    monkeypatch.setattr(module, "scan_used_ports", lambda _worktrees_dir: set())
+    monkeypatch.setattr(module, "is_port_bound", lambda port: port == 18_422)
+
+    assert module.find_free_port(tmp_path) == 8423
+
+
+def test_seed_worktree_settings_preserves_existing_user_values(tmp_path):
+    module = _load_worktree_module()
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {
+                "defaults": {"agent": {"model": "existing/model::connection"}},
+                "providers": {"custom": {"private": {"name": "Private"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    module.seed_worktree_settings(settings_path, server_port=8422)
+
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert settings["server_port"] == 8422
+    assert settings["defaults"]["agent"]["model"] == "existing/model::connection"
+    assert settings["defaults"]["agent"]["fallback_model"] == "fake/e2e-fallback::default"
+    assert settings["providers"]["custom"]["private"] == {"name": "Private"}
+    assert settings["providers"]["custom"]["fake"]["base_url"] == ("http://127.0.0.1:18422/v1")
 
 
 def test_cmd_create_cleans_up_worktree_data_dir_and_branch_after_build_failure(

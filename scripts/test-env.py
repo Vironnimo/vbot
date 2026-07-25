@@ -18,11 +18,20 @@ output that is easy for the Tester agent to parse.
 from __future__ import annotations
 
 import argparse
+import http.client
+import json
+import os
+import shutil
+import signal
+import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
+from typing import NamedTuple
+from urllib.parse import urlsplit
 
-from cli.server_management import CommandResult, resolve_instance
+from cli.server_management import CommandResult, ServerInstance, resolve_instance
 from cli.server_management import start_server as start_server_command
 from cli.server_management import stop_server as stop_server_command
 
@@ -31,6 +40,26 @@ WEBUI_DIR = PROJECT_ROOT / "webui"
 WEBUI_DIST = WEBUI_DIR / "dist" / "index.html"
 WEBUI_NODE_MODULES = WEBUI_DIR / "node_modules"
 STARTUP_TIMEOUT_SECONDS = 15
+FAKE_PROVIDER_ID = "fake"
+FAKE_PROVIDER_SERVICE = "vbot-e2e-fake-provider"
+FAKE_PROVIDER_ENTRY = PROJECT_ROOT / "tests" / "e2e" / "fake-provider.js"
+FAKE_PROVIDER_STARTUP_TIMEOUT_SECONDS = 5
+FAKE_PROVIDER_POLL_SECONDS = 0.1
+FAKE_PROVIDER_PID_FILE = "fake-provider.pid"
+FAKE_PROVIDER_LOG_FILE = "fake-provider.log"
+
+
+class FakeProviderInstance(NamedTuple):
+    """Resolved local fake Provider process owned by one test data directory."""
+
+    host: str
+    port: int
+    pid_path: Path
+    log_path: Path
+
+    @property
+    def url(self) -> str:
+        return f"http://{self.host}:{self.port}"
 
 
 def _run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -44,6 +73,196 @@ def _run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProc
         encoding="utf-8",
         errors="replace",
     )
+
+
+def _resolve_fake_provider(instance: ServerInstance) -> FakeProviderInstance | None:
+    """Resolve the seeded local fake Provider, if this test instance has one."""
+
+    settings_path = instance.data_dir / "settings.json"
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        providers = settings["providers"]
+        custom = providers["custom"]
+        provider = custom[FAKE_PROVIDER_ID]
+        base_url = provider["base_url"]
+    except (KeyError, OSError, TypeError, json.JSONDecodeError):
+        return None
+
+    if not isinstance(provider, dict) or provider.get("adapter") != "openai_compatible":
+        return None
+    if provider.get("auth") != "none" or not isinstance(base_url, str):
+        return None
+
+    parsed = urlsplit(base_url)
+    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}:
+        return None
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    if port is None:
+        return None
+
+    processes_dir = instance.data_dir / "processes"
+    return FakeProviderInstance(
+        host="127.0.0.1",
+        port=port,
+        pid_path=processes_dir / FAKE_PROVIDER_PID_FILE,
+        log_path=processes_dir / FAKE_PROVIDER_LOG_FILE,
+    )
+
+
+def _fake_provider_is_ready(instance: FakeProviderInstance) -> bool:
+    """Return whether the configured endpoint is the project fake Provider."""
+
+    connection = http.client.HTTPConnection(instance.host, instance.port, timeout=0.5)
+    try:
+        connection.request("GET", "/health")
+        response = connection.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+    finally:
+        connection.close()
+
+    return response.status == 200 and payload.get("service") == FAKE_PROVIDER_SERVICE
+
+
+def _fake_provider_port_is_bound(instance: FakeProviderInstance) -> bool:
+    try:
+        with socket.create_connection((instance.host, instance.port), timeout=0.2):
+            return True
+    except OSError:
+        return False
+
+
+def _read_fake_provider_pid(instance: FakeProviderInstance) -> int | None:
+    try:
+        pid = int(instance.pid_path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+    return pid if pid > 0 else None
+
+
+def _wait_for_fake_provider(instance: FakeProviderInstance, *, ready: bool) -> bool:
+    deadline = time.monotonic() + FAKE_PROVIDER_STARTUP_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        if _fake_provider_is_ready(instance) is ready:
+            return True
+        time.sleep(FAKE_PROVIDER_POLL_SECONDS)
+    return False
+
+
+def start_fake_provider(instance: FakeProviderInstance | None) -> bool:
+    """Start the seeded fake Provider when the test instance configures it."""
+
+    if instance is None:
+        return True
+
+    pid = _read_fake_provider_pid(instance)
+    if _fake_provider_is_ready(instance):
+        if pid is None:
+            print("provider.... FAILED")
+            print(f"  result: fake Provider is running without an owned PID at {instance.url}")
+            return False
+        print("provider.... yes")
+        print(f"provider-url {instance.url}")
+        print(f"provider-log {instance.log_path}")
+        return True
+
+    instance.pid_path.unlink(missing_ok=True)
+    if _fake_provider_port_is_bound(instance):
+        print("provider.... FAILED")
+        print(f"  result: port {instance.port} is occupied by another service")
+        return False
+
+    node = shutil.which("node")
+    if node is None:
+        print("provider.... FAILED")
+        print("  result: Node.js is required for the seeded fake Provider")
+        return False
+
+    instance.pid_path.parent.mkdir(parents=True, exist_ok=True)
+    environment = {
+        **os.environ,
+        "VBOT_E2E_PROVIDER_HOST": instance.host,
+        "VBOT_E2E_PROVIDER_PORT": str(instance.port),
+    }
+    with instance.log_path.open("w", encoding="utf-8") as log_file:
+        if sys.platform == "win32":
+            process = subprocess.Popen(
+                [node, str(FAKE_PROVIDER_ENTRY)],
+                cwd=PROJECT_ROOT,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS),
+            )
+        else:
+            process = subprocess.Popen(
+                [node, str(FAKE_PROVIDER_ENTRY)],
+                cwd=PROJECT_ROOT,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+    instance.pid_path.write_text(str(process.pid), encoding="utf-8")
+
+    if not _wait_for_fake_provider(instance, ready=True):
+        stop_fake_provider(instance)
+        print("provider.... FAILED")
+        print(f"  result: fake Provider did not become ready at {instance.url}")
+        print(f"  log: {instance.log_path}")
+        return False
+
+    print("provider.... yes")
+    print(f"provider-url {instance.url}")
+    print(f"provider-log {instance.log_path}")
+    return True
+
+
+def stop_fake_provider(instance: FakeProviderInstance | None) -> bool:
+    """Stop an owned fake Provider without touching unrelated local processes."""
+
+    if instance is None:
+        return True
+
+    pid = _read_fake_provider_pid(instance)
+    ready = _fake_provider_is_ready(instance)
+    if pid is None:
+        if ready:
+            print("provider-stop FAILED")
+            print(f"  result: fake Provider is running without an owned PID at {instance.url}")
+            return False
+        instance.pid_path.unlink(missing_ok=True)
+        print("provider-stop confirmed")
+        return True
+
+    if not ready:
+        instance.pid_path.unlink(missing_ok=True)
+        print("provider-stop confirmed")
+        return True
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    except OSError as exc:
+        print("provider-stop FAILED")
+        print(f"  result: {exc.__class__.__name__}: {exc}")
+        return False
+
+    if not _wait_for_fake_provider(instance, ready=False):
+        print("provider-stop FAILED")
+        print(f"  result: fake Provider did not stop at {instance.url}")
+        return False
+
+    instance.pid_path.unlink(missing_ok=True)
+    print("provider-stop confirmed")
+    return True
 
 
 def build_frontend() -> int:
@@ -248,8 +467,14 @@ def main() -> int:
         if frontend_rc != 0:
             return frontend_rc
 
+        instance = resolve_instance(host=args.host, port=args.port, data_dir=args.data_dir)
+        fake_provider = _resolve_fake_provider(instance)
+        if not start_fake_provider(fake_provider):
+            return 1
+
         server_rc = start_server(args.host, args.port, args.data_dir)
         if server_rc != 0:
+            stop_fake_provider(fake_provider)
             return server_rc
 
         print()
@@ -257,7 +482,10 @@ def main() -> int:
         return 0
 
     if args.command == "stop":
-        return stop_server(args.host, args.port, args.data_dir)
+        server_rc = stop_server(args.host, args.port, args.data_dir)
+        instance = resolve_instance(host=args.host, port=args.port, data_dir=args.data_dir)
+        provider_ok = stop_fake_provider(_resolve_fake_provider(instance))
+        return server_rc if server_rc != 0 else int(not provider_ok)
 
     return 1
 

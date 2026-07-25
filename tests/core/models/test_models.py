@@ -1438,3 +1438,66 @@ class TestModelRegistryRealResources:
             if model.max_output_tokens is not None:
                 assert isinstance(model.max_output_tokens, int)
                 assert model.max_output_tokens >= 0
+
+
+class TestCustomModelOverlay:
+    def test_manual_custom_model_overlays_discovered_record(self, tmp_path: Path) -> None:
+        models_dir = tmp_path / "models"
+        models_dir.mkdir()
+        models_dir.joinpath("local-ai.json").write_text(
+            json.dumps(
+                {
+                    "provider_id": "local-ai",
+                    "models": {
+                        "chat-model": {
+                            "name": "Discovered",
+                            "capabilities": {
+                                "vision": False,
+                                "tools": False,
+                                "json_mode": False,
+                                "reasoning": {"supported": False},
+                            },
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        custom = {
+            "local-ai": {
+                "models": {
+                    "chat-model": {
+                        "name": "Manual",
+                        "context_window": 65_536,
+                        "max_output_tokens": 2_048,
+                        "capabilities": {
+                            "vision": True,
+                            "tools": True,
+                            "json_mode": True,
+                            "reasoning": True,
+                            "input_modalities": ["text", "image"],
+                            "output_modalities": ["text"],
+                            "supported_parameters": [],
+                            "supported_voices": [],
+                            "task_types": ["chat", "image_understanding"],
+                            "task_options": {},
+                        },
+                    }
+                }
+            }
+        }
+
+        registry = ModelRegistry.load(tmp_path, custom_providers=custom)
+        held_reference = registry
+        model = registry.get("local-ai", "chat-model")
+
+        assert model.name == "Manual"
+        assert model.context_window == 65_536
+        assert model.capabilities.reasoning.supported is True
+        assert model.connections == ("default",)
+
+        custom["local-ai"]["models"]["chat-model"]["name"] = "Updated"
+        registry.reload(tmp_path, custom_providers=custom)
+
+        assert held_reference is registry
+        assert held_reference.get("local-ai", "chat-model").name == "Updated"

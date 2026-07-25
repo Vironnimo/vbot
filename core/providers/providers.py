@@ -50,6 +50,12 @@ REQUEST_CONTEXT_WINDOW_RESERVE_RATIO = 0.01
 REQUEST_MIN_RESERVE_TOKENS = 256
 
 
+def custom_provider_credential_key(provider_id: str) -> str:
+    """Return the deterministic environment key for a normalized Custom Provider id."""
+
+    return f"VBOT_CUSTOM_{provider_id.replace('-', '_').upper()}_API_KEY"
+
+
 def resolve_request_output_limit(
     *,
     explicit_limit: Any,
@@ -249,6 +255,7 @@ class ProviderConfig:
     models_dev_id: str | None = None
     context_window: int | None = None
     catalog_exclusions: frozenset[str] = frozenset()
+    custom: bool = False
 
     def effective_models_dev_id(self) -> str:
         """Return the models.dev provider key for this provider.
@@ -401,12 +408,20 @@ class ProviderRegistry:
     # ------------------------------------------------------------------
 
     @classmethod
-    def load(cls, resources_dir: Path) -> ProviderRegistry:
-        """Read all provider JSON files and return a cached registry.
+    def load(
+        cls,
+        resources_dir: Path,
+        *,
+        custom_providers: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> ProviderRegistry:
+        """Read bundled Provider JSON and overlay optional Custom Providers.
 
         The first call for a given *resources_dir* reads and parses every
         ``resources/providers/*.json`` file.  Subsequent calls with the same
-        directory return the cached instance without touching disk again.
+        directory return the cached bundled-only instance without touching disk
+        again. A supplied Custom Provider mapping always gets an isolated
+        registry because it belongs to one data directory and must never mutate
+        another Runtime that uses the same bundled resources.
 
         Args:
             resources_dir: Path to the ``resources/`` root directory.
@@ -417,23 +432,14 @@ class ProviderRegistry:
         Raises:
             KeyError: If two provider configs share the same ``id``.
         """
+        if custom_providers is not None:
+            return cls(cls._assemble_configs(resources_dir, custom_providers))
+
         cache_key = resources_dir.resolve()
         if cache_key in _registry_cache:
             return _registry_cache[cache_key]
 
-        providers_dir = resources_dir / "providers"
-        configs: dict[str, ProviderConfig] = {}
-
-        if providers_dir.is_dir():
-            for json_file in sorted(providers_dir.glob("*.json")):
-                data = json.loads(json_file.read_text(encoding="utf-8"))
-                config = cls._parse_config(data)
-                if config.id in configs:
-                    raise KeyError(
-                        f"Duplicate provider id '{config.id}' (from {json_file} and another file)"
-                    )
-                configs[config.id] = config
-
+        configs = cls._assemble_configs(resources_dir, {})
         registry = cls(configs)
         _registry_cache[cache_key] = registry
         return registry
@@ -466,12 +472,84 @@ class ProviderRegistry:
         """Return a sorted list of all registered provider IDs."""
         return sorted(self._configs.keys())
 
+    def reload(
+        self,
+        resources_dir: Path,
+        *,
+        custom_providers: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> None:
+        """Reload bundled and Custom Provider configs in place."""
+
+        resolved = resources_dir.resolve()
+        self._configs = self._assemble_configs(resources_dir, custom_providers or {})
+        if custom_providers is None:
+            _registry_cache[resolved] = self
+
+    @classmethod
+    def _assemble_configs(
+        cls,
+        resources_dir: Path,
+        custom_providers: Mapping[str, Mapping[str, Any]],
+    ) -> dict[str, ProviderConfig]:
+        providers_dir = resources_dir / "providers"
+        configs: dict[str, ProviderConfig] = {}
+
+        if providers_dir.is_dir():
+            for json_file in sorted(providers_dir.glob("*.json")):
+                data = json.loads(json_file.read_text(encoding="utf-8"))
+                config = cls._parse_config(data)
+                if config.id in configs:
+                    raise KeyError(
+                        f"Duplicate provider id '{config.id}' (from {json_file} and another file)"
+                    )
+                configs[config.id] = config
+
+        for provider_id, custom_provider in sorted(custom_providers.items()):
+            if provider_id in configs:
+                raise ConfigError(
+                    f"Custom Provider id '{provider_id}' conflicts with a bundled Provider"
+                )
+            config = cls._parse_config(
+                cls._custom_config_data(provider_id, custom_provider),
+                custom=True,
+            )
+            configs[config.id] = config
+        return configs
+
+    @staticmethod
+    def _custom_config_data(
+        provider_id: str,
+        provider: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        auth_type = provider["auth"]
+        connection: dict[str, Any] = {
+            "id": "default",
+            "type": auth_type,
+            "label": "Default",
+        }
+        if auth_type == "api_key":
+            credential_key = custom_provider_credential_key(provider_id)
+            connection["auth"] = {
+                "header": "Authorization",
+                "prefix": "Bearer ",
+                "credential_key": credential_key,
+            }
+        return {
+            "id": provider_id,
+            "name": provider["name"],
+            "adapter": provider["adapter"],
+            "base_url": provider["base_url"],
+            "connections": [connection],
+            "defaults": dict(provider.get("defaults", {})),
+            "models_endpoint": provider.get("models_endpoint"),
+        }
+
     # ------------------------------------------------------------------
     # Parsing helper
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _parse_config(data: dict[str, Any]) -> ProviderConfig:
+    def _parse_config(data: dict[str, Any], *, custom: bool = False) -> ProviderConfig:
         """Parse a raw JSON dict into a ``ProviderConfig``.
 
         Args:
@@ -519,6 +597,7 @@ class ProviderRegistry:
             models_dev_id=models_dev_id,
             context_window=context_window,
             catalog_exclusions=frozenset(model_id.strip() for model_id in raw_catalog_exclusions),
+            custom=custom,
         )
 
     @staticmethod

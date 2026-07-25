@@ -56,6 +56,9 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     previewPrompt: (params) => call('prompt.preview', params),
     setProviderKey: (params) => call('provider.set_key', params),
     unsetProviderKey: (params) => call('provider.unset_key', params),
+    listCustomProviders: () => call('provider.custom_list'),
+    saveCustomProvider: (params) => call('provider.custom_save', params),
+    deleteCustomProvider: (params) => call('provider.custom_delete', params),
     connectProvider: (providerId, connectionId, account) =>
       call(
         'provider.connect',

@@ -157,6 +157,47 @@ def test_runtime_start_no_error(tmp_path: Path):
     assert runtime.logger is not None
 
 
+def test_runtime_loads_and_reloads_custom_provider_settings_in_place(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    storage = StorageManager(data_dir)
+    storage.save_custom_provider_settings(
+        "local-ai",
+        {
+            "name": "Local AI",
+            "adapter": "openai_compatible",
+            "base_url": "http://127.0.0.1:8080/v1",
+            "auth": "none",
+            "models": {"chat-model": {"capabilities": {}}},
+        },
+    )
+    runtime = Runtime(Config(data_dir=data_dir))
+
+    runtime.start()
+    providers = runtime.providers
+    models = runtime.models
+    assert providers.get("local-ai").custom is True
+    assert models.get("local-ai", "chat-model").name == "chat-model"
+
+    storage.save_custom_provider_settings(
+        "local-ai",
+        {
+            "name": "Renamed",
+            "adapter": "openai_compatible",
+            "base_url": "http://127.0.0.1:8080/v1",
+            "auth": "none",
+            "models": {"chat-model": {"name": "Renamed Model", "capabilities": {}}},
+        },
+    )
+    runtime.reload_custom_providers()
+
+    assert runtime.providers is providers
+    assert runtime.models is models
+    assert providers.get("local-ai").name == "Renamed"
+    assert models.get("local-ai", "chat-model").name == "Renamed Model"
+
+
 def test_runtime_wires_trigger_service_to_streaming_chat_loop(config: Config) -> None:
     runtime = Runtime(config)
 

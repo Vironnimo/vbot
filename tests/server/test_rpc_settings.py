@@ -136,7 +136,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
                     "editable": False,
                 },
             ],
-            "custom_endpoints": {"supported": False, "items": []},
+            "custom_endpoints": {"supported": True, "items": []},
         },
         "appearance": {
             "language": "en",

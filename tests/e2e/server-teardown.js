@@ -3,30 +3,25 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { environment } from "./environment.js";
-import { stopFakeProvider } from "./fake-provider-lifecycle.js";
 
 export default async function stopServer() {
-  try {
-    execFileSync(
-      environment.python,
-      [
-        path.join(environment.repoRoot, "scripts", "test-env.py"),
-        "stop",
-        "--host",
-        environment.host,
-        "--port",
-        String(environment.port),
-        "--data-dir",
-        environment.dataDir,
-      ],
-      {
-        cwd: environment.repoRoot,
-        stdio: "inherit",
-      },
-    );
-  } finally {
-    await stopFakeProvider();
-  }
+  execFileSync(
+    environment.python,
+    [
+      path.join(environment.repoRoot, "scripts", "test-env.py"),
+      "stop",
+      "--host",
+      environment.host,
+      "--port",
+      String(environment.port),
+      "--data-dir",
+      environment.dataDir,
+    ],
+    {
+      cwd: environment.repoRoot,
+      stdio: "inherit",
+    },
+  );
 }
 
 if (

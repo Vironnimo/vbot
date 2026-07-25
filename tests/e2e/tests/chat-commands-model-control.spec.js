@@ -7,9 +7,9 @@ test("the model command changes and resets the active Agent Model", async ({
 }) => {
   const chat = await startIsolatedChat(page, { agentName: "Main" });
 
-  await sendChatMessage(chat, "/model fake/e2e-fallback::local");
+  await sendChatMessage(chat, "/model fake/e2e-fallback::default");
   await expect(
-    chat.getByText("Model set to fake/e2e-fallback::local.", { exact: true }),
+    chat.getByText("Model set to fake/e2e-fallback::default.", { exact: true }),
   ).toBeVisible();
 
   await sendChatMessage(chat, "Confirm the temporary Model selection");

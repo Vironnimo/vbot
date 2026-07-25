@@ -21,10 +21,7 @@ if (port === providerPort) {
 export const environment = Object.freeze({
   dataDir: path.join(e2eRoot, ".data"),
   e2eRoot,
-  fakeProviderEntry: path.join(e2eRoot, "fake-provider.js"),
   fakeProviderHost: "127.0.0.1",
-  fakeProviderLogFile: path.join(e2eRoot, ".fake-provider.log"),
-  fakeProviderPidFile: path.join(e2eRoot, ".fake-provider.pid"),
   host: "127.0.0.1",
   port,
   providerPort,
@@ -32,5 +29,4 @@ export const environment = Object.freeze({
     process.env.VBOT_E2E_PYTHON ??
     (process.platform === "win32" ? "python" : "python3"),
   repoRoot: path.resolve(e2eRoot, "..", ".."),
-  resourcesDir: path.join(e2eRoot, ".resources"),
 });

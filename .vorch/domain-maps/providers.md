@@ -4,7 +4,7 @@
 
 ## Overview
 
-Providers translate canonical vBot requests and responses at the external-service boundary. Static Provider and Connection definitions live in `resources/providers/*.json`; Model facts and refreshable catalogs belong to the Models domain under `resources/models/`. Runtime resolves one exact Provider Connection, creates the configured outer Adapter, and injects credentials, Model lookup, connection mode, and optional debug capture. Chat and task domains consume normalized interfaces and must not know Provider wire fields.
+Providers translate canonical vBot requests and responses at the external-service boundary. Bundled Provider and Connection definitions live in `resources/providers/*.json`; user-defined OpenAI-compatible Providers live as secret-free records under `settings.json` `providers.custom` and are materialized through the same registry. Model facts and refreshable catalogs belong to the Models domain. Runtime resolves one exact Provider Connection, creates the configured outer Adapter, and injects credentials, Model lookup, connection mode, and optional debug capture. Chat and task domains consume normalized interfaces and must not know Provider wire fields.
 
 A Provider can expose multiple Connection variants through one Adapter or route Models to different wire implementations inside a Provider-owned Adapter. Runtime selects only the outer Adapter from Provider config; per-Model protocol selection remains Provider policy.
 
@@ -38,7 +38,7 @@ Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB
 
 ## Boundaries and invariants
 
-- `ProviderRegistry` owns immutable Provider/Connection configuration parsed from disk, including exact `catalog_exclusions` for ids a Provider advertises but cannot serve. `ProviderCredentialResolver` owns credentials, Accounts, enabled overrides, and usability. Runtime owns wiring them into live Adapters.
+- `ProviderRegistry` owns immutable Provider/Connection configuration assembled from bundled JSON plus the current data directory's normalized Custom Provider overlay, including exact `catalog_exclusions` for ids a Provider advertises but cannot serve. Custom registries are never shared through the bundled-only cache: two Runtimes using the same resources but different data directories must remain isolated. `ProviderCredentialResolver` owns credentials, Accounts, enabled overrides, and usability. Runtime owns wiring them into live Adapters.
 - Connection identity determines wire/auth/catalog behavior; Account identity determines only which credential is used. Discovery and task-target expansion stay Connection-scoped and never multiply catalogs per Account.
 - `ProviderAdapter.send()`, `stream()`, and `normalize_response()` are the Chat-facing translation boundary. Streaming yields normalized deltas; raw SSE event names, response chunks, opaque auth state, and Provider payloads never escape the Adapter layer.
 - Provider-specific wire selectors and replay profiles are scoped to the resolved Connection/Wire plus Model; mechanics stay in the Adapter. A Provider-wide default may be a conservative fallback, never evidence that every Model shares the same reasoning contract. Do not add generic Model fields for one Provider's protocol quirk or route Provider Models in Runtime/Chat.
@@ -60,6 +60,7 @@ Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB
 
 - Adapter creation requires an exact compositional Connection id. It never silently falls back to another Connection; only an omitted Account within that Connection resolves to the first usable Account.
 - Provider JSON uses `connections`; the obsolete single-provider `auth` shape is invalid. Provider ids cannot contain `:`; Connection ids cannot contain `:` or `--`.
+- A Custom Provider cannot shadow a bundled Provider id. Its normalized Settings record selects the allowlisted `openai_compatible` Adapter, materializes one `default` Connection, and derives `VBOT_CUSTOM_<ID>_API_KEY` for bearer-key auth; `auth: "none"` is the keyless form. Settings/RPC never contain the key value.
 - A mostly OpenAI Chat Completions-compatible Provider extends `OpenAICompatibleAdapter` only when it has real runtime/discovery/policy differences. A Messages-compatible branch composes `AnthropicCompatibleAdapter`; it must not compose concrete `AnthropicAdapter` and accidentally inherit Anthropic-native discovery/media/cache policy.
 - Adapters rebuild authorization headers inside retry attempts so a refreshed OAuth token is used after backoff. Do not cache raw OAuth tokens outside `TokenGetter`.
 - `NetworkError` is retryable but deliberately not Provider-specific, so it must not trigger model fallback. Only `ProviderStreamingUnsupportedError` permits Chat's streaming-to-nonstreaming fallback.

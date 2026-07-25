@@ -855,6 +855,12 @@ export function getProviderItems(settings) {
     : [];
 }
 
+export function getCustomProviderItems(settings) {
+  return Array.isArray(settings?.providers?.custom_endpoints?.items)
+    ? settings.providers.custom_endpoints.items
+    : [];
+}
+
 export const DEFAULT_ACCOUNT_ID = 'default';
 
 const ACCOUNT_ID_PATTERN = /^[a-z0-9][a-z0-9_]{0,31}$/;

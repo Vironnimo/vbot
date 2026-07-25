@@ -39,6 +39,7 @@ from core.search_config import (
 from core.settings.normalizers import (
     SUPPORTED_APPEARANCE_LANGUAGES,
     is_absolute_or_home_relative_path,
+    normalize_custom_provider_settings,
 )
 from core.settings.settings import (
     AGENT_DEFAULT_FIELDS,
@@ -49,6 +50,7 @@ from core.settings.settings import (
     validate_temperature,
     validate_thinking_effort,
 )
+from core.utils.errors import StorageError
 
 KNOWN_RAW_SETTINGS_KEYS = frozenset(
     {
@@ -96,7 +98,7 @@ SESSION_TITLE_FIELDS = frozenset({"enabled", "model"})
 MAX_TRACE_LIMIT = 500
 REFLECTION_FIELDS = frozenset({"enabled", "memory_turn_interval", "skill_tool_call_interval"})
 LOCAL_MODELS_FIELDS = frozenset({"context_windows"})
-PROVIDERS_FIELDS = frozenset({"connections", "openrouter"})
+PROVIDERS_FIELDS = frozenset({"connections", "custom", "openrouter"})
 OPENROUTER_PROVIDER_FIELDS = frozenset({"routing"})
 REFLECTION_INTERVAL_FIELDS = ("memory_turn_interval", "skill_tool_call_interval")
 
@@ -684,6 +686,22 @@ def _validate_providers(diagnostics: list[JsonDiagnostic], value: Any) -> None:
                     continue
                 if not isinstance(enabled, bool):
                     _error(diagnostics, key_path, "must be a boolean")
+
+    custom = value.get("custom")
+    if custom is not None:
+        if not isinstance(custom, Mapping):
+            _error(diagnostics, "$.providers.custom", "must be an object")
+        else:
+            for provider_id, provider in custom.items():
+                provider_path = _child_path("$.providers.custom", str(provider_id))
+                try:
+                    normalize_custom_provider_settings(str(provider_id), provider)
+                except StorageError as exc:
+                    _error(
+                        diagnostics,
+                        provider_path,
+                        str(exc).replace("settings.providers.custom.", "", 1),
+                    )
 
     openrouter = value.get("openrouter")
     if openrouter is None:

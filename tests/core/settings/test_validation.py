@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from core.settings import validate_data_dir_config
+from core.settings import validate_data_dir_config, validate_settings_data
 
 
 def test_validate_data_dir_config_delegates_project_files(tmp_path: Path) -> None:
@@ -45,3 +45,54 @@ def test_validate_data_dir_config_delegates_agent_order_file(tmp_path: Path) -> 
     assert len(order_reports) == 1
     assert order_reports[0].ok is False
     assert order_reports[0].diagnostics[0].path == "$.agent_ids[1]"
+
+
+def test_validate_custom_provider_accepts_secret_free_model_facts() -> None:
+    diagnostics = validate_settings_data(
+        {
+            "providers": {
+                "custom": {
+                    "local-ai": {
+                        "name": "Local AI",
+                        "adapter": "openai_compatible",
+                        "base_url": "http://127.0.0.1:8080/v1",
+                        "auth": "none",
+                        "models_endpoint": "/models",
+                        "models": {
+                            "chat-model": {
+                                "capabilities": {
+                                    "tools": True,
+                                    "input_modalities": ["text"],
+                                    "output_modalities": ["text"],
+                                }
+                            }
+                        },
+                    }
+                }
+            }
+        }
+    )
+
+    assert [item for item in diagnostics if item.severity == "error"] == []
+
+
+def test_validate_custom_provider_rejects_secret_and_invalid_endpoint() -> None:
+    diagnostics = validate_settings_data(
+        {
+            "providers": {
+                "custom": {
+                    "local-ai": {
+                        "name": "Local AI",
+                        "adapter": "openai_compatible",
+                        "base_url": "https://user:secret@example.test/v1",
+                        "auth": "api_key",
+                        "api_key": "must-not-live-here",
+                    }
+                }
+            }
+        }
+    )
+
+    errors = [item for item in diagnostics if item.severity == "error"]
+    assert len(errors) == 1
+    assert errors[0].path == "$.providers.custom['local-ai']"

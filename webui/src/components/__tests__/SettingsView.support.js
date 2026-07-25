@@ -777,7 +777,7 @@ export function settingsPayload(options = {}) {
     },
     providers: {
       items: providers,
-      custom_endpoints: { supported: false, items: [] },
+      custom_endpoints: { supported: true, items: [] },
     },
     skills: {
       default_directory: 'C:/data/skills',

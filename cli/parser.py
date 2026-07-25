@@ -123,6 +123,9 @@ PROVIDER_HELP = {
     "connect": "Start the OAuth device flow for one provider connection",
     "disconnect": "Remove the stored OAuth token for one provider connection",
     "connect-status": "Show OAuth connection and device-flow state",
+    "custom-list": "List Settings-owned Custom Providers",
+    "custom-save": "Create or replace a Custom Provider",
+    "custom-delete": "Delete a Custom Provider",
 }
 MODEL_HELP = {
     "list": "List available models",
@@ -1097,6 +1100,71 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
     provider_subparsers = provider_parser.add_subparsers(dest="command", required=True)
 
     _add_command_parser(provider_subparsers, "list", PROVIDER_HELP["list"], example="provider list")
+
+    _add_command_parser(
+        provider_subparsers,
+        "custom-list",
+        PROVIDER_HELP["custom-list"],
+        example="provider custom-list",
+    )
+    custom_save_parser = _add_command_parser(
+        provider_subparsers,
+        "custom-save",
+        PROVIDER_HELP["custom-save"],
+        example=(
+            'provider custom-save local-ai --name "Local AI" '
+            "--base-url http://127.0.0.1:8080/v1 --auth none --model chat-model"
+        ),
+    )
+    custom_save_parser.add_argument(
+        "provider",
+        metavar="<provider-id>",
+        help="Lowercase, hyphen-separated Custom Provider id",
+    )
+    custom_save_parser.add_argument("--name", required=True, help="Display name")
+    custom_save_parser.add_argument(
+        "--adapter",
+        default="openai_compatible",
+        choices=("openai_compatible",),
+        help="Provider wire adapter",
+    )
+    custom_save_parser.add_argument(
+        "--base-url",
+        required=True,
+        help="OpenAI-compatible API base URL",
+    )
+    custom_save_parser.add_argument(
+        "--auth",
+        choices=("api_key", "none"),
+        default="api_key",
+        help="Connection authentication type",
+    )
+    custom_save_parser.add_argument(
+        "--api-key",
+        help="Optional API key stored in the target data-dir .env",
+    )
+    custom_save_parser.add_argument(
+        "--models-endpoint",
+        help="Optional discovery path such as /models",
+    )
+    custom_save_parser.add_argument(
+        "--model",
+        action="append",
+        default=[],
+        metavar="<model-id>",
+        help="Manual chat Model id; repeat to add several",
+    )
+    custom_delete_parser = _add_command_parser(
+        provider_subparsers,
+        "custom-delete",
+        PROVIDER_HELP["custom-delete"],
+        example="provider custom-delete local-ai",
+    )
+    custom_delete_parser.add_argument(
+        "provider",
+        metavar="<provider-id>",
+        help="Custom Provider id to delete",
+    )
 
     status_parser = _add_command_parser(
         provider_subparsers, "status", PROVIDER_HELP["status"], example="provider status openai"

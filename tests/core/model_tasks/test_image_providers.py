@@ -1042,21 +1042,57 @@ async def test_openai_subscription_image_generate_retries_missing_final_image() 
 
 @pytest.mark.asyncio
 async def test_provider_image_client_rejects_unknown_provider() -> None:
-    """A provider other than OpenRouter / OpenAI surfaces an explicit
+    """A provider using an unsupported task adapter surfaces an explicit
     ``ProviderError`` so the caller (ImageService) can map it to an
     ``ImageExecutionError``."""
 
     from core.providers.errors import ProviderError
 
     client = _openai_image_client("gpt-image-1")
-    # Swap the provider id to one we do not support.
+    # Swap the Provider to an adapter whose image wire is not supported.
     client._provider = ProviderConfig(  # type: ignore[attr-defined]
         id="anthropic",
         name="Anthropic",
-        adapter="openai_compatible",
+        adapter="anthropic",
         base_url="https://api.anthropic.com/v1",
         connections=[],
     )
 
     with pytest.raises(ProviderError, match="anthropic"):
         await client.generate("a cat", options={})
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_custom_openai_compatible_provider_uses_standard_image_wire() -> None:
+    route = respx.post("http://127.0.0.1:8080/v1/images/generations").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": [{"b64_json": base64.b64encode(b"custom-image").decode("ascii")}]},
+        )
+    )
+    provider = ProviderConfig(
+        id="local-ai",
+        name="Local AI",
+        adapter="openai_compatible",
+        base_url="http://127.0.0.1:8080/v1",
+        connections=[],
+        custom=True,
+    )
+    connection = ConnectionConfig(
+        id="default",
+        type="none",
+        label="Default",
+        auth=AuthConfig(header="", prefix=""),
+    )
+    client = ProviderImageClient(
+        provider=provider,
+        connection=connection,
+        credential="",
+        model_id="image-model",
+    )
+
+    result = await client.generate("a cat", options={})
+
+    assert route.called
+    assert result.images == (b"custom-image",)
