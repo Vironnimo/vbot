@@ -38,7 +38,7 @@ Issues = "https://github.com/Vironnimo/vbot/issues"
 [project.optional-dependencies]
 server  = ["fastapi", "uvicorn[standard]", "websockets", "watchfiles", "python-telegram-bot[rate-limiter]", "discord.py>=2.7,<3", "python-multipart", "av>=18,<19"]
 cli     = ["psutil"]
-desktop = ["pywebview", "pyopen-wakeword>=1.1,<2", "sounddevice", "webrtcvad"]
+desktop = ["pywebview", "pyopen-wakeword>=1.1,<2", "sounddevice", "webrtcvad-wheels>=2.0.14,<3"]
 dev     = ["pytest", "pytest-asyncio", "ruff", "mypy", "hatchling", "pytest-xdist", "pytest-timeout", "respx", "fastapi", "uvicorn[standard]", "websockets", "watchfiles", "python-telegram-bot[rate-limiter]", "discord.py>=2.7,<3", "python-multipart", "psutil", "numpy", "av>=18,<19"]
 
 [tool.hatch.build.targets.wheel]

@@ -18,6 +18,7 @@ import base64
 import binascii
 import logging
 import threading
+import time
 from collections import deque
 from collections.abc import Callable
 from pathlib import Path
@@ -102,6 +103,7 @@ _KNOWN_WAKEWORD_KEYS = frozenset(
 
 _SERVER_PROFILE_KEYS = frozenset(["target_agent_id", "session_behavior"])
 _WAKEWORD_EVENT_HISTORY_LIMIT = 24
+_CALIBRATION_TIMEOUT_SECONDS = 5 * 60
 
 
 class DesktopBridge:
@@ -145,6 +147,10 @@ class DesktopBridge:
         self._active_microphone: dict[str, Any] | None = None
         self._event_sequence = 0
         self._events: deque[dict[str, Any]] = deque(maxlen=_WAKEWORD_EVENT_HISTORY_LIMIT)
+        self._calibration_active = False
+        self._calibration_deadline = 0.0
+        self._calibration_scores: dict[str, float] = {}
+        self._calibration_peaks: dict[str, float] = {}
         self._lock = threading.Lock()
         # Import validation can load a full TFLite model. Serialize catalog I/O
         # separately so status polling and worker state never wait on it.
@@ -172,6 +178,7 @@ class DesktopBridge:
             error_code = self._error_code
             active_microphone = dict(self._active_microphone) if self._active_microphone else None
             events = [dict(event) for event in self._events]
+            calibration = self._calibration_status_locked()
         return {
             "enabled": config.get("enabled", False),
             "state": state,
@@ -188,6 +195,7 @@ class DesktopBridge:
             # WebUI warn when detection is not really running.
             "mock": self._mock,
             "mode": self._mode,
+            "calibration": calibration,
         }
 
     def listMicrophones(self) -> list[dict[str, Any]]:  # noqa: N802
@@ -330,6 +338,42 @@ class DesktopBridge:
         self._worker = None
         self._start_worker()
 
+    def startWakewordCalibration(self) -> dict[str, Any]:  # noqa: N802
+        """Pause command activation and expose raw per-model detector scores."""
+        with self._lock:
+            config = self._worker_config_locked()
+            if not config.get("enabled", False):
+                raise RuntimeError("Wakeword listening must be enabled for calibration")
+            if self._mode != "real":
+                raise RuntimeError("Wakeword calibration requires the real Voice stack")
+            if self._state != _WAKEWORD_STATE_LISTENING:
+                raise RuntimeError("Wakeword calibration requires the listener to be ready")
+            if self._worker is None or not self._worker.is_running():
+                raise RuntimeError("Wakeword calibration requires a running listener")
+            model_ids = config["active_model_ids"]
+            self._calibration_active = True
+            self._calibration_deadline = time.monotonic() + _CALIBRATION_TIMEOUT_SECONDS
+            self._calibration_scores = dict.fromkeys(model_ids, 0.0)
+            self._calibration_peaks = dict.fromkeys(model_ids, 0.0)
+        logger.info("Wakeword calibration started")
+        return self.getWakewordStatus()
+
+    def stopWakewordCalibration(self) -> dict[str, Any]:  # noqa: N802
+        """Resume normal command activation and clear transient score data."""
+        stopped = self._end_calibration()
+        if stopped:
+            logger.info("Wakeword calibration stopped")
+        return self.getWakewordStatus()
+
+    def resetWakewordCalibrationPeaks(self) -> dict[str, Any]:  # noqa: N802
+        """Clear observed peaks while keeping calibration active."""
+        with self._lock:
+            if not self._calibration_active_locked():
+                raise RuntimeError("Wakeword calibration is not active")
+            self._calibration_scores = dict.fromkeys(self._calibration_scores, 0.0)
+            self._calibration_peaks = dict.fromkeys(self._calibration_peaks, 0.0)
+        return self.getWakewordStatus()
+
     # -- Connection (server selection) ---------------------------------------
 
     def connect(self, host: str, port: Any) -> dict[str, str]:
@@ -390,6 +434,8 @@ class DesktopBridge:
         with self._lock:
             previous_state = self._state
             previous_error_code = self._error_code
+            if state != _WAKEWORD_STATE_LISTENING:
+                self._clear_calibration_locked()
             self._state = state
             self._error_code = error_code if state == _WAKEWORD_STATE_ERROR else None
             self._event_sequence += 1
@@ -428,12 +474,32 @@ class DesktopBridge:
                 dict(active_microphone) if active_microphone is not None else None
             )
 
+    def publish_calibration_scores(self, scores: dict[str, float]) -> None:
+        """Publish one detector frame only while transient calibration is active."""
+        with self._lock:
+            if not self._calibration_active_locked():
+                return
+            for model_id in self._calibration_scores:
+                score = max(0.0, min(1.0, float(scores.get(model_id, 0.0))))
+                self._calibration_scores[model_id] = score
+                self._calibration_peaks[model_id] = max(
+                    self._calibration_peaks[model_id],
+                    score,
+                )
+
+    def wakeword_calibration_active(self) -> bool:
+        """Return whether detections must remain non-operative for calibration."""
+        with self._lock:
+            return self._calibration_active_locked()
+
     def _set_mode(self, mode: str) -> None:
         """Publish the lazily resolved local Voice implementation mode."""
         if mode not in {"real", "mock", "unavailable"}:
             raise ValueError(f"Invalid wakeword mode: {mode}")
         with self._lock:
             self._mode = mode
+            if mode != "real":
+                self._clear_calibration_locked()
 
     # -- Active server (voice target follows the window) ---------------------
 
@@ -485,6 +551,7 @@ class DesktopBridge:
         self._worker.start()
 
     def _stop_worker(self) -> None:
+        self._end_calibration()
         if self._worker:
             self._worker.stop()
 
@@ -501,6 +568,7 @@ class DesktopBridge:
                 return self._model_catalog.create_engine(
                     config["active_model_ids"],
                     config["model_sensitivities"],
+                    score_listener=self.publish_calibration_scores,
                 )
 
     def _worker_config_locked(self) -> dict[str, Any]:
@@ -540,6 +608,31 @@ class DesktopBridge:
         elif enabled:
             self._worker = None
             self._start_worker()
+
+    def _calibration_status_locked(self) -> dict[str, Any]:
+        active = self._calibration_active_locked()
+        return {
+            "active": active,
+            "scores": dict(self._calibration_scores) if active else {},
+            "peaks": dict(self._calibration_peaks) if active else {},
+        }
+
+    def _calibration_active_locked(self) -> bool:
+        if self._calibration_active and time.monotonic() >= self._calibration_deadline:
+            self._clear_calibration_locked()
+        return self._calibration_active
+
+    def _clear_calibration_locked(self) -> None:
+        self._calibration_active = False
+        self._calibration_deadline = 0.0
+        self._calibration_scores = {}
+        self._calibration_peaks = {}
+
+    def _end_calibration(self) -> bool:
+        with self._lock:
+            was_active = self._calibration_active
+            self._clear_calibration_locked()
+        return was_active
 
     def _require_connection(self) -> ConnectionDelegate:
         if self._connection is None:

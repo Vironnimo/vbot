@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -161,6 +162,8 @@ class WakewordModelCatalog:
         self,
         active_model_ids: list[str] | tuple[str, ...],
         model_sensitivities: dict[str, float] | None = None,
+        *,
+        score_listener: Callable[[dict[str, float]], None] | None = None,
     ) -> MultiWakewordEngine:
         """Create one shared-feature detector for the active catalog entries."""
         model_ids = tuple(active_model_ids)
@@ -171,7 +174,11 @@ class WakewordModelCatalog:
         if len(set(model_ids)) != len(model_ids):
             raise WakewordModelError("Active wakeword models must be unique")
         descriptors = tuple(self.resolve(model_id) for model_id in model_ids)
-        return MultiWakewordEngine(descriptors, model_sensitivities or {})
+        return MultiWakewordEngine(
+            descriptors,
+            model_sensitivities or {},
+            score_listener=score_listener,
+        )
 
     def import_model(self, filename: str, content: bytes) -> WakewordModelDescriptor:
         """Validate and persist one user-supplied TFLite wakeword model."""
@@ -326,10 +333,12 @@ class MockWakewordEngine:
         *,
         model_id: str = DEFAULT_WAKEWORD_MODEL_IDS[0],
         sensitivity: float = DEFAULT_WAKEWORD_SENSITIVITY,
+        score_listener: Callable[[dict[str, float]], None] | None = None,
     ) -> None:
         self._score_sequence = score_sequence or [0.0]
         self._model_id = model_id
         self._threshold = _threshold_for_sensitivity(sensitivity)
+        self._score_listener = score_listener
         self._index = 0
         self._running = False
 
@@ -346,6 +355,8 @@ class MockWakewordEngine:
             return None
         score = _clamp_score(self._score_sequence[self._index % len(self._score_sequence)])
         self._index += 1
+        if self._score_listener is not None:
+            self._score_listener({self._model_id: score})
         if score < self._threshold:
             return None
         return WakewordMatch(self._model_id, score, self._threshold)
@@ -363,6 +374,8 @@ class MultiWakewordEngine:
         self,
         descriptors: tuple[WakewordModelDescriptor, ...],
         model_sensitivities: dict[str, float],
+        *,
+        score_listener: Callable[[dict[str, float]], None] | None = None,
     ) -> None:
         if not descriptors:
             raise WakewordModelError("At least one wakeword model is required")
@@ -376,6 +389,7 @@ class MultiWakewordEngine:
         self._models: list[tuple[WakewordModelDescriptor, Any]] = []
         self._features: Any = None
         self._armed = True
+        self._score_listener = score_listener
 
     @property
     def active_model_ids(self) -> tuple[str, ...]:
@@ -426,6 +440,7 @@ class MultiWakewordEngine:
         best_match: WakewordMatch | None = None
         best_ratio = 0.0
         all_below_threshold = True
+        scores: dict[str, float] = {}
         for descriptor, model in self._models:
             score = max(
                 (
@@ -435,6 +450,7 @@ class MultiWakewordEngine:
                 ),
                 default=0.0,
             )
+            scores[descriptor.id] = score
             threshold = self._thresholds[descriptor.id]
             if score < threshold:
                 continue
@@ -443,6 +459,8 @@ class MultiWakewordEngine:
             if best_match is None or ratio > best_ratio:
                 best_match = WakewordMatch(descriptor.id, score, threshold)
                 best_ratio = ratio
+        if self._score_listener is not None:
+            self._score_listener(scores)
         if not self._armed:
             if all_below_threshold:
                 self._armed = True

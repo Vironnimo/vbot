@@ -569,6 +569,7 @@ def _create_wakeword_bridge(
             server_url=bridge.server_url,
             config_reader=bridge.worker_config,
             speech_readiness_checker=check_speech_to_text_readiness,
+            calibration_checker=bridge.wakeword_calibration_active,
         )
 
     bridge = DesktopBridge(
@@ -586,8 +587,8 @@ def _create_wakeword_bridge(
 def _real_wakeword_available() -> bool:
     """Whether the on-device wakeword stack can be imported.
 
-    The detector and sounddevice must import for the real worker; a missing
-    dependency selects unavailable mode. The worker factory calls this
+    The detector, microphone capture, and VAD modules must import for the real
+    worker; a missing dependency selects unavailable mode. The worker factory calls this
     lazily only when Voice is enabled or explicitly retried, keeping the stack
     out of the normal Desktop startup path.
     """
@@ -595,6 +596,7 @@ def _real_wakeword_available() -> bool:
     try:
         import pyopen_wakeword  # type: ignore[import-untyped]  # noqa: F401
         import sounddevice  # type: ignore[import-untyped]  # noqa: F401
+        import webrtcvad  # type: ignore[import-untyped]  # noqa: F401
     except ImportError:
         return False
     return True

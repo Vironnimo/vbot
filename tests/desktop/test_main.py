@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
+import types
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +27,26 @@ class FakeResponse:
         if isinstance(self.payload, Exception):
             raise self.payload
         return self.payload
+
+
+@pytest.mark.parametrize("missing_module", ["pyopen_wakeword", "sounddevice", "webrtcvad"])
+def test_real_wakeword_availability_requires_complete_voice_stack(
+    monkeypatch: pytest.MonkeyPatch, missing_module: str
+) -> None:
+    for module_name in ("pyopen_wakeword", "sounddevice", "webrtcvad"):
+        monkeypatch.setitem(sys.modules, module_name, types.ModuleType(module_name))
+    monkeypatch.setitem(sys.modules, missing_module, None)
+
+    assert desktop_main._real_wakeword_available() is False
+
+
+def test_real_wakeword_availability_accepts_complete_voice_stack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for module_name in ("pyopen_wakeword", "sounddevice", "webrtcvad"):
+        monkeypatch.setitem(sys.modules, module_name, types.ModuleType(module_name))
+
+    assert desktop_main._real_wakeword_available() is True
 
 
 class FakeWindow:

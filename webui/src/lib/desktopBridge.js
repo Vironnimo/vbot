@@ -188,6 +188,21 @@ export async function retryWakeword() {
   return callBridge('retryWakeword');
 }
 
+/** Enter transient detector calibration without recording or sending commands. */
+export async function startWakewordCalibration() {
+  return callBridge('startWakewordCalibration');
+}
+
+/** Leave detector calibration and resume normal wakeword activation. */
+export async function stopWakewordCalibration() {
+  return callBridge('stopWakewordCalibration');
+}
+
+/** Clear calibration peaks while leaving score capture active. */
+export async function resetWakewordCalibrationPeaks() {
+  return callBridge('resetWakewordCalibrationPeaks');
+}
+
 /**
  * Play a short non-verbal Voice cue inside the Desktop WebView.
  * Failures are deliberately silent: visual state remains authoritative when

@@ -1518,6 +1518,32 @@ export const englishCatalog = Object.freeze({
   'settings.voice.noAgent': '— (none)',
   'settings.voice.lessSensitive': 'Less sensitive',
   'settings.voice.moreSensitive': 'More sensitive',
+  'settings.voice.calibrationTitle': 'Wakeword calibration',
+  'settings.voice.calibrationDescription':
+    'Inspect raw detector scores without recording or sending a command.',
+  'settings.voice.calibrationAnalyzer': 'Signal analyzer',
+  'settings.voice.calibrationInstruction':
+    'Say each active phrase several times. Move its sensitivity until the threshold sits below the weakest intentional peak.',
+  'settings.voice.calibrationListening': 'Commands paused',
+  'settings.voice.calibrationStopped': 'Analyzer stopped',
+  'settings.voice.calibrationScore': 'Score',
+  'settings.voice.calibrationPeak': 'Peak',
+  'settings.voice.calibrationThreshold': 'Threshold',
+  'settings.voice.calibrationMeterAria': '{name} detector score',
+  'settings.voice.calibrationReset': 'Reset peaks',
+  'settings.voice.calibrationDiscard': 'Discard and stop',
+  'settings.voice.calibrationApply': 'Apply sensitivity',
+  'settings.voice.calibrationReady':
+    'Normal wakeword actions are paused only while the analyzer is open.',
+  'settings.voice.calibrationEnableFirst':
+    'Enable wakeword listening before starting calibration.',
+  'settings.voice.calibrationStart': 'Start calibration',
+  'settings.voice.calibrationStartFailed': 'Calibration could not start.',
+  'settings.voice.calibrationResetFailed':
+    'Calibration peaks could not be reset.',
+  'settings.voice.calibrationStopFailed': 'Calibration could not stop.',
+  'settings.voice.calibrationApplied': 'Wakeword sensitivity applied.',
+  'settings.voice.calibrationApplyFailed': 'Calibration could not be applied.',
   'settings.voice.desktopOnly':
     'Wakeword listening is configured in the vBot Desktop app. The transcription audio settings above are server-wide.',
   'settings.voice.mockWarning':

@@ -354,6 +354,32 @@ def test_detection_loop_passes_the_last_four_chunks_as_pre_roll(
     assert fake_bridge.states == ["listening", "wakeword_detected"]
 
 
+def test_calibration_suppresses_wakeword_activation(fake_bridge: FakeBridge) -> None:
+    from desktop.wakeword.worker import WakewordWorker
+
+    engine = DetectOnceEngine()
+    worker = WakewordWorker(
+        engine=engine,
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+        calibration_checker=lambda: True,
+    )
+    worker._read_config = lambda: {"target_agent_id": "main"}  # type: ignore[method-assign]
+    worker._target_agent_available = lambda _agent_id: True  # type: ignore[assignment,method-assign]
+    worker._open_stream = lambda: setattr(  # type: ignore[method-assign]
+        worker,
+        "_stream",
+        FakeSounddeviceStream([_make_silence_chunk()], on_read=worker._running.clear),
+    )
+    worker._running.set()
+
+    worker._run()
+
+    assert engine.calls == 1
+    assert "wakeword_detected" not in fake_bridge.states
+    assert fake_bridge.states == ["listening"]
+
+
 def test_recording_prepends_end_aligned_pre_roll_when_new_speech_arrives(
     fake_bridge: FakeBridge,
     monkeypatch: pytest.MonkeyPatch,

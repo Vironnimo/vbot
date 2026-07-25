@@ -189,11 +189,13 @@ def test_engine_shares_features_and_selects_threshold_normalized_winner(
     hey_model.process_streaming.side_effect = ([0.5], [0.1])
     create_features = Mock(return_value=features)
     create_model = Mock(side_effect=[okay_model, hey_model])
+    observed_scores: list[dict[str, float]] = []
     monkeypatch.setattr(engine_module, "_create_pyopenwakeword_features", create_features)
     monkeypatch.setattr(engine_module, "_create_pyopenwakeword_model", create_model)
     engine = catalog.create_engine(
         list(DEFAULT_WAKEWORD_MODEL_IDS),
         {"builtin/okay_nabu": 0.5, "builtin/hey_nabu": 0.75},
+        score_listener=observed_scores.append,
     )
 
     engine.start()
@@ -201,6 +203,12 @@ def test_engine_shares_features_and_selects_threshold_normalized_winner(
     engine.stop()
 
     assert match == WakewordMatch("builtin/hey_nabu", 0.5, 0.25)
+    assert observed_scores == [
+        {
+            "builtin/okay_nabu": 0.8,
+            "builtin/hey_nabu": 0.5,
+        }
+    ]
     create_features.assert_called_once_with()
     assert create_model.call_count == 2
     features.process_streaming.assert_called_once_with(b"\0" * 2560)
