@@ -142,7 +142,7 @@ class AttachmentStore:
         media_type = _sniff_mime(data, filename)
         if not _is_allowed_mime(media_type):
             raise AttachmentTypeNotAllowedError(f"Attachment type not allowed: {media_type}")
-        canonical_extension = _canonical_extension(media_type)
+        canonical_extension = canonical_extension_for_media_type(media_type)
         stored_filename = _filename_with_extension(filename, canonical_extension)
 
         attachment_id = str(uuid4())
@@ -231,7 +231,8 @@ class AttachmentStore:
                 ) from exc
 
     def _blob_path(self, attachment_id: str, media_type: str) -> Path:
-        return self._attachments_dir / f"{attachment_id}{_canonical_extension(media_type)}"
+        extension = canonical_extension_for_media_type(media_type)
+        return self._attachments_dir / f"{attachment_id}{extension}"
 
     def _sidecar_path(self, attachment_id: str) -> Path:
         return self._attachments_dir / f"{attachment_id}.json"
@@ -337,7 +338,9 @@ def _normalize_attachment_id(attachment_id: str) -> str:
     return attachment_id.lower()
 
 
-def _canonical_extension(media_type: str) -> str:
+def canonical_extension_for_media_type(media_type: str) -> str:
+    """Return the stable storage extension for one sniffed attachment media type."""
+
     extension = _CANONICAL_EXTENSION_BY_MEDIA_TYPE.get(media_type)
     if extension is None:
         raise AttachmentError(f"No canonical filename extension for media type: {media_type}")
@@ -449,5 +452,6 @@ __all__ = [
     "AttachmentStore",
     "AttachmentTooLargeError",
     "AttachmentTypeNotAllowedError",
+    "canonical_extension_for_media_type",
     "sniff_media_type",
 ]
