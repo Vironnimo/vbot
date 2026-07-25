@@ -17,6 +17,7 @@ import {
   removeFromQueueMock,
   rpcMock,
   sendComposerMessage,
+  setInputValue,
   setupChatViewTestSuite,
   subscribeRunEventsMock,
   testChatStateRefs,
@@ -25,6 +26,367 @@ import {
 
 describe('ChatView', () => {
   const chatViewTest = setupChatViewTestSuite();
+
+  it('reuses an already empty session and focuses its composer', async () => {
+    rpcMock.mockImplementation(
+      createChatRpcMock({ sessionMessages: { 'session-1': [] } }),
+    );
+
+    chatViewTest.mount({ target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.some(
+          ([method, params]) =>
+            method === 'chat.history' && params?.session_id === 'session-1',
+        ),
+      100,
+    );
+
+    const newSessionButton = findButtonByText('New session');
+    const composerInput = document.querySelector('#chat-composer-input');
+    expect(newSessionButton).toBeTruthy();
+    expect(composerInput).toBeTruthy();
+
+    newSessionButton.focus();
+    newSessionButton.click();
+    newSessionButton.click();
+
+    await waitForCondition(() => document.activeElement === composerInput, 100);
+    expect(
+      rpcMock.mock.calls.filter(([method]) => method === 'session.create'),
+    ).toHaveLength(0);
+  });
+
+  it('creates a new session when the empty transcript has a draft and preserves that draft', async () => {
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        sessionMessages: {
+          'session-1': [],
+          'created-alpha': [],
+        },
+      }),
+    );
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'created-alpha',
+          created_at: '2026-05-10T00:00:00+00:00',
+          last_active_at: '2026-05-10T00:00:00+00:00',
+        },
+        {
+          id: 'session-1',
+          created_at: '2026-05-09T00:00:00+00:00',
+          last_active_at: '2026-05-09T00:00:00+00:00',
+        },
+      ],
+    });
+
+    chatViewTest.mount({ target: document.body });
+    flushSync();
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.some(
+          ([method, params]) =>
+            method === 'chat.history' && params?.session_id === 'session-1',
+        ),
+      100,
+    );
+
+    const composerInput = document.querySelector('#chat-composer-input');
+    setInputValue(composerInput, 'unfinished draft');
+    flushSync();
+    findButtonByText('New session').click();
+
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.some(
+          ([method, params]) =>
+            method === 'chat.history' && params?.session_id === 'created-alpha',
+        ),
+      100,
+    );
+    expect(composerInput.value).toBe('');
+
+    findButtonByText('Sessions').click();
+    await waitForCondition(() => Boolean(findButtonByText('session-1')), 100);
+    findButtonByText('session-1').click();
+    await waitForCondition(
+      () => composerInput.value === 'unfinished draft',
+      100,
+    );
+    expect(
+      rpcMock.mock.calls.filter(([method]) => method === 'session.create'),
+    ).toHaveLength(1);
+    setInputValue(composerInput, '');
+    flushSync();
+  });
+
+  it('creates one session for repeated clicks from a non-empty session and focuses it', async () => {
+    rpcMock.mockImplementation(
+      createChatRpcMock({ sessionMessages: { 'created-alpha': [] } }),
+    );
+
+    chatViewTest.mount({ target: document.body });
+    flushSync();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    const newSessionButton = findButtonByText('New session');
+    expect(newSessionButton).toBeTruthy();
+    newSessionButton.click();
+    newSessionButton.click();
+
+    await waitForCondition(
+      () =>
+        rpcMock.mock.calls.some(
+          ([method, params]) =>
+            method === 'chat.history' && params?.session_id === 'created-alpha',
+        ),
+      100,
+    );
+    const composerInput = document.querySelector('#chat-composer-input');
+    await waitForCondition(() => document.activeElement === composerInput, 100);
+
+    expect(
+      rpcMock.mock.calls.filter(([method]) => method === 'session.create'),
+    ).toHaveLength(1);
+  });
+
+  it('focuses the composer after a user selects another session', async () => {
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        sessionMessages: {
+          'session-2': [
+            {
+              id: 'assistant-two',
+              role: 'assistant',
+              content: 'Second session reply',
+            },
+          ],
+        },
+      }),
+    );
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'session-2',
+          created_at: '2026-05-10T00:00:00+00:00',
+          last_active_at: '2026-05-10T01:00:00+00:00',
+        },
+        {
+          id: 'session-1',
+          created_at: '2026-05-09T00:00:00+00:00',
+          last_active_at: '2026-05-09T01:00:00+00:00',
+        },
+      ],
+    });
+
+    chatViewTest.mount({ target: document.body });
+    flushSync();
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    findButtonByText('Sessions').click();
+    await waitForCondition(() => Boolean(findButtonByText('session-2')), 100);
+    findButtonByText('session-2').click();
+
+    await waitForCondition(
+      () => document.body.textContent.includes('Second session reply'),
+      100,
+    );
+    const composerInput = document.querySelector('#chat-composer-input');
+    await waitForCondition(() => document.activeElement === composerInput, 100);
+  });
+
+  it('does not steal focus when browser history changes the displayed session', async () => {
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        sessionMessages: {
+          'session-2': [
+            {
+              id: 'assistant-two',
+              role: 'assistant',
+              content: 'History-restored session reply',
+            },
+          ],
+        },
+      }),
+    );
+    const { createChatViewParentHarness } =
+      await import('./chatViewParentHarness.svelte.js');
+    const parentHarness = createChatViewParentHarness();
+
+    chatViewTest.mount({
+      target: document.body,
+      props: {
+        get pendingSessionNavigation() {
+          return parentHarness.pendingSessionNavigation;
+        },
+      },
+    });
+    flushSync();
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    const passiveFocusTarget = document.createElement('button');
+    document.body.append(passiveFocusTarget);
+    passiveFocusTarget.focus();
+    parentHarness.setPendingSessionNavigation({
+      agentId: 'alpha',
+      sessionId: 'session-2',
+      subAgent: false,
+      requestId: 'history-navigation-1',
+    });
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        document.body.textContent.includes('History-restored session reply'),
+      100,
+    );
+    expect(document.activeElement).toBe(passiveFocusTarget);
+  });
+
+  it('focuses after a user Agent switch but not after a passive Agent update', async () => {
+    const agents = [
+      createAgent(),
+      createAgent({
+        id: 'beta',
+        name: 'Beta',
+        current_session_id: 'session-2',
+      }),
+    ];
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        agents,
+        sessionMessages: {
+          'session-2': [
+            {
+              id: 'beta-assistant',
+              role: 'assistant',
+              content: 'Beta session reply',
+            },
+          ],
+        },
+      }),
+    );
+    const { createChatViewParentHarness } =
+      await import('./chatViewParentHarness.svelte.js');
+    const parentHarness = createChatViewParentHarness();
+
+    chatViewTest.mount({
+      target: document.body,
+      props: {
+        sharedAgents: agents,
+        get sharedSelectedAgentId() {
+          return parentHarness.selectedAgentId;
+        },
+        onAgentSelected: (agentId) => parentHarness.setSelectedAgentId(agentId),
+      },
+    });
+    flushSync();
+    await waitForCondition(
+      () => document.body.textContent.includes('Hello'),
+      100,
+    );
+
+    findButtonByText('Beta').click();
+    await waitForCondition(
+      () => document.body.textContent.includes('Beta session reply'),
+      100,
+    );
+    const composerInput = document.querySelector('#chat-composer-input');
+    await waitForCondition(() => document.activeElement === composerInput, 100);
+
+    const passiveFocusTarget = document.createElement('button');
+    document.body.append(passiveFocusTarget);
+    passiveFocusTarget.focus();
+    parentHarness.setSelectedAgentId('alpha');
+    flushSync();
+    await waitForCondition(
+      () =>
+        document.body.textContent.includes('Hello') &&
+        !document.body.textContent.includes('Beta session reply'),
+      100,
+    );
+
+    expect(document.activeElement).toBe(passiveFocusTarget);
+  });
+
+  it('keeps mobile Session navigation in reading mode but focuses New session', async () => {
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = () => ({ matches: true });
+    try {
+      rpcMock.mockImplementation(
+        createChatRpcMock({
+          sessionMessages: {
+            'session-2': [
+              {
+                id: 'assistant-two',
+                role: 'assistant',
+                content: 'Mobile session reply',
+              },
+            ],
+            'created-alpha': [],
+          },
+        }),
+      );
+      listSessionsMock.mockResolvedValue({
+        sessions: [
+          {
+            id: 'session-2',
+            created_at: '2026-05-10T00:00:00+00:00',
+            last_active_at: '2026-05-10T01:00:00+00:00',
+          },
+        ],
+      });
+
+      chatViewTest.mount({ target: document.body });
+      flushSync();
+      await waitForCondition(
+        () => document.body.textContent.includes('Hello'),
+        100,
+      );
+
+      findButtonByText('Sessions').click();
+      await waitForCondition(() => Boolean(findButtonByText('session-2')), 100);
+      const sessionButton = findButtonByText('session-2');
+      sessionButton.focus();
+      sessionButton.click();
+      await waitForCondition(
+        () => document.body.textContent.includes('Mobile session reply'),
+        100,
+      );
+      const composerInput = document.querySelector('#chat-composer-input');
+      expect(document.activeElement).not.toBe(composerInput);
+
+      findButtonByText('New session').click();
+      await waitForCondition(
+        () =>
+          rpcMock.mock.calls.some(
+            ([method, params]) =>
+              method === 'chat.history' &&
+              params?.session_id === 'created-alpha',
+          ),
+        100,
+      );
+      await waitForCondition(
+        () => document.activeElement === composerInput,
+        100,
+      );
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
+  });
 
   it('loads selected session history from the sessions drawer', async () => {
     rpcMock.mockImplementation(

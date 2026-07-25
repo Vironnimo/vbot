@@ -696,6 +696,7 @@ export function ensureSessionState(state, agentId, sessionId) {
       agentId,
       sessionId,
       messages: [],
+      historyLoaded: false,
       runEvents: [],
       streamingRunEvents: [],
       streamingPhase: 0,
@@ -907,6 +908,7 @@ export function loadHistory(sessionState, messages, options = {}) {
     ? sessionState.seenStreamingEventKeys
     : new Set();
   sessionState.messages = visibleMessages;
+  sessionState.historyLoaded = true;
   sessionState.hasOlderHistory = options.hasMore === true;
   sessionState.runEvents = activeRunEvents;
   sessionState.streamingRunEvents = activeStreamingRunEvents;
@@ -1270,6 +1272,17 @@ export function removeQueuedMessage(sessionState, queuedMessageId) {
 
 export function canCreateNewSession(sessionState) {
   return !sessionState || !isRunActive(sessionState);
+}
+
+export function isSessionEmpty(sessionState) {
+  return Boolean(
+    sessionState?.historyLoaded &&
+    !sessionState.currentRun &&
+    (sessionState.messages ?? []).length === 0 &&
+    (sessionState.runEvents ?? []).length === 0 &&
+    (sessionState.streamingRunEvents ?? []).length === 0 &&
+    (sessionState.queue ?? []).length === 0,
+  );
 }
 
 export function isRunActive(sessionState) {

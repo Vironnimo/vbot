@@ -11,6 +11,7 @@ import {
   canCreateNewSession,
   createChatState,
   ensureSessionState,
+  isSessionEmpty,
   loadHistory,
   removeQueuedMessage,
   syncQueueFromServer,
@@ -159,6 +160,29 @@ describe('chat state helpers', () => {
     });
 
     expect(canCreateNewSession(sessionState)).toBe(true);
+  });
+
+  it('classifies only loaded sessions without conversation activity as empty', () => {
+    const state = createChatState();
+    const sessionState = ensureSessionState(state, 'alpha', 'session-one');
+
+    expect(isSessionEmpty(sessionState)).toBe(false);
+
+    loadHistory(sessionState, []);
+    expect(isSessionEmpty(sessionState)).toBe(true);
+
+    addServerQueuedMessage(sessionState, {
+      id: 'queue-one',
+      content: 'Waiting message',
+      created_at: '2026-05-22T01:00:00+00:00',
+    });
+    expect(isSessionEmpty(sessionState)).toBe(false);
+
+    syncQueueFromServer(sessionState, []);
+    loadHistory(sessionState, [
+      { id: 'message-one', role: 'user', content: 'Hello' },
+    ]);
+    expect(isSessionEmpty(sessionState)).toBe(false);
   });
 
   it('builds a visible timeline from history and live assistant runs', () => {

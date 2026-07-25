@@ -8,6 +8,7 @@
     replaceActiveSubAgentStatuses,
     subAgentGuardKeysForEvictedStatuses,
   } from '$lib/clientCaches.js';
+  import { getDraft } from '$lib/composerMemory.js';
   import {
     extractMentionTokens,
     matchMentionCandidates,
@@ -33,6 +34,7 @@
     formatAgentAddress,
     isProjectSelected,
     isRunActive,
+    isSessionEmpty,
     newestUnreadSessionForAgent,
     pickProjectAgentSessionId,
     resolveAgentAddressing,
@@ -112,6 +114,7 @@
 
   const chatState = $state(createChatState());
   let creatingSession = $state(false);
+  let composerFocusRequest = $state(0);
   // Chat-local bottom toast for transient command replies and lifecycle notices.
   // Error notices stay in the top stack.
   let chatToast = $state('');
@@ -135,6 +138,7 @@
   // Bottom command toast auto-dismiss. Kept as a single constant so the
   // dwell time can be tuned in one place.
   const CHAT_TOAST_TIMEOUT_MS = 5000;
+  const MOBILE_CHAT_MEDIA_QUERY = '(max-width: 640px)';
   const SUBAGENT_RESULT_HISTORY_LIMIT = 20;
   // Both caches grow per run/spawn for the lifetime of the tab (handoff3
   // B10), so they are LRU-capped. Statuses are tiny strings — a generous cap
@@ -144,6 +148,17 @@
   const SUBAGENT_STATUS_CACHE_LIMIT = 2000;
   const SUBAGENT_RESULT_CACHE_LIMIT = 100;
   let chatToastTimeoutId = null;
+
+  const requestComposerFocus = ({ includeMobile = false } = {}) => {
+    const mobile =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia(MOBILE_CHAT_MEDIA_QUERY).matches;
+    if (!includeMobile && mobile) {
+      return;
+    }
+    composerFocusRequest += 1;
+  };
 
   // --- Project (second-bar) state -----------------------------------------
   //
@@ -309,6 +324,10 @@
     const separator = composerDraftKey.indexOf('::');
     return separator >= 0 ? composerDraftKey.slice(0, separator) : '';
   });
+  const displayedSessionIsEmpty = () =>
+    isSessionEmpty(activeSessionState) &&
+    getDraft(composerDraftKey).trim().length === 0 &&
+    transientCards.length === 0;
   let lastSharedSelectedAgentId = '';
   let lastSharedAgents = null;
   let lastAgentsRefreshToken = null;
@@ -536,7 +555,7 @@
         selectAgent(chatState, sharedSelectedAgentId);
         return;
       }
-      handleSelectAgent(sharedSelectedAgentId);
+      handleSelectAgent(sharedSelectedAgentId, { focusComposer: false });
     }
   });
 
@@ -566,14 +585,25 @@
     lastLoadedProjectId = projectId;
     if (!projectId) {
       clearProjectContext();
+      if (!isInitialRestore) {
+        requestComposerFocus();
+      }
       return;
     }
     // The initial (reload) restore must not clear a session override that a
     // mount-adopted history entry has just applied — the override stays the
     // displayed session, the member session loads invisibly behind it.
-    loadProjectTeam(projectId, {
+    void loadProjectTeam(projectId, {
       restoreAgentId,
       keepOverride: isInitialRestore,
+    }).then(() => {
+      if (
+        !isInitialRestore &&
+        selectedProjectId === projectId &&
+        selectedProjectAgentId
+      ) {
+        requestComposerFocus();
+      }
     });
   });
 
@@ -1214,9 +1244,10 @@
       return;
     }
     await openProjectAgent(agentId);
+    requestComposerFocus();
   };
 
-  const handleSelectAgent = async (agentId) => {
+  const handleSelectAgent = async (agentId, { focusComposer = true } = {}) => {
     // Choosing an identity agent always returns the chat to the identity bar,
     // tearing down any active project-agent selection (the upper bar wins for
     // the identity path; the project stays selected in the dropdown so its
@@ -1238,6 +1269,9 @@
       viewingSubAgentSession = false;
       reportSessionNavigation();
       await loadHistoryForSession(agentId, unreadSession.sessionId);
+      if (focusComposer) {
+        requestComposerFocus();
+      }
       return;
     }
     if (agentId === chatState.selectedAgentId) {
@@ -1245,6 +1279,9 @@
         clearSessionOverride();
         reportSessionNavigation();
         await loadCurrentHistory();
+        if (focusComposer) {
+          requestComposerFocus();
+        }
       }
       return;
     }
@@ -1253,6 +1290,9 @@
     onAgentSelected?.(agentId);
     reportSessionNavigation();
     await loadCurrentHistory();
+    if (focusComposer) {
+      requestComposerFocus();
+    }
   };
 
   const handleSubAgentNavigation = async (agentId, sessionId) => {
@@ -1378,6 +1418,7 @@
         : normalizedSessionId;
     reportSessionNavigation();
     await loadHistoryForSession(agentAddress, normalizedSessionId);
+    requestComposerFocus();
   };
 
   // A session was deleted from the drawer. If this window was viewing it (the
@@ -1464,12 +1505,14 @@
     // return-to-current behavior below.
     if (subAgentSessionActive && subAgentParentTarget) {
       await navigateToParentSession(subAgentParentTarget);
+      requestComposerFocus();
       return;
     }
 
     clearSessionOverride();
     reportSessionNavigation();
     await loadActiveOwnHistory();
+    requestComposerFocus();
   };
 
   // User-initiated navigation from a child session to its parent session: a
@@ -1494,7 +1537,14 @@
   };
 
   const handleNewSession = async () => {
-    if (newSessionBlocked) {
+    if (newSessionBlocked || chatState.loadingHistory || creatingSession) {
+      return;
+    }
+    // "New session" means "make the chat ready for a fresh conversation."
+    // Repeating it on an already blank Session is therefore idempotent, while
+    // a local draft still counts as work that deserves its own Session.
+    requestComposerFocus({ includeMobile: true });
+    if (displayedSessionIsEmpty()) {
       return;
     }
     if (projectAgentActive) {
@@ -1502,7 +1552,9 @@
       // any override view and becomes the displayed session.
       clearSessionOverride();
       reportSessionNavigation();
-      await createProjectAgentSession();
+      if (await createProjectAgentSession()) {
+        requestComposerFocus({ includeMobile: true });
+      }
       return;
     }
     const agent = selectedAgent(chatState);
@@ -1519,6 +1571,7 @@
         make_current: true,
       });
       await switchToCurrentSession(agent.id, session.session_id);
+      requestComposerFocus({ includeMobile: true });
     } catch (error) {
       setSessionActionError(
         `${t('chat.sessionCreateError', 'New session could not be created.')} ${error.message}`,
@@ -1535,7 +1588,7 @@
   const createProjectAgentSession = async () => {
     const agentAddress = currentProjectAgentAddress();
     if (!agentAddress) {
-      return;
+      return false;
     }
     const sourceSessionState = activeSessionState;
     creatingSession = true;
@@ -1546,18 +1599,20 @@
       });
       const sessionId = created?.session_id ?? '';
       if (!sessionId || currentProjectAgentAddress() !== agentAddress) {
-        return;
+        return false;
       }
       projectAgentSessions = {
         ...projectAgentSessions,
         [agentAddress]: sessionId,
       };
       await loadHistoryForSession(agentAddress, sessionId);
+      return true;
     } catch (error) {
       setSessionActionError(
         `${t('chat.sessionCreateError', 'New session could not be created.')} ${error.message}`,
         sourceSessionState,
       );
+      return false;
     } finally {
       creatingSession = false;
     }
@@ -1725,6 +1780,7 @@
     );
     if (outcome.kind === 'move') {
       await moveSessionToAgent(outcome.move);
+      requestComposerFocus({ includeMobile: true });
     } else if (outcome.kind === 'switch') {
       const targetAgentId = outcome.sessionSwitch.targetAgentId || agent.id;
       if (targetAgentId !== chatState.selectedAgentId) {
@@ -1735,6 +1791,7 @@
         targetAgentId,
         outcome.sessionSwitch.sessionId,
       );
+      requestComposerFocus({ includeMobile: true });
     } else if (outcome.kind === 'transient') {
       appendTransientCard(outcome.reply);
     } else if (outcome.kind === 'toast') {
@@ -1946,6 +2003,7 @@
     {showSessionDrawer}
     {creatingSession}
     {newSessionBlocked}
+    newSessionLoading={chatState.loadingHistory}
     {projects}
     {selectedProjectId}
     onSelectProject={handleSelectProject}
@@ -2227,6 +2285,7 @@
               cancelling={chatState.cancellingRun}
               draftKey={composerDraftKey}
               historyKey={composerHistoryKey}
+              focusRequest={composerFocusRequest}
               availableSkills={chatState.availableSkills}
               onSendMessage={handleSendMessage}
               onCancelRun={handleCancelRun}
