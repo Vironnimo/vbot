@@ -54,6 +54,29 @@ def _make_client(provider: ProviderConfig | None = None) -> ProviderTaskClient:
     )
 
 
+def _make_keyless_client() -> ProviderTaskClient:
+    connection = ConnectionConfig(
+        id="default",
+        type="none",
+        label="Default",
+        auth=AuthConfig(header="", prefix=""),
+    )
+    provider = ProviderConfig(
+        id="local",
+        name="Local",
+        adapter="openai_compatible",
+        base_url="http://127.0.0.1:8080/v1",
+        connections=[connection],
+        extra_headers={"X-Title": "vBot"},
+    )
+    return ProviderTaskClient(
+        provider=provider,
+        connection=connection,
+        credential="",
+        model_id="local/some-model",
+    )
+
+
 class _StubRuntime:
     """Minimal ``TaskClientRuntime`` stand-in for target resolution."""
 
@@ -126,6 +149,15 @@ async def test_connection_base_url_overrides_provider_base_url() -> None:
 # ---------------------------------------------------------------------------
 # post_and_parse — classification and retry semantics
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_keyless_connection_omits_auth_header_and_keeps_extra_headers() -> None:
+    client = _make_keyless_client()
+
+    headers = await client._headers()
+
+    assert headers == {"X-Title": "vBot"}
 
 
 @pytest.mark.asyncio
