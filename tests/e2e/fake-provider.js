@@ -608,6 +608,9 @@ function responseText(model, prompt, messages = []) {
   if (model.includes("e2e-fallback")) {
     return "Fallback provider response.";
   }
+  if (model === "e2e-live" && prompt.includes("E2E_CUSTOM_PROVIDER_LIVE")) {
+    return "Dynamic Custom Provider response.";
+  }
   if (
     messagesText(messages, "system").includes(
       "E2E custom provider context 5821",
