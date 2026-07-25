@@ -1,28 +1,36 @@
-"""Tool for an identity agent to author skills in its own private home or the global pool.
+"""Package-oriented authoring tool for vBot Skills.
 
-Unlike the ``skill`` activation tool, ``skill_manage`` *writes*. It is the agent's
-single seam onto the shared skill authoring write core. A ``scope`` argument chooses
-the target: ``own`` (default) writes the agent's own home
-``<data_dir>/agents/<agent_id>/skills/``; ``global`` writes the shared user pool
-``<data_dir>/skills/``. The default is private, and the tool instructs the agent to
-target ``global`` only when the user explicitly asked to make the skill global — a
-guideline, not a hard gate (a global write is reversible and visible in the WebUI
-skill editor). The project/repo scope is never a target here; repo skills are
-authored with the ordinary file tools.
+A vBot Skill is exactly one ``SKILL.md`` plus optional files below ``scripts/``,
+``references/``, and ``assets/``. ``skill_manage`` edits that package through an
+isolated draft and publishes it only after complete-package validation. Draft
+operations never invalidate the live Skill registry; commit and recoverable archive
+are the only live mutations.
 
-A normal allow-list tool that can be toggled per agent, but **identity-only**: it is
-offered only to an agent that owns a Workspace (see :data:`IDENTITY_ONLY_TOOLS`), so a
-config/project agent never authors skills even under a wildcard allow-list. It is not
-gated on the agent already having a skill, so an agent with none can create its first.
+The tool is identity-only and writes either the calling Agent's private Skill home
+(``scope="own"``, the default) or the shared global pool when the user explicitly
+requested a global Skill. Project Skills remain repository-owned and bundled Skills
+remain read-only.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import cast
 
-from core.skills.authoring import SkillAuthoringError, SkillAuthoringService, SkillWriteResult
-from core.tools.arguments import ToolArgumentError, optional_string, required_string
+from core.skills.authoring import (
+    SkillAuthoringError,
+    SkillAuthoringService,
+    SkillDraftMode,
+    SkillPackageFile,
+    SkillPackageInspection,
+)
+from core.tools.arguments import (
+    ToolArgumentError,
+    coerce_bool,
+    optional_string,
+    required_string,
+)
 from core.tools.availability import SKILL_MANAGE_TOOL_NAME
 from core.tools.tools import (
     JsonObject,
@@ -35,22 +43,46 @@ from core.tools.tools import (
 from core.utils.logging import get_logger
 
 SKILL_MANAGE_TOOL_DESCRIPTION = (
-    "Author skills: create, edit, patch, or delete a skill (and its "
-    "scripts/references/assets support files). Defaults to your own private skill "
-    "home; pass scope='global' to write the shared global pool ONLY when the user "
-    "explicitly asked to make the skill global. New and changed skills become usable "
-    "immediately, by name, in the same session."
+    "Manage complete vBot Skill packages (SKILL.md plus optional scripts/, "
+    "references/, and assets/). Inspect a published package; begin an isolated "
+    "create/update draft; put, patch, or remove draft files; validate; then commit "
+    "the whole package or abort it. put_file accepts UTF-8 content or copies a "
+    "binary source_path from your Workspace/current Project. delete archives the "
+    "published package for recovery. Defaults to your private Skill home; use "
+    "scope='global' ONLY when the user explicitly requested a global Skill."
 )
 
-_OPERATIONS = ("create", "edit", "patch", "delete", "write_file", "remove_file")
+_OPERATIONS = (
+    "inspect",
+    "begin",
+    "put_file",
+    "patch",
+    "remove_file",
+    "validate",
+    "commit",
+    "abort",
+    "delete",
+)
 _KNOWN_FIELDS = frozenset(
-    {"operation", "name", "content", "old_string", "new_string", "path", "source", "scope"}
+    {
+        "operation",
+        "scope",
+        "name",
+        "mode",
+        "draft_id",
+        "path",
+        "content",
+        "source_path",
+        "executable",
+        "old_string",
+        "new_string",
+        "source",
+    }
 )
-
 _OWN_SCOPE = "own"
 _GLOBAL_SCOPE = "global"
 _SCOPES = (_OWN_SCOPE, _GLOBAL_SCOPE)
-_SCOPE_LOCATIONS = {_OWN_SCOPE: "your private home", _GLOBAL_SCOPE: "the global pool"}
+_DRAFT_MODES = ("create", "update")
 _LOGGER = get_logger("tools.skill_manage")
 
 SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = {
@@ -60,51 +92,71 @@ SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "enum": list(_OPERATIONS),
             "description": (
-                "create / edit (full SKILL.md) / patch (one unique old→new edit) / "
-                "delete the skill; write_file / remove_file for a support file."
+                "inspect a published package or draft; begin a create/update draft; "
+                "put_file, patch, or remove_file inside that draft; validate; commit "
+                "or abort the draft; delete archives a published Skill."
             ),
         },
         "scope": {
             "type": "string",
             "enum": list(_SCOPES),
             "description": (
-                "Where to write. 'own' (default) is your private skill home. "
-                "'global' is the shared global pool across all your identity agents — "
-                "use it ONLY when the user explicitly asked to make the skill global."
+                "'own' (default) is your private Skill home. 'global' is the shared "
+                "global pool; use it only when the user explicitly requested global."
             ),
         },
         "name": {
             "type": "string",
-            "description": "The skill name; also its directory. Required for every operation.",
-        },
-        "content": {
-            "type": "string",
             "description": (
-                "For create/edit: the full SKILL.md (YAML front matter with name + "
-                "description, then the body). For write_file: the support file's content."
+                "Published Skill/directory name; required by inspect, begin, and delete."
             ),
         },
-        "old_string": {
+        "mode": {
             "type": "string",
-            "description": "patch: the exact existing text to replace (must be unique).",
+            "enum": list(_DRAFT_MODES),
+            "description": "begin: create a new package or update a copy of an existing package.",
         },
-        "new_string": {
+        "draft_id": {
             "type": "string",
-            "description": "patch: the replacement text (may be empty to delete the match).",
+            "description": "Draft id returned by begin; required for every draft operation.",
         },
         "path": {
             "type": "string",
             "description": (
-                "write_file/remove_file: the support-file path under scripts/, "
-                "references/, or assets/."
+                "Package-relative file path: SKILL.md or a file below scripts/, "
+                "references/, or assets/. inspect may select one text file to return; "
+                "patch defaults to SKILL.md."
             ),
+        },
+        "content": {
+            "type": "string",
+            "description": "put_file: UTF-8 text content (mutually exclusive with source_path).",
+        },
+        "source_path": {
+            "type": "string",
+            "description": (
+                "put_file: copy a regular text or binary file from the current Project "
+                "or Workspace byte-for-byte (mutually exclusive with content)."
+            ),
+        },
+        "executable": {
+            "type": "boolean",
+            "description": "put_file: set executable mode; true is valid only below scripts/.",
+        },
+        "old_string": {
+            "type": "string",
+            "description": "patch: exact existing UTF-8 text to replace; it must be unique.",
+        },
+        "new_string": {
+            "type": "string",
+            "description": "patch: replacement text; it may be empty.",
         },
         "source": {
             "type": "string",
-            "description": "Optional: where this skill came from, recorded as provenance.",
+            "description": "begin: optional provenance label recorded in SKILL.md on commit.",
         },
     },
-    "required": ["operation", "name"],
+    "required": ["operation"],
     "additionalProperties": False,
 }
 
@@ -116,16 +168,7 @@ def make_skill_manage_handler(
     resolve_global_skills_dir: Callable[[], Path],
     reload_skills: Callable[[], None],
 ) -> Callable[[ToolContext, JsonObject], JsonObject]:
-    """Return a handler that authors skills into the calling agent's home or the global pool.
-
-    ``resolve_agent_skills_dir`` maps an agent id to its private skill home and
-    ``resolve_global_skills_dir`` returns the shared user pool (the runtime owns the
-    data-dir layout). After a write, the matching invalidation makes it live in the
-    same session: a private write drops that agent's cached registry
-    (``invalidate_agent_skills``); a global write reloads the whole skill registry
-    (``reload_skills``), since the global pool is layered under every project/agent
-    registry.
-    """
+    """Return the vBot Skill package-management handler."""
 
     def skill_manage_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         unknown_arguments = set(arguments) - _KNOWN_FIELDS
@@ -142,13 +185,21 @@ def make_skill_manage_handler(
         if not isinstance(scope, str) or scope not in _SCOPES:
             allowed = ", ".join(_SCOPES)
             return tool_failure("invalid_arguments", f"scope must be one of: {allowed}")
+        target_root = (
+            resolve_global_skills_dir()
+            if scope == _GLOBAL_SCOPE
+            else resolve_agent_skills_dir(context.agent_id)
+        )
 
-        if scope == _GLOBAL_SCOPE:
-            target_root = resolve_global_skills_dir()
-        else:
-            target_root = resolve_agent_skills_dir(context.agent_id)
         try:
-            result = _apply_operation(authoring, target_root, operation, arguments)
+            data, live_mutation = _apply_operation(
+                authoring,
+                target_root,
+                operation,
+                arguments,
+                context=context,
+                scope=scope,
+            )
         except ToolArgumentError as error:
             return tool_failure("invalid_arguments", str(error))
         except SkillAuthoringError as error:
@@ -156,29 +207,19 @@ def make_skill_manage_handler(
         except OSError as error:
             return tool_failure("skill_write_error", str(error))
 
-        if scope == _GLOBAL_SCOPE:
-            reload_skills()
-        else:
-            invalidate_agent_skills(context.agent_id)
-        _LOGGER.info(
-            "Skill mutated (skill=%s scope=%s operation=%s actor_agent=%s)",
-            result.name,
-            scope,
-            result.operation,
-            context.agent_id,
-        )
-        return tool_success(
-            {
-                "name": result.name,
-                "operation": result.operation,
-                "scope": scope,
-                "message": (
-                    f"Skill '{result.name}' {result.operation} succeeded in "
-                    f"{_SCOPE_LOCATIONS[scope]}."
-                ),
-                "warnings": list(result.warnings),
-            }
-        )
+        if live_mutation:
+            if scope == _GLOBAL_SCOPE:
+                reload_skills()
+            else:
+                invalidate_agent_skills(context.agent_id)
+            _LOGGER.info(
+                "Skill package mutated (skill=%s scope=%s operation=%s actor_agent=%s)",
+                data.get("name"),
+                scope,
+                operation,
+                context.agent_id,
+            )
+        return tool_success({**data, "scope": scope})
 
     return skill_manage_handler
 
@@ -188,42 +229,248 @@ def _apply_operation(
     target_root: Path,
     operation: str,
     arguments: JsonObject,
-) -> SkillWriteResult:
-    name = required_string(arguments.get("name"), field_name="name")
-    source = optional_string(arguments.get("source"), field_name="source")
+    *,
+    context: ToolContext,
+    scope: str,
+) -> tuple[JsonObject, bool]:
+    if operation == "inspect":
+        draft_id = optional_string(arguments.get("draft_id"), field_name="draft_id")
+        selected_path = optional_string(arguments.get("path"), field_name="path")
+        if draft_id is not None:
+            inspection = authoring.inspect_draft(
+                target_root,
+                draft_id,
+                actor_id=context.agent_id,
+                selected_path=selected_path,
+            )
+            return {
+                "operation": operation,
+                "draft_id": draft_id,
+                **_inspection_data(inspection),
+            }, False
+        name = required_string(arguments.get("name"), field_name="name")
+        inspection = authoring.inspect_published(
+            target_root,
+            name,
+            selected_path=selected_path,
+        )
+        return {"operation": operation, **_inspection_data(inspection)}, False
 
-    if operation == "create":
-        content = required_string(arguments.get("content"), field_name="content", strip=False)
-        return authoring.create(target_root, name, content, author="agent", source=source)
-    if operation == "edit":
-        content = required_string(arguments.get("content"), field_name="content", strip=False)
-        return authoring.edit(target_root, name, content, author="agent", source=source)
+    if operation == "begin":
+        name = required_string(arguments.get("name"), field_name="name")
+        mode = required_string(arguments.get("mode"), field_name="mode")
+        if mode not in _DRAFT_MODES:
+            raise ToolArgumentError(f"mode must be one of: {', '.join(_DRAFT_MODES)}")
+        provenance_source = optional_string(arguments.get("source"), field_name="source")
+        draft = authoring.begin_draft(
+            target_root,
+            name,
+            mode=cast(SkillDraftMode, mode),
+            actor_id=context.agent_id,
+            author="agent",
+            source=provenance_source,
+        )
+        return {
+            "operation": operation,
+            "name": draft.name,
+            "mode": draft.mode,
+            "draft_id": draft.id,
+            "message": (
+                f"Draft {draft.id} is isolated; publish it only with validate then commit."
+            ),
+        }, False
+
+    if operation == "delete":
+        name = required_string(arguments.get("name"), field_name="name")
+        namespace = (_GLOBAL_SCOPE,) if scope == _GLOBAL_SCOPE else ("agents", context.agent_id)
+        result = authoring.archive_skill(
+            target_root,
+            name,
+            archive_namespace=namespace,
+        )
+        return {
+            "operation": operation,
+            "name": result.name,
+            "archive_path": str(result.path),
+            "message": f"Skill '{result.name}' was archived and can be recovered.",
+        }, True
+
+    draft_id = required_string(arguments.get("draft_id"), field_name="draft_id")
+    if operation == "put_file":
+        path = required_string(arguments.get("path"), field_name="path")
+        has_content = "content" in arguments
+        source_path = optional_string(arguments.get("source_path"), field_name="source_path")
+        if has_content == (source_path is not None):
+            raise ToolArgumentError("put_file requires exactly one of content or source_path")
+        executable_argument = arguments.get("executable")
+        if has_content:
+            content = _exact_string(arguments.get("content"), field_name="content")
+            text_executable = coerce_bool(
+                executable_argument,
+                field_name="executable",
+                default=False,
+            )
+            manifest_file = authoring.put_draft_text(
+                target_root,
+                draft_id,
+                path,
+                content,
+                actor_id=context.agent_id,
+                executable=text_executable,
+            )
+        else:
+            copied_executable = (
+                None
+                if "executable" not in arguments
+                else coerce_bool(executable_argument, field_name="executable", default=False)
+            )
+            resolved_source = _resolve_safe_source(context, source_path or "")
+            manifest_file = authoring.copy_draft_file(
+                target_root,
+                draft_id,
+                path,
+                resolved_source,
+                actor_id=context.agent_id,
+                executable=copied_executable,
+            )
+        return {
+            "operation": operation,
+            "draft_id": draft_id,
+            "file": _manifest_file_data(manifest_file),
+        }, False
+
     if operation == "patch":
+        path = optional_string(arguments.get("path"), field_name="path") or "SKILL.md"
         old_string = required_string(
-            arguments.get("old_string"), field_name="old_string", strip=False
+            arguments.get("old_string"),
+            field_name="old_string",
+            strip=False,
         )
         new_string = _exact_string(arguments.get("new_string"), field_name="new_string")
-        return authoring.patch(
-            target_root, name, old_string, new_string, author="agent", source=source
+        manifest_file = authoring.patch_draft_text(
+            target_root,
+            draft_id,
+            path,
+            old_string,
+            new_string,
+            actor_id=context.agent_id,
         )
-    if operation == "delete":
-        return authoring.delete(target_root, name)
-    if operation == "write_file":
+        return {
+            "operation": operation,
+            "draft_id": draft_id,
+            "file": _manifest_file_data(manifest_file),
+        }, False
+
+    if operation == "remove_file":
         path = required_string(arguments.get("path"), field_name="path")
-        content = _exact_string(arguments.get("content"), field_name="content")
-        return authoring.write_file(target_root, name, path, content)
-    # remove_file — the only remaining validated operation.
-    path = required_string(arguments.get("path"), field_name="path")
-    return authoring.remove_file(target_root, name, path)
+        authoring.remove_draft_file(
+            target_root,
+            draft_id,
+            path,
+            actor_id=context.agent_id,
+        )
+        return {
+            "operation": operation,
+            "draft_id": draft_id,
+            "path": path.replace("\\", "/"),
+        }, False
+
+    if operation == "validate":
+        inspection = authoring.validate_draft(
+            target_root,
+            draft_id,
+            actor_id=context.agent_id,
+        )
+        return {
+            "operation": operation,
+            "draft_id": draft_id,
+            "valid": True,
+            **_inspection_data(inspection),
+        }, False
+
+    if operation == "commit":
+        result = authoring.commit_draft(
+            target_root,
+            draft_id,
+            actor_id=context.agent_id,
+        )
+        return {
+            "operation": operation,
+            "name": result.name,
+            "draft_id": draft_id,
+            "warnings": list(result.warnings),
+            "message": f"Skill '{result.name}' package committed.",
+        }, True
+
+    draft = authoring.abort_draft(
+        target_root,
+        draft_id,
+        actor_id=context.agent_id,
+    )
+    return {
+        "operation": operation,
+        "name": draft.name,
+        "draft_id": draft.id,
+        "message": f"Skill draft {draft.id} discarded; published state was unchanged.",
+    }, False
+
+
+def _inspection_data(inspection: SkillPackageInspection) -> JsonObject:
+    data: JsonObject = {
+        "name": inspection.name,
+        "skill_md": inspection.skill_md,
+        "files": [_manifest_file_data(item) for item in inspection.files],
+        "diagnostics": list(inspection.diagnostics),
+    }
+    if inspection.selected_path is not None:
+        data["selected_path"] = inspection.selected_path
+        data["selected_content"] = inspection.selected_content
+    return data
+
+
+def _manifest_file_data(item: SkillPackageFile) -> JsonObject:
+    return {
+        "path": item.path,
+        "kind": item.kind,
+        "size": item.size,
+        "sha256": item.sha256,
+        "media_type": item.media_type,
+        "binary": item.binary,
+        "executable": item.executable,
+    }
+
+
+def _resolve_safe_source(context: ToolContext, value: str) -> Path:
+    source = context.resolve_path(value)
+    allowed_roots = _unique_paths((context.effective_cwd, context.workspace))
+    if not any(_is_within(source, root) for root in allowed_roots):
+        locations = ", ".join(str(root) for root in allowed_roots)
+        raise SkillAuthoringError(
+            f"source_path must stay inside the current Project or Workspace: {locations}"
+        )
+    if not source.is_file():
+        raise SkillAuthoringError(f"source_path is not a regular file: {source}")
+    return source
+
+
+def _unique_paths(paths: Sequence[Path]) -> list[Path]:
+    unique: list[Path] = []
+    for path in paths:
+        resolved = path.expanduser().resolve()
+        if resolved not in unique:
+            unique.append(resolved)
+    return unique
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
 
 
 def _exact_string(value: object, *, field_name: str) -> str:
-    """Return a string verbatim (may be empty), rejecting non-string values.
-
-    Used where an empty value is meaningful — a patch ``new_string`` that deletes
-    the match, or an intentionally empty support file — so blank is kept, not
-    treated as omitted.
-    """
     if not isinstance(value, str):
         raise ToolArgumentError(f"{field_name} must be a string")
     return value
@@ -237,7 +484,7 @@ def register_skill_manage_tool(
     resolve_global_skills_dir: Callable[[], Path],
     reload_skills: Callable[[], None],
 ) -> None:
-    """Register the private/global skill authoring tool (identity-only, allow-list gated)."""
+    """Register identity-only vBot Skill package management."""
     registry.register(
         SKILL_MANAGE_TOOL_NAME,
         SKILL_MANAGE_TOOL_DESCRIPTION,
@@ -249,7 +496,7 @@ def register_skill_manage_tool(
             resolve_global_skills_dir,
             reload_skills,
         ),
-        display=ToolDisplay(summary_fields=("operation", "name", "scope")),
+        display=ToolDisplay(summary_fields=("operation", "name", "draft_id", "scope")),
     )
 
 

@@ -40,6 +40,14 @@ def service() -> SkillAuthoringService:
     return SkillAuthoringService()
 
 
+@pytest.fixture
+def package_service(tmp_path: Path) -> SkillAuthoringService:
+    return SkillAuthoringService(
+        drafts_root=tmp_path / "temp" / "skill-drafts",
+        archive_root=tmp_path / "archive",
+    )
+
+
 class TestCreate:
     def test_creates_skill_file_with_body(
         self, service: SkillAuthoringService, tmp_path: Path
@@ -322,3 +330,241 @@ class TestProtectedRootRefusal:
 
         service.create(agent_home, "demo", skill_document(), author="agent")
         assert (agent_home / "demo" / "SKILL.md").is_file()
+
+
+class TestPackageDraftLifecycle:
+    def test_create_draft_is_isolated_until_commit(
+        self,
+        package_service: SkillAuthoringService,
+        tmp_path: Path,
+    ) -> None:
+        skills_root = tmp_path / "skills"
+        draft = package_service.begin_draft(
+            skills_root,
+            "demo",
+            mode="create",
+            actor_id="main",
+            author="agent",
+        )
+
+        package_service.put_draft_text(
+            skills_root,
+            draft.id,
+            "SKILL.md",
+            skill_document(),
+            actor_id="main",
+        )
+        assert not (skills_root / "demo").exists()
+
+        inspection = package_service.validate_draft(
+            skills_root,
+            draft.id,
+            actor_id="main",
+        )
+        result = package_service.commit_draft(
+            skills_root,
+            draft.id,
+            actor_id="main",
+        )
+
+        assert [item.path for item in inspection.files] == ["SKILL.md"]
+        assert result.operation == "commit"
+        assert SkillRegistry.load(skills_root).get("demo").description == "Do a demo task."
+        assert not draft.path.exists()
+
+    def test_update_draft_keeps_published_package_unchanged_until_commit(
+        self,
+        package_service: SkillAuthoringService,
+        tmp_path: Path,
+    ) -> None:
+        skills_root = tmp_path / "skills"
+        package_service.create(
+            skills_root,
+            "demo",
+            skill_document(body="old body"),
+            author="agent",
+        )
+        draft = package_service.begin_draft(
+            skills_root,
+            "demo",
+            mode="update",
+            actor_id="main",
+            author="agent",
+        )
+
+        package_service.patch_draft_text(
+            skills_root,
+            draft.id,
+            "SKILL.md",
+            "old body",
+            "new body",
+            actor_id="main",
+        )
+
+        published = (skills_root / "demo" / "SKILL.md").read_text(encoding="utf-8")
+        assert "old body" in published
+        assert "new body" not in published
+
+        package_service.commit_draft(skills_root, draft.id, actor_id="main")
+        assert "new body" in (skills_root / "demo" / "SKILL.md").read_text(encoding="utf-8")
+
+    def test_binary_asset_is_copied_byte_for_byte(
+        self,
+        package_service: SkillAuthoringService,
+        tmp_path: Path,
+    ) -> None:
+        skills_root = tmp_path / "skills"
+        source = tmp_path / "source.png"
+        source.write_bytes(b"\x89PNG\r\n\x1a\n\x00\xff")
+        draft = package_service.begin_draft(
+            skills_root,
+            "demo",
+            mode="create",
+            actor_id="main",
+            author="agent",
+        )
+        package_service.put_draft_text(
+            skills_root,
+            draft.id,
+            "SKILL.md",
+            skill_document(),
+            actor_id="main",
+        )
+
+        manifest_file = package_service.copy_draft_file(
+            skills_root,
+            draft.id,
+            "assets/logo.png",
+            source,
+            actor_id="main",
+        )
+        inspection = package_service.validate_draft(
+            skills_root,
+            draft.id,
+            actor_id="main",
+        )
+        package_service.commit_draft(skills_root, draft.id, actor_id="main")
+
+        assert manifest_file.binary is True
+        assert manifest_file.kind == "assets"
+        assert [item.path for item in inspection.files] == ["SKILL.md", "assets/logo.png"]
+        assert (skills_root / "demo" / "assets" / "logo.png").read_bytes() == source.read_bytes()
+
+    def test_rejects_non_vbot_top_level_directory(
+        self,
+        package_service: SkillAuthoringService,
+        tmp_path: Path,
+    ) -> None:
+        skills_root = tmp_path / "skills"
+        draft = package_service.begin_draft(
+            skills_root,
+            "demo",
+            mode="create",
+            actor_id="main",
+            author="agent",
+        )
+        package_service.put_draft_text(
+            skills_root,
+            draft.id,
+            "SKILL.md",
+            skill_document(),
+            actor_id="main",
+        )
+        foreign_metadata = draft.path / "agents" / "openai.yaml"
+        foreign_metadata.parent.mkdir()
+        foreign_metadata.write_text("interface: {}\n", encoding="utf-8")
+
+        with pytest.raises(SkillAuthoringError) as exc:
+            package_service.validate_draft(skills_root, draft.id, actor_id="main")
+
+        assert any(
+            "Unsupported top-level Skill package path: agents" in diagnostic
+            for diagnostic in exc.value.diagnostics
+        )
+        assert not (skills_root / "demo").exists()
+
+    def test_invalid_update_cannot_replace_published_skill(
+        self,
+        package_service: SkillAuthoringService,
+        tmp_path: Path,
+    ) -> None:
+        skills_root = tmp_path / "skills"
+        package_service.create(skills_root, "demo", skill_document(), author="agent")
+        draft = package_service.begin_draft(
+            skills_root,
+            "demo",
+            mode="update",
+            actor_id="main",
+            author="agent",
+        )
+        package_service.put_draft_text(
+            skills_root,
+            draft.id,
+            "SKILL.md",
+            "---\nname: demo\n---\n",
+            actor_id="main",
+        )
+
+        with pytest.raises(SkillAuthoringError):
+            package_service.commit_draft(skills_root, draft.id, actor_id="main")
+
+        assert SkillRegistry.load(skills_root).get("demo").description == "Do a demo task."
+        assert draft.path.exists()
+
+    def test_draft_is_bound_to_actor_and_scope(
+        self,
+        package_service: SkillAuthoringService,
+        tmp_path: Path,
+    ) -> None:
+        skills_root = tmp_path / "skills"
+        draft = package_service.begin_draft(
+            skills_root,
+            "demo",
+            mode="create",
+            actor_id="main",
+            author="agent",
+        )
+
+        with pytest.raises(SkillAuthoringError, match="different agent"):
+            package_service.inspect_draft(skills_root, draft.id, actor_id="other")
+        with pytest.raises(SkillAuthoringError, match="different scope"):
+            package_service.inspect_draft(tmp_path / "other-skills", draft.id, actor_id="main")
+
+    def test_abort_discards_only_draft(
+        self,
+        package_service: SkillAuthoringService,
+        tmp_path: Path,
+    ) -> None:
+        skills_root = tmp_path / "skills"
+        package_service.create(skills_root, "demo", skill_document(), author="agent")
+        draft = package_service.begin_draft(
+            skills_root,
+            "demo",
+            mode="update",
+            actor_id="main",
+            author="agent",
+        )
+
+        package_service.abort_draft(skills_root, draft.id, actor_id="main")
+
+        assert not draft.path.exists()
+        assert (skills_root / "demo" / "SKILL.md").is_file()
+
+    def test_archive_delete_is_unique_and_recoverable(
+        self,
+        package_service: SkillAuthoringService,
+        tmp_path: Path,
+    ) -> None:
+        skills_root = tmp_path / "skills"
+        package_service.create(skills_root, "demo", skill_document(), author="agent")
+
+        result = package_service.archive_skill(
+            skills_root,
+            "demo",
+            archive_namespace=("global",),
+        )
+
+        assert result.operation == "archive"
+        assert not (skills_root / "demo").exists()
+        assert (result.path / "SKILL.md").is_file()
+        assert result.path.is_relative_to(tmp_path / "archive" / "skills" / "global" / "demo")

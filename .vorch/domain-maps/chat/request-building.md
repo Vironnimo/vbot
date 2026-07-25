@@ -30,7 +30,7 @@ When run-local Model fallback begins, Chat rebuilds request state with the fallb
 
 ## Skills and prompt-cache stability
 
-Pure-text `/skill-name` at the start and `$skill-name` anywhere are deterministic Skill activation hints; `$` never routes to a built-in command. The original user message stays unchanged. Only allowed, loadable, currently available Skills activate, and one Session note is written per activation.
+Pure-text `/skill-name` at the start and `$skill-name` anywhere are deterministic Skill activation hints; `$` never routes to a built-in command. The original user message stays unchanged. Only allowed, loadable, currently available Skills activate. An identical name+content activation deduplicates, but committing a changed package permits the same Skill name to activate again; carrier reconstruction is latest-wins by content. After Compaction, Chat reinjects a wholly missing Skill before the Summary as before; when the surviving Projection/tail contains an older version, it places the newest content after that shaped history so the stale carrier cannot regain precedence over the committed package.
 
 `_pinned_skill_catalog` snapshots the rendered Skill catalog text in Session metadata on first build. Later requests reuse that exact text to keep the System Prompt stable for provider prompt caching. A newly available+allowed Skill therefore does not rewrite the catalog; `_announce_newly_available_skills` adds a one-time System Reminder note instead. The admitted working Project supplies Project Skills while an Identity Agent retains its private Skill layer; Config Agents remain under Project ceilings.
 

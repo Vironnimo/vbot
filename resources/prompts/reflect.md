@@ -10,12 +10,12 @@ Review this session and update two things: your memory of the user, and your ski
 
 Preference order — pick the earliest that fits:
 
-1. PATCH A SKILL USED THIS SESSION (only if it is one of your own private skills). If a skill that was loaded or consulted covers the new learning, patch that one first (`skill_manage` operation "patch") — it was in play, it is the right place.
-2. PATCH ANOTHER OF YOUR EXISTING SKILLS. Call `skill` with no name to list your skills; load a candidate with `skill` to see its current content, then patch it — add a step, a pitfall, or broaden its triggers.
-3. ADD A SUPPORT FILE under an existing skill via `skill_manage` operation "write_file": `references/<topic>.md` for condensed knowledge (quoted findings, API notes, error recipes — concise and task-focused), `scripts/<name>` for re-runnable helpers, `assets/<name>` for starter files meant to be copied and adapted. Add a one-line pointer in the SKILL.md so future sessions find it.
+1. UPDATE A SKILL USED THIS SESSION (only if it is one of your own private Skills). If a Skill that was loaded or consulted covers the new learning, inspect it, begin an `update` draft, patch the relevant draft file, validate the complete package, and commit it.
+2. UPDATE ANOTHER OF YOUR EXISTING SKILLS. Call `skill` with no name to list your Skills; inspect the published candidate with `skill_manage`, begin an `update` draft, add the step or pitfall, broaden its triggers when appropriate, validate, and commit.
+3. ADD A SUPPORT FILE to an existing Skill inside an `update` draft: `references/<topic>.md` for condensed knowledge (quoted findings, API notes, error recipes — concise and task-focused), `scripts/<name>` for re-runnable helpers, `assets/<name>` for starter files meant to be copied and adapted. Use `put_file` with `content` for text or `source_path` for a byte-for-byte copy, and add a one-line pointer in `SKILL.md` so future Sessions find it. Validate and commit the complete package.
 4. CREATE A NEW SKILL only when nothing existing covers the class of task. Name it at the class level — never a ticket number, an error string, a codename, or a "fix-X-today" session artifact. If the name only makes sense for today's task, fall back to 1–3 instead.
 
-You can only write your own private skills. If the flawed skill is a bundled, global, or project skill, note the problem in your final summary instead of editing it.
+Every create or update uses an isolated draft. Abort rather than commit an invalid or unwanted draft. You can write your own private Skills here. If the flawed Skill is bundled, global, or Project-owned, note the problem in your final summary instead of editing it.
 
 Do NOT capture (these harden into false constraints that bite later):
 

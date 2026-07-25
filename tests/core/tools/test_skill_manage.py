@@ -1,9 +1,10 @@
-"""Tests for the internal agent skill-authoring tool (``skill_manage``)."""
+"""Tests for package-oriented vBot Skill authoring through ``skill_manage``."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import Any, cast
 
@@ -18,13 +19,16 @@ from core.tools import (
 
 
 def _skill_md(
-    name: str = "demo", description: str = "Do a demo task.", body: str = "# Demo\n"
+    name: str = "demo",
+    description: str = "Do a demo task.",
+    body: str = "# Demo\n",
 ) -> str:
     return f"---\nname: {name}\ndescription: {description}\n---\n\n{body}"
 
 
 class _Harness:
     def __init__(self, tmp_path: Path) -> None:
+        self.root = tmp_path
         self._homes = tmp_path / "agents"
         self._global = tmp_path / "skills"
         self.invalidated: list[str] = []
@@ -32,7 +36,11 @@ class _Harness:
         self.tools = ToolRegistry()
         register_skill_manage_tool(
             self.tools,
-            SkillAuthoringService(protected_roots=[tmp_path / "resources" / "skills"]),
+            SkillAuthoringService(
+                protected_roots=[tmp_path / "resources" / "skills"],
+                drafts_root=tmp_path / "temp" / "skill-drafts",
+                archive_root=tmp_path / "archive",
+            ),
             self.home,
             self.invalidated.append,
             lambda: self._global,
@@ -49,15 +57,44 @@ class _Harness:
         self.reloaded += 1
 
     def run(self, arguments: dict[str, object], agent_id: str = "main") -> dict[str, Any]:
-        context = _context(agent_id)
+        context = _context(agent_id, self.root)
         return cast(
             dict[str, Any],
             asyncio.run(self.tools.dispatch(context, arguments, [SKILL_MANAGE_TOOL_NAME])),
         )
 
+    def begin(self, *, name: str = "demo", mode: str = "create", scope: str = "own") -> str:
+        result = self.run({"operation": "begin", "name": name, "mode": mode, "scope": scope})
+        assert result["ok"] is True
+        return cast(str, cast(dict[str, Any], result["data"])["draft_id"])
 
-def _context(agent_id: str) -> ToolContext:
-    here = Path(".")
+    def put_skill_md(
+        self,
+        draft_id: str,
+        *,
+        content: str | None = None,
+        scope: str = "own",
+    ) -> None:
+        result = self.run(
+            {
+                "operation": "put_file",
+                "draft_id": draft_id,
+                "path": "SKILL.md",
+                "content": content if content is not None else _skill_md(),
+                "scope": scope,
+            }
+        )
+        assert result["ok"] is True
+
+    def commit(self, draft_id: str, *, scope: str = "own") -> dict[str, Any]:
+        validated = self.run({"operation": "validate", "draft_id": draft_id, "scope": scope})
+        assert validated["ok"] is True
+        result = self.run({"operation": "commit", "draft_id": draft_id, "scope": scope})
+        assert result["ok"] is True
+        return result
+
+
+def _context(agent_id: str, root: Path) -> ToolContext:
     return ToolContext(
         agent_id=agent_id,
         session_id="session-one",
@@ -65,219 +102,249 @@ def _context(agent_id: str) -> ToolContext:
         tool_call_id="call-one",
         tool_name=SKILL_MANAGE_TOOL_NAME,
         tool_call_index=0,
-        workspace=here,
-        app_root=here,
-        data_root=here,
+        workspace=root,
+        app_root=root,
+        data_root=root,
+        cwd=root,
     )
 
 
-def test_create_in_empty_home_and_invalidates(tmp_path: Path, caplog: Any) -> None:
+def test_create_package_is_invisible_until_commit(
+    tmp_path: Path,
+    caplog: Any,
+) -> None:
     harness = _Harness(tmp_path)
+    draft_id = harness.begin()
+    harness.put_skill_md(draft_id, content=_skill_md(body="private body"))
+
+    assert not (harness.home("main") / "demo").exists()
+    assert harness.invalidated == []
 
     with caplog.at_level(logging.INFO, logger="vbot.tools.skill_manage"):
-        result = harness.run(
-            {"operation": "create", "name": "demo", "content": _skill_md(body="private body")}
-        )
+        result = harness.commit(draft_id)
 
-    assert result["ok"] is True
-    assert cast(dict[str, Any], result["data"])["operation"] == "create"
+    assert cast(dict[str, Any], result["data"])["operation"] == "commit"
     assert (harness.home("main") / "demo" / "SKILL.md").is_file()
     assert harness.invalidated == ["main"]
     messages = [
         record.getMessage() for record in caplog.records if record.name == "vbot.tools.skill_manage"
     ]
-    assert messages == ["Skill mutated (skill=demo scope=own operation=create actor_agent=main)"]
+    assert messages == [
+        "Skill package mutated (skill=demo scope=own operation=commit actor_agent=main)"
+    ]
     assert "private body" not in caplog.text
 
 
-def test_created_skill_is_loadable_in_same_session(tmp_path: Path) -> None:
-    # The "live registry" contract: after the write, a fresh scan of the agent's
-    # home (what the next resolve does) finds the new skill by name.
+def test_complete_package_is_loadable_after_commit(tmp_path: Path) -> None:
     harness = _Harness(tmp_path)
+    draft_id = harness.begin()
+    harness.put_skill_md(draft_id)
+    support = harness.run(
+        {
+            "operation": "put_file",
+            "draft_id": draft_id,
+            "path": "references/notes.md",
+            "content": "Useful notes\n",
+        }
+    )
 
-    harness.run({"operation": "create", "name": "demo", "content": _skill_md()})
+    harness.commit(draft_id)
 
-    registry = SkillRegistry.load(harness.home("main"))
-    assert registry.get("demo").description == "Do a demo task."
+    assert support["ok"] is True
+    assert SkillRegistry.load(harness.home("main")).get("demo").description == "Do a demo task."
+    assert (harness.home("main") / "demo" / "references" / "notes.md").read_text(
+        encoding="utf-8"
+    ) == "Useful notes\n"
 
 
-def test_edit_rewrites_skill(tmp_path: Path) -> None:
+def test_update_draft_does_not_leak_partial_changes(tmp_path: Path) -> None:
     harness = _Harness(tmp_path)
-    harness.run({"operation": "create", "name": "demo", "content": _skill_md()})
+    create_id = harness.begin()
+    harness.put_skill_md(create_id, content=_skill_md(body="old marker"))
+    harness.commit(create_id)
+    harness.invalidated.clear()
+
+    update_id = harness.begin(mode="update")
+    patched = harness.run(
+        {
+            "operation": "patch",
+            "draft_id": update_id,
+            "old_string": "old marker",
+            "new_string": "new marker",
+        }
+    )
+
+    assert patched["ok"] is True
+    assert "old marker" in (harness.home("main") / "demo" / "SKILL.md").read_text(encoding="utf-8")
+    assert harness.invalidated == []
+
+    harness.commit(update_id)
+    assert "new marker" in (harness.home("main") / "demo" / "SKILL.md").read_text(encoding="utf-8")
+    assert harness.invalidated == ["main"]
+
+
+def test_binary_asset_copies_from_workspace_without_utf8_conversion(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path)
+    source = tmp_path / "logo.png"
+    source.write_bytes(b"\x89PNG\r\n\x1a\n\x00\xff")
+    draft_id = harness.begin()
+    harness.put_skill_md(draft_id)
 
     result = harness.run(
-        {"operation": "edit", "name": "demo", "content": _skill_md(description="Updated.")}
+        {
+            "operation": "put_file",
+            "draft_id": draft_id,
+            "path": "assets/logo.png",
+            "source_path": str(source),
+        }
     )
+    harness.commit(draft_id)
 
-    assert result["ok"] is True
-    assert SkillRegistry.load(harness.home("main")).get("demo").description == "Updated."
+    file_data = cast(dict[str, Any], cast(dict[str, Any], result["data"])["file"])
+    assert file_data["binary"] is True
+    assert (
+        harness.home("main") / "demo" / "assets" / "logo.png"
+    ).read_bytes() == source.read_bytes()
 
 
-def test_patch_applies_unique_replacement(tmp_path: Path) -> None:
+def test_source_path_outside_workspace_is_rejected(tmp_path: Path) -> None:
     harness = _Harness(tmp_path)
-    harness.run({"operation": "create", "name": "demo", "content": _skill_md(body="old line\n")})
+    draft_id = harness.begin()
 
     result = harness.run(
-        {"operation": "patch", "name": "demo", "old_string": "old line", "new_string": "new line"}
-    )
-
-    assert result["ok"] is True
-    assert "new line" in (harness.home("main") / "demo" / "SKILL.md").read_text(encoding="utf-8")
-
-
-def test_patch_empty_new_string_deletes_text(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
-    harness.run(
-        {"operation": "create", "name": "demo", "content": _skill_md(body="drop me\nkeep\n")}
-    )
-
-    result = harness.run(
-        {"operation": "patch", "name": "demo", "old_string": "drop me\n", "new_string": ""}
-    )
-
-    assert result["ok"] is True
-    body = (harness.home("main") / "demo" / "SKILL.md").read_text(encoding="utf-8")
-    assert "drop me" not in body
-    assert "keep" in body
-
-
-def test_delete_removes_skill(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
-    harness.run({"operation": "create", "name": "demo", "content": _skill_md()})
-
-    result = harness.run({"operation": "delete", "name": "demo"})
-
-    assert result["ok"] is True
-    assert not (harness.home("main") / "demo").exists()
-
-
-def test_write_and_remove_support_file(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
-    harness.run({"operation": "create", "name": "demo", "content": _skill_md()})
-
-    write_result = harness.run(
-        {"operation": "write_file", "name": "demo", "path": "scripts/run.py", "content": "x = 1\n"}
-    )
-    assert write_result["ok"] is True
-    assert (harness.home("main") / "demo" / "scripts" / "run.py").is_file()
-
-    remove_result = harness.run(
-        {"operation": "remove_file", "name": "demo", "path": "scripts/run.py"}
-    )
-    assert remove_result["ok"] is True
-    assert not (harness.home("main") / "demo" / "scripts" / "run.py").exists()
-
-
-def test_invalid_skill_returns_diagnostics(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
-
-    result = harness.run(
-        {"operation": "create", "name": "demo", "content": "---\nname: demo\n---\n\nbody\n"}
+        {
+            "operation": "put_file",
+            "draft_id": draft_id,
+            "path": "references/source.py",
+            "source_path": str(Path(__file__).resolve()),
+        }
     )
 
     assert result["ok"] is False
-    error = cast(dict[str, Any], result["error"])
-    assert error["code"] == "skill_write_rejected"
-    assert "description" in error["message"]
-    # A rejected write does not invalidate anything (nothing changed).
+    assert "current Project or Workspace" in cast(dict[str, Any], result["error"])["message"]
+
+
+def test_non_vbot_package_path_is_rejected(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path)
+    draft_id = harness.begin()
+
+    result = harness.run(
+        {
+            "operation": "put_file",
+            "draft_id": draft_id,
+            "path": "agents/openai.yaml",
+            "content": "interface: {}\n",
+        }
+    )
+
+    assert result["ok"] is False
+    assert "SKILL.md" in cast(dict[str, Any], result["error"])["message"]
+
+
+def test_inspect_returns_manifest_and_selected_text(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path)
+    draft_id = harness.begin()
+    harness.put_skill_md(draft_id)
+    harness.run(
+        {
+            "operation": "put_file",
+            "draft_id": draft_id,
+            "path": "scripts/run.py",
+            "content": "print('ok')\n",
+            "executable": True,
+        }
+    )
+
+    result = harness.run(
+        {
+            "operation": "inspect",
+            "draft_id": draft_id,
+            "path": "scripts/run.py",
+        }
+    )
+
+    data = cast(dict[str, Any], result["data"])
+    files = cast(list[dict[str, Any]], data["files"])
+    assert result["ok"] is True
+    assert data["selected_content"] == "print('ok')\n"
+    assert [item["path"] for item in files] == ["SKILL.md", "scripts/run.py"]
+    assert files[1]["executable"] is (os.name != "nt")
+
+
+def test_invalid_draft_cannot_commit(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path)
+    draft_id = harness.begin()
+    harness.put_skill_md(draft_id, content="---\nname: demo\n---\n\nbody\n")
+
+    result = harness.run({"operation": "commit", "draft_id": draft_id})
+
+    assert result["ok"] is False
+    assert "description" in cast(dict[str, Any], result["error"])["message"]
+    assert not (harness.home("main") / "demo").exists()
     assert harness.invalidated == []
 
 
-def test_path_traversal_rejected(tmp_path: Path) -> None:
+def test_draft_is_bound_to_scope_and_agent(tmp_path: Path) -> None:
     harness = _Harness(tmp_path)
+    draft_id = harness.begin()
 
-    result = harness.run({"operation": "create", "name": "../escape", "content": _skill_md()})
-
-    assert result["ok"] is False
-    assert cast(dict[str, Any], result["error"])["code"] == "skill_write_rejected"
-
-
-def test_unknown_operation_is_invalid_arguments(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
-
-    result = harness.run({"operation": "promote", "name": "demo"})
-
-    assert result["ok"] is False
-    assert cast(dict[str, Any], result["error"])["code"] == "invalid_arguments"
-
-
-def test_missing_content_is_invalid_arguments(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
-
-    result = harness.run({"operation": "create", "name": "demo"})
-
-    assert result["ok"] is False
-    assert cast(dict[str, Any], result["error"])["code"] == "invalid_arguments"
-
-
-def test_unknown_argument_rejected(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
-
-    result = harness.run(
-        {"operation": "create", "name": "demo", "content": _skill_md(), "target": "global"}
+    wrong_scope = harness.run({"operation": "inspect", "draft_id": draft_id, "scope": "global"})
+    wrong_agent = harness.run(
+        {"operation": "inspect", "draft_id": draft_id},
+        agent_id="other",
     )
 
-    assert result["ok"] is False
-    assert cast(dict[str, Any], result["error"])["code"] == "invalid_arguments"
+    assert wrong_scope["ok"] is False
+    assert "different scope" in cast(dict[str, Any], wrong_scope["error"])["message"]
+    assert wrong_agent["ok"] is False
+    assert "different agent" in cast(dict[str, Any], wrong_agent["error"])["message"]
 
 
-def test_writes_target_only_calling_agents_home(tmp_path: Path) -> None:
+def test_abort_discards_draft_without_invalidation(tmp_path: Path) -> None:
     harness = _Harness(tmp_path)
+    draft_id = harness.begin()
 
-    harness.run({"operation": "create", "name": "demo", "content": _skill_md()}, agent_id="alice")
+    result = harness.run({"operation": "abort", "draft_id": draft_id})
 
-    assert (harness.home("alice") / "demo" / "SKILL.md").is_file()
-    assert not harness.home("bob").exists()
-    assert harness.invalidated == ["alice"]
+    assert result["ok"] is True
+    assert harness.invalidated == []
+    missing = harness.run({"operation": "inspect", "draft_id": draft_id})
+    assert missing["ok"] is False
 
 
-def test_own_is_default_scope(tmp_path: Path) -> None:
-    # No scope argument writes the private home and invalidates that agent only —
-    # the global pool stays untouched and is not reloaded.
+def test_delete_archives_complete_skill_and_invalidates(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path)
+    draft_id = harness.begin()
+    harness.put_skill_md(draft_id)
+    harness.commit(draft_id)
+    harness.invalidated.clear()
+
+    result = harness.run({"operation": "delete", "name": "demo"})
+
+    data = cast(dict[str, Any], result["data"])
+    archive_path = Path(cast(str, data["archive_path"]))
+    assert result["ok"] is True
+    assert not (harness.home("main") / "demo").exists()
+    assert (archive_path / "SKILL.md").is_file()
+    assert harness.invalidated == ["main"]
+
+
+def test_global_commit_reloads_global_pool(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path)
+    draft_id = harness.begin(scope="global")
+    harness.put_skill_md(draft_id, scope="global")
+
+    harness.commit(draft_id, scope="global")
+
+    assert (harness.global_home() / "demo" / "SKILL.md").is_file()
+    assert harness.reloaded == 1
+    assert harness.invalidated == []
+
+
+def test_removed_direct_create_operation_is_rejected(tmp_path: Path) -> None:
     harness = _Harness(tmp_path)
 
     result = harness.run({"operation": "create", "name": "demo", "content": _skill_md()})
 
-    assert result["ok"] is True
-    assert cast(dict[str, Any], result["data"])["scope"] == "own"
-    assert harness.invalidated == ["main"]
-    assert harness.reloaded == 0
-    assert not harness.global_home().exists()
-
-
-def test_global_scope_writes_global_pool_and_reloads(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
-
-    result = harness.run(
-        {"operation": "create", "name": "demo", "content": _skill_md(), "scope": "global"}
-    )
-
-    assert result["ok"] is True
-    assert cast(dict[str, Any], result["data"])["scope"] == "global"
-    assert (harness.global_home() / "demo" / "SKILL.md").is_file()
-    # A global write reloads the whole registry, and never touches an agent home.
-    assert harness.reloaded == 1
-    assert harness.invalidated == []
-    assert not harness.home("main").exists()
-
-
-def test_global_created_skill_is_loadable(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
-
-    harness.run({"operation": "create", "name": "demo", "content": _skill_md(), "scope": "global"})
-
-    assert SkillRegistry.load(harness.global_home()).get("demo").description == "Do a demo task."
-
-
-def test_invalid_scope_rejected(tmp_path: Path) -> None:
-    harness = _Harness(tmp_path)
-
-    result = harness.run(
-        {"operation": "create", "name": "demo", "content": _skill_md(), "scope": "project"}
-    )
-
     assert result["ok"] is False
     assert cast(dict[str, Any], result["error"])["code"] == "invalid_arguments"
-    # A rejected scope writes nothing and reloads nothing.
-    assert harness.reloaded == 0
-    assert harness.invalidated == []

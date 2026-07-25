@@ -150,14 +150,48 @@ function plannedToolResponse(prompt, results, offeredTools) {
   }
 
   if (prompt.includes("E2E_LEARN_COMMAND")) {
-    if (resultsFor(results, "skill_manage").length === 0) {
+    const manageResults = resultsFor(results, "skill_manage");
+    if (manageResults.length === 0) {
       return {
         calls: [
           toolCall("skill_manage", {
-            operation: "create",
+            operation: "begin",
             name: "e2e-learned-command",
+            mode: "create",
+          }),
+        ],
+      };
+    }
+    const draftId = manageResults[0].envelope?.data?.draft_id;
+    if (manageResults.length === 1) {
+      return {
+        calls: [
+          toolCall("skill_manage", {
+            operation: "put_file",
+            draft_id: draftId,
+            path: "SKILL.md",
             content:
               "---\nname: e2e-learned-command\ndescription: Temporary Skill authored by the slash-command E2E scenario.\n---\n\n# Learned Command Skill\n\nDeterministic slash-command evidence.\n",
+          }),
+        ],
+      };
+    }
+    if (manageResults.length === 2) {
+      return {
+        calls: [
+          toolCall("skill_manage", {
+            operation: "validate",
+            draft_id: draftId,
+          }),
+        ],
+      };
+    }
+    if (manageResults.length === 3) {
+      return {
+        calls: [
+          toolCall("skill_manage", {
+            operation: "commit",
+            draft_id: draftId,
           }),
         ],
       };
@@ -329,22 +363,23 @@ function plannedToolResponse(prompt, results, offeredTools) {
       return {
         calls: [
           toolCall("skill_manage", {
-            operation: "create",
+            operation: "begin",
             name: "e2e-authored",
-            content:
-              "---\nname: e2e-authored\ndescription: Temporary deterministic E2E Skill.\n---\n\n# E2E Authored Skill\n\nOriginal instruction marker.\n",
+            mode: "create",
           }),
         ],
       };
     }
+    const createDraftId = manageResults[0].envelope?.data?.draft_id;
     if (manageResults.length === 1) {
       return {
         calls: [
           toolCall("skill_manage", {
-            operation: "write_file",
-            name: "e2e-authored",
-            path: "references/evidence.txt",
-            content: "temporary support-file evidence",
+            operation: "put_file",
+            draft_id: createDraftId,
+            path: "SKILL.md",
+            content:
+              "---\nname: e2e-authored\ndescription: Temporary deterministic E2E Skill.\n---\n\n# E2E Authored Skill\n\nOriginal instruction marker.\n",
           }),
         ],
       };
@@ -353,10 +388,42 @@ function plannedToolResponse(prompt, results, offeredTools) {
       return {
         calls: [
           toolCall("skill_manage", {
+            operation: "put_file",
+            draft_id: createDraftId,
+            path: "references/evidence.txt",
+            content: "temporary support-file evidence",
+          }),
+        ],
+      };
+    }
+    if (manageResults.length === 3) {
+      return {
+        calls: [
+          toolCall("skill_manage", {
             operation: "patch",
-            name: "e2e-authored",
+            draft_id: createDraftId,
             old_string: "Original instruction marker.",
             new_string: "Updated instruction marker.",
+          }),
+        ],
+      };
+    }
+    if (manageResults.length === 4) {
+      return {
+        calls: [
+          toolCall("skill_manage", {
+            operation: "validate",
+            draft_id: createDraftId,
+          }),
+        ],
+      };
+    }
+    if (manageResults.length === 5) {
+      return {
+        calls: [
+          toolCall("skill_manage", {
+            operation: "commit",
+            draft_id: createDraftId,
           }),
         ],
       };
@@ -364,18 +431,50 @@ function plannedToolResponse(prompt, results, offeredTools) {
     if (resultsFor(results, "skill").length === 0) {
       return { calls: [toolCall("skill", { name: "e2e-authored" })] };
     }
-    if (manageResults.length === 3) {
+    if (manageResults.length === 6) {
+      return {
+        calls: [
+          toolCall("skill_manage", {
+            operation: "begin",
+            name: "e2e-authored",
+            mode: "update",
+          }),
+        ],
+      };
+    }
+    const updateDraftId = manageResults[6].envelope?.data?.draft_id;
+    if (manageResults.length === 7) {
       return {
         calls: [
           toolCall("skill_manage", {
             operation: "remove_file",
-            name: "e2e-authored",
+            draft_id: updateDraftId,
             path: "references/evidence.txt",
           }),
         ],
       };
     }
-    if (manageResults.length === 4) {
+    if (manageResults.length === 8) {
+      return {
+        calls: [
+          toolCall("skill_manage", {
+            operation: "validate",
+            draft_id: updateDraftId,
+          }),
+        ],
+      };
+    }
+    if (manageResults.length === 9) {
+      return {
+        calls: [
+          toolCall("skill_manage", {
+            operation: "commit",
+            draft_id: updateDraftId,
+          }),
+        ],
+      };
+    }
+    if (manageResults.length === 10) {
       return {
         calls: [
           toolCall("skill_manage", {

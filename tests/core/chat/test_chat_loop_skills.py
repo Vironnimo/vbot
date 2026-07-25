@@ -189,6 +189,34 @@ def test_skill_carried_in_tail_not_duplicated_after_compaction(tmp_path: Path) -
     assert sum("<skill_content" in content for content in contents) == 1
 
 
+def test_updated_skill_follows_stale_tail_carrier_after_compaction(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=StubAdapter([]))
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+
+    session.append(ChatMessage.user("Old question"))
+    session.activate_skill_context(
+        "debugging", {"content": '<skill_content name="debugging">Old steps</skill_content>'}
+    )
+    old_carrier = session.load()[-1]
+    session.activate_skill_context(
+        "debugging", {"content": '<skill_content name="debugging">New steps</skill_content>'}
+    )
+    session.append(
+        ChatMessage.compaction_checkpoint(
+            summary="Compacted historical context.",
+            projection=[old_carrier],
+            compacted_token_count=123,
+        )
+    )
+
+    request_messages = asyncio.run(build_chat_loop(runtime)._build_request_messages(agent, session))
+
+    contents = [message.get("content", "") or "" for message in request_messages]
+    assert '<skill_content name="debugging">Old steps</skill_content>' in contents
+    assert contents[-1] == '<skill_content name="debugging">New steps</skill_content>'
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "message",
