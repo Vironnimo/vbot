@@ -22,10 +22,12 @@ from cli.main import dispatch_update_command
 from cli.parser import parse_args
 from cli.server_management import CommandResult, ServerInstance
 from cli.update_management import (
+    UNKNOWN_APP_VERSION,
     CommandRun,
     ReleaseInfo,
     _default_runner,
     _extract_within,
+    read_checkout_version,
     run_update,
 )
 
@@ -42,6 +44,21 @@ def _instance() -> ServerInstance:
 
 def _ok(stdout: str = "") -> CommandRun:
     return CommandRun(returncode=0, stdout=stdout, stderr="")
+
+
+def test_read_checkout_version_uses_live_pyproject(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "vbot"\nversion = "1.2.3"\n',
+        encoding="utf-8",
+    )
+
+    assert read_checkout_version(tmp_path) == "1.2.3"
+
+
+def test_read_checkout_version_reports_unknown_for_invalid_project(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+
+    assert read_checkout_version(tmp_path) == UNKNOWN_APP_VERSION
 
 
 def _err(stderr: str = "boom") -> CommandRun:

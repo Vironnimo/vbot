@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -55,6 +56,7 @@ _WINDOWS_DESKTOP_LAUNCHER_NAME = "vbot-desktop.exe"
 _WINDOWS_POWERSHELL = "powershell.exe"
 
 Restart = Callable[[ServerInstance], CommandResult]
+UNKNOWN_APP_VERSION = "unknown"
 
 
 @dataclass(frozen=True)
@@ -93,6 +95,17 @@ class _DirtyResolution:
     ok: bool
     message: str
     stashed: bool = False
+
+
+def read_checkout_version(root: Path = APP_DIR) -> str:
+    """Read the live vBot version from the checkout being updated."""
+
+    try:
+        with (root / "pyproject.toml").open("rb") as handle:
+            version = tomllib.load(handle)["project"]["version"]
+    except (OSError, KeyError, TypeError, tomllib.TOMLDecodeError):
+        return UNKNOWN_APP_VERSION
+    return version if isinstance(version, str) and version else UNKNOWN_APP_VERSION
 
 
 def run_update(
