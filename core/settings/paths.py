@@ -17,6 +17,12 @@ from difflib import get_close_matches
 from typing import Any
 
 from core.model_tasks import SUPPORTED_TASK_TYPES
+from core.model_tasks.constants import (
+    DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS,
+    SUPPORTED_TRANSCRIPTION_AUDIO_FORMATS,
+    SUPPORTED_TRANSCRIPTION_AUDIO_PROFILES,
+    SUPPORTED_TRANSCRIPTION_AUDIO_SAMPLE_RATES,
+)
 from core.search_config import (
     DEFAULT_SEARXNG_BASE_URL,
     DEFAULT_WEB_SEARCH_COUNT,
@@ -45,6 +51,7 @@ from core.settings.normalizers import (
     normalize_reflection_settings,
     normalize_session_title_settings,
     normalize_skill_directories,
+    normalize_speech_settings,
     normalize_subagent_integer,
     normalize_web_search_settings,
 )
@@ -63,7 +70,7 @@ JsonObject = dict[str, Any]
 
 DEFAULT_SERVER_PORT = 8420
 DEFAULT_ATTACHMENT_MAX_SIZE_BYTES = 20_971_520
-DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES = 20_971_520
+DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES = 104_857_600
 SUBAGENT_SETTING_DEFAULTS = {
     "max_subagent_depth": 4,
     "max_subagents_per_turn": 8,
@@ -247,6 +254,27 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
         application=APPLICATION_RESTART,
         default=DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES,
         minimum=1,
+    ),
+    _static(
+        "speech.transcription_audio.profile",
+        "string",
+        "Provider-facing transcription audio profile.",
+        default=DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS["profile"],
+        allowed_values=tuple(sorted(SUPPORTED_TRANSCRIPTION_AUDIO_PROFILES)),
+    ),
+    _static(
+        "speech.transcription_audio.format",
+        "string",
+        "Provider-facing transcription audio container and codec.",
+        default=DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS["format"],
+        allowed_values=tuple(sorted(SUPPORTED_TRANSCRIPTION_AUDIO_FORMATS)),
+    ),
+    _static(
+        "speech.transcription_audio.sample_rate_hz",
+        "integer",
+        "Provider-facing transcription audio sample rate in hertz.",
+        default=DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS["sample_rate_hz"],
+        allowed_values=tuple(sorted(SUPPORTED_TRANSCRIPTION_AUDIO_SAMPLE_RATES)),
     ),
     *(
         _static(
@@ -642,6 +670,7 @@ def build_effective_settings(raw_settings: JsonObject) -> JsonObject:
     appearance = normalize_appearance_settings(raw_settings.get("appearance"))
     extensions = normalize_extensions_settings(raw_settings.get("extensions"))
     providers = normalize_providers_settings(raw_settings.get("providers"))
+    speech = normalize_speech_settings(raw_settings.get("speech"))
     return {
         "server": {"port": port},
         "appearance": appearance,
@@ -660,7 +689,8 @@ def build_effective_settings(raw_settings: JsonObject) -> JsonObject:
         "speech": {
             "upload_max_size_bytes": raw_settings.get(
                 "speech_upload_max_size_bytes", DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES
-            )
+            ),
+            **speech,
         },
         "subagents": {
             field: normalize_subagent_integer(field, raw_settings.get(field), default)

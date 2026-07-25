@@ -98,6 +98,15 @@ class CaptureFormat:
     dtype: str
 
 
+@dataclass(frozen=True)
+class CapturedAudioFrame:
+    """One microphone read projected for detection and command recording."""
+
+    detection_pcm16: bytes
+    recording_pcm16: bytes
+    recording_sample_rate: int
+
+
 def check_speech_to_text_readiness(
     server_url: str,
     *,
@@ -162,6 +171,11 @@ class ResamplingInputStream:
         self._stream.start()
 
     def read_pcm16(self, target_frames: int) -> bytes:
+        return self.read_capture_frame(target_frames).detection_pcm16
+
+    def read_capture_frame(self, target_frames: int) -> CapturedAudioFrame:
+        """Read native command audio plus its 16 kHz detection projection."""
+
         import numpy as np
 
         native_frames = max(
@@ -175,15 +189,21 @@ class ResamplingInputStream:
         else:
             normalized = samples.astype(np.float32) / 32768.0
 
+        native_pcm = np.clip(normalized * 32767.0, -32768, 32767).astype(np.int16)
+        detection_samples = normalized
         if native_frames != target_frames:
             source_positions = np.linspace(0.0, 1.0, num=native_frames, endpoint=False)
             target_positions = np.linspace(0.0, 1.0, num=target_frames, endpoint=False)
-            normalized = np.interp(target_positions, source_positions, normalized).astype(
+            detection_samples = np.interp(target_positions, source_positions, normalized).astype(
                 np.float32
             )
 
-        pcm = np.clip(normalized * 32767.0, -32768, 32767).astype(np.int16)
-        return bytes(pcm.tobytes())
+        detection_pcm = np.clip(detection_samples * 32767.0, -32768, 32767).astype(np.int16)
+        return CapturedAudioFrame(
+            detection_pcm16=bytes(detection_pcm.tobytes()),
+            recording_pcm16=bytes(native_pcm.tobytes()),
+            recording_sample_rate=self.capture_format.sample_rate,
+        )
 
     def stop(self) -> None:
         self._stream.stop()
@@ -290,12 +310,12 @@ class WakewordWorker:
 
         self._bridge.publish_state("listening")
         consecutive_read_errors = 0
-        detection_pre_roll: deque[bytes] = deque(maxlen=_DETECTION_PRE_ROLL_CHUNKS)
+        detection_pre_roll: deque[CapturedAudioFrame] = deque(maxlen=_DETECTION_PRE_ROLL_CHUNKS)
 
         try:
             while self._running.is_set():
                 try:
-                    chunk = self._stream.read_pcm16(_FRAME_SIZE_SAMPLES)
+                    captured_frame = _read_capture_frame(self._stream, _FRAME_SIZE_SAMPLES)
                 except Exception:
                     logger.warning("Microphone read error", exc_info=True)
                     consecutive_read_errors += 1
@@ -309,10 +329,10 @@ class WakewordWorker:
                     break
 
                 consecutive_read_errors = 0
-                detection_pre_roll.append(chunk)
+                detection_pre_roll.append(captured_frame)
 
                 try:
-                    match = self._engine.detect(chunk)
+                    match = self._engine.detect(captured_frame.detection_pcm16)
                 except Exception:
                     logger.warning("Wakeword detection failed", exc_info=True)
                     self._fail("detection_failed")
@@ -325,7 +345,7 @@ class WakewordWorker:
                         match.threshold,
                     )
                     self._bridge.publish_state("wakeword_detected")
-                    outcome = self._handle_detection(b"".join(detection_pre_roll))
+                    outcome = self._handle_detection(tuple(detection_pre_roll))
                     detection_pre_roll.clear()
                     if not self._running.is_set():
                         break
@@ -403,7 +423,10 @@ class WakewordWorker:
 
     # -- Post-detection pipeline ---------------------------------------------
 
-    def _handle_detection(self, pre_roll_audio: bytes = b"") -> str | None:
+    def _handle_detection(
+        self,
+        pre_roll_audio: bytes | tuple[CapturedAudioFrame, ...] = b"",
+    ) -> str | None:
         """Record audio, transcribe, and send after wakeword detection."""
         config = self._read_config()
         agent_id = config.get("target_agent_id")
@@ -489,7 +512,10 @@ class WakewordWorker:
 
     # -- Audio recording -----------------------------------------------------
 
-    def _record_until_silence(self, pre_roll_audio: bytes = b"") -> bytes | None:
+    def _record_until_silence(
+        self,
+        pre_roll_audio: bytes | tuple[CapturedAudioFrame, ...] = b"",
+    ) -> bytes | None:
         """Capture microphone audio until silence or max duration.
 
         Uses webrtcvad for voice activity detection. Returns WAV-encoded
@@ -502,22 +528,25 @@ class WakewordWorker:
             return self._record_raw(pre_roll_audio)
 
         vad = webrtcvad.Vad(_VAD_MODE)
-        frames: list[bytes] = []
-        pre_speech_frames: deque[bytes] = deque(maxlen=_PRE_SPEECH_FRAME_COUNT)
-        pre_speech_frames.extend(_end_aligned_vad_frames(pre_roll_audio))
+        frames: list[CapturedAudioFrame] = []
+        pre_speech_frames: deque[CapturedAudioFrame] = deque(maxlen=_PRE_SPEECH_FRAME_COUNT)
+        pre_speech_frames.extend(
+            CapturedAudioFrame(frame, frame, _SAMPLE_RATE)
+            for frame in _end_aligned_vad_frames(_detection_audio_bytes(pre_roll_audio))
+        )
         silent_frames = 0
         has_speech = False
         waited_frames = 0
 
         while self._running.is_set():
             try:
-                frame = self._stream.read_pcm16(_VAD_FRAME_SIZE)
+                frame = _read_capture_frame(self._stream, _VAD_FRAME_SIZE)
             except Exception:
                 logger.warning("Microphone read error during recording", exc_info=True)
                 break
 
             try:
-                is_speech = vad.is_speech(frame, _SAMPLE_RATE)
+                is_speech = vad.is_speech(frame.detection_pcm16, _SAMPLE_RATE)
             except Exception:
                 is_speech = True
 
@@ -544,24 +573,36 @@ class WakewordWorker:
         if not frames or not has_speech:
             return None
 
-        return _encode_wav(b"".join(frames))
+        return _encode_captured_audio(frames)
 
-    def _record_raw(self, pre_roll_audio: bytes = b"") -> bytes | None:
+    def _record_raw(
+        self,
+        pre_roll_audio: bytes | tuple[CapturedAudioFrame, ...] = b"",
+    ) -> bytes | None:
         """Fallback recording without VAD — fixed 3-second capture."""
-        frames: list[bytes] = []
+        frames: list[CapturedAudioFrame] = []
         max_frames = int(3.0 / (_VAD_FRAME_DURATION_MS / 1000))
         for _ in range(max_frames):
             if not self._running.is_set():
                 break
             try:
-                frame = self._stream.read_pcm16(_VAD_FRAME_SIZE)
+                frame = _read_capture_frame(self._stream, _VAD_FRAME_SIZE)
                 frames.append(frame)
             except Exception:
                 logger.warning("Microphone read error during raw recording", exc_info=True)
                 break
         if not frames:
             return None
-        return _encode_wav(pre_roll_audio + b"".join(frames))
+        recording_sample_rate = frames[0].recording_sample_rate
+        pre_roll = _resample_pcm16(
+            _detection_audio_bytes(pre_roll_audio),
+            _SAMPLE_RATE,
+            recording_sample_rate,
+        )
+        return _encode_wav(
+            pre_roll + b"".join(frame.recording_pcm16 for frame in frames),
+            sample_rate=recording_sample_rate,
+        )
 
     # -- Server communication ------------------------------------------------
 
@@ -694,13 +735,66 @@ class WakewordWorker:
 # -- Helpers ----------------------------------------------------------------
 
 
-def _encode_wav(raw_frames: bytes) -> bytes:
-    """Wrap raw 16kHz mono 16-bit PCM frames in a WAV container."""
+def _read_capture_frame(stream: Any, target_frames: int) -> CapturedAudioFrame:
+    reader = getattr(stream, "read_capture_frame", None)
+    if callable(reader):
+        frame = reader(target_frames)
+        if isinstance(frame, CapturedAudioFrame):
+            return frame
+        raise TypeError("Capture stream returned an invalid audio frame")
+    detection_pcm = stream.read_pcm16(target_frames)
+    return CapturedAudioFrame(
+        detection_pcm16=detection_pcm,
+        recording_pcm16=detection_pcm,
+        recording_sample_rate=_SAMPLE_RATE,
+    )
+
+
+def _detection_audio_bytes(
+    audio: bytes | tuple[CapturedAudioFrame, ...],
+) -> bytes:
+    if isinstance(audio, bytes):
+        return audio
+    return b"".join(frame.detection_pcm16 for frame in audio)
+
+
+def _encode_captured_audio(frames: list[CapturedAudioFrame]) -> bytes:
+    recording_sample_rate = frames[-1].recording_sample_rate
+    raw_frames = b"".join(
+        _resample_pcm16(
+            frame.recording_pcm16,
+            frame.recording_sample_rate,
+            recording_sample_rate,
+        )
+        for frame in frames
+    )
+    return _encode_wav(raw_frames, sample_rate=recording_sample_rate)
+
+
+def _resample_pcm16(audio: bytes, source_rate: int, target_rate: int) -> bytes:
+    if not audio or source_rate == target_rate:
+        return audio
+
+    import numpy as np
+
+    samples = np.frombuffer(audio, dtype=np.int16)
+    target_count = max(1, round(len(samples) * target_rate / source_rate))
+    if len(samples) == 1:
+        converted = np.repeat(samples, target_count)
+    else:
+        source_positions = np.linspace(0.0, 1.0, num=len(samples), endpoint=False)
+        target_positions = np.linspace(0.0, 1.0, num=target_count, endpoint=False)
+        converted = np.interp(target_positions, source_positions, samples).astype(np.int16)
+    return bytes(converted.tobytes())
+
+
+def _encode_wav(raw_frames: bytes, *, sample_rate: int = _SAMPLE_RATE) -> bytes:
+    """Wrap mono 16-bit PCM frames in a WAV container."""
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as wav_file:
         wav_file.setnchannels(_CHANNELS)
         wav_file.setsampwidth(_SAMPLE_WIDTH)
-        wav_file.setframerate(_SAMPLE_RATE)
+        wav_file.setframerate(sample_rate)
         wav_file.writeframes(raw_frames)
     return buffer.getvalue()
 

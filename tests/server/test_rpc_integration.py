@@ -235,6 +235,15 @@ class IntegrationStorage:
     def load_reflection_settings(self) -> JsonObject:
         return {"enabled": False, "memory_turn_interval": 10, "skill_tool_call_interval": 25}
 
+    def load_speech_settings(self) -> JsonObject:
+        return {
+            "transcription_audio": {
+                "profile": "compatibility",
+                "format": "wav",
+                "sample_rate_hz": 16_000,
+            }
+        }
+
     def load_model_task_settings(self) -> JsonObject:
         return {}
 
@@ -641,6 +650,13 @@ def test_model_list_and_settings_get_follow_credential_contract(tmp_path: Path) 
                 "enabled": False,
                 "memory_turn_interval": 10,
                 "skill_tool_call_interval": 25,
+            },
+            "speech": {
+                "transcription_audio": {
+                    "profile": "compatibility",
+                    "format": "wav",
+                    "sample_rate_hz": 16_000,
+                }
             },
             "model_tasks": {},
             "session_titles": {"enabled": False, "model": ""},

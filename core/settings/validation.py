@@ -31,6 +31,12 @@ from core.config_validation import (
     warn_unknown_keys as _warn_unknown_keys,
 )
 from core.model_tasks import SUPPORTED_TASK_TYPES
+from core.model_tasks.constants import (
+    SUPPORTED_TRANSCRIPTION_AUDIO_FORMATS,
+    SUPPORTED_TRANSCRIPTION_AUDIO_PROFILES,
+    SUPPORTED_TRANSCRIPTION_AUDIO_SAMPLE_RATES,
+    TRANSCRIPTION_AUDIO_PRESETS,
+)
 from core.search_config import (
     FIRST_PARTY_WEB_SEARCH_PROVIDERS,
     MAX_WEB_SEARCH_COUNT,
@@ -74,6 +80,7 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
         "server_port",
         "session_titles",
         "skill_directories",
+        "speech",
         "speech_upload_max_size_bytes",
         "subagent_timeout_minutes",
         "web_search",
@@ -95,6 +102,8 @@ WEB_SEARCH_SEARXNG_FIELDS = frozenset({"base_url"})
 MODEL_TASK_BINDING_FIELDS = frozenset({"target", "options"})
 DEBUG_FIELDS = frozenset({"enabled", "trace_limit"})
 SESSION_TITLE_FIELDS = frozenset({"enabled", "model"})
+SPEECH_FIELDS = frozenset({"transcription_audio"})
+TRANSCRIPTION_AUDIO_FIELDS = frozenset({"profile", "format", "sample_rate_hz"})
 MAX_TRACE_LIMIT = 500
 REFLECTION_FIELDS = frozenset({"enabled", "memory_turn_interval", "skill_tool_call_interval"})
 LOCAL_MODELS_FIELDS = frozenset({"context_windows"})
@@ -240,6 +249,7 @@ def validate_settings_data(data: Any) -> list[JsonDiagnostic]:
         data.get("speech_upload_max_size_bytes"),
         required=False,
     )
+    _validate_speech(diagnostics, data.get("speech"))
     for field in SUBAGENT_SETTING_FIELDS:
         _validate_positive_integer(diagnostics, f"$.{field}", data.get(field), required=False)
     _validate_compaction(diagnostics, data.get("compaction"))
@@ -254,6 +264,78 @@ def validate_settings_data(data: Any) -> list[JsonDiagnostic]:
     _validate_providers(diagnostics, data.get("providers"))
     _validate_session_titles(diagnostics, data.get("session_titles"))
     return diagnostics
+
+
+def _validate_speech(diagnostics: list[JsonDiagnostic], value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, Mapping):
+        _error(diagnostics, "$.speech", "must be an object")
+        return
+    _warn_unknown_keys(diagnostics, "$.speech", value, SPEECH_FIELDS, "speech field")
+
+    audio = value.get("transcription_audio")
+    if audio is None:
+        return
+    if not isinstance(audio, Mapping):
+        _error(diagnostics, "$.speech.transcription_audio", "must be an object")
+        return
+    _warn_unknown_keys(
+        diagnostics,
+        "$.speech.transcription_audio",
+        audio,
+        TRANSCRIPTION_AUDIO_FIELDS,
+        "transcription_audio field",
+    )
+
+    profile = audio.get("profile")
+    if profile is not None and (
+        not isinstance(profile, str) or profile not in SUPPORTED_TRANSCRIPTION_AUDIO_PROFILES
+    ):
+        allowed = ", ".join(sorted(SUPPORTED_TRANSCRIPTION_AUDIO_PROFILES))
+        _error(
+            diagnostics,
+            "$.speech.transcription_audio.profile",
+            f"must be one of: {allowed}",
+        )
+
+    audio_format = audio.get("format")
+    if audio_format is not None and (
+        not isinstance(audio_format, str)
+        or audio_format not in SUPPORTED_TRANSCRIPTION_AUDIO_FORMATS
+    ):
+        allowed = ", ".join(sorted(SUPPORTED_TRANSCRIPTION_AUDIO_FORMATS))
+        _error(
+            diagnostics,
+            "$.speech.transcription_audio.format",
+            f"must be one of: {allowed}",
+        )
+
+    sample_rate_hz = audio.get("sample_rate_hz")
+    if sample_rate_hz is not None and (
+        not isinstance(sample_rate_hz, int)
+        or isinstance(sample_rate_hz, bool)
+        or sample_rate_hz not in SUPPORTED_TRANSCRIPTION_AUDIO_SAMPLE_RATES
+    ):
+        allowed = ", ".join(
+            str(sample_rate) for sample_rate in sorted(SUPPORTED_TRANSCRIPTION_AUDIO_SAMPLE_RATES)
+        )
+        _error(
+            diagnostics,
+            "$.speech.transcription_audio.sample_rate_hz",
+            f"must be one of: {allowed}",
+        )
+
+    preset = TRANSCRIPTION_AUDIO_PRESETS.get(profile) if isinstance(profile, str) else None
+    if preset is None:
+        return
+    for field, preset_value in preset.items():
+        if field in audio and audio[field] != preset_value:
+            _error(
+                diagnostics,
+                f"$.speech.transcription_audio.{field}",
+                f"must be {preset_value!r} for profile {profile!r}",
+            )
 
 
 def _validate_session_titles(diagnostics: list[JsonDiagnostic], value: Any) -> None:

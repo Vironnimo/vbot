@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import logging
+import wave
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -16,6 +18,7 @@ from core.model_tasks import (
     SpeechExecutionError,
     SpeechService,
     SpeechSynthesisResult,
+    SpeechTranscriptionResult,
     TaskModelError,
 )
 from core.providers.errors import ProviderError
@@ -100,6 +103,69 @@ class _FailingProviderSpeechClient:
         raise self._exception
 
 
+class _CapturingProviderSpeechClient:
+    def __init__(self) -> None:
+        self.audio = b""
+        self.filename = ""
+        self.media_type = ""
+
+    async def transcribe(
+        self,
+        audio: bytes,
+        *,
+        filename: str,
+        media_type: str,
+        options: dict[str, object],
+    ) -> SpeechTranscriptionResult:
+        self.audio = audio
+        self.filename = filename
+        self.media_type = media_type
+        return SpeechTranscriptionResult(text="hello")
+
+
+@pytest.mark.asyncio
+async def test_transcribe_normalizes_provider_audio_to_configured_profile(
+    tmp_path: Path,
+) -> None:
+    import av
+
+    client = _CapturingProviderSpeechClient()
+    service = SpeechService(
+        _ProviderSttModelTasks(),
+        cast(Any, object()),
+        tmp_path,
+        transcription_audio_getter=lambda: {
+            "transcription_audio": {
+                "profile": "custom",
+                "format": "flac",
+                "sample_rate_hz": 24_000,
+            }
+        },
+    )
+
+    with patch(
+        "core.model_tasks.speech.ProviderSpeechClient.from_runtime",
+        return_value=client,
+    ):
+        result = await service.transcribe(
+            _webm_audio_bytes(),
+            filename="browser.webm",
+            media_type="audio/webm",
+        )
+
+    assert result.text == "hello"
+    assert client.filename == "recording.flac"
+    assert client.media_type == "audio/flac"
+    container = av.open(io.BytesIO(client.audio), mode="r")
+    try:
+        stream = container.streams.audio[0]
+        assert stream.codec_context.name == "flac"
+        assert stream.sample_rate == 24_000
+        assert stream.channels == 1
+    finally:
+        container.close()
+
+
 @pytest.mark.asyncio
 async def test_transcribe_logs_provider_error_at_warning_without_traceback(
     tmp_path: Path,
@@ -118,9 +184,39 @@ async def test_transcribe_logs_provider_error_at_warning_without_traceback(
         caplog.at_level(logging.WARNING, logger="vbot.speech"),
         pytest.raises(SpeechExecutionError, match="rate limited"),
     ):
-        await service.transcribe(b"audio")
+        await service.transcribe(_wav_audio_bytes())
 
     relevant = [r for r in caplog.records if "Speech transcription failed" in r.getMessage()]
     assert relevant, "expected a log record for the failed transcription"
     assert all(r.levelno == logging.WARNING for r in relevant)
     assert all(r.exc_info is None for r in relevant)
+
+
+def _wav_audio_bytes() -> bytes:
+    output = io.BytesIO()
+    with wave.open(output, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(48_000)
+        wav_file.writeframes(b"\x00\x00" * 4_800)
+    return output.getvalue()
+
+
+def _webm_audio_bytes() -> bytes:
+    import av
+
+    source = av.open(io.BytesIO(_wav_audio_bytes()), mode="r")
+    output = io.BytesIO()
+    target = av.open(output, mode="w", format="webm")
+    try:
+        stream = target.add_stream("libopus", rate=48_000)
+        stream.layout = "mono"
+        for frame in source.decode(audio=0):
+            for packet in stream.encode(frame):
+                target.mux(packet)
+        for packet in stream.encode(None):
+            target.mux(packet)
+    finally:
+        source.close()
+        target.close()
+    return output.getvalue()

@@ -4,13 +4,13 @@ Provider-neutral speech-to-text and text-to-speech execution for configured task
 
 ## Overview
 
-`core/model_tasks/` (`speech*.py`) executes file-based STT and TTS. It resolves the configured `speech_to_text` or `text_to_speech` binding through `TaskModelService`, merges stored options with backend schema defaults, parses the target, and routes to either a provider-backed speech HTTP client or an optional local speech executor hook. The server enforces `settings.json` `speech_upload_max_size_bytes` before calling `SpeechService.transcribe`; the default limit is 20 MiB (`20_971_520` bytes).
+`core/model_tasks/` (`speech*.py`) executes file-based STT and TTS. It resolves the configured `speech_to_text` or `text_to_speech` binding through `TaskModelService`, merges stored options with backend schema defaults, parses the target, and routes to either a provider-backed speech HTTP client or an optional local speech executor hook. The server enforces `settings.json` `speech_upload_max_size_bytes` before calling `SpeechService.transcribe`; the default limit is 100 MiB (`104_857_600` bytes). Before either local or Provider-backed STT execution, `SpeechService` converts every accepted source recording to the live server-owned `speech.transcription_audio` profile so Chat microphone and post-Wakeword command audio reach the Model with the same container, mono PCM16 sample format, and sample rate.
 
 This domain owns speech wire payloads and runtime artifacts; it does not own task-target discovery, settings validation, chat message persistence, or generic attachments. The first implementation supports OpenAI-compatible audio endpoints and OpenRouter's audio endpoints. Mistral option schemas may be exposed through the generic task-model layer, but Mistral speech execution currently fails through provider execution error handling until a provider runtime contract exists.
 
 ## Interfaces
 
-- `SpeechService.transcribe(audio, filename, media_type) -> SpeechTranscriptionResult` — validates non-empty bytes, resolves the `speech_to_text` binding, then calls the selected local executor or provider speech client. Besides the server transcribe endpoint, the chat layer's `ContentBlockResolver` uses this as its transcriber to degrade audio attachments to text (see `.vorch/domain-maps/attachments.md`).
+- `SpeechService.transcribe(audio, filename, media_type) -> SpeechTranscriptionResult` — validates non-empty bytes, resolves the `speech_to_text` binding, converts the source through PyAV to the live transcription-audio profile, then calls the selected local executor or provider speech client with a canonical `recording.wav` / `audio/wav` or `recording.flac` / `audio/flac` payload. Besides the server transcribe endpoint, the chat layer's `ContentBlockResolver` uses this as its transcriber to degrade audio attachments to text (see `.vorch/domain-maps/attachments.md`).
 - `SpeechService.synthesize(text) -> SpeechSynthesisResult` — trims and validates text, resolves the `text_to_speech` binding, then returns raw synthesized audio.
 - `SpeechService.synthesize_artifact(text) -> SpeechArtifact` — calls `synthesize()` and persists one runtime artifact under the Runtime-injected canonical path `<data_dir>/artifacts/speech/`.
 - `SpeechService.get_artifact(artifact_id) -> SpeechArtifact` — accepts only 32-character lowercase hex IDs, reads the sidecar, recomputes `file_path`, and verifies the audio blob exists.
@@ -38,14 +38,14 @@ This domain owns speech wire payloads and runtime artifacts; it does not own tas
 
 Provider-backed speech execution does not call the chat provider adapters. `ProviderSpeechClient` subclasses `core.providers.task_client.ProviderTaskClient`, which owns the shared plumbing (constructor tuple, `from_runtime` target resolution, auth headers, POST/classify/parse cycle, retry policy — see `providers.md`); `core/model_tasks/speech_providers.py` owns only the speech payload shapes and response parsing.
 
-OpenRouter STT sends Base64 JSON to `/audio/transcriptions`:
+OpenRouter STT sends Base64 JSON to `/audio/transcriptions`; the default compatibility profile produces:
 
 ```json
 {
   "model": "openai/gpt-4o-transcribe",
   "input_audio": {
     "data": "<base64-audio>",
-    "format": "webm"
+    "format": "wav"
   }
 }
 ```
@@ -77,11 +77,13 @@ Callers of `SpeechService` should see expected speech errors as `SpeechError` su
 - `SpeechUnsupportedTargetError` for configured local targets with no execution adapter.
 - `SpeechExecutionError` for provider/network/runtime request failures.
 
-Missing STT bindings and Provider request failures are logged through `vbot.speech` without credentials; Provider/network failures raised inside `ProviderSpeechClient` are wrapped as `SpeechExecutionError`. The server maps `SpeechConfigurationError` to HTTP 409, `SpeechUnsupportedTargetError` to 422, and `SpeechExecutionError` to 502. Transient network and retryable HTTP errors use the shared provider retry helper.
+Missing STT bindings and Provider request failures are logged through `vbot.speech` without credentials; Provider/network failures raised inside `ProviderSpeechClient` and source-audio decode/convert failures are wrapped as `SpeechExecutionError`. The server maps `SpeechConfigurationError` to HTTP 409, `SpeechUnsupportedTargetError` to 422, and `SpeechExecutionError` to 502. Transient network and retryable HTTP errors use the shared provider retry helper.
 
 ## Constraints & Gotchas
 
 - Speech uses file-based requests only. Realtime voice sessions and partial STT streaming are out of scope for this domain version.
+- Transcription conversion depends on PyAV from the `[server]` dependency group; its binary wheels carry FFmpeg support for decoding browser WebM/Opus input and encoding the supported WAV/PCM16 and FLAC/PCM16 output profiles. Conversion runs in a worker thread so media decoding does not block the server event loop.
+- The built-in profiles are `compatibility` (WAV, mono PCM16, 16 kHz) and `high_quality` (FLAC, mono PCM16, 48 kHz); `custom` accepts WAV or FLAC at 16, 24, or 48 kHz. The server setting is live-read for every transcription, while the upload-size limit remains restart-applied.
 - Binary audio transport stays outside JSON-RPC. Accessors use dedicated HTTP endpoints for recording upload and synthesized audio download.
 - The speech HTTP client is not the chat adapter stack. Provider-specific chat behavior, debug capture, streaming behavior, or message formatting changes do not automatically apply here.
 - Local speech execution hooks must stay optional and dependency-free until a concrete local backend is approved.

@@ -432,6 +432,39 @@ def test_load_appearance_settings_defaults_invalid_section(tmp_path: Path) -> No
     }
 
 
+def test_speech_settings_default_and_update_round_trip(tmp_path: Path) -> None:
+    storage = StorageManager(tmp_path)
+
+    assert storage.load_speech_settings() == {
+        "transcription_audio": {
+            "profile": "compatibility",
+            "format": "wav",
+            "sample_rate_hz": 16_000,
+        }
+    }
+
+    updated = storage.update_settings_sections(
+        {
+            "speech": {
+                "transcription_audio": {
+                    "profile": "custom",
+                    "format": "flac",
+                    "sample_rate_hz": 24_000,
+                }
+            }
+        }
+    )
+
+    assert updated["speech"] == {
+        "transcription_audio": {
+            "profile": "custom",
+            "format": "flac",
+            "sample_rate_hz": 24_000,
+        }
+    }
+    assert storage.load_speech_settings() == updated["speech"]
+
+
 def test_load_subagent_settings_returns_defaults_when_missing(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
 

@@ -16,6 +16,13 @@ from typing import Any, cast
 from urllib.parse import urlsplit
 
 from core.model_tasks import SUPPORTED_TASK_TYPES
+from core.model_tasks.constants import (
+    DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS,
+    SUPPORTED_TRANSCRIPTION_AUDIO_FORMATS,
+    SUPPORTED_TRANSCRIPTION_AUDIO_PROFILES,
+    SUPPORTED_TRANSCRIPTION_AUDIO_SAMPLE_RATES,
+    TRANSCRIPTION_AUDIO_PRESETS,
+)
 from core.models.models import MODEL_TASK_ORDER
 from core.search_config import (
     DEFAULT_SEARXNG_BASE_URL,
@@ -86,6 +93,89 @@ CUSTOM_MODEL_CAPABILITY_FIELDS = frozenset(
         "task_options",
     }
 )
+
+
+# --- speech -------------------------------------------------------------------
+
+
+def normalize_speech_settings(speech: Any) -> dict[str, Any]:
+    """Return the normalized server-owned speech settings section."""
+
+    if speech is None:
+        section: Mapping[str, Any] = {}
+    elif isinstance(speech, Mapping):
+        section = speech
+    else:
+        raise StorageError("Speech settings must be a mapping")
+
+    unsupported_fields = sorted(set(section) - {"transcription_audio"})
+    if unsupported_fields:
+        raise StorageError(f"Unsupported speech settings: {', '.join(unsupported_fields)}")
+
+    return {
+        "transcription_audio": normalize_transcription_audio_settings(
+            section.get("transcription_audio")
+        )
+    }
+
+
+def normalize_transcription_audio_settings(value: Any) -> dict[str, Any]:
+    """Return one complete Provider-facing transcription audio profile."""
+
+    if value is None:
+        return dict(DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS)
+    if not isinstance(value, Mapping):
+        raise StorageError("speech.transcription_audio must be a mapping")
+
+    unsupported_fields = sorted(set(value) - {"profile", "format", "sample_rate_hz"})
+    if unsupported_fields:
+        raise StorageError(
+            f"Unsupported speech.transcription_audio settings: {', '.join(unsupported_fields)}"
+        )
+
+    profile = value.get("profile", DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS["profile"])
+    if not isinstance(profile, str) or profile not in SUPPORTED_TRANSCRIPTION_AUDIO_PROFILES:
+        allowed = ", ".join(sorted(SUPPORTED_TRANSCRIPTION_AUDIO_PROFILES))
+        raise StorageError(f"speech.transcription_audio.profile must be one of: {allowed}")
+
+    preset = TRANSCRIPTION_AUDIO_PRESETS.get(profile)
+    if preset is not None:
+        for field, preset_value in preset.items():
+            configured = value.get(field, preset_value)
+            if configured != preset_value:
+                raise StorageError(
+                    f"speech.transcription_audio.{field} must be {preset_value!r} "
+                    f"for profile {profile!r}"
+                )
+        return {"profile": profile, **preset}
+
+    audio_format = value.get("format", DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS["format"])
+    if (
+        not isinstance(audio_format, str)
+        or audio_format not in SUPPORTED_TRANSCRIPTION_AUDIO_FORMATS
+    ):
+        allowed = ", ".join(sorted(SUPPORTED_TRANSCRIPTION_AUDIO_FORMATS))
+        raise StorageError(f"speech.transcription_audio.format must be one of: {allowed}")
+
+    sample_rate_hz = value.get(
+        "sample_rate_hz",
+        DEFAULT_TRANSCRIPTION_AUDIO_SETTINGS["sample_rate_hz"],
+    )
+    if (
+        not isinstance(sample_rate_hz, int)
+        or isinstance(sample_rate_hz, bool)
+        or sample_rate_hz not in SUPPORTED_TRANSCRIPTION_AUDIO_SAMPLE_RATES
+    ):
+        allowed = ", ".join(
+            str(sample_rate) for sample_rate in sorted(SUPPORTED_TRANSCRIPTION_AUDIO_SAMPLE_RATES)
+        )
+        raise StorageError(f"speech.transcription_audio.sample_rate_hz must be one of: {allowed}")
+
+    return {
+        "profile": profile,
+        "format": audio_format,
+        "sample_rate_hz": sample_rate_hz,
+    }
 
 
 # --- appearance ---------------------------------------------------------------

@@ -73,6 +73,23 @@ const DEFAULT_SEARXNG_BASE_URL = 'http://localhost:8888';
 const WEB_SEARCH_DEFAULT_COUNT = 12;
 const WEB_SEARCH_MIN_COUNT = 1;
 const WEB_SEARCH_MAX_COUNT = 20;
+export const TRANSCRIPTION_AUDIO_PROFILES = Object.freeze([
+  'compatibility',
+  'high_quality',
+  'custom',
+]);
+export const TRANSCRIPTION_AUDIO_FORMATS = Object.freeze(['wav', 'flac']);
+export const TRANSCRIPTION_AUDIO_SAMPLE_RATES = Object.freeze([
+  16000, 24000, 48000,
+]);
+const TRANSCRIPTION_AUDIO_PRESETS = Object.freeze({
+  compatibility: Object.freeze({ format: 'wav', sample_rate_hz: 16000 }),
+  high_quality: Object.freeze({ format: 'flac', sample_rate_hz: 48000 }),
+});
+const DEFAULT_TRANSCRIPTION_AUDIO = Object.freeze({
+  profile: 'compatibility',
+  ...TRANSCRIPTION_AUDIO_PRESETS.compatibility,
+});
 
 const AGENT_DEFAULT_THINKING_EFFORT_OPTIONS = Object.freeze([
   'none',
@@ -90,6 +107,36 @@ function positiveIntegerOrDefault(value, fallback) {
   return Number.isInteger(numberValue) && numberValue > 0
     ? numberValue
     : fallback;
+}
+
+export function normalizeTranscriptionAudio(settings) {
+  const source = settings?.speech?.transcription_audio;
+  const profile = TRANSCRIPTION_AUDIO_PROFILES.includes(source?.profile)
+    ? source.profile
+    : DEFAULT_TRANSCRIPTION_AUDIO.profile;
+  const preset = TRANSCRIPTION_AUDIO_PRESETS[profile];
+  if (preset) {
+    return { profile, ...preset };
+  }
+
+  const format = TRANSCRIPTION_AUDIO_FORMATS.includes(source?.format)
+    ? source.format
+    : DEFAULT_TRANSCRIPTION_AUDIO.format;
+  const sampleRate = Number(source?.sample_rate_hz);
+  const sample_rate_hz = TRANSCRIPTION_AUDIO_SAMPLE_RATES.includes(sampleRate)
+    ? sampleRate
+    : DEFAULT_TRANSCRIPTION_AUDIO.sample_rate_hz;
+  return { profile, format, sample_rate_hz };
+}
+
+export function buildTranscriptionAudioSettingsPayload(audio) {
+  return {
+    speech: {
+      transcription_audio: normalizeTranscriptionAudio({
+        speech: { transcription_audio: audio },
+      }),
+    },
+  };
 }
 
 export function buildLanguageOptions(appearance) {

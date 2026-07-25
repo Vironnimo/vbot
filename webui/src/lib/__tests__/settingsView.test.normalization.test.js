@@ -7,9 +7,39 @@ import {
   buildAgentDefaultsPayload,
   buildClientPresenceRows,
   buildSessionTitleSettingsPayload,
+  buildTranscriptionAudioSettingsPayload,
   normalizeCompactionSettings,
   normalizeSessionTitleSettings,
+  normalizeTranscriptionAudio,
 } from '../settingsView.js';
+
+describe('Transcription audio settings', () => {
+  it('defaults to the maximum-compatibility WAV profile', () => {
+    expect(normalizeTranscriptionAudio({})).toEqual({
+      profile: 'compatibility',
+      format: 'wav',
+      sample_rate_hz: 16000,
+    });
+  });
+
+  it('builds a complete custom profile update', () => {
+    expect(
+      buildTranscriptionAudioSettingsPayload({
+        profile: 'custom',
+        format: 'flac',
+        sample_rate_hz: 24000,
+      }),
+    ).toEqual({
+      speech: {
+        transcription_audio: {
+          profile: 'custom',
+          format: 'flac',
+          sample_rate_hz: 24000,
+        },
+      },
+    });
+  });
+});
 
 describe('Session title settings', () => {
   it('normalizes defaults and builds the complete update section', () => {

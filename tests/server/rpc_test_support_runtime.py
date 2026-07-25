@@ -29,7 +29,7 @@ from core.providers.accounts import (
 )
 from core.runs import ChatRunManager
 from core.settings import AGENT_DEFAULT_FIELDS
-from core.settings.normalizers import normalize_extensions_settings
+from core.settings.normalizers import normalize_extensions_settings, normalize_speech_settings
 from core.settings.settings import parse_openrouter_routing
 from core.storage import DataDirectoryLayout, StorageError
 from core.tools import FileReadState, ToolRegistry
@@ -198,6 +198,9 @@ class StubStorage:
         if isinstance(stored, dict):
             defaults.update(stored)
         return defaults
+
+    def load_speech_settings(self) -> JsonObject:
+        return normalize_speech_settings(self._settings.get("speech"))
 
     def load_model_task_settings(self) -> JsonObject:
         stored = self._settings.get("model_tasks")
@@ -378,6 +381,10 @@ class StubStorage:
             updated_sections["appearance"] = self._apply_appearance_settings(
                 settings_update["appearance"]
             )
+        if "speech" in settings_update:
+            normalized = normalize_speech_settings(settings_update["speech"])
+            self._settings = {**self._settings, "speech": normalized}
+            updated_sections["speech"] = normalized
         if "skills" in settings_update:
             updated_sections["skills"] = {
                 "directories": self._apply_skill_directory_settings(

@@ -8,6 +8,12 @@ from collections.abc import Mapping
 from typing import Any, cast
 
 from core.model_tasks import SUPPORTED_TASK_TYPES, TASK_TEXT_EMBEDDING
+from core.model_tasks.constants import (
+    SUPPORTED_TRANSCRIPTION_AUDIO_FORMATS,
+    SUPPORTED_TRANSCRIPTION_AUDIO_PROFILES,
+    SUPPORTED_TRANSCRIPTION_AUDIO_SAMPLE_RATES,
+    TRANSCRIPTION_AUDIO_PRESETS,
+)
 from core.model_tasks.options import (
     TaskModelOptionValidationError,
     validate_text_embedding_options,
@@ -76,6 +82,7 @@ SETTINGS_UPDATE_SECTIONS = frozenset(
         "reflection",
         "local_models",
         "session_titles",
+        "speech",
     }
 )
 OPENROUTER_ROUTING_MODES = frozenset({"automatic", "allowed", "ordered"})
@@ -149,7 +156,83 @@ def parse_settings_update(params: Mapping[str, Any]) -> JsonObject:
     if "session_titles" in params:
         parsed_update["session_titles"] = _parse_session_titles_update(params["session_titles"])
 
+    if "speech" in params:
+        parsed_update["speech"] = _parse_speech_update(params["speech"])
+
     return parsed_update
+
+
+def _parse_speech_update(speech: Any) -> JsonObject:
+    if not isinstance(speech, Mapping):
+        raise SettingsValidationError("params.speech must be an object")
+    unsupported_fields = sorted(set(speech) - {"transcription_audio"})
+    if unsupported_fields:
+        raise SettingsValidationError(
+            f"unsupported speech settings: {', '.join(unsupported_fields)}"
+        )
+    if "transcription_audio" not in speech:
+        raise SettingsValidationError("params.speech requires transcription_audio")
+
+    audio = speech["transcription_audio"]
+    if not isinstance(audio, Mapping):
+        raise SettingsValidationError("params.speech.transcription_audio must be an object")
+    required_fields = {"profile", "format", "sample_rate_hz"}
+    unsupported_audio_fields = sorted(set(audio) - required_fields)
+    if unsupported_audio_fields:
+        raise SettingsValidationError(
+            "unsupported speech.transcription_audio settings: "
+            f"{', '.join(unsupported_audio_fields)}"
+        )
+    missing_fields = sorted(required_fields - set(audio))
+    if missing_fields:
+        raise SettingsValidationError(
+            f"params.speech.transcription_audio requires {', '.join(missing_fields)}"
+        )
+
+    profile = audio["profile"]
+    if not isinstance(profile, str) or profile not in SUPPORTED_TRANSCRIPTION_AUDIO_PROFILES:
+        allowed = ", ".join(sorted(SUPPORTED_TRANSCRIPTION_AUDIO_PROFILES))
+        raise SettingsValidationError(
+            f"params.speech.transcription_audio.profile must be one of: {allowed}"
+        )
+    audio_format = audio["format"]
+    if (
+        not isinstance(audio_format, str)
+        or audio_format not in SUPPORTED_TRANSCRIPTION_AUDIO_FORMATS
+    ):
+        allowed = ", ".join(sorted(SUPPORTED_TRANSCRIPTION_AUDIO_FORMATS))
+        raise SettingsValidationError(
+            f"params.speech.transcription_audio.format must be one of: {allowed}"
+        )
+    sample_rate_hz = audio["sample_rate_hz"]
+    if (
+        not isinstance(sample_rate_hz, int)
+        or isinstance(sample_rate_hz, bool)
+        or sample_rate_hz not in SUPPORTED_TRANSCRIPTION_AUDIO_SAMPLE_RATES
+    ):
+        allowed = ", ".join(
+            str(sample_rate) for sample_rate in sorted(SUPPORTED_TRANSCRIPTION_AUDIO_SAMPLE_RATES)
+        )
+        raise SettingsValidationError(
+            f"params.speech.transcription_audio.sample_rate_hz must be one of: {allowed}"
+        )
+
+    preset = TRANSCRIPTION_AUDIO_PRESETS.get(profile)
+    if preset is not None and (
+        audio_format != preset["format"] or sample_rate_hz != preset["sample_rate_hz"]
+    ):
+        raise SettingsValidationError(
+            f"params.speech.transcription_audio must use format={preset['format']!r} "
+            f"and sample_rate_hz={preset['sample_rate_hz']} for profile {profile!r}"
+        )
+
+    return {
+        "transcription_audio": {
+            "profile": profile,
+            "format": audio_format,
+            "sample_rate_hz": sample_rate_hz,
+        }
+    }
 
 
 def _parse_providers_update(providers: Any) -> JsonObject:
