@@ -145,9 +145,10 @@ def test_websocket_disconnect_removes_event_bus_subscriber(tmp_path: Path) -> No
 
     with TestClient(app) as client:
         with client.websocket_connect("/ws"):
-            assert app.state.event_bus.subscriber_count == 1
+            wait_for_event_bus_subscribers(app, expected_count=1)
 
         app.state.event_bus.publish("run_started", {"run_id": "run-one"})
+        wait_for_event_bus_subscribers(app, expected_count=0)
 
     assert app.state.event_bus.subscriber_count == 0
 
@@ -659,6 +660,21 @@ def wait_for_log_viewer_idle(app: Any, timeout_seconds: float = 2.0) -> None:
         time.sleep(0.01)
 
     raise AssertionError("timed out waiting for log viewer cleanup")
+
+
+def wait_for_event_bus_subscribers(
+    app: Any, *, expected_count: int, timeout_seconds: float = 2.0
+) -> None:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        if app.state.event_bus.subscriber_count == expected_count:
+            return
+        time.sleep(0.01)
+
+    raise AssertionError(
+        "timed out waiting for event-bus subscriber count "
+        f"{expected_count}; got {app.state.event_bus.subscriber_count}"
+    )
 
 
 # -- Unit tests for _parse_after_sequence --
