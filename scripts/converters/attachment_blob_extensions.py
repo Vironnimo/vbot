@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.attachments import AttachmentError, canonical_extension_for_media_type  # noqa: E402
+from core.storage.layout import DataDirectoryLayout  # noqa: E402
 from core.utils.atomic import atomic_write_text  # noqa: E402
 
 JsonObject = dict[str, Any]
@@ -41,7 +42,7 @@ class _ConversionCandidate:
 def convert_attachment_blob_extensions(data_dir: Path) -> AttachmentBlobConversionResult:
     """Convert every sidecar-backed legacy blob under one explicit data directory."""
 
-    attachments_dir = data_dir.expanduser().resolve() / "attachments"
+    attachments_dir = DataDirectoryLayout(data_dir.expanduser().resolve()).attachments
     if not attachments_dir.exists():
         return AttachmentBlobConversionResult(converted=0, already_converted=0)
     if not attachments_dir.is_dir():
@@ -151,7 +152,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "data_dir",
         type=Path,
-        help="Explicit vBot data directory containing attachments/",
+        help="Explicit vBot data directory containing artifacts/attachments/",
     )
     return parser.parse_args(argv)
 

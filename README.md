@@ -172,20 +172,42 @@ The target defaults to the server host, port, and data directory recorded by the
 
 ## Default Data Directory
 
-By default vBot stores runtime state under `~/.vbot`, including:
+By default vBot stores runtime state under `~/.vbot`. Setup, Runtime, and managed Worktree creation all initialize the same non-destructive layout:
 
-- `.env` — Provider keys, bot tokens, and Extension secrets
-- `settings.json` — instance settings
-- `agents/` — Identity Agent configs, Workspaces, private Skills, and Sessions
-- `projects/` — Project metadata and Project Agent Sessions
-- `skills/` — global user Skills
-- `channels/` and `cron/` — Channel configs and scheduled jobs
-- `attachments/`, `speech/`, and `images/` — uploaded and generated artifacts
-- `recall/` — disposable Recall indexes
-- `oauth/` — OAuth tokens
-- `debug/` and `logs/` — traces and daily Logs
-- `temp/` — retained temporary Bash output and Sub-Agent activity files
-- `archive/` — archived Agents, Projects, and Sessions
+```text
+<data-dir>/
+├── artifacts/
+│   ├── attachments/
+│   ├── images/
+│   ├── speech/
+│   ├── models/
+│   ├── debug/
+│   └── temp/
+│       ├── atomic/
+│       ├── bash/
+│       ├── subagents/
+│       └── skill-drafts/
+├── statistics/
+│   └── provider-usage/
+├── agents/
+├── archive/
+├── channels/
+├── cron/
+├── extensions/
+├── logs/
+├── oauth/
+├── processes/
+├── projects/
+├── prompts/
+├── recall/
+├── skills/
+├── .env
+└── settings.json
+```
+
+Artifacts keep their existing domain owners despite sharing `artifacts/`; Provider usage history remains Provider-owned source data despite its location under `statistics/`. The tracked system Model DB remains `resources/models/`, while only the instance's refreshable runtime Model DB lives under `artifacts/models/`. Default Workspaces remain under `agents/<agent-id>/workspace/`, and custom absolute Workspaces stay outside the data directory. `processes/` is reserved; retained Bash output lives under `artifacts/temp/bash/`.
+
+Existing pre-layout data directories require the explicit converter before starting current code; there is no automatic migration or legacy-path fallback. See [Data directory and configuration](USAGE.md#data-directory-and-configuration) for the safe conversion sequence.
 
 ## Running from Source
 

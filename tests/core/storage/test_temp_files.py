@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from core.storage import TemporaryFileManager
+from core.storage import DataDirectoryLayout, TemporaryFileManager
 
 
 def _age(path: Path, *, seconds: float) -> None:
@@ -25,14 +25,20 @@ def test_create_allocates_unique_category_confined_files(tmp_path: Path) -> None
     second = manager.create("bash", ".log")
 
     assert first.path != second.path
-    assert first.path.parent == tmp_path / "temp" / "bash"
+    assert first.path.parent == DataDirectoryLayout(tmp_path).bash_temporary
     assert first.path.is_file()
     assert second.path.is_file()
 
 
 @pytest.mark.parametrize(
     ("category", "suffix"),
-    [("unknown", ".log"), ("bash", "log"), ("bash", "../escape")],
+    [
+        ("unknown", ".log"),
+        ("atomic", ".tmp"),
+        ("skill-drafts", ".md"),
+        ("bash", "log"),
+        ("bash", "../escape"),
+    ],
 )
 def test_create_rejects_unknown_categories_and_unsafe_suffixes(
     tmp_path: Path,
@@ -90,7 +96,7 @@ def test_finish_is_idempotent_and_restarts_retention_clock(tmp_path: Path) -> No
 
 
 def test_start_sweeps_expired_crash_leftovers(tmp_path: Path) -> None:
-    stale_dir = tmp_path / "temp" / "subagents"
+    stale_dir = DataDirectoryLayout(tmp_path).subagent_temporary
     stale_dir.mkdir(parents=True)
     stale = stale_dir / "crash-leftover.md"
     stale.write_text("partial", encoding="utf-8")

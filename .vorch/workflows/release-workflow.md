@@ -71,20 +71,27 @@ gh release view vX.Y.Z --json tagName,assets --jq '{tag: .tagName, assets: [.ass
 
 Expect: all Backend, Frontend, E2E, Candidate Build, Candidate Smoke, publish, and Public Distribution canary jobs succeed; `assets` includes the gated `webui-dist.tar.gz`; and `releases/latest` resolves to `vX.Y.Z`.
 
-### 7. ONE TIME FOR THE NEXT RELEASE: convert the current installation's attachment blobs
+### 7. ONE TIME FOR THE NEXT RELEASE: convert the current installation's data layout and attachment blobs
 
-This step is mandatory for the next release only. The current Windows installation at `C:\Users\Viro\vbot` still runs the suffixless attachment-blob layout against `C:\Users\Viro\.vbot`; converting it before the new release is installed would make those Attachments unreadable to the old server. After the new GitHub release has passed step 6, stop that installation, update it without restarting, run the shipped converter explicitly against `C:\Users\Viro\.vbot`, verify the idempotent second pass, and only then start the new server:
+This step is mandatory for the next release only. The current Windows installation at `C:\Users\Viro\vbot` still runs both the old root-level data-directory layout and the suffixless attachment-blob layout against `C:\Users\Viro\.vbot`; this implementation deliberately converts only the development directory `C:\Users\Viro\.vbot-dev`, because converting `.vbot` before the new release is installed would make its data unreadable to the old server. After the new GitHub release has passed step 6, stop that installation, make a complete backup, update it without restarting, run the shipped structural converter in dry-run/apply/dry-run order, run the Attachment converter twice, validate configuration, and only then start the new server:
 
 ```powershell
 vbot server stop
+$backup = "C:\Users\Viro\.vbot-before-data-layout-vX.Y.Z"
+if (Test-Path -LiteralPath $backup) { throw "Backup target already exists: $backup" }
+Copy-Item -LiteralPath "C:\Users\Viro\.vbot" -Destination $backup -Recurse
 vbot update --no-restart
+& "C:\Users\Viro\vbot\.venv\Scripts\python.exe" "C:\Users\Viro\vbot\scripts\converters\data_dir_artifacts_layout.py" "C:\Users\Viro\.vbot"
+& "C:\Users\Viro\vbot\.venv\Scripts\python.exe" "C:\Users\Viro\vbot\scripts\converters\data_dir_artifacts_layout.py" "C:\Users\Viro\.vbot" --apply
+& "C:\Users\Viro\vbot\.venv\Scripts\python.exe" "C:\Users\Viro\vbot\scripts\converters\data_dir_artifacts_layout.py" "C:\Users\Viro\.vbot"
 & "C:\Users\Viro\vbot\.venv\Scripts\python.exe" "C:\Users\Viro\vbot\scripts\converters\attachment_blob_extensions.py" "C:\Users\Viro\.vbot"
 & "C:\Users\Viro\vbot\.venv\Scripts\python.exe" "C:\Users\Viro\vbot\scripts\converters\attachment_blob_extensions.py" "C:\Users\Viro\.vbot"
+vbot doctor config --data-dir "C:\Users\Viro\.vbot"
 vbot server start
 vbot server status
 ```
 
-The first converter run must succeed. The second must report `converted=0` and `already_converted` equal to the number of Attachment sidecars in `C:\Users\Viro\.vbot\attachments`; `server status` must then report the new installation as running. Once those checks pass, delete this entire step 7 from this workflow and commit and push that deletion on `main`. The one-time cutover and the next-release task are not complete until this instruction has removed itself.
+Replace `vX.Y.Z` in the backup path with the released version. The first structural run must report the complete move plan without changing disk, apply must succeed without a collision, and the second structural run must report no planned moves. The first Attachment-converter run must succeed; the second must report `converted=0` and `already_converted` equal to the number of Attachment sidecars in `C:\Users\Viro\.vbot\artifacts\attachments`. Configuration validation must pass and `server status` must report the new installation as running. Keep the backup until the converted installation has been verified. Once those checks pass, delete this entire step 7 from this workflow and commit and push that deletion on `main`. The one-time cutover and the next-release task are not complete until this instruction has removed itself.
 
 ## Fixing notes after the fact
 

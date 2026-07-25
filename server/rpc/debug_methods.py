@@ -198,7 +198,7 @@ def _debug_status(state: Any, params: JsonObject) -> JsonObject:
             "enabled": enabled,
             "trace_limit": trace_limit,
             "trace_count": trace_count,
-            "data_directory": str(runtime.storage.data_dir),
+            "data_directory": str(store.get_data_dir()),
         }
     except Exception as exc:
         raise _map_expected_error(exc) from exc

@@ -537,7 +537,7 @@ async def test_normal_model_refresh_copies_complete_system_db_to_runtime_root(
     )
 
     assert response["ok"] is True, response
-    runtime_models_dir = tmp_path / "models"
+    runtime_models_dir = state.runtime.storage.layout.models
     assert (
         runtime_models_dir.joinpath("openrouter.overrides.json").read_text(encoding="utf-8")
         == override_text
@@ -574,7 +574,7 @@ async def test_explicit_system_refresh_writes_only_serving_checkout(
     assert response["ok"] is True
     system_models_dir = state.runtime.resources_dir / "models"
     assert system_models_dir.joinpath("openrouter.json").is_file()
-    assert not (tmp_path / "models").exists()
+    assert not state.runtime.storage.layout.models.exists()
     manifest = read_model_database_manifest(system_models_dir)
     assert manifest is not None
     assert manifest.source == MODEL_DATABASE_SOURCE_SYSTEM

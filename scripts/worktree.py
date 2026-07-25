@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+import runpy
 import shutil
 import socket
 import stat
@@ -47,13 +48,10 @@ PROJECT_ROOT = _resolve_project_root()
 MAIN_DEV_PORT = 8421
 FIRST_WORKTREE_PORT = 8422
 WORKTREES_DIR = PROJECT_ROOT / ".worktrees"
-DATA_DIR_TEMPLATE_DIR = PROJECT_ROOT / ".data-dir-base"
 WORKTREE_FILE_NAME = ".vbot-worktree"
 DATA_DIR_KEY = "data_dir"
 MANAGED_BRANCH_KEY = "managed_branch"
 SERVER_PORT_KEY = "server_port"
-MAIN_AGENT_ID = "main"
-MAIN_AGENT_WORKSPACE = f"agents/{MAIN_AGENT_ID}/workspace"
 UNKNOWN_VALUE = "unknown"
 VALID_WORKTREE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 TRASH_DIR_PREFIX = ".trash-"
@@ -100,25 +98,15 @@ def _expected_data_dir(name: str) -> Path:
     return Path.home() / f".vbot-{name}"
 
 
-def _main_agent_config_path(data_dir: Path) -> Path:
-    """Return the main-agent config path inside a data dir."""
-    return data_dir / "agents" / MAIN_AGENT_ID / "agent.json"
+def initialize_data_dir(data_dir: Path) -> None:
+    """Run the pure-standard-library canonical initializer without package imports."""
 
-
-def seed_data_dir(data_dir: Path) -> None:
-    """Copy the default data-dir template and rewrite main-agent workspace."""
-    if not DATA_DIR_TEMPLATE_DIR.is_dir():
-        raise FileNotFoundError(f"data-dir template not found: {DATA_DIR_TEMPLATE_DIR}")
-
-    shutil.copytree(DATA_DIR_TEMPLATE_DIR, data_dir, dirs_exist_ok=True)
-
-    agent_config_path = _main_agent_config_path(data_dir)
-    agent_config = json.loads(agent_config_path.read_text(encoding="utf-8"))
-    if not isinstance(agent_config, dict):
-        raise ValueError("main agent config must be a JSON object")
-
-    agent_config["workspace"] = MAIN_AGENT_WORKSPACE
-    agent_config_path.write_text(f"{json.dumps(agent_config, indent=2)}\n", encoding="utf-8")
+    layout_module = runpy.run_path(
+        str(PROJECT_ROOT / "core" / "storage" / "layout.py"),
+        run_name="vbot_data_directory_layout",
+    )
+    initializer = layout_module["initialize_data_directory"]
+    initializer(data_dir, resources_dir=PROJECT_ROOT / "resources")
 
 
 def _resolve_remove_data_dir(name: str, marker_data: dict[str, object] | None) -> Path:
@@ -507,7 +495,7 @@ def cmd_create(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        seed_data_dir(data_dir)
+        initialize_data_dir(data_dir)
         merge_settings(data_dir / "settings.json", {SERVER_PORT_KEY: port})
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         cleanup_failed_create(

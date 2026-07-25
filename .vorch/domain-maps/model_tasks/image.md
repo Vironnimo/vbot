@@ -8,7 +8,7 @@ Provider-neutral image generation/edit execution, isolated image understanding, 
 
 ## Interfaces
 
-- `ImageService(model_tasks, runtime, data_dir, *, max_input_bytes)` — runtime-owned service; stores artifacts under `<data_dir>/images/` and applies Runtime's Attachment-size ceiling to every local source image. Keeps the injected `model_tasks` reference to resolve target Models.
+- `ImageService(model_tasks, runtime, data_dir, *, max_input_bytes)` — runtime-owned service; receives the canonical `<data_dir>/artifacts/images/` path from Runtime, stores artifacts there, and applies Runtime's Attachment-size ceiling to every local source image. Keeps the injected `model_tasks` reference to resolve target Models.
 - `await ImageService.generate(prompt: str, *, call_options=None, source_paths=None) -> ImageGenerationResult` — trims and validates `prompt`, resolves the configured binding, routes any `call_options` into native wire options vs. prompt hints (see Per-Call Option Routing), loads each optional local source image, executes the provider generation/edit request, and returns normalized bytes without persisting them. Empty/absent `call_options` and `source_paths` reproduce the request the binding alone would make.
 - `await ImageService.analyze(prompt: str, *, image_paths) -> ImageUnderstandingResult` — resolves `image_understanding`, verifies the selected Model advertises `text` and `image` input plus `text` output and the Adapter wire accepts every sniffed MIME type, then returns normalized plain-text analysis plus Model/image-count/optional Usage.
 - `await ImageService.generate_artifacts(prompt: str, *, call_options=None, source_paths=None) -> tuple[ImageArtifact, ...]` — forwards `call_options` and `source_paths` to `generate()`, writes each returned image plus JSON metadata sidecar, and returns persisted artifact metadata.
@@ -60,7 +60,7 @@ OpenAI subscription image execution is selected by provider `openai` plus connec
 Image artifacts are stored through the shared `TaskArtifactStore` (`core/model_tasks/artifacts.py`) as one blob and one JSON sidecar per image:
 
 ```text
-<data_dir>/images/
+<data_dir>/artifacts/images/
   a1b2c3d4....png
   a1b2c3d4....json
 ```

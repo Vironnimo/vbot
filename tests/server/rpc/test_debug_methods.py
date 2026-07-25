@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from core.debug.store import DebugTraceStore
+from core.storage.layout import DataDirectoryLayout
 from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST
 from server.rpc.methods import dispatch_rpc
 from tests.server.test_rpc import (
@@ -146,7 +147,7 @@ class TestDebugStatus:
         assert result["enabled"] is False
         assert result["trace_limit"] == 30
         assert result["trace_count"] == 0
-        assert result["data_directory"] == str(tmp_path)
+        assert result["data_directory"] == str(DataDirectoryLayout(tmp_path).debug)
 
     @pytest.mark.asyncio
     async def test_returns_enabled_state_with_trace_count(self, tmp_path: Path) -> None:
@@ -161,7 +162,7 @@ class TestDebugStatus:
         assert result["enabled"] is True
         assert result["trace_limit"] == 100
         assert result["trace_count"] == 3
-        assert result["data_directory"] == str(tmp_path)
+        assert result["data_directory"] == str(DataDirectoryLayout(tmp_path).debug)
 
     @pytest.mark.asyncio
     async def test_rejects_params(self, tmp_path: Path) -> None:

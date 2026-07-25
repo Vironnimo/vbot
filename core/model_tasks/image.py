@@ -22,6 +22,7 @@ from core.model_tasks.image_types import (
 from core.model_tasks.model_tasks import model_supports_task
 from core.model_tasks.task_execution import TaskBindingResolver
 from core.providers.task_client import TaskClientRuntime
+from core.storage.layout import DataDirectoryLayout
 from core.utils.errors import TaskError, VBotError
 from core.utils.logging import get_logger
 
@@ -95,7 +96,9 @@ class ImageService:
             model_tasks, configuration_error=ImageConfigurationError
         )
         self._artifacts = TaskArtifactStore(
-            Path(data_dir) / "images", kind="image", error=ImageConfigurationError
+            DataDirectoryLayout(data_dir).images,
+            kind="image",
+            error=ImageConfigurationError,
         )
 
     async def generate(

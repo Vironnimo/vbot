@@ -26,6 +26,7 @@ from core.model_tasks.image import (
 )
 from core.model_tasks.image_types import ImageGenerationResult
 from core.providers.errors import ProviderError
+from core.storage.layout import DataDirectoryLayout
 
 
 @pytest.mark.asyncio
@@ -46,6 +47,27 @@ async def test_generate_with_local_target_is_unsupported(tmp_path: Path) -> None
 
     with pytest.raises(ImageUnsupportedTargetError, match="local"):
         await service.generate("a cat")
+
+
+@pytest.mark.asyncio
+async def test_generate_artifacts_uses_canonical_image_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = ImageService(_MissingModelTasks(), cast(Any, object()), tmp_path)
+
+    async def generate(_prompt: str, **_kwargs: Any) -> ImageGenerationResult:
+        return ImageGenerationResult(
+            images=(b"image",),
+            media_type="image/png",
+            model="provider/model",
+        )
+
+    monkeypatch.setattr(service, "generate", generate)
+
+    artifacts = await service.generate_artifacts("a cat")
+
+    assert artifacts[0].file_path.parent == DataDirectoryLayout(tmp_path).images
 
 
 @pytest.mark.asyncio

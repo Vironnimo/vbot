@@ -313,20 +313,12 @@ function Initialize-DataDirectory {
         Write-Host "Keeping existing valid settings.json."
     }
 
-    $envPath = Join-Path $ResolvedDataDir ".env"
-    if (-not (Test-Path $envPath)) {
-        $envTemplate = @(
-            "# vBot provider credentials",
-            "# OPENAI_API_KEY=...",
-            "# OPENROUTER_API_KEY=...",
-            "# ANTHROPIC_API_KEY=..."
-        ) -join [Environment]::NewLine
-        Write-Utf8NoBomFile -Path $envPath -Content ($envTemplate + [Environment]::NewLine)
-        Write-Host "Created .env template."
-    }
-    else {
-        Write-Host "Keeping existing .env."
-    }
+    Invoke-External $Python @(
+        (Join-Path $ProjectRoot "core\storage\layout.py"),
+        $ResolvedDataDir,
+        "--resources-dir",
+        (Join-Path $ProjectRoot "resources")
+    )
 }
 
 function Install-PythonPackage {

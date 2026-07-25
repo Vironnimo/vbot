@@ -8,13 +8,17 @@ import pytest
 
 from core.settings import DEFAULT_APPEARANCE_CHAT_WIDTH, DEFAULT_APPEARANCE_LANGUAGE
 from core.storage import (
-    PHASE_TWO_DIRECTORIES,
+    DATA_DIRECTORY_RELATIVE_PATHS,
+    DataDirectoryLayout,
     StorageError,
     StorageManager,
 )
 
 
 def create_prompt_resources(resources_dir: Path, *, include_compaction: bool = True) -> None:
+    environment_template = resources_dir / "data-dir" / ".env.example"
+    environment_template.parent.mkdir(parents=True)
+    environment_template.write_text("# test environment\n", encoding="utf-8")
     prompts_dir = resources_dir / "prompts"
     prompts_dir.mkdir(parents=True)
     prompt_names = [
@@ -50,13 +54,13 @@ class ConfigWithValues:
         return self.values.get(key, default)
 
 
-def test_ensure_directories_creates_phase_two_structure(tmp_path: Path) -> None:
+def test_ensure_directories_creates_canonical_structure(tmp_path: Path) -> None:
     storage = StorageManager(tmp_path)
 
     storage.ensure_directories()
 
     assert tmp_path.is_dir()
-    assert all((tmp_path / directory).is_dir() for directory in PHASE_TWO_DIRECTORIES)
+    assert all((tmp_path / directory).is_dir() for directory in DATA_DIRECTORY_RELATIVE_PATHS)
 
 
 def test_load_environment_reads_data_dir_env_file(
@@ -112,8 +116,10 @@ def test_set_data_dir_credential_writes_new_env_key(tmp_path: Path) -> None:
 
     storage.set_data_dir_credential("OPENROUTER_API_KEY", "sk-or-test")
 
-    assert (tmp_path / ".env").read_text(encoding="utf-8") == "OPENROUTER_API_KEY=sk-or-test\n"
-    assert storage.load_environment() == {"OPENROUTER_API_KEY": "sk-or-test"}
+    environment_text = (tmp_path / ".env").read_text(encoding="utf-8")
+    assert "OPENROUTER_API_KEY=sk-or-test\n" in environment_text
+    assert "OPENAI_API_KEY=\n" in environment_text
+    assert storage.load_environment()["OPENROUTER_API_KEY"] == "sk-or-test"
 
 
 def test_set_data_dir_credential_replaces_existing_key_and_preserves_other_lines(
@@ -152,7 +158,7 @@ def test_set_data_dir_credential_preserves_env_when_atomic_replace_fails(
 
     assert replace_calls and replace_calls[0][1] == env_path
     assert env_path.read_text(encoding="utf-8") == "OPENROUTER_API_KEY=old\nOTHER_KEY=value\n"
-    assert list((tmp_path / ".tmp").iterdir()) == []
+    assert list(DataDirectoryLayout(tmp_path).atomic_temporary.iterdir()) == []
 
 
 @pytest.mark.parametrize("key", ["", "1BAD", "BAD-NAME", "BAD NAME"])

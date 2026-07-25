@@ -13,6 +13,7 @@ from typing import Any
 from uuid import uuid4
 from zipfile import BadZipFile, ZipFile
 
+from core.storage.layout import DataDirectoryLayout
 from core.utils.atomic import atomic_write_bytes, atomic_write_text
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
@@ -100,13 +101,13 @@ class AttachmentRecord:
 
 
 class AttachmentStore:
-    """Store and fetch attachment blobs under ``<data_dir>/attachments``."""
+    """Store and fetch attachment blobs under the canonical artifact path."""
 
     def __init__(self, data_dir: Path, *, max_size_bytes: int = 20_971_520) -> None:
         if max_size_bytes <= 0:
             raise AttachmentError("max_size_bytes must be greater than 0")
 
-        self._attachments_dir = Path(data_dir).expanduser() / "attachments"
+        self._attachments_dir = DataDirectoryLayout(data_dir).attachments
         self._max_size_bytes = max_size_bytes
 
     @property

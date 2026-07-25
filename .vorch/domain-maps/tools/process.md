@@ -6,7 +6,7 @@ Manages background process sessions created by `bash`.
 
 - Process session ids are distinct from chat Session ids.
 - `ProcessManager` stores process sessions in memory by process `session_id`, scoped by Agent and Run.
-- Runtime injects Storage's `TemporaryFileManager`. Every process session then leases one file under `<data_dir>/temp/bash/` and writes combined output incrementally — decoded via an incremental UTF-8 decoder (chunk-split multibyte safe), ANSI-stripped, and flushed per chunk so the file is readable while the process runs. The file is the *complete* record and is not subject to the in-memory buffer cap. `ProcessSession.log_file` exposes the path (`None` without a temporary-file manager or after a write error, which disables file logging for that session best-effort). The lease remains active through process exit and both stream readers, then starts Storage's 72-hour retention; ProcessManager no longer owns file cleanup.
+- Runtime injects Storage's `TemporaryFileManager`. Every process session then leases one file under `<data_dir>/artifacts/temp/bash/` and writes combined output incrementally — decoded via an incremental UTF-8 decoder (chunk-split multibyte safe), ANSI-stripped, and flushed per chunk so the file is readable while the process runs. The file is the *complete* record and is not subject to the in-memory buffer cap. `ProcessSession.log_file` exposes the path (`None` without a temporary-file manager or after a write error, which disables file logging for that session best-effort). The lease remains active through process exit and both stream readers, then starts Storage's 72-hour retention; ProcessManager no longer owns file cleanup.
 
 ## Interfaces
 

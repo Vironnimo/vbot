@@ -3,9 +3,10 @@
 Every write goes to a unique temp file that is then moved into place with
 ``os.replace``, so a reader never observes a partially written file. The temp
 file lives adjacent to the target by default (guaranteeing the same filesystem
-for the replace); pass ``data_dir`` to stage it under ``<data_dir>/.tmp``
-instead. On failure the temp file is removed and the ``OSError`` re-raised for
-the caller to translate into its own domain error.
+for the replace); pass ``data_dir`` to stage it under the data directory's
+canonical atomic-temporary area instead. On failure the temp file is removed
+and the ``OSError`` re-raised for the caller to translate into its own domain
+error.
 """
 
 from __future__ import annotations
@@ -16,11 +17,13 @@ from contextlib import suppress
 from pathlib import Path
 from uuid import uuid4
 
+from core.storage.layout import DataDirectoryLayout
+
 
 def temporary_path(data_dir: Path, target_path: Path) -> Path:
-    """Return a unique temp path under ``<data_dir>/.tmp`` for an atomic replace."""
+    """Return a unique canonical temp path for an atomic replace."""
 
-    return data_dir / ".tmp" / f".{target_path.name}.{uuid4().hex}.tmp"
+    return DataDirectoryLayout(data_dir).atomic_temporary / f".{target_path.name}.{uuid4().hex}.tmp"
 
 
 def remove_temporary_file(temp_path: Path) -> None:

@@ -48,6 +48,7 @@ from core.settings.normalizers import (
     validate_supported_agent_default_fields,
 )
 from core.storage.errors import StorageError
+from core.storage.layout import DataDirectoryLayout, initialize_data_directory
 from core.storage.prompt_blocks import PromptBlockStore
 from core.storage.prompt_fragments import PromptFragmentStore
 from core.storage.temp_files import TemporaryFileManager
@@ -88,22 +89,6 @@ SETTINGS_UPDATE_SECTIONS = frozenset(
         "session_titles",
     }
 )
-PHASE_TWO_DIRECTORIES = (
-    ".tmp",
-    "agents",
-    "archive",
-    "attachments",
-    "channels",
-    "cron",
-    "debug",
-    "oauth",
-    "prompts",
-    "recall",
-    "speech",
-    "skills",
-    "temp",
-    "logs",
-)
 
 
 class ConfigProtocol(Protocol):
@@ -114,7 +99,7 @@ class ConfigProtocol(Protocol):
 
 
 class StorageManager:
-    """Owns Phase 2 data-directory setup, settings JSON, and prompt fragments."""
+    """Owns data-directory setup, settings JSON, and prompt fragments."""
 
     def __init__(
         self,
@@ -125,6 +110,7 @@ class StorageManager:
     ) -> None:
         self.data_dir = self._resolve_data_dir(data_dir, config).expanduser()
         self.resources_dir = self._resolve_resources_dir(resources_dir)
+        self.layout = DataDirectoryLayout(self.data_dir)
         self._settings_lock = RLock()
         self._settings_diagnostic_signature: tuple[str, ...] | None = None
         self.temporary_files = TemporaryFileManager(self.data_dir)
@@ -142,13 +128,13 @@ class StorageManager:
     def settings_path(self) -> Path:
         """Path to the instance settings JSON file."""
 
-        return self.data_dir / "settings.json"
+        return self.layout.settings_file
 
     @property
     def prompts_dir(self) -> Path:
         """Path to user-copy prompt fragments in the data directory."""
 
-        return self.data_dir / "prompts"
+        return self.layout.prompts
 
     @property
     def resource_prompts_dir(self) -> Path:
@@ -157,11 +143,9 @@ class StorageManager:
         return self.resources_dir / "prompts"
 
     def ensure_directories(self) -> None:
-        """Create the Phase 2 data-directory structure if it is missing."""
+        """Create the canonical data-directory structure if it is missing."""
 
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        for directory_name in PHASE_TWO_DIRECTORIES:
-            (self.data_dir / directory_name).mkdir(parents=True, exist_ok=True)
+        initialize_data_directory(self.data_dir, resources_dir=self.resources_dir)
 
     def load_environment(self) -> dict[str, str]:
         """Return a read-only snapshot of credentials from ``<data_dir>/.env``.
@@ -932,7 +916,6 @@ class StorageManager:
             raise StorageError("Settings must be a mapping")
 
         with self._settings_lock:
-            self.ensure_directories()
             try:
                 serialized = (
                     json.dumps(dict(settings), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
@@ -941,6 +924,7 @@ class StorageManager:
                 raise StorageError(
                     f"Settings contain a value that cannot be serialized: {exc}"
                 ) from exc
+            self.ensure_directories()
             try:
                 atomic_write_text(self.settings_path, serialized, data_dir=self.data_dir)
             except OSError as exc:

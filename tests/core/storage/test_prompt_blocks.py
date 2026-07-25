@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from core.prompts import LayoutEntry
-from core.storage import StorageError, StorageManager
+from core.storage import DataDirectoryLayout, StorageError, StorageManager
 from core.storage.prompt_blocks import PromptBlockStore
 
 
@@ -14,8 +14,9 @@ def make_store(tmp_path: Path) -> PromptBlockStore:
     """Build a store with a real ensure-directories hook over a temp data dir."""
 
     def ensure_directories() -> None:
-        for directory in (".tmp", "prompts", "agents"):
-            (tmp_path / directory).mkdir(parents=True, exist_ok=True)
+        layout = DataDirectoryLayout(tmp_path)
+        for directory in (layout.atomic_temporary, layout.prompts, layout.agents):
+            directory.mkdir(parents=True, exist_ok=True)
 
     return PromptBlockStore(data_dir=tmp_path, ensure_directories=ensure_directories)
 
@@ -224,7 +225,7 @@ def test_write_layout_leaves_no_temp_file(tmp_path: Path) -> None:
 
     store.write_layout(None, [LayoutEntry(id="core:intro")])
 
-    assert list((tmp_path / ".tmp").iterdir()) == []
+    assert list(DataDirectoryLayout(tmp_path).atomic_temporary.iterdir()) == []
 
 
 # --------------------------------------------------------------------------
@@ -270,7 +271,7 @@ def test_write_block_override_leaves_no_temp_file(tmp_path: Path) -> None:
 
     store.write_block_override(None, "tool:bash", "x")
 
-    assert list((tmp_path / ".tmp").iterdir()) == []
+    assert list(DataDirectoryLayout(tmp_path).atomic_temporary.iterdir()) == []
 
 
 # --------------------------------------------------------------------------

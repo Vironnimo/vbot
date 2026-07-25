@@ -34,10 +34,7 @@ from core.extensions import (
 )
 from core.memory import MemoryService
 from core.model_tasks import EmbeddingService, ImageService, SpeechService, TaskModelService
-from core.models.database import (
-    MODEL_DATABASE_DIRECTORY_NAME,
-    begin_runtime_model_database_refresh,
-)
+from core.models.database import begin_runtime_model_database_refresh
 from core.models.models import Model, ModelRegistry
 from core.projects import AgentResolver, ProjectStore, build_agent_resolver
 from core.prompts import (
@@ -147,8 +144,6 @@ _UNKNOWN_APP_VERSION = "0.0.0+unknown"
 _SKILLS_DIRNAME = "skills"
 _AGENTS_DIRNAME = "agents"
 _ARCHIVE_DIRNAME = "archive"
-_TEMP_DIRNAME = "temp"
-_SKILL_DRAFTS_DIRNAME = "skill-drafts"
 
 
 def _detect_app_version() -> str:
@@ -484,7 +479,7 @@ class Runtime:
         )
         self._models = ModelRegistry.load(
             resources_path,
-            runtime_models_dir=self._storage.data_dir / MODEL_DATABASE_DIRECTORY_NAME,
+            runtime_models_dir=self._storage.layout.models,
         )
         self._model_tasks = TaskModelService(
             self._providers,
@@ -582,7 +577,7 @@ class Runtime:
         # the shared global pool (only when the user asked).
         self._skill_authoring = SkillAuthoringService(
             protected_roots=[resources_path / _SKILLS_DIRNAME],
-            drafts_root=storage.data_dir / _TEMP_DIRNAME / _SKILL_DRAFTS_DIRNAME,
+            drafts_root=storage.layout.skill_drafts,
             archive_root=storage.data_dir / _ARCHIVE_DIRNAME,
         )
         register_skill_manage_tool(
@@ -2312,7 +2307,7 @@ class Runtime:
                     # (task targets, status, recall) see the fresh catalog.
                     self.models.reload(
                         system_resources_dir,
-                        runtime_models_dir=self.storage.data_dir / MODEL_DATABASE_DIRECTORY_NAME,
+                        runtime_models_dir=self.storage.layout.models,
                     )
             except Exception as error:
                 # This background convenience path is deliberately fail-soft:

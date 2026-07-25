@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from core.providers.usage_history import ProviderUsageHistoryStore, UsageHistoryError
+from core.storage.layout import DataDirectoryLayout
 
 
 def _snapshot() -> dict[str, Any]:
@@ -36,6 +37,7 @@ def _snapshot() -> dict[str, Any]:
 
 def test_history_store_filters_monthly_files_and_clears_explicitly(tmp_path: Any) -> None:
     store = ProviderUsageHistoryStore(tmp_path)
+    assert store.directory == DataDirectoryLayout(tmp_path).provider_usage
     june_at = "2026-06-30T23:00:00+00:00"
     july_at = "2026-07-01T01:00:00+00:00"
 

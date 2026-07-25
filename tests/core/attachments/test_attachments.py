@@ -19,6 +19,7 @@ from core.attachments.attachments import (
     AttachmentTypeNotAllowedError,
     sniff_media_type,
 )
+from core.storage.layout import DataDirectoryLayout
 
 _OOXML_PREFIX = "application/vnd.openxmlformats-officedocument."
 _DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -57,7 +58,7 @@ def test_sniff_media_type_does_not_create_attachments(tmp_path: Path) -> None:
     # Sniffing is a pure byte inspection: it must not write any blob/sidecar.
     sniff_media_type(b"\x89PNG\r\n\x1a\n", "diagram.png")
 
-    assert not (tmp_path / "attachments").exists()
+    assert not DataDirectoryLayout(tmp_path).attachments.exists()
 
 
 def test_sniff_media_type_classifies_valid_ooxml() -> None:
@@ -118,7 +119,7 @@ def test_store_happy_path_persists_blob_and_sidecar(
     assert blob_path.name == f"{record.id}{expected_extension}"
     assert blob_path.read_bytes() == data
 
-    sidecar_path = tmp_path / "attachments" / f"{record.id}.json"
+    sidecar_path = DataDirectoryLayout(tmp_path).attachments / f"{record.id}.json"
     assert sidecar_path.exists()
 
     sidecar_payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
@@ -209,7 +210,7 @@ def test_set_transcription_persists_to_sidecar(tmp_path: Path) -> None:
     assert updated.transcription == "hello world"
     assert store.get(record.id).transcription == "hello world"
 
-    sidecar_path = tmp_path / "attachments" / f"{record.id}.json"
+    sidecar_path = DataDirectoryLayout(tmp_path).attachments / f"{record.id}.json"
     sidecar_payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
     assert sidecar_payload["transcription"] == "hello world"
 
@@ -300,7 +301,7 @@ def test_get_rejects_non_uuid_attachment_id(tmp_path: Path) -> None:
 def test_get_uses_canonical_blob_path_when_sidecar_path_is_stale(tmp_path: Path) -> None:
     store = AttachmentStore(tmp_path)
     record = store.store("notes.txt", b"canonical path")
-    sidecar_path = tmp_path / "attachments" / f"{record.id}.json"
+    sidecar_path = DataDirectoryLayout(tmp_path).attachments / f"{record.id}.json"
     payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
     payload["file_path"] = str(tmp_path / "outside.txt")
     sidecar_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -313,7 +314,7 @@ def test_get_uses_canonical_blob_path_when_sidecar_path_is_stale(tmp_path: Path)
 def test_get_rejects_sidecar_id_mismatch(tmp_path: Path) -> None:
     store = AttachmentStore(tmp_path)
     record = store.store("notes.txt", b"mismatch")
-    sidecar_path = tmp_path / "attachments" / f"{record.id}.json"
+    sidecar_path = DataDirectoryLayout(tmp_path).attachments / f"{record.id}.json"
     payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
     payload["id"] = "00000000-0000-4000-8000-000000000000"
     sidecar_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -345,7 +346,7 @@ def test_delete_removes_blob_and_sidecar_and_missing_is_noop(tmp_path: Path) -> 
     store = AttachmentStore(tmp_path)
     record = store.store("notes.txt", b"to delete")
     blob_path = Path(record.file_path)
-    sidecar_path = tmp_path / "attachments" / f"{record.id}.json"
+    sidecar_path = DataDirectoryLayout(tmp_path).attachments / f"{record.id}.json"
     assert blob_path.exists()
     assert sidecar_path.exists()
 
@@ -363,7 +364,7 @@ def test_delete_rejects_path_traversal_id_without_removing_existing_files(tmp_pa
     store = AttachmentStore(tmp_path)
     record = store.store("notes.txt", b"keep me")
     blob_path = Path(record.file_path)
-    sidecar_path = tmp_path / "attachments" / f"{record.id}.json"
+    sidecar_path = DataDirectoryLayout(tmp_path).attachments / f"{record.id}.json"
 
     # Act / Assert
     with pytest.raises(AttachmentNotFoundError, match="Invalid attachment id"):
@@ -381,7 +382,7 @@ def test_delete_missing_valid_uuid_is_noop(tmp_path: Path) -> None:
     store.delete("00000000-0000-4000-8000-000000000001")
 
     # Assert
-    assert not (tmp_path / "attachments").exists()
+    assert not DataDirectoryLayout(tmp_path).attachments.exists()
 
 
 def test_stored_at_uses_utc_iso_format_with_explicit_offset(tmp_path: Path) -> None:

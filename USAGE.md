@@ -197,22 +197,80 @@ API keys resolve from the process environment first and `<data-dir>/.env` second
 
 ## Data directory and configuration
 
-The normal runtime data directory is `~/.vbot`. Select another target with `--data-dir` on server and RPC-backed CLI commands, or set `VBOT_DATA_DIR`. Run `vbot home` to print the absolute application and currently selected data directories; pass `--data-dir` to inspect an explicit target. Important contents are:
+The normal runtime data directory is `~/.vbot`. Select another target with `--data-dir` on server and RPC-backed CLI commands, or set `VBOT_DATA_DIR`. Run `vbot home` to print the absolute application and currently selected data directories; pass `--data-dir` to inspect an explicit target.
 
-- `.env` — Provider keys, Channel bot tokens, and Extension secrets
-- `settings.json` — instance Settings
-- `agents/` — Identity Agent configs, Workspaces, private Skills, and Sessions
-- `projects/` — Project metadata and Project Agent Sessions
-- `skills/` — global user Skills
-- `channels/` and `cron/` — Channel configs and scheduled jobs
-- `attachments/`, `speech/`, and `images/` — uploaded and generated artifacts
-- `recall/` — disposable Recall indexes
-- `oauth/` — OAuth Account tokens
-- `models/` — the complete runtime Model DB after the first successful `model refresh`, including generated catalogs and their matching Overrides
-- `prompts/` — persisted System Prompt layout and overrides
-- `debug/` and `logs/` — Debug traces and daily Logs
-- `temp/bash/` and `temp/subagents/` — retained Bash output and Sub-Agent activity files
-- `archive/` — archived Agents, Projects, and Sessions
+Setup, Runtime, direct `core/storage/layout.py` use, and managed Worktree creation all initialize this same non-destructive structure:
+
+```text
+<data-dir>/
+├── artifacts/
+│   ├── attachments/
+│   ├── images/
+│   ├── speech/
+│   ├── models/
+│   ├── debug/
+│   └── temp/
+│       ├── atomic/
+│       ├── bash/
+│       ├── subagents/
+│       └── skill-drafts/
+├── statistics/
+│   └── provider-usage/
+├── agents/
+├── archive/
+├── channels/
+├── cron/
+├── extensions/
+├── logs/
+├── oauth/
+├── processes/
+├── projects/
+├── prompts/
+├── recall/
+├── skills/
+├── .env
+└── settings.json
+```
+
+`artifacts/attachments/`, `artifacts/images/`, `artifacts/speech/`, `artifacts/models/`, and `artifacts/debug/` contain durable domain-owned artifacts. The four `artifacts/temp/` children remain separate: atomic replacement staging, 72-hour retained Bash output, 24-hour retained Sub-Agent activity, and isolated Skill Drafts. `statistics/provider-usage/` is normalized Provider-owned upstream history; local Statistics still derive from Sessions and add no persistence. The tracked system Model DB remains `resources/models/`; only the complete instance runtime Model DB moves under `artifacts/models/`.
+
+Independent roots keep their established ownership: `agents/` contains Identity Agent configs, default Workspaces, private Skills, and Sessions; `projects/` contains Project metadata and Project Agent Sessions; `skills/` contains global user Skills; `channels/`, `cron/`, `extensions/`, `prompts/`, `recall/`, `logs/`, `oauth/`, and `archive/` retain their existing records. Custom absolute Workspaces remain outside the data directory. `processes/` is reserved for future persistent process records and is not the Bash-output location.
+
+The initializer copies `resources/data-dir/.env.example` only when `.env` is absent and creates an empty `settings.json` only when Settings is absent. It never rewrites either existing file; Setup separately retains ownership of fresh-install Settings defaults and explicit port updates.
+
+### Converting an existing data directory
+
+Current application code reads only the canonical paths. Convert every older data directory explicitly before starting the updated instance; Setup and Runtime do not migrate or dual-read old paths.
+
+1. Stop the exact vBot instance that uses the target data directory.
+2. Back up the complete data directory with your normal filesystem backup mechanism.
+3. From the updated vBot checkout, run the converter without `--apply` and resolve every reported unsupported legacy `temp/` entry or destination collision:
+
+   ```bash
+   python scripts/converters/data_dir_artifacts_layout.py <data-dir>
+   ```
+
+4. Apply the same preflighted conversion while vBot remains stopped:
+
+   ```bash
+   python scripts/converters/data_dir_artifacts_layout.py <data-dir> --apply
+   ```
+
+5. If the data predates extension-bearing Attachment blobs, run the Attachment schema converter after the structural conversion:
+
+   ```bash
+   python scripts/converters/attachment_blob_extensions.py <data-dir>
+   ```
+
+6. Validate all configuration files:
+
+   ```bash
+   vbot doctor config --data-dir <data-dir>
+   ```
+
+7. Start the instance and verify its reported data root, Agents and Sessions, artifact serving, Debug status when enabled, and Provider usage history.
+
+The structural converter defaults to a read-only preflight, rejects symlinks, special files, unknown legacy temporary categories, and every matching destination, and never overwrites data. Apply moves regular leaf files atomically within the data root and is resumable after interruption. Previously persisted absolute paths in old Session text are not rewritten.
 
 Desktop owns separate per-user settings because it can connect to different servers. On Windows they live under `%APPDATA%\vbot`; on Linux they live under `$XDG_CONFIG_HOME/vbot` or `~/.config/vbot`. Remembered servers, wakeword configuration, and imported wakeword Models are Desktop-local and are not server Settings.
 
@@ -398,7 +456,7 @@ The CLI Skill manager authors only global and private Identity Agent scopes; it 
 
 The `subagent` Tool delegates a bounded task to an authorized Identity or Project Agent in a child Session. Identity Agents may be allowed to target all Agents or an explicit list; Project Agents remain confined to their own Team. Foreground work returns directly, while top-level background work completes asynchronously and wakes the parent with the finished results. Nested Sub-Agents run in the foreground, and background Bash is unavailable inside a Sub-Agent so work cannot be stranded after the child Session ends.
 
-Default limits are four levels of nesting, eight Sub-Agents per model turn, and a 60-minute foreground timeout. These are configurable in Settings. Each admitted child Run gets a supplemental activity file under `<data-dir>/temp/subagents/`, retained for 24 hours after completion; canonical child history remains in its Session.
+Default limits are four levels of nesting, eight Sub-Agents per model turn, and a 60-minute foreground timeout. These are configurable in Settings. Each admitted child Run gets a supplemental activity file under `<data-dir>/artifacts/temp/subagents/`, retained for 24 hours after completion; canonical child history remains in its Session.
 
 ## Settings and specialized Models
 

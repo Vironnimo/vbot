@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from core.storage.layout import DataDirectoryLayout
 from core.utils.atomic import atomic_write_text
 
 MODEL_DATABASE_DIRECTORY_NAME = "models"
@@ -41,6 +42,7 @@ class ModelDatabaseRefresh:
     resources_dir: Path
     target_models_dir: Path
     source: str
+    publish_temporary_dir: Path | None = None
 
     def commit(self) -> ModelDatabaseManifest:
         """Stamp and atomically publish the complete refreshed root."""
@@ -50,7 +52,11 @@ class ModelDatabaseRefresh:
             working_models_dir,
             source=self.source,
         )
-        _replace_directory(working_models_dir, self.target_models_dir)
+        _replace_directory(
+            working_models_dir,
+            self.target_models_dir,
+            temporary_dir=self.publish_temporary_dir,
+        )
         self.discard()
         return manifest
 
@@ -161,10 +167,11 @@ def begin_runtime_model_database_refresh(
     leaves the previously active runtime root untouched.
     """
 
-    runtime_models_dir = data_dir / MODEL_DATABASE_DIRECTORY_NAME
+    layout = DataDirectoryLayout(data_dir)
+    runtime_models_dir = layout.models
     selected_models_dir = select_model_database_dir(system_resources_dir, runtime_models_dir)
     active_models_dir = selected_models_dir if selected_models_dir.is_dir() else None
-    staging_resources_dir = data_dir / ".tmp" / f"model-db-refresh-{uuid4().hex}"
+    staging_resources_dir = layout.atomic_temporary / f"model-db-refresh-{uuid4().hex}"
     staging_models_dir = staging_resources_dir / MODEL_DATABASE_DIRECTORY_NAME
     if active_models_dir is None:
         staging_models_dir.mkdir(parents=True)
@@ -174,6 +181,7 @@ def begin_runtime_model_database_refresh(
         resources_dir=staging_resources_dir,
         target_models_dir=runtime_models_dir,
         source=MODEL_DATABASE_SOURCE_RUNTIME,
+        publish_temporary_dir=layout.atomic_temporary,
     )
 
 
@@ -196,15 +204,22 @@ def begin_system_model_database_refresh(system_resources_dir: Path) -> ModelData
     )
 
 
-def _replace_directory(source: Path, target: Path) -> None:
+def _replace_directory(
+    source: Path,
+    target: Path,
+    *,
+    temporary_dir: Path | None = None,
+) -> None:
     """Replace ``target`` with a complete same-filesystem copy of ``source``."""
 
     if not source.is_dir():
         raise FileNotFoundError(f"Model DB directory not found: {source}")
     target.parent.mkdir(parents=True, exist_ok=True)
+    publish_root = temporary_dir or target.parent
+    publish_root.mkdir(parents=True, exist_ok=True)
     token = uuid4().hex
-    staging = target.parent / f".{target.name}.{token}.tmp"
-    backup = target.parent / f".{target.name}.{token}.bak"
+    staging = publish_root / f".{target.name}.{token}.tmp"
+    backup = publish_root / f".{target.name}.{token}.bak"
     shutil.copytree(source, staging)
     moved_existing = False
     try:

@@ -21,7 +21,7 @@ Domain-specific vocabulary for skills. The core Skill term lives in `.vorch/GLOS
 **Not:** A global skill (`<data_dir>/skills/`, shared across the user's identity agents, user-curated), a project/team skill (the project's Source Format skill directory, e.g. `<cwd>/.opencode/skills/` or `<cwd>/.claude/skills/`, repo-owned), or a bundled skill (`resources/skills/`, read-only). Those shared-pool skills stay subject to the agent's allow-list; only an agent's own private skills bypass it.
 
 ### Skill Draft
-**Definition:** An isolated copy or empty package under `<data_dir>/temp/skill-drafts/<draft-id>/package/`, bound to the creating Agent, one resolved write scope, one Skill name, and `create` or `update` mode. Draft mutations are invisible to discovery and activation; complete-package validation plus `commit` publishes the package, while `abort` discards only the draft.
+**Definition:** An isolated copy or empty package under `<data_dir>/artifacts/temp/skill-drafts/<draft-id>/package/`, bound to the creating Agent, one resolved write scope, one Skill name, and `create` or `update` mode. Storage owns this canonical placement; Skills authoring owns Draft isolation, validation, commit, abort, and cleanup. Draft mutations are invisible to discovery and activation; complete-package validation plus `commit` publishes the package, while `abort` discards only the draft.
 **Not:** A loadable Skill, an autosaved edit of the live package, or a Project/repo staging area.
 
 ### Session-Pinned Catalog
