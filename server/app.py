@@ -183,7 +183,7 @@ def create_app(
     @app.post("/api/upload")
     async def upload_attachment(request: Request, file: UploadFile) -> JsonObject:
         attachment_store = request.app.state.runtime.attachment_store
-        filename = file.filename or "upload.bin"
+        filename = file.filename or "upload"
         try:
             data = await _read_upload_file_with_limit(
                 file,
@@ -212,7 +212,12 @@ def create_app(
             record = attachment_store.get(attachment_id)
         except AttachmentNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return FileResponse(record.file_path, media_type=record.media_type)
+        return FileResponse(
+            record.file_path,
+            media_type=record.media_type,
+            filename=record.filename,
+            content_disposition_type="inline",
+        )
 
     @app.post("/api/speech/transcribe")
     async def transcribe_speech(request: Request, file: UploadFile) -> JsonObject:

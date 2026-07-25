@@ -86,12 +86,12 @@ def test_sniff_media_type_rejects_oversized_ooxml_content_types() -> None:
 
 
 @pytest.mark.parametrize(
-    ("filename", "data", "expected_media_type"),
+    ("filename", "data", "expected_media_type", "expected_extension"),
     [
-        ("photo.jpg", b"\xff\xd8\xff\x00\x10", "image/jpeg"),
-        ("diagram.png", b"\x89PNG\r\n\x1a\n\x00\x00\x00", "image/png"),
-        ("report.pdf", b"%PDF-1.7\n1 0 obj\n", "application/pdf"),
-        ("notes.txt", b"line one\nline two\n", "text/plain"),
+        ("photo.jpg", b"\xff\xd8\xff\x00\x10", "image/jpeg", ".jpg"),
+        ("diagram.png", b"\x89PNG\r\n\x1a\n\x00\x00\x00", "image/png", ".png"),
+        ("report.pdf", b"%PDF-1.7\n1 0 obj\n", "application/pdf", ".pdf"),
+        ("notes.txt", b"line one\nline two\n", "text/plain", ".txt"),
     ],
 )
 def test_store_happy_path_persists_blob_and_sidecar(
@@ -99,6 +99,7 @@ def test_store_happy_path_persists_blob_and_sidecar(
     filename: str,
     data: bytes,
     expected_media_type: str,
+    expected_extension: str,
 ) -> None:
     # Arrange
     store = AttachmentStore(tmp_path)
@@ -114,6 +115,7 @@ def test_store_happy_path_persists_blob_and_sidecar(
 
     blob_path = Path(record.file_path)
     assert blob_path.exists()
+    assert blob_path.name == f"{record.id}{expected_extension}"
     assert blob_path.read_bytes() == data
 
     sidecar_path = tmp_path / "attachments" / f"{record.id}.json"
@@ -128,6 +130,39 @@ def test_store_happy_path_persists_blob_and_sidecar(
 
     loaded = store.get(record.id)
     assert loaded == record
+
+
+@pytest.mark.parametrize(
+    ("filename", "data", "expected_filename"),
+    [
+        ("camera-upload", b"\xff\xd8\xff\x00\x10", "camera-upload.jpg"),
+        ("voice-message", b"ID3\x04\x00mp3-data", "voice-message.mp3"),
+        ("document", b"%PDF-1.7\n1 0 obj\n", "document.pdf"),
+        ("notes", b"line one\nline two\n", "notes.txt"),
+        ("...", b"\xff\xd8\xff\x00\x10", "attachment.jpg"),
+    ],
+)
+def test_store_adds_canonical_extension_when_filename_has_none(
+    tmp_path: Path,
+    filename: str,
+    data: bytes,
+    expected_filename: str,
+) -> None:
+    store = AttachmentStore(tmp_path)
+
+    record = store.store(filename, data)
+
+    assert record.filename == expected_filename
+    assert Path(record.file_path).suffix == Path(expected_filename).suffix
+
+
+def test_store_preserves_existing_filename_extension(tmp_path: Path) -> None:
+    store = AttachmentStore(tmp_path)
+
+    record = store.store("original.jpeg", b"\xff\xd8\xff\x00\x10")
+
+    assert record.filename == "original.jpeg"
+    assert Path(record.file_path).suffix == ".jpg"
 
 
 @pytest.mark.parametrize(

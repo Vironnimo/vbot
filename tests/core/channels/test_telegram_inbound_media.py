@@ -465,7 +465,7 @@ async def test_album_with_one_failing_item_keeps_siblings_and_reports_failure(
     ("attribute_name", "payload", "expected_media_type", "expected_filename"),
     [
         ("voice", b"OggS\x00\x02opus", "audio/ogg", "telegram-voice-vu-1.ogg"),
-        ("audio", b"ID3\x04\x00mp3", "audio/mpeg", "telegram-audio-vu-1"),
+        ("audio", b"ID3\x04\x00mp3", "audio/mpeg", "telegram-audio-vu-1.mp3"),
         ("video", b"\x00\x00\x00\x18ftypisom", "video/mp4", "telegram-video-vu-1.mp4"),
         (
             "video_note",
