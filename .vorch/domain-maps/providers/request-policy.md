@@ -55,7 +55,7 @@ Compatible Adapters resolve a positive output allowance in this order: explicit 
 
 ## Provider-backed task clients
 
-`ProviderTaskClient` is the shared HTTP base for speech, image, and embedding Provider clients. Its local structural Runtime/target Protocols avoid importing Runtime or `core/model_tasks/`. `from_runtime()` resolves the Connection and refresh-capable token getter; `post_and_parse()` puts request, status classification, and parsing inside `retry_async`, rebuilding headers per attempt.
+`ProviderTaskClient` is the shared HTTP base for speech, image, and embedding Provider clients. Its local structural Runtime/target Protocols avoid importing Runtime or `core/model_tasks/`. `from_runtime()` resolves the Connection and refresh-capable token getter; `post_and_parse()` puts request, status classification, and parsing inside `retry_async`, rebuilding headers per attempt. Keyed Connections contribute their configured auth header; a keyless `none` Connection contributes no auth header while still preserving Provider `extra_headers`.
 
 Task-specific payload/response semantics remain in `model_tasks.md` and its task references. `extra_options` is the common JSON escape hatch: empty placeholders are omitted while `0`, `0.0`, and `False` remain meaningful. Most task wires let non-empty entries override authored fields; embeddings explicitly reserve identity/input/encoding/dimension fields and reject attempts to override them.
 

@@ -200,8 +200,10 @@ class ProviderTaskClient:
         return await self._token_getter()
 
     def _headers_from_credential(self, credential: str) -> dict[str, str]:
-        auth = self._connection.auth
-        headers = {auth.header: f"{auth.prefix}{credential}"}
+        headers: dict[str, str] = {}
+        if self._connection.type != "none":
+            auth = self._connection.auth
+            headers[auth.header] = f"{auth.prefix}{credential}"
         if self._provider.extra_headers:
             headers.update(self._provider.extra_headers)
         return headers

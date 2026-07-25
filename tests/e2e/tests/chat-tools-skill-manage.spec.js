@@ -29,5 +29,5 @@ test("an Agent can author, activate, and clean up a private Skill", async ({
   const deletion = await expectToolSucceeded(page, chat, "skill_manage", 10);
   await openToolRow(deletion);
   await expect(deletion).toContainText("delete");
-  await expect(deletion).toContainText("succeeded");
+  await expect(deletion).toContainText("was archived and can be recovered");
 });
