@@ -20,8 +20,15 @@ from typing import Any, cast
 
 import pytest
 
+from core.chat import (
+    CommandDispatcher,
+    CommandExecutionContext,
+    CommandOutcome,
+    ReplySurface,
+)
 from core.extensions import ExtensionRegistry
 from core.recall.recall import RecallBackendContext, RecallBackendRegistry
+from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager
 from core.tools import ToolContext, ToolRegistry
 
@@ -64,6 +71,17 @@ def _ready_tool_extension_source(tool_name: str, *, ready: bool) -> str:
         "def register(api):\n"
         f"    api.register_tool({tool_name!r}, 'desc', {{'type': 'object'}}, _handler, "
         f"ready=lambda: {ready!r})\n"
+    )
+
+
+def _command_extension_source(command_name: str, marker: str) -> str:
+    return (
+        "from core.chat import CommandFeedback, CommandOutcome\n"
+        "def _handler(context, argument):\n"
+        f"    return CommandOutcome(command={command_name!r}, "
+        f"feedback=CommandFeedback(kind='notice', text={marker!r} + ':' + str(argument)))\n"
+        "def register(api):\n"
+        f"    api.register_command({command_name!r}, 'desc', _handler)\n"
     )
 
 
@@ -218,6 +236,107 @@ def test_extension_with_skipped_tool_stays_loaded(tmp_path: Path) -> None:
     assert record.status == "loaded"
     assert record not in registry.diagnostics()
     assert record.capability_errors != []
+
+
+# --- commands ----------------------------------------------------------------
+
+
+def test_extension_command_dispatches_through_command_dispatcher(tmp_path: Path) -> None:
+    root = tmp_path / "extensions"
+    _write_single_file(
+        root,
+        "workflow_ext",
+        _command_extension_source("workflow", "from-extension"),
+    )
+    registry = ExtensionRegistry.load(root)
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    registry.apply_commands(dispatcher)
+    prepared = dispatcher.prepare("/workflow inspect")
+    assert prepared is not None
+    result = asyncio.run(
+        dispatcher.execute(
+            prepared,
+            CommandExecutionContext(
+                agent_id="a",
+                session_id="s",
+                project_id=None,
+                reply_surface=ReplySurface.webui(),
+            ),
+        )
+    )
+
+    assert isinstance(result, CommandOutcome)
+    assert result.feedback is not None
+    assert result.feedback.text == "from-extension:inspect"
+    assert dispatcher.extension_command_owner("workflow") == "workflow_ext"
+
+
+def test_extension_command_colliding_with_builtin_is_skipped_and_diagnosed(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "extensions"
+    _write_single_file(root, "ext", _command_extension_source("help", "shadow"))
+    registry = ExtensionRegistry.load(root)
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    registry.apply_commands(dispatcher)
+
+    record = _record(registry, "ext")
+    assert dispatcher.extension_command_owner("help") is None
+    assert any("Built-in Command" in message for message in record.capability_errors)
+
+
+def test_two_extensions_same_command_first_wins_both_diagnosed(tmp_path: Path) -> None:
+    root = tmp_path / "extensions"
+    _write_single_file(root, "a_first", _command_extension_source("workflow", "first"))
+    _write_single_file(root, "b_second", _command_extension_source("workflow", "second"))
+    registry = ExtensionRegistry.load(root)
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    registry.apply_commands(dispatcher)
+
+    first = _record(registry, "a_first")
+    second = _record(registry, "b_second")
+    assert dispatcher.extension_command_owner("workflow") == "a_first"
+    assert any("b_second" in message for message in first.capability_errors)
+    assert any("a_first" in message for message in second.capability_errors)
+
+
+def test_invalid_extension_command_is_skipped_without_failing_extension(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "extensions"
+    _write_single_file(root, "ext", _command_extension_source("Bad Name", "bad"))
+    registry = ExtensionRegistry.load(root)
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    registry.apply_commands(dispatcher)
+
+    record = _record(registry, "ext")
+    assert record.status == "loaded"
+    assert dispatcher.extension_command_owner("Bad Name") is None
+    assert any("lowercase" in message for message in record.capability_errors)
+
+
+def test_unhashable_extension_command_metadata_is_diagnosed_nonfatally(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "extensions"
+    _write_single_file(
+        root,
+        "ext",
+        _command_extension_source(cast(Any, ["workflow"]), "bad"),
+    )
+    registry = ExtensionRegistry.load(root)
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    registry.apply_commands(dispatcher)
+
+    record = _record(registry, "ext")
+    assert record.status == "loaded"
+    assert dispatcher.extension_command_owner("workflow") is None
+    assert any("name must be a string" in message for message in record.capability_errors)
 
 
 # --- recall backends ---------------------------------------------------------

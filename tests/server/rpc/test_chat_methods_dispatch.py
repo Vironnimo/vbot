@@ -18,6 +18,8 @@ from core.chat import (
     CommandExecutionContext,
     CommandFeedback,
     CommandOutcome,
+    CommandResourceChange,
+    ExtensionCommandContext,
     PreparedCommand,
     ReplySurface,
 )
@@ -29,6 +31,7 @@ from core.runs import (
     QueuedRunItem,
     Run,
 )
+from server.events import ServerEventBus
 from server.rpc import chat_methods, event_bridge
 from server.rpc.methods import dispatch_rpc
 
@@ -318,13 +321,22 @@ async def test_chat_commands_returns_combined_command_and_skill_items() -> None:
     skills = [
         SimpleNamespace(name="debugging", description="Debug failures."),
         SimpleNamespace(name="alpha", description="Alpha helper."),
+        SimpleNamespace(name="workflow", description="Workflow Skill."),
     ]
+    command_dispatcher = CommandDispatcher(ChatRunManager())
+    command_dispatcher.register_extension_command(
+        "workflow_ext",
+        name="workflow",
+        description="Start the workflow.",
+        handler=lambda _context, _argument: CommandOutcome(command="workflow"),
+    )
     state = SimpleNamespace(
+        command_dispatcher=command_dispatcher,
         runtime=SimpleNamespace(
             skills=SimpleNamespace(
                 list_all=lambda: skills,
             )
-        )
+        ),
     )
 
     response = await dispatch_rpc(state, {"method": "chat.commands", "params": {}})
@@ -360,7 +372,7 @@ async def test_chat_commands_returns_combined_command_and_skill_items() -> None:
                 },
                 {
                     "name": "help",
-                    "description": "Show available built-in slash commands.",
+                    "description": "Show available slash commands.",
                     "type": "command",
                     "argument": "none",
                     "output": "transient",
@@ -422,6 +434,13 @@ async def test_chat_commands_returns_combined_command_and_skill_items() -> None:
                     "output": "toast",
                 },
                 {
+                    "name": "workflow",
+                    "description": "Start the workflow.",
+                    "type": "command",
+                    "argument": "optional",
+                    "output": "toast",
+                },
+                {
                     "name": "alpha",
                     "description": "Alpha helper.",
                     "type": "skill",
@@ -429,6 +448,11 @@ async def test_chat_commands_returns_combined_command_and_skill_items() -> None:
                 {
                     "name": "debugging",
                     "description": "Debug failures.",
+                    "type": "skill",
+                },
+                {
+                    "name": "workflow",
+                    "description": "Workflow Skill.",
                     "type": "skill",
                 },
             ]
@@ -466,6 +490,60 @@ async def test_chat_stream_slash_command_returns_handled_result_without_starting
         },
     }
     assert command_dispatcher.calls == [("agent-1", "session-1", "/stop")]
+    streaming_chat_loop.start_run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_projects_extension_command_through_generic_path() -> None:
+    streaming_chat_loop = SimpleNamespace(start_run=AsyncMock())
+    command_dispatcher = CommandDispatcher(ChatRunManager())
+    observed: list[tuple[str, str | None, str]] = []
+
+    def handler(
+        context: ExtensionCommandContext,
+        argument: str | None,
+    ) -> CommandOutcome:
+        observed.append((context.session_id, argument, context.reply_surface.kind))
+        return CommandOutcome(
+            command="workflow",
+            feedback=CommandFeedback(kind="detail", text="Workflow ready."),
+            resource_changes=(CommandResourceChange(kind="commands"),),
+        )
+
+    command_dispatcher.register_extension_command(
+        "workflow_ext",
+        name="workflow",
+        description="Start the workflow.",
+        handler=handler,
+    )
+    state = SimpleNamespace(
+        command_dispatcher=command_dispatcher,
+        streaming_chat_loop=streaming_chat_loop,
+        event_bus=ServerEventBus(),
+    )
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "chat.stream",
+            "params": {
+                "agent_id": "agent-1",
+                "session_id": "session-1",
+                "content": "/workflow review",
+            },
+        },
+    )
+
+    assert response == {
+        "ok": True,
+        "result": {
+            "command_handled": True,
+            "reply": "Workflow ready.",
+            "output": "transient",
+        },
+    }
+    assert observed == [("session-1", "review", "webui")]
+    assert state.event_bus.events[-1]["payload"] == {"kind": "commands"}
     streaming_chat_loop.start_run.assert_not_awaited()
 
 

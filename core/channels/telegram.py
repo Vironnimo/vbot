@@ -656,14 +656,14 @@ class TelegramChannelAdapter(ChannelAdapter):
                 )
                 return
 
-        # Built-in commands must retain their immediate semantics. Normal text is held
+        # Commands must retain their immediate semantics. Normal text is held
         # for one short settle window because Telegram represents a comment entered in
         # the forwarding UI as a plain message immediately before the forwarded media.
         has_message_id = _parse_message_id(conversation.message_id) is not None
         if (
             has_message_id
             and message_text.startswith("/")
-            and self._engine.is_builtin_command(message_text)
+            and self._engine.is_command(message_text)
         ):
             await self._flush_pending_forward_comment(conversation.chat_id)
             await self._engine.handle_inbound_text(conversation, message_text)

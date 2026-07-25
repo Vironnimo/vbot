@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from core.chat.commands import CommandRun as CommandRun
     from core.chat.commands import CommandSpec as CommandSpec
     from core.chat.commands import CommandUnavailability as CommandUnavailability
+    from core.chat.commands import ExtensionCommandContext as ExtensionCommandContext
     from core.chat.commands import HandoffArgument as HandoffArgument
     from core.chat.commands import PreparedCommand as PreparedCommand
     from core.chat.commands import parse_agent_argument as parse_agent_argument
@@ -60,6 +61,7 @@ _EXPORT_MODULES = {
     "CommandRun": "core.chat.commands",
     "CommandSpec": "core.chat.commands",
     "CommandUnavailability": "core.chat.commands",
+    "ExtensionCommandContext": "core.chat.commands",
     "ContinuationState": "core.chat.continuation",
     "HandoffArgument": "core.chat.commands",
     "INPUT_ORIGIN_SPEECH_TRANSCRIPTION": "core.chat.chat",

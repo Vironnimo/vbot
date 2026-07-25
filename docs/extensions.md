@@ -1,9 +1,6 @@
 # Writing vBot Extensions
 
-An **extension** is in-process Python that adds capabilities to vBot without
-forking the app. One extension is the unit of discovery, identity, config, and
-enable/disable; it can contribute several **capabilities** — hooks, tools, and
-recall backends — through a single `register(api)` entry point.
+An **extension** is in-process Python that adds capabilities to vBot without forking the app. One extension is the unit of discovery, identity, config, and enable/disable; it can contribute several **capabilities** — hooks, commands, tools, and recall backends — through a single `register(api)` entry point.
 
 This is the author guide. For the precise internal contract (composition rules,
 dispatch internals) see [`.vorch/domain-maps/extensions.md`](../.vorch/domain-maps/extensions.md);
@@ -14,8 +11,7 @@ for runnable samples see [`examples/extensions/`](../examples/extensions/).
 > extensions you would run by hand. This is intentional: vBot is a single-user,
 > technical-user tool.
 
-`API_VERSION` is currently **1**. The extension API is vBot's first public
-surface; it is designed conservatively and is not yet declared stable.
+`API_VERSION` is currently **2**. The extension API is vBot's first public surface; it is designed conservatively and is not yet declared stable. Manifests requiring API v1 remain compatible; a command-contributing Extension should declare API v2 so older vBot versions reject it cleanly.
 
 ## Install and discovery
 
@@ -61,6 +57,7 @@ The `api` object (`ExtensionAPI`) offers:
 | Call | Declares |
 |---|---|
 | `api.on(event, handler)` | a hook handler for one event |
+| `api.register_command(name, description, handler, *, argument="optional", catalog_result="notice", execution_mode="serialized", argument_execution_mode=None, unavailable_surfaces=())` | a slash command |
 | `api.register_tool(name, description, parameters, handler, *, internal=False, display=None)` | an agent tool |
 | `api.register_recall_backend(name, factory)` | a session-recall backend |
 | `api.register_prompt_block(slug, *, default_text=None, render=None)` | a System Prompt block |
@@ -169,6 +166,51 @@ prompt.
 
 (Tools are code that does one thing. To teach the agent a *workflow*, write a
 Skill instead.)
+
+## Slash commands
+
+`api.register_command` adds a deterministic slash-command entry point to the same Chat-owned dispatcher used by Built-in Commands, RPC, Channels, `/help`, and WebUI autocomplete. A command can provide an immediate in-process result, report a state change, or start a model-driven follow-up Run that activates a Skill bundled in the same Extension.
+
+```python
+from core.chat import CommandFeedback, CommandOutcome, CommandRun
+
+async def start_workflow(context, argument):
+    prompt = "$workflow"
+    if argument:
+        prompt = f"{prompt}\n\nUser objective:\n{argument}"
+    run = await context.start_run(prompt)
+    return CommandOutcome(
+        command="workflow",
+        feedback=CommandFeedback(kind="notice", text="Workflow started."),
+        runs=(CommandRun(role="follow_up", run=run),),
+    )
+
+def register(api):
+    api.register_command(
+        "workflow",
+        "Start the bundled workflow Skill.",
+        start_workflow,
+        argument="optional",
+    )
+```
+
+The handler may be synchronous or asynchronous. It receives `(context, argument)`, where `argument` is the trimmed raw remainder after the slash token or `None`, and must return a `CommandOutcome` whose `command` exactly matches the declared name. `ExtensionCommandContext` exposes only `agent_id`, `session_id`, `project_id`, `reply_surface`, `report_change(...)`, and `await start_run(content, *, internal=False)`. The Run helper is bound to the current address and reply surface; it does not expose `Runtime` or another service locator.
+
+Command metadata uses the existing surface-neutral Command vocabulary:
+
+| Option | Values and meaning |
+|---|---|
+| `argument` | `"none"`, `"optional"`, or `"required"`; controls recognition and autocomplete behavior |
+| `catalog_result` | `"notice"`, `"detail"`, or `"state_change"`; tells each accessor how to present the result |
+| `execution_mode` | `"immediate"` or `"serialized"`; serialized commands wait behind active Session work |
+| `argument_execution_mode` | optional mode override when an argument is present |
+| `unavailable_surfaces` | any of `"webui"` and `"channel"` |
+
+Names are lowercase slash tokens without `/`, using letters, digits, hyphens, or underscores and starting with a letter or digit. Built-ins always win collisions. Between Extensions, deterministic load order is first-wins; duplicate declarations in one Extension are also skipped. Invalid or losing declarations become non-fatal capability diagnostics, so the rest of the Extension remains active. A same-named Skill is still reachable explicitly as `$skill-name`; slash command recognition takes precedence over `/skill-name`.
+
+Reload, enable, disable, and deletion update the live dispatcher without replacing it, so RPC and existing Channel workers see the same catalog immediately. A command already running may finish. Queued work revalidates an opaque registration identity before execution, so a command removed or replaced meanwhile returns neutral “no longer available” feedback instead of running stale code. Handler exceptions and invalid outcomes are logged with Extension ownership and return neutral failure feedback without crashing the Extension layer or a Channel worker.
+
+The complete runnable example is [`examples/extensions/workflow_command/`](../examples/extensions/workflow_command/). It declares API v2, bundles the `workflow` Skill, and starts that Skill as a same-address follow-up Run.
 
 ## Recall backends
 
@@ -394,7 +436,7 @@ Directory/package extensions may add an `extension.json` to enrich identity
   "name": "Bash Guard",
   "version": "1.2.0",
   "description": "Refuses obviously destructive shell commands.",
-  "api_version": 1
+  "api_version": 2
 }
 ```
 

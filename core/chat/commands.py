@@ -1,12 +1,13 @@
-"""End-to-end Built-in Command preparation and execution for Chat entry points."""
+"""End-to-end slash Command preparation and execution for Chat entry points."""
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from core.chat.content_blocks import ContentBlock, TextBlock
 from core.chat.messages import ChatMessage, ReplySurface
@@ -27,6 +28,7 @@ from core.providers.reasoning import (
 )
 from core.runs import ChatRunManager, Run, RunAdmissionBlockedError, RunNotFoundError
 from core.sessions import SESSION_MOVE_STRIP_META_KEYS
+from core.skills.skill_validator import SKILL_NAME_TRIGGER_PATTERN
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -98,7 +100,7 @@ _MISSING = object()
 
 @dataclass(frozen=True)
 class CommandSpec:
-    """Declarative metadata for a built-in slash command.
+    """Declarative metadata for one slash command.
 
     The spec stays surface-neutral. Accessors project ``catalog_result`` into
     their own presentation vocabulary and honor availability/mode without
@@ -117,12 +119,13 @@ class CommandSpec:
 
 @dataclass(frozen=True)
 class PreparedCommand:
-    """One recognized and parsed Built-in Command, ready for execution."""
+    """One recognized and parsed command, ready for execution."""
 
     name: str
     argument: str | None
     execution_mode: CommandExecutionMode
     accepts_preferred_session_id: bool = False
+    registration_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -190,9 +193,38 @@ class CommandExecutionContext:
             self.on_change(change)
 
 
+ExtensionRunStarter = Callable[[str | list[ContentBlock], bool], Awaitable[Run]]
+
+
+@dataclass(frozen=True)
+class ExtensionCommandContext:
+    """Narrow workflow surface handed to an Extension command handler."""
+
+    agent_id: str
+    session_id: str
+    project_id: str | None
+    reply_surface: ReplySurface
+    _start_run: ExtensionRunStarter = field(repr=False)
+    _on_change: CommandChangeObserver | None = field(default=None, repr=False)
+
+    async def start_run(
+        self,
+        content: str | list[ContentBlock],
+        *,
+        internal: bool = False,
+    ) -> Run:
+        """Start or enqueue a follow-up Run at this command's current address."""
+        return await self._start_run(content, internal)
+
+    def report_change(self, change: CommandResourceChange) -> None:
+        """Publish a time-sensitive neutral resource change when available."""
+        if self._on_change is not None:
+            self._on_change(change)
+
+
 @dataclass(frozen=True)
 class CommandOutcome:
-    """Complete surface-neutral result of one Built-in Command."""
+    """Complete surface-neutral result of one slash command."""
 
     command: str
     feedback: CommandFeedback | None = None
@@ -203,6 +235,15 @@ class CommandOutcome:
 
 
 CommandExecutionHandler = Callable[[CommandExecutionContext, str | None], Awaitable[CommandOutcome]]
+ExtensionCommandHandler = Callable[[ExtensionCommandContext, str | None], Any]
+
+
+@dataclass(frozen=True)
+class _RegisteredExtensionCommand:
+    spec: CommandSpec
+    extension_name: str
+    handler: ExtensionCommandHandler
+    registration_id: int
 
 
 @dataclass(frozen=True)
@@ -334,7 +375,7 @@ class StatusActivity:
 
 
 class CommandDispatcher:
-    """Prepares and executes Built-in Commands before normal Chat Run startup."""
+    """Prepares and executes Built-in and Extension Commands before Chat Runs."""
 
     BUILT_IN_COMMANDS: dict[str, CommandSpec] = {
         "agent": CommandSpec(
@@ -362,7 +403,7 @@ class CommandDispatcher:
         ),
         "help": CommandSpec(
             "help",
-            "Show available built-in slash commands.",
+            "Show available slash commands.",
             argument="none",
             catalog_result="detail",
             execution_mode="immediate",
@@ -462,6 +503,128 @@ class CommandDispatcher:
             "status": self._execute_status,
             "stop": self._execute_stop,
         }
+        self._extension_commands: dict[str, _RegisteredExtensionCommand] = {}
+        self._next_extension_registration_id = 1
+
+    @classmethod
+    def built_in_command_names(cls) -> frozenset[str]:
+        """Return the immutable names reserved by Built-in Commands."""
+        return frozenset(cls.BUILT_IN_COMMANDS)
+
+    def catalog(self) -> tuple[CommandSpec, ...]:
+        """Return the active combined command catalog sorted by canonical name."""
+        combined = {
+            **self.BUILT_IN_COMMANDS,
+            **{name: registered.spec for name, registered in self._extension_commands.items()},
+        }
+        return tuple(sorted(combined.values(), key=lambda spec: spec.name))
+
+    def extension_command_owner(self, name: str) -> str | None:
+        """Return the live Extension owner of *name*, if it is Extension-provided."""
+        registered = self._extension_commands.get(name)
+        return registered.extension_name if registered is not None else None
+
+    def register_extension_command(
+        self,
+        extension_name: str,
+        *,
+        name: str,
+        description: str,
+        handler: ExtensionCommandHandler,
+        argument: str = "optional",
+        catalog_result: str = "notice",
+        execution_mode: str = "serialized",
+        argument_execution_mode: str | None = None,
+        unavailable_surfaces: object = (),
+    ) -> int:
+        """Validate and install one Extension-owned command.
+
+        Runtime/ExtensionRegistry owns ordering and diagnostics. This seam still
+        rejects every invalid or conflicting direct call so the dispatcher can
+        never contain an ambiguous command table.
+        """
+        if not isinstance(extension_name, str) or not extension_name:
+            raise ValueError("extension name must be a non-empty string")
+        if (
+            not isinstance(name, str)
+            or name != name.lower()
+            or SKILL_NAME_TRIGGER_PATTERN.fullmatch(name) is None
+        ):
+            raise ValueError(
+                "name must be 1-64 lowercase letters, digits, hyphens, or underscores "
+                "and start with a letter or digit"
+            )
+        if name in self.BUILT_IN_COMMANDS:
+            raise ValueError("a Built-in Command already uses this name")
+        if name in self._extension_commands:
+            owner = self._extension_commands[name].extension_name
+            raise ValueError(f"name already registered by extension {owner!r}")
+        if not isinstance(description, str) or not description.strip():
+            raise ValueError("description must be a non-empty string")
+        if not callable(handler):
+            raise ValueError("handler must be callable")
+        if not isinstance(argument, str) or argument not in {"none", "optional", "required"}:
+            raise ValueError("argument must be one of: none, optional, required")
+        if not isinstance(catalog_result, str) or catalog_result not in {
+            "notice",
+            "detail",
+            "state_change",
+        }:
+            raise ValueError("catalog_result must be one of: notice, detail, state_change")
+        if not isinstance(execution_mode, str) or execution_mode not in {
+            "immediate",
+            "serialized",
+        }:
+            raise ValueError("execution_mode must be one of: immediate, serialized")
+        if argument_execution_mode is not None and (
+            not isinstance(argument_execution_mode, str)
+            or argument_execution_mode not in {"immediate", "serialized"}
+        ):
+            raise ValueError(
+                "argument_execution_mode must be one of: immediate, serialized, or None"
+            )
+        if (
+            isinstance(unavailable_surfaces, (str, bytes))
+            or not isinstance(unavailable_surfaces, (tuple, list, set, frozenset))
+            or any(not isinstance(surface, str) for surface in unavailable_surfaces)
+        ):
+            raise ValueError(
+                "unavailable_surfaces must be a collection containing webui and/or channel"
+            )
+        normalized_surfaces = frozenset(unavailable_surfaces)
+        invalid_surfaces = normalized_surfaces - {"webui", "channel"}
+        if invalid_surfaces:
+            names = ", ".join(sorted(invalid_surfaces))
+            raise ValueError(f"unavailable_surfaces contains unsupported values: {names}")
+
+        registration_id = self._next_extension_registration_id
+        self._next_extension_registration_id += 1
+        self._extension_commands[name] = _RegisteredExtensionCommand(
+            spec=CommandSpec(
+                name=name,
+                description=description.strip(),
+                argument=cast(CommandArgumentMode, argument),
+                catalog_result=cast(CommandCatalogResult, catalog_result),
+                execution_mode=cast(CommandExecutionMode, execution_mode),
+                argument_execution_mode=cast(CommandExecutionMode | None, argument_execution_mode),
+                unavailable_surfaces=cast(frozenset[CommandSurfaceKind], normalized_surfaces),
+            ),
+            extension_name=extension_name,
+            handler=handler,
+            registration_id=registration_id,
+        )
+        return registration_id
+
+    def unregister_extension_commands(self, extension_name: str) -> int:
+        """Remove every live command owned by *extension_name*."""
+        removed_names = [
+            name
+            for name, registered in self._extension_commands.items()
+            if registered.extension_name == extension_name
+        ]
+        for name in removed_names:
+            del self._extension_commands[name]
+        return len(removed_names)
 
     def prepare(self, content: str | list[ContentBlock]) -> PreparedCommand | None:
         """Recognize and parse one command-eligible Chat content value."""
@@ -474,7 +637,7 @@ class CommandDispatcher:
         matched = self._match_command(command_text)
         if matched is None:
             return None
-        spec, argument = matched
+        spec, argument, registration_id = matched
         execution_mode = (
             spec.argument_execution_mode
             if argument is not None and spec.argument_execution_mode is not None
@@ -485,15 +648,16 @@ class CommandDispatcher:
             argument=argument,
             execution_mode=execution_mode,
             accepts_preferred_session_id=spec.accepts_preferred_session_id,
+            registration_id=registration_id,
         )
 
     def unavailability(
         self, prepared: PreparedCommand, reply_surface: ReplySurface
     ) -> CommandUnavailability | None:
         """Return a Chat-owned surface restriction before scheduling execution."""
-        spec = self.BUILT_IN_COMMANDS.get(prepared.name)
+        spec = self._prepared_spec(prepared)
         if spec is None:
-            raise ValueError(f"unknown Built-in Command: {prepared.name}")
+            return None
         if reply_surface.kind not in spec.unavailable_surfaces:
             return None
         return CommandUnavailability(command=f"/{prepared.name}", surface=reply_surface.kind)
@@ -501,18 +665,37 @@ class CommandDispatcher:
     async def execute(
         self, prepared: PreparedCommand, context: CommandExecutionContext
     ) -> CommandOutcome:
-        """Execute one prepared Built-in Command completely inside Chat core."""
+        """Execute one prepared command completely inside Chat core."""
+        spec = self._prepared_spec(prepared)
+        if spec is None:
+            return self._notice(
+                prepared.name,
+                f"The /{prepared.name} command is no longer available. Please send it again.",
+            )
         unavailable = self.unavailability(prepared, context.reply_surface)
         if unavailable is not None:
             raise ValueError(
                 f"{unavailable.command} is unavailable on {unavailable.surface} surfaces"
             )
-        handler = self._execution_commands.get(prepared.name)
-        if handler is None:
-            raise ValueError(f"unknown Built-in Command: {prepared.name}")
-        return await handler(context, prepared.argument)
+        if prepared.registration_id is None:
+            handler = self._execution_commands.get(prepared.name)
+            if handler is None:
+                raise ValueError(f"unknown Built-in Command: {prepared.name}")
+            return await handler(context, prepared.argument)
+        registered = self._extension_commands[prepared.name]
+        return await self._execute_extension_command(registered, context, prepared.argument)
 
-    def _match_command(self, message_text: str) -> tuple[CommandSpec, str | None] | None:
+    def _prepared_spec(self, prepared: PreparedCommand) -> CommandSpec | None:
+        if prepared.registration_id is None:
+            return self.BUILT_IN_COMMANDS.get(prepared.name)
+        registered = self._extension_commands.get(prepared.name)
+        if registered is None or registered.registration_id != prepared.registration_id:
+            return None
+        return registered.spec
+
+    def _match_command(
+        self, message_text: str
+    ) -> tuple[CommandSpec, str | None, int | None] | None:
         """Resolve a message to a command spec and its parsed argument.
 
         ``none`` commands match only when nothing trails the token, so text after
@@ -526,14 +709,129 @@ class CommandDispatcher:
         first_token, _, remainder = stripped_text.partition(" ")
         name = first_token[1:].lower()
         spec = self.BUILT_IN_COMMANDS.get(name)
-        if spec is None:
+        registered = self._extension_commands.get(name)
+        if spec is None and registered is None:
             return None
+        registration_id = None
+        if spec is None and registered is not None:
+            spec = registered.spec
+            registration_id = registered.registration_id
+        assert spec is not None
         argument = remainder.strip()
         if spec.argument == "none":
             if argument:
                 return None
-            return spec, None
-        return spec, (argument or None)
+            return spec, None, registration_id
+        if spec.argument == "required" and not argument:
+            return None
+        return spec, (argument or None), registration_id
+
+    async def _execute_extension_command(
+        self,
+        registered: _RegisteredExtensionCommand,
+        context: CommandExecutionContext,
+        argument: str | None,
+    ) -> CommandOutcome:
+        extension_context = ExtensionCommandContext(
+            agent_id=context.agent_id,
+            session_id=context.session_id,
+            project_id=context.project_id,
+            reply_surface=context.reply_surface,
+            _start_run=lambda content, internal: self._start_extension_follow_up(
+                context, content, internal=internal
+            ),
+            _on_change=context.on_change,
+        )
+        try:
+            result = registered.handler(extension_context, argument)
+            if inspect.isawaitable(result):
+                result = await result
+            self._validate_extension_outcome(result, expected_command=registered.spec.name)
+            return cast(CommandOutcome, result)
+        except Exception as exc:
+            _LOGGER.error(
+                "Extension command failed (extension=%s command=%s): %s",
+                registered.extension_name,
+                registered.spec.name,
+                exc,
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
+            return self._notice(
+                registered.spec.name,
+                f"The /{registered.spec.name} command failed. Check the server logs.",
+            )
+
+    @staticmethod
+    def _validate_extension_outcome(result: object, *, expected_command: str) -> None:
+        """Keep malformed Extension values from escaping into surface projectors."""
+        if not isinstance(result, CommandOutcome):
+            raise TypeError("handler must return CommandOutcome")
+        if result.command != expected_command:
+            raise ValueError(
+                f"handler returned command {result.command!r}; expected {expected_command!r}"
+            )
+        if result.feedback is not None and (
+            not isinstance(result.feedback, CommandFeedback)
+            or result.feedback.kind not in {"notice", "detail"}
+            or not isinstance(result.feedback.text, str)
+        ):
+            raise TypeError("CommandOutcome.feedback must be valid CommandFeedback")
+        if not isinstance(result.facts, Mapping) or any(
+            not isinstance(key, str) for key in result.facts
+        ):
+            raise TypeError("CommandOutcome.facts must be a mapping with string keys")
+        if result.navigation is not None and (
+            not isinstance(result.navigation, CommandNavigation)
+            or result.navigation.kind not in {"continue_in_session", "offer_session"}
+            or not isinstance(result.navigation.agent_id, str)
+            or not isinstance(result.navigation.session_id, str)
+            or (
+                result.navigation.project_id is not None
+                and not isinstance(result.navigation.project_id, str)
+            )
+        ):
+            raise TypeError("CommandOutcome.navigation must be valid CommandNavigation")
+        if not isinstance(result.runs, tuple) or any(
+            not isinstance(command_run, CommandRun)
+            or command_run.role != "follow_up"
+            or not isinstance(command_run.run, Run)
+            for command_run in result.runs
+        ):
+            raise TypeError("CommandOutcome.runs must contain valid follow-up CommandRun values")
+        if not isinstance(result.resource_changes, tuple) or any(
+            not isinstance(change, CommandResourceChange)
+            or not isinstance(change.kind, str)
+            or not change.kind
+            or not isinstance(change.scope, Mapping)
+            or any(
+                not isinstance(key, str) or not isinstance(value, str)
+                for key, value in change.scope.items()
+            )
+            for change in result.resource_changes
+        ):
+            raise TypeError(
+                "CommandOutcome.resource_changes must contain valid CommandResourceChange values"
+            )
+
+    async def _start_extension_follow_up(
+        self,
+        context: CommandExecutionContext,
+        content: str | list[ContentBlock],
+        *,
+        internal: bool,
+    ) -> Run:
+        trigger_service = _require_dependency(self._trigger_service, "TriggerService")
+        return cast(
+            Run,
+            await trigger_service.trigger_run(
+                context.agent_id,
+                content,
+                context.session_id,
+                internal=internal,
+                reply_surface=context.reply_surface,
+                project_id=context.project_id,
+            ),
+        )
 
     @staticmethod
     def _notice(command: str, text: str) -> CommandOutcome:
@@ -907,11 +1205,8 @@ class CommandDispatcher:
     async def _execute_help(
         self, context: CommandExecutionContext, argument: str | None
     ) -> CommandOutcome:
-        lines = ["Built-in slash commands:"]
-        lines.extend(
-            f"/{spec.name} - {spec.description}"
-            for spec in sorted(self.BUILT_IN_COMMANDS.values(), key=lambda spec: spec.name)
-        )
+        lines = ["Slash commands:"]
+        lines.extend(f"/{spec.name} - {spec.description}" for spec in self.catalog())
         lines.extend(
             [
                 "",

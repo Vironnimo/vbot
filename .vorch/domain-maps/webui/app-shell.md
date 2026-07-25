@@ -30,6 +30,7 @@ Domain controllers still own their data. The app shell may request a refresh or 
 ## Resource invalidation
 
 - `resource_changed` events carry a resource family and optional scope. `resourceInvalidation.js` converts them into refresh tokens or targeted callbacks rather than copying RPC-specific branching into every component.
+- `commands` invalidation bumps the App-owned Command refresh token forwarded to Chat. Replay gaps and epoch changes bump it with the other server-backed projections so the active autocomplete catalog is re-fetched after uncertain continuity.
 - Queue invalidation is scoped to the addressed Agent and Session. Other resource families refresh the controller that owns their displayed projection.
 - Refresh completion does not automatically replace an active editing surface. A controller can retain the visible snapshot while a modal, picker, or draft is busy, then adopt the newest server result at the safe boundary.
 - Event handlers must be idempotent because reconnect replay and explicit refreshes can describe state the browser already knows.

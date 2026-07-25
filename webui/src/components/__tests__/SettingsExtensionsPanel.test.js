@@ -33,6 +33,7 @@ function extensionsResult() {
         capabilities: {
           hooks: { tool_call: 1 },
           tools: [{ name: 'word_count', ready: true }],
+          commands: [{ name: 'workflow', registered: true }],
           recall_backends: [],
           startup: false,
           shutdown: false,
@@ -97,6 +98,7 @@ describe('SettingsExtensionsPanel', () => {
     expect(document.body.textContent).toContain('Loaded');
     expect(document.body.textContent).toContain('Hooks: tool_call(1)');
     expect(document.body.textContent).toContain('Tools: word_count');
+    expect(document.body.textContent).toContain('Commands: /workflow');
     expect(document.body.textContent).toContain('broken');
     expect(document.body.textContent).toContain('import failed: boom');
     expect(buttonByText('Refresh')).toBeUndefined();

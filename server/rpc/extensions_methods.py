@@ -6,9 +6,11 @@ from typing import Any
 
 from core.extensions import ExtensionRecord, SettingsFieldDeclaration
 from core.utils.logging import get_logger
+from server.events import RESOURCE_KIND_COMMANDS
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
+from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.validation import _reject_unsupported
 
 JsonObject = dict[str, Any]
@@ -46,9 +48,11 @@ async def _reload_extensions(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "extensions.reload does not accept params")
     try:
         await state.runtime.reload_extensions()
-        return _extensions_payload(state)
+        payload = _extensions_payload(state)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    publish_resource_changed(state, RESOURCE_KIND_COMMANDS)
+    return payload
 
 
 def _extensions_payload(state: Any) -> JsonObject:
@@ -149,6 +153,17 @@ def _extension_capabilities(record: ExtensionRecord, state: Any) -> JsonObject:
             {"name": declaration.name, "ready": _tool_is_ready(state, declaration.name)}
             for declaration in declarations.tools
         ],
+        "commands": [
+            {
+                "name": declaration.name,
+                "registered": _command_is_registered(
+                    state,
+                    record.name,
+                    declaration.name,
+                ),
+            }
+            for declaration in declarations.commands
+        ],
         "recall_backends": [declaration.name for declaration in declarations.recall_backends],
         "interaction_handlers": [
             declaration.prefix for declaration in declarations.interaction_handlers
@@ -156,6 +171,18 @@ def _extension_capabilities(record: ExtensionRecord, state: Any) -> JsonObject:
         "startup": bool(declarations.startup),
         "shutdown": bool(declarations.shutdown),
     }
+
+
+def _command_is_registered(
+    state: Any,
+    extension_name: str,
+    command_name: str,
+) -> bool:
+    dispatcher = getattr(state, "command_dispatcher", None)
+    if dispatcher is None:
+        dispatcher = getattr(state.runtime, "command_dispatcher", None)
+    owner = getattr(dispatcher, "extension_command_owner", None)
+    return callable(owner) and owner(command_name) == extension_name
 
 
 def _tool_is_ready(state: Any, tool_name: str) -> bool:

@@ -695,6 +695,8 @@ class Runtime:
             reflection_service=self._reflection_service,
             storage=self._storage,
         )
+        if self._extensions is not None:
+            self._extensions.apply_commands(self._command_dispatcher)
         self._channel_service = ChannelService(
             self._trigger_service,
             self._chat_sessions,
@@ -1469,6 +1471,8 @@ class Runtime:
             old_registry = self._extensions
             if old_registry is not None:
                 old_registry.remove_applied_tools(tool_registry)
+                if self._command_dispatcher is not None:
+                    old_registry.remove_applied_commands(self._command_dispatcher)
                 await old_registry.fire_shutdown()
 
             # An edited submodule of a package extension keeps its stale cached copy
@@ -1495,6 +1499,8 @@ class Runtime:
             self._extensions = new_registry
 
             new_registry.apply_tools(tool_registry)
+            if self._command_dispatcher is not None:
+                new_registry.apply_commands(self._command_dispatcher)
             self.reload_recall_backend()
             self._refresh_prompt_block_definitions()
             # The rebuilt layer may change which extensions bundle skills (added,
@@ -1541,7 +1547,11 @@ class Runtime:
             deactivating_backend_names = self._extension_recall_backend_names(newly_disabled)
 
             for name in newly_disabled:
-                await self._extensions.deactivate(name, self._tools)
+                await self._extensions.deactivate(
+                    name,
+                    self._tools,
+                    self._command_dispatcher,
+                )
 
             self._refresh_prompt_block_definitions()
             # A deactivated extension's bundled skills must drop from the global
@@ -1968,7 +1978,7 @@ class Runtime:
 
     @property
     def command_dispatcher(self) -> CommandDispatcher:
-        """Access to built-in slash command dispatch for chat entry points."""
+        """Access to the shared live slash Command dispatcher for Chat entry points."""
         self._ensure_started()
         if self._command_dispatcher is None:
             raise RuntimeError("Command dispatcher service not available")

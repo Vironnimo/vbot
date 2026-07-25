@@ -19,7 +19,9 @@ from pathlib import Path
 
 import pytest
 
+from core.chat import CommandDispatcher
 from core.extensions import ExtensionRegistry, HookContext, InteractionEvent
+from core.runs import ChatRunManager
 from core.tools import ToolContext, ToolRegistry
 from core.tools.tools import ToolNotFoundError
 
@@ -62,6 +64,16 @@ def _tool_extension_source(tool_name: str) -> str:
         "    return tool_success({'value': arguments.get('value')})\n"
         "def register(api):\n"
         f"    api.register_tool({tool_name!r}, 'desc', {{'type': 'object'}}, _handler)\n"
+    )
+
+
+def _command_extension_source(command_name: str) -> str:
+    return (
+        "from core.chat import CommandOutcome\n"
+        "def _handler(context, argument):\n"
+        f"    return CommandOutcome(command={command_name!r})\n"
+        "def register(api):\n"
+        f"    api.register_command({command_name!r}, 'desc', _handler)\n"
     )
 
 
@@ -126,6 +138,25 @@ def test_deactivate_unregisters_tools_and_hides_from_provider_definitions(
 
     assert [tool.name for tool in tool_registry.list_tools()] == []
     assert tool_registry.provider_definitions(["ext_echo"]) == []
+
+
+def test_deactivate_unregisters_extension_commands(tmp_path: Path) -> None:
+    root = tmp_path / "extensions"
+    _write_single_file(root, "workflow_ext", _command_extension_source("workflow"))
+    registry = ExtensionRegistry.load(root)
+    dispatcher = CommandDispatcher(ChatRunManager())
+    registry.apply_commands(dispatcher)
+    assert dispatcher.prepare("/workflow") is not None
+
+    changed = asyncio.run(
+        registry.deactivate(
+            "workflow_ext",
+            command_dispatcher=dispatcher,
+        )
+    )
+
+    assert changed is True
+    assert dispatcher.prepare("/workflow") is None
 
 
 def test_deactivate_dispatch_of_removed_tool_degrades_cleanly(tmp_path: Path) -> None:

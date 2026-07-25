@@ -32,6 +32,7 @@ from core.extensions.settings_schema import SettingsFieldDeclaration, parse_sett
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    from core.chat.commands import CommandDispatcher
     from core.recall.recall import RecallBackendRegistry
     from core.tools.tools import ToolRegistry
 
@@ -41,10 +42,11 @@ _MANIFEST_FILENAME = "extension.json"
 
 # Public extension API version. Bumped when the extension contract changes in a
 # way third-party extensions can detect via their manifest ``api_version``.
-API_VERSION = 1
+API_VERSION = 2
 
 HookHandler = Callable[..., Any]
 LifecycleHandler = Callable[[], Any]
+CommandHandler = Callable[..., Any]
 RegisteredHandler = tuple[str, HookHandler]
 # Injected by chat so tool-result-envelope schema knowledge stays in the chat
 # domain: given (extension_name, candidate dict) it returns the validated
@@ -159,6 +161,25 @@ class ToolDeclaration:
 
 
 @dataclass(frozen=True)
+class CommandDeclaration:
+    """One ``api.register_command`` declaration for Chat-owned application.
+
+    The Extensions domain stores only primitive metadata plus the handler. Chat
+    validates and applies the declaration later so command recognition,
+    scheduling, execution, and outcome semantics remain in ``CommandDispatcher``.
+    """
+
+    name: str
+    description: str
+    handler: CommandHandler
+    argument: str = "optional"
+    catalog_result: str = "notice"
+    execution_mode: str = "serialized"
+    argument_execution_mode: str | None = None
+    unavailable_surfaces: object = ()
+
+
+@dataclass(frozen=True)
 class RecallBackendDeclaration:
     """One ``api.register_recall_backend`` declaration: name + backend factory.
 
@@ -202,6 +223,7 @@ class ExtensionDeclarations:
     startup: list[LifecycleHandler] = field(default_factory=list)
     shutdown: list[LifecycleHandler] = field(default_factory=list)
     tools: list[ToolDeclaration] = field(default_factory=list)
+    commands: list[CommandDeclaration] = field(default_factory=list)
     recall_backends: list[RecallBackendDeclaration] = field(default_factory=list)
     prompt_blocks: list[PromptBlockDeclaration] = field(default_factory=list)
     interaction_handlers: list[InteractionHandlerDeclaration] = field(default_factory=list)
@@ -346,6 +368,38 @@ class ExtensionAPI:
                 display=display,
                 ready=ready,
                 readiness_hint=readiness_hint,
+            )
+        )
+
+    def register_command(
+        self,
+        name: str,
+        description: str,
+        handler: CommandHandler,
+        *,
+        argument: str = "optional",
+        catalog_result: str = "notice",
+        execution_mode: str = "serialized",
+        argument_execution_mode: str | None = None,
+        unavailable_surfaces: frozenset[str] | set[str] | tuple[str, ...] = (),
+    ) -> None:
+        """Declare a slash command for later application by Chat.
+
+        Declaration is intentionally inert here. ``CommandDispatcher`` validates
+        the metadata and installs the handler after Runtime has created its
+        canonical dispatcher. A malformed or colliding command is diagnosed as
+        one skipped capability without failing the rest of the Extension.
+        """
+        self._declarations.commands.append(
+            CommandDeclaration(
+                name=name,
+                description=description,
+                handler=handler,
+                argument=argument,
+                catalog_result=catalog_result,
+                execution_mode=execution_mode,
+                argument_execution_mode=argument_execution_mode,
+                unavailable_surfaces=unavailable_surfaces,
             )
         )
 
@@ -580,6 +634,69 @@ class ExtensionRegistry:
                     tool_registry, record, declaration, declarers, builtin_names, applied
                 )
 
+    def apply_commands(self, command_dispatcher: CommandDispatcher) -> None:
+        """Apply loaded Extensions' commands to the canonical Chat dispatcher.
+
+        Built-ins always win. Extension load order is first-wins, including
+        duplicate declarations inside one Extension. Invalid declarations and
+        collisions remain non-fatal capability diagnostics.
+        """
+        claimed: dict[str, tuple[ExtensionRecord, CommandDeclaration]] = {}
+        built_in_names = command_dispatcher.built_in_command_names()
+        for record in self._records:
+            if record.status != "loaded":
+                continue
+            for declaration in record.declarations.commands:
+                name = declaration.name
+                if not isinstance(name, str):
+                    self._diagnose_capability(
+                        record,
+                        f"command {name!r} skipped: name must be a string",
+                    )
+                    continue
+                if name in built_in_names:
+                    self._diagnose_capability(
+                        record,
+                        f"command {name!r} skipped: a Built-in Command already uses this name",
+                    )
+                    continue
+                winner = claimed.get(name)
+                if winner is not None:
+                    winner_record, _winner_declaration = winner
+                    if winner_record is record:
+                        self._diagnose_capability(
+                            record,
+                            f"command {name!r} duplicate declaration skipped",
+                        )
+                    else:
+                        self._diagnose_capability(
+                            record,
+                            f"command {name!r} skipped: name already declared by extension "
+                            f"{winner_record.name!r}",
+                        )
+                        self._diagnose_capability(
+                            winner_record,
+                            f"command {name!r} registered; also declared by extension "
+                            f"{record.name!r} (skipped there)",
+                        )
+                    continue
+                try:
+                    command_dispatcher.register_extension_command(
+                        record.name,
+                        name=name,
+                        description=declaration.description,
+                        handler=declaration.handler,
+                        argument=declaration.argument,
+                        catalog_result=declaration.catalog_result,
+                        execution_mode=declaration.execution_mode,
+                        argument_execution_mode=declaration.argument_execution_mode,
+                        unavailable_surfaces=declaration.unavailable_surfaces,
+                    )
+                except ValueError as exc:
+                    self._diagnose_capability(record, f"command {name!r} skipped: {exc}")
+                    continue
+                claimed[name] = (record, declaration)
+
     def _apply_one_tool(
         self,
         tool_registry: ToolRegistry,
@@ -740,7 +857,12 @@ class ExtensionRegistry:
                         record, f"recall backend {declaration.name!r} skipped: {exc}"
                     )
 
-    async def deactivate(self, name: str, tool_registry: ToolRegistry | None = None) -> bool:
+    async def deactivate(
+        self,
+        name: str,
+        tool_registry: ToolRegistry | None = None,
+        command_dispatcher: CommandDispatcher | None = None,
+    ) -> bool:
         """Stop a currently-loaded extension's effects live, without a restart.
 
         The disable half of "values live, structure restart-bound": on disable we
@@ -755,8 +877,9 @@ class ExtensionRegistry:
            extension actually registered (matched by handler identity, so a
            collision-skipped name owned by a built-in / another extension is left
            alone),
-        3. fires its shutdown handlers (fail-open, resource cleanup), and
-        4. flips the record to ``disabled`` and clears its declarations, so every
+        3. unregisters its applied Commands from the canonical dispatcher,
+        4. fires its shutdown handlers (fail-open, resource cleanup), and
+        5. flips the record to ``disabled`` and clears its declarations, so every
            status surface reports it exactly like a boot-disabled extension (no
            schema, no capabilities, no pending restart) and the prompt/recall
            refreshers (which key on ``loaded``) drop it on the next rebuild.
@@ -775,6 +898,8 @@ class ExtensionRegistry:
         self._remove_interaction_handlers(name)
         if tool_registry is not None:
             self._unregister_extension_tools(tool_registry, declarations.tools)
+        if command_dispatcher is not None:
+            command_dispatcher.unregister_extension_commands(name)
         for handler in declarations.shutdown:
             await self._invoke_lifecycle("shutdown", name, handler)
 
@@ -798,6 +923,12 @@ class ExtensionRegistry:
             if record.status != "loaded":
                 continue
             self._unregister_extension_tools(tool_registry, record.declarations.tools)
+
+    def remove_applied_commands(self, command_dispatcher: CommandDispatcher) -> None:
+        """Remove every loaded Extension's commands from the live dispatcher."""
+        for record in self._records:
+            if record.status == "loaded":
+                command_dispatcher.unregister_extension_commands(record.name)
 
     def _remove_handlers(self, extension_name: str) -> None:
         """Drop every hook handler registered under *extension_name* from dispatch."""
@@ -1376,6 +1507,7 @@ def _import_extension_module(name: str, entry_path: Path) -> types.ModuleType:
 
 __all__ = [
     "API_VERSION",
+    "CommandDeclaration",
     "Deny",
     "ExtensionAPI",
     "ExtensionManifest",

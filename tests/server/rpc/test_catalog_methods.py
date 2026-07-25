@@ -8,7 +8,9 @@ from typing import Any
 
 import pytest
 
+from core.chat import CommandDispatcher, CommandOutcome
 from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
+from core.runs import ChatRunManager
 from core.tools import ToolRegistry, tool_success
 from server.rpc.catalog_methods import _list_commands, _list_files, _list_tools
 from server.rpc.errors import RpcError
@@ -44,6 +46,7 @@ def _state(
     agent_workspace: str = "",
     rooted_project_id: str | None = None,
     project_cwd: str | None = None,
+    command_dispatcher: CommandDispatcher | None = None,
 ) -> Any:
     global_registry = _Registry(global_names)
     project_registry = _Registry(project_names or [])
@@ -75,7 +78,10 @@ def _state(
         agent_resolver=SimpleNamespace(resolve_agent=resolve_agent),
         projects=projects,
     )
-    return SimpleNamespace(runtime=runtime)
+    return SimpleNamespace(
+        runtime=runtime,
+        command_dispatcher=command_dispatcher or CommandDispatcher(ChatRunManager()),
+    )
 
 
 def _skill_names(result: dict[str, Any]) -> list[str]:
@@ -163,6 +169,28 @@ def test_commands_are_always_present() -> None:
         "status",
         "stop",
     ]
+
+
+def test_extension_commands_come_from_live_dispatcher_catalog() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+    dispatcher.register_extension_command(
+        "workflow_ext",
+        name="workflow",
+        description="Run the workflow.",
+        handler=lambda _context, _argument: CommandOutcome(command="workflow"),
+    )
+    state = _state(global_names=[], command_dispatcher=dispatcher)
+
+    result = _list_commands(state, {})
+
+    command_items = [item for item in result["items"] if item["type"] == "command"]
+    assert command_items[-1] == {
+        "name": "workflow",
+        "description": "Run the workflow.",
+        "type": "command",
+        "argument": "optional",
+        "output": "toast",
+    }
 
 
 def test_unsupported_field_is_rejected() -> None:

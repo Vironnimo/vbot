@@ -1,8 +1,6 @@
 # Example extensions
 
-Runnable, copy-pasteable examples of vBot **extensions** — in-process Python
-that adds capabilities without forking the app. They are documentation-grade:
-copy one into your data directory and it loads on the next start.
+Runnable, copy-pasteable examples of vBot **extensions** — in-process Python that adds capabilities without forking the app. They are documentation-grade: copy one into your data directory and load it with `vbot extensions reload`.
 
 ## Install
 
@@ -12,9 +10,7 @@ Copy a file (or a whole extension directory) into:
 <data_dir>/extensions/        # ~/.vbot/extensions/ by default
 ```
 
-Extensions load at startup. Enable/disable is restart-applied (there is no hot
-reload, and disabled extensions are never imported). The agent can trigger a
-restart to pick up changes.
+Extensions load at startup and reload live. Run `vbot extensions reload` after copying or editing one; enable and disable changes also apply live.
 
 ## What's here
 
@@ -22,6 +18,7 @@ restart to pick up changes.
 |---|---|---|
 | `guard_bash.py` | hook (`tool_call`) | Refuse destructive shell commands with `Deny` + leave a note |
 | `word_count.py` | tool (`register_tool`) | Add a normal agent tool that returns a result envelope |
+| `workflow_command/` | command (`register_command`) + bundled Skill | Start `$workflow` as a same-address follow-up Run from `/workflow [objective]` |
 
 ## How an extension is structured
 
@@ -37,6 +34,7 @@ def register(api):
 
 - **hooks** — `api.on(event, handler)` for `run_start`, `context`, `tool_call`,
   `tool_result`, `run_end`
+- **commands** — `api.register_command(name, description, handler)` for deterministic slash-command entry points and optional follow-up Runs
 - **tools** — `api.register_tool(name, description, parameters, handler)`
 - **recall backends** — `api.register_recall_backend(name, factory)`
 - **prompt blocks** — `api.register_prompt_block(slug, *, default_text=…)` (or

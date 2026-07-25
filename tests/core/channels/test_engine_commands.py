@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from core.chat import (
+    CommandDispatcher,
+    CommandFeedback,
+    ExtensionCommandContext,
+)
+
 from .engine_test_support import (
     CHANNEL_REPLY_SURFACE,
     SESSION_ID,
@@ -11,8 +17,11 @@ from .engine_test_support import (
     CommandOutcome,
     CommandRun,
     CommandUnavailability,
+    ConversationFacts,
     Path,
+    PreparedCommand,
     ReplyPlanFacts,
+    RouteFacts,
     Run,
     asyncio,
     command_outcome,
@@ -26,6 +35,180 @@ from .engine_test_support import (
     make_new_only_dispatcher,
     pytest,
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("execution_mode", ["immediate", "serialized"])
+async def test_extension_command_uses_generic_channel_projection(
+    tmp_path: Path,
+    execution_mode: str,
+) -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    def handler(context: ExtensionCommandContext, argument: str | None) -> CommandOutcome:
+        assert context.reply_surface == CHANNEL_REPLY_SURFACE
+        return CommandOutcome(
+            command="workflow",
+            feedback=CommandFeedback(
+                kind="notice",
+                text=f"Workflow {argument or 'default'} complete.",
+            ),
+        )
+
+    dispatcher.register_extension_command(
+        "workflow_ext",
+        name="workflow",
+        description="Run the workflow.",
+        handler=handler,
+        execution_mode=execution_mode,
+    )
+    engine, _sessions, trigger_mock, transport = make_engine(
+        tmp_path,
+        command_dispatcher=dispatcher,
+    )
+
+    await engine.handle_inbound_text(make_conversation(), "/workflow review")
+    await drain(engine, 12345)
+
+    trigger_mock.assert_not_awaited()
+    assert transport.sent == [("12345", "Workflow review complete.")]
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_extension_command_declared_unavailable_on_channels(
+    tmp_path: Path,
+) -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+    dispatcher.register_extension_command(
+        "workflow_ext",
+        name="workflow",
+        description="Run the workflow.",
+        handler=lambda _context, _argument: CommandOutcome(command="workflow"),
+        unavailable_surfaces=frozenset({"channel"}),
+    )
+    engine, _sessions, trigger_mock, transport = make_engine(
+        tmp_path,
+        command_dispatcher=dispatcher,
+    )
+
+    await engine.handle_inbound_text(make_conversation(), "/workflow")
+
+    trigger_mock.assert_not_awaited()
+    assert transport.sent == [("12345", "The /workflow command is not available through Telegram.")]
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_extension_command_relays_follow_up_run(tmp_path: Path) -> None:
+    follow_up = make_completed_run(output_text="Workflow result.")
+    dispatcher = CommandDispatcher(ChatRunManager())
+    dispatcher.register_extension_command(
+        "workflow_ext",
+        name="workflow",
+        description="Run the workflow.",
+        handler=lambda _context, _argument: CommandOutcome(
+            command="workflow",
+            feedback=CommandFeedback(kind="notice", text="Workflow started."),
+            runs=(CommandRun(role="follow_up", run=follow_up),),
+        ),
+    )
+    engine, _sessions, _trigger_mock, transport = make_engine(
+        tmp_path,
+        command_dispatcher=dispatcher,
+    )
+
+    await engine.handle_inbound_text(make_conversation(), "/workflow")
+    await drain(engine, 12345)
+
+    assert transport.sent_texts == ["Workflow started.", "Workflow result."]
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_extension_command_handler_failure_isolated_through_channel(
+    tmp_path: Path,
+) -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    def fail(_context: ExtensionCommandContext, _argument: str | None) -> CommandOutcome:
+        raise RuntimeError("implementation detail")
+
+    dispatcher.register_extension_command(
+        "workflow_ext",
+        name="workflow",
+        description="Run the workflow.",
+        handler=fail,
+    )
+    engine, _sessions, _trigger_mock, transport = make_engine(
+        tmp_path,
+        command_dispatcher=dispatcher,
+    )
+
+    await engine.handle_inbound_text(make_conversation(), "/workflow")
+    await drain(engine, 12345)
+
+    assert transport.sent_texts == ["The /workflow command failed. Check the server logs."]
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_queued_extension_command_removed_before_execution_is_stale(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    def handler(_context: ExtensionCommandContext, _argument: str | None) -> CommandOutcome:
+        nonlocal called
+        called = True
+        return CommandOutcome(command="workflow")
+
+    dispatcher = CommandDispatcher(ChatRunManager())
+    dispatcher.register_extension_command(
+        "workflow_ext",
+        name="workflow",
+        description="Run the workflow.",
+        handler=handler,
+    )
+    engine, _sessions, _trigger_mock, transport = make_engine(
+        tmp_path,
+        command_dispatcher=dispatcher,
+    )
+    execution_reached = asyncio.Event()
+    release_execution = asyncio.Event()
+    execute_prepared = engine._execute_prepared_command
+
+    async def pause_before_execution(
+        prepared: PreparedCommand,
+        conversation: ConversationFacts,
+        route: RouteFacts,
+        reply_plan: ReplyPlanFacts,
+        conversation_key: str,
+    ) -> None:
+        execution_reached.set()
+        await release_execution.wait()
+        await execute_prepared(
+            prepared,
+            conversation,
+            route,
+            reply_plan,
+            conversation_key,
+        )
+
+    monkeypatch.setattr(engine, "_execute_prepared_command", pause_before_execution)
+
+    await engine.handle_inbound_text(make_conversation(), "/workflow")
+    await asyncio.wait_for(execution_reached.wait(), timeout=1)
+    dispatcher.unregister_extension_commands("workflow_ext")
+    release_execution.set()
+    await drain(engine, 12345)
+
+    assert called is False
+    assert transport.sent_texts == [
+        "The /workflow command is no longer available. Please send it again."
+    ]
+    await engine.stop()
 
 
 @pytest.mark.asyncio

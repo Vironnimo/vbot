@@ -2,6 +2,7 @@
 
 from core.extensions.extensions import (
     API_VERSION,
+    CommandDeclaration,
     Deny,
     ExtensionAPI,
     ExtensionManifest,
@@ -31,6 +32,7 @@ from core.extensions.settings_schema import (
 
 __all__ = [
     "API_VERSION",
+    "CommandDeclaration",
     "Deny",
     "ExtensionAPI",
     "ExtensionManifest",

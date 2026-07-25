@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 
 from core.extensions.extensions import (
+    CommandDeclaration,
     ExtensionDeclarations,
     ExtensionManifest,
     ExtensionRecord,
@@ -86,6 +87,14 @@ class _ToolRegistry:
         return SimpleNamespace(name=name, ready=self._ready[name])
 
 
+class _CommandDispatcher:
+    def __init__(self, owners: dict[str, str] | None = None) -> None:
+        self._owners = owners or {}
+
+    def extension_command_owner(self, name: str) -> str | None:
+        return self._owners.get(name)
+
+
 class _Runtime(SimpleNamespace):
     """Runtime stub exposing the credential seam the handlers touch."""
 
@@ -105,11 +114,13 @@ def _state_with_records(
     records: list[ExtensionRecord],
     config: dict[str, dict[str, Any]] | None = None,
     tools: _ToolRegistry | None = None,
+    command_dispatcher: _CommandDispatcher | None = None,
 ) -> SimpleNamespace:
     runtime = _Runtime(
         extensions=_Registry(records),
         storage=_Storage(config or {}),
         tools=tools if tools is not None else _ToolRegistry(),
+        command_dispatcher=command_dispatcher or _CommandDispatcher(),
     )
     return SimpleNamespace(runtime=runtime)
 
@@ -121,6 +132,7 @@ def _loaded_record() -> ExtensionRecord:
     declarations.tools.append(
         ToolDeclaration("word_count", "Count words", {"type": "object"}, _noop_handler)
     )
+    declarations.commands.append(CommandDeclaration("workflow", "Run workflow", _noop_handler))
     declarations.recall_backends.append(RecallBackendDeclaration("my_backend", _noop_handler))
     declarations.interaction_handlers.append(InteractionHandlerDeclaration("chk", _noop_handler))
     declarations.startup.append(_noop_handler)
@@ -160,6 +172,7 @@ async def test_extensions_list_returns_loaded_failed_disabled_records() -> None:
         [_loaded_record(), failed, disabled],
         config={"guard_bash": {"deny": ["rm -rf"]}},
         tools=tools,
+        command_dispatcher=_CommandDispatcher({"workflow": "guard_bash"}),
     )
 
     result = await dispatch_rpc(state, {"method": "extensions.list", "params": {}})
@@ -188,6 +201,7 @@ async def test_extensions_list_returns_loaded_failed_disabled_records() -> None:
         "capabilities": {
             "hooks": {"tool_call": 1, "run_end": 1},
             "tools": [{"name": "word_count", "ready": True}],
+            "commands": [{"name": "workflow", "registered": True}],
             "recall_backends": ["my_backend"],
             "interaction_handlers": ["chk"],
             "startup": True,
@@ -198,6 +212,7 @@ async def test_extensions_list_returns_loaded_failed_disabled_records() -> None:
     assert failed_item["error"] == "import failed: boom"
     assert failed_item["config"] == {}
     assert failed_item["capabilities"]["tools"] == []
+    assert failed_item["capabilities"]["commands"] == []
     assert disabled_item["status"] == "disabled"
     assert disabled_item["disabled"] is True
 
@@ -551,6 +566,7 @@ async def test_settings_update_extensions_disable_applies_live(tmp_path: Path) -
     assert result["ok"] is True
     assert state.runtime.extension_disabled_changes == [{"legacy"}]
     assert state.runtime.extension_reload_count == 0
+    assert state.event_bus.events[-1]["payload"] == {"kind": "commands"}
     assert state.runtime.storage.load_extensions_settings() == {
         "disabled": ["legacy"],
         "config": {"guard_bash": {"deny": ["rm -rf"]}},
@@ -574,6 +590,7 @@ async def test_settings_update_extensions_enable_reloads_layer(tmp_path: Path) -
     assert result["ok"] is True
     assert state.runtime.extension_reload_count == 1
     assert state.runtime.extension_disabled_changes == []
+    assert state.event_bus.events[-1]["payload"] == {"kind": "commands"}
     assert state.runtime.storage.load_extensions_settings() == {"disabled": [], "config": {}}
 
 
@@ -616,5 +633,6 @@ async def test_reload_extensions_drives_runtime_and_returns_list_shape(tmp_path:
 
     assert result["ok"] is True
     assert state.runtime.extension_reload_count == 1
+    assert state.event_bus.events[-1]["payload"] == {"kind": "commands"}
     names = [extension["name"] for extension in result["result"]["extensions"]]
     assert names == ["guard_bash"]

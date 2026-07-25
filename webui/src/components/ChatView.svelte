@@ -93,6 +93,8 @@
     // session drawer so a new/switched session in another window appears in the
     // list. It deliberately does NOT switch the viewed conversation.
     sessionsRefreshToken = 0,
+    // Bumped when Extension lifecycle changes alter the live slash-command catalog.
+    commandsRefreshToken = 0,
     // Scope object of the latest `resource_changed(kind:"queue")` (a fresh
     // object per signal); re-syncs the matching held session's queue live.
     queueInvalidation = null,
@@ -166,10 +168,9 @@
   // every later run is a user-initiated dropdown switch that jumps to the
   // project default.
   let initialProjectRestoreDone = false;
-  // The agent address the command/skill suggestions were last loaded for. Starts
-  // as `undefined` (distinct from any real address, including the empty one) so the
-  // first effect run always loads; reloaded whenever the active agent changes so
-  // autocomplete reflects that agent's effective skills, not the global list.
+  // The address + invalidation token the command/skill suggestions were last
+  // loaded for. `undefined` is distinct from every real key, so the first effect
+  // always loads; Agent changes and Extension lifecycle events both refresh it.
   let lastCommandsAddress = undefined;
 
   // Whether the active agent is a project (config) team agent. When false the
@@ -666,16 +667,15 @@
     return () => chatController.destroy();
   });
 
-  // Reload command/skill suggestions whenever the active agent address changes, so
-  // autocomplete reflects that agent's effective skills (project-scoped for a
-  // project agent). Guarded by `lastCommandsAddress` so unrelated reactive churn
-  // does not re-fetch; the empty address loads the global list.
+  // Reload command/skill suggestions whenever the active address or live command
+  // catalog changes. The token does not disturb the draft or active selection.
   $effect(() => {
     const { agentAddress } = activeAddressing();
-    if (agentAddress === lastCommandsAddress) {
+    const commandsKey = `${commandsRefreshToken}:${agentAddress}`;
+    if (commandsKey === lastCommandsAddress) {
       return;
     }
-    lastCommandsAddress = agentAddress;
+    lastCommandsAddress = commandsKey;
     loadCommands(agentAddress);
   });
 

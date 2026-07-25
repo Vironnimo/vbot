@@ -252,6 +252,7 @@
   let modelsRefreshToken = $derived(appControllerState.modelsRefreshToken);
   let projectsRefreshToken = $derived(appControllerState.projectsRefreshToken);
   let sessionsRefreshToken = $derived(appControllerState.sessionsRefreshToken);
+  let commandsRefreshToken = $derived(appControllerState.commandsRefreshToken);
   let queueInvalidation = $derived(appControllerState.queueInvalidation);
   let clientsRefreshToken = $derived(appControllerState.clientsRefreshToken);
   let channelsRefreshToken = $derived(appControllerState.channelsRefreshToken);
@@ -1028,6 +1029,7 @@
         {runServerEvents}
         {connectionSnapshot}
         {sessionsRefreshToken}
+        {commandsRefreshToken}
         {queueInvalidation}
         {wakewordStatus}
         {desktopCapabilities}

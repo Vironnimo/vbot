@@ -13,7 +13,9 @@ from core.chat import (
     ChatMessage,
     CommandDispatcher,
     CommandExecutionContext,
+    CommandFeedback,
     CommandOutcome,
+    ExtensionCommandContext,
     PreparedCommand,
     ReplySurface,
 )
@@ -368,6 +370,182 @@ def test_built_in_commands_declare_argument_and_result_metadata() -> None:
         "status": "detail",
         "stop": "notice",
     }
+
+
+def test_extension_command_registers_in_catalog_and_executes_sync_handler() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+    observed: list[tuple[str, str | None]] = []
+
+    def handler(context: ExtensionCommandContext, argument: str | None) -> CommandOutcome:
+        observed.append((context.session_id, argument))
+        return CommandOutcome(
+            command="workflow",
+            feedback=CommandFeedback(kind="notice", text="Workflow started."),
+        )
+
+    registration_id = dispatcher.register_extension_command(
+        "workflow_ext",
+        name="workflow",
+        description="Start the workflow.",
+        handler=handler,
+    )
+
+    prepared = _prepared(dispatcher, "/workflow review this")
+    result = _execute_sync(dispatcher, "/workflow review this")
+
+    assert registration_id > 0
+    assert prepared.registration_id == registration_id
+    assert [spec.name for spec in dispatcher.catalog()][-1] == "workflow"
+    assert result.feedback == CommandFeedback(kind="notice", text="Workflow started.")
+    assert observed == [("session-one", "review this")]
+
+
+def test_extension_command_leaves_same_named_dollar_skill_trigger_unclaimed() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+    dispatcher.register_extension_command(
+        "workflow_ext",
+        name="workflow",
+        description="Start the workflow.",
+        handler=lambda _context, _argument: CommandOutcome(command="workflow"),
+    )
+
+    assert dispatcher.prepare("/workflow") is not None
+    assert dispatcher.prepare("$workflow") is None
+
+
+@pytest.mark.asyncio
+async def test_extension_command_supports_async_handler_and_follow_up_run() -> None:
+    follow_up = cast(Run, object())
+
+    class Trigger:
+        async def trigger_run(self, *args: object, **kwargs: object) -> Run:
+            assert args[:3] == ("coder", "$workflow inspect", "session-one")
+            assert kwargs["internal"] is True
+            assert kwargs["project_id"] == "project-one"
+            return follow_up
+
+    async def handler(context: ExtensionCommandContext, argument: str | None) -> CommandOutcome:
+        run = await context.start_run(f"$workflow {argument}", internal=True)
+        return CommandOutcome(command="workflow", facts={"same_run": run is follow_up})
+
+    dispatcher = CommandDispatcher(ChatRunManager(), trigger_service=Trigger())
+    dispatcher.register_extension_command(
+        "workflow_ext",
+        name="workflow",
+        description="Start the workflow.",
+        handler=handler,
+        argument="required",
+    )
+
+    result = await _execute(
+        dispatcher,
+        "/workflow inspect",
+        project_id="project-one",
+    )
+
+    assert result.facts == {"same_run": True}
+
+
+def test_extension_command_rejects_invalid_metadata() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+
+    with pytest.raises(ValueError, match="lowercase"):
+        dispatcher.register_extension_command(
+            "workflow_ext",
+            name="Bad Name",
+            description="Bad.",
+            handler=lambda _context, _argument: CommandOutcome(command="bad"),
+        )
+
+    with pytest.raises(ValueError, match="Built-in"):
+        dispatcher.register_extension_command(
+            "workflow_ext",
+            name="help",
+            description="Shadow help.",
+            handler=lambda _context, _argument: CommandOutcome(command="help"),
+        )
+
+    with pytest.raises(ValueError, match="argument"):
+        dispatcher.register_extension_command(
+            "workflow_ext",
+            name="workflow",
+            description="Bad argument metadata.",
+            handler=lambda _context, _argument: CommandOutcome(command="workflow"),
+            argument=cast(Any, []),
+        )
+
+
+@pytest.mark.asyncio
+async def test_stale_extension_command_returns_neutral_feedback() -> None:
+    called = False
+
+    def handler(_context: ExtensionCommandContext, _argument: str | None) -> CommandOutcome:
+        nonlocal called
+        called = True
+        return CommandOutcome(command="workflow")
+
+    dispatcher = CommandDispatcher(ChatRunManager())
+    dispatcher.register_extension_command(
+        "workflow_ext",
+        name="workflow",
+        description="Start the workflow.",
+        handler=handler,
+    )
+    prepared = _prepared(dispatcher, "/workflow")
+    dispatcher.unregister_extension_commands("workflow_ext")
+
+    result = await dispatcher.execute(
+        prepared,
+        CommandExecutionContext(
+            agent_id="coder",
+            session_id="session-one",
+            project_id=None,
+            reply_surface=ReplySurface.webui(),
+        ),
+    )
+
+    assert called is False
+    assert result.feedback is not None
+    assert "no longer available" in result.feedback.text
+
+
+@pytest.mark.asyncio
+async def test_extension_command_failure_is_isolated(caplog: pytest.LogCaptureFixture) -> None:
+    def handler(_context: ExtensionCommandContext, _argument: str | None) -> CommandOutcome:
+        raise RuntimeError("boom")
+
+    dispatcher = CommandDispatcher(ChatRunManager())
+    dispatcher.register_extension_command(
+        "workflow_ext",
+        name="workflow",
+        description="Start the workflow.",
+        handler=handler,
+    )
+
+    result = await _execute(dispatcher, "/workflow")
+
+    assert result.feedback is not None
+    assert result.feedback.text == "The /workflow command failed. Check the server logs."
+    assert "Extension command failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_extension_command_invalid_nested_outcome_is_isolated() -> None:
+    dispatcher = CommandDispatcher(ChatRunManager())
+    dispatcher.register_extension_command(
+        "workflow_ext",
+        name="workflow",
+        description="Start the workflow.",
+        handler=lambda _context, _argument: CommandOutcome(
+            command="workflow",
+            feedback=cast(Any, "not feedback"),
+        ),
+    )
+
+    result = await _execute(dispatcher, "/workflow")
+
+    assert result.feedback is not None
+    assert result.feedback.text == "The /workflow command failed. Check the server logs."
 
 
 def test_dispatch_status_marks_transient_output() -> None:
