@@ -388,17 +388,38 @@ class DesktopBridge:
         if state not in _VALID_STATES:
             raise ValueError(f"Invalid wakeword state: {state}")
         with self._lock:
+            previous_state = self._state
+            previous_error_code = self._error_code
             self._state = state
             self._error_code = error_code if state == _WAKEWORD_STATE_ERROR else None
             self._event_sequence += 1
+            event_sequence = self._event_sequence
             self._events.append(
                 {
-                    "sequence": self._event_sequence,
+                    "sequence": event_sequence,
                     "state": state,
                     "error_code": self._error_code,
                 }
             )
+            current_error_code = self._error_code
         self._status_event.set()
+        if state == previous_state and current_error_code == previous_error_code:
+            return
+        if current_error_code is None:
+            logger.info(
+                "Voice state changed (sequence=%s, from=%s, to=%s)",
+                event_sequence,
+                previous_state,
+                state,
+            )
+            return
+        logger.info(
+            "Voice state changed (sequence=%s, from=%s, to=%s, error_code=%s)",
+            event_sequence,
+            previous_state,
+            state,
+            current_error_code,
+        )
 
     def publish_runtime_details(self, *, active_microphone: dict[str, Any] | None) -> None:
         """Publish the concrete input device selected by automatic routing."""

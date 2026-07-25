@@ -187,6 +187,20 @@ def test_desktop_logging_writes_structured_daily_file(tmp_path: Path) -> None:
         desktop_main.close_desktop_logging(handler)
 
 
+def test_desktop_main_logs_normal_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(desktop_main, "configure_desktop_logging", lambda: None)
+    monkeypatch.setattr(desktop_main, "close_desktop_logging", lambda _handler: None)
+    monkeypatch.setattr(desktop_main, "launch_desktop", lambda _argv: None)
+
+    with caplog.at_level("INFO", logger="vbot.desktop"):
+        desktop_main.main([])
+
+    assert "Desktop stopped normally" in caplog.text
+
+
 # -- Probe classification ----------------------------------------------------
 
 

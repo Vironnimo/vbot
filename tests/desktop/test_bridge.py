@@ -551,19 +551,45 @@ def test_set_wakeword_config_rejects_non_dict(tmp_path: Path) -> None:
     }
 
 
-def test_publish_state_updates_state(tmp_path: Path) -> None:
+def test_publish_state_updates_state_and_logs_transitions(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     _write_settings(tmp_path / "settings.json")
 
     bridge = DesktopBridge(settings_path=tmp_path / "settings.json")
 
-    bridge.publish_state("listening")
-    assert bridge.getWakewordStatus()["state"] == "listening"
+    with caplog.at_level("INFO", logger="vbot.desktop.wakeword.bridge"):
+        bridge.publish_state("listening")
+        assert bridge.getWakewordStatus()["state"] == "listening"
 
-    bridge.publish_state("recording")
-    assert bridge.getWakewordStatus()["state"] == "recording"
+        bridge.publish_state("recording")
+        assert bridge.getWakewordStatus()["state"] == "recording"
 
-    bridge.publish_state("error")
-    assert bridge.getWakewordStatus()["state"] == "error"
+        bridge.publish_state("error", "microphone_unavailable")
+        assert bridge.getWakewordStatus()["state"] == "error"
+
+    assert "Voice state changed (sequence=1, from=off, to=listening)" in caplog.text
+    assert "Voice state changed (sequence=2, from=listening, to=recording)" in caplog.text
+    assert (
+        "Voice state changed (sequence=3, from=recording, to=error, "
+        "error_code=microphone_unavailable)"
+    ) in caplog.text
+
+
+def test_publish_state_does_not_log_unchanged_state(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _write_settings(tmp_path / "settings.json")
+    bridge = DesktopBridge(settings_path=tmp_path / "settings.json")
+
+    with caplog.at_level("INFO", logger="vbot.desktop.wakeword.bridge"):
+        bridge.publish_state("listening")
+        caplog.clear()
+        bridge.publish_state("listening")
+
+    assert "Voice state changed" not in caplog.text
 
 
 def test_publish_state_rejects_invalid_state(tmp_path: Path) -> None:

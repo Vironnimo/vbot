@@ -653,6 +653,8 @@ def main(argv: list[str] | None = None) -> None:
     except Exception:
         logger.error("Desktop stopped unexpectedly", exc_info=True)
         raise
+    else:
+        logger.info("Desktop stopped normally")
     finally:
         close_desktop_logging(log_handler)
 
