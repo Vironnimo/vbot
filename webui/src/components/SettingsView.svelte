@@ -179,6 +179,17 @@
       label: () => t('settings.groups.behavior', 'Behavior'),
       sections: [
         {
+          id: 'voice',
+          labelKey: 'settings.voice.title',
+          labelFallback: 'Voice',
+          label: () => t('settings.voice.title', 'Voice'),
+          subtitle: () =>
+            t(
+              'settings.voice.subtitle',
+              'Transcription audio and wakeword command settings.',
+            ),
+        },
+        {
           id: 'recall',
           labelKey: 'settings.recall.title',
           labelFallback: 'Recall',
@@ -253,21 +264,6 @@
                     'Choose which vBot server this Desktop app connects to.',
                   ),
               },
-              ...(desktopCapabilities?.wakeword
-                ? [
-                    {
-                      id: 'voice',
-                      labelKey: 'settings.voice.title',
-                      labelFallback: 'Voice',
-                      label: () => t('settings.voice.title', 'Voice'),
-                      subtitle: () =>
-                        t(
-                          'settings.voice.subtitle',
-                          'Wakeword detection and voice command settings.',
-                        ),
-                    },
-                  ]
-                : []),
             ],
           },
         ]
@@ -1058,6 +1054,22 @@
 
         <section
           class="s-section"
+          data-settings-section="voice"
+          aria-labelledby="settings-section-voice"
+        >
+          {@render sectionHeader(panelById.get('voice'))}
+          <WakewordVoiceSettings
+            {agents}
+            {settings}
+            wakewordAvailable={desktopCapabilities?.wakeword === true}
+            onCommit={commitSettings}
+            {onToast}
+            onError={(message) => reportSettingsError(message)}
+          />
+        </section>
+
+        <section
+          class="s-section"
           data-settings-section="recall"
           aria-labelledby="settings-section-recall"
         >
@@ -1139,17 +1151,6 @@
             {@render sectionHeader(panelById.get('desktop_connection'))}
             <DesktopConnectionSettings {onToast} />
           </section>
-
-          {#if desktopCapabilities?.wakeword}
-            <section
-              class="s-section"
-              data-settings-section="voice"
-              aria-labelledby="settings-section-voice"
-            >
-              {@render sectionHeader(panelById.get('voice'))}
-              <WakewordVoiceSettings {agents} {onToast} />
-            </section>
-          {/if}
         {/if}
 
         <div class="s-doc-group" data-settings-group="system">

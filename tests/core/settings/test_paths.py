@@ -212,11 +212,55 @@ def test_public_document_hides_flat_storage_keys() -> None:
     assert "skill_directories" not in effective
 
 
+def test_speech_defaults_to_compatibility_profile_and_100_mib_uploads() -> None:
+    speech = build_effective_settings({})["speech"]
+
+    assert speech == {
+        "upload_max_size_bytes": 104_857_600,
+        "transcription_audio": {
+            "profile": "compatibility",
+            "format": "wav",
+            "sample_rate_hz": 16_000,
+        },
+    }
+
+
+def test_transcription_audio_profile_can_be_patched_atomically() -> None:
+    operations = parse_patch_operations(
+        [
+            {
+                "op": "set",
+                "path": "speech.transcription_audio.profile",
+                "value": "custom",
+            },
+            {
+                "op": "set",
+                "path": "speech.transcription_audio.format",
+                "value": "flac",
+            },
+            {
+                "op": "set",
+                "path": "speech.transcription_audio.sample_rate_hz",
+                "value": 24_000,
+            },
+        ]
+    )
+
+    updated, _changed = apply_settings_patch({}, operations)
+
+    assert build_effective_settings(updated)["speech"]["transcription_audio"] == {
+        "profile": "custom",
+        "format": "flac",
+        "sample_rate_hz": 24_000,
+    }
+
+
 def test_catalog_contains_static_and_dynamic_public_paths() -> None:
     paths = {entry["path"] for entry in catalog_payload()}
 
     assert "server.port" in paths
     assert "web_search.provider" in paths
+    assert "speech.transcription_audio.profile" in paths
     assert 'local_models.context_windows["<model>"]' in paths
     assert 'extensions.config["<extension>"]["<field>"]' in paths
     assert 'model_tasks["<task>"].options["<option_path>"]...' in paths

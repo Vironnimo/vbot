@@ -144,7 +144,7 @@ describe('SettingsView', () => {
     expect(getSettingsUpdateCalls()).toHaveLength(0);
   });
 
-  it('hides Desktop app settings outside Desktop capabilities', async () => {
+  it('shows server-wide Voice settings but hides Desktop-only connection settings', async () => {
     rpcMock.mockImplementation(createSettingsRpcMock());
 
     mountedComponent = mount(SettingsView, { target: document.body });
@@ -152,7 +152,11 @@ describe('SettingsView', () => {
     await waitForCondition(() => buttonByText('Appearance'));
 
     expect(buttonByText('Connection')).toBeUndefined();
-    expect(buttonByText('Voice')).toBeUndefined();
+    expect(buttonByText('Voice')).toBeTruthy();
+    expect(document.body.textContent).toContain('Transcription audio');
+    expect(document.body.textContent).toContain(
+      'Wakeword listening is configured in the vBot Desktop app',
+    );
   });
 
   it('highlights the Voice section once for a target panel request', async () => {

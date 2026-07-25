@@ -306,7 +306,7 @@ def test_encode_wav_produces_valid_container() -> None:
 def test_detection_loop_passes_the_last_four_chunks_as_pre_roll(
     fake_bridge: FakeBridge,
 ) -> None:
-    from desktop.wakeword.worker import WakewordWorker
+    from desktop.wakeword.worker import CapturedAudioFrame, WakewordWorker
 
     chunks = [bytes([value]) * 2560 for value in range(1, 6)]
 
@@ -338,8 +338,11 @@ def test_detection_loop_passes_the_last_four_chunks_as_pre_roll(
         worker, "_stream", FakeSounddeviceStream(chunks)
     )
 
-    def handle(pre_roll: bytes) -> None:
-        captured.append(pre_roll)
+    def handle(pre_roll: bytes | tuple[CapturedAudioFrame, ...]) -> None:
+        if isinstance(pre_roll, bytes):
+            captured.append(pre_roll)
+        else:
+            captured.append(b"".join(frame.detection_pcm16 for frame in pre_roll))
         worker._running.clear()
 
     worker._handle_detection = handle  # type: ignore[assignment,method-assign]
@@ -445,12 +448,33 @@ def test_resampling_stream_normalizes_native_rate_to_wakeword_pcm() -> None:
         CaptureFormat(device=4, name="Studio mic", sample_rate=48000, dtype="float32"),
     )
 
-    pcm = stream.read_pcm16(1280)
+    frame = stream.read_capture_frame(1280)
 
-    assert len(pcm) == 1280 * 2
-    samples = np.frombuffer(pcm, dtype=np.int16)
+    assert len(frame.detection_pcm16) == 1280 * 2
+    assert len(frame.recording_pcm16) == 3840 * 2
+    assert frame.recording_sample_rate == 48000
+    samples = np.frombuffer(frame.detection_pcm16, dtype=np.int16)
     assert samples[0] < 0
     assert samples[-1] > 0
+
+
+def test_command_audio_keeps_native_capture_rate_before_server_normalization() -> None:
+    from desktop.wakeword.worker import CapturedAudioFrame, _encode_captured_audio
+
+    native_audio = b"\x01\x00" * 1440
+    wav_bytes = _encode_captured_audio(
+        [
+            CapturedAudioFrame(
+                detection_pcm16=b"\x01\x00" * 480,
+                recording_pcm16=native_audio,
+                recording_sample_rate=48000,
+            )
+        ]
+    )
+
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
+        assert wav_file.getframerate() == 48000
+        assert wav_file.readframes(wav_file.getnframes()) == native_audio
 
 
 def test_handle_detection_discards_voice_cancel_before_session_resolution(

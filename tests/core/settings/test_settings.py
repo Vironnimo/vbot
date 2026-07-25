@@ -66,6 +66,13 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
                 "enabled": True,
                 "model": "openai/gpt-4.1-mini::api-key",
             },
+            "speech": {
+                "transcription_audio": {
+                    "profile": "custom",
+                    "format": "flac",
+                    "sample_rate_hz": 24_000,
+                }
+            },
         }
     )
 
@@ -109,6 +116,13 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
         "session_titles": {
             "enabled": True,
             "model": "openai/gpt-4.1-mini::api-key",
+        },
+        "speech": {
+            "transcription_audio": {
+                "profile": "custom",
+                "format": "flac",
+                "sample_rate_hz": 24_000,
+            }
         },
     }
 
@@ -311,6 +325,18 @@ def test_parse_settings_update_rejects_conflicting_openrouter_routing(
             {"model_tasks": {"text_embedding": {"options": {"extra_options": {"input": "wrong"}}}}},
             "params.model_tasks.text_embedding.extra_options cannot override reserved fields",
         ),
+        (
+            {
+                "speech": {
+                    "transcription_audio": {
+                        "profile": "compatibility",
+                        "format": "flac",
+                        "sample_rate_hz": 16_000,
+                    }
+                }
+            },
+            "must use format='wav'",
+        ),
     ],
 )
 def test_parse_settings_update_rejects_invalid_payloads(
@@ -394,6 +420,13 @@ def test_validate_settings_file_accepts_known_settings(tmp_path: Path) -> None:
                 "extension_directories": ["C:/vbot/extensions"],
                 "attachment_max_size_bytes": 1024,
                 "speech_upload_max_size_bytes": 2048,
+                "speech": {
+                    "transcription_audio": {
+                        "profile": "custom",
+                        "format": "flac",
+                        "sample_rate_hz": 24_000,
+                    }
+                },
                 "max_subagent_depth": 4,
                 "max_subagents_per_turn": 8,
                 "subagent_timeout_minutes": 60,

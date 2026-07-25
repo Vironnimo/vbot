@@ -105,7 +105,7 @@ class _SpeechRuntime:
         data_dir: Path,
         *,
         fail: bool,
-        speech_upload_max_size_bytes: int = 20_971_520,
+        speech_upload_max_size_bytes: int = 104_857_600,
     ) -> None:
         self.storage = type("Storage", (), {"data_dir": data_dir})()
         self.chat_runs = ChatRunManager()

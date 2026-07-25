@@ -21,8 +21,12 @@ vi.mock('$lib/desktopBridge.js', () => ({
   retryWakeword: vi.fn(),
   isDesktop: vi.fn(() => true),
 }));
+vi.mock('$lib/api.js', () => ({
+  updateSettings: vi.fn(),
+}));
 
 const desktopBridge = await import('$lib/desktopBridge.js');
+const { updateSettings } = await import('$lib/api.js');
 const { default: WakewordVoiceSettings } =
   await import('../WakewordVoiceSettings.svelte');
 
@@ -72,6 +76,7 @@ describe('WakewordVoiceSettings', () => {
     desktopBridge.setWakewordEnabled.mockResolvedValue(undefined);
     desktopBridge.deleteWakewordModel.mockResolvedValue({ deleted: true });
     desktopBridge.retryWakeword.mockResolvedValue(undefined);
+    updateSettings.mockImplementation(async (payload) => payload);
   });
 
   afterEach(async () => {
@@ -102,6 +107,50 @@ describe('WakewordVoiceSettings', () => {
     flushSync();
     expect(buttonByText('Studio microphone')).not.toBeNull();
     expect(buttonContainingText('Bluetooth hands-free').disabled).toBe(true);
+  });
+
+  it('saves one server-wide transcription profile for both microphone paths', async () => {
+    await mountPanel({
+      settings: {
+        speech: {
+          transcription_audio: {
+            profile: 'compatibility',
+            format: 'wav',
+            sample_rate_hz: 16000,
+          },
+        },
+      },
+    });
+
+    buttonByLabel('Transcription audio').click();
+    flushSync();
+    buttonByText('Custom').click();
+    await settle();
+
+    expect(updateSettings).toHaveBeenLastCalledWith({
+      speech: {
+        transcription_audio: {
+          profile: 'custom',
+          format: 'wav',
+          sample_rate_hz: 16000,
+        },
+      },
+    });
+
+    buttonByLabel('Format').click();
+    flushSync();
+    buttonByText('FLAC (lossless PCM16)').click();
+    await settle();
+
+    expect(updateSettings).toHaveBeenLastCalledWith({
+      speech: {
+        transcription_audio: {
+          profile: 'custom',
+          format: 'flac',
+          sample_rate_hz: 16000,
+        },
+      },
+    });
   });
 
   it('saves the server-specific Personal Agent immediately', async () => {

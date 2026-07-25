@@ -721,6 +721,7 @@ def _settings_response(state: Any) -> JsonObject:
     web_search = runtime.storage.load_web_search_settings()
     debug = runtime.storage.load_debug_settings()
     reflection = runtime.storage.load_reflection_settings()
+    speech = runtime.storage.load_speech_settings()
     model_tasks = runtime.storage.load_model_task_settings()
     session_titles = runtime.storage.load_session_title_settings()
     defaults = runtime.storage.load_defaults()
@@ -765,6 +766,7 @@ def _settings_response(state: Any) -> JsonObject:
             "trace_count": _trace_count(runtime),
         },
         "reflection": dict(reflection),
+        "speech": speech,
         "model_tasks": model_tasks,
         "session_titles": session_titles,
         "local_models": runtime.storage.load_local_models_settings(),

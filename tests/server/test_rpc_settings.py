@@ -178,6 +178,13 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
             "memory_turn_interval": 10,
             "skill_tool_call_interval": 25,
         },
+        "speech": {
+            "transcription_audio": {
+                "profile": "compatibility",
+                "format": "wav",
+                "sample_rate_hz": 16_000,
+            }
+        },
         "model_tasks": {},
         "session_titles": {"enabled": False, "model": ""},
         "local_models": {"context_windows": {}},

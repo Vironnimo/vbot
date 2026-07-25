@@ -45,6 +45,7 @@ from core.settings.normalizers import (
     normalize_reflection_settings,
     normalize_session_title_settings,
     normalize_skill_directories,
+    normalize_speech_settings,
     normalize_subagent_integer,
     normalize_web_search_settings,
     validate_supported_agent_default_fields,
@@ -89,6 +90,7 @@ SETTINGS_UPDATE_SECTIONS = frozenset(
         "reflection",
         "local_models",
         "session_titles",
+        "speech",
     }
 )
 
@@ -334,6 +336,11 @@ class StorageManager:
                     settings,
                     settings_update["appearance"],
                 )
+            if "speech" in settings_update:
+                updated_sections["speech"] = self._apply_speech_settings(
+                    settings,
+                    settings_update["speech"],
+                )
             if "skills" in settings_update:
                 skills_update = coerce_skills_update(settings_update["skills"])
                 updated_sections["skills"] = {
@@ -438,6 +445,23 @@ class StorageManager:
 
         settings["appearance"] = normalize_appearance_settings(appearance)
         return dict(settings["appearance"])
+
+    def load_speech_settings(self) -> dict[str, Any]:
+        """Return live Provider-facing transcription audio settings."""
+
+        settings = self.load_settings()
+        return normalize_speech_settings(settings.get("speech"))
+
+    def _apply_speech_settings(
+        self,
+        settings: dict[str, Any],
+        speech: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Replace the complete server-owned speech settings section."""
+
+        normalized = normalize_speech_settings(speech)
+        settings["speech"] = normalized
+        return normalized
 
     def load_skill_directory_settings(self) -> list[str]:
         """Return normalized extra skill directory settings."""

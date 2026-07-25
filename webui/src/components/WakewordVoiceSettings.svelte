@@ -1,12 +1,20 @@
 <script>
-  import { onDestroy } from 'svelte';
+  import { onDestroy, onMount, untrack } from 'svelte';
   import Dropdown from './Dropdown.svelte';
   import Button from './ui/Button.svelte';
   import Badge from './ui/Badge.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import Toggle from './ui/Toggle.svelte';
   import { useAutosaveContext } from '$lib/autosave.js';
+  import { updateSettings } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
+  import {
+    TRANSCRIPTION_AUDIO_FORMATS,
+    TRANSCRIPTION_AUDIO_PROFILES,
+    TRANSCRIPTION_AUDIO_SAMPLE_RATES,
+    buildTranscriptionAudioSettingsPayload,
+    normalizeTranscriptionAudio,
+  } from '$lib/settingsView.js';
   import {
     getWakewordStatus,
     setWakewordEnabled,
@@ -40,7 +48,14 @@
     },
   ]);
 
-  let { agents = [], onToast = () => {} } = $props();
+  let {
+    agents = [],
+    settings = null,
+    wakewordAvailable = true,
+    onCommit = () => {},
+    onToast = () => {},
+    onError = () => {},
+  } = $props();
 
   let voiceState = $state(createVoiceSettingsState());
   let lastSaved = $state(null);
@@ -53,6 +68,15 @@
   let modelFileInput = $state();
   let modelActionState = $state('idle');
   let deleteConfirmModel = $state(null);
+  let transcriptionAudio = $state(
+    untrack(() => normalizeTranscriptionAudio(settings)),
+  );
+  let lastSavedTranscriptionAudio = $state(
+    untrack(() => normalizeTranscriptionAudio(settings)),
+  );
+  let transcriptionSaveState = $state('idle');
+  let transcriptionSaveChain = Promise.resolve();
+  let desktopMode = $derived(isDesktop() && wakewordAvailable);
 
   let agentOptions = $derived(
     agents.map((agent) => ({
@@ -82,6 +106,47 @@
       : '',
   );
   let modelActionBusy = $derived(modelActionState !== 'idle');
+  let transcriptionProfileOptions = $derived(
+    TRANSCRIPTION_AUDIO_PROFILES.map((profile) => ({
+      value: profile,
+      label:
+        profile === 'compatibility'
+          ? t(
+              'settings.voice.transcriptionProfileCompatibility',
+              'Maximum compatibility (recommended)',
+            )
+          : profile === 'high_quality'
+            ? t(
+                'settings.voice.transcriptionProfileHighQuality',
+                'High fidelity',
+              )
+            : t('settings.voice.transcriptionProfileCustom', 'Custom'),
+    })),
+  );
+  let transcriptionFormatOptions = $derived(
+    TRANSCRIPTION_AUDIO_FORMATS.map((format) => ({
+      value: format,
+      label:
+        format === 'wav'
+          ? t('settings.voice.transcriptionFormatWav', 'WAV (PCM16)')
+          : t(
+              'settings.voice.transcriptionFormatFlac',
+              'FLAC (lossless PCM16)',
+            ),
+    })),
+  );
+  let transcriptionSampleRateOptions = $derived(
+    TRANSCRIPTION_AUDIO_SAMPLE_RATES.map((sampleRate) => ({
+      value: String(sampleRate),
+      label:
+        sampleRate === 16000
+          ? t(
+              'settings.voice.transcriptionSampleRate16',
+              '16 kHz (recommended for speech)',
+            )
+          : `${sampleRate / 1000} kHz`,
+    })),
+  );
 
   let liveStateLabel = $derived(liveStateText(voiceState.liveState));
   let liveStateDotClass = $derived(liveStateDotColor(voiceState.liveState));
@@ -95,7 +160,11 @@
   const autosaveContext = useAutosaveContext();
   const voiceAutosaveParticipant = {
     flush: flushVoiceAutosave,
-    hasPending: () => saveState === 'saving' || voiceConfigHasChanges(),
+    hasPending: () =>
+      saveState === 'saving' ||
+      transcriptionSaveState === 'saving' ||
+      voiceConfigHasChanges() ||
+      transcriptionAudioHasChanges(),
   };
   const unregisterVoiceAutosave = autosaveContext.register(
     voiceAutosaveParticipant,
@@ -270,25 +339,51 @@
   }
 
   function voiceConfigHasChanges() {
+    if (!desktopMode) {
+      return false;
+    }
     return (
       Object.keys(buildVoiceSettingsPayload(voiceState, lastSaved)).length > 0
+    );
+  }
+
+  function transcriptionAudioHasChanges() {
+    return (
+      transcriptionAudio.profile !== lastSavedTranscriptionAudio.profile ||
+      transcriptionAudio.format !== lastSavedTranscriptionAudio.format ||
+      transcriptionAudio.sample_rate_hz !==
+        lastSavedTranscriptionAudio.sample_rate_hz
     );
   }
 
   async function flushVoiceAutosave() {
     for (let pass = 0; pass < MAX_VOICE_FLUSH_PASSES; pass += 1) {
       const observedChain = saveChain;
-      const saved = await observedChain;
-      if (observedChain !== saveChain) {
+      const observedTranscriptionChain = transcriptionSaveChain;
+      const [saved, transcriptionSaved] = await Promise.all([
+        observedChain,
+        observedTranscriptionChain,
+      ]);
+      if (
+        observedChain !== saveChain ||
+        observedTranscriptionChain !== transcriptionSaveChain
+      ) {
         continue;
       }
-      if (saved === false) {
+      if (saved === false || transcriptionSaved === false) {
         return false;
       }
-      if (!voiceConfigHasChanges()) {
+      if (!voiceConfigHasChanges() && !transcriptionAudioHasChanges()) {
         return true;
       }
-      if ((await saveConfig()) === false) {
+      const saves = [];
+      if (voiceConfigHasChanges()) {
+        saves.push(saveConfig());
+      }
+      if (transcriptionAudioHasChanges()) {
+        saves.push(saveTranscriptionAudio());
+      }
+      if ((await Promise.all(saves)).some((result) => result === false)) {
         return false;
       }
     }
@@ -314,6 +409,65 @@
       });
       return false;
     }
+  }
+
+  function saveTranscriptionAudio() {
+    transcriptionSaveChain = transcriptionSaveChain.then(
+      persistCurrentTranscriptionAudio,
+    );
+    return transcriptionSaveChain;
+  }
+
+  async function persistCurrentTranscriptionAudio() {
+    if (!transcriptionAudioHasChanges()) return true;
+    const savedSnapshot = { ...transcriptionAudio };
+    transcriptionSaveState = 'saving';
+    onError('');
+    try {
+      const nextSettings = await updateSettings(
+        buildTranscriptionAudioSettingsPayload(savedSnapshot),
+      );
+      lastSavedTranscriptionAudio = normalizeTranscriptionAudio(nextSettings);
+      onCommit(nextSettings);
+      transcriptionSaveState = 'saved';
+      return true;
+    } catch (error) {
+      transcriptionSaveState = 'error';
+      onError(
+        `${t('settings.saveError', 'Settings could not be saved.')} ${error.message}`,
+      );
+      return false;
+    }
+  }
+
+  function handleTranscriptionProfileChange(profile) {
+    transcriptionAudio = normalizeTranscriptionAudio({
+      speech: {
+        transcription_audio: {
+          ...transcriptionAudio,
+          profile,
+        },
+      },
+    });
+    void saveTranscriptionAudio();
+  }
+
+  function handleTranscriptionFormatChange(format) {
+    transcriptionAudio = {
+      ...transcriptionAudio,
+      format,
+    };
+    void saveTranscriptionAudio();
+  }
+
+  function handleTranscriptionSampleRateChange(value) {
+    const sampleRate = Number.parseInt(value, 10);
+    if (!TRANSCRIPTION_AUDIO_SAMPLE_RATES.includes(sampleRate)) return;
+    transcriptionAudio = {
+      ...transcriptionAudio,
+      sample_rate_hz: sampleRate,
+    };
+    void saveTranscriptionAudio();
   }
 
   function handleAgentChange(value) {
@@ -471,23 +625,110 @@
     }
   }
 
-  // Load status on component init
-  loadStatus();
-
-  let desktopMode = $derived(isDesktop());
+  onMount(() => {
+    if (isDesktop() && wakewordAvailable) {
+      void loadStatus();
+    } else {
+      loaded = true;
+    }
+  });
 </script>
 
 <div class="voice-settings">
+  <div class="s-row">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.voice.transcriptionProfile', 'Transcription audio')}
+      </div>
+      <div class="s-row-desc">
+        {t(
+          'settings.voice.transcriptionProfileDescription',
+          'The audio sent to the Speech-to-text Model from both the Chat microphone and a command recorded after a wake phrase. Local wakeword detection keeps its optimized 16 kHz stream.',
+        )}
+      </div>
+    </div>
+    <div class="s-row-control">
+      <Dropdown
+        value={transcriptionAudio.profile}
+        options={transcriptionProfileOptions}
+        ariaLabel={t(
+          'settings.voice.transcriptionProfile',
+          'Transcription audio',
+        )}
+        onValueChange={handleTranscriptionProfileChange}
+        disabled={transcriptionSaveState === 'saving'}
+      />
+    </div>
+  </div>
+
+  <div class="s-row">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.voice.transcriptionFormat', 'Format')}
+      </div>
+      <div class="s-row-desc">
+        {t(
+          'settings.voice.transcriptionFormatDescription',
+          'Mono, signed 16-bit audio. WAV has the broadest Provider support; FLAC is lossless and smaller.',
+        )}
+      </div>
+    </div>
+    <div class="s-row-control">
+      <Dropdown
+        value={transcriptionAudio.format}
+        options={transcriptionFormatOptions}
+        ariaLabel={t('settings.voice.transcriptionFormat', 'Format')}
+        onValueChange={handleTranscriptionFormatChange}
+        disabled={transcriptionAudio.profile !== 'custom' ||
+          transcriptionSaveState === 'saving'}
+      />
+    </div>
+  </div>
+
+  <div class="s-row">
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.voice.transcriptionSampleRate', 'Sample rate')}
+      </div>
+      <div class="s-row-desc">
+        {t(
+          'settings.voice.transcriptionSampleRateDescription',
+          '16 kHz is the speech-focused default. Higher rates retain more source detail but create larger uploads.',
+        )}
+      </div>
+    </div>
+    <div class="s-row-control">
+      <Dropdown
+        value={String(transcriptionAudio.sample_rate_hz)}
+        options={transcriptionSampleRateOptions}
+        ariaLabel={t('settings.voice.transcriptionSampleRate', 'Sample rate')}
+        onValueChange={handleTranscriptionSampleRateChange}
+        disabled={transcriptionAudio.profile !== 'custom' ||
+          transcriptionSaveState === 'saving'}
+      />
+    </div>
+  </div>
+
+  <div class="voice-save-state" aria-live="polite">
+    {#if transcriptionSaveState === 'saving'}
+      {t('common.saving', 'Saving…')}
+    {:else if transcriptionSaveState === 'saved' && !transcriptionAudioHasChanges()}
+      {t('common.saved', 'Saved')}
+    {:else if transcriptionSaveState === 'error'}
+      {t('common.saveFailed', 'Not saved')}
+    {/if}
+  </div>
+
   {#if !desktopMode}
     <div class="s-row">
       <div class="s-row-info" style="max-width: 100%">
         <div class="s-row-label">
-          {t('settings.voice.title', 'Voice')}
+          {t('settings.voice.enabled', 'Wakeword listening')}
         </div>
         <div class="s-row-desc">
           {t(
             'settings.voice.desktopOnly',
-            'Voice settings are only available in the vBot Desktop app. Open the Desktop app to configure wakeword detection and voice commands.',
+            'Wakeword listening is configured in the vBot Desktop app. The transcription audio settings above are server-wide.',
           )}
         </div>
       </div>

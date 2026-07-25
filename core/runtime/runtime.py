@@ -492,7 +492,12 @@ class Runtime:
             self._provider_credentials,
             self._storage,
         )
-        self._speech = SpeechService(self._model_tasks, self, self._storage.data_dir)
+        self._speech = SpeechService(
+            self._model_tasks,
+            self,
+            self._storage.data_dir,
+            transcription_audio_getter=self._storage.load_speech_settings,
+        )
         self._image = ImageService(
             self._model_tasks,
             self,

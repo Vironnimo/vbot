@@ -1462,7 +1462,24 @@ export const englishCatalog = Object.freeze({
   'status.switchServer': 'Switch server',
 
   'settings.voice.title': 'Voice',
-  'settings.voice.subtitle': 'Wakeword detection and voice command settings.',
+  'settings.voice.subtitle':
+    'Transcription audio and wakeword command settings.',
+  'settings.voice.transcriptionProfile': 'Transcription audio',
+  'settings.voice.transcriptionProfileDescription':
+    'The audio sent to the Speech-to-text Model from both the Chat microphone and a command recorded after a wake phrase. Local wakeword detection keeps its optimized 16 kHz stream.',
+  'settings.voice.transcriptionProfileCompatibility':
+    'Maximum compatibility (recommended)',
+  'settings.voice.transcriptionProfileHighQuality': 'High fidelity',
+  'settings.voice.transcriptionProfileCustom': 'Custom',
+  'settings.voice.transcriptionFormat': 'Format',
+  'settings.voice.transcriptionFormatDescription':
+    'Mono, signed 16-bit audio. WAV has the broadest Provider support; FLAC is lossless and smaller.',
+  'settings.voice.transcriptionFormatWav': 'WAV (PCM16)',
+  'settings.voice.transcriptionFormatFlac': 'FLAC (lossless PCM16)',
+  'settings.voice.transcriptionSampleRate': 'Sample rate',
+  'settings.voice.transcriptionSampleRateDescription':
+    '16 kHz is the speech-focused default. Higher rates retain more source detail but create larger uploads.',
+  'settings.voice.transcriptionSampleRate16': '16 kHz (recommended for speech)',
   'settings.voice.enabled': 'Wakeword listening',
   'settings.voice.model': 'Wakeword model',
   'settings.voice.models': 'Wakeword phrases',
@@ -1502,7 +1519,7 @@ export const englishCatalog = Object.freeze({
   'settings.voice.lessSensitive': 'Less sensitive',
   'settings.voice.moreSensitive': 'More sensitive',
   'settings.voice.desktopOnly':
-    'Voice settings are only available in the vBot Desktop app. Open the Desktop app to configure wakeword detection and voice commands.',
+    'Wakeword listening is configured in the vBot Desktop app. The transcription audio settings above are server-wide.',
   'settings.voice.mockWarning':
     'Voice is running in demo mode. State changes are simulated; no microphone is heard and no command is sent. Restart Desktop without --mock-wakeword for real detection.',
   'settings.voice.cancelPhrases':
