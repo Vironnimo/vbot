@@ -12,6 +12,7 @@ A fake transport keeps every test off the live network.
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -21,7 +22,11 @@ from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfi
 from core.providers.usage import ProviderUsageService
 from server.rpc.errors import RpcError
 from server.rpc.methods import build_method_handlers
-from server.rpc.provider_usage_methods import _provider_usage
+from server.rpc.provider_usage_methods import (
+    _provider_usage,
+    _provider_usage_history,
+    _provider_usage_history_clear,
+)
 
 # ---------------------------------------------------------------------------
 # Fakes
@@ -61,6 +66,17 @@ class _FakeCredentials:
     def is_usable(self, provider_id: str, connection_id: str | None = None) -> bool:
         return self.has_credentials(provider_id, connection_id)
 
+    def resolve_account_id(
+        self,
+        provider_id: str,
+        local_connection_id: str,
+        account_id: str | None = None,
+    ) -> str:
+        connection_id = f"{provider_id}:{local_connection_id}"
+        if connection_id not in self._usable:
+            raise KeyError(connection_id)
+        return account_id or "default"
+
 
 class _FakeProviders:
     def __init__(self, configs: dict[str, ProviderConfig]) -> None:
@@ -77,6 +93,7 @@ class _FakeRuntime:
         self._providers = _FakeProviders({"openai": _openai_provider_config()})
         self._credentials = _FakeCredentials(usable)
         self._extras = extras or {}
+        self.provider_usage: ProviderUsageService | None = None
 
     @property
     def providers(self) -> _FakeProviders:
@@ -93,7 +110,9 @@ class _FakeRuntime:
         return _getter
 
     def get_connection_token_extra(self, provider_id: str, connection_id: str) -> dict[str, str]:
-        return self._extras.get(connection_id, {})
+        return self._extras.get(
+            connection_id, self._extras.get(connection_id.removesuffix(":default"), {})
+        )
 
 
 class _CapturingService:
@@ -150,6 +169,16 @@ def _openai_state() -> SimpleNamespace:
     return SimpleNamespace(runtime=runtime, usage_service=service)
 
 
+def _openai_history_state(tmp_path: Path) -> SimpleNamespace:
+    state = _openai_state()
+    state.usage_service = ProviderUsageService(
+        state.runtime,
+        transport=_FakeTransport(_OPENAI_BODY),
+        data_root=tmp_path,
+    )
+    return state
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -164,8 +193,17 @@ async def test_provider_usage_returns_report_shape() -> None:
     assert set(result) == {"generated_at", "providers"}
     assert len(result["providers"]) == 1
     snapshot = result["providers"][0]
-    assert set(snapshot) == {"connection", "display_name", "plan", "windows", "error"}
+    assert set(snapshot) == {
+        "connection",
+        "account",
+        "display_name",
+        "plan",
+        "windows",
+        "credits",
+        "error",
+    }
     assert snapshot["connection"] == "openai:subscription"
+    assert snapshot["account"] == "default"
     assert [window["label"] for window in snapshot["windows"]] == ["5h", "Week"]
 
 
@@ -192,19 +230,47 @@ async def test_provider_usage_forwards_connections_filter() -> None:
 
 
 @pytest.mark.asyncio
-async def test_provider_usage_lazily_caches_service_on_state() -> None:
-    # No usable connections → no fetch, no network, empty report.
-    state = SimpleNamespace(runtime=_FakeRuntime(usable=set()))
+async def test_provider_usage_uses_runtime_owned_service() -> None:
+    runtime = _FakeRuntime(usable=set())
+    service = ProviderUsageService(runtime)
+    runtime.provider_usage = service
+    state = SimpleNamespace(runtime=runtime)
 
     result = await _provider_usage(state, {})
-    cached = state.usage_service
     await _provider_usage(state, {})
 
-    assert state.usage_service is cached
+    assert not hasattr(state, "usage_service")
     assert result["providers"] == []
+
+
+@pytest.mark.asyncio
+async def test_provider_usage_history_returns_only_automatic_samples(tmp_path: Path) -> None:
+    state = _openai_history_state(tmp_path)
+    await state.usage_service.collect_history_sample()
+
+    result = _provider_usage_history(
+        state,
+        {"since": "2020-01-01T00:00:00Z", "until": "2099-01-01T00:00:00Z"},
+    )
+
+    assert len(result["samples"]) == 1
+    assert result["samples"][0]["providers"][0]["account"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_provider_usage_history_clear_is_explicit(tmp_path: Path) -> None:
+    state = _openai_history_state(tmp_path)
+    await state.usage_service.collect_history_sample()
+
+    result = _provider_usage_history_clear(state, {})
+
+    assert result == {"deleted_samples": 1, "deleted_files": 1}
+    assert _provider_usage_history(state, {})["samples"] == []
 
 
 def test_provider_usage_is_registered() -> None:
     handlers = build_method_handlers()
 
     assert "provider.usage" in handlers
+    assert "provider.usage_history" in handlers
+    assert "provider.usage_history.clear" in handlers

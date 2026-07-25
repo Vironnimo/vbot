@@ -300,26 +300,32 @@ function makeUsageReport(overrides = {}) {
     providers: [
       {
         connection: 'openai:subscription',
+        account: 'default',
         display_name: 'OpenAI',
         plan: 'Plus',
+        credits: { enabled: true, balance: 25 },
         windows: [
           {
             label: '5h',
             used_percent: 42.5,
             reset_at: '2099-06-16T15:00:00+00:00',
+            window_seconds: 18000,
           },
           {
             label: 'Week',
             used_percent: 88,
             reset_at: '2099-06-20T00:00:00+00:00',
+            window_seconds: 604800,
           },
         ],
         error: null,
       },
       {
         connection: 'github-copilot:oauth',
+        account: 'default',
         display_name: 'GitHub Copilot',
         plan: null,
+        credits: null,
         windows: [],
         error: 'HTTP 401',
       },
@@ -328,11 +334,83 @@ function makeUsageReport(overrides = {}) {
   };
 }
 
+function makeUsageHistoryReport() {
+  const provider = (usedPercent) => ({
+    connection: 'openai:subscription',
+    account: 'default',
+    display_name: 'OpenAI',
+    plan: 'Plus',
+    credits: { enabled: true, balance: 25 },
+    windows: [
+      {
+        label: '5h',
+        used_percent: usedPercent,
+        reset_at: '2026-06-16T15:00:00+00:00',
+        window_seconds: 18000,
+        used_units: null,
+        remaining_units: null,
+        total_units: null,
+        unit: null,
+        unlimited: null,
+      },
+    ],
+    error: null,
+  });
+  return {
+    generated_at: '2026-06-16T12:00:00+00:00',
+    samples: [
+      {
+        sampled_at: '2026-06-16T10:00:00+00:00',
+        providers: [provider(20)],
+      },
+      {
+        sampled_at: '2026-06-16T11:00:00+00:00',
+        providers: [provider(48.5)],
+      },
+    ],
+  };
+}
+
+function makeRunActivityReport() {
+  return {
+    generated_at: '2026-06-16T12:00:00+00:00',
+    window: {
+      since: '2026-06-16T10:00:00+00:00',
+      until: '2026-06-16T11:00:00+00:00',
+    },
+    total_runs: 1,
+    truncated: false,
+    runs: [
+      {
+        agent_id: 'main',
+        session_id: 's1',
+        session_title: 'Investigate limits',
+        run_id: 'r1',
+        status: 'completed',
+        started_at: '2026-06-16T10:15:00+00:00',
+        completed_at: '2026-06-16T10:16:00+00:00',
+        duration_ms: 60000,
+        models: ['openai/gpt-5'],
+        tool_calls: 2,
+        measured_input_tokens: 100,
+        measured_output_tokens: 20,
+        estimated_input_tokens: 5,
+        estimated_output_tokens: 2,
+      },
+    ],
+  };
+}
+
 function routedRpc(usageReport) {
   return (method) =>
     method === 'provider.usage'
       ? Promise.resolve(usageReport)
-      : Promise.resolve(makeReport());
+      : method === 'provider.usage_history'
+        ? Promise.resolve({
+            generated_at: usageReport.generated_at,
+            samples: [],
+          })
+        : Promise.resolve(makeReport());
 }
 
 function openLimitsTab() {
@@ -384,6 +462,9 @@ describe('StatisticsView', () => {
     );
 
     expect(rpcMock).toHaveBeenCalledWith('statistics.report');
+    expect(document.body.textContent).toContain(
+      'subscription limits keep one automatic local snapshot per hour',
+    );
     expect(document.body.textContent).toContain('Run health');
     expect(document.body.textContent).toContain('75.0%');
     expect(document.body.textContent).toContain('Activity & reliability');
@@ -712,6 +793,98 @@ describe('StatisticsView', () => {
     ).toBe(false);
     expect(document.querySelector('.stats-view__generated')).toBeNull();
     expect(document.body.textContent).toContain('updated every 10 seconds');
+  });
+
+  it('renders hourly limit history and correlated vBot Runs', async () => {
+    rpcMock.mockImplementation((method) => {
+      if (method === 'provider.usage') {
+        return Promise.resolve(makeUsageReport());
+      }
+      if (method === 'provider.usage_history') {
+        return Promise.resolve(makeUsageHistoryReport());
+      }
+      if (method === 'statistics.run_activity') {
+        return Promise.resolve(makeRunActivityReport());
+      }
+      return Promise.resolve(makeReport());
+    });
+
+    mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForCondition(() =>
+      document.body.textContent.includes('Per agent'),
+    );
+    openLimitsTab();
+    await waitForCondition(() =>
+      document.body.textContent.includes('Largest observed changes'),
+    );
+    await waitForCondition(() =>
+      document.body.textContent.includes('Investigate limits'),
+    );
+
+    expect(document.body.textContent).toContain('Subscription flight recorder');
+    expect(document.body.textContent).toContain('+28.5 pp');
+    expect(document.body.textContent).toContain('Measured tokens');
+    expect(document.body.textContent).toContain('120');
+    expect(document.body.textContent).toContain(
+      'Parallel use outside vBot may also change the Subscription.',
+    );
+    expect(
+      rpcMock.mock.calls.some(
+        ([method, params]) =>
+          method === 'statistics.run_activity' &&
+          params.since === '2026-06-16T10:00:00+00:00' &&
+          params.until === '2026-06-16T11:00:00+00:00',
+      ),
+    ).toBe(true);
+  });
+
+  it('clears hourly limit history only after confirmation', async () => {
+    rpcMock.mockImplementation((method) => {
+      if (method === 'provider.usage') {
+        return Promise.resolve(makeUsageReport());
+      }
+      if (method === 'provider.usage_history') {
+        return Promise.resolve(makeUsageHistoryReport());
+      }
+      if (method === 'statistics.run_activity') {
+        return Promise.resolve(makeRunActivityReport());
+      }
+      if (method === 'provider.usage_history.clear') {
+        return Promise.resolve({ deleted_samples: 2, deleted_files: 1 });
+      }
+      return Promise.resolve(makeReport());
+    });
+
+    mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForCondition(() =>
+      document.body.textContent.includes('Per agent'),
+    );
+    openLimitsTab();
+    await waitForCondition(() =>
+      document.body.textContent.includes('Largest observed changes'),
+    );
+
+    const deleteButton = [...document.querySelectorAll('button')].find(
+      (button) => button.textContent.trim() === 'Delete history',
+    );
+    deleteButton.click();
+    flushSync();
+    expect(document.body.textContent).toContain('Delete limit history?');
+
+    const confirmButton = [...document.querySelectorAll('button')]
+      .filter((button) => button.textContent.trim() === 'Delete history')
+      .at(-1);
+    confirmButton.click();
+    await waitForCondition(() =>
+      document.body.textContent.includes('2 historical snapshots deleted.'),
+    );
+
+    expect(
+      rpcMock.mock.calls.some(
+        ([method]) => method === 'provider.usage_history.clear',
+      ),
+    ).toBe(true);
+    expect(document.body.textContent).toContain('The flight recorder is ready');
   });
 
   it('refreshes provider usage every ten seconds only while Limits is visible', async () => {

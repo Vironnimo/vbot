@@ -67,6 +67,9 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
         providerParams(providerId, connectionId, account),
       ),
     getProviderUsage: () => call('provider.usage'),
+    getProviderUsageHistory: (params = {}) =>
+      call('provider.usage_history', params),
+    clearProviderUsageHistory: () => call('provider.usage_history.clear', {}),
     listProviderRoutingOptions: (params) =>
       call('provider.routing_options', params),
     listChannels: () => call('channel.list'),
@@ -80,6 +83,8 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     reloadExtensions: () => call('extensions.reload'),
     setExtensionSecret: (params) => call('extensions.set_secret', params),
     getStatisticsReport: () => call('statistics.report'),
+    getStatisticsRunActivity: (params) =>
+      call('statistics.run_activity', params),
     listProjects: () => call('project.list'),
     showProject: (projectId) => call('project.show', { project_id: projectId }),
     detectProject: (cwd) => call('project.detect', { cwd }),

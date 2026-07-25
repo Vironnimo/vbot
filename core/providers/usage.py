@@ -18,12 +18,16 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
+from contextlib import suppress
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from math import isfinite
+from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
 
+from core.providers.accounts import DEFAULT_ACCOUNT_ID, compose_connection_id
 from core.providers.openai import CODEX_EXTRA_HEADERS
 from core.providers.openai_subscription_auth import (
     CHATGPT_ACCOUNT_ID_EXTRA_KEY,
@@ -35,6 +39,12 @@ from core.providers.token_getter import (
     GITHUB_OAUTH_TOKEN_EXTRA_KEY,
     TokenGetter,
 )
+from core.providers.usage_history import (
+    ProviderUsageHistoryStore,
+    UsageHistoryClearResult,
+    UsageHistoryError,
+    UsageHistoryReport,
+)
 from core.utils.errors import ConfigError
 from core.utils.logging import get_logger
 
@@ -43,6 +53,7 @@ _LOGGER = get_logger("providers.usage")
 DEFAULT_USAGE_TIMEOUT_SECONDS = 8.0
 DEFAULT_USAGE_CACHE_TTL_SECONDS = 10.0
 DEFAULT_USAGE_ERROR_CACHE_TTL_SECONDS = 60.0
+DEFAULT_USAGE_HISTORY_INTERVAL_SECONDS = 60 * 60
 
 OPENAI_USAGE_CONNECTION = "openai:subscription"
 COPILOT_USAGE_CONNECTION = "github-copilot:oauth"
@@ -89,6 +100,12 @@ class UsageWindow:
     label: str
     used_percent: float
     reset_at: str | None = None
+    window_seconds: int | None = None
+    used_units: float | None = None
+    remaining_units: float | None = None
+    total_units: float | None = None
+    unit: str | None = None
+    unlimited: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Return the JSON-serializable form of this window."""
@@ -97,7 +114,26 @@ class UsageWindow:
             "label": self.label,
             "used_percent": self.used_percent,
             "reset_at": self.reset_at,
+            "window_seconds": self.window_seconds,
+            "used_units": self.used_units,
+            "remaining_units": self.remaining_units,
+            "total_units": self.total_units,
+            "unit": self.unit,
+            "unlimited": self.unlimited,
         }
+
+
+@dataclass(frozen=True)
+class UsageCredits:
+    """Structured subscription-credit state when a Provider exposes it."""
+
+    enabled: bool
+    balance: float | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the JSON-serializable credit projection."""
+
+        return {"enabled": self.enabled, "balance": self.balance}
 
 
 @dataclass(frozen=True)
@@ -105,9 +141,11 @@ class ProviderUsageSnapshot:
     """Per-connection usage state, or a clean error/unavailable marker."""
 
     connection: str
+    account: str
     display_name: str
     plan: str | None = None
     windows: list[UsageWindow] = field(default_factory=list)
+    credits: UsageCredits | None = None
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -115,9 +153,11 @@ class ProviderUsageSnapshot:
 
         return {
             "connection": self.connection,
+            "account": self.account,
             "display_name": self.display_name,
             "plan": self.plan,
             "windows": [window.to_dict() for window in self.windows],
+            "credits": self.credits.to_dict() if self.credits is not None else None,
             "error": self.error,
         }
 
@@ -153,6 +193,13 @@ class _ProviderLookupProtocol(Protocol):
 
 class _ProviderCredentialsProtocol(Protocol):
     def is_usable(self, provider_id: str, connection_id: str | None = None) -> bool: ...
+
+    def resolve_account_id(
+        self,
+        provider_id: str,
+        local_connection_id: str,
+        account_id: str | None = None,
+    ) -> str: ...
 
 
 class UsageProbeRuntime(Protocol):
@@ -231,10 +278,21 @@ class _SupportedConnection:
 
     provider_id: str
     local_connection_id: str
+    account_id: str = DEFAULT_ACCOUNT_ID
 
     @property
     def connection_id(self) -> str:
         return f"{self.provider_id}:{self.local_connection_id}"
+
+    @property
+    def target_id(self) -> str:
+        """Return the exact Connection+Account target used for credentials/cache."""
+
+        return compose_connection_id(
+            self.provider_id,
+            self.local_connection_id,
+            self.account_id,
+        )
 
 
 _SUPPORTED_CONNECTIONS: tuple[_SupportedConnection, ...] = (
@@ -259,25 +317,65 @@ class ProviderUsageService:
         runtime: UsageProbeRuntime,
         *,
         transport: UsageTransport | None = None,
+        history_store: ProviderUsageHistoryStore | None = None,
+        data_root: str | Path | None = None,
         timeout: float = DEFAULT_USAGE_TIMEOUT_SECONDS,
         cache_ttl: float = DEFAULT_USAGE_CACHE_TTL_SECONDS,
         error_cache_ttl: float = DEFAULT_USAGE_ERROR_CACHE_TTL_SECONDS,
+        history_interval: float = DEFAULT_USAGE_HISTORY_INTERVAL_SECONDS,
         monotonic: Callable[[], float] = time.monotonic,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._runtime = runtime
         self._transport = transport or HttpxUsageTransport()
+        self._history = history_store or (
+            ProviderUsageHistoryStore(data_root) if data_root is not None else None
+        )
         self._timeout = timeout
         self._cache_ttl = cache_ttl
         self._error_cache_ttl = error_cache_ttl
+        self._history_interval = history_interval
         self._monotonic = monotonic
+        self._clock = clock
         self._cache: dict[str, tuple[float, float, ProviderUsageSnapshot]] = {}
         self._fetch_locks: dict[str, asyncio.Lock] = {}
+        self._history_task: asyncio.Task[None] | None = None
+        self._history_started = False
         # Only connections with a registered fetcher are queried.
         self._fetchers: dict[str, _Fetcher] = {
             OPENAI_USAGE_CONNECTION: self._fetch_openai,
             COPILOT_USAGE_CONNECTION: self._fetch_copilot,
             MINIMAX_USAGE_CONNECTION: self._fetch_minimax,
         }
+
+    def start(self) -> None:
+        """Start the automatic history sampler on the current event loop."""
+
+        if self._history_started or self._history is None:
+            return
+        self._history_started = True
+        self._history_task = asyncio.create_task(
+            self._history_loop(),
+            name="provider-usage-history",
+        )
+
+    def stop(self) -> None:
+        """Cancel automatic sampling without awaiting task completion."""
+
+        self._history_started = False
+        task = self._history_task
+        self._history_task = None
+        if task is not None:
+            task.cancel()
+
+    async def aclose(self) -> None:
+        """Cancel and await the automatic sampler."""
+
+        task = self._history_task
+        self.stop()
+        if task is not None:
+            with suppress(asyncio.CancelledError):
+                await task
 
     async def report(self, connections: list[str] | None = None) -> UsageReport:
         """Return usage snapshots for every supported, logged-in connection.
@@ -292,40 +390,119 @@ class ProviderUsageService:
         targets = self._select_targets(requested)
         snapshots = await asyncio.gather(*(self._snapshot_for(target) for target in targets))
         meaningful = [snapshot for snapshot in snapshots if _is_meaningful(snapshot)]
-        return UsageReport(generated_at=_now_iso(), providers=meaningful)
+        return UsageReport(generated_at=self._now_iso(), providers=meaningful)
+
+    def history_report(
+        self,
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> UsageHistoryReport:
+        """Return durable automatic samples, never the 10-second live polls."""
+
+        if self._history is None:
+            return UsageHistoryReport(generated_at=self._now_iso())
+        return self._history.report(since=since, until=until)
+
+    def clear_history(self) -> UsageHistoryClearResult:
+        """Explicitly delete all durable automatic usage samples."""
+
+        if self._history is None:
+            return UsageHistoryClearResult(deleted_samples=0, deleted_files=0)
+        return self._history.clear()
+
+    async def collect_history_sample(self) -> bool:
+        """Fetch/coalesce live state and persist at most one automatic sample."""
+
+        if self._history is None:
+            return False
+        try:
+            report = await self.report()
+            return self._history.append(
+                report.generated_at,
+                [snapshot.to_dict() for snapshot in report.providers],
+            )
+        except UsageHistoryError as exc:
+            _LOGGER.warning("Provider usage history sample could not be stored: %s", exc)
+            return False
+
+    async def _history_loop(self) -> None:
+        try:
+            delay = self._initial_history_delay()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            while self._history_started:
+                await self.collect_history_sample()
+                await asyncio.sleep(self._history_interval)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — background sampling must fail soft
+            _LOGGER.warning("Provider usage history sampler stopped unexpectedly: %s", exc)
+        finally:
+            self._history_started = False
+            self._history_task = None
+
+    def _initial_history_delay(self) -> float:
+        if self._history is None:
+            return self._history_interval
+        try:
+            latest = self._history.latest_sampled_at()
+        except UsageHistoryError as exc:
+            _LOGGER.warning("Provider usage history freshness could not be read: %s", exc)
+            return 0.0
+        if latest is None:
+            return 0.0
+        elapsed = (self._now() - latest).total_seconds()
+        return max(0.0, self._history_interval - max(0.0, elapsed))
+
+    def _now(self) -> datetime:
+        now = self._clock()
+        if now.tzinfo is None:
+            return now.replace(tzinfo=UTC)
+        return now.astimezone(UTC)
+
+    def _now_iso(self) -> str:
+        return self._now().isoformat()
 
     def _select_targets(self, requested: set[str] | None) -> list[_SupportedConnection]:
         targets: list[_SupportedConnection] = []
-        for connection in _SUPPORTED_CONNECTIONS:
-            if connection.connection_id not in self._fetchers:
+        for supported in _SUPPORTED_CONNECTIONS:
+            if supported.connection_id not in self._fetchers:
                 continue
-            if requested is not None and connection.connection_id not in requested:
+            if requested is not None and supported.connection_id not in requested:
                 continue
-            if not self._connection_usable(connection):
+            target = self._resolve_target(supported)
+            if target is None:
                 continue
-            targets.append(connection)
+            targets.append(target)
         return targets
 
-    def _connection_usable(self, connection: _SupportedConnection) -> bool:
+    def _resolve_target(self, connection: _SupportedConnection) -> _SupportedConnection | None:
         try:
-            return self._runtime.provider_credentials.is_usable(
+            if not self._runtime.provider_credentials.is_usable(
                 connection.provider_id, connection.connection_id
+            ):
+                return None
+            account_id = self._runtime.provider_credentials.resolve_account_id(
+                connection.provider_id,
+                connection.local_connection_id,
             )
         except (KeyError, ConfigError):
-            return False
+            return None
+        return replace(connection, account_id=account_id)
 
     async def _snapshot_for(self, connection: _SupportedConnection) -> ProviderUsageSnapshot:
-        cached = self._cached_snapshot(connection.connection_id)
+        cached = self._cached_snapshot(connection.target_id)
         if cached is not None:
             return cached
 
-        lock = self._fetch_locks.setdefault(connection.connection_id, asyncio.Lock())
+        lock = self._fetch_locks.setdefault(connection.target_id, asyncio.Lock())
         async with lock:
-            cached = self._cached_snapshot(connection.connection_id)
+            cached = self._cached_snapshot(connection.target_id)
             if cached is not None:
                 return cached
             snapshot = await self._run_fetcher(connection)
-            self._store_cache(connection.connection_id, snapshot)
+            self._store_cache(connection.target_id, snapshot)
             return snapshot
 
     async def _run_fetcher(self, connection: _SupportedConnection) -> ProviderUsageSnapshot:
@@ -340,9 +517,7 @@ class ProviderUsageService:
             # Blind Copilot/MiniMax parsing may raise unexpected shapes; convert
             # any non-fetch error into a clean "unavailable" snapshot and log the
             # real cause for debugging (no token data is included in the message).
-            _LOGGER.warning(
-                "Usage fetch failed for connection %s: %s", connection.connection_id, exc
-            )
+            _LOGGER.warning("Usage fetch failed for target %s: %s", connection.target_id, exc)
             return self._error_snapshot(connection, "Unavailable")
 
     def _error_snapshot(
@@ -350,6 +525,7 @@ class ProviderUsageService:
     ) -> ProviderUsageSnapshot:
         return ProviderUsageSnapshot(
             connection=connection.connection_id,
+            account=connection.account_id,
             display_name=self._display_name(connection),
             error=message,
         )
@@ -384,13 +560,13 @@ class ProviderUsageService:
         base_url = connection_config.base_url or provider.base_url
 
         token_getter = self._runtime.get_connection_token_getter(
-            connection.provider_id, connection.connection_id
+            connection.provider_id, connection.target_id
         )
         token = await token_getter()
         account_id = extract_chatgpt_account_id(token)
         if not account_id:
             extra = self._runtime.get_connection_token_extra(
-                connection.provider_id, connection.connection_id
+                connection.provider_id, connection.target_id
             )
             account_id = extra.get(CHATGPT_ACCOUNT_ID_EXTRA_KEY) or None
         if not account_id:
@@ -402,14 +578,19 @@ class ProviderUsageService:
             **CODEX_EXTRA_HEADERS,
         }
         body = await self._get_json(_join_url(base_url, OPENAI_USAGE_PATH), headers)
-        return _parse_openai_usage(connection.connection_id, self._display_name(connection), body)
+        return _parse_openai_usage(
+            connection.connection_id,
+            self._display_name(connection),
+            body,
+            account=connection.account_id,
+        )
 
     async def _fetch_copilot(self, connection: _SupportedConnection) -> ProviderUsageSnapshot:
         # The Copilot usage endpoint authenticates with the GitHub OAuth token
         # (token-store ``extra``) under GitHub's ``token`` scheme — NOT the
         # exchanged Copilot bearer.
         extra = self._runtime.get_connection_token_extra(
-            connection.provider_id, connection.connection_id
+            connection.provider_id, connection.target_id
         )
         github_oauth_token = extra.get(GITHUB_OAUTH_TOKEN_EXTRA_KEY)
         if not github_oauth_token:
@@ -422,7 +603,12 @@ class ProviderUsageService:
             "Editor-Version": COPILOT_EDITOR_VERSION,
         }
         body = await self._get_json(COPILOT_USAGE_URL, headers)
-        return _parse_copilot_usage(connection.connection_id, self._display_name(connection), body)
+        return _parse_copilot_usage(
+            connection.connection_id,
+            self._display_name(connection),
+            body,
+            account=connection.account_id,
+        )
 
     async def _fetch_minimax(self, connection: _SupportedConnection) -> ProviderUsageSnapshot:
         provider = self._runtime.providers.get(connection.provider_id)
@@ -430,12 +616,17 @@ class ProviderUsageService:
         base_url = connection_config.base_url or provider.base_url
 
         token_getter = self._runtime.get_connection_token_getter(
-            connection.provider_id, connection.connection_id
+            connection.provider_id, connection.target_id
         )
         token = await token_getter()
         headers = {connection_config.auth.header: f"{connection_config.auth.prefix}{token}"}
         body = await self._get_json(_join_url(base_url, MINIMAX_USAGE_PATH), headers)
-        return _parse_minimax_usage(connection.connection_id, self._display_name(connection), body)
+        return _parse_minimax_usage(
+            connection.connection_id,
+            self._display_name(connection),
+            body,
+            account=connection.account_id,
+        )
 
     async def _get_json(self, url: str, headers: Mapping[str, str]) -> Any:
         response = await self._transport.get(url, headers=headers, timeout=self._timeout)
@@ -452,7 +643,13 @@ class ProviderUsageService:
 # ---------------------------------------------------------------------------
 
 
-def _parse_openai_usage(connection_id: str, display_name: str, body: Any) -> ProviderUsageSnapshot:
+def _parse_openai_usage(
+    connection_id: str,
+    display_name: str,
+    body: Any,
+    *,
+    account: str = DEFAULT_ACCOUNT_ID,
+) -> ProviderUsageSnapshot:
     rate_limit = body.get("rate_limit") if isinstance(body, Mapping) else None
     windows: list[UsageWindow] = []
     if isinstance(rate_limit, Mapping):
@@ -464,9 +661,11 @@ def _parse_openai_usage(connection_id: str, display_name: str, body: Any) -> Pro
             windows.append(secondary)
     return ProviderUsageSnapshot(
         connection=connection_id,
+        account=account,
         display_name=display_name,
-        plan=_openai_plan(body),
+        plan=_first_string(body, ("plan_type",)) if isinstance(body, Mapping) else None,
         windows=windows,
+        credits=_openai_credits(body),
     )
 
 
@@ -480,31 +679,22 @@ def _openai_window(raw: Any, label_for: Callable[[Any], str]) -> UsageWindow | N
         label=label_for(raw.get("limit_window_seconds")),
         used_percent=clamp_percent(used_percent),
         reset_at=_epoch_to_iso(raw.get("reset_at")),
+        window_seconds=_positive_int(raw.get("limit_window_seconds")),
     )
 
 
-def _openai_plan(body: Any) -> str | None:
+def _openai_credits(body: Any) -> UsageCredits | None:
+    """Keep OpenAI credit state structured instead of merging it into plan."""
+
     if not isinstance(body, Mapping):
         return None
-    plan_type = body.get("plan_type")
-    plan = plan_type.strip() if isinstance(plan_type, str) and plan_type.strip() else None
-    balance = _credits_balance(body.get("credits"))
-    if plan is None:
-        return f"{balance} credits" if balance is not None else None
-    if balance is not None:
-        return f"{plan} · {balance} credits"
-    return plan
-
-
-def _credits_balance(credits: Any) -> int | None:
-    # The live `/wham/usage` body reports `balance` as a STRING ("0") gated by a
-    # `has_credits` flag, so only surface a positive, credit-enabled balance.
-    if not isinstance(credits, Mapping) or credits.get("has_credits") is not True:
+    credits = body.get("credits")
+    if not isinstance(credits, Mapping) or not isinstance(credits.get("has_credits"), bool):
         return None
-    balance = _coerce_number(credits.get("balance"))
-    if balance is not None and balance > 0:
-        return int(balance)
-    return None
+    return UsageCredits(
+        enabled=credits["has_credits"],
+        balance=_coerce_number(credits.get("balance")),
+    )
 
 
 def _primary_window_label(seconds: Any) -> str:
@@ -528,7 +718,13 @@ def _secondary_window_label(seconds: Any) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _parse_copilot_usage(connection_id: str, display_name: str, body: Any) -> ProviderUsageSnapshot:
+def _parse_copilot_usage(
+    connection_id: str,
+    display_name: str,
+    body: Any,
+    *,
+    account: str = DEFAULT_ACCOUNT_ID,
+) -> ProviderUsageSnapshot:
     quota_snapshots = body.get("quota_snapshots") if isinstance(body, Mapping) else None
     reset_at = _date_to_iso(body.get("quota_reset_date")) if isinstance(body, Mapping) else None
     windows: list[UsageWindow] = []
@@ -539,6 +735,7 @@ def _parse_copilot_usage(connection_id: str, display_name: str, body: Any) -> Pr
                 windows.append(window)
     return ProviderUsageSnapshot(
         connection=connection_id,
+        account=account,
         display_name=display_name,
         plan=_copilot_plan(body),
         windows=windows,
@@ -551,10 +748,17 @@ def _copilot_window(raw: Any, label: str, reset_at: str | None) -> UsageWindow |
     percent_remaining = _as_number(raw.get("percent_remaining"))
     if percent_remaining is None:
         return None
+    remaining = _as_number(raw.get("remaining"))
+    total = _as_number(raw.get("entitlement"))
     return UsageWindow(
         label=label,
         used_percent=clamp_percent(100.0 - percent_remaining),
         reset_at=reset_at,
+        used_units=(total - remaining) if total is not None and remaining is not None else None,
+        remaining_units=remaining,
+        total_units=total,
+        unit="interactions" if total is not None or remaining is not None else None,
+        unlimited=raw.get("unlimited") if isinstance(raw.get("unlimited"), bool) else None,
     )
 
 
@@ -570,7 +774,13 @@ def _copilot_plan(body: Any) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def _parse_minimax_usage(connection_id: str, display_name: str, body: Any) -> ProviderUsageSnapshot:
+def _parse_minimax_usage(
+    connection_id: str,
+    display_name: str,
+    body: Any,
+    *,
+    account: str = DEFAULT_ACCOUNT_ID,
+) -> ProviderUsageSnapshot:
     model_remains = body.get("model_remains") if isinstance(body, Mapping) else None
     if not isinstance(model_remains, list):
         raise UsageFetchError("Unsupported response shape")
@@ -587,9 +797,15 @@ def _parse_minimax_usage(connection_id: str, display_name: str, body: Any) -> Pr
         label=_minimax_window_label(entry),
         used_percent=clamp_percent((total - remaining) / total * 100.0),
         reset_at=_minimax_reset_at(entry),
+        window_seconds=_minimax_window_seconds(entry),
+        used_units=total - remaining,
+        remaining_units=remaining,
+        total_units=total,
+        unit="requests",
     )
     return ProviderUsageSnapshot(
         connection=connection_id,
+        account=account,
         display_name=display_name,
         plan=_first_string(body, _MINIMAX_PLAN_KEYS) if isinstance(body, Mapping) else None,
         windows=[window],
@@ -621,6 +837,13 @@ def _minimax_window_label(entry: Mapping[str, Any]) -> str:
         return f"{round(minutes)}m"
     model_name = entry.get("model_name")
     return model_name if isinstance(model_name, str) and model_name else "Plan"
+
+
+def _minimax_window_seconds(entry: Mapping[str, Any]) -> int | None:
+    minutes = _as_number(entry.get("current_interval_minutes"))
+    if minutes is None or minutes <= 0:
+        return None
+    return round(minutes * 60)
 
 
 def _minimax_reset_at(entry: Mapping[str, Any]) -> str | None:
@@ -694,7 +917,8 @@ def _as_number(value: Any) -> float | None:
 
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
-    return float(value)
+    number = float(value)
+    return number if isfinite(number) else None
 
 
 def _coerce_number(value: Any) -> float | None:
@@ -705,9 +929,10 @@ def _coerce_number(value: Any) -> float | None:
         return number
     if isinstance(value, str):
         try:
-            return float(value.strip())
+            number = float(value.strip())
         except ValueError:
             return None
+        return number if isfinite(number) else None
     return None
 
 
@@ -716,12 +941,15 @@ def _is_positive_number(value: Any) -> bool:
     return number is not None and number > 0
 
 
+def _positive_int(value: Any) -> int | None:
+    number = _as_number(value)
+    if number is None or number <= 0:
+        return None
+    return round(number)
+
+
 def _is_meaningful(snapshot: ProviderUsageSnapshot) -> bool:
     return bool(snapshot.windows) or bool(snapshot.error)
-
-
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def _join_url(base_url: str, path: str) -> str:

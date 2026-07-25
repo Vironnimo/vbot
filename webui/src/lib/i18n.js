@@ -1478,7 +1478,7 @@ export const englishCatalog = Object.freeze({
   'statistics.eyebrow': 'Usage & activity',
   'statistics.title': 'Statistics',
   'statistics.subtitle':
-    'Aggregated on demand from your session history — no extra data is stored.',
+    'Session activity is aggregated on demand; subscription limits keep one automatic local snapshot per hour.',
   'statistics.loading': 'Loading statistics…',
   'statistics.loadError': 'Statistics could not be loaded.',
   'statistics.empty': 'No activity recorded yet.',
@@ -1665,7 +1665,7 @@ export const englishCatalog = Object.freeze({
   'statistics.skills.origin.project': 'project: {detail}',
   'statistics.subview.limits': 'Limits',
   'statistics.limits.note':
-    'Live subscription usage, updated every 10 seconds while this tab is visible — nothing is stored.',
+    'Live subscription usage, updated every 10 seconds while this tab is visible. Only the hourly automatic snapshot is stored.',
   'statistics.limits.loading': 'Loading usage limits…',
   'statistics.limits.loadError': 'Usage limits could not be loaded.',
   'statistics.limits.empty': 'No subscription providers connected.',

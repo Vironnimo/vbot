@@ -174,6 +174,66 @@ def test_agent_with_no_sessions_counts_agent_only(tmp_path: Path) -> None:
     assert report.overview.agents[0].sessions == 0
 
 
+def test_run_activity_returns_overlapping_runs_with_local_usage(tmp_path: Path) -> None:
+    service, manager = _service(tmp_path, ["main"])
+    session_id = _write_session(
+        manager,
+        "main",
+        [
+            _assistant(
+                model="openai/gpt-5",
+                at=BASE,
+                usage={"input_tokens": 100, "output_tokens": 20},
+            ),
+            _assistant(
+                model="openai/gpt-5",
+                at=BASE + timedelta(minutes=1),
+                usage={"input_tokens": 10, "output_tokens": 3, "estimated": True},
+            ),
+            _tool(
+                name="read",
+                at=BASE + timedelta(minutes=2),
+                envelope=tool_success({"text": "ok"}),
+                duration_ms=20,
+            ),
+            _run_summary(
+                status="completed",
+                at=BASE,
+                duration_ms=10 * 60 * 1000,
+                run_id="r1",
+            ),
+            _assistant(
+                model="openai/gpt-5",
+                at=BASE + timedelta(hours=2),
+                usage={"input_tokens": 200, "output_tokens": 30},
+            ),
+            _run_summary(
+                status="completed",
+                at=BASE + timedelta(hours=2),
+                duration_ms=100,
+                run_id="r2",
+            ),
+        ],
+    )
+
+    report = service.run_activity(
+        since=BASE + timedelta(minutes=5),
+        until=BASE + timedelta(minutes=6),
+    )
+
+    assert report.total_runs == 1
+    assert report.truncated is False
+    run = report.runs[0]
+    assert run.session_id == session_id
+    assert run.run_id == "r1"
+    assert run.models == ["openai/gpt-5"]
+    assert run.tool_calls == 1
+    assert run.measured_input_tokens == 100
+    assert run.measured_output_tokens == 20
+    assert run.estimated_input_tokens == 10
+    assert run.estimated_output_tokens == 3
+
+
 def test_chat_messages_and_session_records_are_separate(tmp_path: Path) -> None:
     service, manager = _service(tmp_path, ["main"])
     _write_session(

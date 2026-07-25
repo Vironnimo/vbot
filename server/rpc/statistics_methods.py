@@ -1,9 +1,9 @@
 """Statistics RPC handler.
 
-``statistics.report`` returns a full read-only :class:`StatisticsReport` computed
-on demand from persisted Sessions (see ``.vorch/domain-maps/statistics.md``). It accepts
-an optional ``{since, until}`` ISO-8601 UTC window and contains no opaque provider
-metadata by construction (no raw tool arguments, no reasoning data).
+``statistics.report`` returns a full read-only :class:`StatisticsReport`
+computed on demand from persisted Sessions. ``statistics.run_activity`` returns
+the bounded Run projection overlapping a required time window for Provider-limit
+correlation. Neither stores derived data or exposes raw Tool arguments/reasoning.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from server.rpc.validation import _reject_unsupported
 JsonObject = dict[str, Any]
 
 _SUPPORTED_FIELDS = {"since", "until"}
+_RUN_ACTIVITY_SUPPORTED_FIELDS = {"since", "until"}
 
 
 def _statistics_report(state: Any, params: JsonObject) -> JsonObject:
@@ -32,6 +33,29 @@ def _statistics_report(state: Any, params: JsonObject) -> JsonObject:
 
     report = _statistics_service(state).report(since=since, until=until)
     return report.to_dict()
+
+
+def _statistics_run_activity(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(
+        params,
+        _RUN_ACTIVITY_SUPPORTED_FIELDS,
+        "statistics.run_activity",
+    )
+    since = _required_utc_timestamp(params, "since")
+    until = _required_utc_timestamp(params, "until")
+    if since > until:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.since must not be after params.until")
+    return _statistics_service(state).run_activity(since=since, until=until).to_dict()
+
+
+def _required_utc_timestamp(params: JsonObject, key: str) -> datetime:
+    parsed = _optional_utc_timestamp(params, key)
+    if parsed is None:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.{key} must be an ISO 8601 timestamp string",
+        )
+    return parsed
 
 
 def _optional_utc_timestamp(params: JsonObject, key: str) -> datetime | None:
@@ -109,4 +133,7 @@ def _statistics_service(state: Any) -> StatisticsService:
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return the statistics RPC handlers."""
 
-    return {"statistics.report": _statistics_report}
+    return {
+        "statistics.report": _statistics_report,
+        "statistics.run_activity": _statistics_run_activity,
+    }

@@ -81,6 +81,7 @@ TOP_LONGEST_RUNS = 10
 TOP_SESSIONS = 20
 TOP_CACHE_SESSIONS = 20
 TOP_CACHE_BREAK_INCIDENTS = 20
+MAX_RUN_ACTIVITY = 200
 
 # Prompt-cache-break heuristic (best-effort, derived — the cache-side sibling of
 # ``derived_fallback_runs``). A measured turn is evaluated against its
@@ -360,6 +361,40 @@ class LongestRun:
     started_at: str | None
     completed_at: str | None
     models: list[str]
+
+
+@dataclass(frozen=True)
+class RunActivity:
+    """One persisted Run overlapping a selected Provider-limit interval."""
+
+    agent_id: str
+    session_id: str
+    session_title: str | None
+    run_id: str
+    status: str
+    started_at: str
+    completed_at: str
+    duration_ms: int
+    models: list[str]
+    tool_calls: int
+    measured_input_tokens: int
+    measured_output_tokens: int
+    estimated_input_tokens: int
+    estimated_output_tokens: int
+
+
+@dataclass(frozen=True)
+class RunActivityReport:
+    """Bounded Run details for one inspected historical limit interval."""
+
+    generated_at: str
+    window: WindowInfo
+    total_runs: int
+    truncated: bool
+    runs: list[RunActivity]
+
+    def to_dict(self) -> JsonObject:
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -1418,6 +1453,44 @@ class StatisticsService:
             )
         return aggregator.build(self._skill_inventory)
 
+    def run_activity(
+        self,
+        *,
+        since: datetime,
+        until: datetime,
+    ) -> RunActivityReport:
+        """Return persisted Runs whose execution overlaps the selected interval."""
+
+        runs: list[RunActivity] = []
+        for agent in self._agents.list():
+            self._scan_run_activity_scope(
+                runs,
+                project_id=None,
+                agent_id=agent.id,
+                display_key=agent.id,
+                since=since,
+                until=until,
+            )
+        for project_id, agent_id in self._project_scopes():
+            self._scan_run_activity_scope(
+                runs,
+                project_id=project_id,
+                agent_id=agent_id,
+                display_key=f"{agent_id}{PROJECT_ADDRESS_SEPARATOR}{project_id}",
+                since=since,
+                until=until,
+            )
+
+        runs.sort(key=lambda run: run.started_at, reverse=True)
+        total_runs = len(runs)
+        return RunActivityReport(
+            generated_at=datetime.now(UTC).isoformat(),
+            window=WindowInfo(since=since.isoformat(), until=until.isoformat()),
+            total_runs=total_runs,
+            truncated=total_runs > MAX_RUN_ACTIVITY,
+            runs=runs[:MAX_RUN_ACTIVITY],
+        )
+
     def _project_scopes(self) -> list[tuple[str, str]]:
         """Return ``(project_id, agent_id)`` for every session-owning project agent."""
         if self._projects is None:
@@ -1446,10 +1519,92 @@ class StatisticsService:
             messages = self._sessions.get(agent_id, session_id, project_id).load()
             aggregator.process_session(display_key, session_id, messages, summary)
 
+    def _scan_run_activity_scope(
+        self,
+        runs: list[RunActivity],
+        *,
+        project_id: str | None,
+        agent_id: str,
+        display_key: str,
+        since: datetime,
+        until: datetime,
+    ) -> None:
+        for summary in self._sessions.list_with_metadata(agent_id, project_id):
+            session_id = str(summary["id"])
+            title = summary.get("title")
+            session_title = title if isinstance(title, str) and title else None
+            messages = self._sessions.get(agent_id, session_id, project_id).load()
+            activity_messages = _session_activity_messages(messages, summary)
+            group: list[ChatMessage] = []
+            for message in activity_messages:
+                if message.role != "run_summary":
+                    group.append(message)
+                    continue
+                activity = _run_activity_record(
+                    display_key,
+                    session_id,
+                    session_title,
+                    group,
+                    message,
+                )
+                if _run_overlaps(activity, since=since, until=until):
+                    runs.append(activity)
+                group = []
+
 
 # ---------------------------------------------------------------------------
 # Pure helpers
 # ---------------------------------------------------------------------------
+
+
+def _run_activity_record(
+    agent_id: str,
+    session_id: str,
+    session_title: str | None,
+    group: list[ChatMessage],
+    summary: ChatMessage,
+) -> RunActivity:
+    measured_input = 0
+    measured_output = 0
+    estimated_input = 0
+    estimated_output = 0
+    for message in group:
+        if message.role != "assistant":
+            continue
+        facts = _read_usage(message.usage)
+        if facts.estimated:
+            estimated_input += facts.input_tokens
+            estimated_output += facts.output_tokens
+        else:
+            measured_input += facts.input_tokens
+            measured_output += facts.output_tokens
+
+    started_at = _timing_field(summary.timing, "started_at") or summary.timestamp
+    completed_at = _timing_field(summary.timing, "completed_at") or summary.timestamp
+    return RunActivity(
+        agent_id=agent_id,
+        session_id=session_id,
+        session_title=session_title,
+        run_id=summary.run_id or "",
+        status=summary.status or "completed",
+        started_at=started_at,
+        completed_at=completed_at,
+        duration_ms=_duration_ms(summary.timing) or 0,
+        models=sorted(_distinct_run_models(group)),
+        tool_calls=sum(1 for message in group if message.role == "tool"),
+        measured_input_tokens=measured_input,
+        measured_output_tokens=measured_output,
+        estimated_input_tokens=estimated_input,
+        estimated_output_tokens=estimated_output,
+    )
+
+
+def _run_overlaps(activity: RunActivity, *, since: datetime, until: datetime) -> bool:
+    started_at = parse_timestamp(activity.started_at)
+    completed_at = parse_timestamp(activity.completed_at)
+    if started_at is None or completed_at is None:
+        return False
+    return completed_at >= since and started_at <= until
 
 
 def _provider_model_key(model: str | None) -> str:

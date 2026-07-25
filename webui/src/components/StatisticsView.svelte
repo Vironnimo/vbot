@@ -7,6 +7,7 @@
   import EmptyState from './ui/EmptyState.svelte';
   import InfoHint from './ui/InfoHint.svelte';
   import TabList from './ui/TabList.svelte';
+  import LimitHistory from './statistics/LimitHistory.svelte';
   import { getProviderUsage, getStatisticsReport } from '$lib/api.js';
   import { t, activeLocaleTag } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
@@ -348,7 +349,7 @@
       <p class="stats-view__subtitle view-header__subtitle">
         {t(
           'statistics.subtitle',
-          'Aggregated on demand from your session history — no extra data is stored.',
+          'Session activity is aggregated on demand; subscription limits keep one automatic local snapshot per hour.',
         )}
       </p>
     </div>
@@ -1613,16 +1614,49 @@
           : reset.absolute}
       </span>
     {/if}
+    {#if window.unlimited}
+      <span class="stats-limit-window__units">
+        {t('statistics.limits.unlimited', 'Unlimited')}
+      </span>
+    {:else if window.remaining_units != null && window.total_units != null}
+      <span class="stats-limit-window__units">
+        {t(
+          'statistics.limits.remainingUnits',
+          '{remaining} of {total} {unit} remaining',
+          {
+            remaining: formatInteger(window.remaining_units, locale),
+            total: formatInteger(window.total_units, locale),
+            unit: window.unit ?? t('statistics.limits.units', 'units'),
+          },
+        )}
+      </span>
+    {/if}
   </li>
 {/snippet}
 
 {#snippet limitCard(snapshot)}
   <div class="stats-limit-card">
     <div class="stats-limit-card__head">
-      <span class="stats-limit-card__name">{snapshot.display_name}</span>
-      {#if snapshot.plan}
-        <span class="stats-limit-card__plan">{snapshot.plan}</span>
-      {/if}
+      <div>
+        <span class="stats-limit-card__name">{snapshot.display_name}</span>
+        <span class="stats-limit-card__account">{snapshot.account}</span>
+      </div>
+      <div class="stats-limit-card__labels">
+        {#if snapshot.plan}
+          <span class="stats-limit-card__plan">{snapshot.plan}</span>
+        {/if}
+        {#if snapshot.credits?.enabled && snapshot.credits.balance != null}
+          <span class="stats-limit-card__credits">
+            {t('statistics.limits.credits', '{balance} credits', {
+              balance: formatInteger(snapshot.credits.balance, locale),
+            })}
+          </span>
+        {:else if snapshot.credits?.enabled}
+          <span class="stats-limit-card__credits">
+            {t('statistics.limits.creditsAvailable', 'Credits available')}
+          </span>
+        {/if}
+      </div>
     </div>
     {#if snapshot.error || snapshot.windows.length === 0}
       <p class="stats-limit-card__unavailable">
@@ -1650,7 +1684,7 @@
         <p class="stats-note">
           {t(
             'statistics.limits.note',
-            'Live subscription usage, updated every 10 seconds while this tab is visible — nothing is stored.',
+            'Live subscription usage, updated every 10 seconds while this tab is visible. Only the hourly automatic snapshot is stored.',
           )}
         </p>
       </div>
@@ -1672,12 +1706,13 @@
         />
       {:else}
         <div class="stats-limits">
-          {#each usageProviders as snapshot (snapshot.connection)}
+          {#each usageProviders as snapshot (`${snapshot.connection}:${snapshot.account}`)}
             {@render limitCard(snapshot)}
           {/each}
         </div>
       {/if}
     {/if}
+    <LimitHistory />
   </div>
 {/snippet}
 
@@ -2268,6 +2303,19 @@
     font-weight: 600;
     color: var(--text-hi);
   }
+  .stats-limit-card__account {
+    display: block;
+    margin-top: 2px;
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-xs);
+  }
+  .stats-limit-card__labels {
+    display: flex;
+    align-items: flex-end;
+    flex-direction: column;
+    gap: var(--space-xs);
+  }
   .stats-limit-card__plan {
     font-family: var(--font-mono);
     font-size: 10px;
@@ -2277,6 +2325,11 @@
     border: 1px solid var(--border-2);
     border-radius: 10px;
     padding: 1px 8px;
+  }
+  .stats-limit-card__credits {
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-xs);
   }
   .stats-limit-card__unavailable {
     margin: 0;
@@ -2332,6 +2385,11 @@
     font-family: var(--font-mono);
     font-size: 11px;
     color: var(--text-lo);
+  }
+  .stats-limit-window__units {
+    color: var(--text-med);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-xs);
   }
 
   @media (max-width: 640px) {

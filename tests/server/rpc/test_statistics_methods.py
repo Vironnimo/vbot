@@ -22,7 +22,11 @@ from core.sessions import ChatSessionManager
 from core.sessions.sessions import SKILL_CONTEXT_NOTE_PREFIX
 from server.rpc.errors import RpcError
 from server.rpc.methods import build_method_handlers
-from server.rpc.statistics_methods import _RuntimeSkillInventory, _statistics_report
+from server.rpc.statistics_methods import (
+    _RuntimeSkillInventory,
+    _statistics_report,
+    _statistics_run_activity,
+)
 
 BASE = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
 
@@ -145,6 +149,31 @@ def test_report_applies_time_window(tmp_path: Path) -> None:
 
     assert result["overview"]["total_runs"] == 0
     assert result["window"]["since"] == "2026-07-01T00:00:00+00:00"
+
+
+def test_run_activity_returns_correlated_run_details(tmp_path: Path) -> None:
+    state, manager = _state(tmp_path, ["main"])
+    _seed_session(manager, "main")
+
+    result = _statistics_run_activity(
+        state,
+        {
+            "since": "2026-06-01T12:00:00Z",
+            "until": "2026-06-01T12:01:00Z",
+        },
+    )
+
+    assert result["total_runs"] == 1
+    assert result["truncated"] is False
+    assert result["runs"][0]["run_id"] == "r1"
+    assert result["runs"][0]["measured_input_tokens"] == 30
+
+
+def test_run_activity_requires_complete_window(tmp_path: Path) -> None:
+    state, _manager = _state(tmp_path, ["main"])
+
+    with pytest.raises(RpcError, match="params.until must be an ISO 8601 timestamp string"):
+        _statistics_run_activity(state, {"since": "2026-06-01T12:00:00Z"})
 
 
 def test_report_lazily_caches_service_on_state(tmp_path: Path) -> None:
@@ -294,3 +323,4 @@ def test_statistics_report_is_registered() -> None:
     handlers = build_method_handlers()
 
     assert "statistics.report" in handlers
+    assert "statistics.run_activity" in handlers

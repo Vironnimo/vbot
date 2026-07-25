@@ -7,14 +7,16 @@ and a fake transport so nothing touches the live network.
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.usage import (
+    ProviderUsageHistoryStore,
     ProviderUsageService,
+    UsageCredits,
     UsageFetchError,
     UsageWindow,
     _epoch_to_iso,
@@ -100,6 +102,17 @@ class FakeCredentials:
     def is_usable(self, provider_id: str, connection_id: str | None = None) -> bool:
         return self.has_credentials(provider_id, connection_id)
 
+    def resolve_account_id(
+        self,
+        provider_id: str,
+        local_connection_id: str,
+        account_id: str | None = None,
+    ) -> str:
+        connection_id = f"{provider_id}:{local_connection_id}"
+        if connection_id not in self._usable:
+            raise KeyError(connection_id)
+        return account_id or "default"
+
 
 class FakeProviders:
     def __init__(self, configs: dict[str, ProviderConfig]) -> None:
@@ -140,7 +153,9 @@ class FakeRuntime:
         return _getter
 
     def get_connection_token_extra(self, provider_id: str, connection_id: str) -> dict[str, str]:
-        return self._extras.get(connection_id, {})
+        return self._extras.get(
+            connection_id, self._extras.get(connection_id.removesuffix(":default"), {})
+        )
 
 
 def _openai_provider_config() -> ProviderConfig:
@@ -233,20 +248,23 @@ def test_parse_openai_usage_primary_and_secondary() -> None:
             label="5h",
             used_percent=42.5,
             reset_at=datetime.fromtimestamp(1_750_000_000, UTC).isoformat(),
+            window_seconds=18_000,
         ),
         UsageWindow(
             label="Week",
             used_percent=12.0,
             reset_at=datetime.fromtimestamp(1_750_600_000, UTC).isoformat(),
+            window_seconds=604_800,
         ),
     ]
 
 
-def test_parse_openai_usage_appends_credit_balance_to_plan() -> None:
+def test_parse_openai_usage_keeps_credit_balance_structured() -> None:
     # The live body reports balance as a string gated by `has_credits`.
     body = {**_OPENAI_BODY, "credits": {"has_credits": True, "balance": "1234"}}
     snapshot = _parse_openai_usage("openai:subscription", "OpenAI", body)
-    assert snapshot.plan == "Plus · 1234 credits"
+    assert snapshot.plan == "Plus"
+    assert snapshot.credits == UsageCredits(enabled=True, balance=1234.0)
 
 
 def test_parse_openai_usage_omits_zero_or_disabled_credits() -> None:
@@ -254,6 +272,7 @@ def test_parse_openai_usage_omits_zero_or_disabled_credits() -> None:
     body = {**_OPENAI_BODY, "credits": {"has_credits": False, "balance": "0"}}
     snapshot = _parse_openai_usage("openai:subscription", "OpenAI", body)
     assert snapshot.plan == "Plus"
+    assert snapshot.credits == UsageCredits(enabled=False, balance=0.0)
 
 
 def test_parse_openai_usage_clamps_out_of_range_percent() -> None:
@@ -286,6 +305,7 @@ async def test_report_returns_openai_snapshot_with_windows() -> None:
     assert len(report.providers) == 1
     snapshot = report.providers[0]
     assert snapshot.connection == "openai:subscription"
+    assert snapshot.account == "default"
     assert [window.label for window in snapshot.windows] == ["5h", "Week"]
     # The request carries the account header + Codex beta/originator headers.
     _, headers = transport.calls[0]
@@ -403,6 +423,60 @@ async def test_report_filters_to_requested_connections() -> None:
 
     assert report.providers == []
     assert transport.calls == []
+
+
+# ---------------------------------------------------------------------------
+# Durable hourly history
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_collect_history_sample_reuses_live_cache_and_persists_structured_data(
+    tmp_path: Any,
+) -> None:
+    observed_at = datetime(2026, 7, 25, 12, tzinfo=UTC)
+    transport = FakeTransport(FakeResponse(payload=_OPENAI_BODY))
+    service = ProviderUsageService(
+        _openai_runtime(),
+        transport=transport,
+        data_root=tmp_path,
+        clock=lambda: observed_at,
+    )
+
+    live = await service.report()
+    stored = await service.collect_history_sample()
+    history = service.history_report()
+
+    assert stored is True
+    assert len(transport.calls) == 1
+    assert len(history.samples) == 1
+    sample = history.samples[0]
+    assert sample.sampled_at == observed_at.isoformat()
+    assert sample.providers[0]["account"] == "default"
+    assert sample.providers[0]["windows"][0]["window_seconds"] == 18_000
+    assert sample.providers[0]["plan"] == live.providers[0].plan
+
+
+def test_history_sampler_delays_until_one_hour_after_latest_sample(tmp_path: Any) -> None:
+    observed_at = datetime(2026, 7, 25, 12, tzinfo=UTC)
+    store = ProviderUsageHistoryStore(tmp_path)
+    store.append(
+        (observed_at - timedelta(minutes=15)).isoformat(),
+        [
+            _parse_openai_usage(
+                "openai:subscription",
+                "OpenAI",
+                _OPENAI_BODY,
+            ).to_dict()
+        ],
+    )
+    service = ProviderUsageService(
+        _openai_runtime(),
+        history_store=store,
+        clock=lambda: observed_at,
+    )
+
+    assert service._initial_history_delay() == 45 * 60  # noqa: SLF001
 
 
 # ---------------------------------------------------------------------------
