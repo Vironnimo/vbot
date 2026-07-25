@@ -104,9 +104,12 @@ Provider credentials may also be added later in Settings or through the CLI. Pro
 vbot provider set-key openrouter YOUR_KEY --refresh-models
 vbot provider connect openai --connection openai:subscription
 vbot provider enable ollama
+vbot provider custom-save local-ai --name "Local AI" --base-url http://127.0.0.1:8080/v1 --auth none --models-endpoint /models --model chat-model
 ```
 
 An API key passed as a CLI argument may enter shell history; Settings or a protected environment variable is preferable for real credentials.
+
+Custom OpenAI-compatible Providers are first-class Settings records with an implicit `default` Connection and optional manual Models. Their API keys remain write-only in the data-directory `.env`. See [Custom Providers](USAGE.md#custom-providers) for the WebUI, `settings.json`, discovery, and CLI contracts.
 
 ### Install the Current Checkout
 

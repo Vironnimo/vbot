@@ -1473,3 +1473,108 @@ class TestResolveRequestOutputLimit:
             )
 
         assert exc_info.value.retryable is False
+
+
+class TestCustomProviderRegistry:
+    def test_load_materializes_keyless_custom_provider(self, tmp_path: Path) -> None:
+        registry = ProviderRegistry.load(
+            tmp_path,
+            custom_providers={
+                "local-ai": {
+                    "name": "Local AI",
+                    "adapter": "openai_compatible",
+                    "base_url": "http://127.0.0.1:8080/v1",
+                    "auth": "none",
+                    "models_endpoint": "/models",
+                    "defaults": {},
+                    "models": {},
+                }
+            },
+        )
+
+        provider = registry.get("local-ai")
+        assert provider.custom is True
+        assert provider.models_endpoint == "/models"
+        assert provider.get_connection("default").type == "none"
+
+    def test_reload_replaces_custom_provider_in_place(self, tmp_path: Path) -> None:
+        registry = ProviderRegistry.load(tmp_path, custom_providers={})
+        held_reference = registry
+
+        registry.reload(
+            tmp_path,
+            custom_providers={
+                "gateway": {
+                    "name": "Gateway",
+                    "adapter": "openai_compatible",
+                    "base_url": "https://gateway.example/v1",
+                    "auth": "api_key",
+                    "models_endpoint": None,
+                    "defaults": {},
+                    "models": {},
+                }
+            },
+        )
+
+        connection = held_reference.get("gateway").get_connection("default")
+        assert connection.auth.credential_key == "VBOT_CUSTOM_GATEWAY_API_KEY"
+        assert connection.auth.header == "Authorization"
+        assert connection.auth.prefix == "Bearer "
+
+    def test_custom_provider_registries_are_isolated_per_runtime_data(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        first = ProviderRegistry.load(
+            tmp_path,
+            custom_providers={
+                "first": {
+                    "name": "First",
+                    "adapter": "openai_compatible",
+                    "base_url": "https://first.example/v1",
+                    "auth": "none",
+                    "models_endpoint": None,
+                    "defaults": {},
+                    "models": {},
+                }
+            },
+        )
+        second = ProviderRegistry.load(
+            tmp_path,
+            custom_providers={
+                "second": {
+                    "name": "Second",
+                    "adapter": "openai_compatible",
+                    "base_url": "https://second.example/v1",
+                    "auth": "none",
+                    "models_endpoint": None,
+                    "defaults": {},
+                    "models": {},
+                }
+            },
+        )
+        bundled_only = ProviderRegistry.load(tmp_path)
+
+        assert first.list_ids() == ["first"]
+        assert second.list_ids() == ["second"]
+        assert bundled_only.list_ids() == []
+
+    def test_custom_provider_cannot_shadow_bundled_provider(
+        self,
+        providers_dir: Path,
+    ) -> None:
+        with pytest.raises(ConfigError, match="conflicts with a bundled Provider"):
+            ProviderRegistry.load(
+                providers_dir,
+                custom_providers={
+                    "openai": {
+                        "name": "Shadow",
+                        "adapter": "openai_compatible",
+                        "base_url": "https://shadow.example/v1",
+                        "auth": "none",
+                        "models_endpoint": None,
+                        "defaults": {},
+                        "models": {},
+                    }
+                },
+            )

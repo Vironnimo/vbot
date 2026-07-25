@@ -115,7 +115,7 @@ class ProviderImageClient(ProviderTaskClient):
                 options=options,
                 input_images=input_images,
             )
-        if self._provider.id == "openai":
+        if self._provider.adapter in {"openai", "openai_compatible"}:
             if self._connection.mode == CODEX_RESPONSES_MODE:
                 return await self._generate_openai_codex_responses(
                     prompt,

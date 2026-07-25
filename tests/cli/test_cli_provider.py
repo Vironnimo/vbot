@@ -37,6 +37,150 @@ def test_parse_args_supports_provider_list_target_options() -> None:
     assert args.data_dir == "dev"
 
 
+def test_parse_args_supports_custom_provider_save_and_delete() -> None:
+    save_args = cli_main.parse_args(
+        [
+            "provider",
+            "custom-save",
+            "local-ai",
+            "--name",
+            "Local AI",
+            "--base-url",
+            "http://127.0.0.1:8080/v1",
+            "--auth",
+            "none",
+            "--model",
+            "chat-model",
+            "--model",
+            "image-model",
+        ]
+    )
+    delete_args = cli_main.parse_args(["provider", "custom-delete", "local-ai"])
+
+    assert save_args.command == "custom-save"
+    assert save_args.provider == "local-ai"
+    assert save_args.adapter == "openai_compatible"
+    assert save_args.model == ["chat-model", "image-model"]
+    assert delete_args.command == "custom-delete"
+    assert delete_args.provider == "local-ai"
+
+
+def test_provider_custom_save_posts_secret_once_and_formats_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        calls.append(json)
+        return httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "result": {
+                    "provider": {
+                        "id": "local-ai",
+                        "model_count": 1,
+                        "usable": True,
+                    }
+                },
+            },
+        )
+
+    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
+
+    result = provider_management.provider_custom_save(
+        instance,
+        "local-ai",
+        name="Local AI",
+        adapter="openai_compatible",
+        base_url="http://127.0.0.1:8080/v1",
+        auth="api_key",
+        api_key="secret",
+        models_endpoint="/models",
+        model_ids=["chat-model"],
+    )
+
+    assert result.message == "saved Custom Provider local-ai (1 models, usable)"
+    assert calls == [
+        {
+            "method": "provider.custom_save",
+            "params": {
+                "provider": {
+                    "id": "local-ai",
+                    "name": "Local AI",
+                    "adapter": "openai_compatible",
+                    "base_url": "http://127.0.0.1:8080/v1",
+                    "auth": "api_key",
+                    "models_endpoint": "/models",
+                    "models": {
+                        "chat-model": {
+                            "name": "chat-model",
+                            "capabilities": {},
+                        }
+                    },
+                },
+                "api_key": "secret",
+            },
+        }
+    ]
+    assert "secret" not in result.message
+
+
+def test_provider_custom_list_and_delete_use_custom_rpc_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[dict[str, Any]] = []
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        calls.append(json)
+        if json["method"] == "provider.custom_list":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "result": {
+                        "providers": [
+                            {
+                                "id": "local-ai",
+                                "name": "Local AI",
+                                "auth": "none",
+                                "base_url": "http://127.0.0.1:8080/v1",
+                                "model_count": 2,
+                                "credentials_configured": True,
+                            }
+                        ]
+                    },
+                },
+            )
+        return httpx.Response(
+            200,
+            json={"ok": True, "result": {"deleted": True}},
+        )
+
+    monkeypatch.setattr(provider_management.httpx, "post", fake_post)
+
+    listed = provider_management.provider_custom_list(instance)
+    deleted = provider_management.provider_custom_delete(instance, "local-ai")
+
+    assert "id: local-ai" in listed.message
+    assert deleted.message == "deleted Custom Provider local-ai"
+    assert calls == [
+        {"method": "provider.custom_list", "params": {}},
+        {
+            "method": "provider.custom_delete",
+            "params": {"provider_id": "local-ai"},
+        },
+    ]
+
+
 def test_parse_args_supports_provider_set_key_options() -> None:
     args = cli_main.parse_args(
         [

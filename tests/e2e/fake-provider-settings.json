@@ -1,0 +1,108 @@
+{
+  "defaults": {
+    "agent": {
+      "fallback_model": "fake/e2e-fallback::default",
+      "model": "fake/e2e-primary::default"
+    }
+  },
+  "model_tasks": {
+    "image_generation": {
+      "target": "fake/e2e-image::default",
+      "options": {
+        "output_format": "png",
+        "response_format": "b64_json"
+      }
+    },
+    "text_to_speech": {
+      "target": "fake/e2e-tts::default",
+      "options": {
+        "response_format": "wav",
+        "voice": "alloy"
+      }
+    }
+  },
+  "providers": {
+    "connections": {
+      "fake:default": true
+    },
+    "custom": {
+      "fake": {
+        "name": "Fake Provider",
+        "adapter": "openai_compatible",
+        "base_url": "http://127.0.0.1:0/v1",
+        "auth": "none",
+        "models_endpoint": "/models",
+        "defaults": {
+          "max_tokens": 512,
+          "temperature": 0
+        },
+        "models": {
+          "e2e-primary": {
+            "name": "Fake Primary",
+            "context_window": 65536,
+            "max_output_tokens": 1024,
+            "capabilities": {
+              "input_modalities": ["text"],
+              "json_mode": false,
+              "output_modalities": ["text"],
+              "reasoning": false,
+              "supported_parameters": [],
+              "supported_voices": [],
+              "task_types": ["chat", "text_output"],
+              "tools": true,
+              "vision": false
+            }
+          },
+          "e2e-fallback": {
+            "name": "Fake Fallback",
+            "context_window": 65536,
+            "max_output_tokens": 1024,
+            "capabilities": {
+              "input_modalities": ["text"],
+              "json_mode": false,
+              "output_modalities": ["text"],
+              "reasoning": false,
+              "supported_parameters": [],
+              "supported_voices": [],
+              "task_types": ["chat", "text_output"],
+              "tools": true,
+              "vision": false
+            }
+          },
+          "e2e-image": {
+            "name": "Fake Image",
+            "context_window": 65536,
+            "max_output_tokens": 1024,
+            "capabilities": {
+              "input_modalities": ["text"],
+              "json_mode": false,
+              "output_modalities": ["image"],
+              "reasoning": false,
+              "supported_parameters": ["response_format", "output_format"],
+              "supported_voices": [],
+              "task_types": ["image_generation"],
+              "tools": false,
+              "vision": false
+            }
+          },
+          "e2e-tts": {
+            "name": "Fake Text to Speech",
+            "context_window": 65536,
+            "max_output_tokens": 1024,
+            "capabilities": {
+              "input_modalities": ["text"],
+              "json_mode": false,
+              "output_modalities": ["speech"],
+              "reasoning": false,
+              "supported_parameters": ["voice", "response_format"],
+              "supported_voices": ["alloy"],
+              "task_types": ["text_to_speech"],
+              "tools": false,
+              "vision": false
+            }
+          }
+        }
+      }
+    }
+  }
+}

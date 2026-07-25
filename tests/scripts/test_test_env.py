@@ -1,4 +1,6 @@
+import argparse
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -179,3 +181,123 @@ def test_start_server_reports_structured_keyboard_interrupt(monkeypatch, tmp_pat
     assert "result: interrupted while waiting for local server readiness" in captured.out
     assert f"url: {instance.url}" in captured.out
     assert f"log: {instance.log_path}" in captured.out
+
+
+def test_resolve_fake_provider_from_seeded_settings(tmp_path):
+    module = _load_test_env_module()
+    settings = json.loads(
+        (PROJECT_ROOT / "tests" / "e2e" / "fake-provider-settings.json").read_text(encoding="utf-8")
+    )
+    settings["providers"]["custom"]["fake"]["base_url"] = "http://127.0.0.1:18422/v1"
+    (tmp_path / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
+    instance = ServerInstance(
+        host="127.0.0.1",
+        port=8422,
+        data_dir=tmp_path,
+        url="http://127.0.0.1:8422",
+        log_path=tmp_path / "vbot.log",
+    )
+
+    fake_provider = module._resolve_fake_provider(instance)
+
+    assert fake_provider == module.FakeProviderInstance(
+        host="127.0.0.1",
+        port=18422,
+        pid_path=tmp_path / "processes" / "fake-provider.pid",
+        log_path=tmp_path / "processes" / "fake-provider.log",
+    )
+
+
+def test_start_fake_provider_launches_owned_node_process(monkeypatch, tmp_path):
+    module = _load_test_env_module()
+    fake_provider = module.FakeProviderInstance(
+        host="127.0.0.1",
+        port=18422,
+        pid_path=tmp_path / "processes" / "fake-provider.pid",
+        log_path=tmp_path / "processes" / "fake-provider.log",
+    )
+    readiness = iter([False, True])
+    popen_calls = []
+
+    class FakeProcess:
+        pid = 4321
+
+    def fake_popen(command, **kwargs):
+        popen_calls.append((command, kwargs))
+        return FakeProcess()
+
+    monkeypatch.setattr(module, "_fake_provider_is_ready", lambda _instance: next(readiness))
+    monkeypatch.setattr(module, "_fake_provider_port_is_bound", lambda _instance: False)
+    monkeypatch.setattr(module.shutil, "which", lambda _name: "node")
+    monkeypatch.setattr(module.subprocess, "Popen", fake_popen)
+
+    assert module.start_fake_provider(fake_provider) is True
+    assert fake_provider.pid_path.read_text(encoding="utf-8") == "4321"
+    assert popen_calls[0][0] == ["node", str(module.FAKE_PROVIDER_ENTRY)]
+    assert popen_calls[0][1]["env"]["VBOT_E2E_PROVIDER_PORT"] == "18422"
+
+
+def test_stop_fake_provider_terminates_only_ready_owned_process(monkeypatch, tmp_path):
+    module = _load_test_env_module()
+    fake_provider = module.FakeProviderInstance(
+        host="127.0.0.1",
+        port=18422,
+        pid_path=tmp_path / "processes" / "fake-provider.pid",
+        log_path=tmp_path / "processes" / "fake-provider.log",
+    )
+    fake_provider.pid_path.parent.mkdir(parents=True)
+    fake_provider.pid_path.write_text("4321", encoding="utf-8")
+    killed = []
+
+    monkeypatch.setattr(module, "_fake_provider_is_ready", lambda _instance: True)
+    monkeypatch.setattr(module, "_wait_for_fake_provider", lambda _instance, *, ready: not ready)
+    monkeypatch.setattr(module.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+
+    assert module.stop_fake_provider(fake_provider) is True
+    assert killed == [(4321, module.signal.SIGTERM)]
+    assert not fake_provider.pid_path.exists()
+
+
+def test_main_starts_seeded_provider_before_vbot(monkeypatch, tmp_path):
+    module = _load_test_env_module()
+    instance = ServerInstance(
+        host="127.0.0.1",
+        port=8422,
+        data_dir=tmp_path,
+        url="http://127.0.0.1:8422",
+        log_path=tmp_path / "vbot.log",
+    )
+    fake_provider = module.FakeProviderInstance(
+        host="127.0.0.1",
+        port=18422,
+        pid_path=tmp_path / "processes" / "fake-provider.pid",
+        log_path=tmp_path / "processes" / "fake-provider.log",
+    )
+    calls = []
+
+    monkeypatch.setattr(
+        module,
+        "parse_args",
+        lambda: argparse.Namespace(
+            command="start",
+            host="127.0.0.1",
+            port=None,
+            data_dir=None,
+        ),
+    )
+    monkeypatch.setattr(module, "build_frontend", lambda: 0)
+    monkeypatch.setattr(module, "resolve_instance", lambda **_kwargs: instance)
+    monkeypatch.setattr(module, "_resolve_fake_provider", lambda _instance: fake_provider)
+    monkeypatch.setattr(
+        module,
+        "start_fake_provider",
+        lambda resolved: calls.append(("provider", resolved)) or True,
+    )
+    monkeypatch.setattr(
+        module,
+        "start_server",
+        lambda *_args: calls.append(("server", instance)) or 0,
+    )
+
+    assert module.main() == 0
+    assert calls == [("provider", fake_provider), ("server", instance)]

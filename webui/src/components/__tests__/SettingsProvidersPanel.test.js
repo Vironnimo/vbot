@@ -61,7 +61,84 @@ describe('SettingsProvidersPanel', () => {
     flushSync();
     await waitForCondition(() => onReloadSettingsMock.mock.calls.length >= 1);
   });
+
+  it('keeps an unconfigured Custom Provider visible and deletes it through RPC', async () => {
+    const customSettings = {
+      id: 'local-ai',
+      name: 'Local AI',
+      adapter: 'openai_compatible',
+      base_url: 'http://127.0.0.1:8080/v1',
+      auth: 'api_key',
+      models_endpoint: '/models',
+      defaults: {},
+      models: {},
+      credentials_configured: false,
+      usable: false,
+      model_count: 0,
+    };
+    mountedComponent = mount(SettingsProvidersPanel, {
+      target: document.body,
+      props: {
+        settings: {
+          providers: {
+            items: [
+              {
+                ...customSettings,
+                custom: true,
+                editable: true,
+                connections: [
+                  {
+                    id: 'local-ai:default',
+                    type: 'api_key',
+                    label: 'Default',
+                    configured: false,
+                    usable: false,
+                    accounts: [],
+                  },
+                ],
+              },
+            ],
+            custom_endpoints: {
+              supported: true,
+              items: [customSettings],
+            },
+          },
+        },
+        visible: true,
+        onReloadSettings: onReloadSettingsMock,
+      },
+    });
+    flushSync();
+
+    expect(document.body.textContent).toContain('Local AI');
+    findButton('Details for local-ai', true).click();
+    flushSync();
+    findButton('Delete').click();
+    flushSync();
+    const deleteButtons = [...document.querySelectorAll('button')].filter(
+      (element) => element.textContent.trim() === 'Delete',
+    );
+    deleteButtons.at(-1).click();
+
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some(
+        ([method]) => method === 'provider.custom_delete',
+      ),
+    );
+    expect(rpcMock).toHaveBeenCalledWith('provider.custom_delete', {
+      provider_id: 'local-ai',
+    });
+    expect(onReloadSettingsMock).toHaveBeenCalled();
+  });
 });
+
+function findButton(label, aria = false) {
+  return [...document.querySelectorAll('button')].find((element) =>
+    aria
+      ? element.getAttribute('aria-label') === label
+      : element.textContent.trim() === label,
+  );
+}
 
 async function waitForCondition(check, attempts = 20) {
   for (let index = 0; index < attempts; index += 1) {

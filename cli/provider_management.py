@@ -28,6 +28,108 @@ def provider_list(instance: ServerInstance) -> CommandResult:
     return CommandResult(ok=True, message=_format_connection_rows(connections), instance=instance)
 
 
+def provider_custom_list(instance: ServerInstance) -> CommandResult:
+    """List Settings-owned Custom Providers."""
+
+    payload = _rpc_call(instance, "provider.custom_list", {})
+    if not payload.ok:
+        return payload.to_command_result()
+    providers = payload.data.get("providers")
+    if not isinstance(providers, list):
+        return CommandResult(
+            ok=False,
+            message="RPC result missing providers list",
+            instance=instance,
+        )
+    if not providers:
+        return CommandResult(ok=True, message="no Custom Providers configured", instance=instance)
+    lines = ["Custom Providers:"]
+    for provider in providers:
+        if not isinstance(provider, Mapping):
+            continue
+        provider_id = _string_or_default(provider.get("id"), "?")
+        name = _string_or_default(provider.get("name"), provider_id)
+        auth = _string_or_default(provider.get("auth"), "?")
+        base_url = _string_or_default(provider.get("base_url"), "?")
+        model_count = provider.get("model_count")
+        count = model_count if isinstance(model_count, int) else "?"
+        configured = "yes" if provider.get("credentials_configured") else "no"
+        lines.append(
+            f"- id: {provider_id}  name: {name}  auth: {auth}  "
+            f"configured: {configured}  models: {count}  endpoint: {base_url}"
+        )
+    return CommandResult(ok=True, message="\n".join(lines), instance=instance)
+
+
+def provider_custom_save(
+    instance: ServerInstance,
+    provider_id: str,
+    *,
+    name: str,
+    adapter: str,
+    base_url: str,
+    auth: str,
+    api_key: str | None = None,
+    models_endpoint: str | None = None,
+    model_ids: Sequence[str] = (),
+) -> CommandResult:
+    """Create or replace one Custom Provider through RPC."""
+
+    provider: dict[str, Any] = {
+        "id": provider_id,
+        "name": name,
+        "adapter": adapter,
+        "base_url": base_url,
+        "auth": auth,
+        "models": {model_id: {"name": model_id, "capabilities": {}} for model_id in model_ids},
+    }
+    if models_endpoint is not None:
+        provider["models_endpoint"] = models_endpoint
+    params: dict[str, Any] = {"provider": provider}
+    if api_key is not None:
+        params["api_key"] = api_key
+
+    payload = _rpc_call(instance, "provider.custom_save", params)
+    if not payload.ok:
+        return payload.to_command_result()
+    result = payload.data.get("provider")
+    if not isinstance(result, Mapping):
+        return CommandResult(
+            ok=False,
+            message="RPC result missing provider",
+            instance=instance,
+        )
+    saved_id = _string_or_default(result.get("id"), provider_id)
+    count = result.get("model_count")
+    model_count = count if isinstance(count, int) else len(model_ids)
+    usable = "usable" if result.get("usable") else "not usable"
+    return CommandResult(
+        ok=True,
+        message=f"saved Custom Provider {saved_id} ({model_count} models, {usable})",
+        instance=instance,
+    )
+
+
+def provider_custom_delete(
+    instance: ServerInstance,
+    provider_id: str,
+) -> CommandResult:
+    """Delete one Custom Provider through RPC."""
+
+    payload = _rpc_call(
+        instance,
+        "provider.custom_delete",
+        {"provider_id": provider_id},
+    )
+    if not payload.ok:
+        return payload.to_command_result()
+    return CommandResult(
+        ok=True,
+        message=f"deleted Custom Provider {provider_id}",
+        instance=instance,
+    )
+
+
 def provider_status(
     instance: ServerInstance,
     provider_id: str,

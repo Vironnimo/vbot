@@ -464,8 +464,12 @@ class Runtime:
         )
         data_dir_credentials = self._storage.load_environment()
         self._fallback_environment = dict(data_dir_credentials)
+        custom_providers = self._storage.load_custom_providers_settings()
 
-        self._providers = ProviderRegistry.load(resources_path)
+        self._providers = ProviderRegistry.load(
+            resources_path,
+            custom_providers=custom_providers,
+        )
         self._token_store = TokenStore(self._storage.data_dir)
         self._provider_credentials = ProviderCredentialResolver(
             self._providers,
@@ -480,6 +484,7 @@ class Runtime:
         self._models = ModelRegistry.load(
             resources_path,
             runtime_models_dir=self._storage.layout.models,
+            custom_providers=custom_providers,
         )
         self._model_tasks = TaskModelService(
             self._providers,
@@ -1744,6 +1749,22 @@ class Runtime:
         self._fallback_environment = dict(data_dir_credentials)
         self.provider_credentials.reload_fallback_credentials(data_dir_credentials)
 
+    def reload_custom_providers(self) -> None:
+        """Reload Settings-owned Provider and Model overlays in place."""
+
+        self._ensure_started()
+        resources_path = self._resolve_resources_path()
+        custom_providers = self.storage.load_custom_providers_settings()
+        self.providers.reload(
+            resources_path,
+            custom_providers=custom_providers,
+        )
+        self.models.reload(
+            resources_path,
+            runtime_models_dir=self.storage.layout.models,
+            custom_providers=custom_providers,
+        )
+
     # ------------------------------------------------------------------
     # Read-only registry access
     # ------------------------------------------------------------------
@@ -2318,6 +2339,7 @@ class Runtime:
                     self.models.reload(
                         system_resources_dir,
                         runtime_models_dir=self.storage.layout.models,
+                        custom_providers=self.storage.load_custom_providers_settings(),
                     )
             except Exception as error:
                 # This background convenience path is deliberately fail-soft:

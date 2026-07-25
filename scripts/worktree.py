@@ -17,6 +17,7 @@ import time
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 def _resolve_project_root() -> Path:
@@ -47,8 +48,10 @@ PROJECT_ROOT = _resolve_project_root()
 
 MAIN_DEV_PORT = 8421
 FIRST_WORKTREE_PORT = 8422
+FAKE_PROVIDER_PORT_OFFSET = 10_000
 WORKTREES_DIR = PROJECT_ROOT / ".worktrees"
 WORKTREE_FILE_NAME = ".vbot-worktree"
+FAKE_PROVIDER_SETTINGS_PATH = PROJECT_ROOT / "tests" / "e2e" / "fake-provider-settings.json"
 DATA_DIR_KEY = "data_dir"
 MANAGED_BRANCH_KEY = "managed_branch"
 SERVER_PORT_KEY = "server_port"
@@ -252,7 +255,7 @@ def _read_worktree_branch_name(worktree_path: Path) -> str | None:
 
 
 def scan_used_ports(worktrees_dir: Path) -> set[int]:
-    """Collect ports declared in per-worktree settings.json files."""
+    """Collect server and seeded fake-Provider ports declared by worktrees."""
     ports: set[int] = set()
     if not worktrees_dir.exists():
         return ports
@@ -282,7 +285,22 @@ def scan_used_ports(worktrees_dir: Path) -> set[int]:
             port = settings.get(SERVER_PORT_KEY)
             if isinstance(port, int):
                 ports.add(port)
-        except (OSError, json.JSONDecodeError):
+            providers = settings.get("providers")
+            if not isinstance(providers, dict):
+                continue
+            custom = providers.get("custom")
+            if not isinstance(custom, dict):
+                continue
+            fake_provider = custom.get("fake")
+            if not isinstance(fake_provider, dict):
+                continue
+            base_url = fake_provider.get("base_url")
+            if not isinstance(base_url, str):
+                continue
+            parsed_port = urlsplit(base_url).port
+            if parsed_port is not None:
+                ports.add(parsed_port)
+        except (OSError, ValueError, json.JSONDecodeError):
             continue
 
     return ports
@@ -298,25 +316,53 @@ def is_port_bound(port: int) -> bool:
 
 
 def find_free_port(worktrees_dir: Path, start: int = FIRST_WORKTREE_PORT) -> int:
-    """Find the first unassigned and unbound worktree port."""
+    """Find a free server port whose paired fake-Provider port is also free."""
     used_ports = scan_used_ports(worktrees_dir)
     candidate = start
 
-    while candidate == MAIN_DEV_PORT or candidate in used_ports or is_port_bound(candidate):
+    while True:
+        provider_port = candidate + FAKE_PROVIDER_PORT_OFFSET
+        if provider_port > 65_535:
+            raise RuntimeError("no paired server and fake-Provider ports are available")
+        unavailable = (
+            candidate == MAIN_DEV_PORT
+            or candidate in used_ports
+            or provider_port in used_ports
+            or is_port_bound(candidate)
+            or is_port_bound(provider_port)
+        )
+        if not unavailable:
+            return candidate
         candidate += 1
 
-    return candidate
 
+def seed_worktree_settings(settings_path: Path, *, server_port: int) -> None:
+    """Seed the free local Provider and Models without replacing existing settings."""
 
-def merge_settings(settings_path: Path, updates: dict[str, object]) -> None:
-    """Merge updates into settings JSON, creating file and parents as needed."""
     settings: dict[str, object] = {}
     if settings_path.exists():
         loaded = json.loads(settings_path.read_text(encoding="utf-8"))
         if isinstance(loaded, dict):
             settings = loaded
 
-    settings.update(updates)
+    fixture = json.loads(FAKE_PROVIDER_SETTINGS_PATH.read_text(encoding="utf-8"))
+    if not isinstance(fixture, dict):
+        raise ValueError("fake Provider settings fixture must be a JSON object")
+    providers = fixture["providers"]
+    custom = providers["custom"]
+    fake_provider = custom["fake"]
+    fake_provider["base_url"] = f"http://127.0.0.1:{server_port + FAKE_PROVIDER_PORT_OFFSET}/v1"
+
+    def merge_missing(target: dict[str, object], source: dict[str, object]) -> None:
+        for key, value in source.items():
+            current = target.get(key)
+            if isinstance(current, dict) and isinstance(value, dict):
+                merge_missing(current, value)
+            elif key not in target:
+                target[key] = value
+
+    merge_missing(settings, fixture)
+    settings[SERVER_PORT_KEY] = server_port
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     settings_path.write_text(f"{json.dumps(settings, indent=2)}\n", encoding="utf-8")
 
@@ -496,7 +542,7 @@ def cmd_create(args: argparse.Namespace) -> int:
 
     try:
         initialize_data_dir(data_dir)
-        merge_settings(data_dir / "settings.json", {SERVER_PORT_KEY: port})
+        seed_worktree_settings(data_dir / "settings.json", server_port=port)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         cleanup_failed_create(
             name,
@@ -559,6 +605,7 @@ def cmd_create(args: argparse.Namespace) -> int:
         name=name,
         branch=branch,
         port=port,
+        **{"provider-port": port + FAKE_PROVIDER_PORT_OFFSET},
         **{"data-dir": data_dir_tilde},
         path=worktree_path,
         url=f"http://localhost:{port}",

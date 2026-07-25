@@ -428,6 +428,28 @@ export function unsetProviderKey(params = {}, options = {}) {
   return rpc('provider.unset_key', params, options);
 }
 
+export function listCustomProviders(options = {}) {
+  return rpc('provider.custom_list', {}, options);
+}
+
+export function saveCustomProvider(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Custom Provider payload must be an object',
+    'provider.custom_save',
+  );
+  return rpc('provider.custom_save', params, options);
+}
+
+export function deleteCustomProvider(params = {}, options = {}) {
+  requirePlainObject(
+    params,
+    'Custom Provider delete payload must be an object',
+    'provider.custom_delete',
+  );
+  return rpc('provider.custom_delete', params, options);
+}
+
 export function getProviderUsage(options = {}) {
   return rpc('provider.usage', {}, options);
 }

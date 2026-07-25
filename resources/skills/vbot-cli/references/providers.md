@@ -12,6 +12,19 @@ vbot provider usage [--connection <provider:connection-id>]...
 
 `provider usage` probes live upstream subscription limits for every supported usable Connection, or only the Connection ids selected by repeated `--connection` flags. It reports the plan, percentage used and remaining, reset timestamps, and a per-Provider error without hiding successful siblings. This is live Provider state; use `statistics usage` for persisted Session token/cost totals.
 
+## Custom Providers
+
+```bash
+vbot provider custom-list
+vbot provider custom-save <provider-id> --name <display-name> --base-url <http(s)-url> [--adapter openai_compatible] [--auth api_key|none] [--api-key <value>] [--models-endpoint /models] [--model <wire-id>]...
+vbot provider custom-delete <provider-id>
+```
+
+- Custom Providers are secret-free Settings records with one implicit `default` Connection. The current Adapter is `openai_compatible`.
+- `custom-save` replaces the complete record and reloads Provider/Model registries live. Repeated `--model` flags add conservative manual chat Models; use the WebUI when richer modality/task/capability facts are required.
+- `--api-key` is write-only and stored under the generated data-dir `.env` key. Never echo it. Prefer the WebUI for a real secret because a CLI argument may remain in shell history.
+- `custom-delete` removes generated data-dir credentials but does not rewrite Agent/default/task Model references; tell the user those references become unavailable.
+
 ## Enable / disable a connection
 
 ```bash

@@ -1,11 +1,14 @@
 <script>
   import { SvelteSet } from 'svelte/reactivity';
+  import CustomProviderModal from './CustomProviderModal.svelte';
   import ProviderConnectModal from './ProviderConnectModal.svelte';
   import OpenRouterRoutingSettings from './OpenRouterRoutingSettings.svelte';
   import Button from '../ui/Button.svelte';
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import StatusChip from '../ui/StatusChip.svelte';
   import {
+    deleteCustomProvider,
     disconnectProvider as disconnectProviderRequest,
     listModels,
     refreshModelDatabase as refreshModels,
@@ -26,6 +29,7 @@
     getConfiguredConnections,
     getConnectedProviderItems,
     getConnectionAccounts,
+    getCustomProviderItems,
     getProviderItems,
     getPublicConnectionId,
     isAccountUsable,
@@ -74,6 +78,9 @@
   // A provider change elsewhere is mirrored here through a settings reload, but
   // held while the key-input modal is open so a live edit is never interrupted.
   let pendingSettingsReload = $state(false);
+  let customModalOpen = $state(false);
+  let customModalProvider = $state(null);
+  let deleteCustomCandidate = $state(null);
   let lastModelsRefreshToken = null;
   // Disclosure state: each provider is one collapsed row; connections,
   // accounts, and the local-context editor live in its sub. The sub stays in
@@ -156,6 +163,14 @@
 
   let providerItems = $derived(getProviderItems(settings));
   let connectedProviders = $derived(getConnectedProviderItems(settings));
+  let displayedProviders = $derived(
+    providerItems.filter(
+      (provider) =>
+        provider?.custom === true ||
+        connectedProviders.some((connected) => connected.id === provider.id),
+    ),
+  );
+  let customProviderItems = $derived(getCustomProviderItems(settings));
   let localContextWindows = $derived(
     settings?.local_models?.context_windows ?? {},
   );
@@ -399,6 +414,52 @@
     modalScope = { provider: null, connection: null, account: null };
   }
 
+  function openCustomProviderModal(provider = null) {
+    customModalProvider = provider;
+    customModalOpen = true;
+  }
+
+  function closeCustomProviderModal() {
+    customModalOpen = false;
+    customModalProvider = null;
+  }
+
+  function customProviderSettings(providerId) {
+    return (
+      customProviderItems.find((provider) => provider.id === providerId) ?? null
+    );
+  }
+
+  async function reloadAfterCustomProviderSave() {
+    await onReloadSettings();
+  }
+
+  async function confirmDeleteCustomProvider() {
+    if (!deleteCustomCandidate) {
+      return;
+    }
+    const providerId = deleteCustomCandidate.id;
+    try {
+      await deleteCustomProvider({ provider_id: providerId });
+      deleteCustomCandidate = null;
+      onToast({
+        title: t(
+          'settings.providers.custom.deleted',
+          'Custom Provider deleted.',
+        ),
+        variant: 'success',
+      });
+      await onReloadSettings();
+    } catch (error) {
+      onError(
+        `${t(
+          'settings.providers.custom.deleteError',
+          'Custom Provider could not be deleted.',
+        )} ${error.message}`,
+      );
+    }
+  }
+
   function openAddConnectionModal(provider) {
     modalScope = { provider, connection: null, account: null };
   }
@@ -614,9 +675,12 @@
     <Button variant="primary" onClick={openAddProviderModal}>
       {t('settings.providers.add.button', 'Add provider')}
     </Button>
+    <Button variant="secondary" onClick={() => openCustomProviderModal(null)}>
+      {t('settings.providers.custom.addButton', 'Add custom')}
+    </Button>
   </div>
 
-  {#if connectedProviders.length === 0}
+  {#if displayedProviders.length === 0}
     <EmptyState
       density="compact"
       description={t(
@@ -625,7 +689,7 @@
       )}
     />
   {:else}
-    {#each connectedProviders as provider (provider.id)}
+    {#each displayedProviders as provider (provider.id)}
       <div class="s-provider-card">
         <div class="s-provider-head">
           <div class="s-row-info">
@@ -845,6 +909,26 @@
             {/if}
           </div>
 
+          {#if provider.custom === true}
+            <div class="s-provider-add-connection">
+              <Button
+                variant="secondary"
+                onClick={() =>
+                  openCustomProviderModal(customProviderSettings(provider.id))}
+              >
+                {t('common.edit', 'Edit')}
+              </Button>
+              <Button
+                variant="danger"
+                onClick={() => {
+                  deleteCustomCandidate = provider;
+                }}
+              >
+                {t('common.delete', 'Delete')}
+              </Button>
+            </div>
+          {/if}
+
           {#if provider.id === 'openrouter'}
             <OpenRouterRoutingSettings
               {provider}
@@ -921,6 +1005,33 @@
       {onToast}
       onCompleted={reloadAfterConnect}
       onClose={closeModal}
+    />
+  {/if}
+
+  {#if customModalOpen}
+    <CustomProviderModal
+      provider={customModalProvider}
+      {onToast}
+      onSaved={reloadAfterCustomProviderSave}
+      onClose={closeCustomProviderModal}
+    />
+  {/if}
+
+  {#if deleteCustomCandidate}
+    <ConfirmDialog
+      title={t(
+        'settings.providers.custom.deleteTitle',
+        'Delete Custom Provider?',
+      )}
+      body={t(
+        'settings.providers.custom.deleteBody',
+        'The Provider and its stored data-directory API keys are removed. Existing Model references are kept and become unavailable.',
+      )}
+      confirmLabel={t('common.delete', 'Delete')}
+      onConfirm={confirmDeleteCustomProvider}
+      onCancel={() => {
+        deleteCustomCandidate = null;
+      }}
     />
   {/if}
 {/if}

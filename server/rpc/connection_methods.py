@@ -24,6 +24,7 @@ from core.models.models_dev import (
 )
 from core.models.query import ModelQuery
 from core.providers.accounts import (
+    CREDENTIAL_KEY_ACCOUNT_SEPARATOR,
     DEFAULT_ACCOUNT_ID,
     compose_connection_id,
     derive_credential_key,
@@ -31,6 +32,11 @@ from core.providers.accounts import (
     validate_account_id,
 )
 from core.providers.errors import NetworkError, ProviderError
+from core.providers.providers import custom_provider_credential_key
+from core.settings.normalizers import (
+    normalize_custom_provider_id,
+    normalize_custom_provider_settings,
+)
 from core.utils.errors import ConfigError
 from server.events import RESOURCE_KIND_MODELS, RESOURCE_KIND_PROVIDERS
 from server.rpc.dispatcher import RpcMethodHandler
@@ -320,6 +326,152 @@ def _list_connections(state: Any, params: JsonObject) -> JsonObject:
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"connections": connections}
+
+
+def custom_provider_items(runtime: Any) -> list[JsonObject]:
+    """Return secret-free Custom Provider records with live runtime state."""
+
+    loader = getattr(runtime.storage, "load_custom_providers_settings", None)
+    if not callable(loader):
+        return []
+    providers = loader()
+    items: list[JsonObject] = []
+    for provider_id, provider in sorted(providers.items()):
+        connection_id = f"{provider_id}:default"
+        items.append(
+            {
+                "id": provider_id,
+                **provider,
+                "connection_id": connection_id,
+                "credentials_configured": runtime.provider_credentials.has_credentials(
+                    provider_id,
+                    connection_id,
+                ),
+                "usable": runtime.provider_credentials.is_usable(
+                    provider_id,
+                    connection_id,
+                ),
+                "model_count": len(runtime.models.list_for_provider(provider_id)),
+            }
+        )
+    return items
+
+
+def _list_custom_providers(state: Any, params: JsonObject) -> JsonObject:
+    if params:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "provider.custom_list does not accept params")
+    return {"providers": custom_provider_items(state.runtime)}
+
+
+def _save_custom_provider(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"provider", "api_key"}, "provider custom-save")
+    raw_provider = params.get("provider")
+    if not isinstance(raw_provider, dict):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.provider must be an object")
+
+    raw_provider_id = raw_provider.get("id")
+    try:
+        provider_id = normalize_custom_provider_id(raw_provider_id)
+        provider = normalize_custom_provider_settings(
+            provider_id,
+            {key: value for key, value in raw_provider.items() if key != "id"},
+        )
+    except Exception as exc:
+        if isinstance(exc, RpcError):
+            raise
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+
+    api_key = params.get("api_key")
+    if api_key is not None and (not isinstance(api_key, str) or not api_key.strip()):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.api_key must be a non-empty string")
+    if api_key is not None and provider["auth"] != "api_key":
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.api_key is only supported when provider.auth is 'api_key'",
+        )
+
+    runtime = state.runtime
+    existing_custom = runtime.storage.load_custom_providers_settings()
+    if provider_id not in existing_custom:
+        try:
+            existing_provider = runtime.providers.get(provider_id)
+        except KeyError:
+            existing_provider = None
+        if existing_provider is not None:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                f"Custom Provider id '{provider_id}' conflicts with a bundled Provider",
+            )
+
+    previous = existing_custom.get(provider_id)
+    try:
+        runtime.storage.save_custom_provider_settings(provider_id, provider)
+        runtime.reload_custom_providers()
+        if api_key is not None:
+            runtime.storage.set_data_dir_credential(
+                custom_provider_credential_key(provider_id),
+                api_key.strip(),
+            )
+        elif previous is not None and previous["auth"] == "api_key" and provider["auth"] == "none":
+            _remove_custom_provider_credentials(runtime, provider_id)
+        runtime.reload_environment_credentials()
+        item = next(item for item in custom_provider_items(runtime) if item["id"] == provider_id)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    publish_resource_changed(state, RESOURCE_KIND_PROVIDERS)
+    publish_resource_changed(state, RESOURCE_KIND_MODELS)
+    _LOGGER.info(
+        "Custom Provider saved (provider=%s auth=%s models=%s)",
+        provider_id,
+        provider["auth"],
+        len(provider["models"]),
+    )
+    return {"provider": item}
+
+
+def _delete_custom_provider(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"provider_id"}, "provider custom-delete")
+    try:
+        provider_id = normalize_custom_provider_id(_required_string(params, "provider_id"))
+    except Exception as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+
+    runtime = state.runtime
+    try:
+        removed = runtime.storage.delete_custom_provider_settings(provider_id)
+        if removed is None:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                f"Custom Provider '{provider_id}' does not exist",
+            )
+        credentials_removed = _remove_custom_provider_credentials(runtime, provider_id)
+        runtime.reload_custom_providers()
+        runtime.reload_environment_credentials()
+    except RpcError:
+        raise
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+    publish_resource_changed(state, RESOURCE_KIND_PROVIDERS)
+    publish_resource_changed(state, RESOURCE_KIND_MODELS)
+    _LOGGER.info("Custom Provider deleted (provider=%s)", provider_id)
+    return {
+        "provider_id": provider_id,
+        "deleted": True,
+        "credentials_removed": credentials_removed,
+    }
+
+
+def _remove_custom_provider_credentials(runtime: Any, provider_id: str) -> int:
+    base_key = custom_provider_credential_key(provider_id)
+    account_prefix = f"{base_key}{CREDENTIAL_KEY_ACCOUNT_SEPARATOR}"
+    credential_keys = [
+        key
+        for key in runtime.storage.load_environment()
+        if key == base_key or key.startswith(account_prefix)
+    ]
+    return sum(bool(runtime.storage.remove_data_dir_credential(key)) for key in credential_keys)
 
 
 def _account_param(params: JsonObject) -> str | None:
@@ -872,10 +1024,13 @@ def _reload_runtime_model_registry(runtime: Any, system_resources_dir: Path) -> 
     # captured the registry at construction (task-model targets for
     # speech/image/embeddings, the status display, the recall backend) hold the
     # same instance, so an in-place swap reaches all of them without re-wiring.
-    runtime.models.reload(
-        system_resources_dir,
-        runtime_models_dir=runtime.storage.layout.models,
-    )
+    reload_options: dict[str, Any] = {
+        "runtime_models_dir": runtime.storage.layout.models,
+    }
+    custom_loader = getattr(runtime.storage, "load_custom_providers_settings", None)
+    if callable(custom_loader):
+        reload_options["custom_providers"] = custom_loader()
+    runtime.models.reload(system_resources_dir, **reload_options)
 
 
 def _model_count(result: JsonObject) -> int:
@@ -917,6 +1072,9 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "model.list": _list_models,
         "model.refresh_db": _refresh_model_db,
         "provider.routing_options": _routing_provider_options,
+        "provider.custom_list": _list_custom_providers,
+        "provider.custom_save": _save_custom_provider,
+        "provider.custom_delete": _delete_custom_provider,
         "provider.set_key": _set_provider_key,
         "provider.unset_key": _unset_provider_key,
         "provider.connect": _connect_provider,

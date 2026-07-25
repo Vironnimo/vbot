@@ -32,6 +32,8 @@ from core.settings.normalizers import (
     normalize_agent_defaults,
     normalize_appearance_settings,
     normalize_compaction_settings,
+    normalize_custom_provider_id,
+    normalize_custom_provider_settings,
     normalize_debug_settings,
     normalize_defaults_settings,
     normalize_extensions_settings,
@@ -575,12 +577,73 @@ class StorageManager:
         """Return normalized persisted providers settings.
 
         This established Connection-facing surface remains intentionally narrow;
-        OpenRouter request policy has its own loader below.
+        OpenRouter request policy and Custom Provider definitions have their own
+        loaders below.
         """
 
         settings = self.load_settings()
         normalized = normalize_providers_settings(settings.get("providers"))
         return {"connections": normalized["connections"]}
+
+    def load_custom_providers_settings(self) -> dict[str, dict[str, Any]]:
+        """Return normalized, secret-free Custom Provider definitions."""
+
+        settings = self.load_settings()
+        normalized = normalize_providers_settings(settings.get("providers"))
+        return {
+            provider_id: dict(provider) for provider_id, provider in normalized["custom"].items()
+        }
+
+    def save_custom_provider_settings(
+        self,
+        provider_id: str,
+        provider: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Create or replace one Custom Provider in a Settings transaction."""
+
+        normalized_id = normalize_custom_provider_id(provider_id)
+        normalized_provider = normalize_custom_provider_settings(normalized_id, provider)
+
+        def _mutate(settings: dict[str, Any]) -> dict[str, Any]:
+            current = normalize_providers_settings(settings.get("providers"))
+            custom = dict(current["custom"])
+            custom[normalized_id] = normalized_provider
+            connections = dict(current["connections"])
+            connections.setdefault(f"{normalized_id}:default", True)
+            settings["providers"] = normalize_providers_settings(
+                {
+                    "connections": connections,
+                    "custom": custom,
+                    "openrouter": current["openrouter"],
+                }
+            )
+            return dict(settings["providers"]["custom"][normalized_id])
+
+        return self.update_settings(_mutate)
+
+    def delete_custom_provider_settings(self, provider_id: str) -> dict[str, Any] | None:
+        """Delete one Custom Provider and its Connection override atomically."""
+
+        normalized_id = normalize_custom_provider_id(provider_id)
+
+        def _mutate(settings: dict[str, Any]) -> dict[str, Any] | None:
+            current = normalize_providers_settings(settings.get("providers"))
+            custom = dict(current["custom"])
+            removed = custom.pop(normalized_id, None)
+            if removed is None:
+                return None
+            connections = dict(current["connections"])
+            connections.pop(f"{normalized_id}:default", None)
+            settings["providers"] = normalize_providers_settings(
+                {
+                    "connections": connections,
+                    "custom": custom,
+                    "openrouter": current["openrouter"],
+                }
+            )
+            return dict(removed)
+
+        return self.update_settings(_mutate)
 
     def load_openrouter_routing_settings(self) -> dict[str, Any]:
         """Return the normalized OpenRouter default and per-Model routing policy."""
@@ -594,7 +657,7 @@ class StorageManager:
         settings: dict[str, Any],
         providers: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """Replace OpenRouter routing while preserving Connection overrides."""
+        """Replace OpenRouter routing while preserving Connections and Custom Providers."""
 
         if not isinstance(providers, Mapping):
             raise StorageError("Provider settings must be a mapping")
@@ -609,6 +672,7 @@ class StorageManager:
         current = normalize_providers_settings(settings.get("providers"))
         candidate = {
             "connections": current["connections"],
+            "custom": current["custom"],
             "openrouter": providers["openrouter"],
         }
         normalized = normalize_providers_settings(candidate)
@@ -637,6 +701,7 @@ class StorageManager:
             settings["providers"] = normalize_providers_settings(
                 {
                     "connections": connections,
+                    "custom": current["custom"],
                     "openrouter": current["openrouter"],
                 }
             )

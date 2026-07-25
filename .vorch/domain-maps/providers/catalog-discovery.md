@@ -8,6 +8,8 @@ Read this reference only for Provider Model discovery and refresh. Model-DB laye
 
 A discovery target is one usable Connection with an effective `models_endpoint`. The effective base URL and endpoint use Connection overrides before Provider defaults. Account choice supplies a credential only; discovered Models are tagged with the local Connection id, not the Account.
 
+An OpenAI-compatible Custom Provider participates without a separate discovery path: its implicit `default` Connection, optional Settings `models_endpoint`, Adapter selector, and credential resolver feed this same pipeline. Manual Custom Model facts are applied later by `ModelRegistry` and therefore override a discovered Model with the same wire id without deleting discovered-only Models.
+
 ## Fetch and normalization
 
 - Primary catalog GET accepts top-level `data` or `models` lists and passes entries through the selected Adapter class's catalog filter/normalizer.

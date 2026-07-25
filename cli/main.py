@@ -93,6 +93,9 @@ from cli.prompt_management import (
 from cli.provider_management import (
     provider_connect,
     provider_connect_status,
+    provider_custom_delete,
+    provider_custom_list,
+    provider_custom_save,
     provider_disconnect,
     provider_list,
     provider_set_enabled,
@@ -942,11 +945,30 @@ def dispatch_provider_command(
     set_enabled_fn: Callable[
         [ServerInstance, str, bool, str | None], CommandResult
     ] = provider_set_enabled,
+    custom_list_fn: Callable[[ServerInstance], CommandResult] = provider_custom_list,
+    custom_save_fn: Callable[..., CommandResult] = provider_custom_save,
+    custom_delete_fn: Callable[[ServerInstance, str], CommandResult] = provider_custom_delete,
 ) -> CommandResult:
     """Dispatch one parsed provider command against the server RPC client."""
 
     if args.command == "list":
         return list_providers(instance)
+    if args.command == "custom-list":
+        return custom_list_fn(instance)
+    if args.command == "custom-save":
+        return custom_save_fn(
+            instance,
+            args.provider,
+            name=args.name,
+            adapter=args.adapter,
+            base_url=args.base_url,
+            auth=args.auth,
+            api_key=args.api_key,
+            models_endpoint=args.models_endpoint,
+            model_ids=args.model,
+        )
+    if args.command == "custom-delete":
+        return custom_delete_fn(instance, args.provider)
     if args.command == "status":
         return provider_status_fn(instance, args.provider, args.connection)
     if args.command == "usage":

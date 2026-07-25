@@ -8,7 +8,7 @@ The short version:
 - create one worktree per task
 - list active managed worktrees when you need orientation
 - work from inside that worktree directory
-- start and stop vBot from inside the worktree with normal relative commands
+- start and stop the complete vBot + fake Provider test instance from inside the worktree with `scripts/test-env.py`
 - delete the worktree when the task is finished
 
 ## What the script does
@@ -20,20 +20,21 @@ For each created worktree it does all of the following:
 - creates a Git worktree under `.worktrees/<name>`
 - creates a dedicated data directory at `~/.vbot-<name>`
 - initializes the canonical empty data-directory structure through `core/storage/layout.py`
-- writes `settings.json` in that data directory with a dedicated `server_port`
+- writes `settings.json` in that data directory with a dedicated `server_port`, a paired local fake-Provider endpoint, and chat/fallback/image/speech fake Models
 - writes a `.vbot-worktree` marker into the worktree root
 - installs frontend dependencies in `webui/`
 - builds the frontend once during creation
 
-The Worktree utility does not seed an Agent or copy machine-local Workspace content. Runtime creates the bootstrap Identity Agent and first Session on the first server start. Once you are inside the worktree, normal commands like `python cli/main.py server start` or `python scripts/test-env.py start` use the worktree's own data dir and port automatically.
+The Worktree utility does not seed an Agent or copy machine-local Workspace content. Runtime creates the bootstrap Identity Agent and first Session on the first server start. Once you are inside the worktree, `python scripts/test-env.py start` uses the Worktree's own data dir, starts its Settings-declared fake Provider, builds the WebUI, and starts vBot. Direct `python cli/main.py server start` starts only vBot and therefore leaves fake-Model calls unavailable.
 
 ## Basic model
 
-There are three separate things involved:
+There are four separate things involved:
 
 1. Git worktree
 2. Dedicated data directory
-3. Dedicated port
+3. Dedicated vBot server port
+4. Dedicated fake-Provider port
 
 For a worktree named `feature-a`, the expected layout is:
 
@@ -50,7 +51,7 @@ repo root          -> current branch, usually main
 8421               -> primary development server port
 ```
 
-The separately installed application retains the product defaults `~/.vbot` and `8420`. The first generated worktree port starts at `8422`; additional worktrees get the next free port.
+The separately installed application retains the product defaults `~/.vbot` and `8420`. The first generated Worktree server port starts at `8422`; its paired fake Provider uses `18422`. Additional Worktrees get the next server port whose paired fake-Provider port is also unassigned and unbound.
 
 ## Normal workflow
 
@@ -289,29 +290,17 @@ python cli/main.py server status
 
 ### Start the local worktree server
 
-From inside the worktree:
-
-```bash
-python cli/main.py server start
-```
-
-or:
+From inside the worktree, start the complete test instance:
 
 ```bash
 python scripts/test-env.py start
 ```
 
-`scripts/test-env.py start` also rebuilds the frontend first.
+`scripts/test-env.py start` rebuilds the frontend, starts the Settings-declared fake Provider with an owned PID under the Worktree data directory, then starts vBot. Use `python cli/main.py server start` only when intentionally testing vBot without the fake endpoint.
 
 ### Stop the local worktree server
 
 From inside the worktree:
-
-```bash
-python cli/main.py server stop
-```
-
-or:
 
 ```bash
 python scripts/test-env.py stop
@@ -346,7 +335,7 @@ This is the machine-readable marker used by config and cleanup logic.
 
 ### `~/.vbot-<name>/settings.json`
 
-This contains at least the dedicated `server_port` for that worktree.
+This contains the dedicated `server_port`, the keyless `providers.custom.fake` endpoint, manual fake Models for chat/fallback/image/speech, and the corresponding default/task-model bindings. Existing user values in a reused data directory are preserved; missing fixture values are filled.
 
 ### `~/.vbot-<name>/.env` and canonical directories
 

@@ -434,7 +434,7 @@ export function onboardingSettings(connected) {
           ],
         },
       ],
-      custom_endpoints: { supported: false, items: [] },
+      custom_endpoints: { supported: true, items: [] },
     },
     defaults: { agent: {} },
     debug: { enabled: false, trace_limit: 50 },
@@ -521,7 +521,7 @@ export function createSettingsRpcMock(options = {}) {
     },
     providers: {
       items: [],
-      custom_endpoints: { supported: false, items: [] },
+      custom_endpoints: { supported: true, items: [] },
     },
     defaults: { agent: {} },
     debug: { enabled: debugEnabled, trace_limit: traceLimit },

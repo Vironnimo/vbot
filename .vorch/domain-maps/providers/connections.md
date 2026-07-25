@@ -6,6 +6,8 @@ Read this reference only for Provider/Connection configuration, Accounts, creden
 
 `ProviderConfig` owns id/name, Adapter selector, base URL, `connections`, request `defaults`, extra headers, optional Provider-level discovery endpoint/models.dev id, and an optional read-side `context_window` default. `ConnectionConfig` owns local id/label/type, auth metadata, optional OAuth metadata, optional `base_url`, `mode`, `models_endpoint`, and `auto_refresh`.
 
+Settings-owned Custom Providers use the same types with one implicit `default` Connection. `auth: "api_key"` maps to standard `Authorization: Bearer` auth and deterministic `VBOT_CUSTOM_<ID>_API_KEY` storage; `auth: "none"` maps to a keyless Connection. Custom Provider CRUD owns generated default/named Account keys in the data-dir `.env`, while the persisted Provider record remains secret-free.
+
 Supported Connection types are `api_key`, `oauth`, and `none`. Keyed Connections default enabled and are gated by credentials. A `none` Connection is keyless: auth may be empty, it resolves credential `""`, exposes one implicit usable default Account, and is disabled by default so vBot never probes a local endpoint without explicit opt-in.
 
 Connection-level base URL and models endpoint override Provider-level values. `mode` is an Adapter-interpreted wire selector. `auto_refresh` is a boolean for local catalogs whose installed Model set changes independently of vBot; it changes refresh behavior, not credential semantics.

@@ -1175,6 +1175,82 @@ export const englishCatalog = Object.freeze({
   'settings.providers.add.keyError': 'API key could not be saved.',
   'settings.providers.add.oauthIntro':
     'Click Connect to begin. vBot then shows a code to enter at {provider} in your browser.',
+  'settings.providers.custom.addButton': 'Add custom',
+  'settings.providers.custom.addTitle': 'Add Custom Provider',
+  'settings.providers.custom.editTitle': 'Edit Custom Provider',
+  'settings.providers.custom.eyebrow': 'OpenAI-compatible endpoint',
+  'settings.providers.custom.intro':
+    'Connect an endpoint you control and describe the Models it exposes. Secrets are stored separately in the data-directory .env.',
+  'settings.providers.custom.id': 'Provider id',
+  'settings.providers.custom.idHint':
+    'Stable id used in Model references, for example local-ai.',
+  'settings.providers.custom.name': 'Name',
+  'settings.providers.custom.adapter': 'Adapter',
+  'settings.providers.custom.adapterOpenAiCompatible': 'OpenAI compatible',
+  'settings.providers.custom.auth': 'Authentication',
+  'settings.providers.custom.authApiKey': 'Bearer API key',
+  'settings.providers.custom.authNone': 'No API key',
+  'settings.providers.custom.baseUrl': 'Endpoint URL',
+  'settings.providers.custom.baseUrlHint':
+    'Base URL including the API prefix, for example http://127.0.0.1:8080/v1.',
+  'settings.providers.custom.baseUrlPlaceholder': 'http://127.0.0.1:8080/v1',
+  'settings.providers.custom.modelsEndpoint': 'Model discovery path',
+  'settings.providers.custom.modelsEndpointHint':
+    'Optional OpenAI-compatible path. Leave empty to use manual Models only.',
+  'settings.providers.custom.modelsEndpointPlaceholder': '/models',
+  'settings.providers.custom.apiKey': 'API key (optional)',
+  'settings.providers.custom.replaceApiKey': 'Replace API key (optional)',
+  'settings.providers.custom.apiKeyHint':
+    'Write-only. Leave empty to keep the existing key or connect it later.',
+  'settings.providers.custom.modelsTitle': 'Manual Models',
+  'settings.providers.custom.modelsHint':
+    'Manual facts override discovered Models with the same wire id.',
+  'settings.providers.custom.addModel': 'Add Model',
+  'settings.providers.custom.noModels':
+    'No manual Models. Use discovery or add one here.',
+  'settings.providers.custom.modelId': 'Wire id',
+  'settings.providers.custom.modelNumber': 'Model {number}',
+  'settings.providers.custom.modelName': 'Display name',
+  'settings.providers.custom.contextWindow': 'Context window',
+  'settings.providers.custom.maxOutput': 'Max output tokens',
+  'settings.providers.custom.inputModalities': 'Input modalities',
+  'settings.providers.custom.inputModalitiesHint':
+    'Comma-separated: text, image, audio, file, video',
+  'settings.providers.custom.outputModalities': 'Output modalities',
+  'settings.providers.custom.outputModalitiesHint':
+    'Comma-separated: text, image, speech, transcription, embeddings',
+  'settings.providers.custom.taskTypes': 'Task types',
+  'settings.providers.custom.taskTypesHint':
+    'Optional comma-separated explicit task types',
+  'settings.providers.custom.parameters': 'Supported parameters',
+  'settings.providers.custom.parametersHint':
+    'Optional comma-separated wire parameter names',
+  'settings.providers.custom.voices': 'Supported voices',
+  'settings.providers.custom.voicesHint': 'Optional comma-separated voice ids',
+  'settings.providers.custom.tools': 'Tools',
+  'settings.providers.custom.vision': 'Vision',
+  'settings.providers.custom.jsonMode': 'JSON mode',
+  'settings.providers.custom.reasoning': 'Reasoning',
+  'settings.providers.custom.capabilityAria': '{capability} for {model}',
+  'settings.providers.custom.validationId':
+    'Provider id must use lowercase letters and digits in hyphen-separated segments.',
+  'settings.providers.custom.validationName': 'Enter a Provider name.',
+  'settings.providers.custom.validationBaseUrl':
+    'Enter an absolute HTTP(S) endpoint URL.',
+  'settings.providers.custom.validationModelId':
+    'Every Model needs a wire id without "::".',
+  'settings.providers.custom.validationDuplicateModel':
+    'Model ids must be unique.',
+  'settings.providers.custom.validationPositiveInteger':
+    '{label} must be a positive whole number.',
+  'settings.providers.custom.saved': 'Custom Provider saved.',
+  'settings.providers.custom.saveError': 'Custom Provider could not be saved.',
+  'settings.providers.custom.deleted': 'Custom Provider deleted.',
+  'settings.providers.custom.deleteError':
+    'Custom Provider could not be deleted.',
+  'settings.providers.custom.deleteTitle': 'Delete Custom Provider?',
+  'settings.providers.custom.deleteBody':
+    'The Provider and its stored data-directory API keys are removed. Existing Model references are kept and become unavailable.',
   'settings.channels.title': 'Channels',
   'settings.channels.subtitle': 'Manage channel routing and runtime status.',
   'settings.channels.add': 'Add channel',

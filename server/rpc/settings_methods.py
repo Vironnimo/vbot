@@ -31,6 +31,7 @@ from core.settings import (
 )
 from core.utils.logging import get_logger
 from server.events import RESOURCE_KIND_COMMANDS
+from server.rpc.connection_methods import custom_provider_items
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
@@ -736,8 +737,8 @@ def _settings_response(state: Any) -> JsonObject:
                 for provider_id in runtime.providers.list_ids()
             ],
             "custom_endpoints": {
-                "supported": False,
-                "items": [],
+                "supported": True,
+                "items": custom_provider_items(runtime),
             },
         },
         "appearance": {
@@ -822,8 +823,11 @@ def _provider_settings_item(runtime: Any, provider_id: str) -> JsonObject:
         "status": "configured" if credentials_configured else "missing_credentials",
         "model_count": len(runtime.models.list_for_provider(provider_id)),
         "kind": "remote" if provider.base_url else "local",
-        "editable": False,
+        "editable": bool(getattr(provider, "custom", False)),
     }
+    if getattr(provider, "custom", False):
+        item["custom"] = True
+        item["adapter"] = provider.adapter
     if provider.id == "openrouter":
         item["routing"] = runtime.storage.load_openrouter_routing_settings()
     return item

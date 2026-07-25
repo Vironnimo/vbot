@@ -24,7 +24,7 @@ test("slash command discovery, help, status, rename, and new Session work togeth
     .filter({ hasText: /^status\b/ })
     .click();
   let commandOutputs = chat.getByRole("note", { name: "Command output" });
-  await expect(commandOutputs.last()).toContainText("E2E Primary");
+  await expect(commandOutputs.last()).toContainText("Fake Primary");
 
   await sendChatMessage(chat, "/help");
   commandOutputs = chat.getByRole("note", { name: "Command output" });
