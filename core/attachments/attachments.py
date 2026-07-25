@@ -40,6 +40,30 @@ _MIME_ALLOWLIST = frozenset(
         "application/vnd.ms-powerpoint",
     }
 )
+_CANONICAL_EXTENSION_BY_MEDIA_TYPE = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "audio/ogg": ".ogg",
+    "audio/mpeg": ".mp3",
+    "audio/wav": ".wav",
+    "audio/flac": ".flac",
+    "audio/mp4": ".m4a",
+    "video/mp4": ".mp4",
+    "video/quicktime": ".mov",
+    "video/webm": ".webm",
+    "video/x-msvideo": ".avi",
+    "text/plain": ".txt",
+    "application/pdf": ".pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+    "application/msword": ".doc",
+    "application/vnd.ms-excel": ".xls",
+    "application/vnd.ms-powerpoint": ".ppt",
+}
+_CANONICAL_BLOB_EXTENSIONS = frozenset(_CANONICAL_EXTENSION_BY_MEDIA_TYPE.values())
 
 _LOGGER = get_logger("attachments")
 
@@ -118,17 +142,19 @@ class AttachmentStore:
         media_type = _sniff_mime(data, filename)
         if not _is_allowed_mime(media_type):
             raise AttachmentTypeNotAllowedError(f"Attachment type not allowed: {media_type}")
+        canonical_extension = _canonical_extension(media_type)
+        stored_filename = _filename_with_extension(filename, canonical_extension)
 
         attachment_id = str(uuid4())
         stored_at = datetime.now(UTC).isoformat()
 
         self._attachments_dir.mkdir(parents=True, exist_ok=True)
 
-        blob_path = self._blob_path(attachment_id)
+        blob_path = self._blob_path(attachment_id, media_type)
         sidecar_path = self._sidecar_path(attachment_id)
         record = AttachmentRecord(
             id=attachment_id,
-            filename=filename,
+            filename=stored_filename,
             media_type=media_type,
             size_bytes=size_bytes,
             stored_at=stored_at,
@@ -169,7 +195,7 @@ class AttachmentStore:
                 f"Attachment metadata id mismatch: expected {normalized_id}, got {record.id}"
             )
 
-        blob_path = self._blob_path(normalized_id)
+        blob_path = self._blob_path(normalized_id, record.media_type)
         if not blob_path.is_file():
             raise AttachmentNotFoundError(f"Attachment blob not found: {normalized_id}")
 
@@ -190,7 +216,11 @@ class AttachmentStore:
         """Delete one attachment blob and sidecar. Missing files are ignored."""
 
         normalized_id = _normalize_attachment_id(attachment_id)
-        for target_path in (self._blob_path(normalized_id), self._sidecar_path(normalized_id)):
+        blob_paths = (
+            self._attachments_dir / f"{normalized_id}{extension}"
+            for extension in _CANONICAL_BLOB_EXTENSIONS
+        )
+        for target_path in (*blob_paths, self._sidecar_path(normalized_id)):
             try:
                 target_path.unlink()
             except FileNotFoundError:
@@ -200,8 +230,8 @@ class AttachmentStore:
                     f"Cannot delete attachment file {target_path}: {exc}"
                 ) from exc
 
-    def _blob_path(self, attachment_id: str) -> Path:
-        return self._attachments_dir / attachment_id
+    def _blob_path(self, attachment_id: str, media_type: str) -> Path:
+        return self._attachments_dir / f"{attachment_id}{_canonical_extension(media_type)}"
 
     def _sidecar_path(self, attachment_id: str) -> Path:
         return self._attachments_dir / f"{attachment_id}.json"
@@ -305,6 +335,24 @@ def _normalize_attachment_id(attachment_id: str) -> str:
     if not isinstance(attachment_id, str) or not _UUID4_RE.match(attachment_id.lower()):
         raise AttachmentNotFoundError(f"Invalid attachment id: {attachment_id}")
     return attachment_id.lower()
+
+
+def _canonical_extension(media_type: str) -> str:
+    extension = _CANONICAL_EXTENSION_BY_MEDIA_TYPE.get(media_type)
+    if extension is None:
+        raise AttachmentError(f"No canonical filename extension for media type: {media_type}")
+    return extension
+
+
+def _filename_with_extension(filename: str, canonical_extension: str) -> str:
+    if not filename.strip():
+        return f"attachment{canonical_extension}"
+    if Path(filename).suffix:
+        return filename
+    extensionless_name = filename.rstrip(". ")
+    if not extensionless_name:
+        extensionless_name = "attachment"
+    return f"{extensionless_name}{canonical_extension}"
 
 
 def _sniff_ooxml_media_type(data: bytes) -> str | None:

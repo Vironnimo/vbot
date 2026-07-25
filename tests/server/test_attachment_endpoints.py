@@ -128,6 +128,7 @@ def test_get_attachment_streams_existing_blob_with_media_type(tmp_path: Path) ->
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("image/jpeg")
+    assert response.headers["content-disposition"] == 'inline; filename="photo.jpg"'
     assert response.content == payload
 
 
