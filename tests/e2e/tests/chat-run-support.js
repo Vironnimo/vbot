@@ -10,13 +10,7 @@ export function getAgentTab(container, agentName) {
   });
 }
 
-export async function startIsolatedChat(page, { agentName = "" } = {}) {
-  await page.goto("/#chat");
-
-  const chat = page.getByRole("region", { name: "Chat" });
-  if (agentName) {
-    await getAgentTab(chat, agentName).click();
-  }
+export async function ensureEmptyChat(chat) {
   await chat.getByRole("button", { exact: true, name: "Sessions" }).click();
   const sessionDrawer = chat.getByRole("complementary", { name: "Sessions" });
   const sessionItems = sessionDrawer.getByRole("listitem");
@@ -48,6 +42,16 @@ export async function startIsolatedChat(page, { agentName = "" } = {}) {
   await expect(emptyChat).toBeVisible();
 
   return chat;
+}
+
+export async function startIsolatedChat(page, { agentName = "" } = {}) {
+  await page.goto("/#chat");
+
+  const chat = page.getByRole("region", { name: "Chat" });
+  if (agentName) {
+    await getAgentTab(chat, agentName).click();
+  }
+  return ensureEmptyChat(chat);
 }
 
 export async function sendChatMessage(chat, content) {
