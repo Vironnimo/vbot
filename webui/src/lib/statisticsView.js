@@ -16,6 +16,7 @@ export const STATISTICS_SUB_VIEWS = Object.freeze([
 ]);
 
 export const DAILY_GRANULARITIES = Object.freeze(['day', 'week', 'month']);
+export const USAGE_HISTORY_RANGES = Object.freeze(['24h', '7d', '30d', 'all']);
 
 export const ACTIVITY_BUCKET_COUNTS = Object.freeze({
   day: 30,
@@ -41,6 +42,7 @@ const EM_DASH = '—';
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
+const USAGE_HISTORY_GAP_MS = 90 * MINUTE_MS;
 
 function toFiniteNumber(value) {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
@@ -135,6 +137,244 @@ export function usageSeverity(percent) {
     return 'warn';
   }
   return 'ok';
+}
+
+export function providerUsageTargetKey(snapshot) {
+  const connection =
+    typeof snapshot?.connection === 'string' ? snapshot.connection : '';
+  const account =
+    typeof snapshot?.account === 'string' && snapshot.account
+      ? snapshot.account
+      : 'default';
+  return `${connection}::${account}`;
+}
+
+export function usageHistorySince(range, now = Date.now()) {
+  if (range === 'all') {
+    return null;
+  }
+  const duration =
+    range === '24h' ? DAY_MS : range === '30d' ? 30 * DAY_MS : 7 * DAY_MS;
+  const timestamp = Number.isFinite(now) ? now : Date.now();
+  return new Date(timestamp - duration).toISOString();
+}
+
+export function buildUsageHistorySeries(samples) {
+  const byKey = new Map();
+  for (const sample of Array.isArray(samples) ? samples : []) {
+    const sampledAt = parseIso(sample?.sampled_at);
+    if (sampledAt === null || !Array.isArray(sample?.providers)) {
+      continue;
+    }
+    for (const snapshot of sample.providers) {
+      const targetKey = providerUsageTargetKey(snapshot);
+      if (!targetKey.startsWith('::') && Array.isArray(snapshot?.windows)) {
+        for (const window of snapshot.windows) {
+          if (
+            typeof window?.label !== 'string' ||
+            !Number.isFinite(window?.used_percent)
+          ) {
+            continue;
+          }
+          const duration = Number.isFinite(window.window_seconds)
+            ? window.window_seconds
+            : null;
+          const key = `${targetKey}::${window.label}::${duration ?? ''}`;
+          let series = byKey.get(key);
+          if (!series) {
+            series = {
+              key,
+              targetKey,
+              connection: snapshot.connection,
+              account: snapshot.account || 'default',
+              displayName: snapshot.display_name || snapshot.connection,
+              plan: snapshot.plan ?? null,
+              label: window.label,
+              windowSeconds: duration,
+              points: [],
+            };
+            byKey.set(key, series);
+          }
+          series.plan = snapshot.plan ?? series.plan;
+          series.points.push({
+            sampledAt: sample.sampled_at,
+            timestamp: sampledAt.getTime(),
+            usedPercent: clampUsagePercent(window.used_percent),
+            resetAt:
+              typeof window.reset_at === 'string' ? window.reset_at : null,
+          });
+        }
+      }
+    }
+  }
+  return [...byKey.values()]
+    .map((series) => ({
+      ...series,
+      points: series.points.sort(
+        (left, right) => left.timestamp - right.timestamp,
+      ),
+    }))
+    .sort(
+      (left, right) =>
+        left.displayName.localeCompare(right.displayName) ||
+        left.account.localeCompare(right.account) ||
+        left.label.localeCompare(right.label),
+    );
+}
+
+export function usageHistoryIntervals(seriesList) {
+  const intervals = [];
+  for (const series of Array.isArray(seriesList) ? seriesList : []) {
+    const points = Array.isArray(series?.points) ? series.points : [];
+    for (let index = 1; index < points.length; index += 1) {
+      const previous = points[index - 1];
+      const current = points[index];
+      const elapsedMs = current.timestamp - previous.timestamp;
+      if (elapsedMs <= 0) {
+        continue;
+      }
+      const resetChanged =
+        previous.resetAt !== current.resetAt &&
+        (previous.resetAt !== null || current.resetAt !== null);
+      const inferredReset = current.usedPercent < previous.usedPercent;
+      const kind =
+        elapsedMs > USAGE_HISTORY_GAP_MS
+          ? 'gap'
+          : resetChanged || inferredReset
+            ? 'reset'
+            : 'change';
+      intervals.push({
+        id: `${series.key}::${current.sampledAt}`,
+        kind,
+        seriesKey: series.key,
+        connection: series.connection,
+        account: series.account,
+        displayName: series.displayName,
+        label: series.label,
+        from: previous,
+        to: current,
+        elapsedMs,
+        delta:
+          kind === 'change' ? current.usedPercent - previous.usedPercent : null,
+      });
+    }
+  }
+  return intervals.sort((left, right) => {
+    const leftChange = left.kind === 'change' ? Math.max(0, left.delta) : -1;
+    const rightChange = right.kind === 'change' ? Math.max(0, right.delta) : -1;
+    return (
+      rightChange - leftChange ||
+      right.to.timestamp - left.to.timestamp ||
+      left.id.localeCompare(right.id)
+    );
+  });
+}
+
+export function usageHistoryPolylineSegments(
+  points,
+  width = 720,
+  height = 160,
+) {
+  const safePoints = Array.isArray(points) ? points : [];
+  if (safePoints.length === 0) {
+    return [];
+  }
+  const coordinates = usageHistoryPointCoordinates(safePoints, width, height);
+  const segments = [];
+  let current = [coordinates[0]];
+  for (let index = 1; index < safePoints.length; index += 1) {
+    const previous = safePoints[index - 1];
+    const point = safePoints[index];
+    const resetChanged =
+      previous.resetAt !== point.resetAt &&
+      (previous.resetAt !== null || point.resetAt !== null);
+    const breakBefore =
+      point.timestamp - previous.timestamp > USAGE_HISTORY_GAP_MS ||
+      resetChanged ||
+      point.usedPercent < previous.usedPercent;
+    if (breakBefore) {
+      segments.push(current);
+      current = [];
+    }
+    current.push(coordinates[index]);
+  }
+  segments.push(current);
+  return segments.map((segment) =>
+    segment.map(({ x, y }) => `${x.toFixed(2)},${y.toFixed(2)}`).join(' '),
+  );
+}
+
+export function usageHistoryPointCoordinates(
+  points,
+  width = 720,
+  height = 160,
+) {
+  const safePoints = Array.isArray(points) ? points : [];
+  if (safePoints.length === 0) {
+    return [];
+  }
+  const firstTimestamp = safePoints[0].timestamp;
+  const lastTimestamp = safePoints.at(-1).timestamp;
+  const span = Math.max(1, lastTimestamp - firstTimestamp);
+  return safePoints.map((point) => ({
+    x: ((point.timestamp - firstTimestamp) / span) * width,
+    y: height - (clampUsagePercent(point.usedPercent) / 100) * height,
+  }));
+}
+
+export function usageHistorySummary(samples) {
+  const safeSamples = Array.isArray(samples) ? samples : [];
+  const targets = new Set();
+  let unavailable = 0;
+  for (const sample of safeSamples) {
+    for (const snapshot of Array.isArray(sample?.providers)
+      ? sample.providers
+      : []) {
+      targets.add(providerUsageTargetKey(snapshot));
+      if (
+        snapshot?.error ||
+        !Array.isArray(snapshot?.windows) ||
+        snapshot.windows.length === 0
+      ) {
+        unavailable += 1;
+      }
+    }
+  }
+  return {
+    samples: safeSamples.length,
+    targets: targets.size,
+    unavailable,
+    firstSample: safeSamples[0]?.sampled_at ?? null,
+    lastSample: safeSamples.at(-1)?.sampled_at ?? null,
+  };
+}
+
+export function runActivityTotals(runs) {
+  const totals = {
+    runs: 0,
+    measuredTokens: 0,
+    estimatedTokens: 0,
+  };
+  for (const run of Array.isArray(runs) ? runs : []) {
+    totals.runs += 1;
+    totals.measuredTokens +=
+      toFiniteNumber(run?.measured_input_tokens) +
+      toFiniteNumber(run?.measured_output_tokens);
+    totals.estimatedTokens +=
+      toFiniteNumber(run?.estimated_input_tokens) +
+      toFiniteNumber(run?.estimated_output_tokens);
+  }
+  return totals;
+}
+
+export function formatUsageDelta(value, locale = 'en') {
+  if (!Number.isFinite(value)) {
+    return EM_DASH;
+  }
+  const sign = value > 0 ? '+' : '';
+  return `${sign}${new Intl.NumberFormat(locale, {
+    maximumFractionDigits: 1,
+  }).format(value)} pp`;
 }
 
 // Build a relative ("3h 12m") + absolute reset-time model for a usage window.

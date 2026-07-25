@@ -3,12 +3,14 @@ import { describe, expect, it } from 'vitest';
 import {
   DAILY_GRANULARITIES,
   STATISTICS_SUB_VIEWS,
+  USAGE_HISTORY_RANGES,
   activitySummary,
   agentDisplay,
   barFractions,
   buildActivityTimeline,
   cacheHitRate,
   clampUsagePercent,
+  buildUsageHistorySeries,
   formatActivityDate,
   formatChartTick,
   formatDurationMs,
@@ -19,14 +21,21 @@ import {
   formatShare,
   formatTokens,
   formatUsageRate,
+  formatUsageDelta,
   groupModelsByProvider,
   parseOrigin,
   rollupDaily,
   rollupSkillActivationsByAgent,
+  runActivityTotals,
   sparklinePoints,
   tokenSplit,
   topN,
   usageSeverity,
+  usageHistoryIntervals,
+  usageHistoryPointCoordinates,
+  usageHistoryPolylineSegments,
+  usageHistorySince,
+  usageHistorySummary,
 } from '../statisticsView.js';
 
 describe('statisticsView formatting', () => {
@@ -40,6 +49,7 @@ describe('statisticsView formatting', () => {
       'limits',
     ]);
     expect(DAILY_GRANULARITIES).toEqual(['day', 'week', 'month']);
+    expect(USAGE_HISTORY_RANGES).toEqual(['24h', '7d', '30d', 'all']);
   });
 
   it('formats integers and tokens with locale grouping', () => {
@@ -110,6 +120,144 @@ describe('statisticsView provider usage helpers', () => {
     const now = Date.parse('2026-06-16T12:00:00Z');
     const reset = formatResetAt('2026-06-18T18:00:00Z', 'en', now);
     expect(reset.relative).toBe('2d 6h');
+  });
+});
+
+describe('statisticsView provider usage history', () => {
+  const samples = [
+    {
+      sampled_at: '2026-07-25T10:00:00Z',
+      providers: [
+        {
+          connection: 'openai:subscription',
+          account: 'default',
+          display_name: 'OpenAI',
+          plan: 'plus',
+          windows: [
+            {
+              label: '5h',
+              used_percent: 20,
+              reset_at: '2026-07-25T15:00:00Z',
+              window_seconds: 18000,
+            },
+          ],
+        },
+      ],
+    },
+    {
+      sampled_at: '2026-07-25T11:00:00Z',
+      providers: [
+        {
+          connection: 'openai:subscription',
+          account: 'default',
+          display_name: 'OpenAI',
+          plan: 'plus',
+          windows: [
+            {
+              label: '5h',
+              used_percent: 48.5,
+              reset_at: '2026-07-25T15:00:00Z',
+              window_seconds: 18000,
+            },
+          ],
+        },
+      ],
+    },
+    {
+      sampled_at: '2026-07-25T12:00:00Z',
+      providers: [
+        {
+          connection: 'openai:subscription',
+          account: 'default',
+          display_name: 'OpenAI',
+          plan: 'plus',
+          windows: [
+            {
+              label: '5h',
+              used_percent: 3,
+              reset_at: '2026-07-25T17:00:00Z',
+              window_seconds: 18000,
+            },
+          ],
+        },
+      ],
+    },
+  ];
+
+  it('builds stable per-target/window series and ranks comparable changes', () => {
+    const series = buildUsageHistorySeries(samples);
+    const intervals = usageHistoryIntervals(series);
+
+    expect(series).toHaveLength(1);
+    expect(series[0]).toMatchObject({
+      connection: 'openai:subscription',
+      account: 'default',
+      label: '5h',
+    });
+    expect(series[0].points).toHaveLength(3);
+    expect(intervals).toHaveLength(2);
+    expect(intervals[0]).toMatchObject({
+      kind: 'change',
+      delta: 28.5,
+    });
+    expect(intervals[1].kind).toBe('reset');
+  });
+
+  it('breaks chart lines at reset boundaries instead of implying continuity', () => {
+    const [series] = buildUsageHistorySeries(samples);
+
+    expect(usageHistoryPolylineSegments(series.points)).toHaveLength(2);
+    expect(usageHistoryPointCoordinates(series.points)).toHaveLength(3);
+    expect(usageHistoryPointCoordinates(series.points).at(-1)).toEqual({
+      x: 720,
+      y: 155.2,
+    });
+  });
+
+  it('summarizes availability and computes range timestamps', () => {
+    const withError = [
+      ...samples,
+      {
+        sampled_at: '2026-07-25T13:00:00Z',
+        providers: [
+          {
+            connection: 'openai:subscription',
+            account: 'default',
+            windows: [],
+            error: 'Timeout',
+          },
+        ],
+      },
+    ];
+
+    expect(usageHistorySummary(withError)).toMatchObject({
+      samples: 4,
+      targets: 1,
+      unavailable: 1,
+    });
+    expect(usageHistorySince('24h', Date.parse('2026-07-25T13:00:00Z'))).toBe(
+      '2026-07-24T13:00:00.000Z',
+    );
+    expect(usageHistorySince('all')).toBeNull();
+  });
+
+  it('totals measured and estimated Run tokens separately', () => {
+    expect(
+      runActivityTotals([
+        {
+          measured_input_tokens: 100,
+          measured_output_tokens: 20,
+          estimated_input_tokens: 5,
+          estimated_output_tokens: 2,
+        },
+      ]),
+    ).toEqual({
+      runs: 1,
+      measuredTokens: 120,
+      estimatedTokens: 7,
+    });
+    expect(formatUsageDelta(12.5, 'en')).toBe('+12.5 pp');
+    expect(formatUsageDelta(null, 'en')).toBe('—');
   });
 });
 

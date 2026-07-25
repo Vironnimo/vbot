@@ -125,7 +125,7 @@ cd webui && npm ci && npm run build   # Svelte → static JS/CSS
 
 **Releasing:** When the user wants to release a new version, read `.vorch/workflows/release-workflow.md`.
 
-**Product data directory:** `~/.vbot` — created on first run when no explicit data directory, environment override, or checkout marker applies. Holds `.env` and `settings.json` (see Configuration above) plus all runtime data: the complete runtime Model DB under `models/` after its first refresh, durable attachments/logs/Sessions/recall/Cron/prompt overrides, and retained temporary Bash output/Sub-Agent activity under `temp/`. Per-subdirectory layout and retention ownership live in the relevant domain maps.
+**Product data directory:** `~/.vbot` — created on first run when no explicit data directory, environment override, or checkout marker applies. Holds `.env` and `settings.json` (see Configuration above) plus all runtime data: the complete runtime Model DB under `models/` after its first refresh, durable attachments/logs/Sessions/recall/Cron/prompt overrides/Provider usage history, and retained temporary Bash output/Sub-Agent activity under `temp/`. Per-subdirectory layout and retention ownership live in the relevant domain maps.
 
 ## Testing
 

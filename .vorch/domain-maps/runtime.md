@@ -35,12 +35,12 @@ Idempotent — a second call logs at debug and preserves the existing service in
 12. Create `ChatRunManager` (also exposed as `runtime.chat_runs`), `ReflectionService` (it reaches the streaming loop lazily), and one `SessionTitleService`; construct the explicit Chat-owned `ChatLoopDependencies` from the already-wired Runtime collaborators and live reload callbacks, including `TaskModelService.binding_is_usable` for route-dependent Tool visibility; then create non-streaming + streaming `ChatLoop` instances with that contract, the shared title service, one shared `CompactionService`, and the shared Reflection service.
 13. Wire `TriggerService` with the streaming loop for programmatic/command-started Runs and the non-streaming loop for manual Compaction; only then construct the end-to-end `CommandDispatcher` with explicit resolver, Session, Model, Provider, Project, Agent, Trigger, Reflection, Storage, and status dependencies. Wire + start `ChannelService` with that same dispatcher when an event loop is active and register `channel_send` while ≥1 Channel is active; wire + start `CronService` when an event loop is active and register the `cron` Tool; register `bash` (needs the process manager + trigger service).
 14. Create the `SubAgentCoordinator` (owns the in-memory batch tracking) and register sub-agent tools; register the `status` tool; build `SystemPromptManager`.
-15. Write one info-level inventory summary (tool + skill counts, usable/total provider + connection counts), set started, and log `Runtime started`.
+15. Write one info-level inventory summary (tool + skill counts, usable/total provider + connection counts), set started, start the runtime-owned Provider usage history collector when an event loop exists, and log `Runtime started`.
 
 ### Shutdown
 
-- `stop()` — logs `Runtime stopped` if a logger exists, stops `ChannelService` / `CronService` / `ProcessManager`, then stops the shared temporary-file sweeper, clears all service references (including `token_store`), and closes the log manager. Safe to call before `start()`.
-- `aclose()` — async variant of `stop()`: same producer-before-temporary-files sequence but `await`s the channel / cron / process-manager cleanup before the temporary-file manager. Accessors running inside an event loop should prefer `aclose()` over `stop()`.
+- `stop()` — logs `Runtime stopped` if a logger exists, stops `ChannelService` / `CronService` / the Provider usage collector / `ProcessManager`, then stops the shared temporary-file sweeper, clears all service references (including `token_store`), and closes the log manager. Safe to call before `start()`.
+- `aclose()` — async variant of `stop()`: same producer-before-temporary-files sequence but `await`s the channel / cron / Provider usage / process-manager cleanup before the temporary-file manager. Accessors running inside an event loop should prefer `aclose()` over `stop()`.
 
 ### Service properties
 
@@ -50,6 +50,7 @@ All service properties raise `RuntimeError` before `start()` and after `stop()`,
 - `logger` — public attribute, `LoggerProtocol | None`. Set by `start()`.
 - `providers` / `models` — provider and model registries.
 - `provider_credentials` — central provider credential resolver; also exposed through `has_provider_credentials(provider_id)` and `get_provider_credentials(provider_id)`. `resolve_environment_credential(key)` resolves a single environment credential with process-env-first precedence, while `environment_credential_source(key)` reports `process_environment`, `data_dir`, or `None` without exposing the value. Web Search, Extensions, and Channels consume the shared resolver so live fallback reloads reach every credential-backed subsystem.
+- `provider_usage` — shared `ProviderUsageService` for coalesced live Provider subscription-limit reads and durable hourly observations under `<data_dir>/provider-usage/`.
 - `token_store` — OAuth token persistence service rooted at `<data_dir>/oauth/`.
 - `storage` — `StorageManager` for data-dir/settings/prompt fragments and the internal shared temporary-file lifecycle exposed as `storage.temporary_files`.
 - `attachment_store` — runtime-owned `AttachmentStore` rooted at `<data_dir>/attachments/`.
@@ -96,7 +97,7 @@ All service properties raise `RuntimeError` before `start()` and after `stop()`,
 - Existing data directories with at least one valid Agent are preserved; Runtime does not add another `main` Agent just because `main` is absent. Invalid individual Agent configs are logged and skipped by collection loading, so they do not block Runtime or the remaining Agents from starting.
 - Invalid individual Project configs are skipped by Project collection loading and do not block valid Projects. Only `project_id` and `cwd` are required to load a Project; optional presentation/default metadata is reconstructed from defaults.
 - The bootstrap Agent is ensured **before** `ChannelService` starts, so a configured channel targeting `main` can come up during first-start recovery.
-- `ChannelService.start()` and `CronService.start()` share the event-loop guard: when runtime startup happens without an active asyncio loop, the service is wired but its listeners are not started.
+- `ChannelService.start()`, `CronService.start()`, and the Provider usage collector share the event-loop guard: when Runtime startup happens without an active asyncio loop, each service is wired but its background listeners/sampler are not started.
 - Channel startup failures are isolated to the channel service and recorded as failed channel health state; they must not fail `Runtime.start()`.
 - Invalid individual Cron entries are skipped while valid siblings schedule. Malformed whole Cron storage disables scheduling without failing `Runtime.start()` and is protected from overwrite until repaired.
 - Runtime owns the canonical resolver-wired chat loops (including their compaction service) and the canonical `CommandDispatcher`. Server/accessor code must reuse `runtime.chat_loop` / `runtime.streaming_chat_loop` / `runtime.command_dispatcher` — the server no longer probes for them or constructs fallbacks, so a stub runtime handed to `create_app` must provide them.

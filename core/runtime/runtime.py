@@ -71,6 +71,7 @@ from core.providers.providers import (
 )
 from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter, TokenGetter
 from core.providers.token_store import TokenStore
+from core.providers.usage import ProviderUsageService
 from core.recall import (
     DEFAULT_RECALL_BACKEND,
     RecallBackend,
@@ -365,6 +366,7 @@ class Runtime:
         self._connection_reachability: dict[str, bool] = {}
         self._providers: ProviderRegistry | None = None
         self._provider_credentials: ProviderCredentialResolverProtocol | None = None
+        self._provider_usage: ProviderUsageService | None = None
         self._token_store: TokenStore | None = None
         self._models: ModelRegistry | None = None
         self._model_tasks: TaskModelService | None = None
@@ -472,6 +474,10 @@ class Runtime:
             fallback_credentials=data_dir_credentials,
             token_store=self._token_store,
             enabled_overrides_loader=self._provider_connection_enabled_overrides,
+        )
+        self._provider_usage = ProviderUsageService(
+            self,
+            data_root=self._storage.data_dir,
         )
         self._models = ModelRegistry.load(
             resources_path,
@@ -756,6 +762,7 @@ class Runtime:
 
         self._log_startup_inventory()
         self._started = True
+        self._start_provider_usage_service()
         self.logger.info("Runtime started")
 
     async def fire_extension_startup(self) -> None:
@@ -783,6 +790,8 @@ class Runtime:
             self._channel_service.stop()
         if self._cron_service is not None:
             self._cron_service.stop()
+        if self._provider_usage is not None:
+            self._provider_usage.stop()
         if self._process_manager is not None:
             self._process_manager.stop()
         if self._storage is not None:
@@ -803,6 +812,8 @@ class Runtime:
             await self._channel_service.aclose()
         if self._cron_service is not None:
             await self._cron_service.aclose()
+        if self._provider_usage is not None:
+            await self._provider_usage.aclose()
         if self._process_manager is not None:
             await self._process_manager.aclose()
         if self._storage is not None:
@@ -819,6 +830,7 @@ class Runtime:
         self._connection_reachability = {}
         self._providers = None
         self._provider_credentials = None
+        self._provider_usage = None
         self._token_store = None
         self._fallback_environment = {}
         self._models = None
@@ -1045,6 +1057,15 @@ class Runtime:
         except RuntimeError:
             return
         self._cron_service.start()
+
+    def _start_provider_usage_service(self) -> None:
+        if self._provider_usage is None:
+            raise RuntimeError("Provider usage service not available")
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._provider_usage.start()
 
     def _start_channel_service(self) -> None:
         if self._channel_service is None:
@@ -2000,6 +2021,15 @@ class Runtime:
         if self._cron_service is None:
             raise RuntimeError("Cron service not available")
         return self._cron_service
+
+    @property
+    def provider_usage(self) -> ProviderUsageService:
+        """Access to shared live usage caching and durable hourly history."""
+
+        self._ensure_started()
+        if self._provider_usage is None:
+            raise RuntimeError("Provider usage service not available")
+        return self._provider_usage
 
     @property
     def system_prompts(self) -> SystemPromptManager:

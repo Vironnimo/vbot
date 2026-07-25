@@ -432,6 +432,14 @@ export function getProviderUsage(options = {}) {
   return rpc('provider.usage', {}, options);
 }
 
+export function getProviderUsageHistory(params = {}, options = {}) {
+  return rpc('provider.usage_history', params, options);
+}
+
+export function clearProviderUsageHistory(options = {}) {
+  return rpc('provider.usage_history.clear', {}, options);
+}
+
 export function listChannels(options = {}) {
   return rpc('channel.list', {}, options);
 }
@@ -500,6 +508,10 @@ export function setExtensionSecret(params = {}, options = {}) {
 
 export function getStatisticsReport(options = {}) {
   return rpc('statistics.report', {}, options);
+}
+
+export function getStatisticsRunActivity(params, options = {}) {
+  return rpc('statistics.run_activity', params, options);
 }
 
 export async function uploadAttachment(file, options = {}) {
