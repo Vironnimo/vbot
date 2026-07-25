@@ -71,6 +71,21 @@ gh release view vX.Y.Z --json tagName,assets --jq '{tag: .tagName, assets: [.ass
 
 Expect: all Backend, Frontend, E2E, Candidate Build, Candidate Smoke, publish, and Public Distribution canary jobs succeed; `assets` includes the gated `webui-dist.tar.gz`; and `releases/latest` resolves to `vX.Y.Z`.
 
+### 7. ONE TIME FOR THE NEXT RELEASE: convert the current installation's attachment blobs
+
+This step is mandatory for the next release only. The current Windows installation at `C:\Users\Viro\vbot` still runs the suffixless attachment-blob layout against `C:\Users\Viro\.vbot`; converting it before the new release is installed would make those Attachments unreadable to the old server. After the new GitHub release has passed step 6, stop that installation, update it without restarting, run the shipped converter explicitly against `C:\Users\Viro\.vbot`, verify the idempotent second pass, and only then start the new server:
+
+```powershell
+vbot server stop
+vbot update --no-restart
+& "C:\Users\Viro\vbot\.venv\Scripts\python.exe" "C:\Users\Viro\vbot\scripts\converters\attachment_blob_extensions.py" "C:\Users\Viro\.vbot"
+& "C:\Users\Viro\vbot\.venv\Scripts\python.exe" "C:\Users\Viro\vbot\scripts\converters\attachment_blob_extensions.py" "C:\Users\Viro\.vbot"
+vbot server start
+vbot server status
+```
+
+The first converter run must succeed. The second must report `converted=0` and `already_converted` equal to the number of Attachment sidecars in `C:\Users\Viro\.vbot\attachments`; `server status` must then report the new installation as running. Once those checks pass, delete this entire step 7 from this workflow and commit and push that deletion on `main`. The one-time cutover and the next-release task are not complete until this instruction has removed itself.
+
 ## Fixing notes after the fact
 
 `gh release edit` has no `--generate-notes`. If a release ends up with the wrong body (e.g. hand-written notes), regenerate the house-style notes via the API and overwrite:
