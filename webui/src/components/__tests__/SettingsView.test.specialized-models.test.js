@@ -8,14 +8,16 @@ import {
   createSettingsRpcMock,
   flushAsyncUpdates,
   getButton,
+  getSearchableTrigger,
   getSettingsUpdateCalls,
   getSimpleList,
-  getSimpleTrigger,
+  openSearchableDropdown,
   openRecallPanel,
   openSimpleDropdown,
   openSpecializedModelsPanel,
   resetSettingsViewHarness,
   rpcMock,
+  selectSearchableOption,
   selectSimpleOption,
   setTextareaValue,
   settingsPayload,
@@ -86,9 +88,11 @@ describe('SettingsView', () => {
     flushSync();
     await openSpecializedModelsPanel();
 
-    openSimpleDropdown('settings-specialized-image_generation');
-    await waitForCondition(() => getSimpleList() !== null);
-    selectSimpleOption('settings-specialized-image_generation', 'Recraft v3');
+    await openSearchableDropdown('settings-specialized-image_generation');
+    selectSearchableOption(
+      'settings-specialized-image_generation',
+      'Recraft v3',
+    );
 
     await waitForCondition(
       () => document.body.querySelector('.text-area--code') !== null,
@@ -202,9 +206,11 @@ describe('SettingsView', () => {
     flushSync();
     await openSpecializedModelsPanel();
 
-    openSimpleDropdown('settings-specialized-image_generation');
-    await waitForCondition(() => getSimpleList() !== null);
-    selectSimpleOption('settings-specialized-image_generation', 'Recraft v3');
+    await openSearchableDropdown('settings-specialized-image_generation');
+    selectSearchableOption(
+      'settings-specialized-image_generation',
+      'Recraft v3',
+    );
 
     await waitForCondition(
       () => document.body.querySelector('.text-area--code') !== null,
@@ -356,15 +362,14 @@ describe('SettingsView', () => {
       ),
     ).toBe(true);
 
-    const embeddingTrigger = getSimpleTrigger(
+    const embeddingTrigger = getSearchableTrigger(
       'settings-specialized-text_embedding',
     );
     expect(embeddingTrigger).toBeTruthy();
     expect(embeddingTrigger.textContent).toContain('Not configured');
 
-    openSimpleDropdown('settings-specialized-text_embedding');
-    await waitForCondition(() => getSimpleList() !== null);
-    selectSimpleOption(
+    await openSearchableDropdown('settings-specialized-text_embedding');
+    selectSearchableOption(
       'settings-specialized-text_embedding',
       'Gemini Embedding 2',
     );
