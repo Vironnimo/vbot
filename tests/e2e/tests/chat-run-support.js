@@ -31,13 +31,21 @@ export async function startIsolatedChat(page, { agentName = "" } = {}) {
       (await emptySessions.isVisible()) || (await selectedSession.isVisible()),
     ).toBe(true);
   }).toPass();
+  const emptyChat = chat.getByText("No messages yet", { exact: true }).first();
+  const newSessionButton = chat.getByRole("button", {
+    exact: true,
+    name: "New session",
+  });
+  await expect(newSessionButton).toBeEnabled();
   const previousCount = await sessionItems.count();
+  const reusesCurrentSession =
+    (await selectedSession.isVisible()) && (await emptyChat.isVisible());
 
-  await chat.getByRole("button", { exact: true, name: "New session" }).click();
-  await expect(sessionItems).toHaveCount(previousCount + 1);
-  await expect(
-    chat.getByText("No messages yet", { exact: true }).first(),
-  ).toBeVisible();
+  await newSessionButton.click();
+  await expect(sessionItems).toHaveCount(
+    previousCount + (reusesCurrentSession ? 0 : 1),
+  );
+  await expect(emptyChat).toBeVisible();
 
   return chat;
 }
