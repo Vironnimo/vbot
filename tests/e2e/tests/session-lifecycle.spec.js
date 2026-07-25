@@ -3,6 +3,8 @@ import { expect, test } from "@playwright/test";
 import { sendChatMessage, startIsolatedChat } from "./chat-run-support.js";
 
 const EARLIER_SESSION_TITLE = "E2E Earlier Session Navigation";
+const EARLIER_SESSION_SEED_MESSAGE =
+  "E2E_STREAM Seed the earlier Session before navigation";
 const EARLIER_SESSION_MESSAGE =
   "E2E_STREAM Continue the selected earlier Session";
 
@@ -22,6 +24,10 @@ test("Sessions can be selected and continued without a past-session warning", as
     .getByRole("listitem")
     .filter({ hasText: EARLIER_SESSION_TITLE });
   await expect(earlierSession).toBeVisible();
+  await sendChatMessage(chat, EARLIER_SESSION_SEED_MESSAGE);
+  await expect(
+    chat.getByText("Fake provider streaming response.", { exact: true }),
+  ).toBeVisible();
   const previousCount = await sessionList.getByRole("listitem").count();
 
   await chat.getByRole("button", { exact: true, name: "New session" }).click();
