@@ -88,6 +88,76 @@ describe('SettingsSpecializedModelsPanel', () => {
     expect(document.body.textContent).toContain('Image understanding');
   });
 
+  it('renders every task-model target picker as searchable and filters by target id', async () => {
+    listTaskModelTargetsMock.mockResolvedValue({
+      targets: [
+        {
+          id: 'openrouter/google/gemini-specialized::api-key',
+          label: 'Gemini Specialized',
+          kind: 'provider',
+        },
+        {
+          id: 'openai/specialized-model::api-key',
+          label: 'OpenAI Specialized',
+          kind: 'provider',
+        },
+      ],
+    });
+
+    mountedComponent = mount(SettingsSpecializedModelsPanel, {
+      target: document.body,
+      props: { settings: {}, modelsRefreshToken: 0 },
+    });
+    flushSync();
+
+    const taskTypes = [
+      'speech_to_text',
+      'text_to_speech',
+      'image_understanding',
+      'image_generation',
+      'text_embedding',
+    ];
+    await waitForCondition(() =>
+      taskTypes.every((taskType) => {
+        const trigger = document.getElementById(
+          `settings-specialized-${taskType}`,
+        );
+        return trigger && !trigger.disabled;
+      }),
+    );
+
+    for (const taskType of taskTypes) {
+      const trigger = document.getElementById(
+        `settings-specialized-${taskType}`,
+      );
+      expect(trigger.closest('.searchable-dropdown')).toBeTruthy();
+      expect(trigger.closest('.dropdown-primitive')).toBeNull();
+    }
+
+    document
+      .getElementById('settings-specialized-speech_to_text')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+    await waitForCondition(
+      () =>
+        document.body.querySelector('.searchable-dropdown__search input') !==
+        null,
+    );
+
+    const searchInput = document.body.querySelector(
+      '.searchable-dropdown__search input',
+    );
+    searchInput.value = 'google/gemini';
+    searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+
+    const visibleOptions = Array.from(
+      document.body.querySelectorAll('.searchable-dropdown__option'),
+    );
+    expect(visibleOptions).toHaveLength(1);
+    expect(visibleOptions[0].textContent).toContain('Gemini Specialized');
+  });
+
   it('auto-saves after a boolean option toggle is flipped', async () => {
     // The boolean option field is the shared Toggle (role="switch"); flipping it
     // must arm the same autosave flow as the other option controls.

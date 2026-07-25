@@ -3,6 +3,7 @@
   import { SvelteSet } from 'svelte/reactivity';
 
   import Dropdown from '../Dropdown.svelte';
+  import SearchableDropdown from '../SearchableDropdown.svelte';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import FormField from '../ui/FormField.svelte';
@@ -365,6 +366,7 @@
       ...targets.map((target) => ({
         value: target.id,
         label: target.label,
+        searchText: `${target.label} ${target.id}`,
       })),
     ];
 
@@ -458,7 +460,7 @@
           </div>
         </div>
         <div class="s-row-control s-row-control--task-model">
-          <Dropdown
+          <SearchableDropdown
             id={`settings-specialized-${row.taskType}`}
             value={binding.target}
             options={taskModelTargetOptions(row.taskType, binding)}
@@ -469,7 +471,6 @@
             ariaLabel={t(row.titleKey, row.titleFallback)}
             disabled={taskModelLoading || taskModelSaving}
             triggerClass="settings-view__dropdown"
-            listClass="settings-view__thinking-list"
             onValueChange={(value) =>
               handleTaskModelTargetChange(row.taskType, value)}
           />
