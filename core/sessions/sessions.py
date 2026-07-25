@@ -258,15 +258,16 @@ class ChatSession:
         return notes
 
     def register_skill_activation(self, name: str, content: str) -> bool:
-        """Record a skill activation; return ``False`` when it was already active.
+        """Record a Skill version; return ``False`` when identical content is active.
 
         Dedup seam for the ``skill`` tool: the tool result itself is the durable
         content carrier, so nothing is persisted here. The in-memory record keeps
         ``activated_skill_contents`` complete for same-process consumers (the
-        post-compaction rebuild) before the tool message reaches the file.
+        post-compaction rebuild) before the tool message reaches the file. A changed
+        package may activate again in the same Session; the latest content wins.
         """
         activated_contents = self._load_activated_skill_contents()
-        if name in activated_contents:
+        if activated_contents.get(name) == content:
             return False
         self._activated_skill_names.add(name)
         self._activated_skill_contents[name] = content
@@ -1427,6 +1428,11 @@ def skill_activation_names(messages: list[ChatMessage]) -> frozenset[str]:
     return frozenset(_skill_contexts_from_messages(messages))
 
 
+def skill_activation_contents(messages: list[ChatMessage]) -> dict[str, str]:
+    """Return the latest carried content for each activated Skill in *messages*."""
+    return _skill_contexts_from_messages(messages)
+
+
 def is_channel_message_note(message: ChatMessage) -> bool:
     """Return whether a note holds a passively observed channel message."""
     return (
@@ -1446,12 +1452,12 @@ def is_skill_available_note(message: ChatMessage) -> bool:
 
 
 def _skill_contexts_from_messages(messages: list[ChatMessage]) -> dict[str, str]:
-    """Collect activated skill contents from both carriers, in activation order."""
+    """Collect latest Skill content from both carriers, preserving first-name order."""
     contexts: dict[str, str] = {}
     for message in messages:
         activation = skill_context_note_payload(message) or skill_tool_activation(message)
         if activation is not None:
-            contexts.setdefault(activation[0], activation[1])
+            contexts[activation[0]] = activation[1]
     return contexts
 
 

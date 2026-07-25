@@ -146,6 +146,9 @@ _PACKAGE_NAME = "vbot"
 _UNKNOWN_APP_VERSION = "0.0.0+unknown"
 _SKILLS_DIRNAME = "skills"
 _AGENTS_DIRNAME = "agents"
+_ARCHIVE_DIRNAME = "archive"
+_TEMP_DIRNAME = "temp"
+_SKILL_DRAFTS_DIRNAME = "skill-drafts"
 
 
 def _detect_app_version() -> str:
@@ -578,7 +581,9 @@ class Runtime:
         # ``skill_manage`` tool writes the calling agent's private home (default) or
         # the shared global pool (only when the user asked).
         self._skill_authoring = SkillAuthoringService(
-            protected_roots=[resources_path / _SKILLS_DIRNAME]
+            protected_roots=[resources_path / _SKILLS_DIRNAME],
+            drafts_root=storage.data_dir / _TEMP_DIRNAME / _SKILL_DRAFTS_DIRNAME,
+            archive_root=storage.data_dir / _ARCHIVE_DIRNAME,
         )
         register_skill_manage_tool(
             self._tools,

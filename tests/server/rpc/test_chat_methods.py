@@ -280,7 +280,10 @@ def _fragment_storage() -> SimpleNamespace:
     """
     fragments = {
         "handoff.md": "Write a handoff for the next agent.",
-        "learn.md": 'Author a reusable skill via the `skill_manage` tool with operation "create".',
+        "learn.md": (
+            "Author a reusable skill via the `skill_manage` tool: "
+            "begin, put files, validate, commit."
+        ),
         "reflect.md": "Review this session and update your memory and skill library.",
     }
     return SimpleNamespace(read_prompt_fragment=lambda name: fragments[name])

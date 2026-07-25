@@ -305,31 +305,43 @@ class TestChatSession:
         assert session.activate_skill_context("demo", {"content": "Body", "resources": []}) is False
         assert len([m for m in session.load() if is_skill_context_note(m)]) == 1
 
-    def test_register_skill_activation_dedups_without_persisting(self, tmp_path):
+    def test_register_skill_activation_dedups_identical_content_and_accepts_updates(self, tmp_path):
         session = ChatSession.create(tmp_path, session_id="session-one")
 
         assert session.register_skill_activation("demo", "<skill_content>…</skill_content>") is True
-        assert session.register_skill_activation("demo", "other") is False
+        assert (
+            session.register_skill_activation("demo", "<skill_content>…</skill_content>") is False
+        )
+        assert session.register_skill_activation("demo", "other") is True
         assert session.load() == []
-        assert session.activated_skill_contents() == {"demo": "<skill_content>…</skill_content>"}
+        assert session.activated_skill_contents() == {"demo": "other"}
 
     def test_activated_skill_contents_scans_skill_tool_results(self, tmp_path):
         # The ``skill`` tool result is the durable carrier of a tool-loaded skill:
         # a fresh handle recovers name+content from the persisted envelope, while
         # already-active stubs and failures contribute nothing.
         session = ChatSession.create(tmp_path, session_id="session-one")
-        loaded_envelope = tool_success(
+        first_loaded_envelope = tool_success(
             {
                 "name": "docx",
                 "status": "loaded",
                 "content": '<skill_content name="docx">B</skill_content>',
             }
         )
+        updated_loaded_envelope = tool_success(
+            {
+                "name": "docx",
+                "status": "loaded",
+                "content": '<skill_content name="docx">C</skill_content>',
+            }
+        )
         stub_envelope = tool_success(
             {"name": "docx", "status": "already_active", "message": "already active"}
         )
         failure_envelope = tool_failure("skill_not_found", "Skill not found: nope")
-        for index, envelope in enumerate([loaded_envelope, stub_envelope, failure_envelope]):
+        for index, envelope in enumerate(
+            [first_loaded_envelope, stub_envelope, updated_loaded_envelope, failure_envelope]
+        ):
             session.append(
                 ChatMessage.tool(
                     tool_call_id=f"call-{index}",
@@ -340,7 +352,7 @@ class TestChatSession:
 
         fresh_handle = ChatSession(session.path)
         assert fresh_handle.activated_skill_contents() == {
-            "docx": '<skill_content name="docx">B</skill_content>'
+            "docx": '<skill_content name="docx">C</skill_content>'
         }
 
     def test_skill_tool_carrier_literals_match_tool_constants(self):

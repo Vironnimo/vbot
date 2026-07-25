@@ -166,7 +166,7 @@ from core.sessions import (
     ChatSession,
     latest_project_tool_context_id,
     project_tool_context_id,
-    skill_activation_names,
+    skill_activation_contents,
 )
 from core.tools import ANALYZE_IMAGE_TOOL_NAME, HISTORY_TOOL_NAME
 from core.utils.errors import ConfigError, ProviderError, VBotError
@@ -1641,15 +1641,22 @@ class ChatLoop:
             replay_policy=replay_policy,
             agent_model=reasoning_scope_model or agent.model,
         )
-        skill_context_messages: list[JsonObject] = []
+        missing_skill_contexts: list[JsonObject] = []
+        updated_skill_contexts: list[JsonObject] = []
         if checkpoint is not None:
-            projected_skills = skill_activation_names(effective_messages)
-            skill_context_messages = [
-                {"role": "user", "content": content}
-                for name, content in session.activated_skill_contents(session_messages).items()
-                if name not in projected_skills
-            ]
-        request_messages = [*system_messages, *skill_context_messages, *history]
+            projected_skills = skill_activation_contents(effective_messages)
+            for name, content in session.activated_skill_contents(session_messages).items():
+                projected_content = projected_skills.get(name)
+                if projected_content is None:
+                    missing_skill_contexts.append({"role": "user", "content": content})
+                elif projected_content != content:
+                    updated_skill_contexts.append({"role": "user", "content": content})
+        request_messages = [
+            *system_messages,
+            *missing_skill_contexts,
+            *history,
+            *updated_skill_contexts,
+        ]
 
         session.drain_pending_notes()
 
