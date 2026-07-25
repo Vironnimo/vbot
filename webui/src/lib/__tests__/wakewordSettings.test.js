@@ -20,6 +20,11 @@ describe('createVoiceSettingsState', () => {
     ]);
     expect(state.model_sensitivities).toEqual({});
     expect(state.liveState).toBe('off');
+    expect(state.calibration).toEqual({
+      active: false,
+      scores: {},
+      peaks: {},
+    });
   });
 
   it('isolates arrays and objects between calls', () => {
@@ -47,6 +52,11 @@ describe('applyWakewordStatus', () => {
       },
       target_agent_id: 'agent-1',
       session_behavior: 'new',
+      calibration: {
+        active: true,
+        scores: { 'builtin/okay_nabu': 0.4 },
+        peaks: { 'builtin/okay_nabu': 0.7 },
+      },
     };
 
     const hydrated = applyWakewordStatus(state, status);
@@ -59,6 +69,8 @@ describe('applyWakewordStatus', () => {
     expect(hydrated.model_sensitivities).not.toBe(status.model_sensitivities);
     expect(hydrated.target_agent_id).toBe('agent-1');
     expect(hydrated.session_behavior).toBe('new');
+    expect(hydrated.calibration).toEqual(status.calibration);
+    expect(hydrated.calibration).not.toBe(status.calibration);
   });
 
   it('preserves editable values for missing keys and accepts explicit nulls', () => {
@@ -73,6 +85,11 @@ describe('applyWakewordStatus', () => {
       enabled: true,
       microphone: null,
       target_agent_id: null,
+      calibration: {
+        active: true,
+        scores: { 'builtin/hey_nabu': 0.35 },
+        peaks: { 'builtin/hey_nabu': 0.72 },
+      },
     });
 
     expect(hydrated.enabled).toBe(true);
@@ -106,6 +123,11 @@ describe('applyRuntimeStatus', () => {
       active_model_ids: ['builtin/okay_nabu'],
       model_sensitivities: { 'builtin/okay_nabu': 0.5 },
       target_agent_id: null,
+      calibration: {
+        active: true,
+        scores: { 'builtin/hey_nabu': 0.35 },
+        peaks: { 'builtin/hey_nabu': 0.72 },
+      },
     };
 
     const next = applyRuntimeStatus(state, status);
@@ -118,6 +140,7 @@ describe('applyRuntimeStatus', () => {
     expect(next.active_model_ids).toEqual(['builtin/hey_nabu']);
     expect(next.model_sensitivities).toEqual({ 'builtin/hey_nabu': 0.9 });
     expect(next.target_agent_id).toBe('agent-1');
+    expect(next.calibration).toEqual(status.calibration);
   });
 
   it('returns the same reference when runtime state is unchanged', () => {
@@ -171,7 +194,16 @@ describe('buildVoiceSettingsPayload', () => {
 
   it('ignores runtime-only changes', () => {
     const lastSaved = snapshotVoiceSettings(createVoiceSettingsState());
-    const state = { ...lastSaved, liveState: 'recording', mock: true };
+    const state = {
+      ...lastSaved,
+      liveState: 'recording',
+      mock: true,
+      calibration: {
+        active: true,
+        scores: { 'builtin/okay_nabu': 0.4 },
+        peaks: { 'builtin/okay_nabu': 0.7 },
+      },
+    };
 
     expect(buildVoiceSettingsPayload(state, lastSaved)).toEqual({});
     expect(voiceSettingsDirty(state, lastSaved)).toBe(false);

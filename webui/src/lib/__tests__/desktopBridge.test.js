@@ -16,6 +16,9 @@ import {
   importWakewordModel,
   deleteWakewordModel,
   retryWakeword,
+  startWakewordCalibration,
+  stopWakewordCalibration,
+  resetWakewordCalibrationPeaks,
   onWakewordStatusChange,
   waitForDesktopBridge,
 } from '../desktopBridge.js';
@@ -347,6 +350,35 @@ describe('desktop Voice recovery and devices', () => {
     await retryWakeword();
 
     expect(retry).toHaveBeenCalledOnce();
+  });
+
+  it('controls transient wakeword calibration through the bridge', async () => {
+    const start = vi.fn(() => ({ calibration: { active: true } }));
+    const stop = vi.fn(() => ({ calibration: { active: false } }));
+    const reset = vi.fn(() => ({ calibration: { active: true } }));
+    globalThis.window = {
+      location: { search: '?accessor=desktop' },
+      pywebview: {
+        api: {
+          startWakewordCalibration: start,
+          stopWakewordCalibration: stop,
+          resetWakewordCalibrationPeaks: reset,
+        },
+      },
+    };
+
+    await expect(startWakewordCalibration()).resolves.toEqual({
+      calibration: { active: true },
+    });
+    await expect(resetWakewordCalibrationPeaks()).resolves.toEqual({
+      calibration: { active: true },
+    });
+    await expect(stopWakewordCalibration()).resolves.toEqual({
+      calibration: { active: false },
+    });
+    expect(start).toHaveBeenCalledOnce();
+    expect(reset).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledOnce();
   });
 });
 

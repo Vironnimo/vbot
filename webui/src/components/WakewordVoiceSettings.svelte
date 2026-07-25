@@ -4,6 +4,7 @@
   import Button from './ui/Button.svelte';
   import Badge from './ui/Badge.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
+  import StatusChip from './ui/StatusChip.svelte';
   import Toggle from './ui/Toggle.svelte';
   import { useAutosaveContext } from '$lib/autosave.js';
   import { updateSettings } from '$lib/api.js';
@@ -25,6 +26,9 @@
     deleteWakewordModel,
     onWakewordStatusChange,
     retryWakeword,
+    startWakewordCalibration,
+    stopWakewordCalibration,
+    resetWakewordCalibrationPeaks,
     isDesktop,
   } from '$lib/desktopBridge.js';
   import {
@@ -68,6 +72,8 @@
   let modelFileInput = $state();
   let modelActionState = $state('idle');
   let deleteConfirmModel = $state(null);
+  let calibrationBaselineSensitivities = $state(null);
+  let calibrationActionState = $state('idle');
   let transcriptionAudio = $state(
     untrack(() => normalizeTranscriptionAudio(settings)),
   );
@@ -106,6 +112,19 @@
       : '',
   );
   let modelActionBusy = $derived(modelActionState !== 'idle');
+  let calibrationSessionActive = $derived(
+    calibrationBaselineSensitivities !== null,
+  );
+  let calibrationActive = $derived(Boolean(voiceState.calibration?.active));
+  let calibrationActionBusy = $derived(calibrationActionState !== 'idle');
+  let calibrationCanStart = $derived(
+    loaded &&
+      voiceState.enabled &&
+      voiceState.liveState === 'listening' &&
+      voiceState.mode === 'real' &&
+      !modelActionBusy &&
+      !calibrationSessionActive,
+  );
   let transcriptionProfileOptions = $derived(
     TRANSCRIPTION_AUDIO_PROFILES.map((profile) => ({
       value: profile,
@@ -151,9 +170,12 @@
   let liveStateLabel = $derived(liveStateText(voiceState.liveState));
   let liveStateDotClass = $derived(liveStateDotColor(voiceState.liveState));
 
-  let dirty = $derived(voiceSettingsDirty(voiceState, lastSaved));
+  let dirty = $derived(
+    !calibrationSessionActive && voiceSettingsDirty(voiceState, lastSaved),
+  );
   let enableToggleDisabled = $derived(
     !loaded ||
+      calibrationSessionActive ||
       (!voiceState.enabled &&
         (!voiceState.target_agent_id || voiceState.mode === 'unavailable')),
   );
@@ -163,6 +185,7 @@
     hasPending: () =>
       saveState === 'saving' ||
       transcriptionSaveState === 'saving' ||
+      calibrationActionBusy ||
       voiceConfigHasChanges() ||
       transcriptionAudioHasChanges(),
   };
@@ -285,6 +308,9 @@
       cleanupStatusPoll();
       cleanupStatusPoll = null;
     }
+    if (voiceState.calibration?.active) {
+      void stopWakewordCalibration();
+    }
   });
 
   async function loadStatus() {
@@ -304,7 +330,16 @@
     // state — never the editable config — so a poll firing during the autosave
     // debounce cannot revert an unsaved edit.
     cleanupStatusPoll = onWakewordStatusChange((status) => {
+      const wasCalibrating = Boolean(voiceState.calibration?.active);
       voiceState = applyRuntimeStatus(voiceState, status);
+      if (
+        calibrationBaselineSensitivities &&
+        wasCalibrating &&
+        !voiceState.calibration.active &&
+        calibrationActionState === 'idle'
+      ) {
+        restoreCalibrationDraft();
+      }
     });
   }
 
@@ -339,7 +374,7 @@
   }
 
   function voiceConfigHasChanges() {
-    if (!desktopMode) {
+    if (!desktopMode || calibrationSessionActive) {
       return false;
     }
     return (
@@ -612,6 +647,137 @@
     }
   }
 
+  function handleSensitivityChange() {
+    if (!calibrationSessionActive) {
+      void saveConfig();
+    }
+  }
+
+  function calibrationScore(modelId) {
+    return clampScore(voiceState.calibration?.scores?.[modelId]);
+  }
+
+  function calibrationPeak(modelId) {
+    return clampScore(voiceState.calibration?.peaks?.[modelId]);
+  }
+
+  function calibrationThreshold(modelId) {
+    const sensitivity = voiceState.model_sensitivities[modelId] ?? 0.5;
+    return clampScore(1 - sensitivity);
+  }
+
+  function scorePercent(value) {
+    return `${Math.round(clampScore(value) * 1000) / 10}%`;
+  }
+
+  function clampScore(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 0;
+    return Math.max(0, Math.min(1, numeric));
+  }
+
+  async function handleStartCalibration() {
+    calibrationActionState = 'starting';
+    try {
+      if (voiceConfigHasChanges() && !(await saveConfig())) return;
+      calibrationBaselineSensitivities = {
+        ...voiceState.model_sensitivities,
+      };
+      const status = await startWakewordCalibration();
+      voiceState = applyRuntimeStatus(voiceState, status);
+    } catch (error) {
+      calibrationBaselineSensitivities = null;
+      onToast({
+        title: t(
+          'settings.voice.calibrationStartFailed',
+          'Calibration could not start.',
+        ),
+        message: error?.message || '',
+        variant: 'error',
+      });
+    } finally {
+      calibrationActionState = 'idle';
+    }
+  }
+
+  async function handleResetCalibrationPeaks() {
+    calibrationActionState = 'resetting';
+    try {
+      const status = await resetWakewordCalibrationPeaks();
+      voiceState = applyRuntimeStatus(voiceState, status);
+    } catch (error) {
+      onToast({
+        title: t(
+          'settings.voice.calibrationResetFailed',
+          'Calibration peaks could not be reset.',
+        ),
+        message: error?.message || '',
+        variant: 'error',
+      });
+    } finally {
+      calibrationActionState = 'idle';
+    }
+  }
+
+  async function handleDiscardCalibration() {
+    calibrationActionState = 'discarding';
+    try {
+      const status = await stopWakewordCalibration();
+      voiceState = applyRuntimeStatus(voiceState, status);
+      restoreCalibrationDraft();
+    } catch (error) {
+      onToast({
+        title: t(
+          'settings.voice.calibrationStopFailed',
+          'Calibration could not stop.',
+        ),
+        message: error?.message || '',
+        variant: 'error',
+      });
+    } finally {
+      calibrationActionState = 'idle';
+    }
+  }
+
+  async function handleApplyCalibration() {
+    calibrationActionState = 'applying';
+    try {
+      const status = await stopWakewordCalibration();
+      voiceState = applyRuntimeStatus(voiceState, status);
+      if (!(await saveConfig())) return;
+      calibrationBaselineSensitivities = null;
+      onToast({
+        title: t(
+          'settings.voice.calibrationApplied',
+          'Wakeword sensitivity applied.',
+        ),
+        variant: 'success',
+      });
+    } catch (error) {
+      onToast({
+        title: t(
+          'settings.voice.calibrationApplyFailed',
+          'Calibration could not be applied.',
+        ),
+        message: error?.message || '',
+        variant: 'error',
+      });
+    } finally {
+      calibrationActionState = 'idle';
+    }
+  }
+
+  function restoreCalibrationDraft() {
+    if (!calibrationBaselineSensitivities) return;
+    voiceState = {
+      ...voiceState,
+      model_sensitivities: {
+        ...calibrationBaselineSensitivities,
+      },
+    };
+    calibrationBaselineSensitivities = null;
+  }
+
   async function handleRetry() {
     try {
       voiceState = { ...voiceState, liveState: 'starting', errorCode: null };
@@ -848,6 +1014,7 @@
                     handleWakewordModelToggle(model, checked)}
                   disabled={!loaded ||
                     modelActionBusy ||
+                    calibrationSessionActive ||
                     (active && voiceState.active_model_ids.length === 1) ||
                     (!active && voiceState.active_model_ids.length === 2)}
                   ariaLabel={t(
@@ -873,8 +1040,10 @@
                     step="0.05"
                     value={sensitivity}
                     oninput={(event) => handleSensitivityInput(model.id, event)}
-                    onchange={() => void saveConfig()}
-                    disabled={!loaded || modelActionBusy}
+                    onchange={handleSensitivityChange}
+                    disabled={!loaded ||
+                      modelActionBusy ||
+                      calibrationActionBusy}
                   />
                   <div class="voice-slider-labels">
                     <span
@@ -896,7 +1065,9 @@
                 <div class="voice-model-card__actions">
                   <Button
                     variant="tertiary"
-                    disabled={!loaded || modelActionBusy}
+                    disabled={!loaded ||
+                      modelActionBusy ||
+                      calibrationSessionActive}
                     onClick={() => (deleteConfirmModel = model)}
                   >
                     {t('settings.voice.removeModel', 'Remove imported model')}
@@ -917,7 +1088,7 @@
           <Button
             variant="secondary"
             loading={modelActionState === 'importing'}
-            disabled={!loaded || modelActionBusy}
+            disabled={!loaded || modelActionBusy || calibrationSessionActive}
             onClick={chooseWakewordModelFile}
           >
             {t('settings.voice.importModel', 'Import TFLite model')}
@@ -930,6 +1101,154 @@
             { count: voiceState.active_model_ids.length },
           )}
         </div>
+      </div>
+    </div>
+
+    <div class="s-row">
+      <div class="s-row-info">
+        <div class="s-row-label">
+          {t('settings.voice.calibrationTitle', 'Wakeword calibration')}
+        </div>
+        <div class="s-row-desc">
+          {t(
+            'settings.voice.calibrationDescription',
+            'Inspect raw detector scores without recording or sending a command.',
+          )}
+        </div>
+      </div>
+      <div class="s-row-control voice-calibration-control">
+        {#if calibrationSessionActive}
+          <div class="voice-calibration-panel">
+            <div class="voice-calibration-header">
+              <div>
+                <div class="voice-calibration-heading">
+                  {t('settings.voice.calibrationAnalyzer', 'Signal analyzer')}
+                </div>
+                <div class="voice-calibration-instruction">
+                  {t(
+                    'settings.voice.calibrationInstruction',
+                    'Say each active phrase several times. Move its sensitivity until the threshold sits below the weakest intentional peak.',
+                  )}
+                </div>
+              </div>
+              <StatusChip variant={calibrationActive ? 'warn' : 'neutral'}>
+                {calibrationActive
+                  ? t('settings.voice.calibrationListening', 'Commands paused')
+                  : t('settings.voice.calibrationStopped', 'Analyzer stopped')}
+              </StatusChip>
+            </div>
+
+            <div class="voice-calibration-models">
+              {#each wakewordModels.filter( (model) => voiceState.active_model_ids.includes(model.id), ) as model (model.id)}
+                {@const score = calibrationScore(model.id)}
+                {@const peak = calibrationPeak(model.id)}
+                {@const threshold = calibrationThreshold(model.id)}
+                <div class="voice-calibration-model">
+                  <div class="voice-calibration-model__header">
+                    <span>{model.label}</span>
+                    <span class="voice-calibration-model__values">
+                      {t('settings.voice.calibrationScore', 'Score')}
+                      {score.toFixed(2)}
+                      · {t('settings.voice.calibrationPeak', 'Peak')}
+                      {peak.toFixed(2)}
+                      · {t('settings.voice.calibrationThreshold', 'Threshold')}
+                      {threshold.toFixed(2)}
+                    </span>
+                  </div>
+                  <div
+                    class="voice-calibration-meter"
+                    role="meter"
+                    aria-label={t(
+                      'settings.voice.calibrationMeterAria',
+                      '{name} detector score',
+                      { name: model.label },
+                    )}
+                    aria-valuemin="0"
+                    aria-valuemax="1"
+                    aria-valuenow={score}
+                    style={`--score: ${scorePercent(score)}; --peak: ${scorePercent(peak)}; --threshold: ${scorePercent(threshold)};`}
+                  >
+                    <span
+                      class:voice-calibration-meter__score--match={score >=
+                        threshold}
+                      class="voice-calibration-meter__score"
+                    ></span>
+                    {#if peak > 0}
+                      <span
+                        class="voice-calibration-meter__peak"
+                        aria-hidden="true"
+                      ></span>
+                    {/if}
+                    <span
+                      class="voice-calibration-meter__threshold"
+                      aria-hidden="true"
+                    ></span>
+                  </div>
+                </div>
+              {/each}
+            </div>
+
+            <div class="voice-calibration-legend" aria-hidden="true">
+              <span
+                ><i class="voice-calibration-legend__peak"></i>
+                {t('settings.voice.calibrationPeak', 'Peak')}</span
+              >
+              <span
+                ><i class="voice-calibration-legend__threshold"></i>
+                {t('settings.voice.calibrationThreshold', 'Threshold')}</span
+              >
+            </div>
+
+            <div class="voice-calibration-actions">
+              <Button
+                variant="tertiary"
+                disabled={!calibrationActive || calibrationActionBusy}
+                onClick={handleResetCalibrationPeaks}
+              >
+                {t('settings.voice.calibrationReset', 'Reset peaks')}
+              </Button>
+              <div class="voice-calibration-actions__decision">
+                <Button
+                  variant="secondary"
+                  disabled={calibrationActionBusy}
+                  onClick={handleDiscardCalibration}
+                >
+                  {t('settings.voice.calibrationDiscard', 'Discard and stop')}
+                </Button>
+                <Button
+                  variant="primary"
+                  loading={calibrationActionState === 'applying'}
+                  disabled={calibrationActionBusy}
+                  onClick={handleApplyCalibration}
+                >
+                  {t('settings.voice.calibrationApply', 'Apply sensitivity')}
+                </Button>
+              </div>
+            </div>
+          </div>
+        {:else}
+          <div class="voice-calibration-entry">
+            <span>
+              {voiceState.enabled
+                ? t(
+                    'settings.voice.calibrationReady',
+                    'Normal wakeword actions are paused only while the analyzer is open.',
+                  )
+                : t(
+                    'settings.voice.calibrationEnableFirst',
+                    'Enable wakeword listening before starting calibration.',
+                  )}
+            </span>
+            <Button
+              variant="secondary"
+              disabled={!calibrationCanStart}
+              loading={calibrationActionState === 'starting'}
+              onClick={handleStartCalibration}
+            >
+              {t('settings.voice.calibrationStart', 'Start calibration')}
+            </Button>
+          </div>
+        {/if}
       </div>
     </div>
 
@@ -955,7 +1274,9 @@
           ]}
           placeholder={t('settings.voice.noAgent', '— (none)')}
           onValueChange={handleAgentChange}
-          disabled={!loaded || agentOptions.length === 0}
+          disabled={!loaded ||
+            agentOptions.length === 0 ||
+            calibrationSessionActive}
         />
       </div>
     </div>
@@ -972,7 +1293,7 @@
           value={voiceState.session_behavior}
           options={SESSION_BEHAVIOR_OPTIONS}
           onValueChange={handleSessionBehaviorChange}
-          disabled={!loaded}
+          disabled={!loaded || calibrationSessionActive}
         />
       </div>
     </div>
@@ -991,7 +1312,9 @@
           ariaLabel={t('settings.voice.microphone', 'Microphone')}
           triggerClass="voice-microphone-dropdown"
           onValueChange={handleMicrophoneChange}
-          disabled={!loaded || microphones.length === 0}
+          disabled={!loaded ||
+            microphones.length === 0 ||
+            calibrationSessionActive}
         />
       </div>
     </div>
@@ -1121,6 +1444,7 @@
 
   .voice-microphone-control,
   .voice-model-control,
+  .voice-calibration-control,
   .voice-settings :global(.voice-microphone-dropdown.dropdown) {
     min-width: 300px;
   }
@@ -1204,6 +1528,142 @@
     display: none;
   }
 
+  .voice-calibration-entry {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--text-med);
+    font-size: var(--fs-body-sm);
+  }
+  .voice-calibration-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 16px;
+    border: 1px solid var(--border-2);
+    border-radius: var(--r-lg);
+    background: var(--surface-2);
+  }
+  .voice-calibration-header,
+  .voice-calibration-model__header,
+  .voice-calibration-actions,
+  .voice-calibration-actions__decision,
+  .voice-calibration-legend {
+    display: flex;
+    align-items: center;
+  }
+  .voice-calibration-header,
+  .voice-calibration-model__header,
+  .voice-calibration-actions {
+    justify-content: space-between;
+  }
+  .voice-calibration-header {
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .voice-calibration-heading {
+    color: var(--text-hi);
+    font-size: var(--fs-heading-sm);
+    font-weight: 600;
+  }
+  .voice-calibration-instruction {
+    max-width: 58ch;
+    margin-top: 4px;
+    color: var(--text-med);
+    font-size: var(--fs-body-sm);
+    line-height: 1.4;
+  }
+  .voice-calibration-models {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .voice-calibration-model {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .voice-calibration-model__header {
+    gap: 12px;
+    color: var(--text-hi);
+    font-size: var(--fs-label-md);
+    font-weight: 500;
+  }
+  .voice-calibration-model__values {
+    color: var(--text-med);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-sm);
+    font-weight: 400;
+    white-space: nowrap;
+  }
+  .voice-calibration-meter {
+    position: relative;
+    height: 12px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background:
+      repeating-linear-gradient(
+        to right,
+        transparent 0 calc(25% - 1px),
+        var(--border) calc(25% - 1px) 25%
+      ),
+      var(--bg);
+  }
+  .voice-calibration-meter__score {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: var(--score);
+    background: var(--accent);
+    transition: width 120ms linear;
+  }
+  .voice-calibration-meter__score--match {
+    background: var(--green);
+  }
+  .voice-calibration-meter__peak,
+  .voice-calibration-meter__threshold {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+  }
+  .voice-calibration-meter__peak {
+    left: calc(var(--peak) - 1px);
+    background: var(--green);
+  }
+  .voice-calibration-meter__threshold {
+    left: calc(var(--threshold) - 1px);
+    background: var(--text-hi);
+  }
+  .voice-calibration-legend {
+    justify-content: flex-end;
+    gap: 14px;
+    color: var(--text-lo);
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-xs);
+  }
+  .voice-calibration-legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .voice-calibration-legend i {
+    display: inline-block;
+    width: 2px;
+    height: 10px;
+  }
+  .voice-calibration-legend__peak {
+    background: var(--green);
+  }
+  .voice-calibration-legend__threshold {
+    background: var(--text-hi);
+  }
+  .voice-calibration-actions,
+  .voice-calibration-actions__decision {
+    gap: 8px;
+  }
+
   /* Privacy note */
   .voice-privacy-note {
     margin-top: 16px;
@@ -1266,6 +1726,26 @@
     .voice-dot--detected,
     .voice-dot--processing {
       animation: none;
+    }
+    .voice-calibration-meter__score {
+      transition: none;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .voice-calibration-entry,
+    .voice-calibration-header,
+    .voice-calibration-model__header,
+    .voice-calibration-actions {
+      align-items: stretch;
+      flex-direction: column;
+    }
+    .voice-calibration-actions__decision {
+      justify-content: flex-end;
+      flex-wrap: wrap;
+    }
+    .voice-calibration-model__values {
+      white-space: normal;
     }
   }
 </style>

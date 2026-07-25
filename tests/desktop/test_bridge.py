@@ -123,6 +123,89 @@ def test_get_wakeword_status_shape(tmp_path: Path) -> None:
     assert "session_behavior" in status
     assert status["active_model_ids"] == list(DEFAULT_WAKEWORD_MODEL_IDS)
     assert status["engine"] == "pyopen_wakeword"
+    assert status["calibration"] == {"active": False, "scores": {}, "peaks": {}}
+
+
+def test_calibration_publishes_scores_and_peaks_without_persisting_them(
+    tmp_path: Path,
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file, {"enabled": True})
+    worker = FakeWorker()
+    worker.start()
+    bridge = DesktopBridge(settings_path=settings_file, worker=worker)
+    bridge.publish_state("listening")
+
+    status = bridge.startWakewordCalibration()
+    assert status["calibration"] == {
+        "active": True,
+        "scores": dict.fromkeys(DEFAULT_WAKEWORD_MODEL_IDS, 0.0),
+        "peaks": dict.fromkeys(DEFAULT_WAKEWORD_MODEL_IDS, 0.0),
+    }
+
+    bridge.publish_calibration_scores(
+        {
+            DEFAULT_WAKEWORD_MODEL_IDS[0]: 0.42,
+            DEFAULT_WAKEWORD_MODEL_IDS[1]: 0.67,
+        }
+    )
+    bridge.publish_calibration_scores(
+        {
+            DEFAULT_WAKEWORD_MODEL_IDS[0]: 0.2,
+            DEFAULT_WAKEWORD_MODEL_IDS[1]: 0.3,
+        }
+    )
+
+    calibration = bridge.getWakewordStatus()["calibration"]
+    assert calibration["scores"] == pytest.approx(
+        {
+            DEFAULT_WAKEWORD_MODEL_IDS[0]: 0.2,
+            DEFAULT_WAKEWORD_MODEL_IDS[1]: 0.3,
+        }
+    )
+    assert calibration["peaks"] == pytest.approx(
+        {
+            DEFAULT_WAKEWORD_MODEL_IDS[0]: 0.42,
+            DEFAULT_WAKEWORD_MODEL_IDS[1]: 0.67,
+        }
+    )
+    stored = json.loads(settings_file.read_text(encoding="utf-8"))
+    assert "calibration" not in stored["wakeword"]
+
+    reset = bridge.resetWakewordCalibrationPeaks()["calibration"]
+    assert reset["scores"] == dict.fromkeys(DEFAULT_WAKEWORD_MODEL_IDS, 0.0)
+    assert reset["peaks"] == dict.fromkeys(DEFAULT_WAKEWORD_MODEL_IDS, 0.0)
+
+    stopped = bridge.stopWakewordCalibration()["calibration"]
+    assert stopped == {"active": False, "scores": {}, "peaks": {}}
+
+
+def test_calibration_requires_ready_real_listener(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file, {"enabled": True})
+    bridge = DesktopBridge(
+        settings_path=settings_file,
+        worker=FakeWorker(),
+        mock=True,
+    )
+    bridge.publish_state("listening")
+
+    with pytest.raises(RuntimeError, match="real Voice stack"):
+        bridge.startWakewordCalibration()
+
+
+def test_worker_stop_ends_calibration(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file, {"enabled": True})
+    worker = FakeWorker()
+    worker.start()
+    bridge = DesktopBridge(settings_path=settings_file, worker=worker)
+    bridge.publish_state("listening")
+    bridge.startWakewordCalibration()
+
+    bridge.setWakewordEnabled(False)
+
+    assert bridge.getWakewordStatus()["calibration"]["active"] is False
 
 
 def test_get_wakeword_status_includes_mock_flag(tmp_path: Path) -> None:

@@ -17,6 +17,11 @@ const VOICE_SETTINGS_DEFAULTS = Object.freeze({
   mode: 'real',
   errorCode: null,
   activeMicrophone: null,
+  calibration: Object.freeze({
+    active: false,
+    scores: Object.freeze({}),
+    peaks: Object.freeze({}),
+  }),
 });
 
 const RUNTIME_KEYS = new Set([
@@ -25,6 +30,7 @@ const RUNTIME_KEYS = new Set([
   'mode',
   'errorCode',
   'activeMicrophone',
+  'calibration',
 ]);
 
 const hasKey = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
@@ -55,6 +61,24 @@ const sameObject = (left, right) => {
     leftKeys.every((key) => right[key] === left[key])
   );
 };
+const sameCalibration = (left, right) =>
+  left?.active === right?.active &&
+  sameObject(left?.scores, right?.scores) &&
+  sameObject(left?.peaks, right?.peaks);
+
+function normalizeCalibration(calibration) {
+  return {
+    active: Boolean(calibration?.active),
+    scores:
+      calibration?.scores && typeof calibration.scores === 'object'
+        ? { ...calibration.scores }
+        : {},
+    peaks:
+      calibration?.peaks && typeof calibration.peaks === 'object'
+        ? { ...calibration.peaks }
+        : {},
+  };
+}
 
 /** Create the initial voice settings state with isolated structured defaults. */
 export function createVoiceSettingsState() {
@@ -62,6 +86,7 @@ export function createVoiceSettingsState() {
     ...VOICE_SETTINGS_DEFAULTS,
     active_model_ids: [...DEFAULT_ACTIVE_MODEL_IDS],
     model_sensitivities: {},
+    calibration: normalizeCalibration(),
   };
 }
 
@@ -95,6 +120,9 @@ export function applyWakewordStatus(state, status) {
     activeMicrophone: hasKey(status, 'active_microphone')
       ? status.active_microphone
       : state.activeMicrophone,
+    calibration: hasKey(status, 'calibration')
+      ? normalizeCalibration(status.calibration)
+      : state.calibration,
   };
 }
 
@@ -119,6 +147,15 @@ export function applyRuntimeStatus(state, status) {
     !sameMicrophone(status.active_microphone, next.activeMicrophone)
   ) {
     next = { ...next, activeMicrophone: status.active_microphone };
+  }
+  if (
+    hasKey(status, 'calibration') &&
+    !sameCalibration(status.calibration, next.calibration)
+  ) {
+    next = {
+      ...next,
+      calibration: normalizeCalibration(status.calibration),
+    };
   }
   return next;
 }
@@ -157,6 +194,7 @@ export function snapshotVoiceSettings(state) {
     activeMicrophone: state.activeMicrophone
       ? { ...state.activeMicrophone }
       : null,
+    calibration: normalizeCalibration(state.calibration),
   };
 }
 

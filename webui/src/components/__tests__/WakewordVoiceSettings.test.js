@@ -19,6 +19,9 @@ vi.mock('$lib/desktopBridge.js', () => ({
   deleteWakewordModel: vi.fn(),
   onWakewordStatusChange: vi.fn(() => () => {}),
   retryWakeword: vi.fn(),
+  startWakewordCalibration: vi.fn(),
+  stopWakewordCalibration: vi.fn(),
+  resetWakewordCalibrationPeaks: vi.fn(),
   isDesktop: vi.fn(() => true),
 }));
 vi.mock('$lib/api.js', () => ({
@@ -76,6 +79,43 @@ describe('WakewordVoiceSettings', () => {
     desktopBridge.setWakewordEnabled.mockResolvedValue(undefined);
     desktopBridge.deleteWakewordModel.mockResolvedValue({ deleted: true });
     desktopBridge.retryWakeword.mockResolvedValue(undefined);
+    desktopBridge.startWakewordCalibration.mockResolvedValue({
+      ...baseStatus(),
+      enabled: true,
+      state: 'listening',
+      calibration: {
+        active: true,
+        scores: {
+          'builtin/okay_nabu': 0.34,
+          'builtin/hey_nabu': 0.28,
+        },
+        peaks: {
+          'builtin/okay_nabu': 0.72,
+          'builtin/hey_nabu': 0.64,
+        },
+      },
+    });
+    desktopBridge.stopWakewordCalibration.mockResolvedValue({
+      ...baseStatus(),
+      enabled: true,
+      state: 'listening',
+    });
+    desktopBridge.resetWakewordCalibrationPeaks.mockResolvedValue({
+      ...baseStatus(),
+      enabled: true,
+      state: 'listening',
+      calibration: {
+        active: true,
+        scores: {
+          'builtin/okay_nabu': 0,
+          'builtin/hey_nabu': 0,
+        },
+        peaks: {
+          'builtin/okay_nabu': 0,
+          'builtin/hey_nabu': 0,
+        },
+      },
+    });
     updateSettings.mockImplementation(async (payload) => payload);
   });
 
@@ -239,6 +279,72 @@ describe('WakewordVoiceSettings', () => {
     });
   });
 
+  it('calibrates raw model scores and saves sensitivity only after Apply', async () => {
+    desktopBridge.getWakewordStatus.mockResolvedValue({
+      ...baseStatus(),
+      enabled: true,
+      state: 'listening',
+      target_agent_id: 'main',
+    });
+    await mountPanel();
+
+    buttonByText('Start calibration').click();
+    await settle();
+
+    expect(desktopBridge.startWakewordCalibration).toHaveBeenCalledOnce();
+    expect(document.body.textContent).toContain('Signal analyzer');
+    expect(document.body.textContent).toMatch(/Peak\s+0\.72/);
+    expect(document.body.textContent).toContain('Commands paused');
+
+    const slider = document.getElementById(
+      'voice-sensitivity-builtin/okay_nabu',
+    );
+    slider.value = '0.8';
+    slider.dispatchEvent(new Event('input', { bubbles: true }));
+    slider.dispatchEvent(new Event('change', { bubbles: true }));
+    await settle();
+
+    expect(desktopBridge.setWakewordConfig).not.toHaveBeenCalled();
+
+    buttonByText('Apply sensitivity').click();
+    await settle();
+
+    expect(desktopBridge.stopWakewordCalibration).toHaveBeenCalledOnce();
+    expect(desktopBridge.setWakewordConfig).toHaveBeenCalledWith({
+      model_sensitivities: {
+        'builtin/okay_nabu': 0.8,
+        'builtin/hey_nabu': 0.5,
+      },
+    });
+  });
+
+  it('discards calibration sensitivity drafts without saving', async () => {
+    desktopBridge.getWakewordStatus.mockResolvedValue({
+      ...baseStatus(),
+      enabled: true,
+      state: 'listening',
+      target_agent_id: 'main',
+    });
+    await mountPanel();
+    buttonByText('Start calibration').click();
+    await settle();
+
+    const slider = document.getElementById(
+      'voice-sensitivity-builtin/okay_nabu',
+    );
+    slider.value = '0.8';
+    slider.dispatchEvent(new Event('input', { bubbles: true }));
+    slider.dispatchEvent(new Event('change', { bubbles: true }));
+    await settle();
+
+    buttonByText('Discard and stop').click();
+    await settle();
+
+    expect(desktopBridge.setWakewordConfig).not.toHaveBeenCalled();
+    expect(slider.value).toBe('0.5');
+    expect(document.body.textContent).not.toContain('Signal analyzer');
+  });
+
   it('imports a TFLite model without replacing two active phrases', async () => {
     const importedModel = {
       id: 'custom/computer',
@@ -326,6 +432,11 @@ function baseStatus() {
     mode: 'real',
     error_code: null,
     active_microphone: null,
+    calibration: {
+      active: false,
+      scores: {},
+      peaks: {},
+    },
   };
 }
 

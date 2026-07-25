@@ -228,6 +228,7 @@ class WakewordWorker:
         server_url: str = "",
         config_reader: Callable[[], dict[str, Any]] | None = None,
         speech_readiness_checker: Callable[[str], str | None] | None = None,
+        calibration_checker: Callable[[], bool] | None = None,
     ) -> None:
         self._engine = engine
         self._bridge = bridge
@@ -235,6 +236,7 @@ class WakewordWorker:
         self._server_url = server_url.rstrip("/")
         self._config_reader = config_reader
         self._speech_readiness_checker = speech_readiness_checker or check_speech_to_text_readiness
+        self._calibration_checker = calibration_checker or (lambda: False)
         self._thread: threading.Thread | None = None
         self._running = threading.Event()
         self._stream: Any = None
@@ -330,6 +332,7 @@ class WakewordWorker:
 
                 consecutive_read_errors = 0
                 detection_pre_roll.append(captured_frame)
+                calibrating = self._calibration_checker()
 
                 try:
                     match = self._engine.detect(captured_frame.detection_pcm16)
@@ -337,6 +340,9 @@ class WakewordWorker:
                     logger.warning("Wakeword detection failed", exc_info=True)
                     self._fail("detection_failed")
                     break
+                if calibrating or self._calibration_checker():
+                    detection_pre_roll.clear()
+                    continue
                 if match is not None:
                     logger.info(
                         "Wakeword detected: model=%s score=%.3f threshold=%.3f",
@@ -521,11 +527,7 @@ class WakewordWorker:
         Uses webrtcvad for voice activity detection. Returns WAV-encoded
         audio bytes, or None when no frames were recorded.
         """
-        try:
-            import webrtcvad  # type: ignore[import-untyped]
-        except ImportError:
-            logger.warning("webrtcvad not available; recording raw audio")
-            return self._record_raw(pre_roll_audio)
+        import webrtcvad  # type: ignore[import-untyped]
 
         vad = webrtcvad.Vad(_VAD_MODE)
         frames: list[CapturedAudioFrame] = []
@@ -574,35 +576,6 @@ class WakewordWorker:
             return None
 
         return _encode_captured_audio(frames)
-
-    def _record_raw(
-        self,
-        pre_roll_audio: bytes | tuple[CapturedAudioFrame, ...] = b"",
-    ) -> bytes | None:
-        """Fallback recording without VAD — fixed 3-second capture."""
-        frames: list[CapturedAudioFrame] = []
-        max_frames = int(3.0 / (_VAD_FRAME_DURATION_MS / 1000))
-        for _ in range(max_frames):
-            if not self._running.is_set():
-                break
-            try:
-                frame = _read_capture_frame(self._stream, _VAD_FRAME_SIZE)
-                frames.append(frame)
-            except Exception:
-                logger.warning("Microphone read error during raw recording", exc_info=True)
-                break
-        if not frames:
-            return None
-        recording_sample_rate = frames[0].recording_sample_rate
-        pre_roll = _resample_pcm16(
-            _detection_audio_bytes(pre_roll_audio),
-            _SAMPLE_RATE,
-            recording_sample_rate,
-        )
-        return _encode_wav(
-            pre_roll + b"".join(frame.recording_pcm16 for frame in frames),
-            sample_rate=recording_sample_rate,
-        )
 
     # -- Server communication ------------------------------------------------
 

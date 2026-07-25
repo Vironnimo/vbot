@@ -281,8 +281,9 @@ def read_wakeword_settings(path: Path | None = None) -> dict[str, Any]:
     if not isinstance(wakeword_data, dict):
         wakeword_data = {}
     merged = copy.deepcopy(DEFAULT_WAKEWORD_SETTINGS)
-    merged.update(wakeword_data)
-    merged.pop("model_id", None)
+    for key in DEFAULT_WAKEWORD_SETTINGS:
+        if key in wakeword_data:
+            merged[key] = copy.deepcopy(wakeword_data[key])
     active_model_ids = merged.get("active_model_ids")
     if _valid_active_model_ids(active_model_ids) and isinstance(active_model_ids, list):
         merged["active_model_ids"] = [model_id.strip() for model_id in active_model_ids]

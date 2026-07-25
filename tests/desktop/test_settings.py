@@ -368,6 +368,7 @@ def test_read_wakeword_settings_normalizes_invalid_active_models(
             {
                 "wakeword": {
                     "model_id": "builtin/legacy",
+                    "unknown": "ignored",
                     "active_model_ids": active_model_ids,
                     "model_sensitivities": [],
                 }
@@ -381,6 +382,7 @@ def test_read_wakeword_settings_normalizes_invalid_active_models(
     assert config["active_model_ids"] == list(desktop_settings.DEFAULT_WAKEWORD_MODEL_IDS)
     assert config["model_sensitivities"] == {}
     assert "model_id" not in config
+    assert "unknown" not in config
 
 
 def test_read_wakeword_settings_trims_active_model_ids(tmp_path: Path) -> None:
