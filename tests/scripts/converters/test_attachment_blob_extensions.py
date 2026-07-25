@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from core.attachments import AttachmentStore
+from core.storage.layout import DataDirectoryLayout
 
 _CONVERTER = import_module("scripts.converters.attachment_blob_extensions")
 AttachmentBlobConversionError = _CONVERTER.AttachmentBlobConversionError
@@ -22,7 +23,7 @@ def test_converter_renames_legacy_blob_and_updates_sidecar(tmp_path: Path) -> No
     typed_blob_path = Path(record.file_path)
     legacy_blob_path = typed_blob_path.with_suffix("")
     typed_blob_path.replace(legacy_blob_path)
-    sidecar_path = tmp_path / "attachments" / f"{record.id}.json"
+    sidecar_path = DataDirectoryLayout(tmp_path).attachments / f"{record.id}.json"
     payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
     payload["file_path"] = str(legacy_blob_path)
     sidecar_path.write_text(json.dumps(payload), encoding="utf-8")

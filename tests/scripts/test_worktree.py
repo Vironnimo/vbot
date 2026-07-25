@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = PROJECT_ROOT / "scripts" / "worktree.py"
 
@@ -19,36 +21,12 @@ def _load_worktree_module():
     return module
 
 
-def _write_data_dir_template(root: Path) -> Path:
-    template_dir = root / ".data-dir-base"
-    main_agent_path = template_dir / "agents" / "main" / "agent.json"
-    workspace_dir = main_agent_path.parent / "workspace"
+def test_worktree_source_uses_canonical_initializer_without_local_template() -> None:
+    source = MODULE_PATH.read_text(encoding="utf-8")
 
-    main_agent_path.parent.mkdir(parents=True, exist_ok=True)
-    workspace_dir.mkdir(parents=True, exist_ok=True)
-
-    (template_dir / ".env").write_text("TEMPLATE=1\n", encoding="utf-8")
-    (template_dir / "settings.json").write_text(
-        json.dumps({"from_template": True}),
-        encoding="utf-8",
-    )
-    main_agent_path.write_text(
-        json.dumps(
-            {
-                "id": "main",
-                "name": "Main",
-                "model": "template-model",
-                "workspace": "C:\\placeholder\\workspace",
-            }
-        ),
-        encoding="utf-8",
-    )
-    (workspace_dir / "USER.md").write_text(
-        "template workspace\n",
-        encoding="utf-8",
-    )
-
-    return template_dir
+    assert "initialize_data_directory" in source
+    assert ".data-dir-base" not in source
+    assert "OPENAI_API_KEY" not in source
 
 
 def test_scan_used_ports_tolerates_non_object_marker_and_settings_json(tmp_path):
@@ -168,7 +146,6 @@ def test_cmd_create_runs_npm_install_then_build(tmp_path, monkeypatch):
     webui_path = worktree_path / "webui"
 
     monkeypatch.setattr(module, "WORKTREES_DIR", worktrees_dir)
-    monkeypatch.setattr(module, "DATA_DIR_TEMPLATE_DIR", _write_data_dir_template(tmp_path))
     monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8422)
     monkeypatch.setattr(module.shutil, "which", lambda _name: "npm")
     monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
@@ -208,7 +185,6 @@ def test_cmd_create_reports_branch_in_output(
     webui_path = worktree_path / "webui"
 
     monkeypatch.setattr(module, "WORKTREES_DIR", worktrees_dir)
-    monkeypatch.setattr(module, "DATA_DIR_TEMPLATE_DIR", _write_data_dir_template(tmp_path))
     monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8422)
     monkeypatch.setattr(module.shutil, "which", lambda _name: "npm")
     monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
@@ -228,7 +204,7 @@ def test_cmd_create_reports_branch_in_output(
     assert f"branch: {expected_branch}" in capsys.readouterr().out
 
 
-def test_cmd_create_seeds_data_dir_and_rewrites_main_agent_workspace(tmp_path, monkeypatch):
+def test_cmd_create_initializes_canonical_data_dir_without_agent(tmp_path, monkeypatch):
     module = _load_worktree_module()
 
     name = "seeded-worktree"
@@ -236,26 +212,8 @@ def test_cmd_create_seeds_data_dir_and_rewrites_main_agent_workspace(tmp_path, m
     worktree_path = worktrees_dir / name
     webui_path = worktree_path / "webui"
     data_dir = tmp_path / "home" / f".vbot-{name}"
-    template_dir = _write_data_dir_template(tmp_path)
-
-    data_dir.mkdir(parents=True)
-    (data_dir / ".env").write_text("PREEXISTING=1\n", encoding="utf-8")
-    (data_dir / "settings.json").write_text(
-        json.dumps({"preexisting": True}),
-        encoding="utf-8",
-    )
-    (data_dir / "agents" / "main").mkdir(parents=True, exist_ok=True)
-    (data_dir / "agents" / "main" / "agent.json").write_text(
-        json.dumps({"id": "main", "workspace": "C:\\stale\\workspace"}),
-        encoding="utf-8",
-    )
-    (data_dir / "agents" / "main" / "workspace").mkdir(parents=True, exist_ok=True)
-    (data_dir / "agents" / "main" / "workspace" / "USER.md").write_text(
-        "stale workspace\n", encoding="utf-8"
-    )
 
     monkeypatch.setattr(module, "WORKTREES_DIR", worktrees_dir)
-    monkeypatch.setattr(module, "DATA_DIR_TEMPLATE_DIR", template_dir)
     monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8422)
     monkeypatch.setattr(module.shutil, "which", lambda _name: "npm")
     monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
@@ -270,22 +228,14 @@ def test_cmd_create_seeds_data_dir_and_rewrites_main_agent_workspace(tmp_path, m
     result = module.cmd_create(argparse.Namespace(name=name, from_branch="main"))
 
     assert result == 0
-    assert (data_dir / ".env").read_text(encoding="utf-8") == "TEMPLATE=1\n"
+    assert (data_dir / ".env").read_bytes() == (
+        PROJECT_ROOT / "resources" / "data-dir" / ".env.example"
+    ).read_bytes()
     assert json.loads((data_dir / "settings.json").read_text(encoding="utf-8")) == {
-        "from_template": True,
-        "server_port": 8422,
+        "server_port": 8422
     }
-    assert json.loads(
-        (data_dir / "agents" / "main" / "agent.json").read_text(encoding="utf-8")
-    ) == {
-        "id": "main",
-        "name": "Main",
-        "model": "template-model",
-        "workspace": "agents/main/workspace",
-    }
-    assert (data_dir / "agents" / "main" / "workspace" / "USER.md").read_text(encoding="utf-8") == (
-        "template workspace\n"
-    )
+    assert all((data_dir / path).is_dir() for path in DATA_DIRECTORY_RELATIVE_PATHS)
+    assert not (data_dir / "agents" / "main").exists()
 
 
 def test_cmd_create_cleans_up_worktree_data_dir_and_branch_after_build_failure(
@@ -300,7 +250,6 @@ def test_cmd_create_cleans_up_worktree_data_dir_and_branch_after_build_failure(
     data_dir = tmp_path / "home" / f".vbot-{name}"
 
     monkeypatch.setattr(module, "WORKTREES_DIR", worktrees_dir)
-    monkeypatch.setattr(module, "DATA_DIR_TEMPLATE_DIR", _write_data_dir_template(tmp_path))
     monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8422)
     monkeypatch.setattr(module.shutil, "which", lambda _name: "npm")
     monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))
@@ -345,7 +294,6 @@ def test_cmd_create_preserves_preexisting_data_dir_after_build_failure(tmp_path,
     data_dir.mkdir(parents=True)
 
     monkeypatch.setattr(module, "WORKTREES_DIR", worktrees_dir)
-    monkeypatch.setattr(module, "DATA_DIR_TEMPLATE_DIR", _write_data_dir_template(tmp_path))
     monkeypatch.setattr(module, "find_free_port", lambda _worktrees_dir: 8422)
     monkeypatch.setattr(module.shutil, "which", lambda _name: "npm")
     monkeypatch.setattr(module.Path, "home", staticmethod(lambda: tmp_path / "home"))

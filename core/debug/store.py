@@ -1,7 +1,7 @@
 """Debug trace storage for vBot.
 
 Provides ``DebugTraceStore``, which persists provider wire traces as
-individual JSON files under ``<data_dir>/debug/traces/`` with a
+individual JSON files under ``<data_dir>/artifacts/debug/traces/`` with a
 metadata-only ``index.json`` for fast listing and retention pruning.
 """
 
@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from core.storage.layout import DataDirectoryLayout
 from core.utils.logging import get_logger
 
 _logger = get_logger("debug")
@@ -39,8 +40,8 @@ class DebugTraceStore:
     """Persists and retrieves provider wire traces on the local filesystem.
 
     Traces are stored as individual JSON files under
-    ``<data_dir>/debug/traces/<trace_id>.json``.  A metadata-only
-    ``index.json`` in ``<data_dir>/debug/`` enables fast listing without
+    ``<data_dir>/artifacts/debug/traces/<trace_id>.json``. A metadata-only
+    ``index.json`` in ``<data_dir>/artifacts/debug/`` enables fast listing without
     reading every trace file.  Oldest traces are pruned automatically
     after each write so the total count never exceeds the configured
     limit.
@@ -48,14 +49,14 @@ class DebugTraceStore:
     Args:
         data_dir: Absolute path to the vBot data directory
                   (e.g. ``~/.vbot``).  Traces live under
-                  ``<data_dir>/debug/``.
+                  ``<data_dir>/artifacts/debug/``.
         trace_limit: Maximum number of traces to retain.  Traces
                      exceeding this limit are deleted (oldest first)
                      after every ``save_trace()`` call.
     """
 
     def __init__(self, data_dir: str | Path, trace_limit: int) -> None:
-        self._debug_dir = Path(data_dir) / "debug"
+        self._debug_dir = DataDirectoryLayout(data_dir).debug
         self._traces_dir = self._debug_dir / _TRACES_DIR_NAME
         self._index_path = self._debug_dir / _INDEX_FILE_NAME
         self._trace_limit = trace_limit
@@ -65,14 +66,14 @@ class DebugTraceStore:
     # ------------------------------------------------------------------
 
     def get_data_dir(self) -> Path:
-        """Return the debug data directory path (``<data_dir>/debug/``)."""
+        """Return the debug data directory path under ``artifacts/debug/``."""
         return self._debug_dir
 
     def save_trace(self, trace_id: str, trace_data: dict[str, Any]) -> None:
         """Persist a full trace and update the metadata index.
 
         Writes the complete *trace_data* payload to
-        ``<data_dir>/debug/traces/<trace_id>.json``, inserts a
+        ``<data_dir>/artifacts/debug/traces/<trace_id>.json``, inserts a
         metadata-only entry into ``index.json``, and prunes the oldest
         traces when the total count exceeds the configured limit.
 

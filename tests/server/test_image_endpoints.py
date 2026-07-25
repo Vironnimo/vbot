@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 from core.model_tasks import ImageArtifact, ImageConfigurationError
 from core.runs import ChatRunManager
+from core.storage.layout import DataDirectoryLayout
 from server.app import create_app
 
 
@@ -55,7 +56,7 @@ class _ImageRuntime:
 
 class _Image:
     def __init__(self, data_dir: Path, payload: bytes) -> None:
-        self._file_path = data_dir / "images" / "artifact.png"
+        self._file_path = DataDirectoryLayout(data_dir).images / "artifact.png"
         self._payload = payload
 
     def get_artifact(self, artifact_id: str) -> ImageArtifact:

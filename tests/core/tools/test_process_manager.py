@@ -759,7 +759,7 @@ async def test_log_file_holds_complete_output_beyond_buffer_cap(tmp_path: Path) 
         session = manager.get_session(session_id, AGENT_A)
         assert session.truncated is True
         assert session.log_file is not None
-        assert session.log_file.parent == tmp_path / "temp" / "bash"
+        assert session.log_file.parent == tmp_path / "artifacts" / "temp" / "bash"
 
         content = session.log_file.read_text(encoding="utf-8")
         assert "start-marker" in content

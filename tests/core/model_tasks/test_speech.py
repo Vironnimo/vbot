@@ -19,6 +19,7 @@ from core.model_tasks import (
     TaskModelError,
 )
 from core.providers.errors import ProviderError
+from core.storage.layout import DataDirectoryLayout
 
 
 @pytest.mark.asyncio
@@ -48,6 +49,7 @@ async def test_synthesize_artifact_persists_metadata(tmp_path: Path) -> None:
 
     assert artifact.media_type == "audio/mpeg"
     assert artifact.size_bytes == 5
+    assert artifact.file_path.parent == DataDirectoryLayout(tmp_path).speech
     assert artifact.file_path.read_bytes() == b"audio"
     assert (
         service.get_artifact(artifact.id).to_dict()["url"] == f"/api/speech/artifacts/{artifact.id}"

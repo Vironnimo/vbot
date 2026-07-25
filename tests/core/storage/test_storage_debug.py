@@ -9,7 +9,8 @@ from typing import Any
 import pytest
 
 from core.storage import (
-    PHASE_TWO_DIRECTORIES,
+    DATA_DIRECTORY_RELATIVE_PATHS,
+    DataDirectoryLayout,
     StorageError,
     StorageManager,
 )
@@ -195,15 +196,14 @@ class TestDebugDirectory:
 
         storage.ensure_directories()
 
-        assert "debug" in PHASE_TWO_DIRECTORIES
-        assert (tmp_path / "debug").is_dir()
+        assert DataDirectoryLayout(tmp_path).debug.is_dir()
 
-    def test_ensure_directories_creates_all_phase_two_dirs(self, tmp_path: Path) -> None:
+    def test_ensure_directories_creates_all_canonical_dirs(self, tmp_path: Path) -> None:
         storage = StorageManager(tmp_path)
 
         storage.ensure_directories()
 
-        for directory_name in PHASE_TWO_DIRECTORIES:
+        for directory_name in DATA_DIRECTORY_RELATIVE_PATHS:
             assert (tmp_path / directory_name).is_dir(), f"Missing: {directory_name}"
 
 

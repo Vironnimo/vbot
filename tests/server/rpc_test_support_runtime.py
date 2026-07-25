@@ -31,7 +31,7 @@ from core.runs import ChatRunManager
 from core.settings import AGENT_DEFAULT_FIELDS
 from core.settings.normalizers import normalize_extensions_settings
 from core.settings.settings import parse_openrouter_routing
-from core.storage import StorageError
+from core.storage import DataDirectoryLayout, StorageError
 from core.tools import FileReadState, ToolRegistry
 from core.utils.errors import ConfigError
 from server.events import ServerEventBus
@@ -58,6 +58,7 @@ STUB_SUBAGENT_SETTING_FIELDS = (
 class StubStorage:
     def __init__(self, tmp_path: Path) -> None:
         self.data_dir = tmp_path
+        self.layout = DataDirectoryLayout(tmp_path)
         self.prompts_dir = tmp_path / "prompts"
         self._appearance = {"language": "en", "chat_width": "comfortable"}
         self._skill_directories: list[str] = []

@@ -17,6 +17,7 @@ from core.models.database import (
     write_model_database_manifest,
 )
 from core.models.models import ModelRegistry
+from core.storage.layout import DataDirectoryLayout
 
 
 def test_manifest_round_trips_refresh_provenance(tmp_path: Path) -> None:
@@ -124,9 +125,11 @@ def test_runtime_refresh_copies_and_publishes_every_model_file(tmp_path: Path) -
     )
 
     refresh = begin_runtime_model_database_refresh(resources_dir, data_dir)
+    assert refresh.resources_dir.parent == DataDirectoryLayout(data_dir).atomic_temporary
+    assert refresh.publish_temporary_dir == DataDirectoryLayout(data_dir).atomic_temporary
     refresh.commit()
 
-    assert sorted(path.name for path in (data_dir / "models").iterdir()) == [
+    assert sorted(path.name for path in DataDirectoryLayout(data_dir).models.iterdir()) == [
         "manifest.json",
         "openai.json",
         "openai.overrides.json",
@@ -136,7 +139,8 @@ def test_runtime_refresh_copies_and_publishes_every_model_file(tmp_path: Path) -
 
 def test_discarded_runtime_refresh_leaves_published_database_untouched(tmp_path: Path) -> None:
     resources_dir = tmp_path / "resources"
-    runtime_models_dir = tmp_path / "data" / "models"
+    data_dir = tmp_path / "data"
+    runtime_models_dir = DataDirectoryLayout(data_dir).models
     runtime_models_dir.mkdir(parents=True)
     runtime_models_dir.joinpath("openai.json").write_text("published", encoding="utf-8")
     write_model_database_manifest(
@@ -145,7 +149,7 @@ def test_discarded_runtime_refresh_leaves_published_database_untouched(tmp_path:
         refreshed_at=datetime(2026, 7, 21, tzinfo=UTC),
     )
 
-    refresh = begin_runtime_model_database_refresh(resources_dir, tmp_path / "data")
+    refresh = begin_runtime_model_database_refresh(resources_dir, data_dir)
     refresh.resources_dir.joinpath("models", "openai.json").write_text(
         "unpublished",
         encoding="utf-8",

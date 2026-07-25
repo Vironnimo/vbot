@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from core.debug.store import DebugTraceStore
+from core.storage.layout import DataDirectoryLayout
 
 
 def _make_trace_data(
@@ -57,14 +58,14 @@ class TestSaveTrace:
         store.save_trace(trace_id, trace_data)
 
         # Trace file exists with full content
-        trace_path = tmp_path / "debug" / "traces" / f"{trace_id}.json"
+        trace_path = DataDirectoryLayout(tmp_path).debug / "traces" / f"{trace_id}.json"
         assert trace_path.is_file()
         saved = json.loads(trace_path.read_text(encoding="utf-8"))
         assert saved["trace_id"] == trace_id
         assert saved["request"]["body"]["model"] == "gpt-4"
 
         # Index contains metadata entry
-        index_path = tmp_path / "debug" / "index.json"
+        index_path = DataDirectoryLayout(tmp_path).debug / "index.json"
         assert index_path.is_file()
         index = json.loads(index_path.read_text(encoding="utf-8"))
         assert isinstance(index, list)
@@ -87,7 +88,7 @@ class TestSaveTrace:
 
         store.save_trace("meta-test", trace_data)
 
-        index_path = tmp_path / "debug" / "index.json"
+        index_path = DataDirectoryLayout(tmp_path).debug / "index.json"
         index = json.loads(index_path.read_text(encoding="utf-8"))
         entry = index[0]
 
@@ -193,7 +194,7 @@ class TestRetentionPruning:
         assert len(traces) == 3
 
         # Oldest trace file should be deleted from disk
-        old_trace_path = tmp_path / "debug" / "traces" / "id-1.json"
+        old_trace_path = DataDirectoryLayout(tmp_path).debug / "traces" / "id-1.json"
         assert not old_trace_path.exists()
 
     def test_does_not_prune_when_at_limit(self, tmp_path: Path) -> None:
@@ -221,8 +222,8 @@ class TestClearAll:
 
         store.clear_all()
 
-        traces_dir = tmp_path / "debug" / "traces"
-        index_path = tmp_path / "debug" / "index.json"
+        traces_dir = DataDirectoryLayout(tmp_path).debug / "traces"
+        index_path = DataDirectoryLayout(tmp_path).debug / "index.json"
         assert not index_path.exists()
         # traces_dir is removed by clear_all's rmdir call
         assert not traces_dir.exists()
@@ -242,4 +243,4 @@ class TestClearAll:
 class TestGetDataDir:
     def test_returns_debug_directory(self, tmp_path: Path) -> None:
         store = DebugTraceStore(tmp_path, trace_limit=10)
-        assert store.get_data_dir() == tmp_path / "debug"
+        assert store.get_data_dir() == DataDirectoryLayout(tmp_path).debug

@@ -227,7 +227,7 @@ print(key)
 PYEOF
 }
 
-# Server data-dir steps (port resolution, settings.json, .env): skipped for the
+# Server data-dir steps (port resolution, settings.json, canonical layout): skipped for the
 # desktop-client mode, which connects to a remote server and owns no local one.
 if [ "$DESKTOP_CLIENT" -eq 0 ]; then
     SETTINGS_PATH="${DATA_DIR}/settings.json"
@@ -264,18 +264,9 @@ if [ "$DESKTOP_CLIENT" -eq 0 ]; then
         echo "Keeping existing valid settings.json."
     fi
 
-    ENV_PATH="${DATA_DIR}/.env"
-    if [ ! -f "$ENV_PATH" ]; then
-        cat > "$ENV_PATH" <<'ENVEOF'
-# vBot provider credentials
-# OPENAI_API_KEY=...
-# OPENROUTER_API_KEY=...
-# ANTHROPIC_API_KEY=...
-ENVEOF
-        echo "Created .env template."
-    else
-        echo "Keeping existing .env."
-    fi
+    "$PYTHON" "${PROJECT_ROOT}/core/storage/layout.py" "$DATA_DIR" \
+        --resources-dir "${PROJECT_ROOT}/resources" \
+        || fail "Could not initialize the canonical data-directory layout: ${DATA_DIR}"
 fi
 
 # --dev swaps the base groups; --desktop stays an add-on on top of either base,

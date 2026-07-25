@@ -85,6 +85,9 @@ class FullHistoryFakeAdapter(FakeAdapter):
 @pytest.fixture
 def resources_dir(tmp_path: Path) -> Path:
     resources = tmp_path / "resources"
+    environment_template = resources / "data-dir" / ".env.example"
+    environment_template.parent.mkdir(parents=True)
+    environment_template.write_text("# Integration-test environment\n", encoding="utf-8")
     _write_provider_resource(resources)
     _write_model_resource(resources)
     _write_prompt_resources(resources)

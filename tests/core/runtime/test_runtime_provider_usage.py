@@ -7,6 +7,7 @@ import pytest
 
 from core.providers.usage import ProviderUsageService
 from core.runtime.runtime import Runtime
+from core.storage.layout import DataDirectoryLayout
 from core.utils.config import Config
 
 
@@ -27,6 +28,8 @@ async def test_runtime_starts_shared_provider_usage_service_and_closes_it(
     service = runtime.provider_usage
     assert isinstance(service, ProviderUsageService)
     assert service._history_started is True  # noqa: SLF001
+    assert service._history is not None  # noqa: SLF001
+    assert service._history.directory == DataDirectoryLayout(config.data_dir).provider_usage  # noqa: SLF001
 
     await runtime.aclose()
 

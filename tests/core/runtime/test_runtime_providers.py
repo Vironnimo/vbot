@@ -26,6 +26,7 @@ from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfi
 from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter
 from core.providers.token_store import OAuthToken
 from core.runtime.runtime import Runtime
+from core.storage.layout import DataDirectoryLayout
 from core.utils.config import Config
 from core.utils.errors import ConfigError
 
@@ -1004,6 +1005,7 @@ async def test_maybe_refresh_local_catalogs_degrades_when_staged_db_is_invalid(
     await runtime.maybe_refresh_local_catalogs()
 
     assert reloads == []
+    assert list(DataDirectoryLayout(runtime.storage.data_dir).models.iterdir()) == []
     assert not (runtime.storage.data_dir / "models").exists()
     assert runtime.connection_reachability("ollama:local") is True
 

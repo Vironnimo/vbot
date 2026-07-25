@@ -10,7 +10,6 @@ from typing import Any
 import httpx
 
 from core.models.database import (
-    MODEL_DATABASE_DIRECTORY_NAME,
     ModelDatabaseRefresh,
     begin_runtime_model_database_refresh,
     begin_system_model_database_refresh,
@@ -875,7 +874,7 @@ def _reload_runtime_model_registry(runtime: Any, system_resources_dir: Path) -> 
     # same instance, so an in-place swap reaches all of them without re-wiring.
     runtime.models.reload(
         system_resources_dir,
-        runtime_models_dir=Path(runtime.storage.data_dir) / MODEL_DATABASE_DIRECTORY_NAME,
+        runtime_models_dir=runtime.storage.layout.models,
     )
 
 

@@ -8,7 +8,7 @@ Captures complete raw provider HTTP requests and responses for local inspection,
 
 Capture happens in **one place**: a debug-aware `httpx.AsyncClient` built by the shared provider HTTP factory. When a recorder is attached, every request and response that flows through that client is captured — raw method, URL, headers, and complete body — regardless of whether the provider call is streaming or non-streaming and regardless of which provider adapter issued it. Adapters do **not** contain capture logic; they only opt in by building their client through the factory and forwarding the active recorder.
 
-Traces are local-only JSON files under `<data_dir>/debug/traces/`, with a metadata-only `index.json` for listing without reading full bodies. Retention is capped by `debug.trace_limit`; oldest traces are pruned after each write.
+Traces are local-only JSON files under `<data_dir>/artifacts/debug/traces/`, with a metadata-only `index.json` for listing without reading full bodies. Storage owns the canonical placement; Debug owns the trace/index schema, redaction, retention, and authorization. Retention is capped by `debug.trace_limit`; oldest traces are pruned after each write.
 
 This domain does **not** normalize, interpret, or transform captured bodies — they are stored as the raw bytes/text seen on the wire. The only mutation is secret redaction.
 
@@ -19,7 +19,7 @@ This domain does **not** normalize, interpret, or transform captured bodies — 
 - `enabled: boolean` — default `false`. Controls capture. Read live per request.
 - `trace_limit: positive integer` — default `50`, max `500`. Retained file count.
 
-### Trace file (`<data_dir>/debug/traces/<trace_id>.json`)
+### Trace file (`<data_dir>/artifacts/debug/traces/<trace_id>.json`)
 
 One canonical shape, shared verbatim by backend writers and the WebUI. Field names here are the contract — neither side may read or write differently.
 
@@ -51,7 +51,7 @@ One canonical shape, shared verbatim by backend writers and the WebUI. Field nam
 - For streaming provider calls, `response.body` is the complete aggregate raw streaming HTTP body exactly as captured from the transport, including SSE framing text such as `data:` lines and frame separators. Debug traces do **not** split successful streaming responses into per-event records.
 - `model_probe` traces omit `context`; `model_id` is the empty string.
 
-### Index entry (`<data_dir>/debug/index.json`)
+### Index entry (`<data_dir>/artifacts/debug/index.json`)
 
 Metadata only, one entry per trace, used for the trace list:
 
@@ -81,7 +81,7 @@ Exports `DebugTraceStore`, `ProviderDebugRecorder`, `DebugContext`, `redact_head
   - `get_traces() -> list[dict]` — index entries, newest first.
   - `get_trace(trace_id) -> dict` — full trace; raises `FileNotFoundError`.
   - `clear_all()` — delete all traces and the index.
-  - `get_data_dir() -> Path` — the `<data_dir>/debug/` directory.
+  - `get_data_dir() -> Path` — the `<data_dir>/artifacts/debug/` directory.
 - `ProviderDebugRecorder(store)` — holds one shared `DebugContext` and is the entry point the capture transport drives; it keeps **no** per-request state and is never called from adapter bodies.
   - `set_context(ctx: DebugContext)` — set the context applied to the next captured request(s).
   - `begin_capture(*, method, url, headers, body) -> capture` — called by the transport before the request goes out. Redacts the request URL + headers, stores the body raw, and returns a **fresh per-request capture**; that capture tees the response body and, on `finalize()`, builds the canonical trace and persists it. A separate capture per request means concurrent or retried calls never share buffers.

@@ -4,7 +4,7 @@ Blob-backed file attachment storage and attachment-specific message shaping for 
 
 ## Overview
 
-`core/attachments/` is a storage-focused domain for uploaded and downloaded files. It stores blobs under `<data_dir>/attachments/`, writes one sidecar JSON per attachment, sniffs and validates MIME types, and enforces the configured max file size. It does not know about providers, model wire formats, or server transport. Chat and channel code consume attachment records and decide how they become `TextBlock`, `MediaBlock`, or `FileBlock` content.
+`core/attachments/` is a storage-focused domain for uploaded and downloaded files. It stores blobs under `<data_dir>/artifacts/attachments/`, writes one sidecar JSON per attachment, sniffs and validates MIME types, and enforces the configured max file size. Storage owns this canonical placement; Attachments retains the blob/sidecar format and lifecycle. It does not know about providers, model wire formats, or server transport. Chat and channel code consume attachment records and decide how they become `TextBlock`, `MediaBlock`, or `FileBlock` content.
 
 ## Data Model
 
@@ -16,8 +16,8 @@ Blob-backed file attachment storage and attachment-specific message shaping for 
   - `stored_at: str` — UTC ISO 8601 with explicit offset
   - `file_path: str` — absolute path to the blob on disk
   - `transcription: str | None` — cached speech-to-text result for audio attachments, written by `set_transcription()` on first transcription (default `None`)
-- Blob path: `<data_dir>/attachments/<uuid><canonical-extension>` — the extension is derived from the sniffed `media_type`, not trusted client metadata
-- Sidecar path: `<data_dir>/attachments/<uuid>.json`
+- Blob path: `<data_dir>/artifacts/attachments/<uuid><canonical-extension>` — the extension is derived from the sniffed `media_type`, not trusted client metadata
+- Sidecar path: `<data_dir>/artifacts/attachments/<uuid>.json`
 - There is no global index, no DB, and no cleanup pass.
 
 ## Interfaces

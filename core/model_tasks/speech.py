@@ -13,6 +13,7 @@ from core.model_tasks.speech_providers import ProviderSpeechClient
 from core.model_tasks.speech_types import SpeechSynthesisResult, SpeechTranscriptionResult
 from core.model_tasks.task_execution import TaskBindingResolver
 from core.providers.task_client import TaskClientRuntime
+from core.storage.layout import DataDirectoryLayout
 from core.utils.errors import TaskError, VBotError
 from core.utils.logging import get_logger
 
@@ -77,7 +78,9 @@ class SpeechService:
             model_tasks, configuration_error=SpeechConfigurationError
         )
         self._artifacts = TaskArtifactStore(
-            Path(data_dir) / "speech", kind="speech", error=SpeechConfigurationError
+            DataDirectoryLayout(data_dir).speech,
+            kind="speech",
+            error=SpeechConfigurationError,
         )
         self._local_executor = local_executor or LocalSpeechExecutor()
 

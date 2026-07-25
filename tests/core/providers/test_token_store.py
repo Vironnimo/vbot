@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from core.providers.token_store import OAuthToken, TokenStore
+from core.storage.layout import DataDirectoryLayout
 
 
 def test_token_store_save_load_round_trip(tmp_path: Path) -> None:
@@ -32,7 +33,7 @@ def test_token_store_save_load_round_trip(tmp_path: Path) -> None:
     assert loaded == token
 
 
-def test_token_store_save_uses_tmp_directory_for_atomic_write(tmp_path: Path) -> None:
+def test_token_store_save_uses_atomic_directory_for_atomic_write(tmp_path: Path) -> None:
     """Token writes use the data-dir temporary directory before replacement."""
     # Arrange
     store = TokenStore(tmp_path)
@@ -43,8 +44,9 @@ def test_token_store_save_uses_tmp_directory_for_atomic_write(tmp_path: Path) ->
 
     # Assert
     assert (tmp_path / "oauth" / "github-copilot-oauth.json").exists()
-    assert (tmp_path / ".tmp").is_dir()
-    assert list((tmp_path / ".tmp").glob("github-copilot-oauth.json.*.tmp")) == []
+    atomic_temporary = DataDirectoryLayout(tmp_path).atomic_temporary
+    assert atomic_temporary.is_dir()
+    assert list(atomic_temporary.glob("github-copilot-oauth.json.*.tmp")) == []
 
 
 def test_token_store_delete_removes_file_and_missing_delete_is_silent(tmp_path: Path) -> None:

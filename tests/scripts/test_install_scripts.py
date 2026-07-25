@@ -26,6 +26,18 @@ POWERSHELL_SCRIPTS = (
 )
 
 
+@pytest.mark.parametrize("script_name", ["setup.sh", "setup.ps1"])
+def test_server_setup_delegates_canonical_layout_and_has_no_env_template_body(
+    script_name: str,
+) -> None:
+    script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+
+    assert "storage/layout.py" in script.replace("\\", "/")
+    assert "OPENAI_API_KEY" not in script
+    assert "OPENROUTER_API_KEY" not in script
+    assert "ANTHROPIC_API_KEY" not in script
+
+
 def test_shell_lifecycle_scripts_parse() -> None:
     bash = shutil.which("bash")
     if bash is None:
@@ -233,7 +245,7 @@ def test_existing_settings_do_not_receive_fresh_install_agent_defaults(
     if script_name.endswith(".sh"):
         existing_settings_path = script[
             script.index('elif [ "$PORT_PROVIDED" -eq 1 ]') : script.index(
-                'ENV_PATH="${DATA_DIR}/.env"'
+                '"$PYTHON" "${PROJECT_ROOT}/core/storage/layout.py"'
             )
         ]
         assert "DEFAULT_AGENT_TEMPERATURE" not in existing_settings_path
@@ -241,7 +253,7 @@ def test_existing_settings_do_not_receive_fresh_install_agent_defaults(
     else:
         existing_settings_path = script[
             script.index("elseif ($SyncPortIntoSettings)") : script.index(
-                '$envPath = Join-Path $ResolvedDataDir ".env"'
+                "Invoke-External $Python @("
             )
         ]
         assert "DefaultAgentTemperature" not in existing_settings_path

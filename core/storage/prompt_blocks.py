@@ -50,9 +50,9 @@ OVERRIDE_SUFFIX = ".md"
 class PromptBlockStore:
     """Owns ``layout.json`` and per-block override I/O for the data directory.
 
-    Every write is atomic (temp file under ``<data_dir>/.tmp`` + ``os.replace``);
-    every id is validated before a path is built. The store is the only place
-    that turns a block id into a filesystem path.
+    Every write is atomic (staged under ``<data_dir>/artifacts/temp/atomic`` then
+    replaced with ``os.replace``); every id is validated before a path is built.
+    The store is the only place that turns a block id into a filesystem path.
     """
 
     def __init__(

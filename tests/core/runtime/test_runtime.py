@@ -22,6 +22,7 @@ from core.runs import ChatRunManager, RunCancelledError
 from core.runtime.runtime import _PROJECT_ROOT, Runtime, _detect_app_version
 from core.sessions import ChatSessionManager
 from core.skills.skills import SKILL_ORIGIN_GLOBAL, SkillRegistry
+from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
 from core.tools.file_state import FileReadState
@@ -400,26 +401,29 @@ def test_phase_two_services_inaccessible_before_start(config: Config):
             getattr(runtime, attribute_name)
 
 
-def test_start_ensures_data_directories_and_prompt_fragments(config: Config):
-    """Runtime.start() prepares the Phase 2 data directory structure."""
+def test_start_ensures_canonical_data_directories_and_prompt_fragments(config: Config):
+    """Runtime.start() prepares the canonical data-directory structure."""
     logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
 
     runtime.start()
 
     data_dir = runtime.storage.data_dir
-    for directory_name in (
-        ".tmp",
-        "agents",
-        "archive",
-        "channels",
-        "cron",
-        "oauth",
-        "prompts",
-        "skills",
-        "logs",
-    ):
+    for directory_name in DATA_DIRECTORY_RELATIVE_PATHS:
         assert (data_dir / directory_name).is_dir()
+    assert (data_dir / ".env").is_file()
+    assert (data_dir / "settings.json").is_file()
+    for legacy_name in (
+        ".tmp",
+        "attachments",
+        "images",
+        "speech",
+        "models",
+        "debug",
+        "temp",
+        "provider-usage",
+    ):
+        assert not (data_dir / legacy_name).exists()
     # Startup must NOT seed fragment copies into the data dir: a seeded copy would
     # shadow the bundled resource forever and freeze prompt defaults at first-run
     # state. Bundled fragments are read live; only a hand-created copy overrides.

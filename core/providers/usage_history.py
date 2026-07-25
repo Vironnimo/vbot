@@ -11,11 +11,11 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
+from core.storage.layout import DataDirectoryLayout
 from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
 
-USAGE_HISTORY_DIRECTORY_NAME = "provider-usage"
 USAGE_HISTORY_SCHEMA_VERSION = 1
 USAGE_HISTORY_FILE_SUFFIX = ".jsonl"
 
@@ -76,7 +76,7 @@ class ProviderUsageHistoryStore:
     """
 
     def __init__(self, data_root: str | Path) -> None:
-        self._directory = Path(data_root) / USAGE_HISTORY_DIRECTORY_NAME
+        self._directory = DataDirectoryLayout(data_root).provider_usage
         self._lock = RLock()
 
     @property

@@ -10,6 +10,7 @@ from typing import Any, cast
 
 from core.skills.authoring import SkillAuthoringService
 from core.skills.skills import SkillRegistry
+from core.storage.layout import DataDirectoryLayout
 from core.tools import (
     SKILL_MANAGE_TOOL_NAME,
     ToolContext,
@@ -38,7 +39,7 @@ class _Harness:
             self.tools,
             SkillAuthoringService(
                 protected_roots=[tmp_path / "resources" / "skills"],
-                drafts_root=tmp_path / "temp" / "skill-drafts",
+                drafts_root=DataDirectoryLayout(tmp_path).skill_drafts,
                 archive_root=tmp_path / "archive",
             ),
             self.home,

@@ -13,11 +13,11 @@ from datetime import timedelta
 from pathlib import Path
 from threading import RLock
 
+from core.storage.layout import DataDirectoryLayout
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("storage.temp_files")
 
-TEMPORARY_FILE_ROOT = "temp"
 TEMPORARY_FILE_RETENTION: Mapping[str, timedelta] = {
     "bash": timedelta(hours=72),
     "subagents": timedelta(hours=24),
@@ -65,7 +65,7 @@ class TemporaryFileManager:
             if duration <= timedelta(0):
                 raise ValueError(f"Retention for {category!r} must be positive")
 
-        self.root = Path(data_dir) / TEMPORARY_FILE_ROOT
+        self.root = DataDirectoryLayout(data_dir).temporary
         self._retention = policies
         self._sweep_interval_seconds = sweep_interval_seconds
         self._active: set[Path] = set()
@@ -174,7 +174,6 @@ class TemporaryFileManager:
 
 __all__ = [
     "TEMPORARY_FILE_RETENTION",
-    "TEMPORARY_FILE_ROOT",
     "TEMPORARY_FILE_SWEEP_INTERVAL_SECONDS",
     "TemporaryFileLease",
     "TemporaryFileManager",

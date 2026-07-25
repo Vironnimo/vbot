@@ -1,8 +1,6 @@
 # Worktree Workflow
 
-This document explains how `scripts/worktree.py` is meant to be used, what it
-creates, how vBot behaves inside a worktree, and what an agent or human needs to
-know so the workflow stays predictable.
+This document explains how `scripts/worktree.py` is meant to be used, what it creates, how vBot behaves inside a worktree, and what an agent or human needs to know so the workflow stays predictable.
 
 The short version:
 
@@ -21,14 +19,13 @@ For each created worktree it does all of the following:
 
 - creates a Git worktree under `.worktrees/<name>`
 - creates a dedicated data directory at `~/.vbot-<name>`
-- copies the default contents from `.data-dir-base/` into that data directory
-- rewrites `agents/main/agent.json` with the data-dir-relative Workspace `agents/main/workspace`
+- initializes the canonical empty data-directory structure through `core/storage/layout.py`
 - writes `settings.json` in that data directory with a dedicated `server_port`
 - writes a `.vbot-worktree` marker into the worktree root
 - installs frontend dependencies in `webui/`
 - builds the frontend once during creation
 
-The goal is that once you are inside the worktree, normal commands like `python cli/main.py server start` or `python scripts/test-env.py start` use the worktree's own data dir and port automatically.
+The Worktree utility does not seed an Agent or copy machine-local Workspace content. Runtime creates the bootstrap Identity Agent and first Session on the first server start. Once you are inside the worktree, normal commands like `python cli/main.py server start` or `python scripts/test-env.py start` use the worktree's own data dir and port automatically.
 
 ## Basic model
 
@@ -350,6 +347,10 @@ This is the machine-readable marker used by config and cleanup logic.
 ### `~/.vbot-<name>/settings.json`
 
 This contains at least the dedicated `server_port` for that worktree.
+
+### `~/.vbot-<name>/.env` and canonical directories
+
+Worktree creation uses the same canonical initializer as Setup and Runtime. It seeds `.env` from `resources/data-dir/.env.example` only when absent, preserves pre-existing configuration, creates every canonical directory, and leaves `agents/` empty until Runtime's first start.
 
 ## Delete rules and safety
 

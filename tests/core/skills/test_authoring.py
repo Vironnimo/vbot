@@ -16,6 +16,7 @@ from core.skills.authoring import (
 )
 from core.skills.requirements import REQUIREMENTS_METADATA_KEY
 from core.skills.skills import SkillRegistry
+from core.storage.layout import DataDirectoryLayout
 
 
 def skill_document(
@@ -43,7 +44,7 @@ def service() -> SkillAuthoringService:
 @pytest.fixture
 def package_service(tmp_path: Path) -> SkillAuthoringService:
     return SkillAuthoringService(
-        drafts_root=tmp_path / "temp" / "skill-drafts",
+        drafts_root=DataDirectoryLayout(tmp_path).skill_drafts,
         archive_root=tmp_path / "archive",
     )
 

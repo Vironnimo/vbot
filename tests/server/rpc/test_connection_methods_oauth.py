@@ -11,6 +11,7 @@ import pytest
 from core.providers.auth_flow import DeviceFlowSession
 from core.providers.providers import AuthConfig, ConnectionConfig, OAuthConfig, ProviderConfig
 from core.providers.token_store import OAuthToken, TokenStore
+from core.storage.layout import DataDirectoryLayout
 from server.events import (
     PROVIDER_AUTH_COMPLETED_EVENT,
     RESOURCE_CHANGED_EVENT,
@@ -218,7 +219,10 @@ def make_state(tmp_path: Any, provider: ProviderConfig) -> SimpleNamespace:
             provider_credentials=StubProviderCredentials(
                 {f"{provider.id}:{connection.id}" for connection in provider.connections}
             ),
-            storage=SimpleNamespace(data_dir=tmp_path),
+            storage=SimpleNamespace(
+                data_dir=tmp_path,
+                layout=DataDirectoryLayout(tmp_path),
+            ),
             models=StubModelRegistry(),
             _resolve_resources_path=lambda: tmp_path / "resources",
         ),
