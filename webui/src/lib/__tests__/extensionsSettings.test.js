@@ -42,6 +42,7 @@ function rawExtensions() {
         capabilities: {
           hooks: { tool_call: 1, run_end: 2 },
           tools: [{ name: 'word_count', ready: true }],
+          commands: [{ name: 'workflow', registered: true }],
           recall_backends: [],
           startup: true,
           shutdown: false,
@@ -101,6 +102,9 @@ describe('applyExtensionsPanelList', () => {
     expect(result[0].capabilities.tools).toEqual([
       { name: 'word_count', ready: true },
     ]);
+    expect(result[0].capabilities.commands).toEqual([
+      { name: 'workflow', registered: true },
+    ]);
     expect(result[0].readyState).toBe('ready');
     expect(result[0].capabilities.startup).toBe(true);
     expect(result[1].disabled).toBe(true);
@@ -133,7 +137,9 @@ describe('summarizeExtensionCapabilities', () => {
 
     expect(
       summarizeExtensionCapabilities(extension.capabilities, translate),
-    ).toBe('Hooks: tool_call(1), run_end(2) · Tools: word_count · startup');
+    ).toBe(
+      'Hooks: tool_call(1), run_end(2) · Tools: word_count · Commands: /workflow · startup',
+    );
   });
 
   it('returns an empty string when nothing is contributed', () => {

@@ -1,14 +1,14 @@
-# Chat Built-in Commands
+# Chat Slash Commands
 
-Task-gated reference for Built-in Command recognition, scheduling, execution, neutral outcomes, and surface projection. Read when changing the command catalog, a command workflow, Channel availability, RPC command responses, or command-started Runs.
+Task-gated reference for Built-in and Extension Command recognition, scheduling, execution, neutral outcomes, and surface projection. Read when changing the command catalog, a command workflow, Channel availability, RPC command responses, Extension Command declarations, or command-started Runs.
 
 ## Ownership and execution contract
 
-`core/chat/commands.py::CommandDispatcher` is the single end-to-end owner for every Built-in Command. It declares the catalog, recognizes eligible Chat content, parses the argument once, selects immediate versus serialized execution, enforces command/domain guards, performs all state changes and Run orchestration, and returns a surface-neutral result. RPC and Channel code may validate/authenticate their own ingress, supply addressing and a `ReplySurface`, schedule prepared work, project the result, and publish generic change facts; they must not switch on command names or rebuild a workflow.
+`core/chat/commands.py::CommandDispatcher` is the single end-to-end owner for every Built-in and Extension Command. It declares the Built-in catalog, owns the live Extension registration table, recognizes eligible Chat content, parses the argument once, selects immediate versus serialized execution, enforces command/domain guards, performs state changes and Run orchestration, and returns a surface-neutral result. RPC and Channel code may validate/authenticate their own ingress, supply addressing and a `ReplySurface`, schedule prepared work, project the result, and publish generic change facts; they must not switch on command names or rebuild a workflow.
 
 `CommandSpec` declares `name`, `description`, `argument` (`none`, `optional`, or `required`), neutral `catalog_result` (`notice`, `detail`, or `state_change`), default `execution_mode`, optional argument-specific execution mode, preferred-new-Session-id support, and unavailable surface kinds. The WebUI catalog retains its public `toast`/`transient`/`action` values through generic RPC projection; those accessor words never enter the Chat contract.
 
-`prepare(content) -> PreparedCommand | None` is the only recognition/parser seam. Eligible content is a string or exactly one `TextBlock`; attachments, mixed blocks, and multiple blocks bypass Built-in Commands and continue as normal Chat input. Unknown slash text and a no-argument command with trailing text also fall through. `PreparedCommand` contains the canonical command name, parsed argument, execution mode, and preferred-id capability; it contains no transport payload.
+`prepare(content) -> PreparedCommand | None` is the only recognition/parser seam. Eligible content is a string or exactly one `TextBlock`; attachments, mixed blocks, and multiple blocks bypass Commands and continue as normal Chat input. Unknown slash text, a no-argument command with trailing text, and a required-argument command without its argument also fall through. `PreparedCommand` contains the canonical command name, parsed argument, execution mode, preferred-id capability, and the opaque registration identity for Extension Commands; it contains no transport payload.
 
 `unavailability(prepared, reply_surface) -> CommandUnavailability | None` evaluates Chat-owned surface restrictions before Queue admission or execution. `/agent` is unavailable on every Channel surface in both bare and argument forms. Channels render the neutral restriction as `The /agent command is not available through <Platform>.`; this is a permanent ownership constraint, not an unimplemented feature.
 
@@ -18,13 +18,15 @@ A `follow_up` Run is additional work started after the command completes (`/hand
 
 Runtime constructs `CommandDispatcher` only after `ReflectionService`, both `ChatLoop` instances, and `TriggerService`, then injects `AgentResolver`, Sessions, Models, Providers, Projects, Agents, TriggerService, ReflectionService, Storage, and status dependencies explicitly. The command owner does not receive Runtime as a service locator.
 
+`ExtensionRegistry.apply_commands()` validates and installs declarations only after the canonical dispatcher exists. Extension handlers receive a narrower `ExtensionCommandContext`: current addressing, `ReplySurface`, generic change reporting, and `start_run(content, internal=False)` bound through `TriggerService`. Sync and async handlers must return a matching `CommandOutcome`; exceptions or invalid results become neutral failure feedback. Execution revalidates the prepared registration identity, so queued work cannot call removed code or a replacement owner after reload/disable.
+
 ## Scheduling and surface behavior
 
-Immediate commands execute outside the Channel conversation FIFO; serialized commands use the existing per-conversation admission and worker. `/stop`, `/help`, `/status`, bare `/agent`, and bare `/model` are immediate; mutating `/agent <target>` and `/model <value|reset>` are serialized, as are `/compact`, `/handoff`, `/learn`, `/new`, `/reflect`, and `/rename`. Channel authorization and Chat-owned unavailability are checked before either path. Serialized work stores `PreparedCommand` plus conversation facts and resolves the active Session at worker execution time, so work queued after `/new` follows its new anchor.
+Immediate commands execute outside the Channel conversation FIFO; serialized commands use the existing per-conversation admission and worker. `/stop`, `/help`, `/status`, bare `/agent`, and bare `/model` are immediate; mutating `/agent <target>` and `/model <value|reset>` are serialized, as are `/compact`, `/handoff`, `/learn`, `/new`, `/reflect`, and `/rename`. Extension declarations choose from the same modes and surface restrictions. Channel authorization and Chat-owned unavailability are checked before either path. Serialized work stores `PreparedCommand` plus conversation facts and resolves the active Session at worker execution time, so work queued after `/new` follows its new anchor while registration revalidation prevents stale Extension execution.
 
 RPC maps `detail` to the existing transient response, `notice` to toast, and typed navigation to action; facts plus the command name form the existing `data` object. Channels send feedback text, apply only `continue_in_session` to their conversation anchor, ignore `offer_session` for later routing, and relay Runs in outcome order. `/handoff` is therefore a one-shot follow-up through a Channel: it does not change `ChannelConfig.agent_id` or the source anchor. `/new` creates the Session in Chat core, after which the Channel applies its Channel metadata and active pointer.
 
-## Command behavior
+## Built-in Command behavior
 
 - `/help` returns the catalog as detail feedback. `/status` returns the shared status rendering used by the status Tool. `/stop` cancels the active Run for the addressed Session or reports that none exists.
 - `/compact [instruction]` calls `TriggerService.compact_session` with the addressed Project and optional instruction and returns its user-facing summary.

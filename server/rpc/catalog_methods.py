@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from core.chat import CommandDispatcher
 from core.chat.file_mentions import list_mention_files, resolve_mention_root
 from core.projects import (
     project_tool_configurability_reason,
@@ -18,6 +17,7 @@ from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.payloads import _invalid_skill_response, _skill_response, _tool_response
+from server.rpc.runtime_access import _state_command_dispatcher
 from server.rpc.validation import _reject_unsupported, _required_agent_address
 
 JsonObject = dict[str, Any]
@@ -89,9 +89,7 @@ def _list_commands(state: Any, params: JsonObject) -> JsonObject:
                 "argument": spec.argument,
                 "output": _COMMAND_CATALOG_OUTPUT[spec.catalog_result],
             }
-            for spec in sorted(
-                CommandDispatcher.BUILT_IN_COMMANDS.values(), key=lambda spec: spec.name
-            )
+            for spec in _state_command_dispatcher(state).catalog()
         ]
         skills = _command_skill_suggestions(state, address)
     except Exception as exc:

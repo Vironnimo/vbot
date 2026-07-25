@@ -15,7 +15,9 @@ from pathlib import Path
 
 import pytest
 
+from core.chat import CommandDispatcher, CommandExecutionContext, ReplySurface
 from core.extensions import ExtensionRegistry, HookContext
+from core.runs import ChatRunManager, Run
 from core.tools import ToolContext, ToolRegistry
 
 _EXAMPLES_DIR = Path(__file__).resolve().parents[3] / "examples" / "extensions"
@@ -42,7 +44,7 @@ def test_example_extensions_load_without_diagnostics() -> None:
     registry = ExtensionRegistry.load(_EXAMPLES_DIR)
 
     names = {record.name for record in registry.records()}
-    assert {"guard_bash", "word_count"} <= names
+    assert {"guard_bash", "word_count", "workflow_command"} <= names
     assert registry.diagnostics() == []
     for record in registry.records():
         assert record.status == "loaded"
@@ -108,3 +110,40 @@ def test_example_guard_bash_allows_safe_command() -> None:
     assert decision.deny_reason is None
     assert decision.replacement is None
     assert decision.effective_input == {"command": "ls -la"}
+
+
+@pytest.mark.asyncio
+async def test_example_workflow_command_starts_bundled_skill_run() -> None:
+    follow_up = Run(run_id="run-workflow", agent_id="coder", session_id="session-one")
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    class Trigger:
+        async def trigger_run(self, *args: object, **kwargs: object) -> Run:
+            calls.append((args, kwargs))
+            return follow_up
+
+    registry = ExtensionRegistry.load(_EXAMPLES_DIR)
+    dispatcher = CommandDispatcher(ChatRunManager(), trigger_service=Trigger())
+    registry.apply_commands(dispatcher)
+    prepared = dispatcher.prepare("/workflow review the release")
+
+    assert prepared is not None
+    result = await dispatcher.execute(
+        prepared,
+        CommandExecutionContext(
+            agent_id="coder",
+            session_id="session-one",
+            project_id="project-one",
+            reply_surface=ReplySurface.webui(),
+        ),
+    )
+
+    assert result.feedback is not None
+    assert result.feedback.text == "Workflow started."
+    assert result.runs[0].run is follow_up
+    assert calls[0][0] == (
+        "coder",
+        "$workflow\n\nUser objective:\nreview the release",
+        "session-one",
+    )
+    assert calls[0][1]["project_id"] == "project-one"

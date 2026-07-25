@@ -488,3 +488,36 @@ def test_resolve_credential_empty_without_resolver() -> None:
     api = ExtensionAPI("ext", ExtensionDeclarations(), config={}, logger=None)
 
     assert api.resolve_credential("HASS_TOKEN") == ""
+
+
+def test_register_command_lands_on_declarations() -> None:
+    declarations = ExtensionDeclarations()
+    api = ExtensionAPI(
+        "workflow_ext",
+        declarations,
+        config={},
+        logger=None,
+    )
+
+    def handler(context: object, argument: str | None) -> object:
+        return context, argument
+
+    api.register_command(
+        "workflow",
+        "Start the workflow.",
+        handler,
+        argument="required",
+        catalog_result="state_change",
+        execution_mode="serialized",
+        unavailable_surfaces={"channel"},
+    )
+
+    assert len(declarations.commands) == 1
+    declaration = declarations.commands[0]
+    assert declaration.name == "workflow"
+    assert declaration.description == "Start the workflow."
+    assert declaration.handler is handler
+    assert declaration.argument == "required"
+    assert declaration.catalog_result == "state_change"
+    assert declaration.execution_mode == "serialized"
+    assert declaration.unavailable_surfaces == frozenset({"channel"})

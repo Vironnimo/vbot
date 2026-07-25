@@ -30,9 +30,11 @@ from core.settings import (
     setting_details,
 )
 from core.utils.logging import get_logger
+from server.events import RESOURCE_KIND_COMMANDS
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
+from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.provider_access import _provider_has_credentials, _provider_settings_connection
 from server.rpc.validation import (
     _ensure_model_connection_supported,
@@ -145,7 +147,11 @@ async def _patch_setting_paths(state: Any, params: JsonObject) -> JsonObject:
 
     try:
         previous, saved, changed_paths = storage.update_settings(mutate)
-        await _apply_public_settings_delta(state.runtime, previous, saved)
+        commands_changed = await _apply_public_settings_delta(
+            state.runtime,
+            previous,
+            saved,
+        )
         changes = [
             _runtime_setting_details(state, saved, operation.resolved.canonical_path, True)
             for operation in operations
@@ -157,6 +163,8 @@ async def _patch_setting_paths(state: Any, params: JsonObject) -> JsonObject:
 
     if changed_paths:
         _LOGGER.info("Settings paths updated (paths=%s)", ",".join(changed_paths))
+    if commands_changed:
+        publish_resource_changed(state, RESOURCE_KIND_COMMANDS)
     return {
         "changed": list(changed_paths),
         "changes": changes,
@@ -204,7 +212,7 @@ async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
     try:
         storage.update_settings_sections(settings_update)
         saved_settings = storage.load_settings()
-        await _apply_public_settings_delta(
+        commands_changed = await _apply_public_settings_delta(
             state.runtime,
             previous_settings,
             saved_settings,
@@ -231,6 +239,8 @@ async def _update_settings(state: Any, params: JsonObject) -> JsonObject:
             ",".join(logged_sections),
             details,
         )
+    if commands_changed:
+        publish_resource_changed(state, RESOURCE_KIND_COMMANDS)
     return response
 
 
@@ -257,6 +267,7 @@ async def _apply_extension_delta(
         apply_disabled = getattr(runtime, "apply_extension_disabled_change", None)
         if callable(apply_disabled):
             await apply_disabled(newly_disabled)
+            return True
     return False
 
 
@@ -317,7 +328,7 @@ async def _apply_public_settings_delta(
     current: JsonObject,
     *,
     force_roots: set[str] | None = None,
-) -> None:
+) -> bool:
     """Apply the live lifecycle effects owned by changed Settings roots."""
 
     forced = force_roots or set()
@@ -352,6 +363,7 @@ async def _apply_public_settings_delta(
         reload_recall_backend = getattr(runtime, "reload_recall_backend", None)
         if callable(reload_recall_backend):
             reload_recall_backend()
+    return extension_layer_reloaded
 
 
 def _normalized_disabled(settings: JsonObject) -> set[str]:

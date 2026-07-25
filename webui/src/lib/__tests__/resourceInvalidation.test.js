@@ -5,6 +5,7 @@ import {
   RESOURCE_TOKEN_CHANNELS,
   RESOURCE_TOKEN_CLIENTS,
   RESOURCE_TOKEN_CRON,
+  RESOURCE_TOKEN_COMMANDS,
   RESOURCE_TOKEN_DEBUG_TRACES,
   RESOURCE_TOKEN_MODELS,
   RESOURCE_TOKEN_SESSIONS,
@@ -45,6 +46,10 @@ describe('tokenKeysForKind()', () => {
 
   it('routes cron changes to the cron token', () => {
     expect(tokenKeysForKind('cron')).toEqual([RESOURCE_TOKEN_CRON]);
+  });
+
+  it('routes command catalog changes to the commands token', () => {
+    expect(tokenKeysForKind('commands')).toEqual([RESOURCE_TOKEN_COMMANDS]);
   });
 
   it('returns no tokens for the queue kind (scope-routed, not token-routed)', () => {

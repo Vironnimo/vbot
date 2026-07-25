@@ -20,6 +20,7 @@ import {
   RESOURCE_TOKEN_CHANNELS,
   RESOURCE_TOKEN_CLIENTS,
   RESOURCE_TOKEN_CRON,
+  RESOURCE_TOKEN_COMMANDS,
   RESOURCE_TOKEN_DEBUG_TRACES,
   RESOURCE_TOKEN_MODELS,
   RESOURCE_TOKEN_PROJECTS,
@@ -47,6 +48,7 @@ export function createAppControllerState(activeViewId) {
     channelsRefreshToken: 0,
     cronRefreshToken: 0,
     clientsRefreshToken: 0,
+    commandsRefreshToken: 0,
     connectionSnapshot: null,
     connectionState: createConnectionState(),
     debugTracesRefreshToken: 0,
@@ -388,6 +390,7 @@ export function createAppController({
         state.clientsRefreshToken += 1;
         state.channelsRefreshToken += 1;
         state.cronRefreshToken += 1;
+        state.commandsRefreshToken += 1;
         state.debugTracesRefreshToken += 1;
         await Promise.all([onLoadProjects(), onReloadAgents()]);
       }
@@ -441,6 +444,9 @@ export function createAppController({
     }
     if (tokenKeys.includes(RESOURCE_TOKEN_CRON)) {
       state.cronRefreshToken += 1;
+    }
+    if (tokenKeys.includes(RESOURCE_TOKEN_COMMANDS)) {
+      state.commandsRefreshToken += 1;
     }
     if (tokenKeys.includes(RESOURCE_TOKEN_DEBUG_TRACES)) {
       state.debugTracesRefreshToken += 1;

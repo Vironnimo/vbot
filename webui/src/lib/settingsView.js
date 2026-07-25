@@ -398,6 +398,24 @@ function normalizeCapabilityTools(tools) {
     .map((tool) => ({ name: tool.name, ready: tool.ready !== false }));
 }
 
+function normalizeCapabilityCommands(commands) {
+  if (!Array.isArray(commands)) {
+    return [];
+  }
+  return commands
+    .filter(
+      (command) =>
+        command &&
+        typeof command === 'object' &&
+        typeof command.name === 'string' &&
+        command.name.length > 0,
+    )
+    .map((command) => ({
+      name: command.name,
+      registered: command.registered === true,
+    }));
+}
+
 function normalizeExtensionCapabilities(capabilities) {
   const source =
     capabilities && typeof capabilities === 'object' ? capabilities : {};
@@ -409,6 +427,7 @@ function normalizeExtensionCapabilities(capabilities) {
       (event) => Number(hooks[event]) > 0,
     ).map((event) => ({ event, count: Number(hooks[event]) })),
     tools: normalizeCapabilityTools(source.tools),
+    commands: normalizeCapabilityCommands(source.commands),
     recallBackends: Array.isArray(source.recall_backends)
       ? source.recall_backends.filter(
           (backend) => typeof backend === 'string' && backend.length > 0,
@@ -452,6 +471,11 @@ export function summarizeExtensionCapabilities(capabilities, translate) {
       .join(', ');
     parts.push(
       `${translate('settings.extensions.tools', 'Tools')}: ${toolNames}`,
+    );
+  }
+  if (normalized.commands.length > 0) {
+    parts.push(
+      `${translate('settings.extensions.commands', 'Commands')}: ${normalized.commands.map((command) => `/${command.name}`).join(', ')}`,
     );
   }
   if (normalized.recallBackends.length > 0) {

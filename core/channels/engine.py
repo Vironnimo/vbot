@@ -207,8 +207,8 @@ class ChannelConversationEngine:
 
     # -- Inbound entry points ---------------------------------------------------------
 
-    def is_builtin_command(self, message_text: str) -> bool:
-        """Return whether Chat recognizes text as a Built-in Command without executing it."""
+    def is_command(self, message_text: str) -> bool:
+        """Return whether Chat recognizes text as a live Command without executing it."""
         return self._command_dispatcher.prepare(message_text) is not None
 
     async def handle_inbound_text(
@@ -969,7 +969,7 @@ class ChannelConversationEngine:
             self._busy_reply_times.popitem(last=False)
         return True
 
-    # -- Built-in Commands -----------------------------------------------------------
+    # -- Slash Commands --------------------------------------------------------------
 
     async def _send_command_unavailability(
         self, reply_plan: ReplyPlanFacts, unavailable: CommandUnavailability

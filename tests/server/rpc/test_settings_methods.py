@@ -242,6 +242,32 @@ async def test_extensions_config_only_change_touches_neither_seam(tmp_path: Path
     # neither reloads the layer nor runs the live-disable path.
     assert state.runtime.extension_reload_count == 0
     assert state.runtime.extension_disabled_changes == []
+    assert state.event_bus.events == []
+
+
+@pytest.mark.asyncio
+async def test_extensions_disabled_path_patch_invalidates_commands(tmp_path: Path) -> None:
+    state = _state_with_schema(tmp_path)
+
+    result = await dispatch_rpc(
+        state,
+        {
+            "method": "settings.patch",
+            "params": {
+                "operations": [
+                    {
+                        "op": "set",
+                        "path": "extensions.disabled",
+                        "value": ["homeassistant"],
+                    }
+                ]
+            },
+        },
+    )
+
+    assert result["ok"] is True
+    assert state.runtime.extension_disabled_changes == [{"homeassistant"}]
+    assert state.event_bus.events[-1]["payload"] == {"kind": "commands"}
 
 
 def _reset_extension_spies(state: SimpleNamespace) -> None:

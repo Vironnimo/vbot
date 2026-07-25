@@ -24,7 +24,7 @@ Settings-style panels register their pending local draft and save lifecycle with
 
 ## Extensions, Skills, Agents, and channels
 
-- Extension management renders the backend-provided capability, status, schema, waiting, and configuration projections. Schema forms preserve unknown/non-secret config through the backend contract; secrets use the dedicated secret operation and are never rehydrated into normal form state.
+- Extension management renders the backend-provided capability, status, schema, waiting, and configuration projections, including declared Slash Commands and whether each is currently registered. Commands are code-owned capabilities summarized in the existing row, not editable Settings. Schema forms preserve unknown/non-secret config through the backend contract; secrets use the dedicated secret operation and are never rehydrated into normal form state.
 - A transition flush batches all changed non-secret Extension configs into one complete `settings.update` projection so independently edited rows cannot overwrite each other. Invalid schema or raw-JSON drafts fail the transition in place. Secret values remain outside autosave and retain their explicit per-secret operation.
 - Reload, enable/disable, and configuration changes are separate operations. Live capability ownership remains in the Extensions domain even when the panel displays its result.
 - Skill and Tool selectors use the shared catalog/chip behavior and explicit scope. Creating or editing Skill content uses the Skill API; selecting an allowed Skill or Tool for an Agent or Project only changes that owner's policy.

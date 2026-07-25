@@ -1240,6 +1240,7 @@ export const englishCatalog = Object.freeze({
   'settings.extensions.warning': 'Warning',
   'settings.extensions.hooks': 'Hooks',
   'settings.extensions.tools': 'Tools',
+  'settings.extensions.commands': 'Commands',
   'settings.extensions.recallBackends': 'Recall backends',
   'settings.extensions.startup': 'startup',
   'settings.extensions.shutdown': 'shutdown',

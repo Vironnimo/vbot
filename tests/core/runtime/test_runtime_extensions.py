@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from core.chat import CommandExecutionContext, ReplySurface
 from core.extensions import InteractionButton, InteractionEvent
 from core.extensions.extensions import ExtensionRegistry
 from core.runtime import runtime as runtime_module
@@ -42,6 +43,35 @@ _CAPABILITY_EXT_SOURCE = (
     "    api.register_tool('ext_echo', 'desc', {'type': 'object'}, _echo)\n"
     "    api.register_recall_backend('ext_recall', ExtBackend)\n"
 )
+
+
+def _command_extension_source(reply: str) -> str:
+    return (
+        "from core.chat import CommandFeedback, CommandOutcome\n"
+        "def _workflow(context, argument):\n"
+        f"    return CommandOutcome(command='workflow', "
+        f"feedback=CommandFeedback(kind='notice', text={reply!r}))\n"
+        "def register(api):\n"
+        "    api.register_command('workflow', 'Run the workflow.', _workflow)\n"
+    )
+
+
+def _dispatch_extension_command(runtime: Runtime) -> str:
+    prepared = runtime.command_dispatcher.prepare("/workflow")
+    assert prepared is not None
+    outcome = asyncio.run(
+        runtime.command_dispatcher.execute(
+            prepared,
+            CommandExecutionContext(
+                agent_id="main",
+                session_id=runtime.agents.get("main").current_session_id,
+                project_id=None,
+                reply_surface=ReplySurface.webui(),
+            ),
+        )
+    )
+    assert outcome.feedback is not None
+    return outcome.feedback.text
 
 
 @pytest.fixture(autouse=True)
@@ -298,6 +328,31 @@ def test_extension_tool_and_recall_backend_wired_into_runtime(tmp_path: Path) ->
         runtime.stop()
 
 
+def test_extension_command_wired_into_stable_runtime_dispatcher_across_reload(
+    tmp_path: Path,
+) -> None:
+    config = Config(data_dir=tmp_path / "data")
+    data_dir = config.data_dir
+    _write_extension(data_dir, "workflow_ext", _command_extension_source("v1"))
+
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        dispatcher = runtime.command_dispatcher
+        assert _dispatch_extension_command(runtime) == "v1"
+
+        _rewrite_source(
+            data_dir / "extensions" / "workflow_ext.py",
+            _command_extension_source("v2"),
+        )
+        asyncio.run(runtime.reload_extensions())
+
+        assert runtime.command_dispatcher is dispatcher
+        assert _dispatch_extension_command(runtime) == "v2"
+    finally:
+        runtime.stop()
+
+
 def test_apply_extension_disabled_change_deactivates_tool_and_prompt_block(
     tmp_path: Path,
 ) -> None:
@@ -331,6 +386,24 @@ def test_apply_extension_disabled_change_deactivates_tool_and_prompt_block(
         assert runtime.extensions is not None
         record = next(r for r in runtime.extensions.records() if r.name == "livext")
         assert record.status == "disabled"
+    finally:
+        runtime.stop()
+
+
+def test_apply_extension_disabled_change_deactivates_command(tmp_path: Path) -> None:
+    config = Config(data_dir=tmp_path / "data")
+    data_dir = config.data_dir
+    _write_extension(data_dir, "workflow_ext", _command_extension_source("ready"))
+
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        assert runtime.command_dispatcher.prepare("/workflow") is not None
+
+        asyncio.run(runtime.apply_extension_disabled_change({"workflow_ext"}))
+
+        assert runtime.command_dispatcher.prepare("/workflow") is None
+        assert _extension_record(runtime, "workflow_ext").status == "disabled"
     finally:
         runtime.stop()
 
@@ -570,6 +643,25 @@ def test_reload_drops_extension_deleted_from_disk(tmp_path: Path) -> None:
         asyncio.run(runtime.reload_extensions())
 
         assert "gone_echo" not in _tool_names(runtime)
+        assert "gone" not in _extension_record_names(runtime)
+    finally:
+        runtime.stop()
+
+
+def test_reload_drops_command_from_extension_deleted_from_disk(tmp_path: Path) -> None:
+    config = Config(data_dir=tmp_path / "data")
+    data_dir = config.data_dir
+    _write_extension(data_dir, "gone", _command_extension_source("ready"))
+
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        assert runtime.command_dispatcher.prepare("/workflow") is not None
+
+        (data_dir / "extensions" / "gone.py").unlink()
+        asyncio.run(runtime.reload_extensions())
+
+        assert runtime.command_dispatcher.prepare("/workflow") is None
         assert "gone" not in _extension_record_names(runtime)
     finally:
         runtime.stop()
