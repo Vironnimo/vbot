@@ -709,11 +709,16 @@
 
 <style>
   :global(.custom-provider-modal) {
+    display: flex;
     width: min(880px, calc(100vw - 2 * var(--space-lg)));
     max-height: min(860px, calc(100vh - 2 * var(--space-lg)));
+    flex-direction: column;
+    overflow: hidden;
   }
 
   .custom-provider-form {
+    min-height: 0;
+    flex: 1;
     display: grid;
     gap: var(--space-lg);
     overflow-y: auto;
