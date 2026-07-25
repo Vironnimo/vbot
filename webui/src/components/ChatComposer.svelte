@@ -37,6 +37,7 @@
     availableSkills = [],
     draftKey = '',
     historyKey = '',
+    focusRequest = 0,
     onSendMessage,
     onCancelRun = () => {},
     onTranscriptionError,
@@ -51,6 +52,7 @@
   let historyCursor = -1;
   let navWorkingCopies = {};
   let lastDraftKey = null;
+  let handledFocusRequest = 0;
   let inputElement = $state(null);
   let autocompleteElement = $state(null);
   let fileAutocompleteElement = $state(null);
@@ -151,6 +153,22 @@
         resizeInput();
       } else {
         resetInputHeight();
+      }
+    });
+  });
+
+  // ChatView issues focus requests only for deliberate user navigation. Keep
+  // the DOM detail here so a request made while history is loading waits until
+  // the textarea is enabled, and never lets focus scroll the timeline.
+  $effect(() => {
+    const request = focusRequest;
+    if (!request || request === handledFocusRequest || disabled) {
+      return;
+    }
+    tick().then(() => {
+      if (focusRequest === request && !disabled && inputElement) {
+        inputElement.focus({ preventScroll: true });
+        handledFocusRequest = request;
       }
     });
   });

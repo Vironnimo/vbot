@@ -15,6 +15,7 @@
     showSessionDrawer = false,
     creatingSession = false,
     newSessionBlocked = false,
+    newSessionLoading = false,
     // Project context for the compact project picker that lives in the header
     // (left of the Sessions button). "No project" is Personal/identity chat.
     projects = [],
@@ -294,7 +295,10 @@
     >
       <Button
         variant="primary"
-        disabled={!activeAgent || newSessionBlocked || creatingSession}
+        disabled={!activeAgent ||
+          newSessionBlocked ||
+          newSessionLoading ||
+          creatingSession}
         onClick={onNewSession}
       >
         <svg viewBox="0 0 14 14" width="12" height="12" aria-hidden="true">
