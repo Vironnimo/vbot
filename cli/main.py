@@ -139,7 +139,7 @@ from cli.task_model_management import (
 )
 from cli.tool_management import tool_list
 from cli.uninstall_management import UninstallMode, UninstallResult, run_uninstall
-from cli.update_management import run_update
+from cli.update_management import UNKNOWN_APP_VERSION, read_checkout_version, run_update
 from core.utils.config import APP_DIR, Config
 
 SUCCESS_EXIT_CODE = 0
@@ -290,7 +290,7 @@ def run(
             stop=stop,
             status=status,
         )
-        result = dispatch_server_command(context)
+        result = dispatch_server_command(context, announce=print_server_command_start)
         print_command_result(context.command, result)
         return exit_code_for(context.command, result)
 
@@ -307,8 +307,14 @@ def run(
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "update":
+        version_before = read_checkout_version()
+        print_update_command_start(version_before)
         result = dispatch_update_command(args, resolve=resolve, stop=stop, start=start)
-        print_management_command_result(result)
+        print_update_command_result(
+            result,
+            version_before=version_before,
+            version_after=read_checkout_version(),
+        )
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "uninstall":
@@ -1426,10 +1432,16 @@ def _desktop_launch_argv(args: argparse.Namespace) -> list[str]:
     return launch_argv
 
 
-def dispatch_server_command(context: ServerCommandContext) -> CommandResult:
+def dispatch_server_command(
+    context: ServerCommandContext,
+    *,
+    announce: Callable[[str, ServerInstance], None] | None = None,
+) -> CommandResult:
     """Resolve the target and dispatch the requested server command."""
 
     instance = context.resolve(host=context.host, port=context.port, data_dir=context.data_dir)
+    if announce is not None:
+        announce(context.command, instance)
     if context.command == "start":
         return context.start(instance)
     if context.command == "stop":
@@ -1452,6 +1464,22 @@ def dispatch_server_command(context: ServerCommandContext) -> CommandResult:
     raise ValueError(f"Unsupported server command: {context.command}")
 
 
+def print_server_command_start(command: str, instance: ServerInstance) -> None:
+    """Announce a server lifecycle operation before it can block."""
+
+    actions = {
+        "start": "Starting",
+        "stop": "Stopping",
+        "restart": "Restarting",
+        "status": "Checking the status of",
+    }
+    try:
+        action = actions[command]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported server command: {command}") from exc
+    print(f"{action} the vBot server at {instance.url}...", flush=True)
+
+
 def print_command_result(command: str, result: CommandResult) -> None:
     """Print deterministic plain-text server command output."""
 
@@ -1465,6 +1493,7 @@ def print_command_result(command: str, result: CommandResult) -> None:
     else:
         raise ValueError(f"Unsupported server command: {command}")
 
+    lines.append(_server_completion_message(command, result))
     print("\n".join(lines))
 
 
@@ -1486,6 +1515,27 @@ def print_management_command_result(result: CommandResult) -> None:
     print(_result_message(result))
 
 
+def print_update_command_start(version: str) -> None:
+    """Announce the self-update before its long-running work begins."""
+
+    if version == UNKNOWN_APP_VERSION:
+        print("Updating vBot. The current version could not be determined...", flush=True)
+        return
+    print(f"Updating vBot from version {version}...", flush=True)
+
+
+def print_update_command_result(
+    result: CommandResult,
+    *,
+    version_before: str,
+    version_after: str,
+) -> None:
+    """Print update details followed by one readable completion sentence."""
+
+    print(_result_message(result))
+    print(_update_completion_message(result, version_before, version_after))
+
+
 def print_config_command_result(result: CommandResult) -> None:
     """Print deterministic plain-text config command output."""
 
@@ -1499,6 +1549,82 @@ def _result_message(result: CommandResult) -> str:
     if result.ok:
         return "success: command completed without details"
     return "error: command failed without details"
+
+
+def _server_completion_message(command: str, result: CommandResult) -> str:
+    reason = _result_message(result).rstrip(".")
+    url = result.instance.url
+    if command == "status" and _is_non_vbot_conflict(result):
+        return (
+            f"The vBot server is not running at {url}; the port is occupied by a non-vBot process."
+        )
+    if not result.ok:
+        actions = {
+            "start": "start",
+            "stop": "stop",
+            "restart": "restart",
+            "status": "determine the status of",
+        }
+        return f"Could not {actions[command]} the vBot server at {url}: {reason}."
+
+    if command == "start":
+        if result.message == "already running":
+            return f"The vBot server is already running and healthy at {url}."
+        return f"The vBot server started successfully and is healthy at {url}."
+    if command == "stop":
+        if result.message == "not running":
+            return f"The vBot server is already stopped at {url}."
+        if result.forced:
+            return (
+                f"The vBot server stopped at {url}, but required forced termination after "
+                "the graceful shutdown timed out."
+            )
+        return f"The vBot server stopped successfully at {url}."
+    if command == "restart":
+        return f"The vBot server restarted successfully and is healthy at {url}."
+    if command == "status":
+        if _running_text(result) == "yes":
+            return f"The vBot server is running and healthy at {url}."
+        return f"The vBot server is not running at {url}."
+    raise ValueError(f"Unsupported server command: {command}")
+
+
+def _update_completion_message(
+    result: CommandResult,
+    version_before: str,
+    version_after: str,
+) -> str:
+    before_known = version_before != UNKNOWN_APP_VERSION
+    after_known = version_after != UNKNOWN_APP_VERSION
+    if result.ok:
+        if before_known and after_known and version_before != version_after:
+            return (
+                "The vBot update completed successfully from version "
+                f"{version_before} to version {version_after}. No problems were detected."
+            )
+        if before_known and after_known:
+            return (
+                f"The vBot update completed successfully. vBot remains on version "
+                f"{version_after}. No problems were detected."
+            )
+        if after_known:
+            return (
+                f"The vBot update completed successfully on version {version_after}. "
+                "No problems were detected."
+            )
+        return "The vBot update completed successfully. No problems were detected."
+
+    if before_known and after_known and version_before != version_after:
+        return (
+            "The vBot update did not complete successfully. The checkout now reports version "
+            f"{version_after}, previously {version_before}; review the details above."
+        )
+    if before_known:
+        return (
+            f"The vBot update failed. vBot remains on version {version_before}; "
+            "review the details above."
+        )
+    return "The vBot update failed; review the details above."
 
 
 def exit_code_for(command: str, result: CommandResult) -> int:

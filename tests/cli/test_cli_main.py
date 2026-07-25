@@ -810,6 +810,7 @@ def test_output_contains_deterministic_status_fields(
         "webui: unavailable",
         f"data_dir: {tmp_path / 'data'}",
         f"log_path: {resolve_daily_log_path(tmp_path / 'data')}",
+        "The vBot server started successfully and is healthy at http://127.0.0.1:8420.",
     ]
 
 
@@ -833,6 +834,7 @@ def test_start_output_omits_unknown_webui_field(
         "url: http://127.0.0.1:8420",
         f"data_dir: {tmp_path / 'data'}",
         f"log_path: {resolve_daily_log_path(tmp_path / 'data')}",
+        ("Could not start the vBot server at http://127.0.0.1:8420: server readiness timed out."),
     ]
 
 
@@ -860,6 +862,10 @@ def test_output_reports_process_id_forced_and_conflict(
         "process_id: 123",
         "forced: true",
         "conflict: port occupied by non-vBot process",
+        (
+            "Could not stop the vBot server at http://127.0.0.1:8420: "
+            "port occupied by non-vBot process."
+        ),
     ]
 
 
@@ -888,6 +894,121 @@ def test_status_conflict_output_reports_not_running_with_note(
         f"data_dir: {tmp_path / 'data'}",
         f"log_path: {resolve_daily_log_path(tmp_path / 'data')}",
         "conflict: port occupied by non-vBot process",
+        (
+            "The vBot server is not running at http://127.0.0.1:8420; the port is occupied "
+            "by a non-vBot process."
+        ),
+    ]
+
+
+def test_server_command_announces_action_before_dispatch(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    instance = make_instance(tmp_path)
+
+    def fake_start(resolved: ServerInstance) -> CommandResult:
+        assert capsys.readouterr().out == ("Starting the vBot server at http://127.0.0.1:8420...\n")
+        return CommandResult(ok=True, message="started", instance=resolved)
+
+    exit_code = cli_main.run(
+        ["server", "start"],
+        resolve=lambda **_kwargs: instance,
+        start=fake_start,
+    )
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.splitlines()[-1] == (
+        "The vBot server started successfully and is healthy at http://127.0.0.1:8420."
+    )
+
+
+@pytest.mark.parametrize(
+    ("ok", "before", "after", "expected"),
+    [
+        (
+            True,
+            "0.1.22",
+            "0.1.23",
+            (
+                "The vBot update completed successfully from version 0.1.22 to version "
+                "0.1.23. No problems were detected."
+            ),
+        ),
+        (
+            True,
+            "0.1.23",
+            "0.1.23",
+            (
+                "The vBot update completed successfully. vBot remains on version 0.1.23. "
+                "No problems were detected."
+            ),
+        ),
+        (
+            False,
+            "0.1.22",
+            "0.1.22",
+            ("The vBot update failed. vBot remains on version 0.1.22; review the details above."),
+        ),
+    ],
+)
+def test_update_output_has_readable_start_and_completion(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    ok: bool,
+    before: str,
+    after: str,
+    expected: str,
+) -> None:
+    result = CommandResult(ok=ok, message="update details", instance=make_instance(tmp_path))
+
+    cli_main.print_update_command_start(before)
+    cli_main.print_update_command_result(
+        result,
+        version_before=before,
+        version_after=after,
+    )
+
+    assert capsys.readouterr().out.splitlines() == [
+        f"Updating vBot from version {before}...",
+        "update details",
+        expected,
+    ]
+
+
+def test_run_update_announces_before_work_and_ends_with_version_summary(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    versions = iter(["0.1.22", "0.1.23"])
+    instance = make_instance(tmp_path)
+    monkeypatch.setattr(cli_main, "read_checkout_version", lambda: next(versions))
+
+    def fake_dispatch(
+        _args: object,
+        *,
+        resolve: object,
+        stop: object,
+        start: object,
+    ) -> CommandResult:
+        assert resolve is cli_main.resolve_instance
+        assert stop is cli_main.stop_server
+        assert start is cli_main.start_server
+        assert capsys.readouterr().out == "Updating vBot from version 0.1.22...\n"
+        return CommandResult(ok=True, message="updated checkout", instance=instance)
+
+    monkeypatch.setattr(cli_main, "dispatch_update_command", fake_dispatch)
+
+    exit_code = cli_main.run(["update"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "updated checkout",
+        (
+            "The vBot update completed successfully from version 0.1.22 to version "
+            "0.1.23. No problems were detected."
+        ),
     ]
 
 
