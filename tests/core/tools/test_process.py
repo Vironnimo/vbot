@@ -13,7 +13,12 @@ from typing import cast
 import pytest
 import pytest_asyncio
 
-from core.tools.process import PROCESS_TOOL_NAME, make_process_handler, register_process_tool
+from core.tools.process import (
+    PROCESS_TOOL_DESCRIPTION,
+    PROCESS_TOOL_NAME,
+    make_process_handler,
+    register_process_tool,
+)
 from core.tools.process_manager import ProcessManager
 from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure, tool_success
 
@@ -94,7 +99,13 @@ async def test_register_process_tool_registers_schema(manager: ProcessManager) -
 
     tool = registry.get(PROCESS_TOOL_NAME)
     assert tool.name == PROCESS_TOOL_NAME
+    assert tool.description == PROCESS_TOOL_DESCRIPTION
     assert tool.parameters["additionalProperties"] is False
+    assert "terminal poll or successful kill suppresses" in tool.description
+    assert (
+        tool.parameters["properties"]["session_id"]["description"]
+        == "Process session id returned by bash tool."
+    )
 
 
 @pytest.mark.asyncio

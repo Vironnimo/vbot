@@ -22,9 +22,10 @@ from core.tools.tools import (
 
 PROCESS_TOOL_NAME = "process"
 PROCESS_TOOL_DESCRIPTION = (
-    "Manage background process sessions started by shell-backed tools. Supports "
-    "listing, polling, reading logs, writing stdin, submitting a line, killing, "
-    "and clearing finished sessions."
+    "Manage background process sessions started by shell-backed tools. Use it for "
+    "immediate progress or control; a terminal poll or successful kill suppresses a "
+    "pending automatic completion. Supports listing, polling, reading logs, writing "
+    "stdin, submitting a line, killing, and clearing finished sessions."
 )
 PROCESS_ACTIONS = {"list", "poll", "log", "write", "submit", "kill", "clear"}
 PROCESS_ALLOWED_ARGUMENTS = {
@@ -54,7 +55,7 @@ PROCESS_TOOL_PARAMETERS: JsonObject = {
         },
         "session_id": {
             "type": "string",
-            "description": "Process session id for actions that target one session.",
+            "description": "Process session id returned by bash tool.",
         },
         "timeout_ms": {
             "type": "number",

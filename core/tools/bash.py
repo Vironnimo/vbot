@@ -59,10 +59,12 @@ BASH_TOOL_DESCRIPTION = (
     "Run a shell command on the host system. Short commands complete in the foreground; "
     "commands still running after yield_after seconds (default 30) are moved to the "
     "background and return a session_id for the process tool plus a log_file path that "
-    "receives the output live — read the file's tail to check progress. Result output "
-    f"keeps only the newest {BASH_MODEL_OUTPUT_CAP_CHARS} characters; when truncated, "
-    "the result names the log file holding the complete output — search it with grep/read."
-    + _shell_syntax_notes()
+    "receives the output live. For a short, bounded command whose result blocks the next "
+    "step, set yield_after long enough for it to finish. Let long-running commands, or "
+    "commands that do not block other work, continue in the background; completion wakes "
+    "the Session automatically. Result output keeps only the newest "
+    f"{BASH_MODEL_OUTPUT_CAP_CHARS} characters; when truncated, the result names the log "
+    "file holding the complete output — search it with grep/read." + _shell_syntax_notes()
 )
 BASH_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -82,19 +84,28 @@ BASH_TOOL_PARAMETERS: JsonObject = {
             "type": "number",
             "description": (
                 "Seconds to wait for foreground completion before backgrounding "
-                "(default 30). Inside a sub-agent, where backgrounding is unavailable, "
-                "this caps foreground runtime before the command is killed and defaults "
-                "to 30 minutes; use timeout for a precise cap."
+                "(default 30). This is independent of timeout; increase it only for a "
+                "bounded command whose result blocks the next step. Inside a sub-agent, "
+                "where backgrounding is unavailable, this caps foreground runtime before "
+                "the command is killed and defaults to 30 minutes; use timeout for a "
+                "precise cap."
             ),
             "default": 30,
         },
         "background": {
             "type": "boolean",
-            "description": "Return a background session immediately.",
+            "description": (
+                "When true, skip the foreground wait and return once the process starts "
+                "with status running, a process session_id, and, when available, a "
+                "log_file. The process continues in the background and wakes the Session "
+                "when it finishes."
+            ),
         },
         "timeout": {
             "type": "number",
-            "description": "Seconds after which the process is killed.",
+            "description": (
+                "Seconds after which the process is killed. This does not extend yield_after."
+            ),
         },
     },
     "required": ["command"],

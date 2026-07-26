@@ -16,6 +16,7 @@ import core.tools.bash as bash_module
 from core.runs import ChatRunManager, Run
 from core.storage import TemporaryFileManager
 from core.tools.bash import (
+    BASH_TOOL_DESCRIPTION,
     BASH_TOOL_PARAMETERS,
     _resolve_workdir,
     _resolve_yield_after,
@@ -1025,9 +1026,16 @@ def test_register_bash_tool() -> None:
     register_bash_tool(registry, manager)
 
     tool = registry.get("bash")
+    assert tool.description == BASH_TOOL_DESCRIPTION
     assert tool.parameters == BASH_TOOL_PARAMETERS
     assert tool.parameters["additionalProperties"] is False
     assert "env" not in tool.parameters["properties"]
+    assert "For a short, bounded command whose result blocks the next step" in tool.description
+    assert "read the file's tail to check progress" not in tool.description
+    properties = tool.parameters["properties"]
+    assert "independent of timeout" in properties["yield_after"]["description"]
+    assert "skip the foreground wait" in properties["background"]["description"]
+    assert "does not extend yield_after" in properties["timeout"]["description"]
 
 
 @pytest.mark.asyncio
