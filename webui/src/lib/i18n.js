@@ -1520,27 +1520,41 @@ export const englishCatalog = Object.freeze({
   'settings.voice.moreSensitive': 'More sensitive',
   'settings.voice.calibrationTitle': 'Wakeword calibration',
   'settings.voice.calibrationDescription':
-    'Inspect raw detector scores without recording or sending a command.',
-  'settings.voice.calibrationAnalyzer': 'Signal analyzer',
-  'settings.voice.calibrationInstruction':
-    'Say each active phrase several times. Move its sensitivity until the threshold sits below the weakest intentional peak.',
+    'Measure room noise and three natural repetitions per phrase to calculate a reliable sensitivity automatically.',
+  'settings.voice.calibrationAnalyzer': 'Guided calibration',
+  'settings.voice.calibrationNoiseInstruction':
+    'Stay quiet for {seconds} seconds while vBot measures the room.',
+  'settings.voice.calibrationPhraseInstruction':
+    'Say “{name}” naturally — {count} of {required} repetitions captured. Pause briefly between repetitions.',
+  'settings.voice.calibrationReviewInstruction':
+    'Measurement complete. Review the automatically calculated sensitivities, then apply them.',
   'settings.voice.calibrationListening': 'Commands paused',
-  'settings.voice.calibrationStopped': 'Analyzer stopped',
+  'settings.voice.calibrationStopped':
+    'Calibration stopped before a result was ready.',
+  'settings.voice.calibrationReadyToApply': 'Ready to apply',
+  'settings.voice.calibrationProgressAria': 'Calibration progress',
+  'settings.voice.calibrationStepNoise': 'Room noise',
+  'settings.voice.calibrationStepPhrases': 'Wakeword samples',
+  'settings.voice.calibrationStepReview': 'Review',
+  'settings.voice.calibrationSayNow': 'Say this now',
   'settings.voice.calibrationScore': 'Score',
+  'settings.voice.calibrationNoise': 'Noise',
   'settings.voice.calibrationPeak': 'Peak',
   'settings.voice.calibrationThreshold': 'Threshold',
+  'settings.voice.calibrationSamples': '{count} / {required} samples',
+  'settings.voice.calibrationRecommendation':
+    'Recommended sensitivity {value}%',
   'settings.voice.calibrationMeterAria': '{name} detector score',
-  'settings.voice.calibrationReset': 'Reset peaks',
+  'settings.voice.calibrationReset': 'Restart calibration',
   'settings.voice.calibrationDiscard': 'Discard and stop',
-  'settings.voice.calibrationApply': 'Apply sensitivity',
+  'settings.voice.calibrationApply': 'Apply calibrated values',
   'settings.voice.calibrationReady':
-    'Normal wakeword actions are paused only while the analyzer is open.',
+    'Calibration takes about 15 seconds. Wakeword commands are paused while it runs.',
   'settings.voice.calibrationEnableFirst':
     'Enable wakeword listening before starting calibration.',
   'settings.voice.calibrationStart': 'Start calibration',
   'settings.voice.calibrationStartFailed': 'Calibration could not start.',
-  'settings.voice.calibrationResetFailed':
-    'Calibration peaks could not be reset.',
+  'settings.voice.calibrationResetFailed': 'Calibration could not restart.',
   'settings.voice.calibrationStopFailed': 'Calibration could not stop.',
   'settings.voice.calibrationApplied': 'Wakeword sensitivity applied.',
   'settings.voice.calibrationApplyFailed': 'Calibration could not be applied.',
