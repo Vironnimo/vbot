@@ -418,8 +418,8 @@ class SystemPromptManager:
         data_root: str | Path,
         memory_provider: MemoryPromptProvider | None = None,
         server_hostname: str | None = None,
-        os_name: str | None = None,
-        current_date: Callable[[], str] | None = None,
+        operating_system: str | None = None,
+        current_utc_date: Callable[[], str] | None = None,
         loaded_extensions: Collection[str] = (),
         block_definitions: Sequence[BlockDefinition] = (),
         block_store: BlockStore | None = None,
@@ -440,8 +440,8 @@ class SystemPromptManager:
         self._vbot_root = Path(vbot_root)
         self._data_root = Path(data_root)
         self._server_hostname = server_hostname
-        self._os_name = os_name
-        self._current_date = current_date or _current_utc_date
+        self._operating_system = operating_system
+        self._current_utc_date = current_utc_date or _current_utc_date
         # The set of loaded extension names, gate 2's input for ``extension:<name>``
         # owners (D5/D6). The runtime rebuilds and injects it on every extension
         # (re)load. Held as a frozenset for cheap membership checks.
@@ -1273,17 +1273,17 @@ class SystemPromptManager:
         Environment resources carry these placeholders; treating them as build-time
         globals keeps replacement behavior uniform across resource-backed text blocks.
         """
-        thinking_effort = "default" if agent.thinking_effort is None else agent.thinking_effort
+        thinking_effort = agent.thinking_effort or "provider default"
         return {
             "{server_hostname}": self._server_hostname or socket.gethostname(),
             "{vbot_version}": self._vbot_version,
-            "{os}": self._os_name or platform.platform(),
+            "{operating_system}": self._operating_system or platform.platform(),
             "{model}": agent.model,
             "{identity_workspace}": agent.workspace,
             "{vbot_root}": str(self._vbot_root.resolve()),
             "{data_root}": str(self._data_root.resolve()),
             "{thinking_effort}": thinking_effort,
-            "{current_date}": self._current_date(),
+            "{current_utc_date}": self._current_utc_date(),
         }
 
     def _resolve_scope_layout(self, scope_key: str) -> Sequence[LayoutEntry]:

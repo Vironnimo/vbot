@@ -211,8 +211,8 @@ def _manager(
     block_definitions: Sequence[BlockDefinition] = (),
     loaded_extensions: Sequence[str] = (),
     server_hostname: str = "test-host",
-    os_name: str = "test-os",
-    current_date: str = "2026-05-04",
+    operating_system: str = "test-os",
+    current_utc_date: str = "2026-05-04",
 ) -> SystemPromptManager:
     return SystemPromptManager(
         storage or StubStorage(),
@@ -223,8 +223,8 @@ def _manager(
         vbot_root=tmp_path / "app",
         data_root=tmp_path / "data",
         server_hostname=server_hostname,
-        os_name=os_name,
-        current_date=lambda: current_date,
+        operating_system=operating_system,
+        current_utc_date=lambda: current_utc_date,
         block_definitions=block_definitions,
         loaded_extensions=loaded_extensions,
     )
@@ -291,8 +291,8 @@ def _facade_manager(
         vbot_root=tmp_path / "app",
         data_root=tmp_path / "data",
         server_hostname="h",
-        os_name="o",
-        current_date=lambda: "2026-05-04",
+        operating_system="o",
+        current_utc_date=lambda: "2026-05-04",
         block_store=store or StubBlockStore(),
         agent_store=StubAgentStore(agents) if agents is not None else None,
     )
@@ -307,6 +307,7 @@ def _agent(
     tools: dict[str, Any] | None = None,
     custom_system_prompt_enabled: bool = False,
     memory_prompt_mode: MemoryPromptMode = MEMORY_PROMPT_MODE_AGENT_USER,
+    thinking_effort: str | None = "high",
 ) -> Agent:
     return Agent(
         id=agent_id,
@@ -315,7 +316,7 @@ def _agent(
         fallback_model="",
         workspace=str(workspace),
         temperature=0.1,
-        thinking_effort="high",
+        thinking_effort=thinking_effort,
         memory_prompt_mode=memory_prompt_mode,
         allowed_tools=["*"] if allowed_tools is None else allowed_tools,
         allowed_skills=["*"] if allowed_skills is None else allowed_skills,

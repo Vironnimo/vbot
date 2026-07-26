@@ -733,7 +733,7 @@ def _write_prompt_resources(resources: Path) -> None:
     prompts_dir = resources / "prompts"
     prompts_dir.mkdir(parents=True)
     (prompts_dir / "runtime.md").write_text(
-        "OS {os}\nModel {model}\nThinking {thinking_effort}\nDate {current_date}",
+        "OS {operating_system}\nModel {model}\nThinking {thinking_effort}\nDate {current_utc_date}",
         encoding="utf-8",
     )
     (prompts_dir / "identity_runtime.md").write_text(

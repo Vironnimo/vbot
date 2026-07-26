@@ -29,8 +29,8 @@ def test_saved_layout_disables_a_core_block(workspace: Path, tmp_path: Path) -> 
         vbot_root=tmp_path / "app",
         data_root=tmp_path / "data",
         server_hostname="h",
-        os_name="o",
-        current_date=lambda: "2026-05-04",
+        operating_system="o",
+        current_utc_date=lambda: "2026-05-04",
         block_store=store,
     )
     agent = _agent(workspace, allowed_skills=["agent-cli"])
@@ -53,8 +53,8 @@ def test_block_override_replaces_owner_default_text(workspace: Path, tmp_path: P
         vbot_root=tmp_path / "app",
         data_root=tmp_path / "data",
         server_hostname="h",
-        os_name="o",
-        current_date=lambda: "2026-05-04",
+        operating_system="o",
+        current_utc_date=lambda: "2026-05-04",
         block_store=store,
     )
     agent = _agent(workspace, allowed_tools=["read_file"])
