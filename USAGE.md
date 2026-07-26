@@ -137,7 +137,7 @@ scripts/install.sh --no-autostart
 vbot update
 ```
 
-The updater reads `.vbot-install.json` from the checkout and preserves the recorded install shape, Python executable, dependency groups, source track, server target, and WebUI revision policy. Release installs move to the newest release with a matching WebUI asset; development installs update `main` and rebuild when needed. On Windows, a Desktop install also refreshes its installer-owned Start-menu shortcut to the current windowless GUI launcher. Runtime data is not modified.
+The updater reads `.vbot-install.json` from the checkout and preserves the recorded install shape, Python executable, dependency groups, source track, server target, and WebUI revision policy. Release installs move to the newest release with a matching WebUI asset; development installs update `main` and rebuild when needed. On Windows, close every vBot Desktop window before updating: the updater refuses to change the checkout while this installation's exact `vbot-desktop.exe` is running and checks again immediately before pip changes the environment. A Desktop install also refreshes its installer-owned Start-menu shortcut to the current windowless GUI launcher. If pip still fails after a checkout advance, the failure output includes a source-based resume command through the recorded Python executable, which remains usable even if pip removed the normal `vbot` launcher. Runtime data is not modified.
 
 Local changes to tracked checkout files require an explicit policy:
 

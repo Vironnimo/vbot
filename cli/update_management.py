@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import io
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -25,6 +26,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import httpx
+import psutil  # type: ignore[import-untyped]
 
 from cli.install_state import (
     DESKTOP_CLIENT_SHAPE,
@@ -54,6 +56,7 @@ _DOWNLOAD_TIMEOUT_SECONDS = 60.0
 _COMMAND_TIMEOUT_SECONDS = 600.0
 _WINDOWS_DESKTOP_LAUNCHER_NAME = "vbot-desktop.exe"
 _WINDOWS_POWERSHELL = "powershell.exe"
+_DESKTOP_INSTALL_SHAPES = frozenset({SERVER_DESKTOP_SHAPE, DESKTOP_CLIENT_SHAPE})
 
 Restart = Callable[[ServerInstance], CommandResult]
 UNKNOWN_VBOT_VERSION = "unknown"
@@ -141,17 +144,35 @@ def run_update(
         return _fail(instance, "update: could not resolve the checkout's current commit")
 
     lines = [f"update: {track} track"]
+    inferred_state = False
     try:
         state = read_install_state(repo)
         if state is None:
             state = infer_legacy_install_state(repo, track=track, revision=before)
-            write_install_state(repo, state)
-            lines.append(
-                f"installation manifest created from the current environment "
-                f"(shape={state.install_shape})"
-            )
+            inferred_state = True
     except (InstallStateError, OSError) as exc:
         return _fail(instance, f"update: installation manifest is not usable: {exc}")
+
+    desktop_guard = _guard_windows_desktop_not_running(
+        state,
+        repo,
+        platform_name=effective_platform,
+        checkout_unchanged=True,
+    )
+    if not desktop_guard.ok:
+        return _fail(instance, desktop_guard.message)
+
+    if inferred_state:
+        try:
+            write_install_state(repo, state)
+        except (InstallStateError, OSError) as exc:
+            return _fail(
+                instance, f"update: saving the inferred installation manifest failed: {exc}"
+            )
+        lines.append(
+            f"installation manifest created from the current environment "
+            f"(shape={state.install_shape})"
+        )
     lines.append(f"install shape: {state.install_shape}")
 
     dirty_result = run(["git", "status", "--porcelain", "--untracked-files=no"], repo)
@@ -224,7 +245,12 @@ def run_update(
     else:
         lines.append(f"updated {_short(before)} -> {_short(after)}")
 
-    deps = _refresh_dependencies(run, repo, state)
+    deps = _refresh_dependencies(
+        run,
+        repo,
+        state,
+        platform_name=effective_platform,
+    )
     if deps.message:
         lines.append(deps.message)
     if not deps.ok:
@@ -343,15 +369,100 @@ def _advance_release(run: Runner, repo: Path, release: ReleaseInfo) -> _Step:
     return _Step(True, "")
 
 
-def _refresh_dependencies(run: Runner, repo: Path, state: InstallState) -> _Step:
+def _guard_windows_desktop_not_running(
+    state: InstallState,
+    repo: Path,
+    *,
+    platform_name: str,
+    checkout_unchanged: bool,
+) -> _Step:
+    """Refuse a Windows update while this installation's Desktop launcher is running."""
+
+    if platform_name != "nt" or state.install_shape not in _DESKTOP_INSTALL_SHAPES:
+        return _Step(True, "")
+
+    desktop_launcher = _windows_desktop_launcher(state)
+    process_id = _running_process_id(desktop_launcher)
+    if process_id is None:
+        return _Step(True, "")
+
+    recovery = _resume_update_command(repo, state, platform_name=platform_name)
+    unchanged_detail = (
+        "no checkout or installation files were changed"
+        if checkout_unchanged
+        else "dependency installation was not started"
+    )
+    return _Step(
+        False,
+        f"update: vBot Desktop is running from {desktop_launcher} (process {process_id}). "
+        f"Close every vBot Desktop window before updating; {unchanged_detail}.\n"
+        f"resume update: {recovery}",
+    )
+
+
+def _running_process_id(executable: Path) -> int | None:
+    """Return a process id only for the exact Windows executable path."""
+
+    target = _normalized_windows_path(executable)
+    try:
+        for process in psutil.process_iter(["pid", "exe"]):
+            try:
+                process_id = int(process.info["pid"])
+                process_executable = process.info["exe"]
+            except (KeyError, TypeError, ValueError, psutil.Error):
+                continue
+            if process_id == os.getpid() or not process_executable:
+                continue
+            if _normalized_windows_path(Path(process_executable)) == target:
+                return process_id
+    except psutil.Error:
+        return None
+    return None
+
+
+def _normalized_windows_path(path: Path) -> str:
+    """Normalize an executable path with Windows' case-insensitive semantics."""
+
+    return str(path.resolve()).replace("/", "\\").casefold()
+
+
+def _refresh_dependencies(
+    run: Runner,
+    repo: Path,
+    state: InstallState,
+    *,
+    platform_name: str,
+) -> _Step:
     """Apply the manifest's exact dependency groups until their digest is current."""
 
     if file_digest(repo / "pyproject.toml") == state.dependency_digest:
         return _Step(True, "")
+
+    desktop_guard = _guard_windows_desktop_not_running(
+        state,
+        repo,
+        platform_name=platform_name,
+        checkout_unchanged=False,
+    )
+    if not desktop_guard.ok:
+        return desktop_guard
+
     extras = ",".join(state.dependency_groups)
     pip = run([state.python_executable, "-m", "pip", "install", "-e", f".[{extras}]"], repo)
     if pip.returncode != 0:
-        return _Step(False, f"dependency update failed: {pip.stderr}")
+        detail = pip.stderr or pip.stdout
+        recovery = _resume_update_command(repo, state, platform_name=platform_name)
+        desktop_instruction = (
+            " and closing vBot Desktop"
+            if platform_name == "nt" and state.install_shape in _DESKTOP_INSTALL_SHAPES
+            else ""
+        )
+        return _Step(
+            False,
+            f"dependency update failed: {detail}\n"
+            f"After resolving the error{desktop_instruction}, resume without relying on "
+            f"the package launcher:\nresume update: {recovery}",
+        )
     return _Step(True, f"dependencies reinstalled ([{extras}])")
 
 
@@ -364,13 +475,10 @@ def _refresh_desktop_shortcut(
 ) -> _Step:
     """Point installer-owned Windows Desktop shortcuts at the GUI launcher."""
 
-    desktop_shapes = {SERVER_DESKTOP_SHAPE, DESKTOP_CLIENT_SHAPE}
-    if platform_name != "nt" or state.install_shape not in desktop_shapes:
+    if platform_name != "nt" or state.install_shape not in _DESKTOP_INSTALL_SHAPES:
         return _Step(True, "")
 
-    desktop_launcher = (
-        Path(state.python_executable).parent / _WINDOWS_DESKTOP_LAUNCHER_NAME
-    ).resolve()
+    desktop_launcher = _windows_desktop_launcher(state)
     if not desktop_launcher.is_file():
         return _Step(False, f"desktop shortcut update failed: {desktop_launcher} is missing")
 
@@ -397,6 +505,37 @@ def _refresh_desktop_shortcut(
         detail = refreshed.stderr or refreshed.stdout
         return _Step(False, f"desktop shortcut update failed: {detail}")
     return _Step(True, "desktop shortcut refreshed")
+
+
+def _windows_desktop_launcher(state: InstallState) -> Path:
+    """Return the Desktop GUI launcher owned by the recorded Python environment."""
+
+    return (Path(state.python_executable).parent / _WINDOWS_DESKTOP_LAUNCHER_NAME).resolve()
+
+
+def _resume_update_command(
+    repo: Path,
+    state: InstallState,
+    *,
+    platform_name: str,
+) -> str:
+    """Build a recovery command that works even when the package launcher was removed."""
+
+    if platform_name == "nt":
+        root = _powershell_literal(str(repo.resolve()))
+        python = _powershell_literal(state.python_executable)
+        return f"Set-Location -LiteralPath {root}; & {python} -m cli.main update"
+
+    return (
+        f"cd {shlex.quote(str(repo.resolve()))} && "
+        f"{shlex.quote(state.python_executable)} -m cli.main update"
+    )
+
+
+def _powershell_literal(value: str) -> str:
+    """Quote one PowerShell literal without allowing interpolation."""
+
+    return "'" + value.replace("'", "''") + "'"
 
 
 def _refresh_dev_webui(

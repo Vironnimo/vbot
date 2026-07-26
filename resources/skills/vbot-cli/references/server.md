@@ -31,6 +31,7 @@ vbot update [--discard | --stash] [--no-restart] [--service-name <unit>]
 Updates the installation from the git checkout it was installed from, then restarts the server. Never touches the `~/.vbot` data directory.
 
 - The track is auto-detected: a branch checkout pulls and rebuilds the WebUI locally (needs Node); a release-tag checkout fetches the latest release with its prebuilt WebUI (no Node, re-downloaded only when the tag changed).
+- On Windows, close every vBot Desktop window first. The updater refuses before changing the checkout when this installation's exact Desktop launcher is running and checks again before pip; follow the printed source-based `resume update` command if an earlier pip failure damaged the normal `vbot` launcher.
 - With local changes to tracked files, `update` refuses. `--discard` drops them; `--stash` keeps them and reapplies after the update.
 - `--no-restart` updates the code without restarting.
 
