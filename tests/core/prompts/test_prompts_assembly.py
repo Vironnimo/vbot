@@ -66,14 +66,14 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
 
     # Shared Runtime and Identity Environment blocks (variables filled).
     assert "- Server hostname: `test-host`" in prompt
-    assert "- OS: test-os" in prompt
+    assert "- Operating system: `test-os`" in prompt
     assert "- vBot version: `0.1.0`" in prompt
     assert f"- vBot root: `{(tmp_path / 'app').resolve()}`" in prompt
     assert f"- vBot data root: `{(tmp_path / 'data').resolve()}`" in prompt
-    assert "- You are powered by the model openai/gpt-5.2" in prompt
+    assert "- Model: `openai/gpt-5.2`" in prompt
     assert f"{workspace}" in prompt
-    assert "- Thinking level: high" in prompt
-    assert "- Date: 2026-05-04" in prompt
+    assert "- Configured thinking effort: `high`" in prompt
+    assert "- Current date (UTC): `2026-05-04`" in prompt
     assert "## Working Project" not in prompt
     # Tools block: call-style guidance only. The full name/description list lives
     # in the opt-in core:tools_list block, which ships disabled — the provider tool
@@ -257,6 +257,39 @@ def test_legacy_identity_environment_placeholders_are_not_resolved(tmp_path: Pat
     assert prompt == legacy
 
 
+def test_legacy_runtime_environment_placeholders_are_not_resolved(tmp_path: Path) -> None:
+    legacy = "Legacy {os} {current_date}"
+    storage = StubStorage(
+        {
+            "identity_runtime.md": "",
+            "runtime.md": legacy,
+        }
+    )
+    manager = _manager(tmp_path, storage=storage)
+    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+
+    prompt = manager.build_system_prompt(agent)
+
+    assert prompt == legacy
+
+
+@pytest.mark.parametrize("thinking_effort", [None, ""])
+def test_runtime_environment_renders_provider_default_thinking_effort(
+    tmp_path: Path,
+    thinking_effort: str | None,
+) -> None:
+    manager = _manager(tmp_path)
+    agent = _agent(
+        "",
+        memory_prompt_mode=MEMORY_PROMPT_MODE_OFF,
+        thinking_effort=thinking_effort,
+    )
+
+    prompt = manager.build_system_prompt(agent)
+
+    assert "- Configured thinking effort: `provider default`" in prompt
+
+
 def test_project_config_agent_receives_project_workspace_without_identity_runtime(
     tmp_path: Path,
 ) -> None:
@@ -272,8 +305,8 @@ def test_project_config_agent_receives_project_workspace_without_identity_runtim
         project_context=context,
     )
 
-    assert "## Runtime" in prompt
-    assert "- OS: test-os" in prompt
+    assert "## Runtime Environment" in prompt
+    assert "- Operating system: `test-os`" in prompt
     assert "## Working Project" in prompt
     assert "- Project: vBot" in prompt
     assert "- Project ID: vbot" in prompt

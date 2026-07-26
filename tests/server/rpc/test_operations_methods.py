@@ -82,7 +82,7 @@ class StubStorage:
                 "Root {vbot_root}\n"
                 "Data {data_root}"
             ),
-            "runtime.md": "## Runtime\nOS {os}",
+            "runtime.md": "## Runtime\nOS {operating_system}",
             "working_project.md": (
                 "## Working Project\n"
                 "Project $project_name\n"
@@ -196,8 +196,8 @@ def _manager(
         vbot_root=tmp_path / "app",
         data_root=tmp_path / "data",
         server_hostname="test-host",
-        os_name="test-os",
-        current_date=lambda: "2026-05-04",
+        operating_system="test-os",
+        current_utc_date=lambda: "2026-05-04",
         block_store=store or StubBlockStore(),
         agent_store=cast(PromptAgentStore, StubAgentStore(agents)) if agents is not None else None,
         block_definitions=block_definitions,

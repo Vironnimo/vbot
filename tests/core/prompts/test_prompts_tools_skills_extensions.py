@@ -443,8 +443,8 @@ def test_enabling_tools_list_block_renders_tool_descriptions(
         vbot_root=tmp_path / "app",
         data_root=tmp_path / "data",
         server_hostname="h",
-        os_name="o",
-        current_date=lambda: "2026-05-04",
+        operating_system="o",
+        current_utc_date=lambda: "2026-05-04",
         block_store=store,
     )
     agent = _agent(workspace, allowed_tools=["read_file"])
@@ -478,8 +478,8 @@ def test_session_grant_drives_provider_and_enabled_live_tool_list(
         vbot_root=tmp_path / "app",
         data_root=tmp_path / "data",
         server_hostname="h",
-        os_name="o",
-        current_date=lambda: "2026-05-04",
+        operating_system="o",
+        current_utc_date=lambda: "2026-05-04",
         block_store=store,
     )
     agent = _agent(workspace, allowed_tools=[])
