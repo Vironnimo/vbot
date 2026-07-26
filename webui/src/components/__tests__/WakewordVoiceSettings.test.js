@@ -149,6 +149,35 @@ describe('WakewordVoiceSettings', () => {
     expect(buttonContainingText('Bluetooth hands-free').disabled).toBe(true);
   });
 
+  it('refreshes the microphone picker after retrying a hot-plugged device', async () => {
+    desktopBridge.getWakewordStatus.mockResolvedValue({
+      ...baseStatus(),
+      enabled: true,
+      state: 'error',
+      error_code: 'microphone_unavailable',
+    });
+    desktopBridge.listMicrophones
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          index: 7,
+          name: 'Hot-plugged microphone',
+          supported: true,
+          default_sample_rate: 48000,
+        },
+      ]);
+
+    await mountPanel();
+    buttonByText('Retry listening').click();
+    await settle();
+
+    expect(desktopBridge.retryWakeword).toHaveBeenCalledOnce();
+    expect(desktopBridge.listMicrophones).toHaveBeenCalledTimes(2);
+    buttonByLabel('Microphone').click();
+    flushSync();
+    expect(buttonByText('Hot-plugged microphone')).not.toBeNull();
+  });
+
   it('saves one server-wide transcription profile for both microphone paths', async () => {
     await mountPanel({
       settings: {

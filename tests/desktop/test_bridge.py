@@ -578,6 +578,42 @@ def test_worker_factory_model_error_becomes_actionable_status(tmp_path: Path) ->
     assert status["error_code"] == "wakeword_model_unavailable"
 
 
+def test_retry_refreshes_microphones_before_rebuilding_real_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file, {"enabled": True})
+    previous_worker = FakeWorker()
+    previous_worker.start()
+    lifecycle: list[str] = []
+    replacement_worker = FakeWorker()
+
+    def refresh_microphone_devices() -> bool:
+        lifecycle.append("refresh")
+        return True
+
+    def worker_factory(_bridge: DesktopBridge) -> FakeWorker:
+        lifecycle.append("factory")
+        return replacement_worker
+
+    monkeypatch.setattr(
+        "desktop.wakeword.worker.refresh_microphone_devices",
+        refresh_microphone_devices,
+    )
+    bridge = DesktopBridge(
+        settings_path=settings_file,
+        worker=previous_worker,
+        worker_factory=worker_factory,
+    )
+
+    bridge.retryWakeword()
+
+    assert previous_worker.stopped is True
+    assert lifecycle == ["refresh", "factory"]
+    assert replacement_worker.started is True
+
+
 def test_voice_target_profile_is_isolated_per_server(tmp_path: Path) -> None:
     settings_file = tmp_path / "settings.json"
     _write_settings(settings_file)

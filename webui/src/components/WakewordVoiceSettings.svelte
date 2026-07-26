@@ -782,6 +782,7 @@
     try {
       voiceState = { ...voiceState, liveState: 'starting', errorCode: null };
       await retryWakeword();
+      microphones = await listMicrophones();
     } catch (error) {
       onToast({
         title: t('settings.voice.retryFailed', 'Voice could not restart.'),

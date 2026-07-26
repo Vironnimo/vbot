@@ -336,6 +336,10 @@ class DesktopBridge:
             return
         self._stop_worker()
         self._worker = None
+        if self._mode == "real":
+            from desktop.wakeword.worker import refresh_microphone_devices
+
+            refresh_microphone_devices()
         self._start_worker()
 
     def startWakewordCalibration(self) -> dict[str, Any]:  # noqa: N802
