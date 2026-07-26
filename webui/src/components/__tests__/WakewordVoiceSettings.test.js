@@ -175,6 +175,25 @@ describe('WakewordVoiceSettings', () => {
     expect(buttonContainingText('Bluetooth hands-free').disabled).toBe(true);
   });
 
+  it('shows a warning instead of an error when a running microphone disconnects', async () => {
+    desktopBridge.getWakewordStatus.mockResolvedValue({
+      ...baseStatus(),
+      enabled: true,
+      state: 'microphone_disconnected',
+      error_code: 'microphone_read_failed',
+    });
+
+    await mountPanel();
+
+    const warning = document.querySelector('.banner--warn');
+    expect(warning).not.toBeNull();
+    expect(warning.textContent).toContain('Microphone disconnected');
+    expect(warning.textContent).toContain('microphone stopped responding');
+    expect(document.querySelector('.banner--error')).toBeNull();
+    expect(document.body.textContent).not.toContain('Voice needs attention');
+    expect(buttonByText('Retry listening')).not.toBeNull();
+  });
+
   it('refreshes the microphone picker after retrying a hot-plugged device', async () => {
     desktopBridge.getWakewordStatus.mockResolvedValue({
       ...baseStatus(),

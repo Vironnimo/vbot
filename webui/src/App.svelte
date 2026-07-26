@@ -767,6 +767,20 @@
       });
       return;
     }
+    if (event?.state === 'microphone_disconnected') {
+      showToast({
+        title: t(
+          'voice.toast.microphoneDisconnectedTitle',
+          'Microphone disconnected',
+        ),
+        message: t(
+          'voice.toast.microphoneDisconnectedMessage',
+          'Wakeword listening is paused. Reconnect the microphone and retry when you are ready.',
+        ),
+        variant: 'warn',
+      });
+      return;
+    }
     if (event?.state === 'error') {
       showToast({
         title: t('settings.voice.errorTitle', 'Voice needs attention'),

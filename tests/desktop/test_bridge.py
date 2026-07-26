@@ -732,6 +732,24 @@ def test_status_exposes_actionable_error_and_event_history(tmp_path: Path) -> No
     ]
 
 
+def test_status_preserves_microphone_disconnect_as_nonfatal_reason(tmp_path: Path) -> None:
+    settings_file = tmp_path / "settings.json"
+    _write_settings(settings_file, {"enabled": True})
+    bridge = DesktopBridge(settings_path=settings_file)
+
+    bridge.publish_state("listening")
+    bridge.publish_state("microphone_disconnected", "microphone_read_failed")
+
+    status = bridge.getWakewordStatus()
+    assert status["state"] == "microphone_disconnected"
+    assert status["error_code"] == "microphone_read_failed"
+    assert status["events"][-1] == {
+        "sequence": 2,
+        "state": "microphone_disconnected",
+        "error_code": "microphone_read_failed",
+    }
+
+
 def test_set_wakeword_config_rejects_non_dict(tmp_path: Path) -> None:
     settings_file = tmp_path / "settings.json"
     _write_settings(settings_file)

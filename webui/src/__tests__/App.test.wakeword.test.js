@@ -70,4 +70,56 @@ describe('App Desktop Wakeword feedback', () => {
     flushSync();
     expect(document.querySelector('.toast.error')).toBeTruthy();
   });
+
+  it('shows an auto-dismissing warning when a running microphone disconnects', async () => {
+    vi.useFakeTimers();
+    let status = {
+      enabled: true,
+      state: 'listening',
+      error_code: null,
+      events: [{ sequence: 1, state: 'listening', error_code: null }],
+    };
+    window.pywebview = {
+      api: {
+        getDesktopCapabilities: vi.fn().mockResolvedValue({
+          wakeword: true,
+          serverSelection: false,
+        }),
+        getWakewordStatus: vi
+          .fn()
+          .mockImplementation(() => Promise.resolve(status)),
+      },
+    };
+
+    mountedComponent = mount(App, { target: document.body });
+    flushSync();
+    await vi.advanceTimersByTimeAsync(0);
+    flushSync();
+
+    status = {
+      enabled: true,
+      state: 'microphone_disconnected',
+      error_code: 'microphone_read_failed',
+      events: [
+        { sequence: 1, state: 'listening', error_code: null },
+        {
+          sequence: 2,
+          state: 'microphone_disconnected',
+          error_code: 'microphone_read_failed',
+        },
+      ],
+    };
+    await vi.advanceTimersByTimeAsync(500);
+    flushSync();
+
+    const warningToast = document.querySelector('.toast.warn');
+    expect(warningToast).toBeTruthy();
+    expect(warningToast.textContent).toContain('Microphone disconnected');
+    expect(warningToast.textContent).toContain('Wakeword listening is paused');
+    expect(document.querySelector('.toast.error')).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(3200);
+    flushSync();
+    expect(document.querySelector('.toast.warn')).toBeNull();
+  });
 });

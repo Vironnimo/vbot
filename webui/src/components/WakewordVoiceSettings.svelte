@@ -3,6 +3,7 @@
   import Dropdown from './Dropdown.svelte';
   import Button from './ui/Button.svelte';
   import Badge from './ui/Badge.svelte';
+  import Banner from './ui/Banner.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
   import StatusChip from './ui/StatusChip.svelte';
   import Toggle from './ui/Toggle.svelte';
@@ -302,6 +303,7 @@
       case 'cancelled':
       case 'no_speech':
       case 'transcription_failed':
+      case 'microphone_disconnected':
         return 'voice-dot--warning';
       case 'error':
         return 'voice-dot--error';
@@ -1045,12 +1047,23 @@
       </div>
     </div>
 
-    {#if voiceState.liveState === 'error' || voiceState.mode === 'unavailable'}
-      <div class="voice-error" role="alert">
-        <div>
-          <strong
-            >{t('settings.voice.errorTitle', 'Voice needs attention')}</strong
-          >
+    {#if voiceState.liveState === 'error' || voiceState.liveState === 'microphone_disconnected' || voiceState.mode === 'unavailable'}
+      {@const microphoneDisconnected =
+        voiceState.liveState === 'microphone_disconnected'}
+      <Banner
+        variant={microphoneDisconnected ? 'warn' : 'error'}
+        class="voice-attention-banner"
+        role={microphoneDisconnected ? 'status' : 'alert'}
+      >
+        <div class="voice-attention-copy">
+          <strong>
+            {microphoneDisconnected
+              ? t(
+                  'settings.voice.microphoneDisconnectedTitle',
+                  'Microphone disconnected',
+                )
+              : t('settings.voice.errorTitle', 'Voice needs attention')}
+          </strong>
           <p>
             {errorMessage(
               voiceState.mode === 'unavailable'
@@ -1064,7 +1077,7 @@
             {t('settings.voice.retry', 'Retry listening')}
           </Button>
         {/if}
-      </div>
+      </Banner>
     {/if}
 
     <!-- Active wakeword models and local model management -->
@@ -1931,19 +1944,13 @@
     margin: 8px 0 0;
   }
 
-  .voice-error {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
+  :global(.voice-attention-banner) {
     margin: 8px 0 12px;
-    padding: 12px 16px;
-    border: 1px solid color-mix(in srgb, var(--red) 35%, var(--border));
-    border-radius: var(--r-md);
-    background: color-mix(in srgb, var(--red) 9%, var(--surface-2));
+  }
+  .voice-attention-copy {
     color: var(--text-hi);
   }
-  .voice-error p {
+  .voice-attention-copy p {
     margin: 4px 0 0;
     color: var(--text-med);
     font-size: var(--fs-body-sm);

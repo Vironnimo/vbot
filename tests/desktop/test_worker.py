@@ -973,6 +973,39 @@ def test_detection_loop_recovers_single_microphone_read_error(
     assert not worker._running.is_set()
 
 
+def test_detection_loop_warns_when_running_microphone_disconnects(
+    fake_bridge: FakeBridge,
+) -> None:
+    from desktop.wakeword.worker import WakewordWorker
+
+    worker = WakewordWorker(
+        engine=MockWakewordEngine(score_sequence=[0.0]),
+        bridge=fake_bridge,
+        server_url="http://127.0.0.1:8420",
+    )
+    open_attempts = 0
+
+    def open_stream() -> None:
+        nonlocal open_attempts
+        open_attempts += 1
+        if open_attempts > 1:
+            raise RuntimeError("microphone disconnected")
+        worker._stream = FailingReadStream([])
+
+    worker._open_stream = open_stream  # type: ignore[method-assign]
+    worker._read_config = lambda: {"target_agent_id": "main"}  # type: ignore[method-assign]
+    worker._target_agent_available = lambda _agent_id: True  # type: ignore[assignment,method-assign]
+    worker._running.set()
+
+    worker._run()
+
+    assert fake_bridge.states == ["listening", "microphone_disconnected"]
+    assert fake_bridge.errors == [None, "microphone_read_failed"]
+    assert fake_bridge.active_microphone is None
+    assert "error" not in fake_bridge.states
+    assert not worker._running.is_set()
+
+
 def test_resolve_session_uses_agent_current_session(fake_bridge: FakeBridge) -> None:
     from desktop.wakeword.worker import WakewordWorker
 
