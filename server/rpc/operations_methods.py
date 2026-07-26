@@ -219,7 +219,7 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
     # Agent scope), so that path forces ``project_id`` to ``None``. Otherwise the
     # ``agent_id`` param is an ``agent@projekt`` address — a bare value stays
     # identity (unchanged), a qualified one previews that project's config agent
-    # so ``{project_files}`` and the imported body render like a real run.
+    # so the Working Project block and imported body render like a real run.
     if prompt_scope is not None and prompt_scope.type == "agent":
         agent_id = cast(str, prompt_scope.agent_id)
         project_id: str | None = None
@@ -234,12 +234,17 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
         # actually sent: a project-qualified preview carries that project's cwd and
         # auto-load list; a bare identity preview carries the files of the project
         # the Identity Agent explicitly selected, or nothing —
-        # in which case ``{project_files}`` collapses and the prompt is unchanged.
+        # in which case the Working Project block collapses.
         prompt_project = resolve_prompt_project(state.runtime.projects, working_project_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     project_context = (
-        ProjectPromptContext.from_project(prompt_project.cwd, prompt_project.auto_load)
+        ProjectPromptContext.from_project(
+            prompt_project.project_id,
+            prompt_project.display_name,
+            prompt_project.cwd,
+            prompt_project.auto_load,
+        )
         if prompt_project is not None
         else None
     )
@@ -254,8 +259,6 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
         prompt_manager = state.runtime.system_prompts
         working_project_context = (
             prompt_manager.render_working_project_context(
-                prompt_project.project_id,
-                prompt_project.display_name,
                 project_context,
             )
             if project_id is None and prompt_project is not None and project_context is not None

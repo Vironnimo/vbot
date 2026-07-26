@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from html import escape
 from pathlib import Path
+from string import Template
 from typing import Any, Protocol
 
 from core.memory import (
@@ -68,6 +69,7 @@ JsonObject = dict[str, Any]
 # (``resources/prompts/layout.json``) lists these ids in their shipped order so an
 # identity agent at home reproduces today's content/order.
 CORE_RUNTIME_BLOCK_ID = "core:runtime"
+CORE_IDENTITY_RUNTIME_BLOCK_ID = "core:identity_runtime"
 CORE_TOOLS_BLOCK_ID = "core:tools"
 # The full name-and-description tool list. Ships disabled: providers already
 # receive every tool's description in the native tool definitions, so the prompt
@@ -81,10 +83,11 @@ CORE_SKILLS_BLOCK_ID = "core:skills"
 # never sees it, even under a wildcard allow-list.
 CORE_SKILL_MAINTENANCE_BLOCK_ID = "core:skill_maintenance"
 CORE_SOUL_BLOCK_ID = "core:soul"
-CORE_PROJECT_FILES_BLOCK_ID = "core:project_files"
+CORE_WORKING_PROJECT_BLOCK_ID = "core:working_project"
 CORE_AGENT_BODY_BLOCK_ID = "core:agent_body"
 BLOCK_OWNER_ALWAYS = "always"
 BLOCK_OWNER_CHANNEL = "channel"
+BLOCK_OWNER_IDENTITY = "identity"
 # Owner for a block gated on one tool being in the agent's effective allow-list
 # (gate 2 parses the ``tool:<name>`` form in ``_is_owner_active``). The skill
 # maintenance block uses ``tool:skill_manage``.
@@ -141,22 +144,34 @@ class PromptScope:
 
 @dataclass(frozen=True)
 class ProjectPromptContext:
-    """The project inputs the prompt builder needs to render ``{project_files}``.
+    """The Project inputs the prompt builder needs for the Working Project block.
 
     Passed explicitly into ``build_system_prompt`` (and ``render_project_files``)
-    so the prompt domain never imports project or agent classes — the caller (the
-    chat loop) owns where ``cwd`` / ``auto_load`` come from. ``cwd`` is the project
-    repo root; ``auto_load`` is the project's ordered file list (AGENTS.md is seeded
-    into it as the first entry at project creation, not special-cased here).
+    so the prompt domain never imports Project or Agent classes. The caller owns
+    where the stable Project id, display name, ``cwd``, and ``auto_load`` come from.
+    ``cwd`` is the Project Workspace; ``auto_load`` is its ordered file list.
     """
 
+    project_id: str
+    project_name: str
     cwd: Path
     auto_load: tuple[str, ...] = ()
 
     @classmethod
-    def from_project(cls, cwd: str | Path, auto_load: Sequence[str]) -> ProjectPromptContext:
-        """Build a context from a project's raw ``cwd`` string and auto-load list."""
-        return cls(cwd=Path(cwd), auto_load=tuple(auto_load))
+    def from_project(
+        cls,
+        project_id: str,
+        project_name: str,
+        cwd: str | Path,
+        auto_load: Sequence[str],
+    ) -> ProjectPromptContext:
+        """Build a prompt context from one Project's presentation fields."""
+        return cls(
+            project_id=project_id,
+            project_name=project_name,
+            cwd=Path(cwd),
+            auto_load=tuple(auto_load),
+        )
 
 
 class PromptAgent(Protocol):
@@ -705,8 +720,8 @@ class SystemPromptManager:
     def _listing_block_definitions(self, prompt_scope: PromptScope) -> list[BlockDefinition]:
         """Build the full block-definition list for a scope's listing/editing.
 
-        Same set the build collects (core text blocks, memory, the SOUL/project-
-        files/agent-body data blocks, contributed blocks, and custom blocks from the
+        Same set the build collects (core text blocks, memory, the SOUL/Working-
+        Project/agent-body data blocks, contributed blocks, and custom blocks from the
         active layout), deduped first-wins.
         The core text blocks read their default text scope-aware (the agent copy for
         an agent scope); the data blocks carry no per-run content here — for metadata
@@ -732,6 +747,13 @@ class SystemPromptManager:
                 id=CORE_RUNTIME_BLOCK_ID,
                 owner=BLOCK_OWNER_ALWAYS,
                 default_text=self._read_prompt_fragment(prompt_scope, agent_id, "runtime.md"),
+            ),
+            BlockDefinition(
+                id=CORE_IDENTITY_RUNTIME_BLOCK_ID,
+                owner=BLOCK_OWNER_IDENTITY,
+                default_text=self._read_prompt_fragment(
+                    prompt_scope, agent_id, "identity_runtime.md"
+                ),
             ),
             BlockDefinition(
                 id=CORE_TOOLS_BLOCK_ID,
@@ -764,7 +786,7 @@ class SystemPromptManager:
         ]
 
     def _data_listing_definitions(self) -> list[BlockDefinition]:
-        """Return the SOUL/project-files/agent-body data blocks for listing only.
+        """Return the SOUL/Working-Project/agent-body data blocks for listing only.
 
         Each is a non-editable ``data`` block; for metadata only the id/owner/kind
         matter, so a placeholder ``render`` stands in for the per-run content the
@@ -778,7 +800,7 @@ class SystemPromptManager:
                 render=_listing_data_placeholder,
             ),
             BlockDefinition(
-                id=CORE_PROJECT_FILES_BLOCK_ID,
+                id=CORE_WORKING_PROJECT_BLOCK_ID,
                 owner=BLOCK_OWNER_ALWAYS,
                 kind=BLOCK_KIND_DATA,
                 render=_listing_data_placeholder,
@@ -969,18 +991,18 @@ class SystemPromptManager:
         """Build the complete system prompt for an agent (the block-model path).
 
         Collects the full block-definition list for this agent/run (the core text
-        blocks built from the prompt resources, the SOUL / project-files /
+        blocks built from the prompt resources, the SOUL / Working Project /
         agent-body data blocks, and the contributed memory / tool / extension
         blocks), reads the active scope's layout + overrides, and routes everything
         through the deterministic assembly engine.
 
         ``agent_body`` is a config agent's imported prompt body, inserted verbatim
         through the ``core:agent_body`` data block (empty for identity agents →
-        collapses). ``project_context`` carries the project's cwd and auto-load list
-        for the normal ``core:project_files`` render (``None`` off a project →
-        collapses). ``working_project_context`` is the already-rendered,
+        collapses). ``project_context`` carries Project identity, Workspace, and
+        auto-load files for the live ``core:working_project`` render (``None`` off a
+        Project → collapses). ``working_project_context`` is the already-rendered,
         session-pinned replacement used only by Rooted Identity Agents; when set it
-        wins over ``project_context`` so Project files are not read again.
+        wins over ``project_context`` so Working Project files are not read again.
         ``skill_registry`` overrides the registry the skills block is filtered
         against — a project run passes its project-scoped registry; ``None`` uses the
         configured global one (identity runs, unchanged). ``skill_catalog`` is a
@@ -1054,9 +1076,9 @@ class SystemPromptManager:
     ) -> list[BlockDefinition]:
         """Build the full ordered-agnostic block-definition list for one build.
 
-        The core text blocks (runtime/tools/channels/skills) carry their default
+        The core text blocks (runtime/identity-runtime/tools/channels/skills) carry their default
         text from the active scope's prompt resources; the data blocks (SOUL,
-        project files, agent body) carry their per-run content. The contributed
+        Working Project, agent body) carry their per-run content. The contributed
         blocks (memory, tools, extensions) are merged in next, and the user's own
         custom blocks last — assembly dedupes by id (first wins), so a core block
         can never be shadowed by a contributor or a custom block. A custom
@@ -1114,6 +1136,13 @@ class SystemPromptManager:
                 default_text=self._read_prompt_fragment(prompt_scope, agent.id, "runtime.md"),
             ),
             BlockDefinition(
+                id=CORE_IDENTITY_RUNTIME_BLOCK_ID,
+                owner=BLOCK_OWNER_IDENTITY,
+                default_text=self._read_prompt_fragment(
+                    prompt_scope, agent.id, "identity_runtime.md"
+                ),
+            ),
+            BlockDefinition(
                 id=CORE_TOOLS_BLOCK_ID,
                 owner=BLOCK_OWNER_ALWAYS,
                 default_text=self._read_prompt_fragment(prompt_scope, agent.id, "tools.md"),
@@ -1144,7 +1173,7 @@ class SystemPromptManager:
         ]
 
     def _data_block_definitions(self, *, agent_body: str) -> list[BlockDefinition]:
-        """Return the SOUL / project-files / agent-body data blocks (D2).
+        """Return the SOUL / Working Project / agent-body data blocks (D2).
 
         All three are ``kind="data"`` (positionable, not editable) and owner
         ``always``; each collapses to nothing when its content is empty (gate 3):
@@ -1152,8 +1181,8 @@ class SystemPromptManager:
         - ``core:soul`` renders the workspace ``SOUL.md`` via a ``render`` that uses
           the same ``{include:SOUL.md}`` expansion as before — empty when the file
           is missing or the workspace is ``""`` (a config agent).
-        - ``core:project_files`` renders ``render_project_files(project_context)`` —
-          empty without a project context or readable files.
+        - ``core:working_project`` renders the file-backed Project identity,
+          Workspace, and auto-load-file template; empty only without a Project.
         - ``core:agent_body`` carries the verbatim config-agent body as ``data``
           default text, so its ``{…}`` is never re-interpreted; empty for identity
           agents.
@@ -1166,10 +1195,10 @@ class SystemPromptManager:
                 render=self._render_soul_block,
             ),
             BlockDefinition(
-                id=CORE_PROJECT_FILES_BLOCK_ID,
+                id=CORE_WORKING_PROJECT_BLOCK_ID,
                 owner=BLOCK_OWNER_ALWAYS,
                 kind=BLOCK_KIND_DATA,
-                render=self._render_project_files_block,
+                render=self._render_working_project_block,
             ),
             BlockDefinition(
                 id=CORE_AGENT_BODY_BLOCK_ID,
@@ -1200,21 +1229,24 @@ class SystemPromptManager:
             return ""
         return f"{SOUL_FRAMING}\n\n{rendered}"
 
-    def _render_project_files_block(self, context: BlockRenderContext) -> str:
-        """Render the ``core:project_files`` data block (the auto-load files)."""
+    def _render_working_project_block(self, context: BlockRenderContext) -> str:
+        """Render the file-backed ``core:working_project`` data block."""
         if context.working_project_context is not None:
             return context.working_project_context
-        return self.render_project_files(context.project_context, on_read=context.read_observer)
+        if context.project_context is None:
+            return ""
+        return self.render_working_project_context(
+            context.project_context,
+            on_read=context.read_observer,
+        )
 
     def render_working_project_context(
         self,
-        project_id: str,
-        project_name: str,
         project_context: ProjectPromptContext,
         *,
         on_read: Callable[[Path], None] | None = None,
     ) -> str:
-        """Render a Rooted Identity Agent's Working Project Context snapshot."""
+        """Render the complete Working Project block from its resource template."""
         project_files: list[str] = []
         for name in project_context.auto_load:
             block = self._read_project_file_block(
@@ -1225,23 +1257,13 @@ class SystemPromptManager:
             if block is not None:
                 project_files.append(_indent_project_file_frame(block))
 
-        safe_project_id = escape(project_id, quote=True)
-        safe_project_name = escape(" ".join(project_name.split()), quote=True)
-        safe_cwd = escape(str(project_context.cwd), quote=True)
-        file_text = "\n\n".join(project_files)
-        framed_files = f"\n{file_text}\n" if file_text else "\n"
-        return (
-            "## Working Project\n\n"
-            f'You are rooted in the Project "{safe_project_name}" '
-            f"(id: `{safe_project_id}`), located at `{safe_cwd}`.\n"
-            f"Your working directory is set to: `{safe_cwd}`\n"
-            "Below is the Project Context, follow it for every action that affects "
-            "this Project.\n\n"
-            f'<project_context id="{safe_project_id}" name="{safe_project_name}" '
-            f'cwd="{safe_cwd}">'
-            f"{framed_files}"
-            "</project_context>"
-        )
+        template = Template(self._storage.read_prompt_fragment("working_project.md"))
+        return template.safe_substitute(
+            project_id=escape(project_context.project_id, quote=True),
+            project_name=escape(" ".join(project_context.project_name.split()), quote=True),
+            project_workspace=escape(str(project_context.cwd), quote=True),
+            project_files="\n\n".join(project_files),
+        ).strip()
 
     def _runtime_replacements(self, agent: PromptAgent) -> dict[str, str]:
         """Return the build-time runtime-variable substitutions (``{host}``, …).
@@ -1328,10 +1350,10 @@ class SystemPromptManager:
 
         ``on_read``, when given, is called with the resolved absolute path of every
         file actually inlined, so the caller can stamp it as read-before-write —
-        used both for the system-prompt build and the explicit ``project`` Tool.
+        used both for prompt assembly and the explicit ``project`` Tool.
 
-        This is the single render used both for ``{project_files}`` in the system
-        prompt and for the explicit ``project`` Tool result.
+        The Working Project renderer and this explicit-Tool renderer share
+        ``_read_project_file_block`` so path and fail-soft behavior cannot drift.
         """
         if project_context is None:
             return ""
@@ -1516,6 +1538,7 @@ class SystemPromptManager:
         re-implemented gate:
 
         - ``always`` → always true.
+        - ``identity`` → the Agent has an Identity/Memory Workspace.
         - ``memory`` → the memory tool is enabled for the agent.
         - ``tool:<name>`` → ``<name>`` is in the agent's effective allowed tools.
         - ``channel`` → the agent has at least one active+enabled+running channel.
@@ -1524,6 +1547,8 @@ class SystemPromptManager:
         """
         if owner == "always":
             return True
+        if owner == BLOCK_OWNER_IDENTITY:
+            return bool(agent.workspace)
         if owner == "memory":
             mode = getattr(agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
             return memory_tool_enabled(mode)
@@ -1744,7 +1769,7 @@ def _listing_data_placeholder(_context: BlockRenderContext) -> str:
     """Stand in for a data block's per-run render during metadata listing.
 
     The block-edit listing never renders content (data blocks are non-editable),
-    so the SOUL/project-files/agent-body definitions only need a valid ``render`` to
+    so the SOUL/Working-Project/agent-body definitions only need a valid ``render`` to
     satisfy the "exactly one of default_text/render" contract. This is never called.
     """
     return ""

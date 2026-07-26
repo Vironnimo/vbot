@@ -65,7 +65,9 @@ class StubStorage:
         self._settings: JsonObject = {}
         self._credentials: dict[str, str] = {}
         self._prompt_fragments: dict[str, str] = {
+            "identity_runtime.md": "# Identity Runtime\nDefault identity runtime info.",
             "runtime.md": "# Runtime\nDefault runtime info.",
+            "working_project.md": "# Working Project\nDefault working project info.",
             "tools.md": "# Tools\nDefault tools list.",
             "channels.md": "# Channels\nDefault channels list.",
             "skills.md": "# Skills\nDefault skills list.",
@@ -603,14 +605,12 @@ class StubPrompts:
 
     def render_working_project_context(
         self,
-        project_id: str,
-        project_name: str,
         project_context: object,
         *,
         on_read: object = None,
     ) -> str:
-        del project_name, project_context, on_read
-        return project_id
+        del on_read
+        return str(getattr(project_context, "project_id", ""))
 
     def render_skill_catalog(self, _agent: StubAgent, skill_registry: object = None) -> Any:
         from core.prompts import PinnedSkillCatalog

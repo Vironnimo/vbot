@@ -66,7 +66,7 @@ class PromptError(VBotError, ValueError):
 
 # A block's content kind. ``text`` blocks flow through the override cascade and
 # may carry ``{include:…}``/``{generated:…}`` markers; ``data`` blocks are not
-# editable (auto-lists, SOUL, project files, agent body, dynamic render blocks).
+# editable (auto-lists, SOUL, Working Project data, agent body, dynamic render blocks).
 BlockKind = Literal["text", "data"]
 BLOCK_KIND_TEXT: Literal["text"] = "text"
 BLOCK_KIND_DATA: Literal["data"] = "data"
@@ -134,12 +134,12 @@ class BlockRenderContext:
     agent: PromptAgent
     project_context: ProjectPromptContext | None = None
     # Session-pinned Working Project Context for a Rooted Identity Agent. When
-    # present, the project-files block emits this text verbatim instead of reading
+    # present, the Working Project block emits this text verbatim instead of reading
     # ``project_context`` again. Other System Prompt inputs remain live.
     working_project_context: str | None = None
     # Addressing scope of the Agent itself. This is deliberately separate from
-    # ``project_context``: a Rooted Identity Agent may receive Project files while
-    # remaining identity-scoped for Sub-Agent routing.
+    # ``project_context``: a Rooted Identity Agent may receive Working Project
+    # context while remaining identity-scoped for Sub-Agent routing.
     agent_project_id: str | None = None
     scope: str = "default"
     # Optional side channel for build-time file reads. When set, every prompt file

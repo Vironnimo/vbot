@@ -733,8 +733,16 @@ def _write_prompt_resources(resources: Path) -> None:
     prompts_dir = resources / "prompts"
     prompts_dir.mkdir(parents=True)
     (prompts_dir / "runtime.md").write_text(
-        "Version {app_version}\nModel {model}\nWorkspace {agent_workspace}\n"
-        "Thinking {thinking_effort}\nDate {current_date}",
+        "OS {os}\nModel {model}\nThinking {thinking_effort}\nDate {current_date}",
+        encoding="utf-8",
+    )
+    (prompts_dir / "identity_runtime.md").write_text(
+        "Version {app_version}\nIdentity Workspace {agent_workspace}\n"
+        "Host {host}\nApp {app_dir}\nData {data_root}",
+        encoding="utf-8",
+    )
+    (prompts_dir / "working_project.md").write_text(
+        "Project $project_name ($project_id)\nWorkspace $project_workspace\n$project_files",
         encoding="utf-8",
     )
     (prompts_dir / "tools.md").write_text("Tools\n{generated:tool_list}", encoding="utf-8")

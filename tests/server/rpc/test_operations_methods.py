@@ -74,7 +74,22 @@ class StubStorage:
 
     def __init__(self) -> None:
         self._fragments = {
-            "runtime.md": "## Runtime\nHost {host}",
+            "identity_runtime.md": (
+                "## Identity Runtime\n"
+                "Host {host}\n"
+                "Version {app_version}\n"
+                "Identity Workspace {agent_workspace}\n"
+                "App {app_dir}\n"
+                "Data {data_root}"
+            ),
+            "runtime.md": "## Runtime\nOS {os}",
+            "working_project.md": (
+                "## Working Project\n"
+                "Project $project_name\n"
+                "Project ID $project_id\n"
+                "Project Workspace $project_workspace\n"
+                "$project_files"
+            ),
             "tools.md": "## Tools\n{generated:tool_list}",
             "channels.md": "## Channels\n{generated:channel_list}",
             "skills.md": "## Skills\n{generated:skill_list}",
@@ -209,13 +224,14 @@ def test_list_returns_blocks_in_layout_order_with_scopes(tmp_path: Path) -> None
         "core:soul",
         "memory:guidance",
         "core:runtime",
+        "core:identity_runtime",
         "core:tools",
         "core:tools_list",
         "core:channels",
         "core:skills",
         "core:skill_maintenance",
         "core:agent_body",
-        "core:project_files",
+        "core:working_project",
     ]
     tools = next(block for block in result["blocks"] if block["id"] == "core:tools")
     assert tools["editable"] is True
@@ -487,10 +503,12 @@ async def test_preview_resolves_rooted_identity_skill_pool(tmp_path: Path) -> No
     # skill pool, matching live Run scope rather than the bare global registry.
     repo = tmp_path / "repo"
     repo.mkdir()
+    identity_workspace = tmp_path / "identity"
+    identity_workspace.mkdir()
     agent = StubAgent(
         id="coder",
         name="Coder",
-        workspace=str(repo),
+        workspace=str(identity_workspace),
         root_project_id="vbot",
     )
     manager = _manager(tmp_path, agents=[agent])
@@ -513,9 +531,49 @@ async def test_preview_resolves_rooted_identity_skill_pool(tmp_path: Path) -> No
     }
     state = _state(manager, runtime_extra=runtime_extra)
 
-    await _preview_prompt(state, {"agent_id": "coder"})
+    result = await _preview_prompt(state, {"agent_id": "coder"})
 
     assert skills_for_calls == [("vbot", "coder")]
+    assert "## Identity Runtime" in result["text"]
+    assert f"Identity Workspace {identity_workspace}" in result["text"]
+    assert "## Working Project" in result["text"]
+    assert f"Project Workspace {repo}" in result["text"]
+
+
+@pytest.mark.asyncio
+async def test_preview_project_config_agent_gets_only_working_project_runtime(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    agent = StubAgent(id="reviewer", name="Reviewer", workspace="")
+    project = SimpleNamespace(
+        project_id="vbot",
+        display_name="vBot",
+        cwd=str(repo),
+        auto_load=(),
+    )
+    state = _state(
+        _manager(tmp_path, agents=[agent]),
+        runtime_extra={
+            "agent_resolver": SimpleNamespace(resolve_agent=lambda _project, _id: agent),
+            "projects": SimpleNamespace(get=lambda _project_id: project),
+            "skills_for": lambda _project, _agent=None: StubSkills(),
+        },
+    )
+
+    result = await _preview_prompt(state, {"agent_id": "reviewer@vbot"})
+
+    assert "## Runtime" in result["text"]
+    assert "## Working Project" in result["text"]
+    assert "Project vBot" in result["text"]
+    assert "Project ID vbot" in result["text"]
+    assert f"Project Workspace {repo}" in result["text"]
+    assert "## Identity Runtime" not in result["text"]
+    assert "Host test-host" not in result["text"]
+    assert "Identity Workspace" not in result["text"]
+    assert f"App {tmp_path / 'app'}" not in result["text"]
+    assert f"Data {tmp_path / 'data'}" not in result["text"]
 
 
 @pytest.mark.asyncio

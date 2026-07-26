@@ -20,7 +20,9 @@ from core.utils.atomic import atomic_write_text
 
 PROMPT_FRAGMENT_NAMES = frozenset(
     {
+        "identity_runtime.md",
         "runtime.md",
+        "working_project.md",
         "tools.md",
         "tools_list.md",
         "channels.md",
@@ -34,6 +36,7 @@ PROMPT_FRAGMENT_NAMES = frozenset(
 )
 AGENT_PROMPT_FRAGMENT_NAMES = frozenset(
     {
+        "identity_runtime.md",
         "runtime.md",
         "tools.md",
         "tools_list.md",

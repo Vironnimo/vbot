@@ -143,7 +143,12 @@ def make_project_handler(
             renderer = get_renderer()
             read_paths: list[Path] = []
             rendered_files = renderer.render_project_files(
-                ProjectPromptContext.from_project(project.cwd, project.auto_load),
+                ProjectPromptContext.from_project(
+                    project.project_id,
+                    project.display_name,
+                    project.cwd,
+                    project.auto_load,
+                ),
                 on_read=read_paths.append,
             )
             skills = list_project_skills(project.project_id)
