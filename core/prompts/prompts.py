@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from html import escape
 from pathlib import Path
-from string import Template
 from typing import Any, Protocol
 
 from core.memory import (
@@ -32,6 +31,7 @@ from core.prompts.blocks import (
     EmptyBlockStore,
     LayoutEntry,
     PromptError,
+    apply_replacements,
     assemble_system_prompt,
     dedupe_definitions,
     expand_workspace_includes,
@@ -1258,12 +1258,15 @@ class SystemPromptManager:
             if block is not None:
                 project_files.append(_indent_project_file_frame(block))
 
-        template = Template(self._storage.read_prompt_fragment("working_project.md"))
-        return template.safe_substitute(
-            project_id=escape(project_context.project_id, quote=True),
-            project_name=escape(" ".join(project_context.project_name.split()), quote=True),
-            project_workspace=escape(str(project_context.cwd), quote=True),
-            project_files="\n\n".join(project_files),
+        template = self._storage.read_prompt_fragment("working_project.md")
+        return apply_replacements(
+            template,
+            {
+                "{project_id}": project_context.project_id,
+                "{project_name}": " ".join(project_context.project_name.split()),
+                "{project_workspace}": str(project_context.cwd),
+                "{project_files}": "\n\n".join(project_files),
+            },
         ).strip()
 
     def _runtime_replacements(self, agent: PromptAgent) -> dict[str, str]:

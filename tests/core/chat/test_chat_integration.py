@@ -742,7 +742,7 @@ def _write_prompt_resources(resources: Path) -> None:
         encoding="utf-8",
     )
     (prompts_dir / "working_project.md").write_text(
-        "Project $project_name ($project_id)\nWorkspace $project_workspace\n$project_files",
+        "Project {project_name} ({project_id})\nWorkspace {project_workspace}\n{project_files}",
         encoding="utf-8",
     )
     (prompts_dir / "tools.md").write_text("Tools\n{generated:tool_list}", encoding="utf-8")

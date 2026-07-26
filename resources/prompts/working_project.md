@@ -1,11 +1,13 @@
 ## Working Project
 
-- Project: $project_name
-- Project ID: $project_id
-- Your Project Workspace: $project_workspace
+- Project: `{project_name}`
+- Project ID: `{project_id}`
+- Your Project Workspace: `{project_workspace}`
 
-The following Project Context applies to every action in this Project Workspace. Follow it throughout your work in this Project.
+### Project Context
 
-<project_context id="$project_id" name="$project_name" workspace="$project_workspace">
-$project_files
+Follow the instructions in any files included below and use their contents as context for all work in this Project Workspace.
+
+<project_context>
+{project_files}
 </project_context>

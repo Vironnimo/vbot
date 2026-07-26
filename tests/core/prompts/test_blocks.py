@@ -20,6 +20,7 @@ from core.prompts.blocks import (
     MappingOverrideResolver,
     PromptError,
     ResolvedBlock,
+    apply_replacements,
     assemble_system_prompt,
     dedupe_definitions,
     expand_generated_markers,
@@ -451,6 +452,20 @@ def test_validate_workspace_include_rejects_unsafe(filename: str) -> None:
 
 def test_wrap_include_file_uses_canonical_frame() -> None:
     assert wrap_include_file("A.md", "body") == '<file name="A.md">\nbody\n</file>'
+
+
+def test_apply_replacements_is_exact_and_non_recursive() -> None:
+    text = "Known {first}; second {second}; unknown {other}."
+
+    result = apply_replacements(
+        text,
+        {
+            "{first}": "{second}",
+            "{second}": "resolved",
+        },
+    )
+
+    assert result == "Known {second}; second resolved; unknown {other}."
 
 
 # --- resolve_block_text -----------------------------------------------------

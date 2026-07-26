@@ -308,10 +308,11 @@ def test_project_config_agent_receives_project_workspace_without_identity_runtim
     assert "## Runtime Environment" in prompt
     assert "- Operating system: `test-os`" in prompt
     assert "## Working Project" in prompt
-    assert "- Project: vBot" in prompt
-    assert "- Project ID: vbot" in prompt
-    assert f"- Your Project Workspace: {repo}" in prompt
-    assert f'<project_context id="vbot" name="vBot" workspace="{repo}">' in prompt
+    assert "- Project: `vBot`" in prompt
+    assert "- Project ID: `vbot`" in prompt
+    assert f"- Your Project Workspace: `{repo}`" in prompt
+    assert "<project_context>" in prompt
+    assert "<project_context " not in prompt
     assert "## Identity Environment" not in prompt
     assert "- Server hostname:" not in prompt
     assert "vBot version:" not in prompt
@@ -340,7 +341,7 @@ def test_rooted_identity_prompt_distinguishes_identity_and_project_workspaces(
     assert "## Identity Environment" in prompt
     assert f"- Your Identity and Memory Workspace: `{workspace}`" in prompt
     assert "## Working Project" in prompt
-    assert f"- Your Project Workspace: {repo}" in prompt
+    assert f"- Your Project Workspace: `{repo}`" in prompt
 
 
 def test_project_files_render_in_order_after_memory(workspace: Path, tmp_path: Path) -> None:
@@ -387,12 +388,13 @@ def test_working_project_context_uses_exact_rooted_agent_frame(tmp_path: Path) -
 
     assert snapshot == (
         "## Working Project\n\n"
-        "- Project: Second Brain\n"
-        "- Project ID: second-brain\n"
-        f"- Your Project Workspace: {repo}\n\n"
-        "The following Project Context applies to every action in this Project Workspace. "
-        "Follow it throughout your work in this Project.\n\n"
-        f'<project_context id="second-brain" name="Second Brain" workspace="{repo}">\n'
+        "- Project: `Second Brain`\n"
+        "- Project ID: `second-brain`\n"
+        f"- Your Project Workspace: `{repo}`\n\n"
+        "### Project Context\n\n"
+        "Follow the instructions in any files included below and use their contents as "
+        "context for all work in this Project Workspace.\n\n"
+        "<project_context>\n"
         ' <file name="AGENTS.md">\n'
         "Team rules\n"
         " </file>\n\n"
@@ -418,6 +420,44 @@ def test_working_project_context_uses_exact_rooted_agent_frame(tmp_path: Path) -
     assert snapshot in prompt
     assert "Changed rules" not in prompt
     assert rebuild_reads == []
+
+
+def test_working_project_template_preserves_plain_metadata_and_file_placeholders(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "research & development"
+    repo.mkdir()
+    (repo / "CONTEXT.md").write_text(
+        "Keep {project_name}, {project_workspace}, and $project_name literal.",
+        encoding="utf-8",
+    )
+    manager = _manager(tmp_path)
+    context = ProjectPromptContext.from_project(
+        "research-and-development",
+        "Research & Development",
+        repo,
+        ["CONTEXT.md"],
+    )
+
+    snapshot = manager.render_working_project_context(context)
+
+    assert "- Project: `Research & Development`" in snapshot
+    assert f"- Your Project Workspace: `{repo}`" in snapshot
+    assert "&amp;" not in snapshot
+    assert "Keep {project_name}, {project_workspace}, and $project_name literal." in snapshot
+
+
+def test_legacy_working_project_placeholders_are_not_resolved(tmp_path: Path) -> None:
+    legacy = "Legacy $project_name $project_id $project_workspace $project_files"
+    manager = _manager(
+        tmp_path,
+        storage=StubStorage({"working_project.md": legacy}),
+    )
+    context = ProjectPromptContext.from_project("vbot", "vBot", tmp_path, [])
+
+    snapshot = manager.render_working_project_context(context)
+
+    assert snapshot == legacy
 
 
 def test_project_files_collapse_without_context(workspace: Path, tmp_path: Path) -> None:

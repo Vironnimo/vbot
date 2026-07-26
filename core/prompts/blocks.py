@@ -488,19 +488,20 @@ def resolve_block_text(
 
 
 def apply_replacements(text: str, replacements: Mapping[str, str]) -> str:
-    """Replace each build-time placeholder in *text* with its value (plain text).
+    """Replace known prompt placeholders in *text* once, exactly, and non-recursively.
 
-    The single home for the runtime-variable substitution (``{server_hostname}``,
-    ``{model}``, …). Plain ``str.replace`` per key — never a format engine — so an unrelated
-    ``{…}`` in the text is left untouched and only the known runtime placeholders
-    are filled.
+    This is the single substitution home for runtime variables and file-backed
+    dynamic templates. Only exact mapping keys are replaced; unrelated ``{…}``
+    remains literal. A replacement value is emitted verbatim and never scanned
+    again, so inserted Project files or metadata cannot trigger another placeholder.
     """
     if not replacements:
         return text
-    for placeholder, value in replacements.items():
-        if placeholder in text:
-            text = text.replace(placeholder, value)
-    return text
+    placeholders = [placeholder for placeholder in replacements if placeholder]
+    if not placeholders:
+        return text
+    pattern = re.compile("|".join(re.escape(placeholder) for placeholder in placeholders))
+    return pattern.sub(lambda match: replacements[match.group(0)], text)
 
 
 def normalize_blocks(rendered_blocks: Sequence[str]) -> str:
