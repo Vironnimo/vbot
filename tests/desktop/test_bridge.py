@@ -123,11 +123,23 @@ def test_get_wakeword_status_shape(tmp_path: Path) -> None:
     assert "session_behavior" in status
     assert status["active_model_ids"] == list(DEFAULT_WAKEWORD_MODEL_IDS)
     assert status["engine"] == "pyopen_wakeword"
-    assert status["calibration"] == {"active": False, "scores": {}, "peaks": {}}
+    assert status["calibration"] == {
+        "active": False,
+        "phase": None,
+        "scores": {},
+        "peaks": {},
+        "noise_levels": {},
+        "sample_counts": {},
+        "required_samples": 3,
+        "target_model_id": None,
+        "recommended_sensitivities": {},
+        "noise_seconds_remaining": 0,
+    }
 
 
-def test_calibration_publishes_scores_and_peaks_without_persisting_them(
+def test_guided_calibration_measures_noise_and_recommends_per_model_sensitivity(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings_file = tmp_path / "settings.json"
     _write_settings(settings_file, {"enabled": True})
@@ -135,49 +147,114 @@ def test_calibration_publishes_scores_and_peaks_without_persisting_them(
     worker.start()
     bridge = DesktopBridge(settings_path=settings_file, worker=worker)
     bridge.publish_state("listening")
+    now = [100.0]
+    monkeypatch.setattr(bridge_module.time, "monotonic", lambda: now[0])
 
     status = bridge.startWakewordCalibration()
-    assert status["calibration"] == {
-        "active": True,
-        "scores": dict.fromkeys(DEFAULT_WAKEWORD_MODEL_IDS, 0.0),
-        "peaks": dict.fromkeys(DEFAULT_WAKEWORD_MODEL_IDS, 0.0),
-    }
+    calibration = status["calibration"]
+    assert calibration["active"] is True
+    assert calibration["phase"] == "noise"
+    assert calibration["noise_seconds_remaining"] == 3
+    assert calibration["sample_counts"] == dict.fromkeys(DEFAULT_WAKEWORD_MODEL_IDS, 0)
+    assert calibration["target_model_id"] is None
 
+    now[0] = 100.5
     bridge.publish_calibration_scores(
         {
-            DEFAULT_WAKEWORD_MODEL_IDS[0]: 0.42,
-            DEFAULT_WAKEWORD_MODEL_IDS[1]: 0.67,
+            DEFAULT_WAKEWORD_MODEL_IDS[0]: 0.02,
+            DEFAULT_WAKEWORD_MODEL_IDS[1]: 0.01,
         }
     )
+    now[0] = 101.5
     bridge.publish_calibration_scores(
         {
-            DEFAULT_WAKEWORD_MODEL_IDS[0]: 0.2,
-            DEFAULT_WAKEWORD_MODEL_IDS[1]: 0.3,
+            DEFAULT_WAKEWORD_MODEL_IDS[0]: 0.03,
+            DEFAULT_WAKEWORD_MODEL_IDS[1]: 0.02,
         }
     )
+
+    now[0] = 103.1
+    calibration = bridge.getWakewordStatus()["calibration"]
+    assert calibration["phase"] == "phrases"
+    assert calibration["target_model_id"] == DEFAULT_WAKEWORD_MODEL_IDS[0]
+    assert calibration["noise_levels"] == pytest.approx(
+        {DEFAULT_WAKEWORD_MODEL_IDS[0]: 0.0295, DEFAULT_WAKEWORD_MODEL_IDS[1]: 0.0195}
+    )
+
+    def publish_target_score(model_id: str, score: float) -> None:
+        bridge.publish_calibration_scores(
+            {
+                DEFAULT_WAKEWORD_MODEL_IDS[0]: (
+                    score if model_id == DEFAULT_WAKEWORD_MODEL_IDS[0] else 0.01
+                ),
+                DEFAULT_WAKEWORD_MODEL_IDS[1]: (
+                    score if model_id == DEFAULT_WAKEWORD_MODEL_IDS[1] else 0.01
+                ),
+            }
+        )
+
+    def capture_repetition(model_id: str, peak: float) -> None:
+        publish_target_score(model_id, 0.01)
+        publish_target_score(model_id, 0.01)
+        publish_target_score(model_id, peak)
+        publish_target_score(model_id, 0.01)
+        publish_target_score(model_id, 0.01)
+
+    for peak in (0.7, 0.6, 0.8):
+        capture_repetition(DEFAULT_WAKEWORD_MODEL_IDS[0], peak)
 
     calibration = bridge.getWakewordStatus()["calibration"]
-    assert calibration["scores"] == pytest.approx(
-        {
-            DEFAULT_WAKEWORD_MODEL_IDS[0]: 0.2,
-            DEFAULT_WAKEWORD_MODEL_IDS[1]: 0.3,
-        }
-    )
-    assert calibration["peaks"] == pytest.approx(
-        {
-            DEFAULT_WAKEWORD_MODEL_IDS[0]: 0.42,
-            DEFAULT_WAKEWORD_MODEL_IDS[1]: 0.67,
-        }
-    )
+    assert calibration["sample_counts"] == {
+        DEFAULT_WAKEWORD_MODEL_IDS[0]: 3,
+        DEFAULT_WAKEWORD_MODEL_IDS[1]: 0,
+    }
+    assert calibration["target_model_id"] == DEFAULT_WAKEWORD_MODEL_IDS[1]
+    assert calibration["recommended_sensitivities"] == {DEFAULT_WAKEWORD_MODEL_IDS[0]: 0.75}
+
+    for peak in (0.65, 0.55, 0.75):
+        capture_repetition(DEFAULT_WAKEWORD_MODEL_IDS[1], peak)
+
+    calibration = bridge.getWakewordStatus()["calibration"]
+    assert calibration["phase"] == "ready"
+    assert calibration["target_model_id"] is None
+    assert calibration["sample_counts"] == dict.fromkeys(DEFAULT_WAKEWORD_MODEL_IDS, 3)
+    assert calibration["recommended_sensitivities"] == {
+        DEFAULT_WAKEWORD_MODEL_IDS[0]: 0.75,
+        DEFAULT_WAKEWORD_MODEL_IDS[1]: 0.75,
+    }
     stored = json.loads(settings_file.read_text(encoding="utf-8"))
     assert "calibration" not in stored["wakeword"]
 
-    reset = bridge.resetWakewordCalibrationPeaks()["calibration"]
-    assert reset["scores"] == dict.fromkeys(DEFAULT_WAKEWORD_MODEL_IDS, 0.0)
-    assert reset["peaks"] == dict.fromkeys(DEFAULT_WAKEWORD_MODEL_IDS, 0.0)
+    restarted = bridge.restartWakewordCalibration()["calibration"]
+    assert restarted["phase"] == "noise"
+    assert restarted["scores"] == dict.fromkeys(DEFAULT_WAKEWORD_MODEL_IDS, 0.0)
+    assert restarted["peaks"] == dict.fromkeys(DEFAULT_WAKEWORD_MODEL_IDS, 0.0)
+    assert restarted["recommended_sensitivities"] == {}
 
     stopped = bridge.stopWakewordCalibration()["calibration"]
-    assert stopped == {"active": False, "scores": {}, "peaks": {}}
+    assert stopped["active"] is False
+    assert stopped["phase"] is None
+    assert stopped["recommended_sensitivities"] == {}
+
+
+@pytest.mark.parametrize(
+    ("noise_level", "phrase_peaks"),
+    [
+        (0.0, [0.08, 0.1, 0.12]),
+        (0.03, [0.6, 0.7, 0.8]),
+        (0.31, [0.48, 0.55, 0.62]),
+    ],
+)
+def test_calibrated_threshold_uses_supported_step_between_noise_and_phrase(
+    noise_level: float,
+    phrase_peaks: list[float],
+) -> None:
+    sensitivity = bridge_module._recommended_sensitivity(noise_level, phrase_peaks)
+    threshold = 1.0 - sensitivity
+
+    assert sensitivity / 0.05 == pytest.approx(round(sensitivity / 0.05))
+    assert threshold >= noise_level + 0.02 - 1e-9
+    assert threshold <= min(phrase_peaks) - 0.02 + 1e-9
 
 
 def test_calibration_requires_ready_real_listener(tmp_path: Path) -> None:

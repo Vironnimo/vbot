@@ -19,8 +19,15 @@ const VOICE_SETTINGS_DEFAULTS = Object.freeze({
   activeMicrophone: null,
   calibration: Object.freeze({
     active: false,
+    phase: null,
     scores: Object.freeze({}),
     peaks: Object.freeze({}),
+    noise_levels: Object.freeze({}),
+    sample_counts: Object.freeze({}),
+    required_samples: 3,
+    target_model_id: null,
+    recommended_sensitivities: Object.freeze({}),
+    noise_seconds_remaining: 0,
   }),
 });
 
@@ -63,12 +70,23 @@ const sameObject = (left, right) => {
 };
 const sameCalibration = (left, right) =>
   left?.active === right?.active &&
+  left?.phase === right?.phase &&
   sameObject(left?.scores, right?.scores) &&
-  sameObject(left?.peaks, right?.peaks);
+  sameObject(left?.peaks, right?.peaks) &&
+  sameObject(left?.noise_levels, right?.noise_levels) &&
+  sameObject(left?.sample_counts, right?.sample_counts) &&
+  left?.required_samples === right?.required_samples &&
+  left?.target_model_id === right?.target_model_id &&
+  sameObject(
+    left?.recommended_sensitivities,
+    right?.recommended_sensitivities,
+  ) &&
+  left?.noise_seconds_remaining === right?.noise_seconds_remaining;
 
 function normalizeCalibration(calibration) {
   return {
     active: Boolean(calibration?.active),
+    phase: typeof calibration?.phase === 'string' ? calibration.phase : null,
     scores:
       calibration?.scores && typeof calibration.scores === 'object'
         ? { ...calibration.scores }
@@ -77,6 +95,32 @@ function normalizeCalibration(calibration) {
       calibration?.peaks && typeof calibration.peaks === 'object'
         ? { ...calibration.peaks }
         : {},
+    noise_levels:
+      calibration?.noise_levels && typeof calibration.noise_levels === 'object'
+        ? { ...calibration.noise_levels }
+        : {},
+    sample_counts:
+      calibration?.sample_counts &&
+      typeof calibration.sample_counts === 'object'
+        ? { ...calibration.sample_counts }
+        : {},
+    required_samples: Number.isInteger(calibration?.required_samples)
+      ? calibration.required_samples
+      : 3,
+    target_model_id:
+      typeof calibration?.target_model_id === 'string'
+        ? calibration.target_model_id
+        : null,
+    recommended_sensitivities:
+      calibration?.recommended_sensitivities &&
+      typeof calibration.recommended_sensitivities === 'object'
+        ? { ...calibration.recommended_sensitivities }
+        : {},
+    noise_seconds_remaining: Number.isFinite(
+      calibration?.noise_seconds_remaining,
+    )
+      ? Math.max(0, calibration.noise_seconds_remaining)
+      : 0,
   };
 }
 

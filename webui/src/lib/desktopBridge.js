@@ -198,9 +198,9 @@ export async function stopWakewordCalibration() {
   return callBridge('stopWakewordCalibration');
 }
 
-/** Clear calibration peaks while leaving score capture active. */
-export async function resetWakewordCalibrationPeaks() {
-  return callBridge('resetWakewordCalibrationPeaks');
+/** Restart guided calibration from ambient-noise measurement. */
+export async function restartWakewordCalibration() {
+  return callBridge('restartWakewordCalibration');
 }
 
 /**

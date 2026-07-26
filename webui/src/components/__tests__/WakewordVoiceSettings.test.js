@@ -21,7 +21,7 @@ vi.mock('$lib/desktopBridge.js', () => ({
   retryWakeword: vi.fn(),
   startWakewordCalibration: vi.fn(),
   stopWakewordCalibration: vi.fn(),
-  resetWakewordCalibrationPeaks: vi.fn(),
+  restartWakewordCalibration: vi.fn(),
   isDesktop: vi.fn(() => true),
 }));
 vi.mock('$lib/api.js', () => ({
@@ -85,6 +85,7 @@ describe('WakewordVoiceSettings', () => {
       state: 'listening',
       calibration: {
         active: true,
+        phase: 'ready',
         scores: {
           'builtin/okay_nabu': 0.34,
           'builtin/hey_nabu': 0.28,
@@ -93,6 +94,21 @@ describe('WakewordVoiceSettings', () => {
           'builtin/okay_nabu': 0.72,
           'builtin/hey_nabu': 0.64,
         },
+        noise_levels: {
+          'builtin/okay_nabu': 0.03,
+          'builtin/hey_nabu': 0.02,
+        },
+        sample_counts: {
+          'builtin/okay_nabu': 3,
+          'builtin/hey_nabu': 3,
+        },
+        required_samples: 3,
+        target_model_id: null,
+        recommended_sensitivities: {
+          'builtin/okay_nabu': 0.7,
+          'builtin/hey_nabu': 0.75,
+        },
+        noise_seconds_remaining: 0,
       },
     });
     desktopBridge.stopWakewordCalibration.mockResolvedValue({
@@ -100,12 +116,13 @@ describe('WakewordVoiceSettings', () => {
       enabled: true,
       state: 'listening',
     });
-    desktopBridge.resetWakewordCalibrationPeaks.mockResolvedValue({
+    desktopBridge.restartWakewordCalibration.mockResolvedValue({
       ...baseStatus(),
       enabled: true,
       state: 'listening',
       calibration: {
         active: true,
+        phase: 'noise',
         scores: {
           'builtin/okay_nabu': 0,
           'builtin/hey_nabu': 0,
@@ -114,6 +131,15 @@ describe('WakewordVoiceSettings', () => {
           'builtin/okay_nabu': 0,
           'builtin/hey_nabu': 0,
         },
+        noise_levels: {},
+        sample_counts: {
+          'builtin/okay_nabu': 0,
+          'builtin/hey_nabu': 0,
+        },
+        required_samples: 3,
+        target_model_id: null,
+        recommended_sensitivities: {},
+        noise_seconds_remaining: 3,
       },
     });
     updateSettings.mockImplementation(async (payload) => payload);
@@ -308,7 +334,7 @@ describe('WakewordVoiceSettings', () => {
     });
   });
 
-  it('calibrates raw model scores and saves sensitivity only after Apply', async () => {
+  it('applies automatically calibrated sensitivities only after confirmation', async () => {
     desktopBridge.getWakewordStatus.mockResolvedValue({
       ...baseStatus(),
       enabled: true,
@@ -321,33 +347,87 @@ describe('WakewordVoiceSettings', () => {
     await settle();
 
     expect(desktopBridge.startWakewordCalibration).toHaveBeenCalledOnce();
-    expect(document.body.textContent).toContain('Signal analyzer');
-    expect(document.body.textContent).toMatch(/Peak\s+0\.72/);
-    expect(document.body.textContent).toContain('Commands paused');
+    expect(document.body.textContent).toContain('Guided calibration');
+    expect(document.body.textContent).toContain('Measurement complete');
+    expect(document.body.textContent).toContain('Ready to apply');
+    expect(document.body.textContent).toContain('Recommended sensitivity 70%');
 
     const slider = document.getElementById(
       'voice-sensitivity-builtin/okay_nabu',
     );
-    slider.value = '0.8';
-    slider.dispatchEvent(new Event('input', { bubbles: true }));
-    slider.dispatchEvent(new Event('change', { bubbles: true }));
-    await settle();
-
+    expect(slider.disabled).toBe(true);
     expect(desktopBridge.setWakewordConfig).not.toHaveBeenCalled();
 
-    buttonByText('Apply sensitivity').click();
-    await settle();
+    buttonByText('Apply calibrated values').click();
+    await waitForCondition(
+      () => desktopBridge.stopWakewordCalibration.mock.calls.length === 1,
+    );
 
     expect(desktopBridge.stopWakewordCalibration).toHaveBeenCalledOnce();
     expect(desktopBridge.setWakewordConfig).toHaveBeenCalledWith({
       model_sensitivities: {
-        'builtin/okay_nabu': 0.8,
-        'builtin/hey_nabu': 0.5,
+        'builtin/okay_nabu': 0.7,
+        'builtin/hey_nabu': 0.75,
       },
     });
   });
 
-  it('discards calibration sensitivity drafts without saving', async () => {
+  it('guides phrase capture and can restart from room-noise measurement', async () => {
+    desktopBridge.getWakewordStatus.mockResolvedValue({
+      ...baseStatus(),
+      enabled: true,
+      state: 'listening',
+      target_agent_id: 'main',
+    });
+    desktopBridge.startWakewordCalibration.mockResolvedValue({
+      ...baseStatus(),
+      enabled: true,
+      state: 'listening',
+      calibration: {
+        active: true,
+        phase: 'phrases',
+        scores: {
+          'builtin/okay_nabu': 0.12,
+          'builtin/hey_nabu': 0.01,
+        },
+        peaks: {
+          'builtin/okay_nabu': 0.62,
+          'builtin/hey_nabu': 0.02,
+        },
+        noise_levels: {
+          'builtin/okay_nabu': 0.03,
+          'builtin/hey_nabu': 0.02,
+        },
+        sample_counts: {
+          'builtin/okay_nabu': 1,
+          'builtin/hey_nabu': 0,
+        },
+        required_samples: 3,
+        target_model_id: 'builtin/okay_nabu',
+        recommended_sensitivities: {},
+        noise_seconds_remaining: 0,
+      },
+    });
+    await mountPanel();
+
+    buttonByText('Start calibration').click();
+    await settle();
+
+    expect(document.body.textContent).toContain(
+      'Say “Okay Nabu” naturally — 1 of 3 repetitions captured.',
+    );
+    expect(buttonByText('Apply calibrated values').disabled).toBe(true);
+
+    buttonByText('Restart calibration').click();
+    await settle();
+
+    expect(desktopBridge.restartWakewordCalibration).toHaveBeenCalledOnce();
+    expect(document.body.textContent).toContain(
+      'Stay quiet for 3 seconds while vBot measures the room.',
+    );
+  });
+
+  it('discards a calibration result without saving', async () => {
     desktopBridge.getWakewordStatus.mockResolvedValue({
       ...baseStatus(),
       enabled: true,
@@ -358,20 +438,14 @@ describe('WakewordVoiceSettings', () => {
     buttonByText('Start calibration').click();
     await settle();
 
-    const slider = document.getElementById(
-      'voice-sensitivity-builtin/okay_nabu',
-    );
-    slider.value = '0.8';
-    slider.dispatchEvent(new Event('input', { bubbles: true }));
-    slider.dispatchEvent(new Event('change', { bubbles: true }));
-    await settle();
-
     buttonByText('Discard and stop').click();
     await settle();
 
     expect(desktopBridge.setWakewordConfig).not.toHaveBeenCalled();
-    expect(slider.value).toBe('0.5');
-    expect(document.body.textContent).not.toContain('Signal analyzer');
+    expect(
+      document.getElementById('voice-sensitivity-builtin/okay_nabu').value,
+    ).toBe('0.5');
+    expect(document.body.textContent).not.toContain('Guided calibration');
   });
 
   it('imports a TFLite model without replacing two active phrases', async () => {
@@ -463,8 +537,15 @@ function baseStatus() {
     active_microphone: null,
     calibration: {
       active: false,
+      phase: null,
       scores: {},
       peaks: {},
+      noise_levels: {},
+      sample_counts: {},
+      required_samples: 3,
+      target_model_id: null,
+      recommended_sensitivities: {},
+      noise_seconds_remaining: 0,
     },
   };
 }

@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import binascii
 import logging
+import math
 import threading
 import time
 from collections import deque
@@ -104,6 +105,14 @@ _KNOWN_WAKEWORD_KEYS = frozenset(
 _SERVER_PROFILE_KEYS = frozenset(["target_agent_id", "session_behavior"])
 _WAKEWORD_EVENT_HISTORY_LIMIT = 24
 _CALIBRATION_TIMEOUT_SECONDS = 5 * 60
+_CALIBRATION_NOISE_SECONDS = 3.0
+_CALIBRATION_REQUIRED_SAMPLES = 3
+_CALIBRATION_RELEASE_FRAMES = 2
+_CALIBRATION_NOISE_PERCENTILE = 0.95
+_CALIBRATION_NOISE_MARGIN = 0.02
+_CALIBRATION_PHRASE_MARGIN = 0.02
+_CALIBRATION_THRESHOLD_GAP_RATIO = 0.4
+_CALIBRATION_SENSITIVITY_STEP = 0.05
 
 
 class DesktopBridge:
@@ -151,6 +160,17 @@ class DesktopBridge:
         self._calibration_deadline = 0.0
         self._calibration_scores: dict[str, float] = {}
         self._calibration_peaks: dict[str, float] = {}
+        self._calibration_phase: str | None = None
+        self._calibration_noise_deadline = 0.0
+        self._calibration_model_ids: tuple[str, ...] = ()
+        self._calibration_noise_samples: dict[str, list[float]] = {}
+        self._calibration_noise_levels: dict[str, float] = {}
+        self._calibration_sample_peaks: dict[str, list[float]] = {}
+        self._calibration_recommendations: dict[str, float] = {}
+        self._calibration_target_index = 0
+        self._calibration_candidate_peak = 0.0
+        self._calibration_release_frames = 0
+        self._calibration_sample_armed = False
         self._lock = threading.Lock()
         # Import validation can load a full TFLite model. Serialize catalog I/O
         # separately so status polling and worker state never wait on it.
@@ -355,10 +375,7 @@ class DesktopBridge:
             if self._worker is None or not self._worker.is_running():
                 raise RuntimeError("Wakeword calibration requires a running listener")
             model_ids = config["active_model_ids"]
-            self._calibration_active = True
-            self._calibration_deadline = time.monotonic() + _CALIBRATION_TIMEOUT_SECONDS
-            self._calibration_scores = dict.fromkeys(model_ids, 0.0)
-            self._calibration_peaks = dict.fromkeys(model_ids, 0.0)
+            self._start_calibration_locked(model_ids)
         logger.info("Wakeword calibration started")
         return self.getWakewordStatus()
 
@@ -369,13 +386,13 @@ class DesktopBridge:
             logger.info("Wakeword calibration stopped")
         return self.getWakewordStatus()
 
-    def resetWakewordCalibrationPeaks(self) -> dict[str, Any]:  # noqa: N802
-        """Clear observed peaks while keeping calibration active."""
+    def restartWakewordCalibration(self) -> dict[str, Any]:  # noqa: N802
+        """Restart ambient-noise measurement and discard captured repetitions."""
         with self._lock:
             if not self._calibration_active_locked():
                 raise RuntimeError("Wakeword calibration is not active")
-            self._calibration_scores = dict.fromkeys(self._calibration_scores, 0.0)
-            self._calibration_peaks = dict.fromkeys(self._calibration_peaks, 0.0)
+            self._start_calibration_locked(list(self._calibration_model_ids))
+        logger.info("Wakeword calibration restarted")
         return self.getWakewordStatus()
 
     # -- Connection (server selection) ---------------------------------------
@@ -479,10 +496,12 @@ class DesktopBridge:
             )
 
     def publish_calibration_scores(self, scores: dict[str, float]) -> None:
-        """Publish one detector frame only while transient calibration is active."""
+        """Advance guided calibration with one raw detector-score frame."""
         with self._lock:
             if not self._calibration_active_locked():
                 return
+            now = time.monotonic()
+            self._advance_calibration_phase_locked(now)
             for model_id in self._calibration_scores:
                 score = max(0.0, min(1.0, float(scores.get(model_id, 0.0))))
                 self._calibration_scores[model_id] = score
@@ -490,6 +509,10 @@ class DesktopBridge:
                     self._calibration_peaks[model_id],
                     score,
                 )
+                if self._calibration_phase == "noise":
+                    self._calibration_noise_samples[model_id].append(score)
+            if self._calibration_phase == "phrases":
+                self._capture_calibration_sample_locked()
 
     def wakeword_calibration_active(self) -> bool:
         """Return whether detections must remain non-operative for calibration."""
@@ -615,15 +638,48 @@ class DesktopBridge:
 
     def _calibration_status_locked(self) -> dict[str, Any]:
         active = self._calibration_active_locked()
+        now = time.monotonic()
+        noise_seconds_remaining = (
+            max(0, math.ceil(self._calibration_noise_deadline - now))
+            if active and self._calibration_phase == "noise"
+            else 0
+        )
+        target_model_id = (
+            self._calibration_model_ids[self._calibration_target_index]
+            if active
+            and self._calibration_phase == "phrases"
+            and self._calibration_target_index < len(self._calibration_model_ids)
+            else None
+        )
         return {
             "active": active,
+            "phase": self._calibration_phase if active else None,
             "scores": dict(self._calibration_scores) if active else {},
             "peaks": dict(self._calibration_peaks) if active else {},
+            "noise_levels": dict(self._calibration_noise_levels) if active else {},
+            "sample_counts": (
+                {
+                    model_id: len(self._calibration_sample_peaks.get(model_id, []))
+                    for model_id in self._calibration_model_ids
+                }
+                if active
+                else {}
+            ),
+            "required_samples": _CALIBRATION_REQUIRED_SAMPLES,
+            "target_model_id": target_model_id,
+            "recommended_sensitivities": (
+                dict(self._calibration_recommendations) if active else {}
+            ),
+            "noise_seconds_remaining": noise_seconds_remaining,
         }
 
     def _calibration_active_locked(self) -> bool:
-        if self._calibration_active and time.monotonic() >= self._calibration_deadline:
-            self._clear_calibration_locked()
+        if self._calibration_active:
+            now = time.monotonic()
+            if now >= self._calibration_deadline:
+                self._clear_calibration_locked()
+            else:
+                self._advance_calibration_phase_locked(now)
         return self._calibration_active
 
     def _clear_calibration_locked(self) -> None:
@@ -631,6 +687,17 @@ class DesktopBridge:
         self._calibration_deadline = 0.0
         self._calibration_scores = {}
         self._calibration_peaks = {}
+        self._calibration_phase = None
+        self._calibration_noise_deadline = 0.0
+        self._calibration_model_ids = ()
+        self._calibration_noise_samples = {}
+        self._calibration_noise_levels = {}
+        self._calibration_sample_peaks = {}
+        self._calibration_recommendations = {}
+        self._calibration_target_index = 0
+        self._calibration_candidate_peak = 0.0
+        self._calibration_release_frames = 0
+        self._calibration_sample_armed = False
 
     def _end_calibration(self) -> bool:
         with self._lock:
@@ -638,10 +705,170 @@ class DesktopBridge:
             self._clear_calibration_locked()
         return was_active
 
+    def _start_calibration_locked(self, model_ids: list[str]) -> None:
+        now = time.monotonic()
+        self._calibration_active = True
+        self._calibration_deadline = now + _CALIBRATION_TIMEOUT_SECONDS
+        self._calibration_phase = "noise"
+        self._calibration_noise_deadline = now + _CALIBRATION_NOISE_SECONDS
+        self._calibration_model_ids = tuple(model_ids)
+        self._calibration_scores = dict.fromkeys(model_ids, 0.0)
+        self._calibration_peaks = dict.fromkeys(model_ids, 0.0)
+        self._calibration_noise_samples = {model_id: [] for model_id in model_ids}
+        self._calibration_noise_levels = {}
+        self._calibration_sample_peaks = {model_id: [] for model_id in model_ids}
+        self._calibration_recommendations = {}
+        self._calibration_target_index = 0
+        self._reset_calibration_candidate_locked()
+
+    def _advance_calibration_phase_locked(self, now: float) -> None:
+        if (
+            not self._calibration_active
+            or self._calibration_phase != "noise"
+            or now < self._calibration_noise_deadline
+        ):
+            return
+        self._calibration_noise_levels = {
+            model_id: _percentile(samples, _CALIBRATION_NOISE_PERCENTILE)
+            for model_id, samples in self._calibration_noise_samples.items()
+        }
+        self._calibration_phase = "phrases"
+        self._reset_calibration_candidate_locked()
+
+    def _capture_calibration_sample_locked(self) -> None:
+        if self._calibration_target_index >= len(self._calibration_model_ids):
+            return
+        model_id = self._calibration_model_ids[self._calibration_target_index]
+        score = self._calibration_scores[model_id]
+        noise_level = self._calibration_noise_levels.get(model_id, 0.0)
+        signal_gate = _calibration_signal_gate(noise_level)
+        release_level = min(
+            signal_gate * 0.9,
+            max(
+                noise_level + (_CALIBRATION_NOISE_MARGIN / 2),
+                signal_gate * 0.6,
+            ),
+        )
+
+        if self._calibration_candidate_peak > 0.0:
+            self._calibration_candidate_peak = max(self._calibration_candidate_peak, score)
+            if score < release_level:
+                self._calibration_release_frames += 1
+                if self._calibration_release_frames >= _CALIBRATION_RELEASE_FRAMES:
+                    self._record_calibration_sample_locked(
+                        model_id,
+                        self._calibration_candidate_peak,
+                    )
+            else:
+                self._calibration_release_frames = 0
+            return
+
+        if not self._calibration_sample_armed:
+            if score < release_level:
+                self._calibration_release_frames += 1
+                if self._calibration_release_frames >= _CALIBRATION_RELEASE_FRAMES:
+                    self._calibration_sample_armed = True
+                    self._calibration_release_frames = 0
+            else:
+                self._calibration_release_frames = 0
+            return
+
+        if score >= signal_gate:
+            self._calibration_candidate_peak = score
+            self._calibration_sample_armed = False
+            self._calibration_release_frames = 0
+
+    def _record_calibration_sample_locked(self, model_id: str, peak: float) -> None:
+        samples = self._calibration_sample_peaks[model_id]
+        samples.append(peak)
+        self._reset_calibration_candidate_locked()
+        if len(samples) < _CALIBRATION_REQUIRED_SAMPLES:
+            return
+
+        self._calibration_recommendations[model_id] = _recommended_sensitivity(
+            self._calibration_noise_levels.get(model_id, 0.0),
+            samples,
+        )
+        self._calibration_target_index += 1
+        if self._calibration_target_index >= len(self._calibration_model_ids):
+            self._calibration_phase = "ready"
+            logger.info(
+                "Wakeword calibration completed (models=%s)",
+                ",".join(self._calibration_model_ids),
+            )
+
+    def _reset_calibration_candidate_locked(self) -> None:
+        self._calibration_candidate_peak = 0.0
+        self._calibration_release_frames = 0
+        self._calibration_sample_armed = False
+
     def _require_connection(self) -> ConnectionDelegate:
         if self._connection is None:
             raise RuntimeError("DesktopBridge has no connection controller attached")
         return self._connection
+
+
+def _percentile(values: list[float], percentile: float) -> float:
+    """Return a linearly interpolated percentile without a numeric dependency."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * percentile
+    lower_index = math.floor(position)
+    upper_index = math.ceil(position)
+    if lower_index == upper_index:
+        return ordered[lower_index]
+    fraction = position - lower_index
+    return ordered[lower_index] + ((ordered[upper_index] - ordered[lower_index]) * fraction)
+
+
+def _recommended_sensitivity(noise_level: float, phrase_peaks: list[float]) -> float:
+    """Place a quantized threshold safely between noise and the weakest phrase."""
+    weakest_phrase = min(phrase_peaks)
+    separation = max(0.0, weakest_phrase - noise_level)
+    minimum_threshold = 1.0 - MAX_WAKEWORD_SENSITIVITY
+    maximum_threshold = 1.0 - MIN_WAKEWORD_SENSITIVITY
+    minimum_reliable_threshold = max(
+        minimum_threshold,
+        noise_level + _CALIBRATION_NOISE_MARGIN,
+    )
+    maximum_reliable_threshold = min(
+        maximum_threshold,
+        weakest_phrase - _CALIBRATION_PHRASE_MARGIN,
+    )
+    target_threshold = noise_level + (separation * _CALIBRATION_THRESHOLD_GAP_RATIO)
+    supported_thresholds = [
+        round(step * _CALIBRATION_SENSITIVITY_STEP, 2)
+        for step in range(1, 20)
+        if minimum_reliable_threshold - 1e-9
+        <= round(step * _CALIBRATION_SENSITIVITY_STEP, 2)
+        <= maximum_reliable_threshold + 1e-9
+    ]
+    if not supported_thresholds:
+        threshold = max(
+            minimum_threshold,
+            min(maximum_threshold, maximum_reliable_threshold),
+        )
+    else:
+        threshold = min(
+            supported_thresholds,
+            key=lambda candidate: (abs(candidate - target_threshold), -candidate),
+        )
+    return round(1.0 - threshold, 2)
+
+
+def _calibration_signal_gate(noise_level: float) -> float:
+    """Require a phrase peak above the first supported noise-safe threshold."""
+    minimum_threshold = 1.0 - MAX_WAKEWORD_SENSITIVITY
+    noise_safe_threshold = max(
+        minimum_threshold,
+        noise_level + _CALIBRATION_NOISE_MARGIN,
+    )
+    quantized_threshold = (
+        math.ceil((noise_safe_threshold - 1e-9) / _CALIBRATION_SENSITIVITY_STEP)
+        * _CALIBRATION_SENSITIVITY_STEP
+    )
+    return min(1.0, quantized_threshold + _CALIBRATION_PHRASE_MARGIN)
 
 
 def _coerce_port(value: Any) -> int | str:

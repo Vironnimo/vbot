@@ -9,6 +9,22 @@ import {
   snapshotVoiceSettings,
 } from '../wakewordSettings.js';
 
+function calibrationStatus(overrides = {}) {
+  return {
+    active: false,
+    phase: null,
+    scores: {},
+    peaks: {},
+    noise_levels: {},
+    sample_counts: {},
+    required_samples: 3,
+    target_model_id: null,
+    recommended_sensitivities: {},
+    noise_seconds_remaining: 0,
+    ...overrides,
+  };
+}
+
 describe('createVoiceSettingsState', () => {
   it('starts with both Nabu wakeword models active', () => {
     const state = createVoiceSettingsState();
@@ -20,11 +36,7 @@ describe('createVoiceSettingsState', () => {
     ]);
     expect(state.model_sensitivities).toEqual({});
     expect(state.liveState).toBe('off');
-    expect(state.calibration).toEqual({
-      active: false,
-      scores: {},
-      peaks: {},
-    });
+    expect(state.calibration).toEqual(calibrationStatus());
   });
 
   it('isolates arrays and objects between calls', () => {
@@ -52,11 +64,15 @@ describe('applyWakewordStatus', () => {
       },
       target_agent_id: 'agent-1',
       session_behavior: 'new',
-      calibration: {
+      calibration: calibrationStatus({
         active: true,
+        phase: 'phrases',
         scores: { 'builtin/okay_nabu': 0.4 },
         peaks: { 'builtin/okay_nabu': 0.7 },
-      },
+        noise_levels: { 'builtin/okay_nabu': 0.03 },
+        sample_counts: { 'builtin/okay_nabu': 2 },
+        target_model_id: 'builtin/okay_nabu',
+      }),
     };
 
     const hydrated = applyWakewordStatus(state, status);
@@ -85,11 +101,15 @@ describe('applyWakewordStatus', () => {
       enabled: true,
       microphone: null,
       target_agent_id: null,
-      calibration: {
+      calibration: calibrationStatus({
         active: true,
+        phase: 'phrases',
         scores: { 'builtin/hey_nabu': 0.35 },
         peaks: { 'builtin/hey_nabu': 0.72 },
-      },
+        noise_levels: { 'builtin/hey_nabu': 0.02 },
+        sample_counts: { 'builtin/hey_nabu': 1 },
+        target_model_id: 'builtin/hey_nabu',
+      }),
     });
 
     expect(hydrated.enabled).toBe(true);
@@ -123,11 +143,15 @@ describe('applyRuntimeStatus', () => {
       active_model_ids: ['builtin/okay_nabu'],
       model_sensitivities: { 'builtin/okay_nabu': 0.5 },
       target_agent_id: null,
-      calibration: {
+      calibration: calibrationStatus({
         active: true,
+        phase: 'ready',
         scores: { 'builtin/hey_nabu': 0.35 },
         peaks: { 'builtin/hey_nabu': 0.72 },
-      },
+        noise_levels: { 'builtin/hey_nabu': 0.02 },
+        sample_counts: { 'builtin/hey_nabu': 3 },
+        recommended_sensitivities: { 'builtin/hey_nabu': 0.8 },
+      }),
     };
 
     const next = applyRuntimeStatus(state, status);
@@ -198,11 +222,13 @@ describe('buildVoiceSettingsPayload', () => {
       ...lastSaved,
       liveState: 'recording',
       mock: true,
-      calibration: {
+      calibration: calibrationStatus({
         active: true,
+        phase: 'noise',
         scores: { 'builtin/okay_nabu': 0.4 },
         peaks: { 'builtin/okay_nabu': 0.7 },
-      },
+        noise_seconds_remaining: 2,
+      }),
     };
 
     expect(buildVoiceSettingsPayload(state, lastSaved)).toEqual({});
