@@ -1572,6 +1572,7 @@ export const englishCatalog = Object.freeze({
     'The configured Speech-to-text Model is not currently usable. Check its Provider connection or choose another Model under Settings → Models.',
   'settings.voice.error.speechToTextReadiness':
     'Voice could not verify the Speech-to-text configuration. Check the Desktop log and try again.',
+  'settings.voice.microphoneDisconnectedTitle': 'Microphone disconnected',
 
   'voice.state.off': 'Disabled',
   'voice.state.starting': 'Starting',
@@ -1584,6 +1585,7 @@ export const englishCatalog = Object.freeze({
   'voice.state.cancelled': 'Cancelled',
   'voice.state.no_speech': 'No speech heard',
   'voice.state.transcription_failed': 'Not understood',
+  'voice.state.microphone_disconnected': 'Microphone disconnected',
   'voice.state.processing': 'Processing',
   'voice.state.error': 'Voice error',
 
@@ -1597,6 +1599,7 @@ export const englishCatalog = Object.freeze({
   'voice.mic.tooltip.cancelled': 'Voice command cancelled',
   'voice.mic.tooltip.noSpeech': 'No speech heard',
   'voice.mic.tooltip.transcriptionFailed': 'Voice command was not understood',
+  'voice.mic.tooltip.microphoneDisconnected': 'Microphone disconnected',
   'voice.mic.tooltip.error': 'Voice error',
   'voice.toast.sentTitle': 'Voice command sent',
   'voice.toast.noSpeechTitle': 'No speech heard',
@@ -1606,6 +1609,9 @@ export const englishCatalog = Object.freeze({
     'Voice command could not be transcribed',
   'voice.toast.transcriptionFailedMessage':
     'Check the Speech-to-text Model and the Desktop log, then try again.',
+  'voice.toast.microphoneDisconnectedTitle': 'Microphone disconnected',
+  'voice.toast.microphoneDisconnectedMessage':
+    'Wakeword listening is paused. Reconnect the microphone and retry when you are ready.',
   'voice.toast.errorMessage':
     'Open Voice settings for details. The failure was written to the Desktop log.',
 

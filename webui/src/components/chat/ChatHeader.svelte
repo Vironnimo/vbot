@@ -123,6 +123,7 @@
       case 'cancelled':
       case 'no_speech':
       case 'transcription_failed':
+      case 'microphone_disconnected':
         return 'mic-dot--warning';
       case 'error':
         return 'mic-dot--error';
@@ -161,6 +162,11 @@
           'voice.mic.tooltip.transcriptionFailed',
           'Voice command was not understood',
         );
+      case 'microphone_disconnected':
+        return t(
+          'voice.mic.tooltip.microphoneDisconnected',
+          'Microphone disconnected',
+        );
       case 'error':
         return t('voice.mic.tooltip.error', 'Voice error');
       default:
@@ -183,6 +189,11 @@
         return t('voice.state.processing', 'Processing');
       case 'cancelled':
         return t('voice.state.cancelled', 'Cancelled');
+      case 'microphone_disconnected':
+        return t(
+          'voice.state.microphone_disconnected',
+          'Microphone disconnected',
+        );
       case 'error':
         return t('voice.state.error', 'Voice error');
       default:

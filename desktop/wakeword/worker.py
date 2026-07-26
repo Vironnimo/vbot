@@ -323,12 +323,12 @@ class WakewordWorker:
                     logger.warning("Microphone read error", exc_info=True)
                     consecutive_read_errors += 1
                     if consecutive_read_errors >= _MAX_CONSECUTIVE_MIC_READ_ERRORS:
-                        self._fail("microphone_read_failed")
+                        self._disconnect_microphone("microphone_read_failed")
                         break
                     if self._restart_stream():
                         self._bridge.publish_state("listening")
                         continue
-                    self._fail("microphone_read_failed")
+                    self._disconnect_microphone("microphone_read_failed")
                     break
 
                 consecutive_read_errors = 0
@@ -360,7 +360,7 @@ class WakewordWorker:
                     if not self._running.is_set():
                         break
                     if not self._restart_stream():
-                        self._fail("microphone_unavailable")
+                        self._disconnect_microphone("microphone_unavailable")
                         break
         finally:
             self._close_stream()
@@ -517,6 +517,13 @@ class WakewordWorker:
         logger.warning("Wakeword worker stopped (reason=%s)", error_code)
         self._running.clear()
         self._bridge.publish_state("error", error_code)
+
+    def _disconnect_microphone(self, reason_code: str) -> None:
+        """Pause Voice without treating an expected runtime device loss as fatal."""
+        logger.warning("Wakeword microphone disconnected (reason=%s)", reason_code)
+        self._running.clear()
+        self._bridge.publish_runtime_details(active_microphone=None)
+        self._bridge.publish_state("microphone_disconnected", reason_code)
 
     # -- Audio recording -----------------------------------------------------
 

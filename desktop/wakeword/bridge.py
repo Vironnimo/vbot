@@ -76,8 +76,12 @@ _WAKEWORD_STATE_SENT = "sent"
 _WAKEWORD_STATE_CANCELLED = "cancelled"
 _WAKEWORD_STATE_NO_SPEECH = "no_speech"
 _WAKEWORD_STATE_TRANSCRIPTION_FAILED = "transcription_failed"
+_WAKEWORD_STATE_MICROPHONE_DISCONNECTED = "microphone_disconnected"
 _WAKEWORD_STATE_ERROR = "error"
 
+_WAKEWORD_STATES_WITH_REASON = frozenset(
+    [_WAKEWORD_STATE_MICROPHONE_DISCONNECTED, _WAKEWORD_STATE_ERROR]
+)
 _VALID_STATES = frozenset(
     [
         _WAKEWORD_STATE_OFF,
@@ -91,6 +95,7 @@ _VALID_STATES = frozenset(
         _WAKEWORD_STATE_CANCELLED,
         _WAKEWORD_STATE_NO_SPEECH,
         _WAKEWORD_STATE_TRANSCRIPTION_FAILED,
+        _WAKEWORD_STATE_MICROPHONE_DISCONNECTED,
         _WAKEWORD_STATE_ERROR,
     ]
 )
@@ -458,7 +463,7 @@ class DesktopBridge:
             if state != _WAKEWORD_STATE_LISTENING:
                 self._clear_calibration_locked()
             self._state = state
-            self._error_code = error_code if state == _WAKEWORD_STATE_ERROR else None
+            self._error_code = error_code if state in _WAKEWORD_STATES_WITH_REASON else None
             self._event_sequence += 1
             event_sequence = self._event_sequence
             self._events.append(
