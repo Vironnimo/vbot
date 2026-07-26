@@ -13,6 +13,7 @@ import pytest
 import pytest_asyncio
 
 import core.tools.bash as bash_module
+from core.runs import ChatRunManager, Run
 from core.storage import TemporaryFileManager
 from core.tools.bash import (
     BASH_TOOL_PARAMETERS,
@@ -21,6 +22,7 @@ from core.tools.bash import (
     bash_handler,
     register_bash_tool,
 )
+from core.tools.process import PROCESS_TOOL_NAME, make_process_handler
 from core.tools.process_manager import ProcessManager
 from core.tools.tools import ToolContext, ToolRegistry
 
@@ -405,6 +407,111 @@ async def test_background_watcher_does_not_consume_process_poll_output(
     output = poll_result.get("output")
     assert isinstance(output, str)
     assert "poll-marker" in output
+
+
+@pytest.mark.asyncio
+async def test_terminal_process_poll_cancels_already_pending_completion_delivery(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_manager = ChatRunManager()
+    active_release = asyncio.Event()
+    trigger_queued = asyncio.Event()
+    completion_run_executed = asyncio.Event()
+
+    async def active_executor(_run: Run) -> str:
+        await active_release.wait()
+        return "active"
+
+    async def completion_executor(_run: Run) -> str:
+        completion_run_executed.set()
+        return "completion"
+
+    active_run = await run_manager.start(
+        agent_id=AGENT_ID,
+        session_id="session-a",
+        executor=active_executor,
+        project_id=None,
+    )
+
+    class PendingTriggerService:
+        async def trigger_run(
+            self,
+            agent_id: str,
+            _message: str,
+            *,
+            session_id: str,
+            internal: bool,
+            project_id: str | None = None,
+        ) -> Run:
+            assert agent_id == AGENT_ID
+            assert session_id == "session-a"
+            assert internal is True
+            assert project_id is None
+            queued = await run_manager.enqueue(
+                agent_id=agent_id,
+                session_id=session_id,
+                executor=completion_executor,
+                display_content="background completion",
+                internal=True,
+                project_id=project_id,
+            )
+            trigger_queued.set()
+            return await queued.future
+
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    bash_context = make_context(tmp_path)
+    bash_result = await bash_handler(
+        bash_context,
+        {"command": "print('done')", "background": True},
+        manager,
+        trigger_service=PendingTriggerService(),
+    )
+    bash_data = bash_result["data"]
+    assert isinstance(bash_data, dict)
+    process_session_id = bash_data["session_id"]
+    assert isinstance(process_session_id, str)
+    await asyncio.wait_for(trigger_queued.wait(), timeout=2)
+    assert len(run_manager.list_queued(AGENT_ID, "session-a", project_id=None)) == 1
+
+    persisted_callbacks: list[Callable[[], None]] = []
+    process_context = ToolContext(
+        agent_id=AGENT_ID,
+        session_id=bash_context.session_id,
+        run_id=RUN_ID,
+        tool_call_id="call-process",
+        tool_name=PROCESS_TOOL_NAME,
+        tool_call_index=0,
+        workspace=tmp_path,
+        vbot_root=tmp_path,
+        data_root=tmp_path,
+        result_persisted_hook=lambda callback: persisted_callbacks.append(callback),
+    )
+    process_result = await make_process_handler(manager)(
+        process_context,
+        {"action": "poll", "session_id": process_session_id},
+    )
+
+    assert process_result["ok"] is True
+    assert process_result["data"]["status"] == "completed"
+    assert len(persisted_callbacks) == 1
+
+    persisted_callbacks[0]()
+
+    notification_task = manager.get_session(
+        process_session_id, AGENT_ID
+    ).completion_notification_task
+    assert notification_task is not None
+    await asyncio.gather(notification_task, return_exceptions=True)
+    await asyncio.sleep(0)
+    assert notification_task.cancelled() is True
+    assert run_manager.list_queued(AGENT_ID, "session-a", project_id=None) == []
+
+    active_release.set()
+    assert await active_run.wait() == "active"
+    await asyncio.sleep(0)
+    assert completion_run_executed.is_set() is False
 
 
 @pytest.mark.asyncio

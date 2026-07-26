@@ -110,6 +110,8 @@ class ProcessSession:
     stdout_task: asyncio.Task[None] | None = field(default=None, repr=False)
     stderr_task: asyncio.Task[None] | None = field(default=None, repr=False)
     wait_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    completion_notification_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    completion_acknowledged: bool = False
 
 
 class ProcessManager:
@@ -149,6 +151,9 @@ class ProcessManager:
             self._sweeper_task = None
 
         for session in list(self._sessions.values()):
+            notification_task = session.completion_notification_task
+            if notification_task is not None and not notification_task.done():
+                notification_task.cancel()
             if session.status == "running":
                 self._kill_session_now(session)
 
@@ -161,7 +166,12 @@ class ProcessManager:
         if sweeper_task is not None and not sweeper_task.done():
             tasks.append(sweeper_task)
         for session in list(self._sessions.values()):
-            for task in (session.wait_task, session.stdout_task, session.stderr_task):
+            for task in (
+                session.wait_task,
+                session.stdout_task,
+                session.stderr_task,
+                session.completion_notification_task,
+            ):
                 if task is not None and not task.done():
                     tasks.append(task)
 
@@ -382,6 +392,33 @@ class ProcessManager:
         """Stop accumulating foreground-only stdout/stderr line buffers."""
         session = self._session_for_agent(session_id, agent_id)
         session.foreground_capture_open = False
+
+    def register_completion_notification(
+        self,
+        session_id: str,
+        agent_id: str,
+        task: asyncio.Task[None],
+    ) -> None:
+        """Track the automatic completion delivery for one background process."""
+        session = self._session_for_agent(session_id, agent_id)
+        current = session.completion_notification_task
+        if current is not None and not current.done():
+            raise ProcessManagerError(
+                f"Process completion notification is already registered: {session_id}"
+            )
+        session.completion_notification_task = task
+        if session.completion_acknowledged:
+            task.cancel()
+
+    def acknowledge_completion(self, session_id: str, agent_id: str) -> None:
+        """Cancel automatic delivery after a terminal result was durably delivered."""
+        session = self._session_for_agent(session_id, agent_id)
+        if session.status == "running":
+            raise SessionStillRunningError(f"Process session is still running: {session_id}")
+        session.completion_acknowledged = True
+        notification_task = session.completion_notification_task
+        if notification_task is not None and not notification_task.done():
+            notification_task.cancel()
 
     def cancel_scope(self, scope_key: str) -> None:
         """Kill active sessions in a run scope, independent of agent ownership."""

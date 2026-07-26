@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -35,7 +36,12 @@ def context(tmp_path: Path) -> ToolContext:
     return make_context(tmp_path)
 
 
-def make_context(tmp_path: Path, *, agent_id: str = AGENT_A) -> ToolContext:
+def make_context(
+    tmp_path: Path,
+    *,
+    agent_id: str = AGENT_A,
+    result_persisted_hook: Callable[[Callable[[], None]], None] | None = None,
+) -> ToolContext:
     return ToolContext(
         agent_id=agent_id,
         session_id="chat-session-a",
@@ -46,6 +52,7 @@ def make_context(tmp_path: Path, *, agent_id: str = AGENT_A) -> ToolContext:
         workspace=tmp_path,
         vbot_root=tmp_path,
         data_root=tmp_path,
+        result_persisted_hook=result_persisted_hook,
     )
 
 
@@ -326,6 +333,48 @@ async def test_kill_action_stops_process(
 
     assert result == tool_success({"session_id": session_id})
     assert poll_result["status"] == "killed"
+
+
+@pytest.mark.parametrize("action", ["poll", "kill"])
+@pytest.mark.asyncio
+async def test_terminal_manual_result_cancels_pending_completion_after_persistence(
+    manager: ProcessManager,
+    tmp_path: Path,
+    action: str,
+) -> None:
+    callbacks: list[Callable[[], None]] = []
+    context = make_context(
+        tmp_path,
+        result_persisted_hook=lambda callback: callbacks.append(callback),
+    )
+    script = "print('done')" if action == "poll" else "import time; time.sleep(30)"
+    session_id = await spawn_python(manager, script)
+    if action == "poll":
+        await wait_for_terminal(manager, session_id)
+
+    notification_release = asyncio.Event()
+
+    async def pending_notification() -> None:
+        await notification_release.wait()
+
+    notification_task = asyncio.create_task(pending_notification())
+    manager.register_completion_notification(session_id, AGENT_A, notification_task)
+
+    result = await call_process(
+        manager,
+        context,
+        {"action": action, "session_id": session_id},
+    )
+
+    assert result["ok"] is True
+    assert callbacks
+    assert notification_task.done() is False
+
+    callbacks.pop()()
+    await asyncio.sleep(0)
+
+    assert notification_task.cancelled() is True
+    assert manager.get_session(session_id, AGENT_A).completion_acknowledged is True
 
 
 @pytest.mark.asyncio

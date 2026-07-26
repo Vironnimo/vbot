@@ -166,6 +166,8 @@ async def _handle_poll(
         timeout_ms = MAX_POLL_TIMEOUT_MS
 
     result = await process_manager.poll(session_id, context.agent_id, timeout_ms=timeout_ms)
+    if result["status"] != "running":
+        _acknowledge_completion_after_persistence(process_manager, context, session_id)
     return tool_success(
         {
             "session_id": result["session_id"],
@@ -231,6 +233,7 @@ async def _handle_kill(
 ) -> JsonObject:
     session_id = _required_session_id(arguments)
     await process_manager.kill(session_id, context.agent_id)
+    _acknowledge_completion_after_persistence(process_manager, context, session_id)
     return tool_success({"session_id": session_id})
 
 
@@ -246,6 +249,17 @@ async def _handle_clear(
 
 def _required_session_id(arguments: JsonObject) -> str:
     return required_string(arguments.get("session_id"), field_name="session_id")
+
+
+def _acknowledge_completion_after_persistence(
+    process_manager: ProcessManager,
+    context: ToolContext,
+    session_id: str,
+) -> None:
+    """Suppress automatic delivery only after this manual result is durable."""
+    context.after_result_persisted(
+        lambda: process_manager.acknowledge_completion(session_id, context.agent_id)
+    )
 
 
 def _format_timestamp(value: datetime | None) -> str | None:
