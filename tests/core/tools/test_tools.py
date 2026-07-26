@@ -54,7 +54,7 @@ def make_context(tool_name: str = "read_file", tool_call_id: str = "call_1") -> 
         tool_name=tool_name,
         tool_call_index=0,
         workspace=Path("workspace"),
-        app_root=Path("app"),
+        vbot_root=Path("app"),
         data_root=Path("data"),
     )
 
@@ -69,7 +69,7 @@ def make_execution_config(
         session_id="session-1",
         run_id="run-1",
         workspace=workspace,
-        app_root=Path("app"),
+        vbot_root=Path("app"),
         data_root=Path("data"),
         allowed_tools=allowed_tools,
     )
@@ -135,7 +135,7 @@ class TestToolContext:
             tool_name="read_file",
             tool_call_index=0,
             workspace=Path("workspace"),
-            app_root=Path("app"),
+            vbot_root=Path("app"),
             data_root=Path("data"),
             cwd=Path("repo"),
         )
@@ -151,7 +151,7 @@ class TestToolContext:
             tool_name="read",
             tool_call_index=0,
             workspace=tmp_path / "workspace",
-            app_root=tmp_path / "app",
+            vbot_root=tmp_path / "app",
             data_root=tmp_path / "data",
             cwd=tmp_path / "repo",
         )
@@ -173,7 +173,7 @@ class TestToolContext:
             tool_name="read_file",
             tool_call_index=0,
             workspace=Path("workspace"),
-            app_root=Path("app"),
+            vbot_root=Path("app"),
             data_root=Path("data"),
             emit_hook=emit_hook,
             cancellation_hook=lambda: True,
@@ -199,7 +199,7 @@ class TestToolContext:
             tool_name="read_file",
             tool_call_index=0,
             workspace=Path("workspace"),
-            app_root=Path("app"),
+            vbot_root=Path("app"),
             data_root=Path("data"),
             note_hook=notes.append,
         )
@@ -231,7 +231,7 @@ class TestToolContextCancelHooks:
             tool_name="read_file",
             tool_call_index=0,
             workspace=Path("workspace"),
-            app_root=Path("app"),
+            vbot_root=Path("app"),
             data_root=Path("data"),
             cancel_registration_hook=registration_hook,
         )
@@ -260,7 +260,7 @@ class TestToolContextCancelHooks:
             tool_name="read_file",
             tool_call_index=0,
             workspace=Path("workspace"),
-            app_root=Path("app"),
+            vbot_root=Path("app"),
             data_root=Path("data"),
             cancel_check_hook=lambda: cancel_state["user_cancelled"],
         )
@@ -965,7 +965,7 @@ class TestToolExecutor:
                 session_id="session-1",
                 run_id="run-1",
                 workspace=Path("workspace"),
-                app_root=Path("app"),
+                vbot_root=Path("app"),
                 data_root=Path("data"),
                 allowed_tools=["*"],
                 nesting_depth=3,
@@ -999,7 +999,7 @@ class TestToolExecutor:
                 session_id="session-1",
                 run_id="run-1",
                 workspace=Path("workspace"),
-                app_root=Path("app"),
+                vbot_root=Path("app"),
                 data_root=Path("data"),
                 cwd=Path("repo"),
                 allowed_tools=["*"],
@@ -1074,7 +1074,7 @@ class TestToolExecutor:
                 session_id="session-1",
                 run_id="run-1",
                 workspace=Path("workspace"),
-                app_root=Path("app"),
+                vbot_root=Path("app"),
                 data_root=Path("data"),
                 allowed_tools=["*"],
                 cancel_registration_hook=registration_hook,

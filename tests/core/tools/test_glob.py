@@ -35,7 +35,7 @@ def make_context(
         tool_name=tool_name,
         tool_call_index=0,
         workspace=workspace,
-        app_root=workspace.parent,
+        vbot_root=workspace.parent,
         data_root=workspace.parent / "data",
         cwd=cwd,
         cancel_check_hook=(lambda: True) if user_cancelled else None,

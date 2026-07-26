@@ -16,7 +16,7 @@ Run:
 vbot home [--data-dir <path>]
 ```
 
-Use its absolute `app_dir` and `data_dir` results. Do not assume `~/.vbot`: development checkouts, worktrees, environment overrides, and explicit `--data-dir` targets may resolve elsewhere.
+Use its absolute `vbot_root` and `data_dir` results. Do not assume `~/.vbot`: development checkouts, worktrees, environment overrides, and explicit `--data-dir` targets may resolve elsewhere.
 
 `vbot home` is local and takes no `--host` or `--port`. It reports the installation and data root on the machine where the command executes, not the data directory of a remote server selected by other CLI commands. When the CLI targets a remote server, use RPC-backed list/show/status/diagnostic commands unless the task also has filesystem access on that server host.
 
@@ -24,7 +24,7 @@ Keep the four path roles distinct:
 
 | Path | Ownership and purpose |
 |---|---|
-| `app_dir` | vBot code, bundled resources, and bundled Skills |
+| `vbot_root` | vBot code, bundled resources, and bundled Skills |
 | `data_dir` | One server instance's Settings, credentials, Identity Agents, Sessions, artifacts, and operational state |
 | Project `cwd` | External repository or working folder used by Project file/shell Tools |
 | Agent Workspace | Identity and Memory files; inside the Agent data home by default, but optionally external |
@@ -62,7 +62,7 @@ Some directories are created only when their owning feature first writes data.
 | `temp/bash/` and `temp/subagents/` | Retained diagnostic output with category-specific expiry | Inspect when a Tool points to a retained file; do not treat it as durable application state |
 | `.tmp/` | Short-lived atomic-write and refresh staging | Never use as a source of truth |
 
-Project Skills do not live in the data directory: they stay in the Project cwd under the directory selected by its Source Format (`.opencode/skills/` or `.claude/skills/`). Bundled Skills live under `app_dir/resources/skills/`. Configured extra Skill and Extension directories may also be external.
+Project Skills do not live in the data directory: they stay in the Project cwd under the directory selected by its Source Format (`.opencode/skills/` or `.claude/skills/`). Bundled Skills live under `vbot_root/resources/skills/`. Configured extra Skill and Extension directories may also be external.
 
 ## Search and edit discipline
 

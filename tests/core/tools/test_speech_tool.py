@@ -24,7 +24,7 @@ async def test_text_to_speech_tool_returns_artifact_payload(tmp_path: Path) -> N
         tool_name=TEXT_TO_SPEECH_TOOL_NAME,
         tool_call_index=0,
         workspace=tmp_path,
-        app_root=tmp_path,
+        vbot_root=tmp_path,
         data_root=tmp_path,
     )
 
@@ -52,7 +52,7 @@ async def test_text_to_speech_tool_rejects_unknown_arguments(tmp_path: Path) -> 
         tool_name=TEXT_TO_SPEECH_TOOL_NAME,
         tool_call_index=0,
         workspace=tmp_path,
-        app_root=tmp_path,
+        vbot_root=tmp_path,
         data_root=tmp_path,
     )
 

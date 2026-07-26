@@ -15,8 +15,8 @@ from typing import Any, TypedDict
 from core.settings import SettingsValidationError, load_runtime_settings_json
 from core.utils.errors import ConfigError
 
-APP_DIR = Path(__file__).resolve().parents[2]
-_WORKTREE_FILE = APP_DIR / ".vbot-worktree"
+VBOT_ROOT = Path(__file__).resolve().parents[2]
+_WORKTREE_FILE = VBOT_ROOT / ".vbot-worktree"
 _WORKTREE_CWD_ONLY_KEY = "cwd_only"
 
 DEFAULT_HOST = "127.0.0.1"

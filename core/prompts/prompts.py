@@ -413,11 +413,11 @@ class SystemPromptManager:
         skill_registry: SkillPromptRegistry,
         channel_registry: ChannelPromptRegistry | None = None,
         *,
-        app_version: str,
-        app_dir: str | Path,
+        vbot_version: str,
+        vbot_root: str | Path,
         data_root: str | Path,
         memory_provider: MemoryPromptProvider | None = None,
-        host: str | None = None,
+        server_hostname: str | None = None,
         os_name: str | None = None,
         current_date: Callable[[], str] | None = None,
         loaded_extensions: Collection[str] = (),
@@ -436,10 +436,10 @@ class SystemPromptManager:
         # that never touch the edit facade).
         self._agent_store = agent_store
         self._memory_provider = memory_provider or MemoryService()
-        self._app_version = app_version
-        self._app_dir = Path(app_dir)
+        self._vbot_version = vbot_version
+        self._vbot_root = Path(vbot_root)
         self._data_root = Path(data_root)
-        self._host = host
+        self._server_hostname = server_hostname
         self._os_name = os_name
         self._current_date = current_date or _current_utc_date
         # The set of loaded extension names, gate 2's input for ``extension:<name>``
@@ -469,9 +469,9 @@ class SystemPromptManager:
         )
 
     @property
-    def app_dir(self) -> Path:
-        """Application source directory this prompt manager was built with."""
-        return self._app_dir
+    def vbot_root(self) -> Path:
+        """vBot installation or source root this prompt manager was built with."""
+        return self._vbot_root
 
     def update_skill_registry(self, skill_registry: SkillPromptRegistry) -> None:
         """Replace the skill registry used for prompt and provider tool decisions."""
@@ -1118,9 +1118,10 @@ class SystemPromptManager:
 
         Each block's default text is the scope-aware prompt fragment (the bundled
         resource for the default scope, the agent copy for an agent scope — with no
-        default fallback, exactly as today). The runtime block keeps its ``{host}``/
-        ``{model}``/… placeholders (filled by the build-time replacements); the
-        tools-list/channels/skills blocks carry the ``{generated:…}`` list markers.
+        default fallback, exactly as today). The runtime blocks keep their
+        ``{server_hostname}``/``{model}``/… placeholders (filled by the build-time
+        replacements); the tools-list/channels/skills blocks carry the
+        ``{generated:…}`` list markers.
         The tools-list block ships ``default_enabled=False`` — the native provider
         tool definitions already carry every description, so the prompt copy is an
         opt-in booster for models that attend poorly to tool schemas. The channels
@@ -1266,20 +1267,20 @@ class SystemPromptManager:
         ).strip()
 
     def _runtime_replacements(self, agent: PromptAgent) -> dict[str, str]:
-        """Return the build-time runtime-variable substitutions (``{host}``, …).
+        """Return the build-time runtime-variable substitutions.
 
-        Applied to every text block by the engine; only the runtime block carries
-        these placeholders today, but treating them as build-time globals matches
-        how ``{app_version}`` worked at the root before the block model.
+        Applied to every text block by the engine. The shared Runtime and Identity
+        Environment resources carry these placeholders; treating them as build-time
+        globals keeps replacement behavior uniform across resource-backed text blocks.
         """
         thinking_effort = "default" if agent.thinking_effort is None else agent.thinking_effort
         return {
-            "{host}": self._host or socket.gethostname(),
-            "{app_version}": self._app_version,
+            "{server_hostname}": self._server_hostname or socket.gethostname(),
+            "{vbot_version}": self._vbot_version,
             "{os}": self._os_name or platform.platform(),
             "{model}": agent.model,
-            "{agent_workspace}": agent.workspace,
-            "{app_dir}": str(self._app_dir.resolve()),
+            "{identity_workspace}": agent.workspace,
+            "{vbot_root}": str(self._vbot_root.resolve()),
             "{data_root}": str(self._data_root.resolve()),
             "{thinking_effort}": thinking_effort,
             "{current_date}": self._current_date(),

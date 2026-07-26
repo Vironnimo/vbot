@@ -12,6 +12,7 @@ from .prompts_test_support import (
     StubChannels,
     StubSkill,
     StubSkills,
+    StubStorage,
     StubTools,
     _agent,
     _manager,
@@ -63,10 +64,12 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
 
     prompt = manager.build_system_prompt(agent)
 
-    # Shared Runtime and Identity Runtime blocks (variables filled).
-    assert "- Host: test-host" in prompt
+    # Shared Runtime and Identity Environment blocks (variables filled).
+    assert "- Server hostname: `test-host`" in prompt
     assert "- OS: test-os" in prompt
-    assert "- vBot version: 0.1.0" in prompt
+    assert "- vBot version: `0.1.0`" in prompt
+    assert f"- vBot root: `{(tmp_path / 'app').resolve()}`" in prompt
+    assert f"- vBot data root: `{(tmp_path / 'data').resolve()}`" in prompt
     assert "- You are powered by the model openai/gpt-5.2" in prompt
     assert f"{workspace}" in prompt
     assert "- Thinking level: high" in prompt
@@ -118,12 +121,12 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
     assert "- None" not in prompt
     assert prompt == prompt.strip()
     assert "\n\n\n" not in prompt
-    # Order: SOUL < memory < runtime < identity runtime < tools < channels < skills.
+    # Order: SOUL < memory < runtime < identity environment < tools < channels < skills.
     order = [
         "Soul text",
         "<memory>",
         "## Runtime",
-        "## Identity Runtime",
+        "## Identity Environment",
         "## Tool Call Style",
         "## Channels",
     ]
@@ -228,11 +231,30 @@ def test_config_agent_body_with_braces_is_not_expanded(tmp_path: Path) -> None:
     # a "{...}" inside it (even a real vBot placeholder name) survives verbatim.
     manager = _manager(tmp_path)
     agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-    body = "Use {host} and {include:SOUL.md} and {generated:tool_list} literally; also {custom}."
+    body = (
+        "Use {server_hostname} and {include:SOUL.md} and "
+        "{generated:tool_list} literally; also {custom}."
+    )
 
     prompt = manager.build_system_prompt(agent, agent_body=body)
 
     assert body in prompt
+
+
+def test_legacy_identity_environment_placeholders_are_not_resolved(tmp_path: Path) -> None:
+    legacy = "Legacy {host} {app_version} {agent_workspace} {app_dir}"
+    storage = StubStorage(
+        {
+            "identity_runtime.md": legacy,
+            "runtime.md": "",
+        }
+    )
+    manager = _manager(tmp_path, storage=storage)
+    agent = _agent(tmp_path / "empty-workspace", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+
+    prompt = manager.build_system_prompt(agent)
+
+    assert prompt == legacy
 
 
 def test_project_config_agent_receives_project_workspace_without_identity_runtime(
@@ -257,12 +279,12 @@ def test_project_config_agent_receives_project_workspace_without_identity_runtim
     assert "- Project ID: vbot" in prompt
     assert f"- Your Project Workspace: {repo}" in prompt
     assert f'<project_context id="vbot" name="vBot" workspace="{repo}">' in prompt
-    assert "## Identity Runtime" not in prompt
-    assert "- Host:" not in prompt
+    assert "## Identity Environment" not in prompt
+    assert "- Server hostname:" not in prompt
     assert "vBot version:" not in prompt
     assert "Identity and Memory Workspace:" not in prompt
-    assert "App Path:" not in prompt
-    assert "Data Path:" not in prompt
+    assert "vBot root:" not in prompt
+    assert "vBot data root:" not in prompt
 
 
 def test_rooted_identity_prompt_distinguishes_identity_and_project_workspaces(
@@ -282,8 +304,8 @@ def test_rooted_identity_prompt_distinguishes_identity_and_project_workspaces(
         working_project_context=snapshot,
     )
 
-    assert "## Identity Runtime" in prompt
-    assert f"- Your Identity and Memory Workspace: {workspace}" in prompt
+    assert "## Identity Environment" in prompt
+    assert f"- Your Identity and Memory Workspace: `{workspace}`" in prompt
     assert "## Working Project" in prompt
     assert f"- Your Project Workspace: {repo}" in prompt
 

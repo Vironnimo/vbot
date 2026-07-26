@@ -64,7 +64,7 @@ def test_example_word_count_tool_registers_and_runs(tmp_path: Path) -> None:
         tool_name="word_count",
         tool_call_index=0,
         workspace=tmp_path,
-        app_root=tmp_path,
+        vbot_root=tmp_path,
         data_root=tmp_path,
     )
     result = asyncio.run(tool_registry.dispatch(context, {"text": "one two three"}))

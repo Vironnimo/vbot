@@ -20,7 +20,7 @@ vbot server status
 vbot home [--data-dir <path>]
 ```
 
-Prints the absolute `app_dir` of the running checkout/install and the resolved `data_dir`. This is local and read-only; it does not report a Project cwd or Agent Workspace and needs no server.
+Prints the absolute `vbot_root` of the running checkout/install and the resolved `data_dir`. This is local and read-only; it does not report a Project cwd or Agent Workspace and needs no server.
 
 ## Update
 

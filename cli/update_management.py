@@ -45,7 +45,7 @@ from cli.server_management import (
     start_server,
     stop_server,
 )
-from core.utils.config import APP_DIR
+from core.utils.config import VBOT_ROOT
 
 GITHUB_API_BASE = "https://api.github.com/repos/Vironnimo/vbot"
 WEBUI_ASSET_NAME = "webui-dist.tar.gz"
@@ -56,7 +56,7 @@ _WINDOWS_DESKTOP_LAUNCHER_NAME = "vbot-desktop.exe"
 _WINDOWS_POWERSHELL = "powershell.exe"
 
 Restart = Callable[[ServerInstance], CommandResult]
-UNKNOWN_APP_VERSION = "unknown"
+UNKNOWN_VBOT_VERSION = "unknown"
 
 
 @dataclass(frozen=True)
@@ -97,15 +97,15 @@ class _DirtyResolution:
     stashed: bool = False
 
 
-def read_checkout_version(root: Path = APP_DIR) -> str:
+def read_checkout_version(root: Path = VBOT_ROOT) -> str:
     """Read the live vBot version from the checkout being updated."""
 
     try:
         with (root / "pyproject.toml").open("rb") as handle:
             version = tomllib.load(handle)["project"]["version"]
     except (OSError, KeyError, TypeError, tomllib.TOMLDecodeError):
-        return UNKNOWN_APP_VERSION
-    return version if isinstance(version, str) and version else UNKNOWN_APP_VERSION
+        return UNKNOWN_VBOT_VERSION
+    return version if isinstance(version, str) and version else UNKNOWN_VBOT_VERSION
 
 
 def run_update(
@@ -125,7 +125,7 @@ def run_update(
     """Advance the installed checkout and optionally restart the server."""
 
     run = runner or _default_runner
-    repo = root if root is not None else APP_DIR
+    repo = root if root is not None else VBOT_ROOT
     lookup = latest_release or _fetch_latest_release
     effective_platform = os.name if platform_name is None else platform_name
 

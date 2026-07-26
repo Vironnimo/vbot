@@ -104,7 +104,7 @@ def _context(agent_id: str, root: Path) -> ToolContext:
         tool_name=SKILL_MANAGE_TOOL_NAME,
         tool_call_index=0,
         workspace=root,
-        app_root=root,
+        vbot_root=root,
         data_root=root,
         cwd=root,
     )

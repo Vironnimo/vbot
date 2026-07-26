@@ -30,7 +30,7 @@ from cli.server_management import (
     is_valid_systemd_service_name,
     start_server,
 )
-from core.utils.config import APP_DIR
+from core.utils.config import VBOT_ROOT
 
 DEFAULT_TASK_NAME = "vBot"
 
@@ -204,7 +204,7 @@ def enable_autostart(
             service_name=name,
             unit_dir=unit_dir,
             python_executable=python_executable,
-            repo_root=repo_root or APP_DIR,
+            repo_root=repo_root or VBOT_ROOT,
         )
         started_by_service = True
     else:

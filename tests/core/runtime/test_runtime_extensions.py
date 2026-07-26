@@ -310,7 +310,7 @@ def test_extension_tool_and_recall_backend_wired_into_runtime(tmp_path: Path) ->
             tool_name="ext_echo",
             tool_call_index=0,
             workspace=data_dir,
-            app_root=data_dir,
+            vbot_root=data_dir,
             data_root=data_dir,
         )
         result = asyncio.run(runtime.tools.dispatch(context, {"value": "hi"}))
@@ -471,7 +471,7 @@ def _dispatch_extension_tool(
         tool_name=tool_name,
         tool_call_index=0,
         workspace=data_dir,
-        app_root=data_dir,
+        vbot_root=data_dir,
         data_root=data_dir,
     )
     return asyncio.run(runtime.tools.dispatch(context, arguments or {}))

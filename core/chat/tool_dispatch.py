@@ -63,7 +63,7 @@ class ToolDispatchContext:
     session: ChatSession
     run: Run
     nesting_depth: int
-    app_root: Path
+    vbot_root: Path
     data_root: Path
     project_cwd: Path | None = None
     project_id: str | None = None
@@ -318,7 +318,7 @@ async def _dispatch_tool_calls(
             session_id=run.session_id,
             run_id=run.id,
             workspace=workspace,
-            app_root=context.app_root,
+            vbot_root=context.vbot_root,
             data_root=context.data_root,
             cwd=_resolve_tool_cwd(context.project_cwd, workspace),
             # The owning run's project rides onto every ToolContext so the

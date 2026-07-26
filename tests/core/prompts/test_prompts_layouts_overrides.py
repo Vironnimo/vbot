@@ -25,10 +25,10 @@ def test_saved_layout_disables_a_core_block(workspace: Path, tmp_path: Path) -> 
         StubStorage(),
         StubTools(),
         StubSkills([StubSkill("agent-cli", "Delegate")]),
-        app_version="0.1.0",
-        app_dir=tmp_path / "app",
+        vbot_version="0.1.0",
+        vbot_root=tmp_path / "app",
         data_root=tmp_path / "data",
-        host="h",
+        server_hostname="h",
         os_name="o",
         current_date=lambda: "2026-05-04",
         block_store=store,
@@ -49,10 +49,10 @@ def test_block_override_replaces_owner_default_text(workspace: Path, tmp_path: P
         StubStorage(),
         StubTools(),
         StubSkills([]),
-        app_version="0.1.0",
-        app_dir=tmp_path / "app",
+        vbot_version="0.1.0",
+        vbot_root=tmp_path / "app",
         data_root=tmp_path / "data",
-        host="h",
+        server_hostname="h",
         os_name="o",
         current_date=lambda: "2026-05-04",
         block_store=store,
@@ -93,7 +93,11 @@ def test_custom_agent_scope_uses_agent_fragments_without_default_fallback(
     # An agent scope reads agent fragments with no default fallback: an unset
     # runtime fragment makes the runtime block empty → it collapses.
     storage = StubStorage()
-    storage.set_agent_prompt_fragment("coder", "runtime.md", "## Custom Runtime\nHost {host}")
+    storage.set_agent_prompt_fragment(
+        "coder",
+        "runtime.md",
+        "## Custom Runtime\nHost {server_hostname}",
+    )
     manager = _manager(tmp_path, storage=storage)
     agent = _agent(workspace, custom_system_prompt_enabled=True)
 

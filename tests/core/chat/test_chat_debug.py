@@ -175,7 +175,7 @@ class _StubProviderConfig:
 
 
 class StubPrompts:
-    app_dir = Path("app")
+    vbot_root = Path("app")
 
     def build_system_prompt(
         self,

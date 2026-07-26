@@ -19,7 +19,7 @@ from core.providers.credentials import ProviderCredentialResolver
 from core.providers.providers import ProviderRegistry
 from core.recall import JsonlSessionRecallBackend, SqliteFtsRecallBackend
 from core.runs import ChatRunManager, RunCancelledError
-from core.runtime.runtime import _PROJECT_ROOT, Runtime, _detect_app_version
+from core.runtime.runtime import _VBOT_ROOT, Runtime, _detect_vbot_version
 from core.sessions import ChatSessionManager
 from core.skills.skills import SKILL_ORIGIN_GLOBAL, SkillRegistry
 from core.storage.layout import DATA_DIRECTORY_RELATIVE_PATHS
@@ -121,26 +121,26 @@ def config(tmp_path: Path) -> Config:
     return Config(data_dir=tmp_path / "data")
 
 
-def test_detect_app_version_matches_pyproject_single_source() -> None:
-    """The reported app version tracks the one source of truth in pyproject.toml.
+def test_detect_vbot_version_matches_pyproject_single_source() -> None:
+    """The reported vBot version tracks the one source of truth in pyproject.toml.
 
     Regression guard for the split where the System Prompt showed a hardcoded
     default instead of the real release version.
     """
-    with (_PROJECT_ROOT / "pyproject.toml").open("rb") as handle:
+    with (_VBOT_ROOT / "pyproject.toml").open("rb") as handle:
         expected = tomllib.load(handle)["project"]["version"]
 
-    assert _detect_app_version() == expected
+    assert _detect_vbot_version() == expected
 
 
 def test_runtime_feeds_detected_version_into_system_prompt(config: Config) -> None:
-    """Runtime wires the detected app version into the System Prompt manager."""
+    """Runtime wires the detected vBot version into the System Prompt manager."""
     logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
 
     runtime.start()
 
-    assert runtime.system_prompts._app_version == _detect_app_version()
+    assert runtime.system_prompts._vbot_version == _detect_vbot_version()
 
 
 def test_runtime_start_no_error(tmp_path: Path):

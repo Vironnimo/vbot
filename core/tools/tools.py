@@ -120,7 +120,7 @@ class ToolContext:
     tool_name: str
     tool_call_index: int
     workspace: Path
-    app_root: Path
+    vbot_root: Path
     data_root: Path
     # Working directory for relative-path resolution by file/shell tools. ``None``
     # falls back to ``workspace`` (the identity-agent home) so every existing
@@ -247,7 +247,7 @@ class ToolExecutionConfig:
     session_id: str
     run_id: str
     workspace: Path
-    app_root: Path
+    vbot_root: Path
     data_root: Path
     # Working directory for relative-path resolution; ``None`` falls back to
     # ``workspace`` so existing execution groups keep today's behavior. See
@@ -809,7 +809,7 @@ class ToolExecutor:
                 tool_name=tool_call.name,
                 tool_call_index=index,
                 workspace=config.workspace,
-                app_root=config.app_root,
+                vbot_root=config.vbot_root,
                 data_root=config.data_root,
                 cwd=config.cwd,
                 project_id=config.project_id,

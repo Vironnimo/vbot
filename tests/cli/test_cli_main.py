@@ -11,7 +11,7 @@ import pytest
 from cli import main as cli_main
 from cli.server_management import CommandResult, HealthProbeResult, ServerInstance, WebUIProbeResult
 from cli.uninstall_management import UninstallMode, UninstallResult
-from core.utils.config import APP_DIR
+from core.utils.config import VBOT_ROOT
 from core.utils.logging import resolve_daily_log_path
 
 
@@ -206,7 +206,7 @@ def test_run_home_prints_app_and_resolved_data_directories_without_server(
 
     assert exit_code == 0
     assert capsys.readouterr().out.splitlines() == [
-        f"app_dir: {APP_DIR}",
+        f"vbot_root: {VBOT_ROOT}",
         f"data_dir: {tmp_path / 'runtime-data'}",
     ]
 

@@ -48,7 +48,7 @@ def make_context(
         tool_name=SESSION_SEARCH_TOOL_NAME,
         tool_call_index=0,
         workspace=workspace,
-        app_root=data_root.parent,
+        vbot_root=data_root.parent,
         data_root=data_root,
         project_id=project_id,
     )
