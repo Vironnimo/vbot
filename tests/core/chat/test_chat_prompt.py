@@ -190,9 +190,9 @@ async def test_rooted_identity_agent_puts_project_files_in_system_prompt(tmp_pat
 
     system = _system_message(adapter)
     assert "## Working Project" in system
-    assert "- Project: vBot" in system
-    assert f"- Project ID: {PROJECT_ID}" in system
-    assert f"- Your Project Workspace: {repo}" in system
+    assert "- Project: `vBot`" in system
+    assert f"- Project ID: `{PROJECT_ID}`" in system
+    assert f"- Your Project Workspace: `{repo}`" in system
     assert ' <file name="AGENTS.md">\nTeam rules\n </file>' in system
     agent_id, agent_body, project_context = runtime.system_prompts.build_calls[-1]
     assert agent_id == "coder"

@@ -249,11 +249,13 @@ class StubPrompts:
         framed_files = f"\n{indented_files}\n" if indented_files else "\n"
         return (
             "## Working Project\n\n"
-            f"- Project: {project_context.project_name}\n"
-            f"- Project ID: {project_context.project_id}\n"
-            f"- Your Project Workspace: {cwd}\n\n"
-            f'<project_context id="{project_context.project_id}" '
-            f'name="{project_context.project_name}" workspace="{cwd}">'
+            f"- Project: `{project_context.project_name}`\n"
+            f"- Project ID: `{project_context.project_id}`\n"
+            f"- Your Project Workspace: `{cwd}`\n\n"
+            "### Project Context\n\n"
+            "Follow the instructions in any files included below and use their contents as "
+            "context for all work in this Project Workspace.\n\n"
+            "<project_context>"
             f"{framed_files}"
             "</project_context>"
         )

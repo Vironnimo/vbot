@@ -85,10 +85,10 @@ class StubStorage:
             "runtime.md": "## Runtime\nOS {operating_system}",
             "working_project.md": (
                 "## Working Project\n"
-                "Project $project_name\n"
-                "Project ID $project_id\n"
-                "Project Workspace $project_workspace\n"
-                "$project_files"
+                "Project {project_name}\n"
+                "Project ID {project_id}\n"
+                "Project Workspace {project_workspace}\n"
+                "{project_files}"
             ),
             "tools.md": "## Tools\n{generated:tool_list}",
             "channels.md": "## Channels\n{generated:channel_list}",
