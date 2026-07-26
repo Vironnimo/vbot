@@ -41,7 +41,7 @@ def _context(tmp_path: Path, *, project_id: str | None = None) -> ToolContext:
         tool_name=PROJECT_TOOL_NAME,
         tool_call_index=0,
         workspace=tmp_path / "workspace",
-        app_root=tmp_path,
+        vbot_root=tmp_path,
         data_root=tmp_path,
         project_id=project_id,
     )

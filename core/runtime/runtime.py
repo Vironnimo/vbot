@@ -129,7 +129,7 @@ from core.tools.process_manager import ProcessManager
 from core.tools.status import register_status_tool
 from core.tools.subagent import register_subagent_tools
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
-from core.utils.config import APP_DIR
+from core.utils.config import VBOT_ROOT
 from core.utils.errors import ConfigError, StorageError
 from core.utils.logging import LogManager
 
@@ -137,17 +137,17 @@ from core.utils.logging import LogManager
 # Project root / default resources directory
 # ---------------------------------------------------------------------------
 
-_PROJECT_ROOT = APP_DIR
-_DEFAULT_RESOURCES_DIR = _PROJECT_ROOT / "resources"
+_VBOT_ROOT = VBOT_ROOT
+_DEFAULT_RESOURCES_DIR = _VBOT_ROOT / "resources"
 _PACKAGE_NAME = "vbot"
-_UNKNOWN_APP_VERSION = "0.0.0+unknown"
+_UNKNOWN_VBOT_VERSION = "0.0.0+unknown"
 _SKILLS_DIRNAME = "skills"
 _AGENTS_DIRNAME = "agents"
 _ARCHIVE_DIRNAME = "archive"
 
 
-def _detect_app_version() -> str:
-    """Resolve the running app version from its single source of truth.
+def _detect_vbot_version() -> str:
+    """Resolve the running vBot version from its single source of truth.
 
     The version lives once, in ``pyproject.toml`` → ``project.version``. Read
     that file directly when it sits next to the running code (the dev and
@@ -158,7 +158,7 @@ def _detect_app_version() -> str:
     time and would otherwise drift behind an edited ``pyproject.toml``.
     """
     try:
-        with (_PROJECT_ROOT / "pyproject.toml").open("rb") as handle:
+        with (_VBOT_ROOT / "pyproject.toml").open("rb") as handle:
             version = tomllib.load(handle)["project"]["version"]
         if isinstance(version, str) and version:
             return version
@@ -167,7 +167,7 @@ def _detect_app_version() -> str:
     try:
         return _installed_package_version(_PACKAGE_NAME)
     except PackageNotFoundError:
-        return _UNKNOWN_APP_VERSION
+        return _UNKNOWN_VBOT_VERSION
 
 
 @dataclass(frozen=True)
@@ -762,8 +762,8 @@ class Runtime:
             self._tools,
             cast(SkillPromptRegistry, self._skills),
             channel_registry=cast(ChannelService, self._channel_service),
-            app_version=str(self._config.get("APP_VERSION") or _detect_app_version()),
-            app_dir=_PROJECT_ROOT,
+            vbot_version=str(self._config.get("VBOT_VERSION") or _detect_vbot_version()),
+            vbot_root=_VBOT_ROOT,
             data_root=self._storage.data_dir,
             memory_provider=self._memory_service,
             block_definitions=self._collect_prompt_block_definitions(),

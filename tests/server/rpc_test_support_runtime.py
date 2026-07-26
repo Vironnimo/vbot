@@ -65,7 +65,7 @@ class StubStorage:
         self._settings: JsonObject = {}
         self._credentials: dict[str, str] = {}
         self._prompt_fragments: dict[str, str] = {
-            "identity_runtime.md": "# Identity Runtime\nDefault identity runtime info.",
+            "identity_runtime.md": "# Identity Environment\nDefault identity environment info.",
             "runtime.md": "# Runtime\nDefault runtime info.",
             "working_project.md": "# Working Project\nDefault working project info.",
             "tools.md": "# Tools\nDefault tools list.",
@@ -556,7 +556,7 @@ class StubStorage:
 
 
 class StubPrompts:
-    app_dir = Path("app")
+    vbot_root = Path("app")
 
     def __init__(self, tools: ToolRegistry) -> None:
         self._tools = tools

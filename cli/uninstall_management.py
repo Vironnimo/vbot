@@ -36,7 +36,7 @@ from cli.server_management import (
     stop_server,
     stop_systemd_server,
 )
-from core.utils.config import APP_DIR, DEFAULT_HOST
+from core.utils.config import DEFAULT_HOST, VBOT_ROOT
 
 _COMMAND_TIMEOUT_SECONDS = 30.0
 _DATA_REMOVE_ATTEMPTS = 3
@@ -103,7 +103,7 @@ def launch_uninstall(
 ) -> UninstallResult:
     """Launch the checkout's platform uninstaller without retaining file locks."""
 
-    install_root = (root or APP_DIR).resolve()
+    install_root = (root or VBOT_ROOT).resolve()
     current_directory = (working_directory or Path.cwd()).resolve()
     home = (home_directory or Path.home()).resolve()
     if remove_data and (data_directory is None or server_host is None or server_port is None):
@@ -308,7 +308,7 @@ def run_uninstall(
 ) -> UninstallResult:
     """Select, confirm, and perform one safe application/data removal scope."""
 
-    install_root = (root or APP_DIR).resolve()
+    install_root = (root or VBOT_ROOT).resolve()
     current_directory = (working_directory or Path.cwd()).resolve()
     home = (home_directory or Path.home()).resolve()
     effective_interactive = sys.stdin.isatty() if interactive is None else interactive

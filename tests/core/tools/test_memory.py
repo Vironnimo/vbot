@@ -29,7 +29,7 @@ def make_context(data_root: Path) -> ToolContext:
         tool_name=MEMORY_TOOL_NAME,
         tool_call_index=0,
         workspace=workspace,
-        app_root=data_root.parent,
+        vbot_root=data_root.parent,
         data_root=data_root,
     )
 
@@ -209,7 +209,7 @@ def test_thrash_guard_is_scoped_per_run(tmp_path: Path) -> None:
         tool_name=MEMORY_TOOL_NAME,
         tool_call_index=0,
         workspace=context.workspace,
-        app_root=context.app_root,
+        vbot_root=context.vbot_root,
         data_root=context.data_root,
     )
     error = assert_failure(

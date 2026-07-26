@@ -61,7 +61,7 @@ def make_context(
         tool_name="bash",
         tool_call_index=0,
         workspace=tmp_path,
-        app_root=tmp_path,
+        vbot_root=tmp_path,
         data_root=tmp_path,
         cwd=cwd,
         emit_hook=emit_hook,

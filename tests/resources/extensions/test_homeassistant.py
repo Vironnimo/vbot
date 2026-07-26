@@ -112,7 +112,7 @@ def make_context(tool_name: str = HA_LIST_ENTITIES_NAME) -> ToolContext:
         tool_name=tool_name,
         tool_call_index=0,
         workspace=Path("/tmp/workspace"),
-        app_root=Path("/tmp/app"),
+        vbot_root=Path("/tmp/app"),
         data_root=Path("/tmp/data"),
     )
 

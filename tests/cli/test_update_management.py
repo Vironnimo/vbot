@@ -22,7 +22,7 @@ from cli.main import dispatch_update_command
 from cli.parser import parse_args
 from cli.server_management import CommandResult, ServerInstance
 from cli.update_management import (
-    UNKNOWN_APP_VERSION,
+    UNKNOWN_VBOT_VERSION,
     CommandRun,
     ReleaseInfo,
     _default_runner,
@@ -58,7 +58,7 @@ def test_read_checkout_version_uses_live_pyproject(tmp_path: Path) -> None:
 def test_read_checkout_version_reports_unknown_for_invalid_project(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
 
-    assert read_checkout_version(tmp_path) == UNKNOWN_APP_VERSION
+    assert read_checkout_version(tmp_path) == UNKNOWN_VBOT_VERSION
 
 
 def _err(stderr: str = "boom") -> CommandRun:

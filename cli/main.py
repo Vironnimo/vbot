@@ -142,8 +142,8 @@ from cli.task_model_management import (
 )
 from cli.tool_management import tool_list
 from cli.uninstall_management import UninstallMode, UninstallResult, run_uninstall
-from cli.update_management import UNKNOWN_APP_VERSION, read_checkout_version, run_update
-from core.utils.config import APP_DIR, Config
+from cli.update_management import UNKNOWN_VBOT_VERSION, read_checkout_version, run_update
+from core.utils.config import VBOT_ROOT, Config
 
 SUCCESS_EXIT_CODE = 0
 FAILURE_EXIT_CODE = 1
@@ -277,7 +277,7 @@ def run(
     args = parse_args(argv)
     if args.area == "home":
         config = Config(data_dir=Path(args.data_dir) if args.data_dir is not None else None)
-        print(f"app_dir: {APP_DIR}")
+        print(f"vbot_root: {VBOT_ROOT}")
         print(f"data_dir: {config.data_dir.expanduser().resolve()}")
         return SUCCESS_EXIT_CODE
 
@@ -1540,7 +1540,7 @@ def print_management_command_result(result: CommandResult) -> None:
 def print_update_command_start(version: str) -> None:
     """Announce the self-update before its long-running work begins."""
 
-    if version == UNKNOWN_APP_VERSION:
+    if version == UNKNOWN_VBOT_VERSION:
         print("Updating vBot. The current version could not be determined...", flush=True)
         return
     print(f"Updating vBot from version {version}...", flush=True)
@@ -1616,8 +1616,8 @@ def _update_completion_message(
     version_before: str,
     version_after: str,
 ) -> str:
-    before_known = version_before != UNKNOWN_APP_VERSION
-    after_known = version_after != UNKNOWN_APP_VERSION
+    before_known = version_before != UNKNOWN_VBOT_VERSION
+    after_known = version_after != UNKNOWN_VBOT_VERSION
     if result.ok:
         if before_known and after_known and version_before != version_after:
             return (

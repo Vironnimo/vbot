@@ -44,7 +44,7 @@ def make_context(tmp_path: Path, *, agent_id: str = AGENT_A) -> ToolContext:
         tool_name=PROCESS_TOOL_NAME,
         tool_call_index=0,
         workspace=tmp_path,
-        app_root=tmp_path,
+        vbot_root=tmp_path,
         data_root=tmp_path,
     )
 

@@ -1903,7 +1903,7 @@ class ChatLoop:
                         session=session,
                         run=run,
                         nesting_depth=self._nesting_depth,
-                        app_root=Path(self._dependencies.get_system_prompts().app_dir),
+                        vbot_root=Path(self._dependencies.get_system_prompts().vbot_root),
                         data_root=Path(self._dependencies.storage.data_dir),
                         project_cwd=context.project_cwd,
                         project_id=project_id,

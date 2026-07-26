@@ -75,11 +75,11 @@ class StubStorage:
     def __init__(self) -> None:
         self._fragments = {
             "identity_runtime.md": (
-                "## Identity Runtime\n"
-                "Host {host}\n"
-                "Version {app_version}\n"
-                "Identity Workspace {agent_workspace}\n"
-                "App {app_dir}\n"
+                "## Identity Environment\n"
+                "Host {server_hostname}\n"
+                "Version {vbot_version}\n"
+                "Identity Workspace {identity_workspace}\n"
+                "Root {vbot_root}\n"
                 "Data {data_root}"
             ),
             "runtime.md": "## Runtime\nOS {os}",
@@ -192,10 +192,10 @@ def _manager(
         StubStorage(),
         StubTools(),
         StubSkills(),
-        app_version="0.1.0",
-        app_dir=tmp_path / "app",
+        vbot_version="0.1.0",
+        vbot_root=tmp_path / "app",
         data_root=tmp_path / "data",
-        host="test-host",
+        server_hostname="test-host",
         os_name="test-os",
         current_date=lambda: "2026-05-04",
         block_store=store or StubBlockStore(),
@@ -534,7 +534,7 @@ async def test_preview_resolves_rooted_identity_skill_pool(tmp_path: Path) -> No
     result = await _preview_prompt(state, {"agent_id": "coder"})
 
     assert skills_for_calls == [("vbot", "coder")]
-    assert "## Identity Runtime" in result["text"]
+    assert "## Identity Environment" in result["text"]
     assert f"Identity Workspace {identity_workspace}" in result["text"]
     assert "## Working Project" in result["text"]
     assert f"Project Workspace {repo}" in result["text"]
@@ -569,10 +569,10 @@ async def test_preview_project_config_agent_gets_only_working_project_runtime(
     assert "Project vBot" in result["text"]
     assert "Project ID vbot" in result["text"]
     assert f"Project Workspace {repo}" in result["text"]
-    assert "## Identity Runtime" not in result["text"]
+    assert "## Identity Environment" not in result["text"]
     assert "Host test-host" not in result["text"]
     assert "Identity Workspace" not in result["text"]
-    assert f"App {tmp_path / 'app'}" not in result["text"]
+    assert f"Root {tmp_path / 'app'}" not in result["text"]
     assert f"Data {tmp_path / 'data'}" not in result["text"]
 
 

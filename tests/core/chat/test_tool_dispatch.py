@@ -59,7 +59,7 @@ class _StubStorage:
 
 
 class _StubSystemPrompts:
-    app_dir = Path.cwd()
+    vbot_root = Path.cwd()
 
 
 def _build_session(tmp_path: Path, agent_id: str = "coder", session_id: str = "session-one") -> Any:
@@ -104,7 +104,7 @@ async def _dispatch_tool_calls(
             session=session,
             run=run,
             nesting_depth=nesting_depth,
-            app_root=Path(runtime.system_prompts.app_dir),
+            vbot_root=Path(runtime.system_prompts.vbot_root),
             data_root=Path(runtime.storage.data_dir),
             project_cwd=project_cwd,
             project_id=project_id,

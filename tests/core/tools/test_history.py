@@ -30,7 +30,7 @@ def _context(session_id: str, *, agent_id: str = "agent") -> ToolContext:
         tool_name=HISTORY_TOOL_NAME,
         tool_call_index=0,
         workspace=Path("workspace"),
-        app_root=Path("app"),
+        vbot_root=Path("app"),
         data_root=Path("data"),
         session_tool_grants=(HISTORY_TOOL_NAME,),
     )

@@ -254,7 +254,7 @@ class IntegrationStorage:
 class IntegrationPrompts:
     def __init__(self, tools: ToolRegistry) -> None:
         self._tools = tools
-        self.app_dir = Path("app")
+        self.vbot_root = Path("app")
 
     def build_system_prompt(
         self,

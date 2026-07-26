@@ -456,9 +456,9 @@ def resolve_block_text(
       resolver, falling back to ``default_text``), expand ``{generated:…}``
       (producers) then ``{include:…}`` (workspace files) — both fail-soft — and
       finally apply the build-time ``replacements`` (the runtime variables
-      ``{host}``/``{model}``/… that stay literal placeholders, not ``{generated:…}``,
-      and are filled here at build). Replacements are plain text substitution, so a
-      block that does not contain a placeholder is untouched.
+      ``{server_hostname}``/``{model}``/… that stay literal placeholders, not
+      ``{generated:…}``, and are filled here at build). Replacements are plain text
+      substitution, so a block that does not contain a placeholder is untouched.
     - **static data** block: its ``default_text`` is rendered **verbatim** —
       never run through marker/include/replacement expansion (mirrors today's
       "agent body substituted last, literally"). A data block that needs expansion
@@ -490,8 +490,8 @@ def resolve_block_text(
 def apply_replacements(text: str, replacements: Mapping[str, str]) -> str:
     """Replace each build-time placeholder in *text* with its value (plain text).
 
-    The single home for the runtime-variable substitution (``{host}``, ``{model}``,
-    …). Plain ``str.replace`` per key — never a format engine — so an unrelated
+    The single home for the runtime-variable substitution (``{server_hostname}``,
+    ``{model}``, …). Plain ``str.replace`` per key — never a format engine — so an unrelated
     ``{…}`` in the text is left untouched and only the known runtime placeholders
     are filled.
     """

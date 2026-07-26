@@ -104,7 +104,7 @@ async def test_agent_sends_message_and_persists_assistant_response(
     adapter = FakeAdapter({"content": "assistant response", "reasoning": None, "tool_calls": None})
     config = Config(data_dir=tmp_path / "data")
     config._data["RESOURCES_PATH"] = str(resources_dir)
-    config._data["APP_VERSION"] = "test-version"
+    config._data["VBOT_VERSION"] = "test-version"
     runtime = Runtime(config)
     monkeypatch.setenv("FAKE_API_KEY", "test-key")
     monkeypatch.setattr(runtime, "get_adapter", lambda provider_id, connection_id: adapter)
@@ -155,7 +155,7 @@ async def test_read_tool_success_persists_result_and_final_response_uses_content
     )
     config = Config(data_dir=tmp_path / "data")
     config._data["RESOURCES_PATH"] = str(resources_dir)
-    config._data["APP_VERSION"] = "test-version"
+    config._data["VBOT_VERSION"] = "test-version"
     runtime = Runtime(config)
     monkeypatch.setenv("FAKE_API_KEY", "test-key")
     monkeypatch.setattr(runtime, "get_adapter", lambda provider_id, connection_id: adapter)
@@ -215,7 +215,7 @@ async def test_read_tool_missing_file_persists_failure_and_run_recovers(
     )
     config = Config(data_dir=tmp_path / "data")
     config._data["RESOURCES_PATH"] = str(resources_dir)
-    config._data["APP_VERSION"] = "test-version"
+    config._data["VBOT_VERSION"] = "test-version"
     runtime = Runtime(config)
     monkeypatch.setenv("FAKE_API_KEY", "test-key")
     monkeypatch.setattr(runtime, "get_adapter", lambda provider_id, connection_id: adapter)
@@ -289,7 +289,7 @@ async def test_read_image_injects_base64_for_vision_model(
     )
     config = Config(data_dir=tmp_path / "data")
     config._data["RESOURCES_PATH"] = str(resources_dir)
-    config._data["APP_VERSION"] = "test-version"
+    config._data["VBOT_VERSION"] = "test-version"
     runtime = Runtime(config)
     monkeypatch.setenv("FAKE_API_KEY", "test-key")
     monkeypatch.setattr(runtime, "get_adapter", lambda provider_id, connection_id: adapter)
@@ -349,7 +349,7 @@ async def test_read_image_degrades_to_note_for_non_vision_model(
     )
     config = Config(data_dir=tmp_path / "data")
     config._data["RESOURCES_PATH"] = str(resources_dir)
-    config._data["APP_VERSION"] = "test-version"
+    config._data["VBOT_VERSION"] = "test-version"
     runtime = Runtime(config)
     monkeypatch.setenv("FAKE_API_KEY", "test-key")
     monkeypatch.setattr(runtime, "get_adapter", lambda provider_id, connection_id: adapter)
@@ -405,7 +405,7 @@ def _full_history_runtime(
 ) -> Runtime:
     config = Config(data_dir=tmp_path / "data")
     config._data["RESOURCES_PATH"] = str(resources_dir)
-    config._data["APP_VERSION"] = "test-version"
+    config._data["VBOT_VERSION"] = "test-version"
     runtime = Runtime(config)
     monkeypatch.setenv("FAKE_API_KEY", "test-key")
     monkeypatch.setattr(runtime, "get_adapter", lambda provider_id, connection_id: adapter)
@@ -557,7 +557,7 @@ def test_runtime_prompt_includes_workspace_files_and_filtered_tool_skill_metadat
 ) -> None:
     config = Config(data_dir=tmp_path / "data")
     config._data["RESOURCES_PATH"] = str(resources_dir)
-    config._data["APP_VERSION"] = "test-version"
+    config._data["VBOT_VERSION"] = "test-version"
     runtime = Runtime(config)
 
     runtime.start()
@@ -737,8 +737,8 @@ def _write_prompt_resources(resources: Path) -> None:
         encoding="utf-8",
     )
     (prompts_dir / "identity_runtime.md").write_text(
-        "Version {app_version}\nIdentity Workspace {agent_workspace}\n"
-        "Host {host}\nApp {app_dir}\nData {data_root}",
+        "Version {vbot_version}\nIdentity Workspace {identity_workspace}\n"
+        "Host {server_hostname}\nRoot {vbot_root}\nData {data_root}",
         encoding="utf-8",
     )
     (prompts_dir / "working_project.md").write_text(

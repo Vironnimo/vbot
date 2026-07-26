@@ -191,7 +191,7 @@ class StubPrompts:
     def __init__(self, tool_registry: ToolRegistry | None = None) -> None:
         self.agent_for_tools: StubAgent | None = None
         self.tool_registry = tool_registry
-        self.app_dir = Path("app")
+        self.vbot_root = Path("app")
         self.build_calls: list[tuple[str, str, Any]] = []
         self.effective_tool_name_calls: list[tuple[str, ...]] = []
         self.render_project_files_calls: list[Any] = []

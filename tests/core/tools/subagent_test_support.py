@@ -93,7 +93,7 @@ def make_context(
         tool_name=tool_name,
         tool_call_index=0,
         workspace=Path("workspace"),
-        app_root=Path("app"),
+        vbot_root=Path("app"),
         data_root=Path("data"),
         emit_hook=emit_hook,
         nesting_depth=nesting_depth,
