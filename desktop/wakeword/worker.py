@@ -69,6 +69,7 @@ _RETRYABLE_STATUS_CODES = frozenset([429, 502, 503, 504])
 _VOICE_CANCEL_PHRASES = frozenset(["abbrechen", "vergiss es"])
 _COMMON_CAPTURE_SAMPLE_RATES = (16000, 48000, 44100, 32000)
 _CAPTURE_DTYPES = ("int16", "float32")
+_AUDIO_BACKEND_LOCK = threading.Lock()
 
 _OUTCOME_SENT = "sent"
 _OUTCOME_CANCELLED = "cancelled"
@@ -379,16 +380,17 @@ class WakewordWorker:
         config = self._read_config()
         requested_device = config.get("microphone")
         device = requested_device if isinstance(requested_device, int) else None
-        capture_format = _select_capture_format(sd, device)
-        native_stream = sd.InputStream(
-            samplerate=capture_format.sample_rate,
-            channels=_CHANNELS,
-            dtype=capture_format.dtype,
-            blocksize=0,
-            device=capture_format.device,
-        )
-        self._stream = ResamplingInputStream(native_stream, capture_format)
-        self._stream.start()
+        with _AUDIO_BACKEND_LOCK:
+            capture_format = _select_capture_format(sd, device)
+            native_stream = sd.InputStream(
+                samplerate=capture_format.sample_rate,
+                channels=_CHANNELS,
+                dtype=capture_format.dtype,
+                blocksize=0,
+                device=capture_format.device,
+            )
+            self._stream = ResamplingInputStream(native_stream, capture_format)
+            self._stream.start()
         self._bridge.publish_runtime_details(
             active_microphone={
                 "index": capture_format.device,
@@ -902,23 +904,49 @@ def list_microphones() -> list[dict[str, Any]]:
 
     devices: list[dict[str, Any]] = []
     try:
-        for i, info in enumerate(sd.query_devices()):
-            if int(info.get("max_input_channels", 0)) > 0:
-                capture_format = _capture_format_for_device(sd, i)
-                devices.append(
-                    {
-                        "index": i,
-                        "name": info.get("name", f"Device {i}"),
-                        "default_sample_rate": int(info.get("default_samplerate", _SAMPLE_RATE)),
-                        "supported": capture_format is not None,
-                        "capture_sample_rate": (
-                            capture_format.sample_rate if capture_format is not None else None
-                        ),
-                    }
-                )
+        with _AUDIO_BACKEND_LOCK:
+            for i, info in enumerate(sd.query_devices()):
+                if int(info.get("max_input_channels", 0)) > 0:
+                    capture_format = _capture_format_for_device(sd, i)
+                    devices.append(
+                        {
+                            "index": i,
+                            "name": info.get("name", f"Device {i}"),
+                            "default_sample_rate": int(
+                                info.get("default_samplerate", _SAMPLE_RATE)
+                            ),
+                            "supported": capture_format is not None,
+                            "capture_sample_rate": (
+                                capture_format.sample_rate if capture_format is not None else None
+                            ),
+                        }
+                    )
     except Exception:
         logger.warning("Failed to enumerate microphones", exc_info=True)
     return devices
+
+
+def refresh_microphone_devices() -> bool:
+    """Reinitialize PortAudio so a retry sees devices connected after startup."""
+    try:
+        import sounddevice as sd  # type: ignore[import-untyped]
+    except ImportError:
+        return False
+
+    terminate = getattr(sd, "_terminate", None)
+    initialize = getattr(sd, "_initialize", None)
+    if not callable(terminate) or not callable(initialize):
+        logger.warning("sounddevice does not expose PortAudio device refresh hooks")
+        return False
+
+    try:
+        with _AUDIO_BACKEND_LOCK:
+            terminate()
+            initialize()
+    except Exception:
+        logger.warning("Failed to refresh microphone devices", exc_info=True)
+        return False
+    return True
 
 
 class UnavailableWakewordWorker:
