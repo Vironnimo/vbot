@@ -356,7 +356,12 @@ async def test_read_image_degrades_to_note_for_non_vision_model(
 
     runtime.start()
     try:
-        agent = runtime.agents.create("coder", "Coder Agent", model="fake-provider/fake-model-v1")
+        agent = runtime.agents.create(
+            "coder",
+            "Coder Agent",
+            model="fake-provider/fake-model-v1",
+            allowed_tools=["read"],
+        )
         Path(agent.workspace).joinpath("diagram.png").write_bytes(_PNG_BYTES)
 
         # The run must complete without raising even though the model lacks vision.

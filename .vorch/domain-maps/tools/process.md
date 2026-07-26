@@ -13,7 +13,8 @@ Manages background process sessions created by `bash`.
 
 - Tool name: `process`
 - Registration: `register_process_tool(registry, process_manager)`
-- Schema: required `action`; optional `session_id`, `timeout_ms`, `offset`, `limit`, `data`, and `eof`.
+- Schema: required `action`; optional `session_id`, `timeout_ms`, `offset`, `limit`, `data`, and `eof`. The model-facing `session_id` description identifies it only as a process session id returned by the Bash Tool, avoiding confusion with Chat and Sub-Agent Session ids.
+- The Tool description positions Process as the immediate progress/control surface and tells the model that a terminal poll or successful kill suppresses a pending automatic completion.
 - Actions: `list`, `poll`, `log`, `write`, `submit`, `kill`, `clear`. `list` entries include `log_file` (path or `null`).
 - Display: summary fields `action` and `session_id`.
 - `ProcessManager.spawn(scope_key, agent_id, argv, *, env, cwd) -> str`
