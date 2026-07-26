@@ -403,6 +403,15 @@ def _maybe_spawn_completion_watcher(
             project_id=context.project_id,
         )
     )
+    try:
+        process_manager.register_completion_notification(
+            process_session_id,
+            context.agent_id,
+            task,
+        )
+    except Exception:
+        task.cancel()
+        raise
     task.add_done_callback(
         lambda completed: _log_background_task_result(
             completed,

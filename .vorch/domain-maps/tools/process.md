@@ -6,6 +6,7 @@ Manages background process sessions created by `bash`.
 
 - Process session ids are distinct from chat Session ids.
 - `ProcessManager` stores process sessions in memory by process `session_id`, scoped by Agent and Run.
+- A background Bash process may carry one tracked automatic completion-notification task plus a manual-acknowledgement bit. `register_completion_notification(...)` attaches that task; `acknowledge_completion(...)` requires a terminal process, records manual delivery, and cancels a notification that is still waiting in the parent Session's Run Queue.
 - Runtime injects Storage's `TemporaryFileManager`. Every process session then leases one file under `<data_dir>/artifacts/temp/bash/` and writes combined output incrementally — decoded via an incremental UTF-8 decoder (chunk-split multibyte safe), ANSI-stripped, and flushed per chunk so the file is readable while the process runs. The file is the *complete* record and is not subject to the in-memory buffer cap. `ProcessSession.log_file` exposes the path (`None` without a temporary-file manager or after a write error, which disables file logging for that session best-effort). The lease remains active through process exit and both stream readers, then starts Storage's 72-hour retention; ProcessManager no longer owns file cleanup.
 
 ## Interfaces
@@ -29,5 +30,6 @@ Manages background process sessions created by `bash`.
 - Core Tool subprocesses must use `subprocess_creation_flags`: the managed command, Bash environment probe, ripgrep search, and Windows `taskkill` helpers stay windowless when vBot runs without a parent console, while managed commands retain their separate process group for tree cancellation.
 - The in-memory finished-Session TTL and the complete-output file retention are separate: evicting a `ProcessSession` does not remove its 72-hour temporary log.
 - `process poll` output is incremental since the previous poll.
+- A terminal `process poll` and a successful `process kill` register their manual completion acknowledgement through `ToolContext.after_result_persisted`; merely returning from the handler is not delivery. This persistence boundary preserves the automatic wake-up if Chat fails before the manual Tool Result reaches Session history, while cancelling an already queued wake-up when persistence succeeds.
 - `waiting_for_input` is a best-effort hint only.
 - All surfaced output is ANSI-stripped at the single decode boundary (`_decode` in `core/tools/process_manager.py`, via `core/utils/ansi.strip_ansi`): raw bytes stay in the buffer so byte offsets and the cap stay accurate, but the `poll`/`log` text the model and UI see has terminal escape/color sequences removed. This stops a model from copying escape codes into file writes and keeps output clean. Consequence: an agent cannot inspect *literal* terminal escape codes through process output — `read` the file directly if that is ever needed.
