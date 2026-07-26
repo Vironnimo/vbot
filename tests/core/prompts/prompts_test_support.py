@@ -35,7 +35,9 @@ from core.tools import HISTORY_TOOL_NAME, ToolRegistry, tool_success
 _RESOURCES_PROMPTS_DIR = Path(__file__).resolve().parents[3] / "resources" / "prompts"
 
 _CORE_FRAGMENT_NAMES = (
+    "identity_runtime.md",
     "runtime.md",
+    "working_project.md",
     "tools.md",
     "tools_list.md",
     "channels.md",

@@ -2,6 +2,7 @@
   { "id": "core:soul", "enabled": true, "source": "core" },
   { "id": "memory:guidance", "enabled": true, "source": "memory" },
   { "id": "core:runtime", "enabled": true, "source": "core" },
+  { "id": "core:identity_runtime", "enabled": true, "source": "core" },
   { "id": "core:tools", "enabled": true, "source": "core" },
   { "id": "tool:project", "enabled": true, "source": "tool" },
   { "id": "tool:subagent", "enabled": true, "source": "tool" },
@@ -10,5 +11,5 @@
   { "id": "core:skills", "enabled": true, "source": "core" },
   { "id": "core:skill_maintenance", "enabled": true, "source": "core" },
   { "id": "core:agent_body", "enabled": true, "source": "core" },
-  { "id": "core:project_files", "enabled": true, "source": "core" }
+  { "id": "core:working_project", "enabled": true, "source": "core" }
 ]

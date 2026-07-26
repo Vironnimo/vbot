@@ -1,10 +1,10 @@
-"""Chat-loop wiring for Project files in the System Prompt.
+"""Chat-loop wiring for Working Project context in the System Prompt.
 
 These tests cover how the chat loop feeds the prompt builder:
 
 - a **project-born** session (``project_id`` set) hands the config-agent body and
-  the project context into ``build_system_prompt`` → body + project files land in
-  the **system prompt**;
+  Project context into ``build_system_prompt`` → body + Working Project context
+  land in the **system prompt**;
 - an **identity** session (no project) passes empty body / no context → the
   prompt is unchanged. Foreign Project Context is loaded only by the explicit
   ``project`` Tool and is therefore outside Chat's request-building path.
@@ -190,9 +190,9 @@ async def test_rooted_identity_agent_puts_project_files_in_system_prompt(tmp_pat
 
     system = _system_message(adapter)
     assert "## Working Project" in system
-    assert (
-        f'You are rooted in the Project "vBot" (id: `{PROJECT_ID}`), located at `{repo}`.' in system
-    )
+    assert "- Project: vBot" in system
+    assert f"- Project ID: {PROJECT_ID}" in system
+    assert f"- Your Project Workspace: {repo}" in system
     assert ' <file name="AGENTS.md">\nTeam rules\n </file>' in system
     agent_id, agent_body, project_context = runtime.system_prompts.build_calls[-1]
     assert agent_id == "coder"

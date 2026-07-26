@@ -22,7 +22,9 @@ def create_prompt_resources(resources_dir: Path, *, include_compaction: bool = T
     prompts_dir = resources_dir / "prompts"
     prompts_dir.mkdir(parents=True)
     prompt_names = [
+        "identity_runtime.md",
         "runtime.md",
+        "working_project.md",
         "tools.md",
         "tools_list.md",
         "channels.md",
@@ -1109,6 +1111,7 @@ def test_copy_agent_prompt_fragments_seeds_editable_defaults_only(tmp_path: Path
 
     assert sorted(path.name for path in written_paths) == [
         "channels.md",
+        "identity_runtime.md",
         "runtime.md",
         "skill_maintenance.md",
         "skills.md",

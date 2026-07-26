@@ -195,7 +195,7 @@ class StubPrompts:
         self.build_calls: list[tuple[str, str, Any]] = []
         self.effective_tool_name_calls: list[tuple[str, ...]] = []
         self.render_project_files_calls: list[Any] = []
-        self.render_working_project_context_calls: list[tuple[str, str, Any]] = []
+        self.render_working_project_context_calls: list[Any] = []
         self.render_skill_catalog_calls = 0
 
     def build_system_prompt(
@@ -218,10 +218,10 @@ class StubPrompts:
             tuple(str(name) for name in (effective_tool_names or ()))
         )
         self.build_calls.append((agent.id, agent_body, project_context))
-        # Echo the body and rendered project files so chat tests can assert what
+        # Echo the body and rendered Working Project files so chat tests can assert what
         # actually reaches the system message, mirroring the real builder's slots
-        # (body in the identity slot, project files after it). Thread read_paths
-        # through render_project_files so project files are reported as read, like
+        # (body in the identity slot, Working Project files after it). Thread read_paths
+        # through render_project_files so auto-load files are reported as read, like
         # the real builder (SOUL/memory are not modeled by this stub).
         on_read = read_paths.append if read_paths is not None else None
         rendered_project = (
@@ -238,27 +238,22 @@ class StubPrompts:
 
     def render_working_project_context(
         self,
-        project_id: str,
-        project_name: str,
         project_context: Any,
         *,
         on_read: Any = None,
     ) -> str:
-        self.render_working_project_context_calls.append(
-            (project_id, project_name, project_context)
-        )
+        self.render_working_project_context_calls.append(project_context)
         files = self.render_project_files(project_context, on_read=on_read)
         indented_files = files.replace("<file ", " <file ").replace("</file>", " </file>")
         cwd = str(project_context.cwd)
         framed_files = f"\n{indented_files}\n" if indented_files else "\n"
         return (
             "## Working Project\n\n"
-            f'You are rooted in the Project "{project_name}" (id: `{project_id}`), '
-            f"located at `{cwd}`.\n"
-            f"Your working directory is set to: `{cwd}`\n"
-            "Below is the Project Context, follow it for every action that affects "
-            "this Project.\n\n"
-            f'<project_context id="{project_id}" name="{project_name}" cwd="{cwd}">'
+            f"- Project: {project_context.project_name}\n"
+            f"- Project ID: {project_context.project_id}\n"
+            f"- Your Project Workspace: {cwd}\n\n"
+            f'<project_context id="{project_context.project_id}" '
+            f'name="{project_context.project_name}" workspace="{cwd}">'
             f"{framed_files}"
             "</project_context>"
         )

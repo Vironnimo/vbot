@@ -63,14 +63,15 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
 
     prompt = manager.build_system_prompt(agent)
 
-    # Runtime block (variables filled).
+    # Shared Runtime and Identity Runtime blocks (variables filled).
     assert "- Host: test-host" in prompt
     assert "- OS: test-os" in prompt
-    assert "- App version: 0.1.0" in prompt
+    assert "- vBot version: 0.1.0" in prompt
     assert "- You are powered by the model openai/gpt-5.2" in prompt
     assert f"{workspace}" in prompt
     assert "- Thinking level: high" in prompt
     assert "- Date: 2026-05-04" in prompt
+    assert "## Working Project" not in prompt
     # Tools block: call-style guidance only. The full name/description list lives
     # in the opt-in core:tools_list block, which ships disabled — the provider tool
     # definitions already carry every description.
@@ -117,8 +118,15 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
     assert "- None" not in prompt
     assert prompt == prompt.strip()
     assert "\n\n\n" not in prompt
-    # Order: SOUL < memory < runtime < tools < channels < skills.
-    order = ["Soul text", "<memory>", "## Runtime", "## Tool Call Style", "## Channels"]
+    # Order: SOUL < memory < runtime < identity runtime < tools < channels < skills.
+    order = [
+        "Soul text",
+        "<memory>",
+        "## Runtime",
+        "## Identity Runtime",
+        "## Tool Call Style",
+        "## Channels",
+    ]
     positions = [prompt.index(section) for section in order]
     assert positions == sorted(positions)
     assert prompt.index("## Channels") < prompt.index("## Available Skills")
@@ -227,6 +235,59 @@ def test_config_agent_body_with_braces_is_not_expanded(tmp_path: Path) -> None:
     assert body in prompt
 
 
+def test_project_config_agent_receives_project_workspace_without_identity_runtime(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    manager = _manager(tmp_path)
+    agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
+    context = ProjectPromptContext.from_project("vbot", "vBot", repo, [])
+
+    prompt = manager.build_system_prompt(
+        agent,
+        agent_body="You are the Project reviewer.",
+        project_context=context,
+    )
+
+    assert "## Runtime" in prompt
+    assert "- OS: test-os" in prompt
+    assert "## Working Project" in prompt
+    assert "- Project: vBot" in prompt
+    assert "- Project ID: vbot" in prompt
+    assert f"- Your Project Workspace: {repo}" in prompt
+    assert f'<project_context id="vbot" name="vBot" workspace="{repo}">' in prompt
+    assert "## Identity Runtime" not in prompt
+    assert "- Host:" not in prompt
+    assert "vBot version:" not in prompt
+    assert "Identity and Memory Workspace:" not in prompt
+    assert "App Path:" not in prompt
+    assert "Data Path:" not in prompt
+
+
+def test_rooted_identity_prompt_distinguishes_identity_and_project_workspaces(
+    workspace: Path,
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    manager = _manager(tmp_path)
+    agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT)
+    context = ProjectPromptContext.from_project("vbot", "vBot", repo, [])
+    snapshot = manager.render_working_project_context(context)
+
+    prompt = manager.build_system_prompt(
+        agent,
+        project_context=context,
+        working_project_context=snapshot,
+    )
+
+    assert "## Identity Runtime" in prompt
+    assert f"- Your Identity and Memory Workspace: {workspace}" in prompt
+    assert "## Working Project" in prompt
+    assert f"- Your Project Workspace: {repo}" in prompt
+
+
 def test_project_files_render_in_order_after_memory(workspace: Path, tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -234,13 +295,18 @@ def test_project_files_render_in_order_after_memory(workspace: Path, tmp_path: P
     (repo / "CONTEXT.md").write_text("Project context", encoding="utf-8")
     manager = _manager(tmp_path)
     agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT)
-    context = ProjectPromptContext.from_project(repo, ["AGENTS.md", "CONTEXT.md"])
+    context = ProjectPromptContext.from_project(
+        "vbot",
+        "vBot",
+        repo,
+        ["AGENTS.md", "CONTEXT.md"],
+    )
 
     prompt = manager.build_system_prompt(agent, project_context=context)
 
-    assert '<file name="AGENTS.md">\nTeam rules\n</file>' in prompt
-    assert '<file name="CONTEXT.md">\nProject context\n</file>' in prompt
-    # Default layout: memory before project files; AGENTS.md before CONTEXT.md.
+    assert ' <file name="AGENTS.md">\nTeam rules\n </file>' in prompt
+    assert ' <file name="CONTEXT.md">\nProject context\n </file>' in prompt
+    # Default layout: memory before Working Project; AGENTS.md before CONTEXT.md.
     assert prompt.index("<memory>") < prompt.index("AGENTS.md")
     assert prompt.index("AGENTS.md") < prompt.index("CONTEXT.md")
 
@@ -254,24 +320,24 @@ def test_working_project_context_uses_exact_rooted_agent_frame(tmp_path: Path) -
     (wiki_dir / "index.md").write_text("Wiki index", encoding="utf-8")
     manager = _manager(tmp_path)
     agent = _agent("", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-    context = ProjectPromptContext.from_project(repo, ["AGENTS.md", "wiki/index.md"])
-    read_paths: list[Path] = []
-
-    snapshot = manager.render_working_project_context(
+    context = ProjectPromptContext.from_project(
         "second-brain",
         "Second Brain",
-        context,
-        on_read=read_paths.append,
+        repo,
+        ["AGENTS.md", "wiki/index.md"],
     )
+    read_paths: list[Path] = []
+
+    snapshot = manager.render_working_project_context(context, on_read=read_paths.append)
 
     assert snapshot == (
         "## Working Project\n\n"
-        f'You are rooted in the Project "Second Brain" (id: `second-brain`), '
-        f"located at `{repo}`.\n"
-        f"Your working directory is set to: `{repo}`\n"
-        "Below is the Project Context, follow it for every action that affects "
-        "this Project.\n\n"
-        f'<project_context id="second-brain" name="Second Brain" cwd="{repo}">\n'
+        "- Project: Second Brain\n"
+        "- Project ID: second-brain\n"
+        f"- Your Project Workspace: {repo}\n\n"
+        "The following Project Context applies to every action in this Project Workspace. "
+        "Follow it throughout your work in this Project.\n\n"
+        f'<project_context id="second-brain" name="Second Brain" workspace="{repo}">\n'
         ' <file name="AGENTS.md">\n'
         "Team rules\n"
         " </file>\n\n"
@@ -322,7 +388,12 @@ def test_build_system_prompt_reports_auto_injected_files_via_read_paths(
     (repo / "CONTEXT.md").write_text("Project context", encoding="utf-8")
     manager = _manager(tmp_path)
     agent = _agent(workspace, memory_prompt_mode=MEMORY_PROMPT_MODE_AGENT_USER)
-    context = ProjectPromptContext.from_project(repo, ["AGENTS.md", "MISSING.md", "CONTEXT.md"])
+    context = ProjectPromptContext.from_project(
+        "vbot",
+        "vBot",
+        repo,
+        ["AGENTS.md", "MISSING.md", "CONTEXT.md"],
+    )
     read_paths: list[Path] = []
 
     manager.build_system_prompt(agent, project_context=context, read_paths=read_paths)
@@ -372,13 +443,13 @@ def test_render_project_files_one_source_for_reminder_and_prompt(tmp_path: Path)
     (repo / "AGENTS.md").write_text("Team rules", encoding="utf-8")
     manager = _manager(tmp_path)
     agent = _agent(tmp_path / "empty-ws", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-    context = ProjectPromptContext.from_project(repo, ["AGENTS.md"])
+    context = ProjectPromptContext.from_project("vbot", "vBot", repo, ["AGENTS.md"])
 
     rendered = manager.render_project_files(context)
     in_prompt = manager.build_system_prompt(agent, project_context=context)
 
     assert rendered == '<file name="AGENTS.md">\nTeam rules\n</file>'
-    assert rendered in in_prompt
+    assert ' <file name="AGENTS.md">\nTeam rules\n </file>' in in_prompt
 
 
 def test_project_files_never_abort_run_on_unreadable_file(
@@ -392,12 +463,17 @@ def test_project_files_never_abort_run_on_unreadable_file(
     (repo / "BINARY.md").write_bytes(b"\xff\xfe\x00\x01 not utf-8")
     manager = _manager(tmp_path)
     agent = _agent(tmp_path / "empty-ws", memory_prompt_mode=MEMORY_PROMPT_MODE_OFF)
-    context = ProjectPromptContext.from_project(repo, ["ADIR", "BINARY.md", "GOOD.md"])
+    context = ProjectPromptContext.from_project(
+        "vbot",
+        "vBot",
+        repo,
+        ["ADIR", "BINARY.md", "GOOD.md"],
+    )
 
     with caplog.at_level(logging.WARNING):
         prompt = manager.build_system_prompt(agent, project_context=context)
 
-    assert '<file name="GOOD.md">\nGood doc\n</file>' in prompt
+    assert ' <file name="GOOD.md">\nGood doc\n </file>' in prompt
     assert '<file name="ADIR">' not in prompt
     assert '<file name="BINARY.md">' not in prompt
     assert "Skipping unreadable project file" in caplog.text

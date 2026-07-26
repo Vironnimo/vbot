@@ -21,13 +21,14 @@ def test_list_blocks_returns_metadata_in_layout_order(tmp_path: Path) -> None:
         "core:soul",
         "memory:guidance",
         "core:runtime",
+        "core:identity_runtime",
         "core:tools",
         "core:tools_list",
         "core:channels",
         "core:skills",
         "core:skill_maintenance",
         "core:agent_body",
-        "core:project_files",
+        "core:working_project",
     ]
     # Ranks are the layout positions, 0-based and contiguous.
     assert [block["rank"] for block in blocks] == list(range(len(blocks)))
@@ -52,6 +53,9 @@ def test_list_blocks_returns_metadata_in_layout_order(tmp_path: Path) -> None:
     assert soul["editable"] is False
     assert "text" not in soul
     assert by_id["core:channels"]["owner"] == "channel"
+    assert by_id["core:identity_runtime"]["owner"] == "identity"
+    assert by_id["core:identity_runtime"]["editable"] is True
+    assert by_id["core:working_project"]["editable"] is False
     # The memory block ships under the memory source/owner.
     assert by_id["memory:guidance"]["source"] == "memory"
     assert by_id["memory:guidance"]["owner"] == "memory"
@@ -265,6 +269,7 @@ def test_reset_layout_restores_bundled_default(tmp_path: Path) -> None:
         "core:soul",
         "memory:guidance",
         "core:runtime",
+        "core:identity_runtime",
         "core:tools",
         "tool:project",
         "tool:subagent",
@@ -273,7 +278,7 @@ def test_reset_layout_restores_bundled_default(tmp_path: Path) -> None:
         "core:skills",
         "core:skill_maintenance",
         "core:agent_body",
-        "core:project_files",
+        "core:working_project",
     ]
     # Everything ships enabled except the opt-in tool list.
     disabled_ids = {entry.id for entry in persisted if not entry.enabled}

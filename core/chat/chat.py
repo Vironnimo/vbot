@@ -761,7 +761,12 @@ class ChatLoop:
             )
             prompt_project = resolve_prompt_project(self._dependencies.projects, working_project_id)
             prompt_context = (
-                ProjectPromptContext.from_project(prompt_project.cwd, prompt_project.auto_load)
+                ProjectPromptContext.from_project(
+                    prompt_project.project_id,
+                    prompt_project.display_name,
+                    prompt_project.cwd,
+                    prompt_project.auto_load,
+                )
                 if prompt_project is not None
                 else None
             )
@@ -949,7 +954,12 @@ class ChatLoop:
         project_cwd = self._resolve_project_cwd(working_project_id)
         prompt_project = resolve_prompt_project(self._dependencies.projects, working_project_id)
         project_prompt_context = (
-            ProjectPromptContext.from_project(prompt_project.cwd, prompt_project.auto_load)
+            ProjectPromptContext.from_project(
+                prompt_project.project_id,
+                prompt_project.display_name,
+                prompt_project.cwd,
+                prompt_project.auto_load,
+            )
             if prompt_project is not None
             else None
         )
@@ -1461,8 +1471,6 @@ class ChatLoop:
 
         read_paths: list[Path] = []
         snapshot = self._dependencies.get_system_prompts().render_working_project_context(
-            prompt_project.project_id,
-            prompt_project.display_name,
             project_context,
             on_read=read_paths.append,
         )
@@ -1582,8 +1590,8 @@ class ChatLoop:
         skill_registry: SkillRegistry | None = None,
         skill_catalog: PinnedSkillCatalog | None = None,
     ) -> _RequestState:
-        # For a project-born session the project files land in the system prompt;
-        # for an identity session both are empty and the prompt is unchanged. The
+        # For a project-born session the Working Project context lands in the system
+        # prompt; for an unrooted identity session it is empty. The
         # config-agent body is inserted verbatim (never re-expanded) by the builder.
         # ``skill_registry`` scopes the skills block to the project pool (``None`` =
         # the global registry); ``skill_catalog`` is the session-pinned snapshot the
