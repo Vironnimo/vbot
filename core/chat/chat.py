@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -196,6 +197,7 @@ if TYPE_CHECKING:
 _LOGGER = get_logger("chat")
 
 MAX_TOOL_ITERATIONS = 1000
+MAX_IDENTICAL_FAILED_TOOL_CALLS = 8
 
 # Session-pinned skill catalog snapshot (the rendered ``<available_skills>`` text),
 # stored in session metadata so a mid-session skill write never shifts the session's
@@ -212,6 +214,60 @@ class _RequestState:
     tools: list[JsonObject]
     allowed_tool_names: tuple[str, ...]
     session_tool_grants: tuple[str, ...]
+
+
+@dataclass
+class _FailedToolCallCircuitBreaker:
+    """Stop one Run after repeated identical failed Tool Calls make no progress."""
+
+    limit: int = MAX_IDENTICAL_FAILED_TOOL_CALLS
+    _last_signature: tuple[str, str] | None = None
+    _consecutive_count: int = 0
+
+    def observe(
+        self,
+        tool_calls: Sequence[ToolCall],
+        tool_messages: Sequence[ChatMessage],
+    ) -> str | None:
+        """Return the Tool name when the failure threshold is reached."""
+
+        for tool_call, tool_message in zip(tool_calls, tool_messages, strict=True):
+            if not _tool_message_is_failure(tool_message):
+                self._reset()
+                continue
+            signature = (
+                tool_call.name,
+                json.dumps(
+                    tool_call.arguments,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            )
+            if signature == self._last_signature:
+                self._consecutive_count += 1
+            else:
+                self._last_signature = signature
+                self._consecutive_count = 1
+            if self._consecutive_count >= self.limit:
+                return tool_call.name
+        return None
+
+    def _reset(self) -> None:
+        self._last_signature = None
+        self._consecutive_count = 0
+
+
+def _tool_message_is_failure(message: ChatMessage) -> bool:
+    """Return whether one canonical Tool message carries a failure envelope."""
+
+    if not isinstance(message.content, str):
+        return False
+    try:
+        result = json.loads(message.content)
+    except (TypeError, ValueError):
+        return False
+    return isinstance(result, dict) and result.get("ok") is False
 
 
 @dataclass(frozen=True)
@@ -1757,6 +1813,7 @@ class ChatLoop:
             run.terminal_payload_extras["session_usage"] = session_usage
         tool_iteration_count = 0
         iteration_number = 1
+        failed_tool_call_breaker = _FailedToolCallCircuitBreaker()
         for _ in range(self._max_tool_iterations + 1):
             run.raise_if_cancelled()
             pending_notes = session.drain_pending_notes()
@@ -1834,6 +1891,7 @@ class ChatLoop:
             # message through its tool results so a writer on another accessor
             # (a channel observed note, session.link_channel) cannot land between
             # them and break the tool-cycle ordering invariant.
+            repeated_failed_tool: str | None = None
             async with self._dependencies.sessions.write_lock(
                 run.agent_id, run.session_id, project_id
             ):
@@ -1929,6 +1987,10 @@ class ChatLoop:
                             self._apply_project_skill_context(context, loaded_project_id)
                     if context.continuation_tracker is not None:
                         context.continuation_tracker.record_tool_results(tool_messages)
+                    repeated_failed_tool = failed_tool_call_breaker.observe(
+                        assistant_message.tool_calls,
+                        tool_messages,
+                    )
                     # A tool may ask to show media (e.g. read on an image): inject it
                     # as a synthetic current-turn user message after the tool results
                     # so the tool-cycle invariant (results before any non-tool message)
@@ -1952,6 +2014,13 @@ class ChatLoop:
                     run.raise_if_cancelled()
                 finally:
                     session.flush_deferred_notes()
+
+            if repeated_failed_tool is not None:
+                raise ToolIterationLimitError(
+                    f"Tool '{repeated_failed_tool}' repeated the same failed call "
+                    f"{MAX_IDENTICAL_FAILED_TOOL_CALLS} times; the circuit breaker "
+                    "stopped this Run."
+                )
 
             if self._compaction_service is not None:
                 compacted_state = await self._maybe_auto_compact_state(

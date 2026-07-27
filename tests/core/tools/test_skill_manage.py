@@ -8,11 +8,13 @@ import os
 from pathlib import Path
 from typing import Any, cast
 
+from core.providers.tool_schema import sanitize_anthropic_tool_input_schema
 from core.skills.authoring import SkillAuthoringService
 from core.skills.skills import SkillRegistry
 from core.storage.layout import DataDirectoryLayout
 from core.tools import (
     SKILL_MANAGE_TOOL_NAME,
+    SKILL_MANAGE_TOOL_PARAMETERS,
     ToolContext,
     ToolRegistry,
     register_skill_manage_tool,
@@ -25,6 +27,10 @@ def _skill_md(
     body: str = "# Demo\n",
 ) -> str:
     return f"---\nname: {name}\ndescription: {description}\n---\n\n{body}"
+
+
+def _request(operation: str, **arguments: object) -> dict[str, object]:
+    return {operation: arguments}
 
 
 class _Harness:
@@ -65,7 +71,7 @@ class _Harness:
         )
 
     def begin(self, *, name: str = "demo", mode: str = "create", scope: str = "own") -> str:
-        result = self.run({"operation": "begin", "name": name, "mode": mode, "scope": scope})
+        result = self.run(_request("begin", name=name, mode=mode, scope=scope))
         assert result["ok"] is True
         return cast(str, cast(dict[str, Any], result["data"])["draft_id"])
 
@@ -77,20 +83,20 @@ class _Harness:
         scope: str = "own",
     ) -> None:
         result = self.run(
-            {
-                "operation": "put_file",
-                "draft_id": draft_id,
-                "path": "SKILL.md",
-                "content": content if content is not None else _skill_md(),
-                "scope": scope,
-            }
+            _request(
+                "put_file",
+                draft_id=draft_id,
+                path="SKILL.md",
+                content=content if content is not None else _skill_md(),
+                scope=scope,
+            )
         )
         assert result["ok"] is True
 
     def commit(self, draft_id: str, *, scope: str = "own") -> dict[str, Any]:
-        validated = self.run({"operation": "validate", "draft_id": draft_id, "scope": scope})
+        validated = self.run(_request("validate", draft_id=draft_id, scope=scope))
         assert validated["ok"] is True
-        result = self.run({"operation": "commit", "draft_id": draft_id, "scope": scope})
+        result = self.run(_request("commit", draft_id=draft_id, scope=scope))
         assert result["ok"] is True
         return result
 
@@ -108,6 +114,122 @@ def _context(agent_id: str, root: Path) -> ToolContext:
         data_root=root,
         cwd=root,
     )
+
+
+def test_provider_schema_exposes_one_strict_object_per_operation(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path)
+    definitions = harness.tools.provider_definitions([SKILL_MANAGE_TOOL_NAME])
+    parameters = cast(dict[str, Any], definitions[0]["parameters"])
+    operations = cast(dict[str, dict[str, Any]], parameters["properties"])
+    expected_fields = {
+        "inspect": {"scope", "name", "draft_id", "path"},
+        "begin": {"scope", "name", "mode", "source"},
+        "put_file": {
+            "scope",
+            "draft_id",
+            "path",
+            "content",
+            "source_path",
+            "executable",
+        },
+        "patch": {"scope", "draft_id", "path", "old_string", "new_string"},
+        "remove_file": {"scope", "draft_id", "path"},
+        "validate": {"scope", "draft_id"},
+        "commit": {"scope", "draft_id"},
+        "abort": {"scope", "draft_id"},
+        "delete": {"scope", "name"},
+    }
+    expected_required = {
+        "inspect": set(),
+        "begin": {"name", "mode"},
+        "put_file": {"draft_id", "path"},
+        "patch": {"draft_id", "old_string", "new_string"},
+        "remove_file": {"draft_id", "path"},
+        "validate": {"draft_id"},
+        "commit": {"draft_id"},
+        "abort": {"draft_id"},
+        "delete": {"name"},
+    }
+
+    assert parameters == SKILL_MANAGE_TOOL_PARAMETERS
+    assert parameters["minProperties"] == 1
+    assert parameters["maxProperties"] == 1
+    assert parameters["additionalProperties"] is False
+    assert set(operations) == set(expected_fields)
+    for operation, schema in operations.items():
+        assert schema["type"] == "object"
+        assert schema["additionalProperties"] is False
+        assert set(cast(dict[str, Any], schema["properties"])) == expected_fields[operation]
+        assert set(cast(list[str], schema["required"])) == expected_required[operation]
+
+
+def test_provider_schema_structurally_models_exclusive_arguments() -> None:
+    operations = cast(
+        dict[str, dict[str, Any]],
+        SKILL_MANAGE_TOOL_PARAMETERS["properties"],
+    )
+
+    assert operations["inspect"]["oneOf"] == [
+        {"required": ["name"]},
+        {"required": ["draft_id"]},
+    ]
+    assert operations["put_file"]["oneOf"] == [
+        {"required": ["content"]},
+        {"required": ["source_path"]},
+    ]
+    assert (
+        sanitize_anthropic_tool_input_schema(
+            SKILL_MANAGE_TOOL_PARAMETERS,
+            tool_name=SKILL_MANAGE_TOOL_NAME,
+        )
+        == SKILL_MANAGE_TOOL_PARAMETERS
+    )
+
+
+def test_flat_or_multiple_operation_calls_are_rejected(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path)
+
+    flat = harness.run({"operation": "begin", "name": "demo", "mode": "create"})
+    multiple = harness.run(
+        {
+            "begin": {"name": "demo", "mode": "create"},
+            "delete": {"name": "demo"},
+        }
+    )
+
+    assert flat["ok"] is False
+    assert (
+        "exactly one top-level operation object" in cast(dict[str, Any], flat["error"])["message"]
+    )
+    assert multiple["ok"] is False
+    assert (
+        "exactly one top-level operation object"
+        in cast(dict[str, Any], multiple["error"])["message"]
+    )
+
+
+def test_begin_requires_name_and_mode_at_dispatch(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path)
+
+    missing_name = harness.run(_request("begin", mode="create"))
+    missing_mode = harness.run(_request("begin", name="demo"))
+
+    for result, field_name in ((missing_name, "name"), (missing_mode, "mode")):
+        assert result["ok"] is False
+        error = cast(dict[str, Any], result["error"])
+        assert error["code"] == "invalid_arguments"
+        assert error["retryable"] is False
+        assert f"{field_name} must be a non-empty string" in error["message"]
+
+
+def test_inspect_rejects_name_and_draft_id_together(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path)
+    draft_id = harness.begin()
+
+    result = harness.run(_request("inspect", name="demo", draft_id=draft_id))
+
+    assert result["ok"] is False
+    assert "exactly one of name or draft_id" in cast(dict[str, Any], result["error"])["message"]
 
 
 def test_create_package_is_invisible_until_commit(
@@ -141,12 +263,12 @@ def test_complete_package_is_loadable_after_commit(tmp_path: Path) -> None:
     draft_id = harness.begin()
     harness.put_skill_md(draft_id)
     support = harness.run(
-        {
-            "operation": "put_file",
-            "draft_id": draft_id,
-            "path": "references/notes.md",
-            "content": "Useful notes\n",
-        }
+        _request(
+            "put_file",
+            draft_id=draft_id,
+            path="references/notes.md",
+            content="Useful notes\n",
+        )
     )
 
     harness.commit(draft_id)
@@ -167,12 +289,12 @@ def test_update_draft_does_not_leak_partial_changes(tmp_path: Path) -> None:
 
     update_id = harness.begin(mode="update")
     patched = harness.run(
-        {
-            "operation": "patch",
-            "draft_id": update_id,
-            "old_string": "old marker",
-            "new_string": "new marker",
-        }
+        _request(
+            "patch",
+            draft_id=update_id,
+            old_string="old marker",
+            new_string="new marker",
+        )
     )
 
     assert patched["ok"] is True
@@ -192,12 +314,12 @@ def test_binary_asset_copies_from_workspace_without_utf8_conversion(tmp_path: Pa
     harness.put_skill_md(draft_id)
 
     result = harness.run(
-        {
-            "operation": "put_file",
-            "draft_id": draft_id,
-            "path": "assets/logo.png",
-            "source_path": str(source),
-        }
+        _request(
+            "put_file",
+            draft_id=draft_id,
+            path="assets/logo.png",
+            source_path=str(source),
+        )
     )
     harness.commit(draft_id)
 
@@ -213,12 +335,12 @@ def test_source_path_outside_workspace_is_rejected(tmp_path: Path) -> None:
     draft_id = harness.begin()
 
     result = harness.run(
-        {
-            "operation": "put_file",
-            "draft_id": draft_id,
-            "path": "references/source.py",
-            "source_path": str(Path(__file__).resolve()),
-        }
+        _request(
+            "put_file",
+            draft_id=draft_id,
+            path="references/source.py",
+            source_path=str(Path(__file__).resolve()),
+        )
     )
 
     assert result["ok"] is False
@@ -230,12 +352,12 @@ def test_non_vbot_package_path_is_rejected(tmp_path: Path) -> None:
     draft_id = harness.begin()
 
     result = harness.run(
-        {
-            "operation": "put_file",
-            "draft_id": draft_id,
-            "path": "agents/openai.yaml",
-            "content": "interface: {}\n",
-        }
+        _request(
+            "put_file",
+            draft_id=draft_id,
+            path="agents/openai.yaml",
+            content="interface: {}\n",
+        )
     )
 
     assert result["ok"] is False
@@ -247,21 +369,21 @@ def test_inspect_returns_manifest_and_selected_text(tmp_path: Path) -> None:
     draft_id = harness.begin()
     harness.put_skill_md(draft_id)
     harness.run(
-        {
-            "operation": "put_file",
-            "draft_id": draft_id,
-            "path": "scripts/run.py",
-            "content": "print('ok')\n",
-            "executable": True,
-        }
+        _request(
+            "put_file",
+            draft_id=draft_id,
+            path="scripts/run.py",
+            content="print('ok')\n",
+            executable=True,
+        )
     )
 
     result = harness.run(
-        {
-            "operation": "inspect",
-            "draft_id": draft_id,
-            "path": "scripts/run.py",
-        }
+        _request(
+            "inspect",
+            draft_id=draft_id,
+            path="scripts/run.py",
+        )
     )
 
     data = cast(dict[str, Any], result["data"])
@@ -277,7 +399,7 @@ def test_invalid_draft_cannot_commit(tmp_path: Path) -> None:
     draft_id = harness.begin()
     harness.put_skill_md(draft_id, content="---\nname: demo\n---\n\nbody\n")
 
-    result = harness.run({"operation": "commit", "draft_id": draft_id})
+    result = harness.run(_request("commit", draft_id=draft_id))
 
     assert result["ok"] is False
     assert "description" in cast(dict[str, Any], result["error"])["message"]
@@ -289,9 +411,9 @@ def test_draft_is_bound_to_scope_and_agent(tmp_path: Path) -> None:
     harness = _Harness(tmp_path)
     draft_id = harness.begin()
 
-    wrong_scope = harness.run({"operation": "inspect", "draft_id": draft_id, "scope": "global"})
+    wrong_scope = harness.run(_request("inspect", draft_id=draft_id, scope="global"))
     wrong_agent = harness.run(
-        {"operation": "inspect", "draft_id": draft_id},
+        _request("inspect", draft_id=draft_id),
         agent_id="other",
     )
 
@@ -305,11 +427,11 @@ def test_abort_discards_draft_without_invalidation(tmp_path: Path) -> None:
     harness = _Harness(tmp_path)
     draft_id = harness.begin()
 
-    result = harness.run({"operation": "abort", "draft_id": draft_id})
+    result = harness.run(_request("abort", draft_id=draft_id))
 
     assert result["ok"] is True
     assert harness.invalidated == []
-    missing = harness.run({"operation": "inspect", "draft_id": draft_id})
+    missing = harness.run(_request("inspect", draft_id=draft_id))
     assert missing["ok"] is False
 
 
@@ -320,7 +442,7 @@ def test_delete_archives_complete_skill_and_invalidates(tmp_path: Path) -> None:
     harness.commit(draft_id)
     harness.invalidated.clear()
 
-    result = harness.run({"operation": "delete", "name": "demo"})
+    result = harness.run(_request("delete", name="demo"))
 
     data = cast(dict[str, Any], result["data"])
     archive_path = Path(cast(str, data["archive_path"]))
@@ -345,7 +467,7 @@ def test_global_commit_reloads_global_pool(tmp_path: Path) -> None:
 def test_removed_direct_create_operation_is_rejected(tmp_path: Path) -> None:
     harness = _Harness(tmp_path)
 
-    result = harness.run({"operation": "create", "name": "demo", "content": _skill_md()})
+    result = harness.run(_request("create", name="demo", content=_skill_md()))
 
     assert result["ok"] is False
     assert cast(dict[str, Any], result["error"])["code"] == "invalid_arguments"

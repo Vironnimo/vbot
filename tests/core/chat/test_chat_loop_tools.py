@@ -13,7 +13,11 @@ from core.chat import (
     ChatError,
     ChatMessage,
 )
-from core.chat.messages import HISTORY_COMPACTION_GUIDANCE
+from core.chat.chat import (
+    MAX_IDENTICAL_FAILED_TOOL_CALLS,
+    _FailedToolCallCircuitBreaker,
+)
+from core.chat.messages import HISTORY_COMPACTION_GUIDANCE, ToolCall
 from core.model_tasks import TASK_IMAGE_UNDERSTANDING
 from core.runs import (
     MODEL_STEP_USAGE_EVENT,
@@ -826,6 +830,92 @@ async def test_max_tool_iteration_stop_raises_chat_error(tmp_path: Path) -> None
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     assert persisted_roles(messages) == ["user", "assistant", "error"]
     assert messages[2].error_kind == "tool_iterations_exceeded"
+
+
+def test_failed_tool_call_circuit_breaker_resets_on_change_and_success() -> None:
+    breaker = _FailedToolCallCircuitBreaker()
+    berlin = ToolCall(id="call-berlin", name="weather", arguments={"city": "Berlin"})
+    paris = ToolCall(id="call-paris", name="weather", arguments={"city": "Paris"})
+
+    def result_message(tool_call: ToolCall, *, ok: bool) -> ChatMessage:
+        result = tool_success({}) if ok else tool_failure("weather_error", "unavailable")
+        return ChatMessage.tool(
+            tool_call_id=tool_call.id,
+            name=tool_call.name,
+            content=json.dumps(result),
+        )
+
+    for _ in range(MAX_IDENTICAL_FAILED_TOOL_CALLS - 1):
+        assert breaker.observe([berlin], [result_message(berlin, ok=False)]) is None
+
+    assert breaker.observe([paris], [result_message(paris, ok=False)]) is None
+    assert breaker.observe([paris], [result_message(paris, ok=True)]) is None
+
+    for _ in range(MAX_IDENTICAL_FAILED_TOOL_CALLS - 1):
+        assert breaker.observe([paris], [result_message(paris, ok=False)]) is None
+    assert breaker.observe([paris], [result_message(paris, ok=False)]) == "weather"
+
+
+@pytest.mark.asyncio
+async def test_identical_failed_tool_call_stops_run_on_eighth_call(tmp_path: Path) -> None:
+    invocation_count = 0
+
+    def failing_handler(
+        _context: ToolContext,
+        _arguments: ToolJsonObject,
+    ) -> JsonObject:
+        nonlocal invocation_count
+        invocation_count += 1
+        return tool_failure("invalid_arguments", "name is required")
+
+    repeated_call = {
+        "name": "skill_manage",
+        "arguments": {"begin": {"mode": "create"}},
+    }
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [{"id": f"call_{index}", **repeated_call}],
+            }
+            for index in range(MAX_IDENTICAL_FAILED_TOOL_CALLS)
+        ]
+    )
+    tools = ToolRegistry()
+    tools.register(
+        "skill_manage",
+        "Manage Skills.",
+        {"type": "object"},
+        failing_handler,
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=StubAgent(
+            id="coder",
+            model="openai/gpt-5.2",
+            allowed_tools=["skill_manage"],
+        ),
+        adapter=adapter,
+        tools=tools,
+    )
+
+    with pytest.raises(ChatError, match="repeated the same failed call 8 times"):
+        await build_chat_loop(runtime).send(
+            "coder",
+            "Create a Skill",
+            session_id="session-one",
+        )
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert invocation_count == MAX_IDENTICAL_FAILED_TOOL_CALLS
+    assert len(adapter.requests) == MAX_IDENTICAL_FAILED_TOOL_CALLS
+    assert messages[-2].role == "error"
+    assert messages[-2].error_kind == "tool_iterations_exceeded"
+    assert persisted_roles(messages) == [
+        "user",
+        *(["assistant", "tool"] * MAX_IDENTICAL_FAILED_TOOL_CALLS),
+        "error",
+    ]
 
 
 @pytest.mark.asyncio
