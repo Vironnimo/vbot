@@ -23,7 +23,7 @@ from core.providers._http_shared import (
     build_async_client,
     classify_http_status,
     decode_response_json,
-    iter_sse_data,
+    iter_sse_events,
     parse_sse_json_data,
     wrap_network_error,
 )
@@ -657,7 +657,13 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         seen_done_marker = False
 
         try:
-            async for data in iter_sse_data(response):
+            async for event in iter_sse_events(response):
+                if event.comment is not None:
+                    yield {"type": "heartbeat"}
+                    continue
+                data = event.data
+                if data is None:
+                    continue
                 if data.strip() == SSE_DONE_MARKER:
                     seen_done_marker = True
                     break

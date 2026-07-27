@@ -4,7 +4,7 @@ Read this reference only for Adapter request/response/SSE translation, shared HT
 
 ## Adapter ownership
 
-`ProviderAdapter` defines `send()`, `stream()`, `normalize_response()`, `aclose()`, and the per-request policy hooks. `stream()` yields only normalized delta types for content, reasoning, Tool calls, opaque reasoning metadata, usage, and finish; raw Provider frames stay private.
+`ProviderAdapter` defines `send()`, `stream()`, `normalize_response()`, `aclose()`, and the per-request policy hooks. `stream()` yields normalized delta types for content, reasoning, Tool calls, opaque reasoning metadata, usage, finish, and transport-only heartbeat; raw Provider frames stay private.
 
 `OpenAICompatibleAdapter` deeply owns generic Chat Completions mechanics. `AnthropicCompatibleAdapter` deeply owns Messages-compatible requests, content blocks, SSE, usage/cache normalization, and retry. Concrete Provider Adapters extend or compose those mechanics only for verified Provider differences. A Provider-owned router may inspect its injected Model lookup and Connection mode, but Runtime never selects an inner wire per Model.
 
@@ -47,7 +47,7 @@ Compatible Adapters resolve a positive output allowance in this order: explicit 
 ## HTTP, retry, and streaming
 
 - Chat Adapters construct HTTP clients through `_http_shared.build_async_client()` so timeouts and optional debug capture are consistent. Task clients deliberately use their separate shared client path and have no chat debug capture.
-- Chat generation uses bounded connect/write/pool timeouts and no read timeout; Chat's normalized-delta stall guard owns open-stream stalls. Remote streams allow 180 seconds between normalized deltas; incomplete SSE events, raw bytes, and heartbeats do not reset the window because Adapter normalization has not yielded Model progress. Local/loopback Providers disable the window.
+- Chat generation uses bounded connect/write/pool timeouts and no read timeout; Chat owns open-stream stalls with separate transport and Model-progress clocks. Remote streams allow 180 seconds without a normalized delta or transport heartbeat and 900 seconds without a normalized Model delta. The shared SSE framer exposes comments separately; the OpenAI-compatible Adapter normalizes comments as transport-only heartbeats because OpenCode Go was verified to buffer a 40,560-character GLM-5.2 `write` Tool Call for 18 heartbeat intervals before releasing it as one Tool delta. Heartbeats keep the connection alive and feed the transient Run status but never count as Assistant, Reasoning, Tool, Usage, or finish progress. Incomplete SSE events and arbitrary raw bytes reset neither clock. Local/loopback Providers disable both windows.
 - HTTP 401/403 are fatal auth errors; 429 and 502/503/504 are retryable; concrete Adapters or task clients can add verified codes through their explicit extra-status policy (Anthropic and embedding task requests opt into 529). Provider POST 500 is fatal. Retryable errors can carry parsed `Retry-After`, used as a capped floor over backoff.
 - Every `httpx.TimeoutException` becomes retryable `ProviderTimeoutError`; other transport failures become retryable `NetworkError`. Malformed 2xx JSON and malformed SSE JSON become non-retryable `ProviderError` with the decode error chained.
 - Adapter retry covers request/stream establishment. Once streaming has begun, mid-stream failures propagate to Chat, which owns preservation/recovery. Only `ProviderStreamingUnsupportedError` triggers the nonstreaming fallback.
@@ -67,6 +67,7 @@ Across Adapters, `input_tokens` means total prompt tokens including cached token
 
 - Base contract: `core/providers/adapter.py`
 - Shared HTTP/errors: `core/providers/_http_shared.py`, `errors.py`, `core/utils/http_status.py`, `core/utils/retry.py`
+- Live Tool Call/heartbeat probe against a configured Provider or captured debug trace: `scripts/probe_provider_tool_call.py`
 - Reasoning: `core/providers/reasoning.py`
 - Request output/context policy: `core/providers/providers.py`, `core/utils/tokens.py`
 - Compatible and concrete Adapter modules: `core/providers/*.py`

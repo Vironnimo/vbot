@@ -222,6 +222,54 @@ describe('terminal-run projection memoization (handoff3 B10)', () => {
   });
 });
 
+describe('Provider heartbeat projection', () => {
+  it('keeps the latest transport liveness measurement on the active run', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-heartbeat',
+    );
+    appendRunEvent(sessionState, {
+      type: 'run_started',
+      run_id: 'run-heartbeat',
+      sequence: 1,
+      payload: { status: CHAT_STATUS_RUNNING },
+    });
+    appendRunEvent(sessionState, {
+      type: 'provider_heartbeat',
+      run_id: 'run-heartbeat',
+      sequence: 2,
+      timestamp: '2026-07-27T10:00:15Z',
+      payload: {
+        idle_seconds: 75.4,
+        state: 'waiting_for_model_delta',
+      },
+    });
+
+    const assistantRun = visibleTimelineItemsForRender(sessionState).find(
+      (item) => item.type === 'assistant_run' && item.runId === 'run-heartbeat',
+    );
+
+    expect(assistantRun.providerHeartbeat).toEqual({
+      idleSeconds: 75.4,
+      timestamp: '2026-07-27T10:00:15Z',
+    });
+    expect(assistantRun.items).toEqual([]);
+
+    appendRunEvent(sessionState, {
+      type: 'assistant_output_delta',
+      run_id: 'run-heartbeat',
+      sequence: 3,
+      payload: { content_delta: 'The buffered call is ready.' },
+    });
+    const progressedRun = visibleTimelineItemsForRender(sessionState).find(
+      (item) => item.type === 'assistant_run' && item.runId === 'run-heartbeat',
+    );
+
+    expect(progressedRun.providerHeartbeat).toBeNull();
+  });
+});
+
 describe('interrupted assistant turn projection', () => {
   function assistantOutputChild(sessionState, runId) {
     const run = visibleTimelineItemsForRender(sessionState).find(

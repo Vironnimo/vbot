@@ -1,5 +1,6 @@
 import {
   RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
+  RUN_EVENT_PROVIDER_HEARTBEAT,
   RUN_EVENT_REASONING_DELTA,
   RUN_EVENT_TOOL_CALL_DELTA,
   RUN_EVENT_TOOL_CALL_STDERR,
@@ -15,6 +16,14 @@ const TERMINAL_RUN_EVENTS = new Set([
   'run_completed',
   'run_failed',
   'run_cancelled',
+]);
+const PROVIDER_PROGRESS_RUN_EVENTS = new Set([
+  RUN_EVENT_REASONING_DELTA,
+  RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
+  RUN_EVENT_TOOL_CALL_DELTA,
+  'reasoning',
+  'assistant_output',
+  'tool_call_started',
 ]);
 
 function isRunActive(sessionState) {
@@ -780,6 +789,7 @@ function createAssistantRunItem({ id, runId, source, sequence, timestamp }) {
     status: CHAT_STATUS_RUNNING,
     timing: null,
     durationMs: null,
+    providerHeartbeat: null,
     items: [],
     reasoning: [],
     outputs: [],
@@ -811,6 +821,20 @@ function appendLiveRunEvent(assistantRun, event) {
     });
     syncAssistantRunCollections(assistantRun);
     return;
+  }
+
+  if (event.type === RUN_EVENT_PROVIDER_HEARTBEAT) {
+    assistantRun.providerHeartbeat = {
+      idleSeconds: Number.isFinite(event.payload?.idle_seconds)
+        ? event.payload.idle_seconds
+        : null,
+      timestamp: event.timestamp ?? null,
+    };
+    return;
+  }
+
+  if (PROVIDER_PROGRESS_RUN_EVENTS.has(event.type)) {
+    assistantRun.providerHeartbeat = null;
   }
 
   if (TERMINAL_RUN_EVENTS.has(event.type)) {
@@ -1397,6 +1421,7 @@ function isAssistantRunEvent(event) {
   return [
     'run_started',
     'model_fallback_activated',
+    RUN_EVENT_PROVIDER_HEARTBEAT,
     RUN_EVENT_REASONING_DELTA,
     'reasoning',
     RUN_EVENT_TOOL_CALL_DELTA,

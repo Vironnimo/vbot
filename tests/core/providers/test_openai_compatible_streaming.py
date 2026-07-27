@@ -109,6 +109,34 @@ class TestStreamSSE:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_stream_exposes_sse_comments_as_transport_heartbeats(self, openai_adapter):
+        """Gateway pings preserve liveness without claiming Model progress."""
+        sse_body = (
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Writing"}}]}\n\n'
+            ": ping - 2026-07-27T10:00:00Z\n\n"
+            ": ping - 2026-07-27T10:00:15Z\n\n"
+            'data: {"id":"chatcmpl-1","choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
+            "data: [DONE]\n\n"
+        )
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200, text=sse_body, headers={"content-type": "text/event-stream"}
+            )
+        )
+
+        chunks = [
+            chunk async for chunk in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2")
+        ]
+
+        assert chunks == [
+            {"type": "content_delta", "text": "Writing"},
+            {"type": "heartbeat"},
+            {"type": "heartbeat"},
+            {"type": "finish", "reason": "stop"},
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_stream_raises_network_error_on_eof_without_done_marker(self, openai_adapter):
         """stream() raises NetworkError when SSE ends without the [DONE] marker."""
         # Arrange
@@ -468,8 +496,8 @@ class TestStreamSSE:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_stream_ignores_non_data_lines(self, openai_adapter):
-        """stream() skips lines that don't start with 'data: '."""
+    async def test_stream_surfaces_comments_and_ignores_other_non_data_lines(self, openai_adapter):
+        """SSE comments become heartbeats while unrelated lines stay ignored."""
         # Arrange — includes comment lines and empty lines
         sse_body = (
             ": this is a comment\n"
@@ -489,8 +517,10 @@ class TestStreamSSE:
             chunks.append(chunk)
 
         # Assert
-        assert len(chunks) == 1
-        assert chunks[0] == {"type": "content_delta", "text": "A"}
+        assert chunks == [
+            {"type": "heartbeat"},
+            {"type": "content_delta", "text": "A"},
+        ]
 
     @respx.mock
     @pytest.mark.asyncio

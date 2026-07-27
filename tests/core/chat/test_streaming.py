@@ -12,6 +12,7 @@ from core.chat.streaming import (
     StreamingAssistantFields,
     StreamingChunkTimeoutError,
     StreamingDeltaError,
+    StreamingProgressTimeoutError,
     StreamRecoveryAction,
     decide_stream_recovery,
     is_local_provider_base_url,
@@ -482,6 +483,56 @@ async def test_iter_with_chunk_timeout_fails_on_stalled_delta() -> None:
     with pytest.raises(StreamingChunkTimeoutError, match="stalled"):
         await anext(iterator)
     assert closed is True
+
+
+async def test_iter_with_chunk_timeout_heartbeats_keep_transport_alive_only() -> None:
+    closed = False
+
+    async def source() -> AsyncIteratorForTest:
+        nonlocal closed
+        try:
+            while True:
+                await asyncio.sleep(0.01)
+                yield {"type": "heartbeat"}
+        finally:
+            closed = True
+
+    iterator = iter_with_chunk_timeout(
+        source(),
+        timeout_seconds=0.2,
+        progress_timeout_seconds=0.08,
+    )
+
+    assert await anext(iterator) == {"type": "heartbeat"}
+    assert await anext(iterator) == {"type": "heartbeat"}
+    with pytest.raises(StreamingProgressTimeoutError, match="no Model delta"):
+        while True:
+            await anext(iterator)
+    assert closed is True
+
+
+async def test_iter_with_chunk_timeout_model_delta_resets_progress_window() -> None:
+    async def source() -> AsyncIteratorForTest:
+        yield {"type": "heartbeat"}
+        await asyncio.sleep(0.02)
+        yield {"type": "content_delta", "text": "still working"}
+        await asyncio.sleep(0.02)
+        yield {"type": "finish", "reason": "stop"}
+
+    chunks = [
+        chunk
+        async for chunk in iter_with_chunk_timeout(
+            source(),
+            timeout_seconds=0.2,
+            progress_timeout_seconds=0.1,
+        )
+    ]
+
+    assert chunks == [
+        {"type": "heartbeat"},
+        {"type": "content_delta", "text": "still working"},
+        {"type": "finish", "reason": "stop"},
+    ]
 
 
 async def test_assistant_fields_includes_usage_in_response_dict_when_set() -> None:

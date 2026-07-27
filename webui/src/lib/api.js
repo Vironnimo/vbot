@@ -26,6 +26,7 @@ export const RUN_EVENT_REASONING_DELTA = 'reasoning_delta';
 export const RUN_EVENT_TOOL_CALL_DELTA = 'tool_call_delta';
 export const RUN_EVENT_TOOL_CALL_STDOUT = 'tool_call_stdout';
 export const RUN_EVENT_TOOL_CALL_STDERR = 'tool_call_stderr';
+export const RUN_EVENT_PROVIDER_HEARTBEAT = 'provider_heartbeat';
 export const RUN_STREAM_HEARTBEAT_EVENT = 'heartbeat';
 
 export const RUN_EVENT_TYPES = [
@@ -45,6 +46,7 @@ export const RUN_EVENT_TYPES = [
   RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
   'assistant_output',
   'model_step_usage',
+  RUN_EVENT_PROVIDER_HEARTBEAT,
   'run_completed',
   'run_cancelled',
   'run_failed',

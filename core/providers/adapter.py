@@ -41,6 +41,7 @@ class ProviderAdapter(ABC):
     - ``{"type": "content_delta", "text": " token"}``
     - ``{"type": "reasoning_delta", "text": " thinking"}``
     - ``{"type": "tool_call_delta", "id": "...", "name_delta": "...", "arguments_delta": "..."}``
+    - ``{"type": "heartbeat"}`` (transport liveness only; not Model progress)
     - ``{"type": "reasoning_meta", "reasoning_meta": {...}}``
     - ``{"type": "usage", "input_tokens": 1, "output_tokens": 1}``
       (optional ``cache_read_tokens`` / ``cache_write_tokens`` ints when the
