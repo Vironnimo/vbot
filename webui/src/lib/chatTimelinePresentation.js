@@ -1189,6 +1189,13 @@ function humanReadableToolLabel(toolName, argumentsValue) {
     }
   }
 
+  const requestOperation = trimmedString(
+    isPlainObject(args.request) ? args.request.operation : null,
+  );
+  if (requestOperation) {
+    return requestOperation;
+  }
+
   if (toolNameHasHiddenArguments(toolName)) {
     return '';
   }
