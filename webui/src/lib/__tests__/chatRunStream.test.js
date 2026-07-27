@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createChatRunStream } from '../chatRunStream.js';
 import {
   CHAT_STATUS_IDLE,
+  CHAT_STATUS_CANCELLED,
   CHAT_STATUS_RUNNING,
   agentActivityStatus,
   addServerQueuedMessage,
@@ -10,6 +11,8 @@ import {
   ensureSessionState,
   resetStaleRun,
   setAgents,
+  startRun,
+  visibleTimelineItemsForRender,
 } from '../chatState.js';
 
 function makeStreamHarness({
@@ -399,6 +402,131 @@ describe('createChatRunStream().applyConnectionSnapshot()', () => {
     expect(sessionState.hasUnreadCompletion).toBe(false);
     expect(agentActivityStatus(chatState, DISPLAYED_AGENT_ID)).toBe('idle');
     expect(harness.subAgentRunStatuses).toEqual({});
+  });
+});
+
+describe('createChatRunStream().mergeRunResponse()', () => {
+  it('settles the active Run and its open Sub-Agent from the cancel RPC response', () => {
+    const chatState = createChatState();
+    const close = vi.fn();
+    const subscribeRunEvents = vi.fn(() => ({ close }));
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: 'orchestrator@project-one',
+      displayedSessionId: 'session-one',
+      subscribeRunEvents,
+    });
+    const sessionState = ensureSessionState(
+      chatState,
+      'orchestrator@project-one',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-parent',
+      status: CHAT_STATUS_RUNNING,
+      sse_url: '/api/runs/run-parent/events',
+    });
+    harness.stream.subscribeToRun(sessionState, '/api/runs/run-parent/events');
+
+    expect(
+      harness.stream.mergeRunResponse(sessionState, {
+        run_id: 'run-parent',
+        status: CHAT_STATUS_CANCELLED,
+        events: [
+          {
+            type: 'run_started',
+            run_id: 'run-parent',
+            agent_id: 'orchestrator',
+            session_id: 'session-one',
+            sequence: 1,
+            payload: { status: CHAT_STATUS_RUNNING },
+          },
+          {
+            type: 'tool_call_started',
+            run_id: 'run-parent',
+            agent_id: 'orchestrator',
+            session_id: 'session-one',
+            sequence: 2,
+            payload: {
+              tool_call: {
+                id: 'call-subagent',
+                index: 0,
+                name: 'subagent',
+                arguments: {
+                  agent_id: 'planner',
+                  background: false,
+                  content: 'Create the plan',
+                },
+              },
+            },
+          },
+          {
+            type: 'run_cancelled',
+            run_id: 'run-parent',
+            agent_id: 'orchestrator',
+            session_id: 'session-one',
+            sequence: 3,
+            payload: { status: CHAT_STATUS_CANCELLED },
+          },
+        ],
+      }),
+    ).toBe(true);
+
+    expect(sessionState.status).toBe(CHAT_STATUS_CANCELLED);
+    expect(sessionState.currentRun?.status).toBe(CHAT_STATUS_CANCELLED);
+    expect(close).toHaveBeenCalledOnce();
+    expect(harness.syncSessionQueue).toHaveBeenCalledOnce();
+    expect(visibleTimelineItemsForRender(sessionState)[0].tools[0].status).toBe(
+      CHAT_STATUS_CANCELLED,
+    );
+
+    harness.stream.mergeRunResponse(sessionState, {
+      run_id: 'run-parent',
+      status: CHAT_STATUS_CANCELLED,
+      events: [...sessionState.runEvents],
+    });
+
+    expect(sessionState.runEvents).toHaveLength(3);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('does not let a delayed cancel response overwrite a newer Run', () => {
+    const chatState = createChatState();
+    const harness = makeStreamHarness({ chatState });
+    const sessionState = ensureSessionState(
+      chatState,
+      'orchestrator',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-new',
+      status: CHAT_STATUS_RUNNING,
+      sse_url: '/api/runs/run-new/events',
+    });
+
+    expect(
+      harness.stream.mergeRunResponse(sessionState, {
+        run_id: 'run-old',
+        status: CHAT_STATUS_CANCELLED,
+        events: [
+          {
+            type: 'run_cancelled',
+            run_id: 'run-old',
+            sequence: 3,
+            payload: { status: CHAT_STATUS_CANCELLED },
+          },
+        ],
+      }),
+    ).toBe(false);
+
+    expect(sessionState.status).toBe(CHAT_STATUS_RUNNING);
+    expect(sessionState.currentRun).toEqual(
+      expect.objectContaining({
+        runId: 'run-new',
+        status: CHAT_STATUS_RUNNING,
+      }),
+    );
+    expect(sessionState.runEvents).toEqual([]);
   });
 });
 

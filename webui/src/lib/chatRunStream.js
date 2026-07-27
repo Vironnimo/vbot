@@ -176,6 +176,18 @@ export function createChatRunStream({
     }
   }
 
+  function mergeRunResponse(sessionState, run) {
+    if (
+      !sessionState ||
+      !run?.run_id ||
+      sessionState.currentRun?.runId !== run.run_id
+    ) {
+      return false;
+    }
+    mergeRetainedRunEvents(sessionState, run.events);
+    return true;
+  }
+
   function queueRunEvent(sessionState, eventData) {
     const sessionKey = sessionState.key;
     pendingRunEventQueues[sessionKey] ??= [];
@@ -779,6 +791,7 @@ export function createChatRunStream({
     closeSubscriptions,
     closeSubscriptionsExcept,
     handleServerEvents,
+    mergeRunResponse,
     subscribeToRun,
   };
 }

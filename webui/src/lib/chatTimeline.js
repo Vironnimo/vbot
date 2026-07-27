@@ -307,18 +307,32 @@ function selectTrackedRunTimelineSource(
     (item) => !matchesActiveRunTimelineItem(item, activeRunId),
   );
 
-  if (
-    isTrackedRunTerminal(sessionState, liveAssistantRun) &&
-    hasPersistedAssistantTurn(currentTurnMessages)
-  ) {
-    return [...historyItems, ...remainingLiveItems];
-  }
-
   const activeUserItem = historyMessageItem(
     sessionState.messages[currentUserIndex],
   );
   const prefixHistoryItems = historyTimelineItems(prefixMessages);
   const trailingHistoryItems = historyTimelineItems(trailingMessages);
+
+  if (
+    isTrackedRunTerminal(sessionState, liveAssistantRun) &&
+    hasPersistedAssistantTurn(currentTurnMessages)
+  ) {
+    if (!hasPersistedRunSummary(currentTurnMessages, activeRunId)) {
+      const currentTurnHistoryItems = historyTimelineItems(currentTurnMessages);
+      applyLiveTerminalStateToHistory(
+        currentTurnHistoryItems,
+        liveAssistantRun,
+        activeRunId,
+      );
+      return [
+        ...prefixHistoryItems,
+        ...currentTurnHistoryItems,
+        ...trailingHistoryItems,
+        ...remainingLiveItems,
+      ];
+    }
+    return [...historyItems, ...remainingLiveItems];
+  }
 
   return [
     ...prefixHistoryItems,
@@ -519,6 +533,45 @@ function hasPersistedAssistantTurn(messages) {
   return (messages ?? []).some((message) =>
     ['assistant', 'tool'].includes(message?.role),
   );
+}
+
+function hasPersistedRunSummary(messages, runId) {
+  return (messages ?? []).some(
+    (message) =>
+      message?.role === 'run_summary' && matchesRunId(message.run_id, runId),
+  );
+}
+
+function applyLiveTerminalStateToHistory(
+  historyItems,
+  liveAssistantRun,
+  runId,
+) {
+  const historyAssistantRun = (historyItems ?? []).find(
+    (item) => item?.type === 'assistant_run',
+  );
+  if (!historyAssistantRun) {
+    return;
+  }
+
+  historyAssistantRun.runId = runId;
+  historyAssistantRun.run_id = runId;
+  historyAssistantRun.status = liveAssistantRun.status;
+  historyAssistantRun.timing =
+    liveAssistantRun.timing ?? historyAssistantRun.timing;
+  historyAssistantRun.startTimestamp =
+    liveAssistantRun.startTimestamp ?? historyAssistantRun.startTimestamp;
+  historyAssistantRun.endTimestamp =
+    liveAssistantRun.endTimestamp ?? historyAssistantRun.endTimestamp;
+  historyAssistantRun.durationMs =
+    liveAssistantRun.durationMs ?? historyAssistantRun.durationMs;
+  historyAssistantRun.terminalEvent = liveAssistantRun.terminalEvent;
+  if (liveAssistantRun.terminalEvent?.type === 'run_cancelled') {
+    markPendingToolsCancelled(
+      historyAssistantRun,
+      liveAssistantRun.terminalEvent,
+    );
+  }
 }
 
 function matchesActiveRunTimelineItem(item, activeRunId) {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  CHAT_STATUS_CANCELLED,
   CHAT_STATUS_COMPLETED,
   CHAT_STATUS_RUNNING,
   appendRunEvent,
@@ -144,6 +145,100 @@ describe('chat state helpers', () => {
         status: CHAT_STATUS_COMPLETED,
         outputs: [expect.objectContaining({ content: 'The file says A.' })],
         tools: [],
+      }),
+    ]);
+  });
+
+  it('overlays a live cancellation onto history that has not loaded its Run Summary yet', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'orchestrator@project-one',
+      'session-one',
+    );
+    startRun(sessionState, {
+      run_id: 'run-parent',
+      sse_url: '/api/runs/run-parent/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+
+    loadHistory(sessionState, [
+      { id: 'user-one', role: 'user', content: 'Start the planner' },
+      {
+        id: 'assistant-subagent',
+        role: 'assistant',
+        content: 'I will start the planner.',
+        tool_calls: [
+          {
+            id: 'call-subagent',
+            name: 'subagent',
+            arguments: {
+              agent_id: 'planner',
+              background: false,
+              content: 'Create the plan',
+            },
+          },
+        ],
+      },
+    ]);
+
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-parent',
+      sequence: 1,
+      payload: {
+        message: {
+          id: 'user-one',
+          role: 'user',
+          content: 'Start the planner',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-parent',
+      sequence: 2,
+      payload: {
+        tool_call: {
+          id: 'call-subagent',
+          index: 0,
+          name: 'subagent',
+          arguments: {
+            agent_id: 'planner',
+            background: false,
+            content: 'Create the plan',
+          },
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'run_cancelled',
+      run_id: 'run-parent',
+      sequence: 3,
+      timestamp: '2026-07-27T12:11:57Z',
+      payload: {
+        status: CHAT_STATUS_CANCELLED,
+        timing: { duration_ms: 1509909 },
+      },
+    });
+
+    const timelineItems = visibleTimelineItemsForRender(sessionState);
+    const assistantRun = timelineItems.find(
+      (item) => item.type === 'assistant_run',
+    );
+
+    expect(timelineItems).toHaveLength(2);
+    expect(assistantRun).toEqual(
+      expect.objectContaining({
+        id: 'history-run-assistant-subagent',
+        runId: 'run-parent',
+        status: CHAT_STATUS_CANCELLED,
+        durationMs: 1509909,
+      }),
+    );
+    expect(assistantRun.tools).toEqual([
+      expect.objectContaining({
+        toolCallId: 'call-subagent',
+        status: CHAT_STATUS_CANCELLED,
       }),
     ]);
   });
