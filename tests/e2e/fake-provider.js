@@ -133,6 +133,10 @@ function toolCall(name, args) {
   return { args, name };
 }
 
+function skillManageCall(operation, args) {
+  return toolCall("skill_manage", { [operation]: args });
+}
+
 function plannedToolResponse(prompt, results, offeredTools) {
   if (prompt.includes("E2E_MEMORY_PROMPT_SEED")) {
     if (resultsFor(results, "memory").length === 0) {
@@ -154,8 +158,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
     if (manageResults.length === 0) {
       return {
         calls: [
-          toolCall("skill_manage", {
-            operation: "begin",
+          skillManageCall("begin", {
             name: "e2e-learned-command",
             mode: "create",
           }),
@@ -166,8 +169,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
     if (manageResults.length === 1) {
       return {
         calls: [
-          toolCall("skill_manage", {
-            operation: "put_file",
+          skillManageCall("put_file", {
             draft_id: draftId,
             path: "SKILL.md",
             content:
@@ -179,8 +181,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
     if (manageResults.length === 2) {
       return {
         calls: [
-          toolCall("skill_manage", {
-            operation: "validate",
+          skillManageCall("validate", {
             draft_id: draftId,
           }),
         ],
@@ -189,8 +190,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
     if (manageResults.length === 3) {
       return {
         calls: [
-          toolCall("skill_manage", {
-            operation: "commit",
+          skillManageCall("commit", {
             draft_id: draftId,
           }),
         ],
@@ -203,8 +203,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
     if (resultsFor(results, "skill_manage").length === 0) {
       return {
         calls: [
-          toolCall("skill_manage", {
-            operation: "delete",
+          skillManageCall("delete", {
             name: "e2e-learned-command",
           }),
         ],
@@ -362,8 +361,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
     if (manageResults.length === 0) {
       return {
         calls: [
-          toolCall("skill_manage", {
-            operation: "begin",
+          skillManageCall("begin", {
             name: "e2e-authored",
             mode: "create",
           }),
@@ -374,8 +372,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
     if (manageResults.length === 1) {
       return {
         calls: [
-          toolCall("skill_manage", {
-            operation: "put_file",
+          skillManageCall("put_file", {
             draft_id: createDraftId,
             path: "SKILL.md",
             content:
@@ -387,8 +384,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
     if (manageResults.length === 2) {
       return {
         calls: [
-          toolCall("skill_manage", {
-            operation: "put_file",
+          skillManageCall("put_file", {
             draft_id: createDraftId,
             path: "references/evidence.txt",
             content: "temporary support-file evidence",
@@ -399,8 +395,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
     if (manageResults.length === 3) {
       return {
         calls: [
-          toolCall("skill_manage", {
-            operation: "patch",
+          skillManageCall("patch", {
             draft_id: createDraftId,
             old_string: "Original instruction marker.",
             new_string: "Updated instruction marker.",
@@ -411,8 +406,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
     if (manageResults.length === 4) {
       return {
         calls: [
-          toolCall("skill_manage", {
-            operation: "validate",
+          skillManageCall("validate", {
             draft_id: createDraftId,
           }),
         ],
@@ -421,8 +415,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
     if (manageResults.length === 5) {
       return {
         calls: [
-          toolCall("skill_manage", {
-            operation: "commit",
+          skillManageCall("commit", {
             draft_id: createDraftId,
           }),
         ],
@@ -434,8 +427,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
     if (manageResults.length === 6) {
       return {
         calls: [
-          toolCall("skill_manage", {
-            operation: "begin",
+          skillManageCall("begin", {
             name: "e2e-authored",
             mode: "update",
           }),
@@ -446,8 +438,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
     if (manageResults.length === 7) {
       return {
         calls: [
-          toolCall("skill_manage", {
-            operation: "remove_file",
+          skillManageCall("remove_file", {
             draft_id: updateDraftId,
             path: "references/evidence.txt",
           }),
@@ -457,8 +448,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
     if (manageResults.length === 8) {
       return {
         calls: [
-          toolCall("skill_manage", {
-            operation: "validate",
+          skillManageCall("validate", {
             draft_id: updateDraftId,
           }),
         ],
@@ -467,8 +457,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
     if (manageResults.length === 9) {
       return {
         calls: [
-          toolCall("skill_manage", {
-            operation: "commit",
+          skillManageCall("commit", {
             draft_id: updateDraftId,
           }),
         ],
@@ -477,8 +466,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
     if (manageResults.length === 10) {
       return {
         calls: [
-          toolCall("skill_manage", {
-            operation: "delete",
+          skillManageCall("delete", {
             name: "e2e-authored",
           }),
         ],

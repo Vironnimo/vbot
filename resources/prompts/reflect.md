@@ -17,6 +17,8 @@ Preference order — pick the earliest that fits:
 
 Every create or update uses an isolated draft. Abort rather than commit an invalid or unwanted draft. You can write your own private Skills here. If the flawed Skill is bundled, global, or Project-owned, note the problem in your final summary instead of editing it.
 
+`skill_manage` takes exactly one top-level operation object per call: `{"begin":{"name":"wiki-research","mode":"create"}}`, then for example `{"put_file":{"draft_id":"<returned id>","path":"SKILL.md","content":"..."}}`. Never send flat `operation`, `name`, or `draft_id` fields; copy every required field from the selected operation's schema.
+
 Do NOT capture (these harden into false constraints that bite later):
 
 - Environment-dependent failures: missing binaries, unconfigured credentials, "command not found". The user can fix these — they are not durable rules.

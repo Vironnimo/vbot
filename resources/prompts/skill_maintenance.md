@@ -2,6 +2,8 @@
 
 You own the private Skills in your Skill home; keep them alive with the `skill_manage` tool. A vBot Skill package contains exactly `SKILL.md` plus optional files under `scripts/`, `references/`, and `assets/`.
 
+`skill_manage` takes exactly one top-level operation object per call: `{"begin":{"name":"wiki-research","mode":"create"}}`, then for example `{"put_file":{"draft_id":"<returned id>","path":"SKILL.md","content":"..."}}`. Never send flat `operation`, `name`, or `draft_id` fields; copy the operation-specific schema and every required field exactly.
+
 - After completing a complex multi-step task, fixing a tricky error, or discovering a non-trivial workflow, offer to save the approach as a skill so a future session starts already knowing it.
 - When one of your private Skills turns out wrong, outdated, or incomplete, update it immediately: inspect the published package, begin an `update` draft, make every change in the draft, validate it, and commit it. Abort the draft if the update should not be published.
 - When the updated Skill was already active in the current Session, load it again with the `skill` Tool after commit; changed content becomes a new activation while identical content remains deduplicated.

@@ -25,6 +25,10 @@ from core.skills.authoring import (
     SkillPackageFile,
     SkillPackageInspection,
 )
+from core.skills.skill_validator import (
+    MAX_SKILL_NAME_LENGTH,
+    SKILL_NAME_CHARSET_FRAGMENT,
+)
 from core.tools.arguments import (
     ToolArgumentError,
     coerce_bool,
@@ -44,11 +48,14 @@ from core.utils.logging import get_logger
 
 SKILL_MANAGE_TOOL_DESCRIPTION = (
     "Manage complete vBot Skill packages (SKILL.md plus optional scripts/, "
-    "references/, and assets/). Inspect a published package; begin an isolated "
-    "create/update draft; put, patch, or remove draft files; validate; then commit "
-    "the whole package or abort it. put_file accepts UTF-8 content or copies a "
-    "binary source_path from your Workspace/current Project. delete archives the "
-    "published package for recovery. Defaults to your private Skill home; use "
+    "references/, and assets/). Call with exactly one top-level operation object, "
+    'for example {"begin":{"name":"wiki-research","mode":"create"}}. Each operation '
+    "exposes only its valid arguments and structurally requires everything it needs. "
+    "Inspect a published package or owned draft; begin an isolated create/update "
+    "draft; put, patch, or remove draft files; validate; then commit the whole "
+    "package or abort it. put_file accepts UTF-8 content or copies a binary "
+    "source_path from your Workspace/current Project. delete archives the published "
+    "package for recovery. Omit scope for your private Skill home; use "
     "scope='global' ONLY when the user explicitly requested a global Skill."
 )
 
@@ -63,101 +70,208 @@ _OPERATIONS = (
     "abort",
     "delete",
 )
-_KNOWN_FIELDS = frozenset(
-    {
-        "operation",
-        "scope",
-        "name",
-        "mode",
-        "draft_id",
-        "path",
-        "content",
-        "source_path",
-        "executable",
-        "old_string",
-        "new_string",
-        "source",
-    }
-)
 _OWN_SCOPE = "own"
 _GLOBAL_SCOPE = "global"
 _SCOPES = (_OWN_SCOPE, _GLOBAL_SCOPE)
 _DRAFT_MODES = ("create", "update")
 _LOGGER = get_logger("tools.skill_manage")
 
+_SCOPE_PARAMETER: JsonObject = {
+    "type": "string",
+    "enum": list(_SCOPES),
+    "default": _OWN_SCOPE,
+    "description": (
+        "Target Skill home. Omit for 'own', the calling Agent's private home. Use "
+        "'global' only when the user explicitly requested a Skill shared by all Agents."
+    ),
+}
+_NAME_PARAMETER: JsonObject = {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": MAX_SKILL_NAME_LENGTH,
+    "pattern": f"^{SKILL_NAME_CHARSET_FRAGMENT}$",
+    "description": (
+        "Published Skill directory and front-matter name. Use a short trigger-safe name "
+        "that starts with a letter or digit and otherwise uses letters, digits, '-' or "
+        "'_', for example 'wiki-research'."
+    ),
+}
+_DRAFT_ID_PARAMETER: JsonObject = {
+    "type": "string",
+    "pattern": "^[a-f0-9]{32}$",
+    "description": "Opaque draft_id returned by begin; copy it exactly.",
+}
+_PACKAGE_PATH_PARAMETER: JsonObject = {
+    "type": "string",
+    "minLength": 1,
+    "pattern": r"^(SKILL\.md|(?:scripts|references|assets)/.+)$",
+    "description": (
+        "Package-relative path: SKILL.md or a file below scripts/, references/, "
+        "or assets/. No other top-level path is valid."
+    ),
+}
+
+
+def _operation_parameters(
+    description: str,
+    properties: JsonObject,
+    *,
+    required: Sequence[str] = (),
+    exactly_one_of: Sequence[str] = (),
+) -> JsonObject:
+    """Build one strict operation object for the provider-visible schema."""
+
+    schema: JsonObject = {
+        "type": "object",
+        "description": description,
+        "properties": {"scope": _SCOPE_PARAMETER, **properties},
+        "required": list(required),
+        "additionalProperties": False,
+    }
+    if exactly_one_of:
+        schema["oneOf"] = [{"required": [name]} for name in exactly_one_of]
+    return schema
+
+
 SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
+    "description": (
+        "Choose exactly one operation property. Its value is the complete argument object "
+        "for that operation; never send flat operation/name/draft_id fields."
+    ),
     "properties": {
-        "operation": {
-            "type": "string",
-            "enum": list(_OPERATIONS),
-            "description": (
-                "inspect a published package or draft; begin a create/update draft; "
-                "put_file, patch, or remove_file inside that draft; validate; commit "
-                "or abort the draft; delete archives a published Skill."
-            ),
-        },
-        "scope": {
-            "type": "string",
-            "enum": list(_SCOPES),
-            "description": (
-                "'own' (default) is your private Skill home. 'global' is the shared "
-                "global pool; use it only when the user explicitly requested global."
-            ),
-        },
-        "name": {
-            "type": "string",
-            "description": (
-                "Published Skill/directory name; required by inspect, begin, and delete."
-            ),
-        },
-        "mode": {
-            "type": "string",
-            "enum": list(_DRAFT_MODES),
-            "description": "begin: create a new package or update a copy of an existing package.",
-        },
-        "draft_id": {
-            "type": "string",
-            "description": "Draft id returned by begin; required for every draft operation.",
-        },
-        "path": {
-            "type": "string",
-            "description": (
-                "Package-relative file path: SKILL.md or a file below scripts/, "
-                "references/, or assets/. inspect may select one text file to return; "
-                "patch defaults to SKILL.md."
-            ),
-        },
-        "content": {
-            "type": "string",
-            "description": "put_file: UTF-8 text content (mutually exclusive with source_path).",
-        },
-        "source_path": {
-            "type": "string",
-            "description": (
-                "put_file: copy a regular text or binary file from the current Project "
-                "or Workspace byte-for-byte (mutually exclusive with content)."
-            ),
-        },
-        "executable": {
-            "type": "boolean",
-            "description": "put_file: set executable mode; true is valid only below scripts/.",
-        },
-        "old_string": {
-            "type": "string",
-            "description": "patch: exact existing UTF-8 text to replace; it must be unique.",
-        },
-        "new_string": {
-            "type": "string",
-            "description": "patch: replacement text; it may be empty.",
-        },
-        "source": {
-            "type": "string",
-            "description": "begin: optional provenance label recorded in SKILL.md on commit.",
-        },
+        "inspect": _operation_parameters(
+            "Inspect one published Skill by name or one owned draft by draft_id. Provide "
+            "exactly one of name or draft_id; path optionally returns one UTF-8 file.",
+            {
+                "name": _NAME_PARAMETER,
+                "draft_id": _DRAFT_ID_PARAMETER,
+                "path": _PACKAGE_PATH_PARAMETER,
+            },
+            exactly_one_of=("name", "draft_id"),
+        ),
+        "begin": _operation_parameters(
+            "Create an isolated draft. mode='create' starts an absent Skill; mode='update' "
+            "copies an existing published Skill. Save the returned draft_id for every "
+            "following draft operation.",
+            {
+                "name": _NAME_PARAMETER,
+                "mode": {
+                    "type": "string",
+                    "enum": list(_DRAFT_MODES),
+                    "description": (
+                        "'create' requires the published name to be absent; 'update' "
+                        "requires it to exist and copies the complete package."
+                    ),
+                },
+                "source": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": (
+                        "Optional concise provenance label recorded under metadata.vbot "
+                        "when the draft is committed."
+                    ),
+                },
+            },
+            required=("name", "mode"),
+        ),
+        "put_file": _operation_parameters(
+            "Write one complete draft file. Provide exactly one of UTF-8 text content or "
+            "source_path for a byte-preserving copy from the current Project/Workspace.",
+            {
+                "draft_id": _DRAFT_ID_PARAMETER,
+                "path": _PACKAGE_PATH_PARAMETER,
+                "content": {
+                    "type": "string",
+                    "description": (
+                        "Complete UTF-8 file content. May be empty. Mutually exclusive "
+                        "with source_path."
+                    ),
+                },
+                "source_path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": (
+                        "Existing regular file inside the current Project or Workspace to "
+                        "copy byte-for-byte. Mutually exclusive with content."
+                    ),
+                },
+                "executable": {
+                    "type": "boolean",
+                    "description": (
+                        "Whether the destination should be executable. true is valid only "
+                        "for files below scripts/. Omit with source_path to preserve the "
+                        "source file's executable mode; omission with content means false."
+                    ),
+                },
+            },
+            required=("draft_id", "path"),
+            exactly_one_of=("content", "source_path"),
+        ),
+        "patch": _operation_parameters(
+            "Replace one unique exact UTF-8 string inside a draft file. path defaults to "
+            "SKILL.md; new_string may be empty to remove the match.",
+            {
+                "draft_id": _DRAFT_ID_PARAMETER,
+                "path": _PACKAGE_PATH_PARAMETER,
+                "old_string": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Exact existing text; it must occur exactly once.",
+                },
+                "new_string": {
+                    "type": "string",
+                    "description": "Exact replacement text; an empty string deletes the match.",
+                },
+            },
+            required=("draft_id", "old_string", "new_string"),
+        ),
+        "remove_file": _operation_parameters(
+            "Remove one support file from an owned draft. SKILL.md cannot be removed.",
+            {
+                "draft_id": _DRAFT_ID_PARAMETER,
+                "path": _PACKAGE_PATH_PARAMETER,
+            },
+            required=("draft_id", "path"),
+        ),
+        "validate": _operation_parameters(
+            "Validate the complete isolated package before commit and return its manifest "
+            "and diagnostics without changing the published Skill.",
+            {"draft_id": _DRAFT_ID_PARAMETER},
+            required=("draft_id",),
+        ),
+        "commit": _operation_parameters(
+            "Validate and atomically publish the complete owned draft, then discard the "
+            "draft. Call validate first so diagnostics can be handled deliberately.",
+            {"draft_id": _DRAFT_ID_PARAMETER},
+            required=("draft_id",),
+        ),
+        "abort": _operation_parameters(
+            "Discard one owned draft without changing the published Skill.",
+            {"draft_id": _DRAFT_ID_PARAMETER},
+            required=("draft_id",),
+        ),
+        "delete": _operation_parameters(
+            "Move one published Skill package into the recoverable archive.",
+            {"name": _NAME_PARAMETER},
+            required=("name",),
+        ),
     },
-    "required": ["operation"],
+    "minProperties": 1,
+    "maxProperties": 1,
     "additionalProperties": False,
+}
+
+_OPERATION_FIELDS: dict[str, frozenset[str]] = {
+    "inspect": frozenset({"scope", "name", "draft_id", "path"}),
+    "begin": frozenset({"scope", "name", "mode", "source"}),
+    "put_file": frozenset({"scope", "draft_id", "path", "content", "source_path", "executable"}),
+    "patch": frozenset({"scope", "draft_id", "path", "old_string", "new_string"}),
+    "remove_file": frozenset({"scope", "draft_id", "path"}),
+    "validate": frozenset({"scope", "draft_id"}),
+    "commit": frozenset({"scope", "draft_id"}),
+    "abort": frozenset({"scope", "draft_id"}),
+    "delete": frozenset({"scope", "name"}),
 }
 
 
@@ -171,39 +285,33 @@ def make_skill_manage_handler(
     """Return the vBot Skill package-management handler."""
 
     def skill_manage_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        unknown_arguments = set(arguments) - _KNOWN_FIELDS
-        if unknown_arguments:
-            names = ", ".join(sorted(unknown_arguments))
-            return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
-
-        operation = arguments.get("operation")
-        if not isinstance(operation, str) or operation not in _OPERATIONS:
-            allowed = ", ".join(_OPERATIONS)
-            return tool_failure("invalid_arguments", f"operation must be one of: {allowed}")
-
-        scope = arguments.get("scope", _OWN_SCOPE)
-        if not isinstance(scope, str) or scope not in _SCOPES:
-            allowed = ", ".join(_SCOPES)
-            return tool_failure("invalid_arguments", f"scope must be one of: {allowed}")
-        target_root = (
-            resolve_global_skills_dir()
-            if scope == _GLOBAL_SCOPE
-            else resolve_agent_skills_dir(context.agent_id)
-        )
-
         try:
+            operation, operation_arguments = _extract_operation(arguments)
+            scope = operation_arguments.get("scope", _OWN_SCOPE)
+            if not isinstance(scope, str) or scope not in _SCOPES:
+                allowed = ", ".join(_SCOPES)
+                raise ToolArgumentError(f"scope must be one of: {allowed}")
+            target_root = (
+                resolve_global_skills_dir()
+                if scope == _GLOBAL_SCOPE
+                else resolve_agent_skills_dir(context.agent_id)
+            )
             data, live_mutation = _apply_operation(
                 authoring,
                 target_root,
                 operation,
-                arguments,
+                operation_arguments,
                 context=context,
                 scope=scope,
             )
         except ToolArgumentError as error:
-            return tool_failure("invalid_arguments", str(error))
+            return tool_failure("invalid_arguments", str(error), retryable=False)
         except SkillAuthoringError as error:
-            return tool_failure("skill_write_rejected", "; ".join(error.diagnostics))
+            return tool_failure(
+                "skill_write_rejected",
+                "; ".join(error.diagnostics),
+                retryable=False,
+            )
         except OSError as error:
             return tool_failure("skill_write_error", str(error))
 
@@ -224,6 +332,27 @@ def make_skill_manage_handler(
     return skill_manage_handler
 
 
+def _extract_operation(arguments: JsonObject) -> tuple[str, JsonObject]:
+    """Return the one selected operation and its strict argument object."""
+
+    if len(arguments) != 1:
+        allowed = ", ".join(_OPERATIONS)
+        raise ToolArgumentError(
+            f"skill_manage requires exactly one top-level operation object: {allowed}"
+        )
+    operation, raw_arguments = next(iter(arguments.items()))
+    if operation not in _OPERATIONS:
+        allowed = ", ".join(_OPERATIONS)
+        raise ToolArgumentError(f"operation must be one of: {allowed}")
+    if not isinstance(raw_arguments, dict):
+        raise ToolArgumentError(f"{operation} must be an object")
+    unknown_arguments = set(raw_arguments) - _OPERATION_FIELDS[operation]
+    if unknown_arguments:
+        names = ", ".join(sorted(unknown_arguments))
+        raise ToolArgumentError(f"Unknown {operation} argument(s): {names}")
+    return operation, cast(JsonObject, raw_arguments)
+
+
 def _apply_operation(
     authoring: SkillAuthoringService,
     target_root: Path,
@@ -235,7 +364,10 @@ def _apply_operation(
 ) -> tuple[JsonObject, bool]:
     if operation == "inspect":
         draft_id = optional_string(arguments.get("draft_id"), field_name="draft_id")
+        name = optional_string(arguments.get("name"), field_name="name")
         selected_path = optional_string(arguments.get("path"), field_name="path")
+        if (draft_id is None) == (name is None):
+            raise ToolArgumentError("inspect requires exactly one of name or draft_id")
         if draft_id is not None:
             inspection = authoring.inspect_draft(
                 target_root,
@@ -248,10 +380,9 @@ def _apply_operation(
                 "draft_id": draft_id,
                 **_inspection_data(inspection),
             }, False
-        name = required_string(arguments.get("name"), field_name="name")
         inspection = authoring.inspect_published(
             target_root,
-            name,
+            cast(str, name),
             selected_path=selected_path,
         )
         return {"operation": operation, **_inspection_data(inspection)}, False
@@ -496,8 +627,26 @@ def register_skill_manage_tool(
             resolve_global_skills_dir,
             reload_skills,
         ),
-        display=ToolDisplay(summary_fields=("operation", "name", "draft_id", "scope")),
+        display=ToolDisplay(summary_builder=_skill_manage_display_summary),
     )
+
+
+def _skill_manage_display_summary(arguments: JsonObject) -> str | None:
+    """Summarize the nested operation call without exposing file content."""
+
+    if len(arguments) != 1:
+        return None
+    operation, raw_arguments = next(iter(arguments.items()))
+    if operation not in _OPERATIONS or not isinstance(raw_arguments, dict):
+        return None
+    identifier = raw_arguments.get("name") or raw_arguments.get("draft_id")
+    scope = raw_arguments.get("scope")
+    parts = [operation]
+    if isinstance(identifier, str) and identifier.strip():
+        parts.append(identifier)
+    if isinstance(scope, str) and scope.strip():
+        parts.append(scope)
+    return " · ".join(parts)
 
 
 __all__ = [
