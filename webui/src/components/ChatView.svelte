@@ -228,6 +228,19 @@
   // `agent@projekt` otherwise) — what address-parsing RPCs like session.list
   // need (trap 2). The session drawer lists sessions through it.
   let activeAgentAddress = $derived(activeAddressing().agentAddress);
+  // Agent-bar selection follows the owner of the displayed Session, while the
+  // underlying selected Agent remains the return target for an override. This
+  // keeps nested Sub-Agent navigation truthful without losing the root context.
+  let displayedIdentityAgentId = $derived.by(() => {
+    const addressing = activeAddressing();
+    return addressing.projectId ? '' : addressing.bareAgentId;
+  });
+  let displayedProjectAgentId = $derived.by(() => {
+    const addressing = activeAddressing();
+    return addressing.projectId === selectedProjectId
+      ? addressing.bareAgentId
+      : '';
+  });
   let subAgentSessionActive = $derived(
     Boolean(viewingSessionId) && viewingSubAgentSession,
   );
@@ -287,9 +300,37 @@
       if (!parentProjectId && !agentById(parentAgentId)) {
         return;
       }
+      const parentAgentAddress = formatAgentAddress(
+        parentAgentId,
+        parentProjectId,
+      );
+      let parentSession = null;
+      if (parentAgentAddress === childAddress) {
+        parentSession = (listed?.sessions ?? []).find(
+          (session) => String(session?.id ?? '').trim() === parentSessionId,
+        );
+      } else {
+        try {
+          const parentListed =
+            await chatController.listSessions(parentAgentAddress);
+          if (displayedSessionKey() !== displayKey) {
+            return;
+          }
+          parentSession = (parentListed?.sessions ?? []).find(
+            (session) => String(session?.id ?? '').trim() === parentSessionId,
+          );
+        } catch {
+          // Parent navigation remains usable when only its nesting metadata
+          // cannot be loaded; the destination history can still resolve.
+        }
+      }
       subAgentParentTarget = {
-        agentAddress: formatAgentAddress(parentAgentId, parentProjectId),
+        agentAddress: parentAgentAddress,
         sessionId: parentSessionId,
+        isSubAgentSession:
+          parentSession?.is_subagent_session === true ||
+          (parentSession?.subagent_parent !== null &&
+            typeof parentSession?.subagent_parent === 'object'),
       };
     } catch {
       // Best effort — the banner button falls back to return-to-current.
@@ -1517,15 +1558,19 @@
 
   // User-initiated navigation from a child session to its parent session: a
   // normal session navigation, so it reports up and becomes a history push —
-  // Back returns to the child. A parent that is not the owning agent's
-  // current session displays as a normal past-session view with its own
-  // past-session banner.
-  const navigateToParentSession = async ({ agentAddress, sessionId }) => {
+  // Back returns to the child. A parent that is itself a Sub-Agent Session
+  // keeps the contextual banner so another parent step remains available;
+  // the root parent returns to ordinary Session presentation.
+  const navigateToParentSession = async ({
+    agentAddress,
+    sessionId,
+    isSubAgentSession = false,
+  }) => {
     const ownAddress = activeOwnAgentAddress();
     const ownCurrentSessionId = projectAgentActive
       ? (projectAgentSessions[ownAddress] ?? '')
       : (selectedAgent(chatState)?.current_session_id ?? '');
-    viewingSubAgentSession = false;
+    viewingSubAgentSession = isSubAgentSession;
     if (agentAddress === ownAddress && sessionId === ownCurrentSessionId) {
       clearSessionOverride();
     } else {
@@ -1996,7 +2041,7 @@
   <ChatHeader
     agents={chatState.agents}
     agentStatuses={identityAgentStatuses}
-    selectedAgentId={projectAgentActive ? '' : chatState.selectedAgentId}
+    selectedAgentId={displayedIdentityAgentId}
     loadingAgents={chatState.loadingAgents}
     {activeAgent}
     {activeSessionState}
@@ -2066,7 +2111,7 @@
             <button
               type="button"
               class="agent-tab chat-view__project-tab"
-              class:active={member.agent_id === selectedProjectAgentId}
+              class:active={member.agent_id === displayedProjectAgentId}
               aria-label={memberActivityLabel}
               use:tooltip={memberActivityLabel}
               onclick={() => handleSelectProjectAgent(member.agent_id)}
