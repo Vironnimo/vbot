@@ -88,6 +88,7 @@ IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
         },
         "aspect_ratio": {
             "type": "string",
+            "pattern": r".*\S.*",
             "description": (
                 "Optional. Desired aspect ratio, e.g. 1:1, 16:9, 3:2, 9:16. "
                 "Sent as a native parameter for models that support it, "
@@ -97,6 +98,7 @@ IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
         },
         "resolution": {
             "type": "string",
+            "pattern": r".*\S.*",
             "description": (
                 "Optional. Desired output resolution, e.g. 1K, 2K, 4K (higher "
                 "means more detail and quality). Sent as a native parameter for "
@@ -113,9 +115,8 @@ IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
 def _collect_call_options(arguments: JsonObject) -> JsonObject:
     """Gather the supplied per-call intent knobs into a routing dict.
 
-    Only the two curated knobs are read; each is coerced through the shared
-    lenient string parser (blank is treated as omitted). Blank/absent values
-    are left out so the execution layer's no-options path runs unchanged.
+    Only the two curated knobs are read. Absent values are left out so the
+    execution layer's no-options path runs unchanged.
     """
 
     call_options: JsonObject = {}
@@ -132,8 +133,6 @@ def _collect_source_paths(context: ToolContext, arguments: JsonObject) -> tuple[
     raw_paths = arguments.get("source_images")
     if raw_paths is None or raw_paths == []:
         return ()
-    if isinstance(raw_paths, str):
-        raw_paths = [raw_paths]
     if not isinstance(raw_paths, list):
         raise ValueError("source_images must be an array of local image paths")
 
@@ -152,8 +151,6 @@ def _collect_analysis_paths(context: ToolContext, arguments: JsonObject) -> tupl
     """Resolve required analysis-image paths against the Run's effective cwd."""
 
     raw_paths = arguments.get("images")
-    if isinstance(raw_paths, str):
-        raw_paths = [raw_paths]
     if not isinstance(raw_paths, list):
         raise ValueError("images must be an array of local image paths")
 
@@ -202,6 +199,7 @@ def register_analyze_image_tool(registry: ToolRegistry, image_service: Any) -> N
         ANALYZE_IMAGE_TOOL_DESCRIPTION,
         ANALYZE_IMAGE_TOOL_PARAMETERS,
         make_analyze_image_handler(image_service),
+        result_schema={"type": "object"},
         display=ToolDisplay(summary_fields=("prompt", "images")),
     )
 
@@ -279,6 +277,7 @@ def register_image_generation_tool(registry: ToolRegistry, image_service: Any) -
         IMAGE_GENERATION_TOOL_DESCRIPTION,
         IMAGE_GENERATION_TOOL_PARAMETERS,
         make_image_generation_handler(image_service),
+        result_schema={"type": "object", "required": ["message", "images"]},
         display=ToolDisplay(
             summary_fields=("prompt", "source_images", "aspect_ratio", "resolution")
         ),

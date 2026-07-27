@@ -99,7 +99,8 @@ def test_explicit_agent_targets_narrow_nested_subagent_operations() -> None:
         allowed_agents=["worker"],
     )
 
-    operations = definitions[0]["parameters"]["properties"]
+    branches = definitions[0]["parameters"]["properties"]["request"]["anyOf"]
+    operations = {branch["properties"]["operation"]["enum"][0]: branch for branch in branches}
     assert operations["start"]["properties"]["agent_id"]["enum"] == [
         "orchestrator",
         "worker",
@@ -108,7 +109,13 @@ def test_explicit_agent_targets_narrow_nested_subagent_operations() -> None:
         "orchestrator",
         "worker",
     ]
-    assert "enum" not in SUBAGENT_TOOL_PARAMETERS["properties"]["start"]["properties"]["agent_id"]
+    source_branches = SUBAGENT_TOOL_PARAMETERS["properties"]["request"]["anyOf"]
+    source_start = next(
+        branch
+        for branch in source_branches
+        if branch["properties"]["operation"]["enum"] == ["start"]
+    )
+    assert "enum" not in source_start["properties"]["agent_id"]
 
 
 def test_empty_additional_targets_do_not_remove_subagent_tools_from_dispatch() -> None:

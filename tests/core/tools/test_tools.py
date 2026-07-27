@@ -34,6 +34,7 @@ READ_FILE_SCHEMA = {
     "type": "object",
     "properties": {"path": {"type": "string"}},
     "required": ["path"],
+    "additionalProperties": False,
 }
 WRITE_FILE_SCHEMA = {
     "type": "object",
@@ -42,6 +43,7 @@ WRITE_FILE_SCHEMA = {
         "content": {"type": "string"},
     },
     "required": ["path", "content"],
+    "additionalProperties": False,
 }
 
 
@@ -1151,7 +1153,10 @@ class TestToolExecutor:
         )
 
         assert results == [
-            tool_failure("invalid_arguments", "Tool arguments must be a JSON object")
+            tool_failure(
+                "invalid_arguments",
+                "arguments: [] is not of type 'object' [type]",
+            )
         ]
 
     @pytest.mark.asyncio
@@ -1217,7 +1222,13 @@ class TestToolExecutor:
                 release_second.set()
             return tool_success({"id": context.tool_call_id})
 
-        registry.register("slow", "Slow tool for testing.", {"type": "object"}, slow_handler)
+        registry.register(
+            "slow",
+            "Slow tool for testing.",
+            {"type": "object"},
+            slow_handler,
+            parallel_safe=True,
+        )
         executor = ToolExecutor(registry)
 
         results = await executor.execute_many(
@@ -1248,7 +1259,13 @@ class TestToolExecutor:
             active_count -= 1
             return tool_success({"id": context.tool_call_id})
 
-        registry.register("same", "Same tool for testing.", {"type": "object"}, same_tool_handler)
+        registry.register(
+            "same",
+            "Same tool for testing.",
+            {"type": "object"},
+            same_tool_handler,
+            parallel_safe=True,
+        )
         executor = ToolExecutor(registry, per_run_limit=2, global_limit=2)
 
         results = await executor.execute_many(
@@ -1261,6 +1278,66 @@ class TestToolExecutor:
 
         assert max_active_count == 2
         assert results == [tool_success({"id": "call-1"}), tool_success({"id": "call-2"})]
+
+    @pytest.mark.asyncio
+    async def test_serial_tool_is_a_barrier_between_parallel_safe_groups(self) -> None:
+        registry = ToolRegistry()
+        events: list[str] = []
+        active_safe_calls = 0
+
+        async def safe_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+            nonlocal active_safe_calls
+            active_safe_calls += 1
+            events.append(f"start:{context.tool_call_id}")
+            await asyncio.sleep(0.01)
+            events.append(f"end:{context.tool_call_id}")
+            active_safe_calls -= 1
+            return tool_success({"id": context.tool_call_id})
+
+        async def serial_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+            assert active_safe_calls == 0
+            events.append(f"start:{context.tool_call_id}")
+            await asyncio.sleep(0)
+            events.append(f"end:{context.tool_call_id}")
+            return tool_success({"id": context.tool_call_id})
+
+        registry.register(
+            "safe",
+            "Parallel-safe tool for testing.",
+            {"type": "object"},
+            safe_handler,
+            parallel_safe=True,
+        )
+        registry.register(
+            "serial",
+            "Serial tool for testing.",
+            {"type": "object"},
+            serial_handler,
+        )
+        executor = ToolExecutor(registry)
+
+        results = await executor.execute_many(
+            [
+                ToolCall(id="safe-1", name="safe", arguments={}),
+                ToolCall(id="safe-2", name="safe", arguments={}),
+                ToolCall(id="serial", name="serial", arguments={}),
+                ToolCall(id="safe-3", name="safe", arguments={}),
+                ToolCall(id="safe-4", name="safe", arguments={}),
+            ],
+            make_execution_config(allowed_tools=["*"]),
+        )
+
+        assert events.index("end:safe-1") < events.index("start:serial")
+        assert events.index("end:safe-2") < events.index("start:serial")
+        assert events.index("end:serial") < events.index("start:safe-3")
+        assert events.index("end:serial") < events.index("start:safe-4")
+        assert [result["data"]["id"] for result in results] == [
+            "safe-1",
+            "safe-2",
+            "serial",
+            "safe-3",
+            "safe-4",
+        ]
 
     @pytest.mark.asyncio
     async def test_semaphore_queues_overflow_with_lowered_limits(self) -> None:

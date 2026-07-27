@@ -351,6 +351,9 @@ def test_start_registers_builtin_tools_once(config: Config):
     tool_names = sorted(tool.name for tool in runtime.tools.list_tools())
     assert tool_names == CANONICAL_REGISTERED_TOOLS
     assert runtime.tools.get("history").session_scoped is True
+    for tool in runtime.tools.list_tools():
+        assert tool.result_schema is not None
+        assert len(tool.contract.schema_fingerprint) == 64
 
 
 def test_runtime_selects_jsonl_recall_backend_by_default(config: Config) -> None:

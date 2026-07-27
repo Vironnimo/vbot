@@ -30,7 +30,8 @@ HISTORY_TOOL_NAME = "history"
 HISTORY_TOOL_DESCRIPTION = (
     "Verify original records from this Session after Compaction. Use overview to inspect "
     "checkpoint sections, search for exact text, read a section chronologically, or around "
-    "to recover complete records near a known message id. Choose exactly one operation object. "
+    "to recover complete records near a known message id. Set request.operation to the intended "
+    "History operation. "
     "The Tool is available only after this Session has a Compaction checkpoint."
 )
 HISTORY_ACTIONS = ("overview", "search", "read", "around")
@@ -167,8 +168,8 @@ HISTORY_TOOL_PARAMETERS: JsonObject = operation_envelope_schema(
         ),
     },
     description=(
-        "Choose exactly one operation property. Its value is the complete argument object "
-        "for that operation."
+        "Set request.operation to overview, search, read, or around and include that operation's "
+        "arguments in the same request object."
     ),
 )
 
@@ -271,7 +272,12 @@ def register_history_tool(registry: ToolRegistry, sessions: ChatSessionManager) 
         description=HISTORY_TOOL_DESCRIPTION,
         parameters=HISTORY_TOOL_PARAMETERS,
         handler=make_history_handler(sessions),
+        result_schema={
+            "type": "object",
+            "required": ["action", "items", "has_more", "formatted_bytes"],
+        },
         session_scoped=True,
+        parallel_safe=True,
         display=ToolDisplay(
             summary_builder=_history_display_summary,
             hidden_argument_keys=("query", "message_id", "cursor"),

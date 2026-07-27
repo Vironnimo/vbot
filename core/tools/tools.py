@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import inspect
 import weakref
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -10,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
+from core.tools.contracts import ToolContract, compile_tool_contract
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
@@ -43,30 +45,47 @@ def operation_envelope_schema(
     *,
     description: str,
 ) -> JsonObject:
-    """Build the canonical provider schema for a multi-operation Tool.
-
-    The operation name is the single top-level property and its value is the
-    complete operation-specific argument object. Keeping the conditional
-    requirements below the root avoids provider adapters that must remove
-    root-level union keywords while still giving constrained decoders an exact
-    set of required fields for the selected operation.
-    """
+    """Build a closed, nested discriminator schema for a multi-operation Tool."""
 
     if not operations:
         raise ValueError("Operation envelope requires at least one operation")
-    normalized: JsonObject = {}
+    branches: list[JsonObject] = []
     for name, schema in operations.items():
         if not isinstance(name, str) or not name:
             raise ValueError("Operation names must be non-empty strings")
         if not isinstance(schema, dict) or schema.get("type") != "object":
             raise ValueError(f"Operation schema must be an object: {name}")
-        normalized[name] = dict(schema)
+        operation_branches = schema.get("oneOf") if "properties" not in schema else None
+        if operation_branches is None:
+            operation_branches = [schema]
+        if not isinstance(operation_branches, list) or not operation_branches:
+            raise ValueError(f"Operation schema oneOf must be a non-empty array: {name}")
+        for raw_branch in operation_branches:
+            if not isinstance(raw_branch, dict) or raw_branch.get("type") != "object":
+                raise ValueError(f"Operation schema branch must be an object: {name}")
+            properties = raw_branch.get("properties")
+            if not isinstance(properties, dict):
+                raise ValueError(f"Operation schema properties must be an object: {name}")
+            branch = copy.deepcopy(raw_branch)
+            branch["properties"] = {
+                "operation": {"type": "string", "enum": [name]},
+                **copy.deepcopy(properties),
+            }
+            branch["required"] = ["operation", *list(raw_branch.get("required", []))]
+            if isinstance(raw_branch.get("minProperties"), int):
+                branch["minProperties"] = raw_branch["minProperties"] + 1
+            branch["additionalProperties"] = False
+            branches.append(branch)
     return {
         "type": "object",
         "description": description,
-        "properties": normalized,
-        "minProperties": 1,
-        "maxProperties": 1,
+        "properties": {
+            "request": {
+                "type": "object",
+                "anyOf": branches,
+            }
+        },
+        "required": ["request"],
         "additionalProperties": False,
     }
 
@@ -74,35 +93,24 @@ def operation_envelope_schema(
 def extract_tool_operation(
     arguments: JsonObject,
     operation_names: Sequence[str],
-    *,
-    legacy_action_key: str = "action",
 ) -> tuple[str, JsonObject]:
-    """Normalize one canonical operation envelope or a legacy flat action call.
-
-    Provider schemas expose only ``{"operation": {...}}``. Existing persisted
-    calls and older models may still send ``{"action": "operation", ...}``, so
-    handlers accept that flat form as a compatibility superset without teaching
-    new models to use it.
-    """
+    """Extract one canonical ``request.operation`` Tool call."""
 
     allowed = tuple(dict.fromkeys(operation_names))
     if not allowed:
         raise ValueError("At least one operation name is required")
 
-    if legacy_action_key in arguments:
-        action = arguments.get(legacy_action_key)
-        if not isinstance(action, str) or action not in allowed:
-            raise ValueError(f"{legacy_action_key} must be one of: {', '.join(sorted(allowed))}")
-        return action, {key: value for key, value in arguments.items() if key != legacy_action_key}
-
-    if len(arguments) != 1:
-        raise ValueError("exactly one operation object is required: " + ", ".join(sorted(allowed)))
-    operation, raw_arguments = next(iter(arguments.items()))
+    if set(arguments) != {"request"}:
+        raise ValueError("exactly one request object is required")
+    raw_arguments = arguments.get("request")
+    if not isinstance(raw_arguments, dict):
+        raise ValueError("request must be an object")
+    operation = raw_arguments.get("operation")
     if operation not in allowed:
         raise ValueError(f"operation must be one of: {', '.join(sorted(allowed))}")
-    if not isinstance(raw_arguments, dict):
-        raise ValueError(f"{operation} must be an object")
-    return operation, dict(raw_arguments)
+    return str(operation), {
+        key: value for key, value in raw_arguments.items() if key != "operation"
+    }
 
 
 class ToolError(VBotError):
@@ -349,6 +357,8 @@ class Tool:
     description: str
     parameters: JsonObject
     handler: ToolHandler
+    result_schema: JsonObject | None = field(default=None, repr=False)
+    contract: ToolContract = field(init=False, repr=False, compare=False)
     internal: bool = False
     # A Session-scoped tool is configurable nowhere and model-visible only when
     # the current Session supplies a matching persisted-state grant.
@@ -372,6 +382,18 @@ class Tool:
     # built-in tool. Set at extension-tool apply time so ``tool.list`` can attribute
     # a tool to its owning extension.
     extension: str | None = None
+    parallel_safe: bool = False
+
+    def __post_init__(self) -> None:
+        contract = compile_tool_contract(
+            name=self.name,
+            input_schema=self.parameters,
+            result_schema=self.result_schema,
+            parallel_safe=self.parallel_safe,
+        )
+        object.__setattr__(self, "parameters", copy.deepcopy(contract.input_schema))
+        object.__setattr__(self, "result_schema", copy.deepcopy(contract.result_schema))
+        object.__setattr__(self, "contract", contract)
 
 
 def tool_is_ready(tool: Tool) -> bool:
@@ -500,6 +522,8 @@ class ToolRegistry:
         ready: ToolReadinessPredicate | None = None,
         readiness_hint: str | None = None,
         extension: str | None = None,
+        result_schema: JsonObject | None = None,
+        parallel_safe: bool = False,
     ) -> Tool:
         """Register a tool and return its immutable definition.
 
@@ -513,18 +537,19 @@ class ToolRegistry:
         self._validate_tool(name, description, parameters, handler, display, ready)
         if name in self._tools:
             raise DuplicateToolError(f"Tool already registered: {name}")
-
         tool = Tool(
             name=name,
             description=description,
-            parameters=dict(parameters),
+            parameters=parameters,
             handler=handler,
+            result_schema=result_schema,
             internal=internal,
             session_scoped=session_scoped,
             display=display or ToolDisplay(),
             ready=ready,
             readiness_hint=readiness_hint,
             extension=extension,
+            parallel_safe=parallel_safe,
         )
         self._tools[name] = tool
         return tool
@@ -543,6 +568,32 @@ class ToolRegistry:
     def unregister(self, name: str) -> None:
         """Remove a registered tool when it exists."""
         self._tools.pop(name, None)
+
+    def is_parallel_safe(self, name: str) -> bool:
+        """Return whether a registered Tool may overlap a sibling call."""
+        tool = self._tools.get(name)
+        return bool(tool is not None and tool.parallel_safe)
+
+    def schema_fingerprint(self, name: str) -> str:
+        """Return the deterministic canonical schema fingerprint for a Tool."""
+        return self.get(name).contract.schema_fingerprint
+
+    def validate_result(self, name: str, result: Any) -> JsonObject:
+        """Validate a Tool result envelope and its successful data contract."""
+        if not isinstance(result, dict):
+            raise InvalidToolResultError(f"Tool handler must return a JSON object: {name}")
+        if not is_tool_result_envelope(result):
+            raise InvalidToolResultError(
+                f"Tool handler must return a valid result envelope: {name}"
+            )
+        if result["ok"]:
+            try:
+                self.get(name).contract.validate_success_data(result["data"])
+            except ValueError as error:
+                raise InvalidToolResultError(
+                    f"Tool result violates its contract: {name}: {error}"
+                ) from None
+        return result
 
     def list_tools(
         self,
@@ -649,21 +700,12 @@ class ToolRegistry:
                 f"tool '{context.tool_name}' is not available: its extension is not configured",
                 retryable=False,
             )
-        if not isinstance(arguments, dict):
-            raise ValueError("Tool arguments must be a JSON object")
+        tool.contract.validate_arguments(arguments)
 
         result = tool.handler(context, arguments)
         if inspect.isawaitable(result):
             result = await result
-        if not isinstance(result, dict):
-            raise InvalidToolResultError(
-                f"Tool handler must return a JSON object: {context.tool_name}"
-            )
-        if not is_tool_result_envelope(result):
-            raise InvalidToolResultError(
-                f"Tool handler must return a valid result envelope: {context.tool_name}"
-            )
-        return result
+        return self.validate_result(context.tool_name, result)
 
     def _model_facing_tools(
         self,
@@ -731,7 +773,7 @@ class ToolRegistry:
         return {
             "name": tool.name,
             "description": tool.description,
-            "parameters": dict(tool.parameters),
+            "parameters": copy.deepcopy(tool.contract.input_schema),
         }
 
 
@@ -805,7 +847,7 @@ class ToolPromptBlockRegistry:
 
 
 class ToolExecutor:
-    """Schedule tool calls concurrently while preserving returned call order."""
+    """Schedule serial barriers and proven-safe concurrent Tool groups."""
 
     _global_semaphores: ClassVar[
         weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[int, asyncio.Semaphore]]
@@ -832,20 +874,43 @@ class ToolExecutor:
         tool_calls: Sequence[ToolCall],
         config: ToolExecutionConfig,
     ) -> list[JsonObject]:
-        """Execute tool calls concurrently and return results in request order."""
+        """Execute serial-by-default calls and return results in request order."""
         per_run_semaphore = asyncio.Semaphore(self._per_run_limit)
-        tasks = [
-            asyncio.create_task(
-                self._execute_one(tool_call, index, config, per_run_semaphore),
-                name=f"tool:{tool_call.name}:{tool_call.id}",
+        results: list[JsonObject | None] = [None] * len(tool_calls)
+        parallel_group: list[tuple[int, ToolCall]] = []
+
+        async def flush_parallel_group() -> None:
+            if not parallel_group:
+                return
+            tasks = [
+                asyncio.create_task(
+                    self._execute_one(tool_call, index, config, per_run_semaphore),
+                    name=f"tool:{tool_call.name}:{tool_call.id}",
+                )
+                for index, tool_call in parallel_group
+            ]
+            group_results = await asyncio.gather(*tasks)
+            for (index, _tool_call), result in zip(
+                parallel_group,
+                group_results,
+                strict=True,
+            ):
+                results[index] = result
+            parallel_group.clear()
+
+        for index, tool_call in enumerate(tool_calls):
+            if self._registry.is_parallel_safe(tool_call.name):
+                parallel_group.append((index, tool_call))
+                continue
+            await flush_parallel_group()
+            results[index] = await self._execute_one(
+                tool_call,
+                index,
+                config,
+                per_run_semaphore,
             )
-            for index, tool_call in enumerate(tool_calls)
-        ]
-
-        if not tasks:
-            return []
-
-        return await asyncio.gather(*tasks)
+        await flush_parallel_group()
+        return [result for result in results if result is not None]
 
     async def _execute_one(
         self,

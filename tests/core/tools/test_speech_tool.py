@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from core.tools import ToolContractError
 from core.tools.speech import TEXT_TO_SPEECH_TOOL_NAME, register_text_to_speech_tool
 from core.tools.tools import ToolContext, ToolRegistry
 
@@ -56,11 +57,8 @@ async def test_text_to_speech_tool_rejects_unknown_arguments(tmp_path: Path) -> 
         data_root=tmp_path,
     )
 
-    result = await registry.dispatch(context, {"text": "hello", "unexpected": True})
-
-    assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_arguments"
-    assert "unexpected" in result["error"]["message"]
+    with pytest.raises(ToolContractError, match="Additional properties"):
+        await registry.dispatch(context, {"text": "hello", "unexpected": True})
 
 
 _ARTIFACT_PAYLOAD = {

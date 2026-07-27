@@ -6,7 +6,11 @@ from typing import Any
 
 import pytest
 
-from core.providers.tool_schema import sanitize_anthropic_tool_input_schema
+from core.providers.tool_schema import (
+    render_tool_definitions,
+    render_tool_schema,
+    sanitize_anthropic_tool_input_schema,
+)
 from core.tools.bash import BASH_TOOL_PARAMETERS
 from core.tools.channel import CHANNEL_SEND_TOOL_PARAMETERS
 from core.tools.cron import CRON_TOOL_PARAMETERS
@@ -150,15 +154,39 @@ _DIRECT_TOOL_SCHEMAS: tuple[tuple[str, JsonObject], ...] = (
     ("write", WRITE_TOOL_PARAMETERS),
 )
 
+_OPENAI_STRICT_SHIPPED_TOOLS = {
+    "analyze_image",
+    "memory",
+    "project",
+    "status",
+    "text_to_speech",
+    "write",
+}
 
-def _normal_operation_schema(operation_schema: JsonObject) -> JsonObject:
-    if "properties" in operation_schema:
-        return operation_schema
-    branches = operation_schema.get("oneOf")
-    assert isinstance(branches, list) and branches
-    normal = branches[0]
-    assert isinstance(normal, dict)
-    return normal
+
+def test_shipped_tool_profile_eligibility_snapshot_is_explicit() -> None:
+    schemas = [
+        *((name, schema) for name, schema, _required in _OPERATION_CONTRACTS),
+        *_DIRECT_TOOL_SCHEMAS,
+    ]
+    openai_decisions = {
+        name: render_tool_schema(schema, profile="openai_strict") for name, schema in schemas
+    }
+    anthropic_definitions = render_tool_definitions(
+        [
+            {"name": name, "description": f"Call {name}.", "parameters": schema}
+            for name, schema in schemas
+        ],
+        profile="anthropic_strict",
+    )
+
+    assert {
+        name for name, decision in openai_decisions.items() if decision.strict
+    } == _OPENAI_STRICT_SHIPPED_TOOLS
+    assert all(
+        decision.strict or decision.reason is not None for decision in openai_decisions.values()
+    )
+    assert all("strict" not in definition for definition in anthropic_definitions)
 
 
 @pytest.mark.parametrize(
@@ -172,18 +200,30 @@ def test_multi_operation_tool_schema_is_exact_and_action_complete(
     required_by_operation: dict[str, tuple[str, ...]],
 ) -> None:
     assert schema["type"] == "object", tool_name
-    assert schema["minProperties"] == 1, tool_name
-    assert schema["maxProperties"] == 1, tool_name
     assert schema["additionalProperties"] is False, tool_name
-    assert set(schema["properties"]) == set(required_by_operation), tool_name
+    assert schema["required"] == ["request"], tool_name
+    assert set(schema["properties"]) == {"request"}, tool_name
+    request = schema["properties"]["request"]
+    assert request["type"] == "object", tool_name
+    branches = request["anyOf"]
 
     for operation, expected_required in required_by_operation.items():
-        operation_schema = schema["properties"][operation]
-        assert operation_schema["type"] == "object", f"{tool_name}.{operation}"
-        normal = _normal_operation_schema(operation_schema)
-        assert normal["additionalProperties"] is False, f"{tool_name}.{operation}"
-        assert tuple(normal.get("required", ())) == expected_required, f"{tool_name}.{operation}"
-        assert set(expected_required) <= set(normal["properties"]), f"{tool_name}.{operation}"
+        operation_branches = [
+            branch
+            for branch in branches
+            if branch["properties"]["operation"]["enum"] == [operation]
+        ]
+        assert operation_branches, f"{tool_name}.{operation}"
+        assert any(
+            set(expected_required)
+            <= {field for field in branch["required"] if field != "operation"}
+            for branch in operation_branches
+        ), f"{tool_name}.{operation}"
+        for branch in operation_branches:
+            assert branch["type"] == "object", f"{tool_name}.{operation}"
+            assert branch["additionalProperties"] is False, f"{tool_name}.{operation}"
+            assert branch["required"][0] == "operation", f"{tool_name}.{operation}"
+            assert set(branch["required"]) <= set(branch["properties"]), f"{tool_name}.{operation}"
 
 
 @pytest.mark.parametrize(
@@ -223,10 +263,9 @@ def test_operation_envelope_builder_rejects_invalid_definitions() -> None:
         )
 
 
-def test_operation_extractor_accepts_canonical_and_legacy_calls() -> None:
-    assert extract_tool_operation({"list": {}}, ("list", "read")) == ("list", {})
+def test_operation_extractor_accepts_only_canonical_calls() -> None:
     assert extract_tool_operation(
-        {"action": "read", "message_id": "m1"},
+        {"request": {"operation": "read", "message_id": "m1"}},
         ("list", "read"),
     ) == ("read", {"message_id": "m1"})
 
@@ -235,9 +274,11 @@ def test_operation_extractor_accepts_canonical_and_legacy_calls() -> None:
     "arguments",
     (
         {},
-        {"list": {}, "read": {"message_id": "m1"}},
+        {"request": {"operation": "list"}, "read": {"message_id": "m1"}},
         {"unknown": {}},
-        {"list": "not-an-object"},
+        {"request": "not-an-object"},
+        {"action": "read", "message_id": "m1"},
+        {"list": {}},
     ),
 )
 def test_operation_extractor_rejects_ambiguous_or_invalid_calls(

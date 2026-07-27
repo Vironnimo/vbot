@@ -17,7 +17,7 @@ from curl_cffi.requests import AsyncSession
 from curl_cffi.requests.exceptions import RequestException
 
 from core.attachments import AttachmentError, sniff_media_type
-from core.tools.arguments import coerce_bool
+from core.tools.arguments import optional_bool
 from core.tools.read_extract import (
     ExtractionError,
     ExtractionLimitExceededError,
@@ -1092,10 +1092,10 @@ def make_web_fetch_handler(attachment_store: Any) -> ToolHandler:
             )
 
         try:
-            include_links = coerce_bool(
+            include_links = optional_bool(
                 arguments.get("include_links"), field_name="include_links", default=True
             )
-            raw = coerce_bool(arguments.get("raw"), field_name="raw", default=False)
+            raw = optional_bool(arguments.get("raw"), field_name="raw", default=False)
         except ValueError as error:
             return tool_failure("validation_error", str(error), retryable=False)
 
@@ -1157,7 +1157,9 @@ def register_web_fetch_tool(registry: ToolRegistry, *, attachment_store: Any) ->
         WEB_FETCH_TOOL_DESCRIPTION,
         WEB_FETCH_TOOL_PARAMETERS,
         make_web_fetch_handler(attachment_store),
+        result_schema={"type": "object", "required": ["content"]},
         display=ToolDisplay(summary_fields=("url",)),
+        parallel_safe=True,
     )
 
 

@@ -52,6 +52,7 @@ from core.providers.reasoning import (
     warn_rejected_effort,
 )
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
+from core.providers.tool_schema import render_tool_definitions
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 from core.utils.tokens import estimate_request_input_tokens
@@ -310,7 +311,11 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             "model": model_id,
             "messages": [self._format_message(message) for message in messages],
         }
-        _apply_openai_tools(payload, request_kwargs)
+        _apply_openai_tools(
+            payload,
+            request_kwargs,
+            strict_capable=self._config.id == "openai",
+        )
         self._apply_reasoning(payload, request_kwargs, model_id)
         # Apply provider defaults (lower priority — caller kwargs win)
         if self._config.defaults:
@@ -962,10 +967,19 @@ def _to_openai_assistant_message(message: dict[str, Any]) -> dict[str, Any]:
     return openai_message
 
 
-def _apply_openai_tools(payload: dict[str, Any], kwargs: dict[str, Any]) -> None:
+def _apply_openai_tools(
+    payload: dict[str, Any],
+    kwargs: dict[str, Any],
+    *,
+    strict_capable: bool,
+) -> None:
     tools = kwargs.pop("tools", None)
     if not tools:
         return
+    rendered = render_tool_definitions(
+        tools,
+        profile="openai_strict" if strict_capable else "best_effort",
+    )
     payload["tools"] = [
         {
             "type": "function",
@@ -973,9 +987,10 @@ def _apply_openai_tools(payload: dict[str, Any], kwargs: dict[str, Any]) -> None
                 "name": tool["name"],
                 "description": tool["description"],
                 "parameters": tool["parameters"],
+                **({"strict": True} if tool.get("strict") is True else {}),
             },
         }
-        for tool in tools
+        for tool in rendered
     ]
 
 

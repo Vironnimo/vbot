@@ -81,6 +81,7 @@ def test_provider_tool_definitions_keep_subagent_tools_for_self_only(
             parameters={
                 "type": "object",
                 "properties": {"agent_id": {"type": "string"}},
+                "additionalProperties": False,
             },
             handler=lambda _context, _arguments: tool_success({}),
         )
@@ -112,6 +113,7 @@ def test_provider_tool_definitions_narrow_explicit_agent_targets(
         parameters={
             "type": "object",
             "properties": {"agent_id": {"type": "string"}},
+            "additionalProperties": False,
         },
         handler=lambda _context, _arguments: tool_success({}),
     )

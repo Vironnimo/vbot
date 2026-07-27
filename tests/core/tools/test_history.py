@@ -49,7 +49,16 @@ def _call(
     session: ChatSession,
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
-    return cast(dict[str, Any], make_history_handler(manager)(_context(session.id), arguments))
+    canonical = arguments
+    if "action" in arguments:
+        fields = dict(arguments)
+        operation = fields.pop("action")
+        canonical = {"request": {"operation": operation, **fields}}
+    elif len(arguments) == 1:
+        operation, fields = next(iter(arguments.items()))
+        if isinstance(fields, dict):
+            canonical = {"request": {"operation": operation, **fields}}
+    return cast(dict[str, Any], make_history_handler(manager)(_context(session.id), canonical))
 
 
 def _data(result: dict[str, Any]) -> dict[str, Any]:
@@ -74,21 +83,32 @@ def test_registration_is_session_scoped_and_schema_is_strict(tmp_path: Path) -> 
     tool = registry.get(HISTORY_TOOL_NAME)
     assert tool.session_scoped is True
     assert tool.parameters["additionalProperties"] is False
-    assert tool.parameters["minProperties"] == 1
-    assert tool.parameters["maxProperties"] == 1
-    assert set(tool.parameters["properties"]) == {
+    assert tool.parameters["required"] == ["request"]
+    branches = tool.parameters["properties"]["request"]["anyOf"]
+    operations = {branch["properties"]["operation"]["enum"][0] for branch in branches}
+    assert operations == {
         "overview",
         "search",
         "read",
         "around",
     }
-    search_schema = tool.parameters["properties"]["search"]["oneOf"][0]
-    around_schema = tool.parameters["properties"]["around"]["oneOf"][0]
-    assert search_schema["required"] == ["query"]
-    assert around_schema["required"] == ["message_id"]
+    search_schema = next(
+        branch for branch in branches if branch["properties"]["operation"]["enum"] == ["search"]
+    )
+    around_schema = next(
+        branch for branch in branches if branch["properties"]["operation"]["enum"] == ["around"]
+    )
+    assert search_schema["required"] == ["operation", "query"]
+    assert around_schema["required"] == ["operation", "message_id"]
     display = registry.display_for_call(
         HISTORY_TOOL_NAME,
-        {"action": "search", "query": "secret", "cursor": "opaque"},
+        {
+            "request": {
+                "operation": "search",
+                "query": "secret",
+                "cursor": "opaque",
+            }
+        },
     )
     assert display["summary"] == "search · all earlier history"
     assert display["hidden_argument_keys"] == ["cursor", "message_id", "query"]
@@ -105,7 +125,7 @@ def test_checkpoint_grant_and_cursor_lifecycle_across_restart_move_takeover_and_
     first = _data(
         make_history_handler(manager)(
             _context(source.id, agent_id="alpha"),
-            {"action": "read", "limit": 1},
+            {"request": {"operation": "read", "limit": 1}},
         )
     )
     cursor = first["next_cursor"]
@@ -114,21 +134,21 @@ def test_checkpoint_grant_and_cursor_lifecycle_across_restart_move_takeover_and_
     restarted_source = restarted.get("alpha", source.id)
     restarted_page = make_history_handler(restarted)(
         _context(source.id, agent_id="alpha"),
-        {"action": "read", "cursor": cursor},
+        {"request": {"operation": "read", "cursor": cursor}},
     )
     assert restarted_page["ok"] is True
 
     moved = asyncio.run(restarted.move("alpha", restarted_source.id, "beta"))
     moved_page = make_history_handler(restarted)(
         _context(moved.id, agent_id="beta"),
-        {"action": "read", "cursor": cursor},
+        {"request": {"operation": "read", "cursor": cursor}},
     )
     assert moved_page["ok"] is True
     moved.append(ChatMessage.agent_takeover(from_address="alpha", to_address="beta"))
     assert (
         make_history_handler(restarted)(
             _context(moved.id, agent_id="beta"),
-            {"action": "overview"},
+            {"request": {"operation": "overview"}},
         )["ok"]
         is True
     )
@@ -137,13 +157,13 @@ def test_checkpoint_grant_and_cursor_lifecycle_across_restart_move_takeover_and_
     assert (
         make_history_handler(restarted)(
             _context(fork.id, agent_id="gamma"),
-            {"action": "overview"},
+            {"request": {"operation": "overview"}},
         )["ok"]
         is True
     )
     fork_cursor_result = make_history_handler(restarted)(
         _context(fork.id, agent_id="gamma"),
-        {"action": "read", "cursor": cursor},
+        {"request": {"operation": "read", "cursor": cursor}},
     )
     assert fork_cursor_result["error"]["code"] == "invalid_cursor"
 

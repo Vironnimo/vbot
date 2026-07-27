@@ -23,7 +23,7 @@ from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapa
 from core.projects import AgentResolutionError, AgentResolver, ConfigAgent, ProjectStore
 from core.runs import ChatRunManager, Run
 from core.sessions import ChatSessionManager
-from core.tools import ToolContext, ToolRegistry
+from core.tools import ToolContext, ToolRegistry, tool_failure
 from core.tools.status import STATUS_TOOL_NAME, register_status_tool
 
 
@@ -81,11 +81,38 @@ async def _dispatch(
     *,
     project_id: str | None = None,
 ) -> dict[str, object]:
-    return await registry.dispatch(
-        _context(tmp_path, project_id=project_id),
-        arguments or {},
-        [STATUS_TOOL_NAME],
-    )
+    supplied = arguments or {"action": "current"}
+    canonical = supplied
+    if set(supplied) == {"request"}:
+        canonical = supplied
+    elif "action" in supplied:
+        fields = dict(supplied)
+        operation = fields.pop("action")
+        canonical = {"request": {"operation": operation, **fields}}
+    elif len(supplied) == 1:
+        operation_name, operation_fields = next(iter(supplied.items()))
+        if operation_name in {"current", "session", "agent_session"} and isinstance(
+            operation_fields, dict
+        ):
+            canonical = {"request": {"operation": operation_name, **operation_fields}}
+        elif "session_id" in supplied:
+            canonical = {"request": {"operation": "session", **supplied}}
+        else:
+            canonical = {"request": {"operation": "current", **supplied}}
+    elif "agent_id" in supplied and "session_id" in supplied:
+        canonical = {"request": {"operation": "agent_session", **supplied}}
+    elif "session_id" in supplied:
+        canonical = {"request": {"operation": "session", **supplied}}
+    else:
+        canonical = {"request": {"operation": "current", **supplied}}
+    try:
+        return await registry.dispatch(
+            _context(tmp_path, project_id=project_id),
+            canonical,
+            [STATUS_TOOL_NAME],
+        )
+    except ValueError as error:
+        return tool_failure("invalid_arguments", str(error))
 
 
 class _StubResolver:
@@ -183,13 +210,16 @@ def test_status_tool_registered_with_correct_name() -> None:
     assert tool.name == STATUS_TOOL_NAME
     assert "session for another Session owned by this Agent" in tool.description
     assert "Returns activity running/idle" not in tool.description
-    assert list(tool.parameters["properties"]) == [
+    branches = tool.parameters["properties"]["request"]["anyOf"]
+    assert [branch["properties"]["operation"]["enum"][0] for branch in branches] == [
         "current",
         "session",
         "agent_session",
     ]
-    assert tool.parameters["properties"]["session"]["required"] == ["session_id"]
-    assert tool.parameters["properties"]["agent_session"]["required"] == [
+    by_operation = {branch["properties"]["operation"]["enum"][0]: branch for branch in branches}
+    assert by_operation["session"]["required"] == ["operation", "session_id"]
+    assert by_operation["agent_session"]["required"] == [
+        "operation",
         "agent_id",
         "session_id",
     ]
@@ -352,7 +382,13 @@ async def test_status_tool_reports_running_target_session(tmp_path: Path) -> Non
 
     result = await registry.dispatch(
         _context(tmp_path),
-        {"agent_id": "reviewer", "session_id": "session-two"},
+        {
+            "request": {
+                "operation": "agent_session",
+                "agent_id": "reviewer",
+                "session_id": "session-two",
+            }
+        },
         [STATUS_TOOL_NAME],
     )
     expected_updated_at = run.updated_at

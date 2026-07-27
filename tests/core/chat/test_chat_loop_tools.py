@@ -567,6 +567,11 @@ async def test_registered_search_tools_execute_and_persist_envelopes(
         for event in run.events
         if event.type == TOOL_CALL_STARTED_EVENT
     ] == ["glob", "grep"]
+    for event in run.events:
+        if event.type not in {TOOL_CALL_STARTED_EVENT, TOOL_CALL_RESULT_EVENT}:
+            continue
+        tool_name = event.payload["tool_call"]["name"]
+        assert event.payload["schema_fingerprint"] == tools.schema_fingerprint(tool_name)
     results_by_tool = {
         event.payload["tool_call"]["name"]: event.payload["result"]
         for event in run.events
@@ -647,7 +652,13 @@ async def test_same_turn_tool_calls_run_concurrently_and_persist_in_call_order(
         return tool_success({"value": arguments["value"], "id": context.tool_call_id})
 
     tools = ToolRegistry()
-    tools.register("slow", "Slow tool.", {"type": "object"}, slow_handler)
+    tools.register(
+        "slow",
+        "Slow tool.",
+        {"type": "object"},
+        slow_handler,
+        parallel_safe=True,
+    )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
     assistant = await build_chat_loop(runtime).send("coder", "Run tools", session_id="session-one")
@@ -704,7 +715,13 @@ async def test_same_tool_sibling_calls_run_in_parallel(tmp_path: Path) -> None:
         return tool_success({"id": context.tool_call_id})
 
     tools = ToolRegistry()
-    tools.register("same", "Same tool.", {"type": "object"}, same_handler)
+    tools.register(
+        "same",
+        "Same tool.",
+        {"type": "object"},
+        same_handler,
+        parallel_safe=True,
+    )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
     await build_chat_loop(runtime).send("coder", "Run tools", session_id="session-one")
@@ -747,6 +764,63 @@ async def test_tool_handler_exception_continues_with_failure_envelope(tmp_path: 
     assert result_payload["tool_call"] == {"id": "call_1", "index": 0, "name": "explode"}
     assert result_payload["result"] == tool_failure("tool_execution_error", "boom")
     assert result_payload["timing"]["duration_ms"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_invalid_arguments_can_be_corrected_without_running_handler_twice(
+    tmp_path: Path,
+) -> None:
+    invocations: list[ToolJsonObject] = []
+
+    def handler(_context: ToolContext, arguments: ToolJsonObject) -> ToolJsonObject:
+        invocations.append(arguments)
+        return tool_success({"city": arguments["city"]})
+
+    tools = ToolRegistry()
+    tools.register(
+        "weather",
+        "Read weather for one city.",
+        {
+            "type": "object",
+            "properties": {"city": {"type": "string", "minLength": 1}},
+            "required": ["city"],
+            "additionalProperties": False,
+        },
+        handler,
+    )
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["weather"])
+    adapter = StubAdapter(
+        [
+            {
+                "content": None,
+                "tool_calls": [{"id": "call_1", "name": "weather", "arguments": {"city": 7}}],
+            },
+            {
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_2", "name": "weather", "arguments": {"city": "Berlin"}}
+                ],
+            },
+            {"content": "Recovered", "tool_calls": None},
+        ]
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+
+    assistant = await build_chat_loop(runtime).send(
+        "coder",
+        "Check the weather",
+        session_id="session-one",
+    )
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    tool_results = [
+        json.loads(cast(str, message.content)) for message in messages if message.role == "tool"
+    ]
+    assert assistant.content == "Recovered"
+    assert invocations == [{"city": "Berlin"}]
+    assert tool_results[0]["error"]["code"] == "invalid_arguments"
+    assert "arguments/city" in tool_results[0]["error"]["message"]
+    assert tool_results[1] == tool_success({"city": "Berlin"})
 
 
 @pytest.mark.asyncio
@@ -854,6 +928,33 @@ def test_failed_tool_call_circuit_breaker_resets_on_change_and_success() -> None
     for _ in range(MAX_IDENTICAL_FAILED_TOOL_CALLS - 1):
         assert breaker.observe([paris], [result_message(paris, ok=False)]) is None
     assert breaker.observe([paris], [result_message(paris, ok=False)]) == "weather"
+
+
+def test_failed_tool_call_circuit_breaker_keys_error_class_and_schema_version() -> None:
+    breaker = _FailedToolCallCircuitBreaker(limit=2)
+    call = ToolCall(id="call", name="weather", arguments={"city": "Berlin"})
+
+    class Registry:
+        fingerprint = "schema-v1"
+
+        def schema_fingerprint(self, name: str) -> str:
+            assert name == "weather"
+            return self.fingerprint
+
+    registry = Registry()
+
+    def failed(code: str) -> ChatMessage:
+        return ChatMessage.tool(
+            tool_call_id=call.id,
+            name=call.name,
+            content=json.dumps(tool_failure(code, "failed")),
+        )
+
+    assert breaker.observe([call], [failed("timeout")], registry) is None
+    assert breaker.observe([call], [failed("permission_denied")], registry) is None
+    registry.fingerprint = "schema-v2"
+    assert breaker.observe([call], [failed("permission_denied")], registry) is None
+    assert breaker.observe([call], [failed("permission_denied")], registry) == "weather"
 
 
 @pytest.mark.asyncio

@@ -66,8 +66,17 @@ async def call_process(
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
+    canonical = arguments
+    if "action" in arguments:
+        fields = dict(arguments)
+        operation = fields.pop("action")
+        canonical = {"request": {"operation": operation, **fields}}
+    elif len(arguments) == 1:
+        operation, fields = next(iter(arguments.items()))
+        if isinstance(fields, dict):
+            canonical = {"request": {"operation": operation, **fields}}
     handler = make_process_handler(manager)
-    result = handler(context, arguments)
+    result = handler(context, canonical)
     if inspect.isawaitable(result):
         result = await result
     return cast(JsonObject, result)
@@ -102,11 +111,12 @@ async def test_register_process_tool_registers_schema(manager: ProcessManager) -
     assert tool.description == PROCESS_TOOL_DESCRIPTION
     assert tool.parameters["additionalProperties"] is False
     assert "terminal poll or successful kill suppresses" in tool.description
-    assert (
-        tool.parameters["properties"]["poll"]["properties"]["session_id"]["description"]
-        == "Process session id returned by bash."
+    branches = tool.parameters["properties"]["request"]["anyOf"]
+    poll = next(
+        branch for branch in branches if branch["properties"]["operation"]["enum"] == ["poll"]
     )
-    assert tool.parameters["properties"]["poll"]["required"] == ["session_id"]
+    assert poll["properties"]["session_id"]["description"] == "Process session id returned by bash."
+    assert poll["required"] == ["operation", "session_id"]
 
 
 @pytest.mark.asyncio

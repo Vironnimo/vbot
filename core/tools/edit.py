@@ -6,9 +6,8 @@ from pathlib import Path
 
 from core.tools.arguments import (
     ToolArgumentError,
-    coerce_bool,
     looks_like_line_numbered_content,
-    normalize_aliases,
+    optional_bool,
 )
 from core.tools.file_state import FileReadState, stale_failure_text
 from core.tools.fuzzy_match import AmbiguousFuzzyMatch, replace_fuzzy
@@ -134,18 +133,7 @@ def _text_not_found_failure(old_string: str) -> JsonObject:
     )
 
 
-_EDIT_ARGUMENT_ALIASES = {
-    "oldString": "old_string",
-    "newString": "new_string",
-    "replaceAll": "replace_all",
-}
-
-
 def _validate_edit_arguments(arguments: JsonObject) -> tuple[str, str, str, bool] | JsonObject:
-    # Accept camelCase variants some models emit instead of rejecting the whole
-    # call as an unknown argument; the canonical key wins if both are present.
-    arguments = normalize_aliases(arguments, _EDIT_ARGUMENT_ALIASES)
-
     unknown_arguments = set(arguments) - {"path", "old_string", "new_string", "replace_all"}
     if unknown_arguments:
         names = ", ".join(sorted(unknown_arguments))
@@ -173,7 +161,7 @@ def _validate_edit_arguments(arguments: JsonObject) -> tuple[str, str, str, bool
         )
 
     try:
-        replace_all = coerce_bool(
+        replace_all = optional_bool(
             arguments.get("replace_all"), field_name="replace_all", default=False
         )
     except ToolArgumentError as error:
@@ -293,6 +281,10 @@ def register_edit_tool(registry: ToolRegistry, *, file_state: FileReadState) -> 
         EDIT_TOOL_DESCRIPTION,
         EDIT_TOOL_PARAMETERS,
         make_edit_handler(file_state),
+        result_schema={
+            "type": "object",
+            "required": ["message", "path", "first_changed_line", "replacements"],
+        },
         display=ToolDisplay(
             summary_fields=("path",),
             hidden_argument_keys=("newString", "new_string", "oldString", "old_string"),

@@ -40,7 +40,7 @@ from core.subagents.tracker import (
 )
 from core.tools.arguments import (
     ToolArgumentError,
-    coerce_bool,
+    optional_bool,
     optional_string,
     required_string,
 )
@@ -159,14 +159,22 @@ class SubAgentCoordinator:
         )
 
 
-def _normalize_subagent_call(arguments: JsonObject) -> tuple[str | None, JsonObject]:
-    """Return canonical start/continue arguments or one legacy flat call."""
+def _normalize_subagent_call(arguments: JsonObject) -> tuple[str, JsonObject]:
+    """Return start/continue arguments at the public or internal boundary.
 
+    Registered Tool calls always arrive through the compiled nested contract.
+    Direct internal callers already pass the operation payload and are not a
+    second model-facing wire format.
+    """
     operations = ("start", "continue")
-    if set(arguments) & set(operations):
-        operation, operation_arguments = extract_tool_operation(arguments, operations)
-        return operation, operation_arguments
-    return None, dict(arguments)
+    if set(arguments) == {"request"}:
+        return extract_tool_operation(arguments, operations)
+    if len(arguments) == 1:
+        operation, payload = next(iter(arguments.items()))
+        if operation in operations and isinstance(payload, dict):
+            return operation, dict(payload)
+    operation = "continue" if "session_id" in arguments else "start"
+    return operation, dict(arguments)
 
 
 async def _handle_subagent(
@@ -207,10 +215,10 @@ async def _handle_subagent(
                 "invalid_arguments",
                 "start creates a new Session and does not accept session_id",
             )
-        if operation == "continue" and (session_id is None or explicit_agent_address is None):
+        if operation == "continue" and session_id is None:
             return tool_failure(
                 "invalid_arguments",
-                "continue requires both agent_id and session_id",
+                "continue requires session_id",
             )
         if session_id is not None and explicit_agent_address is None:
             return tool_failure(
@@ -222,7 +230,11 @@ async def _handle_subagent(
         target_agent_id, target_project_id = _resolve_target_address(
             target_agent_address, context.project_id
         )
-        background = coerce_bool(arguments.get("background"), field_name="background", default=True)
+        background = optional_bool(
+            arguments.get("background"),
+            field_name="background",
+            default=True,
+        )
         run_overrides = _parse_agent_run_overrides(arguments)
     except (ToolArgumentError, InvalidAgentAddressError, SettingsValidationError) as error:
         return tool_failure("invalid_arguments", str(error))

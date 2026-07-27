@@ -21,7 +21,8 @@ from core.tools.tools import (
 )
 
 MEMORY_TOOL_DESCRIPTION = (
-    "List or edit pinned memory by choosing exactly one operation object: USER.md "
+    "List or edit pinned memory by setting request.operation to list, add, replace, or remove. "
+    "USER.md "
     "('user' scope — who the user is: preferences, "
     "role, communication style) and MEMORY.md ('agent' scope — your own environment, "
     "conventions, and tool quirks). Entries are injected into every future turn, so keep "
@@ -107,8 +108,8 @@ MEMORY_TOOL_PARAMETERS: JsonObject = operation_envelope_schema(
         ),
     },
     description=(
-        "Choose exactly one operation property. Its value is the complete argument object "
-        "for that operation."
+        "Set request.operation to list, add, replace, or remove and include that operation's "
+        "arguments in the same request object."
     ),
 )
 
@@ -346,6 +347,7 @@ def register_memory_tool(registry: ToolRegistry, memory_service: MemoryService) 
         MEMORY_TOOL_DESCRIPTION,
         MEMORY_TOOL_PARAMETERS,
         make_memory_handler(memory_service),
+        result_schema={"type": "object", "required": ["content", "scope", "entries"]},
         display=ToolDisplay(
             summary_builder=_memory_display_summary,
             hidden_argument_keys=("content",),

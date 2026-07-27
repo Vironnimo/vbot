@@ -31,7 +31,7 @@ from core.skills.skill_validator import (
 )
 from core.tools.arguments import (
     ToolArgumentError,
-    coerce_bool,
+    optional_bool,
     optional_string,
     required_string,
 )
@@ -41,6 +41,7 @@ from core.tools.tools import (
     ToolContext,
     ToolDisplay,
     ToolRegistry,
+    extract_tool_operation,
     operation_envelope_schema,
     tool_failure,
     tool_success,
@@ -49,8 +50,8 @@ from core.utils.logging import get_logger
 
 SKILL_MANAGE_TOOL_DESCRIPTION = (
     "Manage complete vBot Skill packages (SKILL.md plus optional scripts/, "
-    "references/, and assets/). Call with exactly one top-level operation object, "
-    'for example {"begin":{"name":"wiki-research","mode":"create"}}. Each operation '
+    "references/, and assets/). Set request.operation to the intended operation, for example "
+    '{"request":{"operation":"begin","name":"wiki-research","mode":"create"}}. Each operation '
     "exposes only its valid arguments and structurally requires everything it needs. "
     "Inspect a published package or owned draft; begin an isolated create/update "
     "draft; put, patch, or remove draft files; validate; then commit the whole "
@@ -120,7 +121,7 @@ def _operation_parameters(
     required: Sequence[str] = (),
     exactly_one_of: Sequence[str] = (),
 ) -> JsonObject:
-    """Build one strict operation object for the provider-visible schema."""
+    """Build one strict operation branch for the provider-visible schema."""
 
     schema: JsonObject = {
         "type": "object",
@@ -254,8 +255,8 @@ SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = operation_envelope_schema(
         ),
     },
     description=(
-        "Choose exactly one operation property. Its value is the complete argument object "
-        "for that operation; never send flat operation/name/draft_id fields."
+        "Set request.operation to the intended operation and include its arguments in the same "
+        "request object; never send flat operation/name/draft_id fields."
     ),
 )
 
@@ -331,18 +332,10 @@ def make_skill_manage_handler(
 
 def _extract_operation(arguments: JsonObject) -> tuple[str, JsonObject]:
     """Return the one selected operation and its strict argument object."""
-
-    if len(arguments) != 1:
-        allowed = ", ".join(_OPERATIONS)
-        raise ToolArgumentError(
-            f"skill_manage requires exactly one top-level operation object: {allowed}"
-        )
-    operation, raw_arguments = next(iter(arguments.items()))
-    if operation not in _OPERATIONS:
-        allowed = ", ".join(_OPERATIONS)
-        raise ToolArgumentError(f"operation must be one of: {allowed}")
-    if not isinstance(raw_arguments, dict):
-        raise ToolArgumentError(f"{operation} must be an object")
+    try:
+        operation, raw_arguments = extract_tool_operation(arguments, _OPERATIONS)
+    except ValueError as error:
+        raise ToolArgumentError(str(error)) from None
     unknown_arguments = set(raw_arguments) - _OPERATION_FIELDS[operation]
     if unknown_arguments:
         names = ", ".join(sorted(unknown_arguments))
@@ -433,7 +426,7 @@ def _apply_operation(
         executable_argument = arguments.get("executable")
         if has_content:
             content = _exact_string(arguments.get("content"), field_name="content")
-            text_executable = coerce_bool(
+            text_executable = optional_bool(
                 executable_argument,
                 field_name="executable",
                 default=False,
@@ -450,7 +443,7 @@ def _apply_operation(
             copied_executable = (
                 None
                 if "executable" not in arguments
-                else coerce_bool(executable_argument, field_name="executable", default=False)
+                else optional_bool(executable_argument, field_name="executable", default=False)
             )
             resolved_source = _resolve_safe_source(context, source_path or "")
             manifest_file = authoring.copy_draft_file(
@@ -624,6 +617,7 @@ def register_skill_manage_tool(
             resolve_global_skills_dir,
             reload_skills,
         ),
+        result_schema={"type": "object", "required": ["scope"]},
         display=ToolDisplay(summary_builder=_skill_manage_display_summary),
     )
 

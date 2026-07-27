@@ -872,6 +872,7 @@ async def test_chat_send_collected_timeline_includes_read_tool_result_envelope(
     result = response["result"]
     tool_started = next(event for event in result["events"] if event["type"] == "tool_call_started")
     tool_result = next(event for event in result["events"] if event["type"] == "tool_call_result")
+    fingerprint = state.runtime.tools.schema_fingerprint("read")
     assert tool_started["payload"] == {
         "tool_call": {
             "id": "call_read",
@@ -880,6 +881,7 @@ async def test_chat_send_collected_timeline_includes_read_tool_result_envelope(
             "arguments": {"path": "note.txt"},
         },
         "display": {"summary": "note.txt", "hidden_argument_keys": []},
+        "schema_fingerprint": fingerprint,
     }
     assert tool_result["payload"]["tool_call"] == {
         "id": "call_read",
@@ -892,6 +894,8 @@ async def test_chat_send_collected_timeline_includes_read_tool_result_envelope(
         "data": {"content": "1|rpc content"},
         "artifacts": [],
     }
+    assert tool_result["payload"]["schema_fingerprint"] == fingerprint
+    assert tool_result["payload"]["error_code"] is None
     assert "path" not in tool_result["payload"]["result"]["data"]
     assert "reasoning_meta" not in str(result["events"])
     assert "batch" not in str(result["events"])

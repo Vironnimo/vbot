@@ -68,9 +68,13 @@ def test_example_word_count_tool_registers_and_runs(tmp_path: Path) -> None:
         data_root=tmp_path,
     )
     result = asyncio.run(tool_registry.dispatch(context, {"text": "one two three"}))
+    tool = tool_registry.get("word_count")
 
     assert result["ok"] is True
     assert result["data"] == {"word_count": 3}
+    assert tool.parallel_safe is True
+    assert tool.result_schema is not None
+    assert tool.result_schema["additionalProperties"] is False
 
 
 def test_example_guard_bash_denies_dangerous_command() -> None:

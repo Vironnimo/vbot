@@ -579,8 +579,7 @@ def test_edit_success_and_failure_results_are_valid_envelopes(tmp_path: Path) ->
     assert is_tool_result_envelope(failure) is True
 
 
-def test_edit_accepts_camelcase_aliases(tmp_path: Path) -> None:
-    # Some models emit camelCase; accept oldString/newString as the canonical keys.
+def test_edit_rejects_camelcase_aliases(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     target = workspace / "notes.txt"
@@ -591,11 +590,13 @@ def test_edit_accepts_camelcase_aliases(tmp_path: Path) -> None:
         {"path": "notes.txt", "oldString": "old value", "newString": "new value"},
     )
 
-    assert_success_envelope(result)
-    assert target.read_text(encoding="utf-8") == "new value"
+    error = assert_failure_envelope(result, "invalid_arguments")
+    assert "oldString" in error["message"]
+    assert "newString" in error["message"]
+    assert target.read_text(encoding="utf-8") == "old value"
 
 
-def test_edit_accepts_string_encoded_replace_all(tmp_path: Path) -> None:
+def test_edit_rejects_string_encoded_replace_all(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     target = workspace / "notes.txt"
@@ -606,9 +607,9 @@ def test_edit_accepts_string_encoded_replace_all(tmp_path: Path) -> None:
         {"path": "notes.txt", "old_string": "x", "new_string": "y", "replace_all": "true"},
     )
 
-    data = assert_success_envelope(result)
-    assert data["replacements"] == 3
-    assert target.read_text(encoding="utf-8") == "y y y"
+    error = assert_failure_envelope(result, "invalid_arguments")
+    assert error["message"] == "replace_all must be a boolean"
+    assert target.read_text(encoding="utf-8") == "x x x"
 
 
 def test_edit_guard_blocks_when_file_unread(tmp_path: Path) -> None:

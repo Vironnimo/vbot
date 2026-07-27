@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from core.providers.errors import ProviderError
+from core.providers.tool_schema import render_tool_definitions
 
 RESPONSES_DONE_MARKER = "[DONE]"
 REASONING_ENCRYPTED_CONTENT_INCLUDE = "reasoning.encrypted_content"
@@ -108,6 +109,7 @@ def build_responses_payload(
     policy: ResponsesRequestPolicy,
     stream: bool = False,
     document_media_types: frozenset[str] = frozenset(),
+    strict_tools: bool = False,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Build a stateless ``/responses`` request payload from canonical messages."""
@@ -126,7 +128,12 @@ def build_responses_payload(
     if stream:
         payload["stream"] = True
 
-    _apply_responses_tools(payload, request_kwargs, policy)
+    _apply_responses_tools(
+        payload,
+        request_kwargs,
+        policy,
+        strict_capable=strict_tools,
+    )
     _apply_responses_reasoning(payload, request_kwargs, policy)
     _apply_responses_text_format(payload, request_kwargs, policy)
     _apply_remaining_kwargs(payload, request_kwargs, policy)
@@ -398,14 +405,18 @@ def _apply_responses_tools(
     payload: dict[str, Any],
     request_kwargs: dict[str, Any],
     policy: ResponsesRequestPolicy,
+    *,
+    strict_capable: bool,
 ) -> None:
     tools = request_kwargs.pop("tools", None)
     tool_choice = request_kwargs.pop("tool_choice", None)
     if not policy.supports_tools or not tools:
         return
-    payload["tools"] = [
-        _to_responses_function_tool(tool) for tool in tools if isinstance(tool, Mapping)
-    ]
+    rendered = render_tool_definitions(
+        [tool for tool in tools if isinstance(tool, Mapping)],
+        profile="openai_strict" if strict_capable else "best_effort",
+    )
+    payload["tools"] = [_to_responses_function_tool(tool) for tool in rendered]
     if tool_choice is not None:
         payload["tool_choice"] = tool_choice
 
@@ -418,12 +429,14 @@ def _to_responses_function_tool(tool: Mapping[str, Any]) -> dict[str, Any]:
             "name": _function_call_name(tool),
             "description": _function_description(tool),
             "parameters": _function_parameters(tool),
+            **({"strict": True} if tool.get("strict") is True else {}),
         }
     return {
         "type": "function",
         "name": _function_call_name(tool),
         "description": _function_description(tool),
         "parameters": _function_parameters(tool),
+        **({"strict": True} if tool.get("strict") is True else {}),
     }
 
 

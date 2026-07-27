@@ -70,6 +70,7 @@ from core.providers.reasoning import (
     resolve_reasoning_intent,
 )
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
+from core.providers.tool_schema import render_tool_definitions
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 
@@ -318,6 +319,7 @@ class OllamaAdapter(ProviderAdapter):
 
         tools = request_kwargs.pop("tools", None)
         if tools:
+            rendered_tools = render_tool_definitions(tools, profile="best_effort")
             payload["tools"] = [
                 {
                     "type": "function",
@@ -327,7 +329,7 @@ class OllamaAdapter(ProviderAdapter):
                         "parameters": tool["parameters"],
                     },
                 }
-                for tool in tools
+                for tool in rendered_tools
             ]
 
         self._apply_reasoning(payload, request_kwargs, model_id)

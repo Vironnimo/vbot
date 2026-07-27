@@ -283,11 +283,9 @@ def test_grep_returns_failure_for_invalid_controls(
     assert error["message"] == message
 
 
-def test_grep_accepts_string_encoded_controls(
+def test_grep_rejects_aliases_and_string_encoded_controls(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Models often encode numbers and booleans as strings; accept them. The
-    # string variant also uses the legacy camelCase alias to cover normalization.
     force_python_fallback(monkeypatch)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -302,8 +300,9 @@ def test_grep_accepts_string_encoded_controls(
         {"pattern": "hello", "ignore_case": True, "limit": 5, "context": 0},
     )
 
-    assert string_result["ok"] is True
-    assert string_result == typed_result
+    error = assert_failure_envelope(string_result, "invalid_arguments")
+    assert "ignoreCase" in error["message"]
+    assert typed_result["ok"] is True
 
 
 def test_grep_output_modes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

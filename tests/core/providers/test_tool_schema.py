@@ -1,127 +1,99 @@
-"""Tests for Anthropic tool ``input_schema`` sanitization."""
+"""Tests for explicit canonical-to-Provider Tool-schema profiles."""
 
 from __future__ import annotations
 
 import copy
+from typing import Any
 
-from core.providers.tool_schema import sanitize_anthropic_tool_input_schema
+import pytest
 
+from core.providers.tool_schema import (
+    ANTHROPIC_MAX_STRICT_TOOLS,
+    render_tool_definitions,
+    render_tool_schema,
+    sanitize_anthropic_tool_input_schema,
+)
 
-class TestNullableUnionCollapse:
-    """Nullable ``anyOf`` / ``oneOf`` unions collapse to the non-null branch."""
-
-    def test_nullable_anyof_property_collapses_to_non_null_branch(self):
-        schema = {
-            "type": "object",
-            "properties": {
-                "name": {
-                    "anyOf": [{"type": "string"}, {"type": "null"}],
-                    "description": "Optional name",
-                }
-            },
-        }
-
-        result = sanitize_anthropic_tool_input_schema(schema)
-
-        assert result["properties"]["name"] == {
-            "type": "string",
-            "description": "Optional name",
-        }
-
-    def test_nullable_oneof_property_collapses(self):
-        schema = {
-            "type": "object",
-            "properties": {"count": {"oneOf": [{"type": "integer"}, {"type": "null"}]}},
-        }
-
-        result = sanitize_anthropic_tool_input_schema(schema)
-
-        assert result["properties"]["count"] == {"type": "integer"}
-
-    def test_nested_nullable_union_collapses(self):
-        schema = {
-            "type": "object",
-            "properties": {
-                "filter": {
-                    "type": "object",
-                    "properties": {
-                        "tag": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-                    },
-                }
-            },
-        }
-
-        result = sanitize_anthropic_tool_input_schema(schema)
-
-        assert result["properties"]["filter"]["properties"]["tag"] == {"type": "string"}
-
-    def test_meaningful_multi_branch_union_is_preserved(self):
-        """A union with two non-null branches is not a nullable hint — keep it."""
-        schema = {
-            "type": "object",
-            "properties": {"value": {"anyOf": [{"type": "string"}, {"type": "integer"}]}},
-        }
-
-        result = sanitize_anthropic_tool_input_schema(schema)
-
-        assert result["properties"]["value"] == {"anyOf": [{"type": "string"}, {"type": "integer"}]}
+_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string"},
+        "limit": {"type": "integer"},
+    },
+    "required": ["path"],
+    "additionalProperties": False,
+}
 
 
-class TestTopLevelUnionStripping:
-    """Root-level union keywords are stripped (Anthropic rejects them)."""
-
-    def test_top_level_anyof_stripped_and_object_ensured(self):
-        schema = {"anyOf": [{"type": "object"}, {"type": "null"}]}
-
-        result = sanitize_anthropic_tool_input_schema(schema)
-
-        assert "anyOf" not in result
-        assert result["type"] == "object"
-        assert result["properties"] == {}
-
-    def test_top_level_allof_stripped_keeps_existing_object_fields(self):
-        schema = {
-            "type": "object",
-            "properties": {"a": {"type": "string"}},
-            "allOf": [{"required": ["a"]}],
-        }
-
-        result = sanitize_anthropic_tool_input_schema(schema)
-
-        assert "allOf" not in result
-        assert result["type"] == "object"
-        assert result["properties"] == {"a": {"type": "string"}}
+def _tool(name: str, schema: dict | None = None) -> dict:
+    return {
+        "name": name,
+        "description": f"Call {name}.",
+        "parameters": copy.deepcopy(schema or _SCHEMA),
+    }
 
 
-class TestPassThroughAndFallback:
-    """Valid schemas pass through unchanged; junk degrades to an empty object."""
+def test_anthropic_sanitizer_preserves_canonical_schema_without_mutation() -> None:
+    original = copy.deepcopy(_SCHEMA)
 
-    def test_valid_object_schema_passes_through_without_mutating_input(self):
-        schema = {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string"},
-                "limit": {"type": "integer"},
-            },
-            "required": ["path"],
-            "additionalProperties": False,
-        }
-        original = copy.deepcopy(schema)
+    result = sanitize_anthropic_tool_input_schema(_SCHEMA)
 
-        result = sanitize_anthropic_tool_input_schema(schema)
+    assert result == original
+    assert result is not _SCHEMA
+    assert original == _SCHEMA
 
-        assert result == original
-        assert schema == original  # the caller's registry entry is untouched
 
-    def test_object_without_properties_gets_empty_properties(self):
-        result = sanitize_anthropic_tool_input_schema({"type": "object"})
+@pytest.mark.parametrize("schema", [{}, None, "object", {"anyOf": [{"type": "object"}]}])
+def test_anthropic_sanitizer_rejects_non_object_roots(schema: object) -> None:
+    with pytest.raises(ValueError, match="object root"):
+        sanitize_anthropic_tool_input_schema(schema)
 
-        assert result == {"type": "object", "properties": {}}
 
-    def test_empty_or_non_dict_returns_empty_object_schema(self):
-        assert sanitize_anthropic_tool_input_schema({}) == {"type": "object", "properties": {}}
-        assert sanitize_anthropic_tool_input_schema(None) == {"type": "object", "properties": {}}
-        assert sanitize_anthropic_tool_input_schema("object") == {
-            "type": "object",
-            "properties": {},
-        }
+def test_openai_strict_render_preserves_canonical_nullable_optionals() -> None:
+    schema = copy.deepcopy(_SCHEMA)
+    schema["properties"]["limit"]["type"] = ["integer", "null"]
+
+    decision = render_tool_schema(schema, profile="openai_strict")
+
+    assert decision.strict is True
+    assert decision.reason is None
+    assert decision.schema["required"] == ["path", "limit"]
+    assert decision.schema["properties"]["limit"]["type"] == ["integer", "null"]
+    assert decision.schema["additionalProperties"] is False
+    assert _SCHEMA["required"] == ["path"]
+
+
+def test_openai_strict_downgrades_nonnullable_optional_without_weakening_schema() -> None:
+    decision = render_tool_schema(_SCHEMA, profile="openai_strict")
+
+    assert decision.strict is False
+    assert decision.reason == "optional_property_not_nullable:/properties/limit"
+    assert decision.schema == _SCHEMA
+
+
+def test_openai_strict_downgrades_unsupported_keywords_without_weakening_schema() -> None:
+    schema = {**_SCHEMA, "not": {"required": ["limit"]}}
+
+    decision = render_tool_schema(schema, profile="openai_strict")
+
+    assert decision.strict is False
+    assert decision.reason == "unsupported_keyword:not"
+    assert decision.schema == schema
+
+
+def test_anthropic_strict_is_all_or_none_for_the_request_set() -> None:
+    eligible = render_tool_definitions([_tool("one"), _tool("two")], profile="anthropic_strict")
+    oversized = render_tool_definitions(
+        [_tool(f"tool_{index}") for index in range(ANTHROPIC_MAX_STRICT_TOOLS + 1)],
+        profile="anthropic_strict",
+    )
+
+    assert all(tool["strict"] is True for tool in eligible)
+    assert all("strict" not in tool for tool in oversized)
+
+
+def test_best_effort_profile_preserves_schema_and_emits_no_internal_fields() -> None:
+    rendered = render_tool_definitions([_tool("read")], profile="best_effort")
+
+    assert rendered == [_tool("read")]
+    assert rendered[0]["parameters"] is not _SCHEMA

@@ -26,13 +26,32 @@ from core.tools.session_search import (
     build_session_search_description,
     build_session_search_parameters,
     register_session_search_tool,
-    session_search_handler,
+)
+from core.tools.session_search import (
+    session_search_handler as _session_search_handler,
 )
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
 
 pytestmark = pytest.mark.asyncio
 
 JsonObject = dict[str, Any]
+
+
+async def session_search_handler(
+    context: ToolContext,
+    arguments: JsonObject,
+    backend: Any,
+) -> JsonObject:
+    canonical = arguments
+    if "action" in arguments:
+        fields = dict(arguments)
+        operation = fields.pop("action")
+        canonical = {"request": {"operation": operation, **fields}}
+    elif len(arguments) == 1:
+        operation, fields = next(iter(arguments.items()))
+        if isinstance(fields, dict):
+            canonical = {"request": {"operation": operation, **fields}}
+    return await _session_search_handler(context, canonical, backend)
 
 
 def make_context(
@@ -81,11 +100,15 @@ async def test_registered_schema_exposes_strict_operations_and_matches_jsonl() -
     register_session_search_tool(registry, sessions)
 
     tool = registry.get(SESSION_SEARCH_TOOL_NAME)
-    operations = tool.parameters["properties"]
-    assert set(operations) == {"list", "overview", "search", "read"}
-    search_properties = operations["search"]["oneOf"][0]["properties"]
+    branches = tool.parameters["properties"]["request"]["anyOf"]
+    operations = {branch["properties"]["operation"]["enum"][0] for branch in branches}
+    assert operations == {"list", "overview", "search", "read"}
+    search = next(
+        branch for branch in branches if branch["properties"]["operation"]["enum"] == ["search"]
+    )
+    search_properties = search["properties"]
     assert {"query", "match", "roles", "order"} <= set(search_properties)
-    assert operations["search"]["oneOf"][0]["required"] == ["query"]
+    assert search["required"] == ["operation", "query"]
     assert search_properties["order"]["enum"] == ["newest", "oldest"]
     assert tool.description.startswith(SESSION_SEARCH_TOOL_DESCRIPTION)
 
@@ -96,8 +119,18 @@ async def test_schema_changes_with_backend_capabilities(tmp_path: Path) -> None:
 
     vector = build_session_search_parameters(VectorRecallBackend(context).search_capabilities())
     hybrid = build_session_search_parameters(HybridRecallBackend(context).search_capabilities())
-    vector_properties = vector["properties"]["search"]["oneOf"][0]["properties"]
-    hybrid_properties = hybrid["properties"]["search"]["oneOf"][0]["properties"]
+    vector_search = next(
+        branch
+        for branch in vector["properties"]["request"]["anyOf"]
+        if branch["properties"]["operation"]["enum"] == ["search"]
+    )
+    hybrid_search = next(
+        branch
+        for branch in hybrid["properties"]["request"]["anyOf"]
+        if branch["properties"]["operation"]["enum"] == ["search"]
+    )
+    vector_properties = vector_search["properties"]
+    hybrid_properties = hybrid_search["properties"]
 
     assert "match" not in vector_properties
     assert "literal_match" not in vector_properties

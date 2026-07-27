@@ -225,6 +225,7 @@ async def test_rooted_project_context_stays_pinned_across_project_tool_call(
             "type": "object",
             "properties": {"project_id": {"type": "string"}},
             "required": ["project_id"],
+            "additionalProperties": False,
         },
         project_tool,
     )

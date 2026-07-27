@@ -10,12 +10,37 @@ from core.tools.memory import (
     MEMORY_TOOL_NAME,
     MEMORY_TOOL_PARAMETERS,
     _MemoryThrashTracker,
-    memory_handler,
     register_memory_tool,
+)
+from core.tools.memory import (
+    memory_handler as _memory_handler,
 )
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
 
 JsonObject = dict[str, Any]
+
+
+def memory_handler(
+    context: ToolContext,
+    arguments: JsonObject,
+    service: MemoryService,
+    tracker: _MemoryThrashTracker | None = None,
+) -> JsonObject:
+    if "action" in arguments:
+        fields = dict(arguments)
+        operation = fields.pop("action")
+    elif len(arguments) == 1:
+        operation, fields = next(iter(arguments.items()))
+        if not isinstance(fields, dict):
+            return _memory_handler(context, arguments, service, tracker)
+    else:
+        return _memory_handler(context, arguments, service, tracker)
+    return _memory_handler(
+        context,
+        {"request": {"operation": operation, **fields}},
+        service,
+        tracker,
+    )
 
 
 def make_context(data_root: Path) -> ToolContext:
@@ -65,10 +90,16 @@ def test_register_memory_tool_exposes_provider_schema(tmp_path: Path) -> None:
     assert tool.parameters == MEMORY_TOOL_PARAMETERS
     definition = registry.provider_definitions(["memory"])[0]
     assert definition["name"] == "memory"
-    operations = definition["parameters"]["properties"]
+    branches = definition["parameters"]["properties"]["request"]["anyOf"]
+    operations = {branch["properties"]["operation"]["enum"][0]: branch for branch in branches}
     assert set(operations) == {"list", "add", "replace", "remove"}
-    assert operations["add"]["required"] == ["scope", "content"]
-    assert operations["replace"]["required"] == ["scope", "entry_id", "content"]
+    assert operations["add"]["required"] == ["operation", "scope", "content"]
+    assert operations["replace"]["required"] == [
+        "operation",
+        "scope",
+        "entry_id",
+        "content",
+    ]
 
 
 def test_memory_tool_adds_and_lists_user_entries(tmp_path: Path) -> None:

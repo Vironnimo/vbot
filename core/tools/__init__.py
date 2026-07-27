@@ -12,6 +12,7 @@ from core.tools.bash import (
     bash_handler,
     register_bash_tool,
 )
+from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
 from core.tools.edit import (
     EDIT_TOOL_DESCRIPTION,
     EDIT_TOOL_NAME,
@@ -250,6 +251,8 @@ __all__ = [
     "TOOL_ALLOWLIST_WILDCARD",
     "Tool",
     "ToolCall",
+    "ToolContract",
+    "ToolContractError",
     "ToolCancellationHook",
     "ToolContext",
     "ToolDisplay",
@@ -324,6 +327,7 @@ __all__ = [
     "tool_success",
     "web_search_handler",
     "write_handler",
+    "compile_tool_contract",
     "effective_agent_allowed_tools",
     "memory_tool_enabled",
     "sanitize_configured_allowed_tools",

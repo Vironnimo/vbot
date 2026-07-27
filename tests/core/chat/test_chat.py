@@ -74,9 +74,27 @@ async def test_cancel_during_tool_dispatch_persists_all_sibling_tool_results(
         return handler
 
     tools = ToolRegistry()
-    tools.register("first_tool", "Fast tool.", {"type": "object"}, make_handler("first"))
-    tools.register("second_tool", "Fast tool.", {"type": "object"}, make_handler("second"))
-    tools.register("third_tool", "Fast tool.", {"type": "object"}, make_handler("third"))
+    tools.register(
+        "first_tool",
+        "Fast tool.",
+        {"type": "object"},
+        make_handler("first"),
+        parallel_safe=True,
+    )
+    tools.register(
+        "second_tool",
+        "Fast tool.",
+        {"type": "object"},
+        make_handler("second"),
+        parallel_safe=True,
+    )
+    tools.register(
+        "third_tool",
+        "Fast tool.",
+        {"type": "object"},
+        make_handler("third"),
+        parallel_safe=True,
+    )
 
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter(

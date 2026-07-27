@@ -39,9 +39,23 @@ async def _dispatch(
     *,
     project_id: str | None = None,
 ) -> dict[str, object]:
-    return await registry.dispatch(
-        _context(tmp_path, project_id=project_id), arguments, [CRON_TOOL_NAME]
-    )
+    canonical = arguments
+    if set(arguments) == {"request"}:
+        canonical = arguments
+    elif "action" in arguments:
+        fields = dict(arguments)
+        operation = fields.pop("action")
+        canonical = {"request": {"operation": operation, **fields}}
+    elif len(arguments) == 1:
+        operation_name, operation_fields = next(iter(arguments.items()))
+        if isinstance(operation_fields, dict):
+            canonical = {"request": {"operation": operation_name, **operation_fields}}
+    try:
+        return await registry.dispatch(
+            _context(tmp_path, project_id=project_id), canonical, [CRON_TOOL_NAME]
+        )
+    except ValueError as error:
+        return tool_failure("invalid_arguments", str(error), retryable=False)
 
 
 def _make_job(
@@ -85,9 +99,12 @@ def _cron_service_mock() -> Mock:
 
 
 def test_schema_exposes_strict_operation_objects() -> None:
-    operations = cast(dict[str, dict[str, Any]], CRON_TOOL_PARAMETERS["properties"])
-
-    assert set(operations) == {
+    request = cast(dict[str, Any], CRON_TOOL_PARAMETERS["properties"]["request"])
+    branches = cast(list[dict[str, Any]], request["anyOf"])
+    operations = {
+        cast(list[str], branch["properties"]["operation"]["enum"])[0] for branch in branches
+    }
+    assert operations == {
         "create",
         "list",
         "update",
@@ -95,14 +112,25 @@ def test_schema_exposes_strict_operation_objects() -> None:
         "enable",
         "disable",
     }
-    assert CRON_TOOL_PARAMETERS["minProperties"] == 1
-    assert CRON_TOOL_PARAMETERS["maxProperties"] == 1
-    assert operations["create"]["required"] == ["name", "prompt", "schedule_type"]
-    assert operations["update"]["required"] == ["id"]
+    assert CRON_TOOL_PARAMETERS["required"] == ["request"]
+    create_branches = [
+        branch for branch in branches if branch["properties"]["operation"]["enum"] == ["create"]
+    ]
+    assert create_branches
+    assert all(
+        {"operation", "name", "prompt", "schedule_type"}.issubset(branch["required"])
+        for branch in create_branches
+    )
+    by_operation = {
+        branch["properties"]["operation"]["enum"][0]: branch
+        for branch in branches
+        if branch["properties"]["operation"]["enum"][0] != "create"
+    }
+    assert by_operation["update"]["required"] == ["operation", "id"]
     for operation in ("delete", "enable", "disable"):
-        assert operations[operation]["required"] == ["id"]
+        assert by_operation[operation]["required"] == ["operation", "id"]
     for removed_field in ("status", "session_id", "timezone", "agent_id"):
-        assert removed_field not in operations["create"]["properties"]
+        assert all(removed_field not in branch["properties"] for branch in create_branches)
 
 
 def test_canonical_create_operation_returns_success(tmp_path: Path) -> None:
@@ -223,8 +251,7 @@ def test_create_requires_a_name_and_recommends_a_valid_call(tmp_path: Path) -> N
     error = cast(dict[str, Any], result["error"])
     assert error["code"] == "invalid_arguments"
     assert error["retryable"] is False
-    assert "name must be a non-empty string" in error["message"]
-    assert '"name":"<job name>"' in error["message"]
+    assert "'name' is a required property" in error["message"]
     cron_service.create_job.assert_not_called()
 
 
@@ -377,24 +404,20 @@ def test_disable_action_returns_success(tmp_path: Path) -> None:
     cron_service.disable_job.assert_called_once_with("job-disable")
 
 
-def test_invalid_action_returns_failure(tmp_path: Path) -> None:
+def test_invalid_operation_returns_contract_failure(tmp_path: Path) -> None:
     cron_service = _cron_service_mock()
     registry = ToolRegistry()
     register_cron_tool(registry, cron_service)
 
-    result = asyncio.run(_dispatch(registry, tmp_path, {"action": "invalid"}))
+    result = asyncio.run(_dispatch(registry, tmp_path, {"request": {"operation": "invalid"}}))
 
-    assert result == tool_failure(
-        "invalid_arguments",
-        (
-            "Legacy action must be one of: create, delete, disable, enable, list, update. "
-            'Use the canonical operation object; to inspect jobs use {"list":{}}'
-        ),
-        retryable=False,
-    )
+    error = cast(dict[str, Any], result["error"])
+    assert error["code"] == "invalid_arguments"
+    assert error["retryable"] is False
+    assert "[anyOf]" in error["message"]
 
 
-def test_legacy_multiple_operation_envelopes_return_actionable_failure(tmp_path: Path) -> None:
+def test_multiple_top_level_operation_objects_are_rejected(tmp_path: Path) -> None:
     cron_service = _cron_service_mock()
     registry = ToolRegistry()
     register_cron_tool(registry, cron_service)
@@ -407,14 +430,10 @@ def test_legacy_multiple_operation_envelopes_return_actionable_failure(tmp_path:
         )
     )
 
-    assert result == tool_failure(
-        "invalid_arguments",
-        (
-            "Choose exactly one operation object: create, list, update, delete, enable, "
-            'or disable. To inspect jobs use {"list":{}}'
-        ),
-        retryable=False,
-    )
+    error = cast(dict[str, Any], result["error"])
+    assert error["code"] == "invalid_arguments"
+    assert error["retryable"] is False
+    assert "'request' is a required property" in error["message"]
 
 
 def test_update_requires_a_change_beyond_id(tmp_path: Path) -> None:
@@ -433,8 +452,7 @@ def test_update_requires_a_change_beyond_id(tmp_path: Path) -> None:
     error = cast(dict[str, Any], result["error"])
     assert error["code"] == "invalid_arguments"
     assert error["retryable"] is False
-    assert "update requires at least one field to change" in error["message"]
-    assert '{"update":{"id":"<job-id>"' in error["message"]
+    assert "[minProperties]" in error["message"]
     cron_service.update_job.assert_not_called()
 
 
@@ -459,12 +477,12 @@ def test_removed_agent_fields_are_rejected(
     error = cast(dict[str, Any], result["error"])
     assert error["code"] == "invalid_arguments"
     assert error["retryable"] is False
-    assert f"Action 'create' does not accept: {removed_field}" in error["message"]
-    assert '{"create":{' in error["message"]
+    assert "Additional properties are not allowed" in error["message"]
+    assert removed_field in error["message"]
     cron_service.create_job.assert_not_called()
 
 
-def test_legacy_flat_shape_maps_agent_id_to_target(tmp_path: Path) -> None:
+def test_removed_agent_id_is_rejected(tmp_path: Path) -> None:
     cron_service = _cron_service_mock()
     cron_service.create_job.return_value = _make_job(job_id="job-legacy")
     registry = ToolRegistry()
@@ -485,20 +503,13 @@ def test_legacy_flat_shape_maps_agent_id_to_target(tmp_path: Path) -> None:
         )
     )
 
-    assert result["ok"] is True
-    cron_service.create_job.assert_called_once_with(
-        agent_id="builder",
-        name="Later task",
-        prompt="Run this later",
-        schedule_type="cron",
-        cron_expression="*/5 * * * *",
-        run_at=None,
-        session_id=None,
-        project_id="vbot",
-    )
+    error = cast(dict[str, Any], result["error"])
+    assert error["code"] == "invalid_arguments"
+    assert "Additional properties are not allowed" in error["message"]
+    cron_service.create_job.assert_not_called()
 
 
-def test_legacy_stringified_empty_list_envelope_is_normalized(tmp_path: Path) -> None:
+def test_stringified_operation_payload_is_rejected(tmp_path: Path) -> None:
     cron_service = _cron_service_mock()
     cron_service.list_jobs.return_value = []
     registry = ToolRegistry()
@@ -506,12 +517,13 @@ def test_legacy_stringified_empty_list_envelope_is_normalized(tmp_path: Path) ->
 
     result = asyncio.run(_dispatch(registry, tmp_path, {"list": "{}"}))
 
-    assert result["ok"] is True
-    assert result["data"] == {"jobs": [], "system_timezone": "UTC"}
-    cron_service.list_jobs.assert_called_once_with()
+    error = cast(dict[str, Any], result["error"])
+    assert error["code"] == "invalid_arguments"
+    assert "'request' is a required property" in error["message"]
+    cron_service.list_jobs.assert_not_called()
 
 
-def test_legacy_create_envelope_remains_supported(tmp_path: Path) -> None:
+def test_nested_create_request_is_supported(tmp_path: Path) -> None:
     cron_service = _cron_service_mock()
     cron_service.create_job.return_value = _make_job(job_id="job-envelope")
     registry = ToolRegistry()
@@ -522,7 +534,8 @@ def test_legacy_create_envelope_remains_supported(tmp_path: Path) -> None:
             registry,
             tmp_path,
             {
-                "create": {
+                "request": {
+                    "operation": "create",
                     "name": "Later task",
                     "prompt": "Run this later",
                     "schedule_type": "cron",

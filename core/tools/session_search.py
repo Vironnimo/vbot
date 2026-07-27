@@ -55,8 +55,9 @@ SESSION_SEARCH_RESULT_MAX_BYTES = 50 * 1024
 SESSION_SEARCH_CURSOR_VERSION = 1
 
 _BASE_DESCRIPTION = (
-    "Discover persisted Sessions and retrieve canonical Messages. Choose one operation object: "
-    "list returns Session summaries; overview returns counts and boundary references; search "
+    "Discover persisted Sessions and retrieve canonical Messages. Set request.operation to list, "
+    "overview, search, or read. list returns Session summaries; overview returns counts and "
+    "boundary references; search "
     "uses the configured Recall backend and returns ranked excerpts with read references; read "
     "returns exact canonical Message records and losslessly segments oversized records. Cursor "
     "continuations use cursor by itself inside the same operation."
@@ -270,8 +271,8 @@ def build_session_search_parameters(
             ),
         },
         description=(
-            "Choose exactly one operation property. Its value is the complete argument object "
-            "for that operation."
+            "Set request.operation to list, overview, search, or read and include that "
+            "operation's arguments in the same request object."
         ),
     )
 
@@ -391,6 +392,11 @@ def register_session_search_tool(
         build_session_search_description(recall_backend),
         build_session_search_parameters(capabilities),
         make_session_search_handler(recall_backend, sessions, backend_name),
+        result_schema={
+            "type": "object",
+            "required": ["action", "items", "has_more", "formatted_bytes"],
+        },
+        parallel_safe=True,
         display=ToolDisplay(
             summary_builder=_display_summary,
             hidden_argument_keys=(

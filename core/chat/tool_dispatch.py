@@ -10,7 +10,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from core.agents import default_workspace_dir
 from core.chat.events import _emit_tool_context_event, _timing_payload
@@ -123,6 +123,27 @@ class _EmittingToolRegistry(ToolRegistry):
             add_note=self._note_hook or (lambda _text: None),
         )
 
+    def is_parallel_safe(self, name: str) -> bool:
+        """Delegate execution policy and serialize while Tool hooks are active."""
+        if self._extension_registry is not None and self._extension_registry.has_tool_hooks():
+            return False
+        resolver = getattr(self._registry, "is_parallel_safe", None)
+        return bool(callable(resolver) and resolver(name))
+
+    def schema_fingerprint(self, name: str) -> str:
+        """Return the wrapped registry's Tool schema fingerprint."""
+        resolver = getattr(self._registry, "schema_fingerprint", None)
+        if not callable(resolver):
+            return ""
+        return str(resolver(name))
+
+    def validate_result(self, name: str, result: Any) -> JsonObject:
+        """Validate through the wrapped canonical registry."""
+        validator = getattr(self._registry, "validate_result", None)
+        if not callable(validator):
+            return _validated_tool_result(name, result)
+        return cast(JsonObject, validator(name, result))
+
     async def dispatch(
         self,
         context: ToolContext,
@@ -148,6 +169,7 @@ class _EmittingToolRegistry(ToolRegistry):
                     input=arguments,
                     validator=lambda extension_name, candidate: (
                         _validated_extension_tool_hook_result(
+                            registry=self,
                             tool_name=context.tool_name,
                             extension_name=extension_name,
                             hook_name="tool_call",
@@ -171,6 +193,7 @@ class _EmittingToolRegistry(ToolRegistry):
                 elif decision.replacement is not None:
                     result = decision.replacement
 
+            fingerprint = _safe_schema_fingerprint(self, context.tool_name)
             self._run.emit(
                 TOOL_CALL_STARTED_EVENT,
                 {
@@ -185,6 +208,7 @@ class _EmittingToolRegistry(ToolRegistry):
                         context.tool_name,
                         effective_arguments,
                     ),
+                    "schema_fingerprint": fingerprint,
                 },
             )
 
@@ -202,6 +226,7 @@ class _EmittingToolRegistry(ToolRegistry):
                     result=result,
                     validator=lambda extension_name, candidate: (
                         _validated_extension_tool_hook_result(
+                            registry=self,
                             tool_name=context.tool_name,
                             extension_name=extension_name,
                             hook_name="tool_result",
@@ -212,12 +237,17 @@ class _EmittingToolRegistry(ToolRegistry):
 
             timing = _timing_payload(started_at, started_perf)
             self._tool_timings[context.tool_call_id] = timing
+            error = result.get("error")
+            error_code = error.get("code") if isinstance(error, dict) else None
             _LOGGER.debug(
-                "Tool %s completed (run=%s duration_ms=%s ok=%s)",
+                "Tool %s completed (run=%s call=%s schema=%s duration_ms=%s ok=%s error=%s)",
                 context.tool_name,
                 self._run.id,
+                context.tool_call_id,
+                fingerprint[:12],
                 timing["duration_ms"],
                 result.get("ok"),
+                error_code,
             )
             # Do not discard a completed tool result when the run is
             # cancelled: the executor already returned the result, the
@@ -234,6 +264,8 @@ class _EmittingToolRegistry(ToolRegistry):
                     },
                     "result": result,
                     "timing": timing,
+                    "schema_fingerprint": fingerprint,
+                    "error_code": error_code,
                 },
             )
             return result
@@ -285,7 +317,17 @@ class _EmittingToolRegistry(ToolRegistry):
         allowed_tools: Sequence[str] | None,
     ) -> JsonObject:
         result = await self._registry.dispatch(context, arguments, allowed_tools)
-        return _validated_tool_result(context.tool_name, result)
+        return self.validate_result(context.tool_name, result)
+
+
+def _safe_schema_fingerprint(registry: Any, tool_name: str) -> str:
+    resolver = getattr(registry, "schema_fingerprint", None)
+    if not callable(resolver):
+        return ""
+    try:
+        return str(resolver(tool_name))
+    except (KeyError, ToolNotFoundError, ValueError):
+        return ""
 
 
 async def _dispatch_tool_calls(
@@ -509,13 +551,19 @@ def _validated_tool_result(tool_name: str, result: Any) -> JsonObject:
 
 def _validated_extension_tool_hook_result(
     *,
+    registry: Any,
     tool_name: str,
     extension_name: str,
     hook_name: str,
     result: Any,
 ) -> JsonObject | None:
     try:
-        validated = _validated_tool_result(tool_name, result)
+        validator = getattr(registry, "validate_result", None)
+        validated = (
+            validator(tool_name, result)
+            if callable(validator)
+            else _validated_tool_result(tool_name, result)
+        )
         json.dumps(validated, ensure_ascii=False, separators=(",", ":"))
         return validated
     except (TypeError, ValueError) as error:

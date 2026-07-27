@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Literal, cast
 
 from core.automation.cron import CronJobNotFoundError, CronJobValidationError, CronServiceError
@@ -13,6 +12,7 @@ from core.tools.tools import (
     ToolContext,
     ToolDisplay,
     ToolRegistry,
+    extract_tool_operation,
     operation_envelope_schema,
     tool_failure,
     tool_success,
@@ -26,8 +26,8 @@ CronScheduleType = Literal["cron", "once"]
 
 CRON_TOOL_NAME = "cron"
 CRON_TOOL_DESCRIPTION = (
-    "Create and manage named persisted schedules that start Runs. Choose exactly one operation "
-    "object: create, list, update, delete, enable, or disable. New "
+    "Create and manage named persisted schedules that start Runs. Set request.operation to "
+    "create, list, update, delete, enable, or disable. New "
     "jobs are enabled immediately, use the server timezone, and start a fresh Session on "
     "every fire. Use list to obtain job ids; disable pauses a job without deleting it."
 )
@@ -68,21 +68,21 @@ _ACTION_ARGUMENTS: dict[str, frozenset[str]] = {
 }
 _ACTION_RECOMMENDATIONS = {
     "create": (
-        'For a recurring job use {"create":{"name":"<job name>",'
+        'For a recurring job use {"request":{"operation":"create","name":"<job name>",'
         '"prompt":"<instruction>",'
         '"schedule_type":"cron","cron_expression":"0 9 * * *"}}. For a one-time job use '
-        '{"create":{"name":"<job name>","prompt":"<instruction>",'
+        '{"request":{"operation":"create","name":"<job name>","prompt":"<instruction>",'
         '"schedule_type":"once",'
         '"run_at":"2026-07-25T09:00:00+02:00"}}'
     ),
-    "list": 'Use {"list":{}}',
+    "list": 'Use {"request":{"operation":"list"}}',
     "update": (
-        'Use {"update":{"id":"<job-id>","name":"<replacement name>"}}; '
+        'Use {"request":{"operation":"update","id":"<job-id>","name":"<replacement name>"}}; '
         "include only fields that should change"
     ),
-    "delete": 'Use {"delete":{"id":"<job-id>"}}',
-    "enable": 'Use {"enable":{"id":"<job-id>"}}',
-    "disable": 'Use {"disable":{"id":"<job-id>"}}',
+    "delete": 'Use {"request":{"operation":"delete","id":"<job-id>"}}',
+    "enable": 'Use {"request":{"operation":"enable","id":"<job-id>"}}',
+    "disable": 'Use {"request":{"operation":"disable","id":"<job-id>"}}',
 }
 
 _CRON_ID_PARAMETER: JsonObject = {
@@ -147,29 +147,30 @@ def _cron_operation(
 CRON_TOOL_PARAMETERS: JsonObject = operation_envelope_schema(
     {
         "create": {
-            **_cron_operation(
-                "Create and immediately enable one schedule.",
-                {
-                    "target": _CRON_TARGET_PARAMETER,
-                    "name": _CRON_NAME_PARAMETER,
-                    "prompt": _CRON_PROMPT_PARAMETER,
-                    "schedule_type": _CRON_SCHEDULE_TYPE_PARAMETER,
-                    "cron_expression": _CRON_EXPRESSION_PARAMETER,
-                    "run_at": _CRON_RUN_AT_PARAMETER,
-                },
-                required=("name", "prompt", "schedule_type"),
-            ),
+            "type": "object",
             "oneOf": [
-                {
-                    "properties": {"schedule_type": {"const": "cron"}},
-                    "required": ["cron_expression"],
-                    "not": {"required": ["run_at"]},
-                },
-                {
-                    "properties": {"schedule_type": {"const": "once"}},
-                    "required": ["run_at"],
-                    "not": {"required": ["cron_expression"]},
-                },
+                _cron_operation(
+                    "Create and immediately enable one recurring schedule.",
+                    {
+                        "target": _CRON_TARGET_PARAMETER,
+                        "name": _CRON_NAME_PARAMETER,
+                        "prompt": _CRON_PROMPT_PARAMETER,
+                        "schedule_type": {"type": "string", "enum": ["cron"]},
+                        "cron_expression": _CRON_EXPRESSION_PARAMETER,
+                    },
+                    required=("name", "prompt", "schedule_type", "cron_expression"),
+                ),
+                _cron_operation(
+                    "Create and immediately enable one one-time schedule.",
+                    {
+                        "target": _CRON_TARGET_PARAMETER,
+                        "name": _CRON_NAME_PARAMETER,
+                        "prompt": _CRON_PROMPT_PARAMETER,
+                        "schedule_type": {"type": "string", "enum": ["once"]},
+                        "run_at": _CRON_RUN_AT_PARAMETER,
+                    },
+                    required=("name", "prompt", "schedule_type", "run_at"),
+                ),
             ],
         },
         "list": _cron_operation(
@@ -190,17 +191,7 @@ CRON_TOOL_PARAMETERS: JsonObject = operation_envelope_schema(
                 },
                 required=("id",),
             ),
-            "anyOf": [
-                {"required": [field_name]}
-                for field_name in (
-                    "target",
-                    "name",
-                    "prompt",
-                    "schedule_type",
-                    "cron_expression",
-                    "run_at",
-                )
-            ],
+            "minProperties": 2,
         },
         "delete": _cron_operation(
             "Delete an existing job.",
@@ -219,8 +210,8 @@ CRON_TOOL_PARAMETERS: JsonObject = operation_envelope_schema(
         ),
     },
     description=(
-        "Choose exactly one operation property. Its value is the complete argument object "
-        "for that operation."
+        "Set request.operation to exactly one supported operation and include only that "
+        "operation's fields."
     ),
 )
 
@@ -238,6 +229,7 @@ def register_cron_tool(registry: ToolRegistry, cron_service: CronService) -> Non
         CRON_TOOL_DESCRIPTION,
         CRON_TOOL_PARAMETERS,
         handler,
+        result_schema={"type": "object"},
         display=ToolDisplay(summary_builder=_cron_display_summary),
     )
 
@@ -412,61 +404,11 @@ def _job_payload(cron_service: CronService, job: CronJob) -> JsonObject:
 
 
 def _extract_operation(arguments: JsonObject) -> tuple[str, JsonObject] | str:
-    """Normalize the canonical operation envelope and legacy flat action calls."""
-
-    if "action" in arguments:
-        action = arguments.get("action")
-        if not isinstance(action, str) or action not in CRON_ACTIONS:
-            return (
-                "Legacy action must be one of: create, delete, disable, enable, list, update. "
-                'Use the canonical operation object; to inspect jobs use {"list":{}}'
-            )
-        action_arguments = {key: value for key, value in arguments.items() if key != "action"}
-        if "agent_id" in action_arguments:
-            if "target" in action_arguments:
-                return "Use only target, not both target and legacy agent_id"
-            action_arguments["target"] = action_arguments.pop("agent_id")
-        return action, action_arguments
-
-    if len(arguments) != 1:
-        return (
-            "Choose exactly one operation object: create, list, update, delete, enable, or "
-            'disable. To inspect jobs use {"list":{}}'
-        )
-    action, operation_arguments = next(iter(arguments.items()))
-    if action not in CRON_ACTIONS:
-        return (
-            f"Unknown operation: {action}. Choose create, list, update, delete, enable, "
-            'or disable. To inspect jobs use {"list":{}}'
-        )
-
-    normalized_arguments = _normalize_operation_arguments(action, operation_arguments)
-    if isinstance(normalized_arguments, str):
-        return normalized_arguments
-    return action, normalized_arguments
-
-
-def _normalize_operation_arguments(action: str, operation_arguments: object) -> JsonObject | str:
-    """Normalize one operation object and tolerate old malformed list encodings."""
-
-    if isinstance(operation_arguments, dict):
-        return dict(operation_arguments)
-
-    if action == "list" and operation_arguments in (None, True, ""):
-        return {}
-
-    if isinstance(operation_arguments, str):
-        try:
-            decoded_arguments = json.loads(operation_arguments)
-        except json.JSONDecodeError:
-            decoded_arguments = None
-        if isinstance(decoded_arguments, dict):
-            return decoded_arguments
-
-    return _with_action_recommendation(
-        action,
-        f"Legacy field '{action}' could not be interpreted as operation arguments",
-    )
+    """Extract the canonical request discriminator with actionable recovery text."""
+    try:
+        return extract_tool_operation(arguments, sorted(CRON_ACTIONS))
+    except ValueError as error:
+        return f"{error}. {_ACTION_RECOMMENDATIONS['list']}"
 
 
 def _with_action_recommendation(action: str, message: str) -> str:

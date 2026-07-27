@@ -158,6 +158,8 @@ class ToolDeclaration:
     # Optional English hint explaining the tool's readiness precondition, forwarded
     # verbatim into ``ToolRegistry.register`` and surfaced by ``tool.list``.
     readiness_hint: str | None = None
+    result_schema: dict[str, Any] | None = None
+    parallel_safe: bool = False
 
 
 @dataclass(frozen=True)
@@ -342,6 +344,8 @@ class ExtensionAPI:
         display: Any = None,
         ready: Callable[[], bool] | None = None,
         readiness_hint: str | None = None,
+        result_schema: dict[str, Any] | None = None,
+        parallel_safe: bool = False,
     ) -> None:
         """Declare an agent tool, mirroring ``ToolRegistry.register``.
 
@@ -368,6 +372,8 @@ class ExtensionAPI:
                 display=display,
                 ready=ready,
                 readiness_hint=readiness_hint,
+                result_schema=result_schema,
+                parallel_safe=parallel_safe,
             )
         )
 
@@ -730,6 +736,8 @@ class ExtensionRegistry:
                 ready=declaration.ready,
                 readiness_hint=declaration.readiness_hint,
                 extension=record.name,
+                result_schema=declaration.result_schema,
+                parallel_safe=declaration.parallel_safe,
             )
         except Exception as exc:
             self._diagnose_capability(record, f"tool {name!r} registration failed: {exc}")
@@ -835,6 +843,10 @@ class ExtensionRegistry:
         renders. Rebuilt and re-handed on every extension (re)load.
         """
         return {record.name for record in self._records if record.status == "loaded"}
+
+    def has_tool_hooks(self) -> bool:
+        """Return whether active Extensions can modify Tool calls or results."""
+        return bool(self._handlers.get("tool_call") or self._handlers.get("tool_result"))
 
     def apply_recall_backends(self, recall_registry: RecallBackendRegistry) -> None:
         """Register every loaded extension's recall backends into *recall_registry*.

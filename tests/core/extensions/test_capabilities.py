@@ -238,6 +238,37 @@ def test_extension_with_skipped_tool_stays_loaded(tmp_path: Path) -> None:
     assert record.capability_errors != []
 
 
+def test_invalid_extension_tool_contract_isolated_from_sibling_capabilities(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "extensions"
+    _write_single_file(
+        root,
+        "mixed_ext",
+        (
+            "from core.tools import tool_success\n"
+            "def register(api):\n"
+            "    handler = lambda context, arguments: tool_success({})\n"
+            "    api.register_tool('broken', 'Broken.', "
+            "{'type': 'object', 'properties': {'value': {'type': 'string'}}}, handler)\n"
+            "    api.register_tool('healthy', 'Healthy.', "
+            "{'type': 'object', 'additionalProperties': False}, handler)\n"
+        ),
+    )
+
+    registry = ExtensionRegistry.load(root)
+    tool_registry = ToolRegistry()
+    registry.apply_tools(tool_registry)
+
+    record = _record(registry, "mixed_ext")
+    assert record.status == "loaded"
+    assert [tool.name for tool in tool_registry.list_tools()] == ["healthy"]
+    assert any(
+        "broken" in message and "registration failed" in message
+        for message in record.capability_errors
+    )
+
+
 # --- commands ----------------------------------------------------------------
 
 
