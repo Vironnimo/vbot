@@ -121,6 +121,15 @@ describe('chatTimelinePresentation', () => {
     expect(summary).toBe('final/path.md');
   });
 
+  it('keeps canonical request operations visible after history reload', () => {
+    const summary = toolArgumentSummary({
+      name: 'process',
+      arguments: { request: { operation: 'list' } },
+    });
+
+    expect(summary).toBe('list');
+  });
+
   it('keeps a streaming row unlabeled while no preview field is complete', () => {
     const summary = toolArgumentSummary({
       name: 'write',
