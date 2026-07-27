@@ -67,7 +67,7 @@ Across Adapters, `input_tokens` means total prompt tokens including cached token
 
 - Base contract: `core/providers/adapter.py`
 - Shared HTTP/errors: `core/providers/_http_shared.py`, `errors.py`, `core/utils/http_status.py`, `core/utils/retry.py`
-- Live Tool Call/heartbeat probe against a configured Provider or captured debug trace: `scripts/probe_provider_tool_call.py`
+- Read-only structural Tool-contract/heartbeat probe against a configured Provider or captured debug trace: `scripts/probe_provider_tool_call.py`. Named scenarios cover direct, discriminated, nullable, invalid-pressure, large streamed, and strict-budget shapes; output is structural and redacted, and the synthetic Tool is never dispatched.
 - Reasoning: `core/providers/reasoning.py`
 - Request output/context policy: `core/providers/providers.py`, `core/utils/tokens.py`
 - Compatible and concrete Adapter modules: `core/providers/*.py`

@@ -17,7 +17,7 @@ One async Python kernel owns all agent behavior. The FastAPI server exposes it, 
 <table>
 <tr><td><b>Personal and project agents</b></td><td>Use durable Identity Agents, root one in a Project while retaining its identity, or run repository-defined Project Agents addressed as <code>agent@project</code>.</td></tr>
 <tr><td><b>Many providers and models</b></td><td>Connect OpenAI, Anthropic, OpenRouter, Ollama, Mistral, GitHub Copilot, and others through API-key, OAuth, or keyless Connections, with per-Agent defaults and Run-local fallback.</td></tr>
-<tr><td><b>Host tools and Sub-Agents</b></td><td>Agents can read, write, search, execute processes, browse the web, work with attachments, and delegate to authorized Identity or Project Agents.</td></tr>
+<tr><td><b>Host Tools and Sub-Agents</b></td><td>Agents can read, write, search, execute processes, browse the web, work with attachments, and delegate to authorized Identity or Project Agents through centrally validated Tool contracts.</td></tr>
 <tr><td><b>Durable Sessions</b></td><td>Session history survives restarts and supports Queueing, cancellation, Recall, policy-driven Compaction, Continuation checkpoints, automatic titles, Handoff, and Agent Takeover.</td></tr>
 <tr><td><b>Skills</b></td><td>Load bundled, global, Project, Extension, and private per-Agent playbooks. Identity Agents can author private or global Skills, and users can manage them in Settings.</td></tr>
 <tr><td><b>Speech, images, and embeddings</b></td><td>Bind dedicated Models for speech-to-text, text-to-speech, Image Generation/Edit, and semantic Recall independently of the Agent's chat Model.</td></tr>

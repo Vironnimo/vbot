@@ -11,7 +11,7 @@ Reports current or targeted agent/session/runtime status through the same status
   - `current` checks the calling Agent's current Tool Context Session.
   - `session` checks its `session_id` for the calling Agent.
   - `agent_session` checks its exact `agent_id`/`session_id` pair.
-  - The handler accepts the retired flat no-target, `session_id`, or `agent_id` plus `session_id` forms for compatibility; flat `agent_id` without `session_id` returns `invalid_arguments`.
+  - Public calls use exactly one closed root `request` object whose required `operation` is `current`, `session`, or `agent_session`; the latter branches structurally require their target fields and reject flat targeting arguments.
 - Success data contains status text built from Agent, Session, project, model, runtime, run activity state, context usage, and cache usage, plus machine-readable `agent_id`, `session_id`, `activity`, `run_id`, `created_at`, and `updated_at`. Cache details are intentionally text-only in the existing `text` field: the tool does not add machine-readable cache fields.
 - The status text carries a `Project:` line: `<display name> (<id>)` for a project session, the placeholder for an identity session (and the bare id when the project can't be loaded). Resolved by the shared `resolve_status_project_label(projects, project_id)` helper, so the `/status` command and the tool agree.
 - The status text carries `Last request cache:` and `Session cache:` lines. They render provider-reported cache read/write tokens and hit rate only when cache fields are present on measured assistant usage; otherwise they render the placeholder, so providers without cache reporting do not look like a 0% hit.

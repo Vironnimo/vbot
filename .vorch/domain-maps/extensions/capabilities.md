@@ -30,9 +30,9 @@ The sync or async handler receives `(ExtensionCommandContext, raw_argument)` and
 
 ## Tools
 
-`api.register_tool(name, description, parameters, handler, *, internal=False, display=None, ready=None, readiness_hint=None)` declares a normal Tool. Runtime applies Extension Tools after built-ins into the same `ToolRegistry`; they then use the same allowlist, Prompt, Provider definition, dispatch, and result-envelope contracts as built-ins.
+`api.register_tool(name, description, parameters, handler, *, internal=False, display=None, ready=None, readiness_hint=None, result_schema=None, parallel_safe=False)` declares a normal Tool. Runtime applies Extension Tools after built-ins into the same `ToolRegistry`; they then use the same compiled canonical input contract, optional success-data contract, fingerprint, allowlist, Prompt, Provider definition, dispatch, and result-envelope contracts as built-ins. Invalid Tool registration is diagnosed and skipped without preventing that Extension's other capabilities from applying.
 
-An existing built-in or earlier Extension Tool name wins. The losing declaration is skipped and diagnosed without failing the Extension. `ready` must be cheap and I/O-free; a false result leaves the Tool registered but hides it from model-facing surfaces. `readiness_hint` is optional English guidance exposed by `tool.list`.
+An existing built-in or earlier Extension Tool name wins. The losing declaration is skipped and diagnosed without failing the Extension. `ready` must be cheap and I/O-free; a false result leaves the Tool registered but hides it from model-facing surfaces. `readiness_hint` is optional English guidance exposed by `tool.list`. Extension Tools are serial by default; `parallel_safe=True` is an explicit declaration that sibling calls are independent and read-only or safely idempotent. Any active `tool_call` or `tool_result` hook forces all sibling Tool Calls to serialize because hook transformations and replacements are not assumed commutative.
 
 ## Recall backends
 

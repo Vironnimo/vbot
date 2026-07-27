@@ -7,7 +7,7 @@ Pinned memory CRUD over `USER.md` and `MEMORY.md`.
 - Tool name: `memory`
 - Registration: `register_memory_tool(registry, memory_service)`
 - Bound service: `MemoryService`
-- Schema: exactly one top-level `list`, `add`, `replace`, or `remove` operation object; every nested object has `additionalProperties: false` and structurally requires its own fields.
+- Schema: exactly one closed root `request` object whose required `operation` is `list`, `add`, `replace`, or `remove`; every branch rejects unknown fields and structurally requires its own arguments.
 - `scope`: one of `user` or `agent`.
 - `content`: required for `add` and `replace`.
 - `entry_id`: required for `replace` and `remove`; 1-based id from the current list response.

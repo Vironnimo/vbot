@@ -10,7 +10,7 @@ Registers the public sub-agent tools and delegates orchestration to `core/subage
 ## Interfaces
 
 - Tool name: `subagent`
-- Schema: exactly one top-level operation object. `start` requires `content` and optionally accepts `agent_id`, `background`, `model`, and `thinking_effort`; `continue` requires `content`, `agent_id`, and `session_id` and accepts the same Run overrides. The handler accepts the retired flat form for compatibility.
+- Schema: exactly one closed root `request` object whose required `operation` is `start` or `continue`. `start` requires `content` and optionally accepts `agent_id`, `background`, `model`, and `thinking_effort`; `continue` requires `content`, `agent_id`, and `session_id` and accepts the same Run overrides. Public calls accept no retired flat or operation-key form.
 - Display: the summary builder reads either shape and renders the operation, `agent_id`, and `content`; it hides `content` from argument details.
 - Tool name: `subagent_result`
 - Schema: required `session_id`; optional `agent_id` and `run_id`.
