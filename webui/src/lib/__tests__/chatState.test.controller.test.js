@@ -20,6 +20,7 @@ function setup({
     closeSubscriptions: vi.fn(),
     closeSubscriptionsExcept: vi.fn(),
     handleServerEvents: vi.fn(),
+    mergeRunResponse: vi.fn(),
     subscribeToRun: vi.fn(),
   };
   const listQueue = vi.fn().mockResolvedValue({
@@ -142,6 +143,42 @@ describe('chat controller', () => {
     expect(sessionState.actionError).toContain('offline');
     expect(chatState.actionError).toBe('');
     expect(runStream.closeSubscriptions).toHaveBeenCalledOnce();
+  });
+
+  it('merges the terminal cancel response into the active Run projection', async () => {
+    const cancelledRun = {
+      run_id: 'run-cancelled',
+      status: 'cancelled',
+      events: [
+        {
+          type: 'run_cancelled',
+          run_id: 'run-cancelled',
+          sequence: 2,
+          payload: { status: 'cancelled' },
+        },
+      ],
+    };
+    const cancelRun = vi.fn().mockResolvedValue(cancelledRun);
+    const { chatState, controller, runStream } = setup({
+      operationOverrides: { cancelRun },
+    });
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-one');
+    startRun(sessionState, {
+      run_id: 'run-cancelled',
+      status: 'running',
+      sse_url: '/api/runs/run-cancelled/events',
+    });
+
+    await controller.cancelActiveRun(sessionState);
+
+    expect(cancelRun).toHaveBeenCalledWith('run-cancelled', {
+      reason: 'user',
+    });
+    expect(runStream.mergeRunResponse).toHaveBeenCalledWith(
+      sessionState,
+      cancelledRun,
+    );
+    expect(chatState.cancellingRun).toBe(false);
   });
 
   it('keeps history transport failures separate from Run failures', async () => {

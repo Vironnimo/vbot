@@ -383,7 +383,8 @@ export function createChatController({
     chatState.cancellingRun = true;
     sessionState.actionError = '';
     try {
-      await operations.cancelRun(runId, { reason: 'user' });
+      const run = await operations.cancelRun(runId, { reason: 'user' });
+      runStream.mergeRunResponse(sessionState, run);
     } catch (error) {
       sessionState.actionError = `${translate('chat.cancelError', 'Run could not be cancelled.')} ${errorMessage(error)}`;
     } finally {
