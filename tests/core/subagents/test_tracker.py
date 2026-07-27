@@ -78,6 +78,25 @@ async def test_entry_status_returns_cancelled_for_generic_cancellation() -> None
     assert status == "cancelled"
 
 
+async def test_interrupted_entry_surfaces_cause_and_continuation_guidance() -> None:
+    note = (
+        "Result is partial: the Sub-Agent Run was interrupted by timeout. Continue the "
+        "same Session by passing both agent_id and session_id from this result to subagent."
+    )
+    entry = _completed_entry(
+        {
+            "status": "completed",
+            "result": "I am about to write the plan.",
+            "interrupted": True,
+            "interruption_cause": "timeout",
+            "note": note,
+        }
+    )
+
+    assert _entry_status(entry) == "interrupted (timeout)"
+    assert _entry_result_text(entry) == f"I am about to write the plan.\n\n{note}"
+
+
 async def test_entry_result_text_uses_user_cancel_message_when_flag_set() -> None:
     # Arrange
     entry = _completed_entry(

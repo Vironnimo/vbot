@@ -39,7 +39,11 @@ async def test_subagent_tool_queues_busy_session_and_returns_running(tmp_path: P
     # Act
     result = await _handle_subagent(
         context,
-        {"content": "spawn", "session_id": "busy-sub-session"},
+        {
+            "content": "spawn",
+            "agent_id": context.agent_id,
+            "session_id": "busy-sub-session",
+        },
         runtime=runtime,
         batch_tracker=tracker,
     )
@@ -69,7 +73,11 @@ async def test_subagent_tool_queues_when_start_races_active_run(
     # Act
     result = await _handle_subagent(
         context,
-        {"content": "spawn", "session_id": "raced-sub-session"},
+        {
+            "content": "spawn",
+            "agent_id": context.agent_id,
+            "session_id": "raced-sub-session",
+        },
         runtime=runtime,
         batch_tracker=tracker,
     )
@@ -103,7 +111,11 @@ async def test_subagent_tool_returns_queued_without_waiting_for_busy_session_sta
     task = asyncio.create_task(
         _handle_subagent(
             context,
-            {"content": "spawn", "session_id": "waiting-sub-session"},
+            {
+                "content": "spawn",
+                "agent_id": context.agent_id,
+                "session_id": "waiting-sub-session",
+            },
             runtime=runtime,
             batch_tracker=tracker,
         )
@@ -154,13 +166,21 @@ async def test_subagent_tool_counts_queued_run_against_per_turn_limit(
     # Act
     first_result = await _handle_subagent(
         context,
-        {"content": "spawn", "session_id": "limited-sub-session"},
+        {
+            "content": "spawn",
+            "agent_id": context.agent_id,
+            "session_id": "limited-sub-session",
+        },
         runtime=runtime,
         batch_tracker=tracker,
     )
     second_result = await _handle_subagent(
         context,
-        {"content": "spawn again", "session_id": "limited-sub-session"},
+        {
+            "content": "spawn again",
+            "agent_id": context.agent_id,
+            "session_id": "limited-sub-session",
+        },
         runtime=runtime,
         batch_tracker=tracker,
     )
@@ -197,6 +217,7 @@ async def test_parent_cancellation_removes_foreground_queued_subagent(tmp_path: 
             context,
             {
                 "content": "spawn",
+                "agent_id": context.agent_id,
                 "session_id": "cancel-sub-session",
                 "background": False,
             },
@@ -237,7 +258,11 @@ async def test_parent_cancellation_does_not_remove_background_queued_subagent(
     # Act
     result = await _handle_subagent(
         context,
-        {"content": "spawn", "session_id": "survive-sub-session"},
+        {
+            "content": "spawn",
+            "agent_id": context.agent_id,
+            "session_id": "survive-sub-session",
+        },
         runtime=runtime,
         batch_tracker=tracker,
     )
@@ -272,7 +297,11 @@ async def test_subagent_result_reports_queued_session(tmp_path: Path) -> None:
 
     spawn_result = await _handle_subagent(
         context,
-        {"content": "spawn", "session_id": "queued-result-sub-session"},
+        {
+            "content": "spawn",
+            "agent_id": context.agent_id,
+            "session_id": "queued-result-sub-session",
+        },
         runtime=runtime,
         batch_tracker=tracker,
     )
@@ -394,6 +423,7 @@ async def test_subagent_tool_foreground_waits_for_queued_run_to_complete(
         context,
         {
             "content": "spawn",
+            "agent_id": context.agent_id,
             "session_id": "queued-foreground-sub-session",
             "background": False,
         },

@@ -411,12 +411,16 @@ class TestChatMessageFactories:
             model="openai/gpt-4.1",
             content="Partial answer",
             interrupted=True,
+            interruption_cause="timeout",
             timestamp=FIXED_TIMESTAMP,
         )
 
         result = message.to_dict()
         assert result["interrupted"] is True
-        assert ChatMessage.from_dict(result).interrupted is True
+        assert result["interruption_cause"] == "timeout"
+        restored = ChatMessage.from_dict(result)
+        assert restored.interrupted is True
+        assert restored.interruption_cause == "timeout"
 
     def test_assistant_message_not_interrupted_omits_flag(self):
         message = ChatMessage.assistant(
@@ -426,7 +430,9 @@ class TestChatMessageFactories:
         )
 
         assert message.interrupted is False
+        assert message.interruption_cause is None
         assert "interrupted" not in message.to_dict()
+        assert "interruption_cause" not in message.to_dict()
 
     def test_interrupted_rejected_on_non_assistant_role(self):
         with pytest.raises(ChatMessageValidationError, match="interrupted"):
@@ -450,6 +456,33 @@ class TestChatMessageFactories:
                     "model": "openai/gpt-4.1",
                     "content": "hi",
                     "interrupted": "yes",
+                }
+            )
+
+    def test_interruption_cause_requires_interrupted_assistant(self):
+        with pytest.raises(ChatMessageValidationError, match="requires an interrupted assistant"):
+            ChatMessage.from_dict(
+                {
+                    "id": "a1",
+                    "timestamp": "2026-05-03T14:30:01+00:00",
+                    "role": "assistant",
+                    "model": "openai/gpt-4.1",
+                    "content": "hi",
+                    "interruption_cause": "timeout",
+                }
+            )
+
+    def test_interruption_cause_rejects_unknown_value(self):
+        with pytest.raises(ChatMessageValidationError, match="invalid interruption_cause"):
+            ChatMessage.from_dict(
+                {
+                    "id": "a1",
+                    "timestamp": "2026-05-03T14:30:01+00:00",
+                    "role": "assistant",
+                    "model": "openai/gpt-4.1",
+                    "content": "hi",
+                    "interrupted": True,
+                    "interruption_cause": "mystery",
                 }
             )
 

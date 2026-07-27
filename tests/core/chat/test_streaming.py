@@ -434,6 +434,37 @@ async def test_iter_with_chunk_timeout_resets_after_each_delta() -> None:
     ]
 
 
+async def test_iter_with_chunk_timeout_uses_active_window_after_tool_call_delta() -> None:
+    async def source() -> AsyncIteratorForTest:
+        yield {
+            "type": "tool_call_delta",
+            "id": "call-write",
+            "name_delta": "write",
+            "arguments_delta": '{"path":"plan.md","content":"',
+        }
+        await asyncio.sleep(0.03)
+        yield {
+            "type": "tool_call_delta",
+            "id": "call-write",
+            "name_delta": "",
+            "arguments_delta": 'large plan"}',
+        }
+
+    chunks = [
+        chunk
+        async for chunk in iter_with_chunk_timeout(
+            source(),
+            timeout_seconds=0.01,
+            active_timeout_seconds=0.05,
+        )
+    ]
+
+    assert [chunk["arguments_delta"] for chunk in chunks] == [
+        '{"path":"plan.md","content":"',
+        'large plan"}',
+    ]
+
+
 async def test_iter_with_chunk_timeout_fails_on_stalled_delta() -> None:
     closed = False
 

@@ -461,6 +461,11 @@ def _entry_status(entry: _SubAgentEntry) -> str:
     if entry.result is not None:
         if entry.result.get("cancelled_by_user"):
             return "cancelled by user"
+        if entry.result.get("interrupted"):
+            cause = entry.result.get("interruption_cause")
+            if isinstance(cause, str) and cause:
+                return f"interrupted ({cause})"
+            return "interrupted"
         status = entry.result.get("status")
         if isinstance(status, str) and status:
             return status
@@ -477,6 +482,9 @@ def _entry_result_text(entry: _SubAgentEntry) -> str:
         return "Cancelled by the user"
     result = entry.result.get("result")
     if isinstance(result, str) and result:
+        note = entry.result.get("note")
+        if entry.result.get("interrupted") and isinstance(note, str) and note:
+            return f"{result}\n\n{note}"
         return result
     note = entry.result.get("note")
     if isinstance(note, str) and note:

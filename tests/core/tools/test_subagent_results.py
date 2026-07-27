@@ -57,6 +57,76 @@ async def test_subagent_result_reflects_user_cancelled_child(tmp_path: Path) -> 
     assert result["data"]["result"] == "Cancelled by the user"
 
 
+async def test_subagent_result_marks_preserved_partial_as_interrupted(tmp_path: Path) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(tool_name=SUBAGENT_RESULT_TOOL_NAME)
+    parent_key = (context.agent_id, context.session_id, context.run_id)
+    sub_run = Run(run_id="sub-run", agent_id="worker", session_id="sub-session")
+    sub_run.mark_completed(
+        ChatMessage.assistant(
+            model="openai/gpt-5.2",
+            content="I am about to write the plan.",
+            interrupted=True,
+            interruption_cause="timeout",
+        )
+    )
+    manager.runs[sub_run.id] = sub_run
+    tracker.register(parent_key, "worker", "sub-session", sub_run.id)
+
+    result = await _handle_subagent_result(
+        context,
+        {"agent_id": "worker", "session_id": "sub-session", "run_id": sub_run.id},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "completed"
+    assert result["data"]["interrupted"] is True
+    assert result["data"]["interruption_cause"] == "timeout"
+    assert result["data"]["note"] == (
+        "Result is partial: the Sub-Agent Run was interrupted by timeout. Continue the "
+        "same Session by passing both agent_id and session_id from this result to subagent."
+    )
+
+
+async def test_subagent_result_preserves_interruption_details_from_jsonl(tmp_path: Path) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    session = runtime.chat_sessions.create("worker", session_id="sub-session")
+    session.append(ChatMessage.user("write the plan"))
+    session.append(
+        ChatMessage.assistant(
+            model="openai/gpt-5.2",
+            content="I am about to write the plan.",
+            interrupted=True,
+            interruption_cause="timeout",
+        )
+    )
+    session.append(
+        ChatMessage.run_summary(
+            run_id="missing-run",
+            status="completed",
+            timing=TERMINAL_TIMING,
+        )
+    )
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context(tool_name=SUBAGENT_RESULT_TOOL_NAME)
+
+    result = await _handle_subagent_result(
+        context,
+        {"agent_id": "worker", "session_id": "sub-session", "run_id": "missing-run"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["interrupted"] is True
+    assert result["data"]["interruption_cause"] == "timeout"
+
+
 async def test_subagent_result_falls_back_to_jsonl_when_run_is_missing(tmp_path: Path) -> None:
     # Arrange
     manager = FakeRunManager()

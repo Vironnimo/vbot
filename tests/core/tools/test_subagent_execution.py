@@ -38,7 +38,11 @@ async def test_subagent_tool_rejects_parent_session_reuse(tmp_path: Path) -> Non
     # Act
     result = await _handle_subagent(
         context,
-        {"content": "spawn", "session_id": context.session_id},
+        {
+            "content": "spawn",
+            "agent_id": context.agent_id,
+            "session_id": context.session_id,
+        },
         runtime=runtime,
         batch_tracker=tracker,
     )

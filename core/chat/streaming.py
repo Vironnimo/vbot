@@ -23,6 +23,11 @@ from core.utils.errors import ProviderError, VBotError
 JsonObject = dict[str, Any]
 
 STREAM_CHUNK_TIMEOUT_SECONDS = 180.0
+# Once a remote stream has produced any normalized delta, replay is no longer
+# necessarily safe and long Reasoning or Tool-call generations may legitimately
+# pause. Give an active stream a wider idle window while retaining the shorter
+# initial guard that enables clean pre-output restarts.
+STREAM_ACTIVE_CHUNK_TIMEOUT_SECONDS = 900.0
 MALFORMED_TOOL_ARGUMENT_PREVIEW_CHARS = 1200
 
 
@@ -389,27 +394,38 @@ async def iter_with_chunk_timeout(
     source: AsyncIterator[JsonObject],
     *,
     timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
+    active_timeout_seconds: float | None = None,
 ) -> AsyncIterator[JsonObject]:
     """Yield stream chunks with a timeout that resets before each chunk.
 
     A ``timeout_seconds`` of ``None`` disables the stall guard entirely — used
     for local/loopback providers whose prefill can be silent for minutes (see
-    :func:`is_local_provider_base_url`).
+    :func:`is_local_provider_base_url`). When ``active_timeout_seconds`` is set,
+    it replaces the initial timeout after the first yielded delta. This lets
+    established remote streams finish long Reasoning or Tool-call generations
+    without weakening the shorter pre-output restart guard.
     """
     if timeout_seconds is None:
         async for chunk in source:
             yield chunk
         return
     iterator = source.__aiter__()
+    current_timeout_seconds = timeout_seconds
     while True:
         try:
-            yield await asyncio.wait_for(iterator.__anext__(), timeout=timeout_seconds)
+            chunk = await asyncio.wait_for(
+                iterator.__anext__(),
+                timeout=current_timeout_seconds,
+            )
+            if active_timeout_seconds is not None:
+                current_timeout_seconds = active_timeout_seconds
+            yield chunk
         except StopAsyncIteration:
             return
         except TimeoutError as exc:
             await _close_async_iterator(iterator)
             raise StreamingChunkTimeoutError(
-                f"provider stream stalled for {timeout_seconds:g} seconds"
+                f"provider stream stalled for {current_timeout_seconds:g} seconds"
             ) from exc
 
 

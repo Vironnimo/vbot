@@ -184,14 +184,19 @@ async def _handle_subagent(
         )
 
     try:
-        target_agent_address = (
-            optional_string(arguments.get("agent_id"), field_name="agent_id") or context.agent_id
-        )
+        explicit_agent_address = optional_string(arguments.get("agent_id"), field_name="agent_id")
+        session_id = optional_string(arguments.get("session_id"), field_name="session_id")
+        if session_id is not None and explicit_agent_address is None:
+            return tool_failure(
+                "invalid_arguments",
+                "agent_id is required with session_id because Sub-Agent Sessions are "
+                "Agent-scoped; repeat both values returned by the original subagent call",
+            )
+        target_agent_address = explicit_agent_address or context.agent_id
         target_agent_id, target_project_id = _resolve_target_address(
             target_agent_address, context.project_id
         )
         background = coerce_bool(arguments.get("background"), field_name="background", default=True)
-        session_id = optional_string(arguments.get("session_id"), field_name="session_id")
         run_overrides = _parse_agent_run_overrides(arguments)
     except (ToolArgumentError, InvalidAgentAddressError, SettingsValidationError) as error:
         return tool_failure("invalid_arguments", str(error))
@@ -870,6 +875,8 @@ def _result_from_session(
         },
         project_id,
     )
+    if assistant is not None:
+        _add_interruption_details(result, assistant)
     if assistant is None:
         result["note"] = "Sub-agent Run finished without assistant output."
     return result, True
@@ -920,7 +927,9 @@ def _result_dict(
 ) -> JsonObject:
     content: str | None
     usage: JsonObject | None
+    assistant_message: ChatMessage | None = None
     if isinstance(message, ChatMessage):
+        assistant_message = message
         message_content = message.content
         content = message_content if isinstance(message_content, str) else None
         usage = message.usage
@@ -943,11 +952,29 @@ def _result_dict(
         },
         run.project_id,
     )
+    if assistant_message is not None:
+        _add_interruption_details(data, assistant_message)
     if cancelled_by_user:
         data["cancelled_by_user"] = True
     if status == RunStatus.FAILED.value and not content:
         data["note"] = "No assistant output found in sub-agent session."
     return data
+
+
+def _add_interruption_details(data: JsonObject, message: ChatMessage) -> None:
+    """Make a preserved partial unmistakable to Sub-Agent result consumers."""
+    if not message.interrupted:
+        return
+    data["interrupted"] = True
+    if message.interruption_cause is not None:
+        data["interruption_cause"] = message.interruption_cause
+        cause_text = f" by {message.interruption_cause}"
+    else:
+        cause_text = ""
+    data["note"] = (
+        f"Result is partial: the Sub-Agent Run was interrupted{cause_text}. Continue the "
+        "same Session by passing both agent_id and session_id from this result to subagent."
+    )
 
 
 def _queued_result_dict(entry: _SubAgentEntry) -> JsonObject:
