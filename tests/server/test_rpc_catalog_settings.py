@@ -38,6 +38,8 @@ async def test_tool_list_returns_all_registered_tools_with_name_and_description(
     )
 
     response = await dispatch_rpc(state, {"method": "tool.list", "params": {}})
+    a_fingerprint = state.runtime.tools.schema_fingerprint("a_tool")
+    z_fingerprint = state.runtime.tools.schema_fingerprint("z_tool")
 
     assert response == {
         "ok": True,
@@ -49,6 +51,8 @@ async def test_tool_list_returns_all_registered_tools_with_name_and_description(
                     "ready": True,
                     "readiness_hint": None,
                     "extension": None,
+                    "schema_fingerprint": a_fingerprint,
+                    "parallel_safe": False,
                     "project_configurable": True,
                     "project_configurability_reason": None,
                 },
@@ -58,6 +62,8 @@ async def test_tool_list_returns_all_registered_tools_with_name_and_description(
                     "ready": True,
                     "readiness_hint": None,
                     "extension": None,
+                    "schema_fingerprint": z_fingerprint,
+                    "parallel_safe": False,
                     "project_configurable": True,
                     "project_configurability_reason": None,
                 },

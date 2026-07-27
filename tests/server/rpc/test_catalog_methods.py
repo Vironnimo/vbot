@@ -232,6 +232,8 @@ def _tool_stub(
         ready=ready,
         readiness_hint=readiness_hint,
         extension=extension,
+        contract=SimpleNamespace(schema_fingerprint=f"fingerprint:{name}"),
+        parallel_safe=False,
     )
 
 
