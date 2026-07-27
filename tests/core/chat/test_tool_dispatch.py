@@ -20,7 +20,7 @@ from core.chat.tool_dispatch import (
 from core.chat.tool_dispatch import (
     _dispatch_tool_calls as _dispatch_resolved_tool_calls,
 )
-from core.extensions import Deny, ExtensionRegistry, Modify, Replace
+from core.extensions import Deny, ExtensionRegistry, HookContext, Modify, Replace
 from core.runs import TOOL_CALL_STARTED_EVENT, Run, RunStatus
 from core.sessions import ChatSessionManager
 from core.tools import (
@@ -475,17 +475,31 @@ class TestExtensionDecisionWiring:
     """The tool_call decision model wired through ``_dispatch_tool_calls``."""
 
     @pytest.mark.asyncio
-    async def test_tool_hooks_serialize_parallel_safe_calls(self, tmp_path: Path) -> None:
-        active = 0
-        max_active = 0
+    async def test_tool_hooks_serialize_without_serializing_tool_handlers(
+        self, tmp_path: Path
+    ) -> None:
+        active_tools = 0
+        max_active_tools = 0
+        active_hooks = 0
+        max_active_hooks = 0
+        both_tools_started = asyncio.Event()
 
         async def handler(_context: ToolContext, _arguments: JsonObject) -> JsonObject:
-            nonlocal active, max_active
-            active += 1
-            max_active = max(max_active, active)
-            await asyncio.sleep(0.01)
-            active -= 1
+            nonlocal active_tools, max_active_tools
+            active_tools += 1
+            max_active_tools = max(max_active_tools, active_tools)
+            if active_tools == 2:
+                both_tools_started.set()
+            await asyncio.wait_for(both_tools_started.wait(), timeout=1)
+            active_tools -= 1
             return tool_success({"ran": True})
+
+        async def hook(_context: HookContext, **_payload: Any) -> None:
+            nonlocal active_hooks, max_active_hooks
+            active_hooks += 1
+            max_active_hooks = max(max_active_hooks, active_hooks)
+            await asyncio.sleep(0.01)
+            active_hooks -= 1
 
         tools = ToolRegistry()
         tools.register(
@@ -497,7 +511,8 @@ class TestExtensionDecisionWiring:
         )
         runtime, agent = _build_runtime_and_agent(tmp_path, tools)
         registry = ExtensionRegistry()
-        registry.install_handler("observer", "tool_call", lambda _ctx, **_payload: None)
+        registry.install_handler("observer", "tool_call", hook)
+        registry.install_handler("observer", "tool_result", hook)
         runtime.extensions = registry
         session = _build_session(tmp_path)
         run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
@@ -514,7 +529,8 @@ class TestExtensionDecisionWiring:
             nesting_depth=0,
         )
 
-        assert max_active == 1
+        assert max_active_tools == 2
+        assert max_active_hooks == 1
 
     @pytest.mark.asyncio
     async def test_denied_tool_call_yields_error_envelope_and_never_executes(
