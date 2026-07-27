@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import time
 from collections import OrderedDict
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ from core.utils.errors import ProviderError, VBotError
 JsonObject = dict[str, Any]
 
 STREAM_CHUNK_TIMEOUT_SECONDS = 180.0
+STREAM_PROGRESS_TIMEOUT_SECONDS = 900.0
 MALFORMED_TOOL_ARGUMENT_PREVIEW_CHARS = 1200
 
 
@@ -36,6 +38,10 @@ class StreamingDeltaError(StreamingError):
 
 class StreamingChunkTimeoutError(StreamingError):
     """Raised when a provider stream stalls between chunks."""
+
+
+class StreamingProgressTimeoutError(StreamingError):
+    """Raised when heartbeats continue but the Model produces no delta."""
 
 
 class StreamRecoveryAction(Enum):
@@ -117,7 +123,7 @@ def _is_stream_restartable_error(error: Exception) -> bool:
     already saw — this is the streaming analogue of the streaming→non-streaming
     fallback.
     """
-    if isinstance(error, StreamingChunkTimeoutError):
+    if isinstance(error, (StreamingChunkTimeoutError, StreamingProgressTimeoutError)):
         return True
     return bool(getattr(error, "retryable", False))
 
@@ -389,28 +395,63 @@ async def iter_with_chunk_timeout(
     source: AsyncIterator[JsonObject],
     *,
     timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
+    progress_timeout_seconds: float | None = STREAM_PROGRESS_TIMEOUT_SECONDS,
 ) -> AsyncIterator[JsonObject]:
-    """Yield stream chunks with a timeout that resets before each chunk.
+    """Yield stream chunks with separate transport and Model-progress timeouts.
 
     A ``timeout_seconds`` of ``None`` disables the stall guard entirely — used
     for local/loopback providers whose prefill can be silent for minutes (see
-    :func:`is_local_provider_base_url`).
+    :func:`is_local_provider_base_url`). Provider heartbeats reset the transport
+    window but not ``progress_timeout_seconds``: OpenAI-compatible gateways may
+    buffer a complete Tool Call while sending SSE comments, so those comments
+    prove the request is alive without pretending the Model produced a delta.
     """
-    if timeout_seconds is None:
+    if timeout_seconds is None and progress_timeout_seconds is None:
         async for chunk in source:
             yield chunk
         return
     iterator = source.__aiter__()
+    last_progress_at = time.monotonic()
     while True:
+        progress_remaining = _remaining_progress_seconds(
+            last_progress_at,
+            progress_timeout_seconds,
+        )
+        wait_timeout = _minimum_timeout(timeout_seconds, progress_remaining)
         try:
-            yield await asyncio.wait_for(iterator.__anext__(), timeout=timeout_seconds)
+            chunk = await asyncio.wait_for(iterator.__anext__(), timeout=wait_timeout)
         except StopAsyncIteration:
             return
         except TimeoutError as exc:
             await _close_async_iterator(iterator)
+            if (
+                progress_timeout_seconds is not None
+                and time.monotonic() - last_progress_at >= progress_timeout_seconds
+            ):
+                raise StreamingProgressTimeoutError(
+                    "provider connection stayed alive but produced no Model delta for "
+                    f"{progress_timeout_seconds:g} seconds"
+                ) from exc
             raise StreamingChunkTimeoutError(
                 f"provider stream stalled for {timeout_seconds:g} seconds"
             ) from exc
+        if chunk.get("type") != "heartbeat":
+            last_progress_at = time.monotonic()
+        yield chunk
+
+
+def _remaining_progress_seconds(
+    last_progress_at: float,
+    progress_timeout_seconds: float | None,
+) -> float | None:
+    if progress_timeout_seconds is None:
+        return None
+    return max(0.0, progress_timeout_seconds - (time.monotonic() - last_progress_at))
+
+
+def _minimum_timeout(first: float | None, second: float | None) -> float | None:
+    values = [value for value in (first, second) if value is not None]
+    return min(values) if values else None
 
 
 def _require_delta_type(delta: JsonObject) -> str:

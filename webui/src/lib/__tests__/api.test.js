@@ -9,6 +9,7 @@ import {
   SSE_ERROR_RESPONSE,
   RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
   RUN_EVENT_REASONING_DELTA,
+  RUN_EVENT_PROVIDER_HEARTBEAT,
   RUN_EVENT_TOOL_CALL_DELTA,
   RUN_EVENT_TOOL_CALL_STDERR,
   RUN_EVENT_TOOL_CALL_STDOUT,
@@ -993,6 +994,35 @@ describe('subscribeRunEvents()', () => {
       type: RUN_EVENT_TOOL_CALL_DELTA,
       data: {
         payload: { tool_call_id: 'tool-one', name_delta: 'read' },
+      },
+      rawEvent: expect.any(Object),
+    });
+  });
+
+  it('subscribes to Provider heartbeat Run events as ordinary Run output', () => {
+    const onEvent = vi.fn();
+    const connection = subscribeRunEvents(
+      '/api/runs/run-provider-heartbeat/events',
+      { onEvent },
+      { EventSource: MockEventSource },
+    );
+
+    connection.source.emit(RUN_EVENT_PROVIDER_HEARTBEAT, {
+      data: JSON.stringify({
+        payload: {
+          idle_seconds: 75,
+          state: 'waiting_for_model_delta',
+        },
+      }),
+    });
+
+    expect(onEvent).toHaveBeenCalledWith({
+      type: RUN_EVENT_PROVIDER_HEARTBEAT,
+      data: {
+        payload: {
+          idle_seconds: 75,
+          state: 'waiting_for_model_delta',
+        },
       },
       rawEvent: expect.any(Object),
     });

@@ -19,6 +19,7 @@ from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     ERROR_MESSAGE_PERSISTED_EVENT,
     MODEL_STEP_USAGE_EVENT,
+    PROVIDER_HEARTBEAT_EVENT,
     REASONING_DELTA_EVENT,
     TOOL_CALL_DELTA_EVENT,
     TOOL_CALL_RESULT_EVENT,
@@ -90,6 +91,39 @@ async def test_streaming_mode_emits_deltas_then_final_authoritative_message(
     assert "reasoning_scope" not in run.events[6].payload["message"]
     assert adapter.requests == []
     assert adapter.stream_requests[0]["kwargs"]["thinking_effort"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_streaming_mode_emits_provider_heartbeat_without_model_output(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "content_delta", "text": "Writing the file now."},
+                {"type": "heartbeat"},
+                {"type": "finish", "reason": "stop"},
+            ]
+        ],
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    await build_chat_loop(runtime, streaming=True).send(
+        "coder",
+        "Hi",
+        session_id="session-one",
+    )
+
+    run = next(iter(runtime.chat_runs._runs.values()))
+    heartbeat = next(event for event in run.events if event.type == PROVIDER_HEARTBEAT_EVENT)
+    assert heartbeat.payload["state"] == "waiting_for_model_delta"
+    assert heartbeat.payload["idle_seconds"] >= 0
+    assert persisted_roles(runtime.chat_sessions.get("coder", "session-one").load()) == [
+        "user",
+        "assistant",
+    ]
 
 
 @pytest.mark.asyncio

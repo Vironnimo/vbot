@@ -120,8 +120,10 @@ from core.chat.model_resolution import (
 )
 from core.chat.streaming import (
     STREAM_CHUNK_TIMEOUT_SECONDS,
+    STREAM_PROGRESS_TIMEOUT_SECONDS,
     StreamingAccumulator,
     StreamingChunkTimeoutError,
+    StreamingProgressTimeoutError,
     StreamRecoveryAction,
     decide_stream_recovery,
     is_local_provider_base_url,
@@ -155,6 +157,7 @@ from core.runs import (
     COMPACTION_COMPLETED_EVENT,
     MODEL_FALLBACK_ACTIVATED_EVENT,
     MODEL_STEP_USAGE_EVENT,
+    PROVIDER_HEARTBEAT_EVENT,
     USER_MESSAGE_EVENT,
     QueuedRunItem,
     Run,
@@ -2427,12 +2430,26 @@ class ChatLoop:
             **(request_context or {}),
         )
 
+        last_model_delta_at = time.monotonic()
         try:
             async for delta in iter_with_chunk_timeout(
                 stream,
                 timeout_seconds=chunk_timeout_seconds,
+                progress_timeout_seconds=(
+                    STREAM_PROGRESS_TIMEOUT_SECONDS if chunk_timeout_seconds is not None else None
+                ),
             ):
                 run.raise_if_cancelled()
+                if delta.get("type") == "heartbeat":
+                    run.emit(
+                        PROVIDER_HEARTBEAT_EVENT,
+                        {
+                            "idle_seconds": round(time.monotonic() - last_model_delta_at, 1),
+                            "state": "waiting_for_model_delta",
+                        },
+                    )
+                    continue
+                last_model_delta_at = time.monotonic()
                 visible_deltas = accumulator.add_delta(delta)
                 for visible_delta in visible_deltas:
                     run.emit(visible_delta.event_type, visible_delta.payload)
@@ -2446,7 +2463,12 @@ class ChatLoop:
             if accumulator.finish_reason is None:
                 raise NetworkError("Provider stream ended without finish delta")
             assistant_fields = accumulator.finalize_assistant_fields()
-        except (ProviderError, NetworkError, StreamingChunkTimeoutError) as exc:
+        except (
+            ProviderError,
+            NetworkError,
+            StreamingChunkTimeoutError,
+            StreamingProgressTimeoutError,
+        ) as exc:
             # One provider-agnostic owner decides what a stream break means; the
             # action stays here (the chat loop owns side effects, not the policy).
             action = decide_stream_recovery(

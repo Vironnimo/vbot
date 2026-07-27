@@ -926,6 +926,20 @@ describe('runMetaParts', () => {
 
     expect(parts.join(' ')).not.toContain('Completed');
   });
+
+  it('shows live Provider liveness without calling it model output', () => {
+    const parts = runMetaParts({
+      status: 'running',
+      durationMs: null,
+      outputs: [{ content: 'Writing the plan now.' }],
+      tools: [],
+      providerHeartbeat: { idleSeconds: 75.4 },
+    });
+
+    expect(parts).toContain(
+      'Provider connected · waiting 75s for the next model chunk',
+    );
+  });
 });
 
 describe('isToolPreparing', () => {

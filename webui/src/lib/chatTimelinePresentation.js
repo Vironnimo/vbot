@@ -318,6 +318,18 @@ export const runMetaParts = (assistantRun) => {
   } else {
     parts.push(duration || runStatusLabel(assistantRun.status));
   }
+  if (
+    assistantRun.status === 'running' &&
+    Number.isFinite(assistantRun.providerHeartbeat?.idleSeconds)
+  ) {
+    parts.push(
+      t(
+        'chat.providerWorking',
+        'Provider connected · waiting {seconds}s for the next model chunk',
+        { seconds: Math.round(assistantRun.providerHeartbeat.idleSeconds) },
+      ),
+    );
+  }
   return parts.filter(Boolean);
 };
 

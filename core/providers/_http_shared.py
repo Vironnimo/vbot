@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -33,6 +34,14 @@ if TYPE_CHECKING:
 # Auth-related HTTP status codes — not retryable.
 _AUTH_ERROR_STATUS_CODES: frozenset[int] = frozenset({401, 403})
 _PROVIDER_HTTP_TIMEOUT_SECONDS = 60.0
+
+
+@dataclass(frozen=True)
+class SSEEvent:
+    """One framed SSE data payload or transport comment."""
+
+    data: str | None = None
+    comment: str | None = None
 
 
 def provider_chat_timeout() -> httpx.Timeout:
@@ -236,27 +245,38 @@ def wrap_network_error(error: Exception) -> NetworkError | ProviderTimeoutError:
     return NetworkError(f"Connection failed: {error}")
 
 
-async def iter_sse_data(response: httpx.Response) -> AsyncIterator[str]:
-    """Yield complete Server-Sent Event data payloads from an HTTPX stream.
+async def iter_sse_events(response: httpx.Response) -> AsyncIterator[SSEEvent]:
+    """Yield framed Server-Sent Event data payloads and transport comments.
 
     SSE events may contain multiple ``data:`` lines. HTTPX yields individual
-    lines, so adapters should consume framed payloads instead of parsing every
-    line as a complete JSON document.
+    lines, so adapters should consume framed events instead of parsing every
+    line as complete JSON. Comments are yielded immediately without disturbing
+    an in-progress multi-line data event; an Adapter may translate them into a
+    Provider heartbeat when the concrete wire uses comments as keepalives.
     """
     data_parts: list[str] = []
     async for line in response.aiter_lines():
         if line == "":
             if data_parts:
-                yield "\n".join(data_parts)
+                yield SSEEvent(data="\n".join(data_parts))
                 data_parts = []
             continue
         if line.startswith(":"):
+            yield SSEEvent(comment=line[1:].lstrip(" "))
             continue
         if line.startswith("data:"):
             data_parts.append(line[len("data:") :].lstrip(" "))
 
     if data_parts:
-        yield "\n".join(data_parts)
+        yield SSEEvent(data="\n".join(data_parts))
+
+
+async def iter_sse_data(response: httpx.Response) -> AsyncIterator[str]:
+    """Yield complete SSE data payloads while ignoring transport comments."""
+
+    async for event in iter_sse_events(response):
+        if event.data is not None:
+            yield event.data
 
 
 def parse_sse_json_data(data: str, *, context: str) -> Any:
