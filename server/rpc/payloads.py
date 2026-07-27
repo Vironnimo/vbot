@@ -236,6 +236,10 @@ def _tool_response(tool: Any) -> JsonObject:
         "readiness_hint": getattr(tool, "readiness_hint", None),
         # The owning extension name, or null for a built-in tool.
         "extension": getattr(tool, "extension", None),
+        # Stable contract diagnostics. The fingerprint changes whenever the
+        # Tool's input, result, or scheduling contract changes.
+        "schema_fingerprint": tool.contract.schema_fingerprint,
+        "parallel_safe": tool.parallel_safe,
     }
 
 
