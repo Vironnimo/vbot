@@ -7,6 +7,7 @@ import {
   appendRunEvent,
   createChatState,
   ensureSessionState,
+  loadHistory,
 } from '../../lib/chatState.js';
 import { init } from '../../lib/i18n.js';
 
@@ -564,6 +565,56 @@ describe('ChatTimeline', () => {
     expect(subAgentRow).toBeTruthy();
     expect(subAgentRow.textContent).toContain('starting');
     expect(document.querySelector('.subagent-link')).toBeNull();
+  });
+
+  it('renders a cancelled blocking sub-agent as cancelled after history reload', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-blocking-subagent-cancelled',
+    );
+    loadHistory(sessionState, [
+      { id: 'user-1', role: 'user', content: 'Research the APIs' },
+      {
+        id: 'assistant-subagent',
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: 'call-subagent',
+            name: 'subagent',
+            arguments: {
+              agent_id: 'researcher',
+              background: false,
+              content: 'Research the APIs',
+            },
+          },
+        ],
+      },
+      {
+        id: 'summary-1',
+        role: 'run_summary',
+        run_id: 'run-parent',
+        status: 'cancelled',
+        timestamp: '2026-07-27T09:14:23Z',
+      },
+    ]);
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const subAgentRow = document.querySelector('.subagent-tool-event');
+    expect(subAgentRow).toBeTruthy();
+    expect(subAgentRow.textContent).toContain('cancelled');
+    expect(subAgentRow.textContent).not.toContain('starting');
+    expect(subAgentRow.querySelector('.te-dot.cancelled')).not.toBeNull();
+    expect(subAgentRow.querySelector('[data-cancel="subagent"]')).toBeNull();
   });
 
   it('does not render a non-blocking sub-agent row before a session target', () => {

@@ -332,7 +332,7 @@
                 >
                   {t('chat.subagent.viewSession', 'view session')}
                 </button>
-              {:else if isStartingForegroundSubAgent(child)}
+              {:else if dotStatus === 'running' && isStartingForegroundSubAgent(child)}
                 <span class="subagent-state">
                   {t('chat.subagent.starting', 'starting')}
                 </span>
