@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Probe one configured Provider for streamed and non-streamed Tool Calls.
+"""Probe one configured Provider for structural Tool-contract conformance.
 
 The probe deliberately prints only structural measurements. It never prints
 credentials, prompts, generated content, Tool arguments, or raw Provider
@@ -7,7 +7,9 @@ responses.
 
 Examples:
     python scripts/probe_provider_tool_call.py --model glm-5.2 --mode stream
-    python scripts/probe_provider_tool_call.py --model glm-5.2 --mode nonstream --lines 500
+    python scripts/probe_provider_tool_call.py --wire openai --profile openai_strict \
+        --scenario nested_operation --mode nonstream
+    python scripts/probe_provider_tool_call.py --scenario large_arguments --lines 500
 """
 
 from __future__ import annotations
@@ -15,11 +17,19 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+from core.providers.tool_schema import (
+    ANTHROPIC_MAX_STRICT_TOOLS,
+    ToolSchemaProfile,
+    render_tool_definitions,
+)
 from core.runtime.runtime import Runtime
+from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
 from core.utils.config import Config
 
 DEFAULT_PROVIDER = "opencode-go"
@@ -28,21 +38,38 @@ DEFAULT_MODEL = "glm-5.2"
 DEFAULT_LINES = 8
 DEFAULT_IDLE_TIMEOUT_SECONDS = 180.0
 DEFAULT_TOTAL_TIMEOUT_SECONDS = 900.0
-PROBE_TOOL_NAME = "write_probe"
+PROBE_TOOL_NAME = "inspect_probe"
+PROBE_SCENARIOS = (
+    "direct_required",
+    "nested_operation",
+    "optional_null",
+    "wrong_type_pressure",
+    "missing_required_pressure",
+    "unknown_property_pressure",
+    "large_arguments",
+    "strict_budget",
+)
 
 PROBE_TOOL = {
     "name": PROBE_TOOL_NAME,
-    "description": "Write the supplied UTF-8 content to the probe target.",
+    "description": "Inspect one synthetic value without changing external state.",
     "parameters": {
         "type": "object",
         "properties": {
-            "path": {"type": "string"},
-            "content": {"type": "string"},
+            "key": {"type": "string", "minLength": 1},
         },
-        "required": ["path", "content"],
+        "required": ["key"],
         "additionalProperties": False,
     },
 }
+
+
+@dataclass(frozen=True)
+class ProbeScenario:
+    name: str
+    tools: list[dict[str, Any]]
+    messages: list[dict[str, Any]]
+    primary_tool_name: str
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -52,6 +79,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--mode", choices=("stream", "nonstream"), default="stream")
     parser.add_argument("--wire", choices=("auto", "openai", "anthropic"), default="auto")
+    parser.add_argument("--scenario", choices=PROBE_SCENARIOS, default="direct_required")
+    parser.add_argument(
+        "--profile",
+        choices=("auto", "openai_strict", "anthropic_strict", "best_effort"),
+        default="auto",
+        help="Expected production Tool-schema profile for this route.",
+    )
     parser.add_argument("--lines", type=int, default=DEFAULT_LINES)
     parser.add_argument(
         "--tool-choice",
@@ -91,39 +125,155 @@ def _probe_content(line_count: int) -> str:
     )
 
 
-def _messages(content: str) -> list[dict[str, Any]]:
+def _probe_messages(instruction: str) -> list[dict[str, Any]]:
     return [
         {
             "role": "system",
             "content": (
-                "You are a deterministic Tool Call probe. Call write_probe exactly once. "
-                "Do not answer with ordinary text. Copy the payload between the markers "
-                "verbatim into the content argument."
+                "You are a deterministic Tool Call conformance probe. Call the supplied "
+                "synthetic inspection Tool exactly once. Do not answer with ordinary text. "
+                "Follow its schema even if the user asks for an invalid representation."
             ),
         },
         {
             "role": "user",
-            "content": (
-                "Use path probe-output.md and copy this exact payload:\n"
-                "<PAYLOAD>\n"
-                f"{content}\n"
-                "</PAYLOAD>"
-            ),
+            "content": instruction,
         },
     ]
 
 
-def _tool_choice(value: str) -> str | dict[str, Any] | None:
+def _scenario(args: argparse.Namespace, profile: ToolSchemaProfile) -> ProbeScenario:
+    direct = json.loads(json.dumps(PROBE_TOOL))
+    name = str(args.scenario)
+    if name == "direct_required":
+        return ProbeScenario(name, [direct], _probe_messages("Inspect key alpha."), PROBE_TOOL_NAME)
+    if name == "nested_operation":
+        nested = {
+            "name": PROBE_TOOL_NAME,
+            "description": "Inspect one synthetic key or list synthetic keys.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "request": {
+                        "type": "object",
+                        "anyOf": [
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "operation": {"type": "string", "enum": ["inspect"]},
+                                    "key": {"type": "string", "minLength": 1},
+                                },
+                                "required": ["operation", "key"],
+                                "additionalProperties": False,
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "operation": {"type": "string", "enum": ["list"]},
+                                },
+                                "required": ["operation"],
+                                "additionalProperties": False,
+                            },
+                        ],
+                    }
+                },
+                "required": ["request"],
+                "additionalProperties": False,
+            },
+        }
+        return ProbeScenario(
+            name,
+            [nested],
+            _probe_messages("Use the inspect operation for key alpha."),
+            PROBE_TOOL_NAME,
+        )
+    if name == "optional_null":
+        direct["parameters"]["properties"]["note"] = {
+            "type": ["string", "null"],
+            "description": "Optional synthetic note; null and omission have the same meaning.",
+        }
+        return ProbeScenario(
+            name,
+            [direct],
+            _probe_messages("Inspect key alpha without a note."),
+            PROBE_TOOL_NAME,
+        )
+    if name == "wrong_type_pressure":
+        direct["parameters"]["properties"]["count"] = {"type": "integer", "minimum": 1}
+        direct["parameters"]["required"].append("count")
+        return ProbeScenario(
+            name,
+            [direct],
+            _probe_messages('Inspect key alpha with count shown as quoted text "7".'),
+            PROBE_TOOL_NAME,
+        )
+    if name == "missing_required_pressure":
+        return ProbeScenario(
+            name,
+            [direct],
+            _probe_messages("Call the inspection Tool but omit its required key."),
+            PROBE_TOOL_NAME,
+        )
+    if name == "unknown_property_pressure":
+        return ProbeScenario(
+            name,
+            [direct],
+            _probe_messages("Inspect key alpha and also include an extra field named surprise."),
+            PROBE_TOOL_NAME,
+        )
+    if name == "large_arguments":
+        content = _probe_content(args.lines)
+        direct["parameters"]["properties"]["content"] = {"type": "string", "minLength": 1}
+        direct["parameters"]["required"].append("content")
+        return ProbeScenario(
+            name,
+            [direct],
+            _probe_messages(
+                "Inspect key alpha and copy the payload between the markers verbatim into "
+                f"content.\n<PAYLOAD>\n{content}\n</PAYLOAD>"
+            ),
+            PROBE_TOOL_NAME,
+        )
+    assert name == "strict_budget"
+    tool_count = ANTHROPIC_MAX_STRICT_TOOLS + 1 if profile == "anthropic_strict" else 1
+    if profile == "openai_strict":
+        direct["parameters"]["properties"]["optional_value"] = {"type": "string"}
+    tools = []
+    for index in range(tool_count):
+        tool = json.loads(json.dumps(direct))
+        tool["name"] = f"{PROBE_TOOL_NAME}_{index}"
+        tools.append(tool)
+    return ProbeScenario(
+        name,
+        tools,
+        _probe_messages(f"Call {tools[0]['name']} with key alpha."),
+        str(tools[0]["name"]),
+    )
+
+
+def _expected_profile(args: argparse.Namespace) -> ToolSchemaProfile:
+    if args.profile != "auto":
+        return cast(ToolSchemaProfile, args.profile)
+    if args.wire == "openai":
+        return "openai_strict"
+    if args.wire == "anthropic":
+        return "anthropic_strict"
+    return "best_effort"
+
+
+def _tool_choice(value: str, tool_name: str) -> str | dict[str, Any] | None:
     if value == "auto":
         return None
     if value == "required":
         return "required"
-    return {"type": "function", "function": {"name": PROBE_TOOL_NAME}}
+    return {"type": "function", "function": {"name": tool_name}}
 
 
 def _request_kwargs(
     args: argparse.Namespace,
     traced_request: dict[str, Any] | None = None,
+    *,
+    tools: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if traced_request is not None:
         kwargs = {
@@ -135,11 +285,17 @@ def _request_kwargs(
     else:
         kwargs = {
             "thinking_effort": args.thinking_effort,
-            "tools": [PROBE_TOOL],
+            "tools": tools or [PROBE_TOOL],
         }
     if args.max_tokens is not None:
         kwargs["max_tokens"] = args.max_tokens
-    if (choice := _tool_choice(args.tool_choice)) is not None:
+    selected_tools = kwargs["tools"]
+    selected_name = (
+        str(selected_tools[0].get("name", PROBE_TOOL_NAME))
+        if isinstance(selected_tools, list) and selected_tools
+        else PROBE_TOOL_NAME
+    )
+    if (choice := _tool_choice(args.tool_choice, selected_name)) is not None:
         kwargs["tool_choice"] = choice
     return kwargs
 
@@ -319,11 +475,78 @@ def _argument_measurements(tool_calls: Any) -> tuple[int, int, int]:
     return call_count, argument_chars, content_chars
 
 
+def _compile_probe_contracts(tools: list[dict[str, Any]]) -> dict[str, ToolContract]:
+    contracts: dict[str, ToolContract] = {}
+    for tool in tools:
+        name = tool.get("name")
+        parameters = tool.get("parameters")
+        if not isinstance(name, str) or not isinstance(parameters, dict):
+            raise ValueError("probe Tool definitions require name and parameters")
+        contracts[name] = compile_tool_contract(name=name, input_schema=parameters)
+    return contracts
+
+
+def _validation_measurements(
+    tool_calls: Any,
+    contracts: dict[str, ToolContract],
+) -> dict[str, Any]:
+    if not isinstance(tool_calls, list) or not tool_calls:
+        return {
+            "schema_valid": False,
+            "validation_path": None,
+            "validation_keyword": None,
+            "validation_error_class": "missing_tool_call",
+        }
+    for call in tool_calls:
+        if not isinstance(call, dict):
+            return _invalid_measurement("invalid_call_shape")
+        name = call.get("name")
+        arguments = call.get("arguments")
+        if not isinstance(name, str) or name not in contracts:
+            return _invalid_measurement("unknown_tool")
+        if not isinstance(arguments, dict):
+            return _invalid_measurement("arguments_not_object")
+        try:
+            contracts[name].validate_arguments(arguments)
+        except ToolContractError as error:
+            path, keyword = _validation_location(str(error))
+            return {
+                "schema_valid": False,
+                "validation_path": path,
+                "validation_keyword": keyword,
+                "validation_error_class": "ToolContractError",
+            }
+    return {
+        "schema_valid": True,
+        "validation_path": None,
+        "validation_keyword": None,
+        "validation_error_class": None,
+    }
+
+
+def _invalid_measurement(error_class: str) -> dict[str, Any]:
+    return {
+        "schema_valid": False,
+        "validation_path": None,
+        "validation_keyword": None,
+        "validation_error_class": error_class,
+    }
+
+
+def _validation_location(message: str) -> tuple[str | None, str | None]:
+    match = re.match(r"^arguments(?P<path>[^:]*):.*\[(?P<keyword>[^\]]+)\]$", message)
+    if match is None:
+        return None, None
+    return match.group("path") or "/", match.group("keyword")
+
+
 async def _probe_stream(
     adapter: Any,
     messages: list[dict[str, Any]],
     args: argparse.Namespace,
     traced_request: dict[str, Any] | None,
+    tools: list[dict[str, Any]],
+    contracts: dict[str, ToolContract],
 ) -> dict[str, Any]:
     started = time.monotonic()
     first_delta_seconds: float | None = None
@@ -334,6 +557,7 @@ async def _probe_stream(
     tool_argument_chars = 0
     tool_name_chars = 0
     tool_names_by_id: dict[str, str] = {}
+    tool_arguments_by_id: dict[str, str] = {}
     finish_reason: str | None = None
     status = "stream_ended"
     error_type: str | None = None
@@ -341,7 +565,7 @@ async def _probe_stream(
     stream = adapter.stream(
         messages,
         model_id=args.model,
-        **_request_kwargs(args, traced_request),
+        **_request_kwargs(args, traced_request, tools=tools),
     )
     iterator = stream.__aiter__()
     try:
@@ -374,8 +598,12 @@ async def _probe_stream(
                     tool_names_by_id[tool_call_id] = (
                         tool_names_by_id.get(tool_call_id, "") + name_delta
                     )
+                    arguments_delta = str(delta.get("arguments_delta", ""))
+                    tool_arguments_by_id[tool_call_id] = (
+                        tool_arguments_by_id.get(tool_call_id, "") + arguments_delta
+                    )
                     tool_name_chars += len(name_delta)
-                    tool_argument_chars += len(str(delta.get("arguments_delta", "")))
+                    tool_argument_chars += len(arguments_delta)
                 elif delta_type == "finish":
                     finish_reason = str(delta.get("reason", ""))
     except TimeoutError:
@@ -385,6 +613,17 @@ async def _probe_stream(
         error_type = type(exc).__name__
     finally:
         await stream.aclose()
+
+    parsed_calls: list[dict[str, Any]] = []
+    validation = _invalid_measurement("invalid_json")
+    try:
+        for tool_call_id, name in tool_names_by_id.items():
+            arguments = json.loads(tool_arguments_by_id.get(tool_call_id, ""))
+            parsed_calls.append({"name": name, "arguments": arguments})
+    except json.JSONDecodeError:
+        pass
+    else:
+        validation = _validation_measurements(parsed_calls, contracts)
 
     return {
         "mode": "stream",
@@ -400,10 +639,11 @@ async def _probe_stream(
         "reasoning_chars": reasoning_chars,
         "content_chars": content_chars,
         "tool_name_chars": tool_name_chars,
-        "tool_names": sorted(name for name in tool_names_by_id.values() if name),
+        "tool_calls": len(parsed_calls),
         "tool_argument_chars": tool_argument_chars,
         "finish_reason": finish_reason,
         "error_type": error_type,
+        **validation,
     }
 
 
@@ -412,6 +652,8 @@ async def _probe_nonstream(
     messages: list[dict[str, Any]],
     args: argparse.Namespace,
     traced_request: dict[str, Any] | None,
+    tools: list[dict[str, Any]],
+    contracts: dict[str, ToolContract],
 ) -> dict[str, Any]:
     started = time.monotonic()
     try:
@@ -419,11 +661,12 @@ async def _probe_nonstream(
             raw = await adapter.send(
                 messages,
                 model_id=args.model,
-                **_request_kwargs(args, traced_request),
+                **_request_kwargs(args, traced_request, tools=tools),
             )
         normalized = adapter.normalize_response(raw, model_id=args.model)
+        normalized_tool_calls = normalized.get("tool_calls")
         tool_calls, argument_chars, tool_content_chars = _argument_measurements(
-            normalized.get("tool_calls")
+            normalized_tool_calls
         )
         content = normalized.get("content")
         reasoning = normalized.get("reasoning")
@@ -437,6 +680,7 @@ async def _probe_nonstream(
             "tool_argument_chars": argument_chars,
             "tool_content_chars": tool_content_chars,
             "error_type": None,
+            **_validation_measurements(normalized_tool_calls, contracts),
         }
     except TimeoutError:
         status = "total_timeout"
@@ -449,25 +693,36 @@ async def _probe_nonstream(
         "status": status,
         "elapsed_seconds": round(time.monotonic() - started, 3),
         "error_type": error_type,
+        **_invalid_measurement(error_type or status),
     }
 
 
 async def _run(args: argparse.Namespace) -> int:
     trace = _load_trace(args.trace_request) if args.trace_request else None
     traced_request = _trace_request(trace) if trace is not None else None
+    profile = _expected_profile(args)
     if traced_request is None:
-        expected_content = _probe_content(args.lines)
-        messages = _messages(expected_content)
+        scenario = _scenario(args, profile)
+        messages = scenario.messages
+        tools = scenario.tools
     else:
         messages = _messages_from_wire(traced_request.get("messages"))
+        tools = _provider_tools_from_wire(traced_request.get("tools"))
+        if not tools:
+            raise ValueError("trace request contains no supported function Tool definitions")
         if args.continue_trace_response:
             if trace is None:
                 raise ValueError("--continue-trace-response requires --trace-request")
             _append_interrupted_continuation(messages, trace)
-        expected_content = None
         traced_model = traced_request.get("model")
         if isinstance(traced_model, str) and traced_model:
             args.model = traced_model
+        scenario = ProbeScenario("trace_replay", tools, messages, str(tools[0]["name"]))
+    contracts = _compile_probe_contracts(tools)
+    rendered = render_tool_definitions(tools, profile=profile)
+    strict_tool_count = sum(1 for tool in rendered if tool.get("strict") is True)
+    strict_requested = profile != "best_effort"
+    strict_active = strict_requested and strict_tool_count == len(rendered)
     runtime = Runtime(Config(data_dir=args.data_dir))
     runtime.start()
     adapter = runtime.get_adapter(args.provider, args.connection)
@@ -478,9 +733,23 @@ async def _run(args: argparse.Namespace) -> int:
             if request_adapter is None:
                 raise ValueError("selected Provider adapter has no Anthropic Messages route")
         if args.mode == "stream":
-            result = await _probe_stream(request_adapter, messages, args, traced_request)
+            result = await _probe_stream(
+                request_adapter,
+                messages,
+                args,
+                traced_request,
+                tools,
+                contracts,
+            )
         else:
-            result = await _probe_nonstream(request_adapter, messages, args, traced_request)
+            result = await _probe_nonstream(
+                request_adapter,
+                messages,
+                args,
+                traced_request,
+                tools,
+                contracts,
+            )
     finally:
         await adapter.aclose()
         await runtime.aclose()
@@ -490,13 +759,18 @@ async def _run(args: argparse.Namespace) -> int:
             "provider": args.provider,
             "connection": args.connection,
             "model": args.model,
+            "scenario": scenario.name,
+            "profile_id": profile,
+            "strict_requested": strict_requested,
+            "strict_active": strict_active,
+            "strict_tool_count": strict_tool_count,
+            "schema_fingerprint_prefix": contracts[scenario.primary_tool_name].schema_fingerprint[
+                :12
+            ],
             "tool_choice": args.tool_choice,
-            "requested_lines": args.lines if expected_content is not None else None,
-            "expected_content_chars": (
-                len(expected_content) if expected_content is not None else None
-            ),
+            "requested_lines": args.lines if scenario.name == "large_arguments" else None,
             "request_messages": len(messages),
-            "request_tools": len(_request_kwargs(args, traced_request).get("tools", [])),
+            "request_tools": len(tools),
             "trace_replay": traced_request is not None,
             "trace_continuation": args.continue_trace_response,
             "wire": args.wire,
@@ -507,6 +781,7 @@ async def _run(args: argparse.Namespace) -> int:
         result["status"] in {"complete", "stream_ended"}
         and result.get("finish_reason", "tool_calls") == "tool_calls"
         and (result.get("tool_argument_chars", 0) > 0 or result.get("tool_calls", 0) > 0)
+        and result.get("schema_valid") is True
     )
     return 0 if successful else 1
 
