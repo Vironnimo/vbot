@@ -437,6 +437,142 @@ describe('ChatView', () => {
     expect(findButtonByText('Return to current session')).toBeFalsy();
   });
 
+  it('keeps parent navigation and Agent selection aligned through nested sub-agent sessions', async () => {
+    const agents = [
+      createAgent({
+        id: 'alpha',
+        name: 'Alpha',
+        current_session_id: 'root-session',
+      }),
+      createAgent({
+        id: 'beta',
+        name: 'Beta',
+        current_session_id: 'beta-current',
+      }),
+      createAgent({
+        id: 'gamma',
+        name: 'Gamma',
+        current_session_id: 'gamma-current',
+      }),
+    ];
+    listSessionsMock.mockImplementation(async (agentId) => {
+      if (agentId === 'gamma') {
+        return {
+          sessions: [
+            {
+              id: 'grandchild-session',
+              is_subagent_session: true,
+              subagent_parent: {
+                agent_id: 'beta',
+                session_id: 'child-session',
+              },
+            },
+          ],
+        };
+      }
+      if (agentId === 'beta') {
+        return {
+          sessions: [
+            {
+              id: 'child-session',
+              is_subagent_session: true,
+              subagent_parent: {
+                agent_id: 'alpha',
+                session_id: 'root-session',
+              },
+            },
+          ],
+        };
+      }
+      if (agentId === 'alpha') {
+        return {
+          sessions: [{ id: 'root-session' }],
+        };
+      }
+      return { sessions: [] };
+    });
+    rpcMock.mockImplementation(
+      createChatRpcMock({
+        agents,
+        sessionMessages: {
+          'root-session': [
+            {
+              id: 'root-reply',
+              role: 'assistant',
+              content: 'Root history',
+            },
+          ],
+          'child-session': [
+            {
+              id: 'child-reply',
+              role: 'assistant',
+              content: 'Child history',
+            },
+          ],
+          'grandchild-session': [
+            {
+              id: 'grandchild-reply',
+              role: 'assistant',
+              content: 'Grandchild history',
+            },
+          ],
+        },
+      }),
+    );
+
+    chatViewTest.mount({
+      target: document.body,
+      props: {
+        sharedAgents: agents,
+        sharedSelectedAgentId: 'alpha',
+        pendingSessionNavigation: {
+          agentId: 'gamma',
+          sessionId: 'grandchild-session',
+          subAgent: true,
+        },
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        document.body.textContent.includes('Grandchild history') &&
+        Boolean(findButtonByText('Return to parent session')),
+      100,
+    );
+    expect(
+      document.querySelector('.chat-header .agent-tab.active')?.textContent,
+    ).toContain('Gamma');
+
+    findButtonByText('Return to parent session').click();
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        document.body.textContent.includes('Child history') &&
+        Boolean(findButtonByText('Return to parent session')),
+      100,
+    );
+    expect(document.body.textContent).toContain('Viewing a sub-agent session');
+    expect(
+      document.querySelector('.chat-header .agent-tab.active')?.textContent,
+    ).toContain('Beta');
+
+    findButtonByText('Return to parent session').click();
+    flushSync();
+
+    await waitForCondition(
+      () =>
+        document.body.textContent.includes('Root history') &&
+        !document.body.textContent.includes('Viewing a sub-agent session'),
+      100,
+    );
+    expect(findButtonByText('Return to parent session')).toBeFalsy();
+    expect(
+      document.querySelector('.chat-header .agent-tab.active')?.textContent,
+    ).toContain('Alpha');
+  });
+
   it('falls back to return-to-current when the child has no parent metadata (item 4)', async () => {
     rpcMock.mockImplementation(createChatRpcMock());
 

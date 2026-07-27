@@ -742,6 +742,7 @@ describe('ChatView', () => {
       () => document.body.textContent.includes('Beta sub-agent response'),
       100,
     );
+    expect(activeAgentTab()?.textContent).toContain('Beta');
 
     const returnButton = Array.from(document.querySelectorAll('button')).find(
       (button) => button.textContent.trim() === 'Return to current session',
@@ -906,7 +907,7 @@ describe('ChatView', () => {
       100,
     );
 
-    expect(activeAgentTab()?.textContent).toContain('Alpha');
+    expect(activeAgentTab()?.textContent).toContain('Beta');
     expect(subscribeRunEventsMock).toHaveBeenCalledWith(
       '/api/runs/beta-sub-run-continue/events',
       expect.any(Object),
