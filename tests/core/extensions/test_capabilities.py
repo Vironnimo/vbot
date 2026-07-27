@@ -138,6 +138,7 @@ def test_extension_tool_dispatches_through_tool_registry(tmp_path: Path) -> None
 
     assert result["ok"] is True
     assert result["data"] == {"marker": "from-ext", "value": "hi"}
+    assert tool_registry.get("ext_echo").parallel_safe is True
     assert _record(registry, "echo_ext").capability_errors == []
 
 

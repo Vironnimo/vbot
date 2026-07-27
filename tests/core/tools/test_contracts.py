@@ -149,13 +149,13 @@ def test_fingerprint_is_deterministic_and_covers_result_and_scheduling_contracts
         input_schema=_input_schema(),
         result_schema={"type": "object", "required": ["other"]},
     )
-    parallel = compile_tool_contract(
+    serial = compile_tool_contract(
         name="sample",
         input_schema=_input_schema(),
         result_schema={"type": "object", "required": ["value"]},
-        parallel_safe=True,
+        parallel_safe=False,
     )
 
     assert base.schema_fingerprint == reordered.schema_fingerprint
     assert changed_result.schema_fingerprint != base.schema_fingerprint
-    assert parallel.schema_fingerprint != base.schema_fingerprint
+    assert serial.schema_fingerprint != base.schema_fingerprint

@@ -25,7 +25,14 @@ from core.tools.bash import (
 )
 from core.tools.process import PROCESS_TOOL_NAME, make_process_handler
 from core.tools.process_manager import ProcessManager
-from core.tools.tools import ToolContext, ToolRegistry
+from core.tools.tools import (
+    ToolCall,
+    ToolContext,
+    ToolExecutionConfig,
+    ToolExecutor,
+    ToolRegistry,
+    tool_success,
+)
 
 AGENT_ID = "agent-a"
 RUN_ID = "run-a"
@@ -1041,6 +1048,64 @@ def test_register_bash_tool() -> None:
     assert "independent of timeout" in properties["yield_after"]["description"]
     assert "skip the foreground wait" in properties["background"]["description"]
     assert "does not extend yield_after" in properties["timeout"]["description"]
+    assert tool.parallel_safe is True
+
+
+@pytest.mark.asyncio
+async def test_two_bash_calls_can_run_concurrently_by_default(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active_count = 0
+    max_active_count = 0
+    both_started = asyncio.Event()
+
+    async def fake_bash_handler(
+        context: ToolContext,
+        arguments: dict[str, Any],
+        process_manager: ProcessManager,
+        *,
+        trigger_service: Any | None = None,
+    ) -> dict[str, Any]:
+        nonlocal active_count, max_active_count
+        assert process_manager is manager
+        assert trigger_service is None
+        assert arguments["command"].startswith("download-")
+        active_count += 1
+        max_active_count = max(max_active_count, active_count)
+        if max_active_count == 2:
+            both_started.set()
+        await asyncio.wait_for(both_started.wait(), timeout=1)
+        active_count -= 1
+        return tool_success({"status": "completed", "call_id": context.tool_call_id})
+
+    monkeypatch.setattr(bash_module, "bash_handler", fake_bash_handler)
+    registry = ToolRegistry()
+    register_bash_tool(registry, manager)
+    executor = ToolExecutor(registry, per_run_limit=2, global_limit=2)
+
+    results = await executor.execute_many(
+        [
+            ToolCall(id="download-1", name="bash", arguments={"command": "download-one"}),
+            ToolCall(id="download-2", name="bash", arguments={"command": "download-two"}),
+        ],
+        ToolExecutionConfig(
+            agent_id=AGENT_ID,
+            session_id="session-a",
+            run_id=RUN_ID,
+            workspace=tmp_path,
+            vbot_root=tmp_path,
+            data_root=tmp_path,
+            allowed_tools=["bash"],
+        ),
+    )
+
+    assert max_active_count == 2
+    assert [result["data"]["call_id"] for result in results] == [
+        "download-1",
+        "download-2",
+    ]
 
 
 @pytest.mark.asyncio

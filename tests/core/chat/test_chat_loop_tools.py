@@ -657,7 +657,6 @@ async def test_same_turn_tool_calls_run_concurrently_and_persist_in_call_order(
         "Slow tool.",
         {"type": "object"},
         slow_handler,
-        parallel_safe=True,
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
@@ -720,7 +719,6 @@ async def test_same_tool_sibling_calls_run_in_parallel(tmp_path: Path) -> None:
         "Same tool.",
         {"type": "object"},
         same_handler,
-        parallel_safe=True,
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
 
