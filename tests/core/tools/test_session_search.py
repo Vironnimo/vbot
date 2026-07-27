@@ -75,16 +75,18 @@ def failure(result: JsonObject, code: str) -> dict[str, str]:
     return error  # type: ignore[return-value]
 
 
-async def test_registered_schema_requires_explicit_action_and_matches_jsonl() -> None:
+async def test_registered_schema_exposes_strict_operations_and_matches_jsonl() -> None:
     sessions = ChatSessionManager(Path.cwd())
     registry = ToolRegistry()
     register_session_search_tool(registry, sessions)
 
     tool = registry.get(SESSION_SEARCH_TOOL_NAME)
-    properties = tool.parameters["properties"]
-    assert tool.parameters["required"] == ["action"]
-    assert {"action", "cursor", "match", "roles", "order"} <= set(properties)
-    assert properties["order"]["enum"] == ["newest", "oldest"]
+    operations = tool.parameters["properties"]
+    assert set(operations) == {"list", "overview", "search", "read"}
+    search_properties = operations["search"]["oneOf"][0]["properties"]
+    assert {"query", "match", "roles", "order"} <= set(search_properties)
+    assert operations["search"]["oneOf"][0]["required"] == ["query"]
+    assert search_properties["order"]["enum"] == ["newest", "oldest"]
     assert tool.description.startswith(SESSION_SEARCH_TOOL_DESCRIPTION)
 
 
@@ -94,8 +96,8 @@ async def test_schema_changes_with_backend_capabilities(tmp_path: Path) -> None:
 
     vector = build_session_search_parameters(VectorRecallBackend(context).search_capabilities())
     hybrid = build_session_search_parameters(HybridRecallBackend(context).search_capabilities())
-    vector_properties = vector["properties"]
-    hybrid_properties = hybrid["properties"]
+    vector_properties = vector["properties"]["search"]["oneOf"][0]["properties"]
+    hybrid_properties = hybrid["properties"]["search"]["oneOf"][0]["properties"]
 
     assert "match" not in vector_properties
     assert "literal_match" not in vector_properties
@@ -141,13 +143,11 @@ async def test_list_and_overview_are_tool_owned(tmp_path: Path) -> None:
     session.append(last)
     backend = JsonlSessionRecallBackend(sessions)
 
-    listed = success(
-        await session_search_handler(make_context(tmp_path), {"action": "list"}, backend)
-    )
+    listed = success(await session_search_handler(make_context(tmp_path), {"list": {}}, backend))
     overview = success(
         await session_search_handler(
             make_context(tmp_path),
-            {"action": "overview", "session_id": "owned-session"},
+            {"overview": {"session_id": "owned-session"}},
             backend,
         )
     )

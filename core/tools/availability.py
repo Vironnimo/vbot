@@ -98,11 +98,30 @@ def apply_agent_target_tool_visibility(
         narrowed = deepcopy(definition)
         parameters = narrowed.get("parameters")
         if isinstance(parameters, dict):
-            properties = parameters.get("properties")
-            if isinstance(properties, dict) and isinstance(properties.get("agent_id"), dict):
-                properties["agent_id"]["enum"] = targets
+            _set_named_property_enum(parameters, "agent_id", targets)
         projected.append(narrowed)
     return projected
+
+
+def _set_named_property_enum(schema: Any, property_name: str, values: list[str]) -> None:
+    """Apply an enum to every matching property in one nested JSON Schema."""
+
+    if isinstance(schema, list):
+        for item in schema:
+            _set_named_property_enum(item, property_name, values)
+        return
+    if not isinstance(schema, dict):
+        return
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        selected = properties.get(property_name)
+        if isinstance(selected, dict):
+            selected["enum"] = list(values)
+        for property_schema in properties.values():
+            _set_named_property_enum(property_schema, property_name, values)
+    for keyword in ("oneOf", "anyOf", "allOf"):
+        _set_named_property_enum(schema.get(keyword), property_name, values)
+    _set_named_property_enum(schema.get("items"), property_name, values)
 
 
 def agent_tool_settings(agent_tools: Any) -> dict[str, Any]:

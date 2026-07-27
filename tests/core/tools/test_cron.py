@@ -84,30 +84,50 @@ def _cron_service_mock() -> Mock:
     return service
 
 
-def test_schema_uses_one_flat_action_and_omits_agent_inapplicable_fields() -> None:
-    properties = cast(dict[str, dict[str, Any]], CRON_TOOL_PARAMETERS["properties"])
+def test_schema_exposes_strict_operation_objects() -> None:
+    operations = cast(dict[str, dict[str, Any]], CRON_TOOL_PARAMETERS["properties"])
 
-    assert set(properties) == {
-        "action",
-        "id",
-        "target",
-        "name",
-        "prompt",
-        "schedule_type",
-        "cron_expression",
-        "run_at",
-    }
-    assert CRON_TOOL_PARAMETERS["required"] == ["action"]
-    assert properties["action"]["enum"] == [
+    assert set(operations) == {
         "create",
-        "delete",
-        "disable",
-        "enable",
         "list",
         "update",
-    ]
+        "delete",
+        "enable",
+        "disable",
+    }
+    assert CRON_TOOL_PARAMETERS["minProperties"] == 1
+    assert CRON_TOOL_PARAMETERS["maxProperties"] == 1
+    assert operations["create"]["required"] == ["name", "prompt", "schedule_type"]
+    assert operations["update"]["required"] == ["id"]
+    for operation in ("delete", "enable", "disable"):
+        assert operations[operation]["required"] == ["id"]
     for removed_field in ("status", "session_id", "timezone", "agent_id"):
-        assert removed_field not in properties
+        assert removed_field not in operations["create"]["properties"]
+
+
+def test_canonical_create_operation_returns_success(tmp_path: Path) -> None:
+    cron_service = _cron_service_mock()
+    cron_service.create_job.return_value = _make_job(job_id="job-create")
+    registry = ToolRegistry()
+    register_cron_tool(registry, cron_service)
+
+    result = asyncio.run(
+        _dispatch(
+            registry,
+            tmp_path,
+            {
+                "create": {
+                    "name": "Later task",
+                    "prompt": "Run this later",
+                    "schedule_type": "cron",
+                    "cron_expression": "*/5 * * * *",
+                }
+            },
+        )
+    )
+
+    assert result["ok"] is True
+    cron_service.create_job.assert_called_once()
 
 
 def test_create_action_returns_success(tmp_path: Path) -> None:
@@ -367,8 +387,8 @@ def test_invalid_action_returns_failure(tmp_path: Path) -> None:
     assert result == tool_failure(
         "invalid_arguments",
         (
-            "action must be one of: create, delete, disable, enable, list, update. "
-            'To inspect jobs use {"action":"list"}'
+            "Legacy action must be one of: create, delete, disable, enable, list, update. "
+            'Use the canonical operation object; to inspect jobs use {"list":{}}'
         ),
         retryable=False,
     )
@@ -390,8 +410,8 @@ def test_legacy_multiple_operation_envelopes_return_actionable_failure(tmp_path:
     assert result == tool_failure(
         "invalid_arguments",
         (
-            "Missing flat action. Set action to create, list, update, delete, enable, or "
-            'disable. To inspect jobs use {"action":"list"}'
+            "Choose exactly one operation object: create, list, update, delete, enable, "
+            'or disable. To inspect jobs use {"list":{}}'
         ),
         retryable=False,
     )
@@ -414,7 +434,7 @@ def test_update_requires_a_change_beyond_id(tmp_path: Path) -> None:
     assert error["code"] == "invalid_arguments"
     assert error["retryable"] is False
     assert "update requires at least one field to change" in error["message"]
-    assert '{"action":"update","id":"<job-id>"' in error["message"]
+    assert '{"update":{"id":"<job-id>"' in error["message"]
     cron_service.update_job.assert_not_called()
 
 
@@ -440,7 +460,7 @@ def test_removed_agent_fields_are_rejected(
     assert error["code"] == "invalid_arguments"
     assert error["retryable"] is False
     assert f"Action 'create' does not accept: {removed_field}" in error["message"]
-    assert '{"action":"create"' in error["message"]
+    assert '{"create":{' in error["message"]
     cron_service.create_job.assert_not_called()
 
 
@@ -577,5 +597,5 @@ def test_unknown_id_failures_return_job_not_found(
     assert error["code"] == "job_not_found"
     assert error["retryable"] is False
     assert "Cron job not found: missing" in error["message"]
-    assert '{"action":"list"}' in error["message"]
+    assert '{"list":{}}' in error["message"]
     getattr(cron_service, method_name).assert_called_once()

@@ -48,6 +48,7 @@ from core.tools.availability import subagent_allowed_agents
 from core.tools.tools import (
     JsonObject,
     ToolContext,
+    extract_tool_operation,
     tool_failure,
     tool_success,
 )
@@ -158,6 +159,16 @@ class SubAgentCoordinator:
         )
 
 
+def _normalize_subagent_call(arguments: JsonObject) -> tuple[str | None, JsonObject]:
+    """Return canonical start/continue arguments or one legacy flat call."""
+
+    operations = ("start", "continue")
+    if set(arguments) & set(operations):
+        operation, operation_arguments = extract_tool_operation(arguments, operations)
+        return operation, operation_arguments
+    return None, dict(arguments)
+
+
 async def _handle_subagent(
     context: ToolContext,
     arguments: JsonObject,
@@ -165,6 +176,11 @@ async def _handle_subagent(
     runtime: RuntimeServices,
     batch_tracker: SubAgentBatchTracker,
 ) -> JsonObject:
+    try:
+        operation, arguments = _normalize_subagent_call(arguments)
+    except ValueError as error:
+        return tool_failure("invalid_arguments", str(error))
+
     unknown_arguments = set(arguments) - {
         "content",
         "agent_id",
@@ -186,6 +202,16 @@ async def _handle_subagent(
     try:
         explicit_agent_address = optional_string(arguments.get("agent_id"), field_name="agent_id")
         session_id = optional_string(arguments.get("session_id"), field_name="session_id")
+        if operation == "start" and session_id is not None:
+            return tool_failure(
+                "invalid_arguments",
+                "start creates a new Session and does not accept session_id",
+            )
+        if operation == "continue" and (session_id is None or explicit_agent_address is None):
+            return tool_failure(
+                "invalid_arguments",
+                "continue requires both agent_id and session_id",
+            )
         if session_id is not None and explicit_agent_address is None:
             return tool_failure(
                 "invalid_arguments",

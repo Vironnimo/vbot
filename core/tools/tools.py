@@ -38,6 +38,73 @@ ToolSummaryBuilder = Callable[[JsonObject], str | None]
 MAX_TOOL_DISPLAY_SUMMARY_LENGTH = 120
 
 
+def operation_envelope_schema(
+    operations: Mapping[str, JsonObject],
+    *,
+    description: str,
+) -> JsonObject:
+    """Build the canonical provider schema for a multi-operation Tool.
+
+    The operation name is the single top-level property and its value is the
+    complete operation-specific argument object. Keeping the conditional
+    requirements below the root avoids provider adapters that must remove
+    root-level union keywords while still giving constrained decoders an exact
+    set of required fields for the selected operation.
+    """
+
+    if not operations:
+        raise ValueError("Operation envelope requires at least one operation")
+    normalized: JsonObject = {}
+    for name, schema in operations.items():
+        if not isinstance(name, str) or not name:
+            raise ValueError("Operation names must be non-empty strings")
+        if not isinstance(schema, dict) or schema.get("type") != "object":
+            raise ValueError(f"Operation schema must be an object: {name}")
+        normalized[name] = dict(schema)
+    return {
+        "type": "object",
+        "description": description,
+        "properties": normalized,
+        "minProperties": 1,
+        "maxProperties": 1,
+        "additionalProperties": False,
+    }
+
+
+def extract_tool_operation(
+    arguments: JsonObject,
+    operation_names: Sequence[str],
+    *,
+    legacy_action_key: str = "action",
+) -> tuple[str, JsonObject]:
+    """Normalize one canonical operation envelope or a legacy flat action call.
+
+    Provider schemas expose only ``{"operation": {...}}``. Existing persisted
+    calls and older models may still send ``{"action": "operation", ...}``, so
+    handlers accept that flat form as a compatibility superset without teaching
+    new models to use it.
+    """
+
+    allowed = tuple(dict.fromkeys(operation_names))
+    if not allowed:
+        raise ValueError("At least one operation name is required")
+
+    if legacy_action_key in arguments:
+        action = arguments.get(legacy_action_key)
+        if not isinstance(action, str) or action not in allowed:
+            raise ValueError(f"{legacy_action_key} must be one of: {', '.join(sorted(allowed))}")
+        return action, {key: value for key, value in arguments.items() if key != legacy_action_key}
+
+    if len(arguments) != 1:
+        raise ValueError("exactly one operation object is required: " + ", ".join(sorted(allowed)))
+    operation, raw_arguments = next(iter(arguments.items()))
+    if operation not in allowed:
+        raise ValueError(f"operation must be one of: {', '.join(sorted(allowed))}")
+    if not isinstance(raw_arguments, dict):
+        raise ValueError(f"{operation} must be an object")
+    return operation, dict(raw_arguments)
+
+
 class ToolError(VBotError):
     """Base class for expected tool registry errors."""
 

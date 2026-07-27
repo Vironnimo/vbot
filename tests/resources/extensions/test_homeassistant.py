@@ -252,6 +252,21 @@ def test_display_metadata_preserved() -> None:
     )
 
 
+def test_provider_schemas_reject_unknowns_and_describe_string_formats() -> None:
+    tools = _tools_with_token()
+
+    for name in _HA_TOOL_NAMES:
+        assert tools.get(name).parameters["additionalProperties"] is False
+
+    entity_id = tools.get(HA_GET_STATE_NAME).parameters["properties"]["entity_id"]
+    assert entity_id["minLength"] == 1
+    assert entity_id["pattern"]
+    call_properties = tools.get(HA_CALL_SERVICE_NAME).parameters["properties"]
+    assert call_properties["domain"]["pattern"]
+    assert call_properties["service"]["pattern"]
+    assert call_properties["data"]["type"] == "object"
+
+
 # ---------------------------------------------------------------------------
 # Handler guard: token removed between prompt build and call
 # ---------------------------------------------------------------------------
@@ -514,6 +529,34 @@ async def test_get_state_invalid_entity_id(entity_id: str) -> None:
     result = await _dispatch(tools, HA_GET_STATE_NAME, {"entity_id": entity_id})
 
     assert_failure_envelope(result, "validation_error")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_name", "arguments", "message"),
+    (
+        (HA_LIST_ENTITIES_NAME, {"unknown": True}, "Unknown argument"),
+        (HA_LIST_ENTITIES_NAME, {"domain": 42}, "domain must be a string"),
+        (HA_GET_STATE_NAME, {"entity_id": 42}, "entity_id must be a string"),
+        (HA_LIST_SERVICES_NAME, {"domain": []}, "domain must be a string"),
+        (
+            HA_CALL_SERVICE_NAME,
+            {"domain": "light", "service": "turn_on", "data": []},
+            "data must be an object",
+        ),
+    ),
+)
+async def test_handlers_reject_unknown_or_wrong_typed_arguments(
+    tool_name: str,
+    arguments: dict[str, Any],
+    message: str,
+) -> None:
+    tools = _tools_with_token()
+
+    result = await _dispatch(tools, tool_name, arguments)
+
+    error = assert_failure_envelope(result, "validation_error")
+    assert message in error["message"]
 
 
 @respx.mock

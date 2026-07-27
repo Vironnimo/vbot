@@ -73,14 +73,19 @@ def test_registration_is_session_scoped_and_schema_is_strict(tmp_path: Path) -> 
 
     tool = registry.get(HISTORY_TOOL_NAME)
     assert tool.session_scoped is True
-    assert tool.parameters["required"] == ["action"]
     assert tool.parameters["additionalProperties"] is False
-    assert set(tool.parameters["properties"]["action"]["enum"]) == {
+    assert tool.parameters["minProperties"] == 1
+    assert tool.parameters["maxProperties"] == 1
+    assert set(tool.parameters["properties"]) == {
         "overview",
         "search",
         "read",
         "around",
     }
+    search_schema = tool.parameters["properties"]["search"]["oneOf"][0]
+    around_schema = tool.parameters["properties"]["around"]["oneOf"][0]
+    assert search_schema["required"] == ["query"]
+    assert around_schema["required"] == ["message_id"]
     display = registry.display_for_call(
         HISTORY_TOOL_NAME,
         {"action": "search", "query": "secret", "cursor": "opaque"},
@@ -171,7 +176,7 @@ def test_overview_reports_fixed_checkpoint_sections(tmp_path: Path) -> None:
     ):
         session.append(message)
 
-    data = _data(_call(manager, session, {"action": "overview"}))
+    data = _data(_call(manager, session, {"overview": {}}))
 
     assert [item["checkpoint"] for item in data["items"]] == [1, 2]
     assert data["items"][0] == {

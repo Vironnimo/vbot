@@ -37,6 +37,7 @@ WRITE_TOOL_PARAMETERS: JsonObject = {
     "properties": {
         "path": {
             "type": "string",
+            "minLength": 1,
             "description": (
                 "Path to the file to write (relative to the working directory, or absolute)."
             ),

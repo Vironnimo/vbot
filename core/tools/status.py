@@ -25,6 +25,8 @@ from core.tools.tools import (
     ToolContext,
     ToolDisplay,
     ToolRegistry,
+    extract_tool_operation,
+    operation_envelope_schema,
     tool_failure,
     tool_success,
 )
@@ -34,26 +36,55 @@ _LOGGER = get_logger("tools.status")
 
 STATUS_TOOL_NAME = "status"
 STATUS_TOOL_DESCRIPTION = (
-    "Show status for a chat session. With no arguments, checks this session. "
-    "Use session_id to check another session for this agent; use both session_id "
-    "and agent_id to check another agent's session."
+    "Show status for a chat Session. Choose current for this Session, session for "
+    "another Session owned by this Agent, or agent_session for another Agent's Session."
 )
-STATUS_TOOL_PARAMETERS: JsonObject = {
-    "type": "object",
-    "properties": {
-        "session_id": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Optional session id to inspect. Alone, it targets this agent.",
-        },
-        "agent_id": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Optional agent id for the target session. Requires session_id.",
-        },
-    },
-    "additionalProperties": False,
+_STATUS_SESSION_ID_PARAMETER: JsonObject = {
+    "type": "string",
+    "minLength": 1,
+    "description": "Session id to inspect.",
 }
+_STATUS_AGENT_ID_PARAMETER: JsonObject = {
+    "type": "string",
+    "minLength": 1,
+    "description": "Agent id that owns the target Session.",
+}
+
+
+def _status_operation(
+    description: str,
+    properties: JsonObject,
+    *,
+    required: tuple[str, ...] = (),
+) -> JsonObject:
+    return {
+        "type": "object",
+        "description": description,
+        "properties": properties,
+        "required": list(required),
+        "additionalProperties": False,
+    }
+
+
+STATUS_TOOL_PARAMETERS: JsonObject = operation_envelope_schema(
+    {
+        "current": _status_operation("Inspect the current Agent and Session.", {}),
+        "session": _status_operation(
+            "Inspect another Session owned by the current Agent.",
+            {"session_id": _STATUS_SESSION_ID_PARAMETER},
+            required=("session_id",),
+        ),
+        "agent_session": _status_operation(
+            "Inspect one Session owned by another Agent.",
+            {
+                "agent_id": _STATUS_AGENT_ID_PARAMETER,
+                "session_id": _STATUS_SESSION_ID_PARAMETER,
+            },
+            required=("agent_id", "session_id"),
+        ),
+    },
+    description=("Choose exactly one target operation. Its value is the complete target object."),
+)
 
 
 def make_status_handler(
@@ -78,6 +109,10 @@ def make_status_handler(
             return {}
 
     def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        try:
+            arguments = _normalize_status_call(arguments)
+        except ValueError as error:
+            return tool_failure("invalid_arguments", str(error))
         unknown_arguments = set(arguments) - {"agent_id", "session_id"}
         if unknown_arguments:
             names = ", ".join(sorted(unknown_arguments))
@@ -186,3 +221,21 @@ def register_status_tool(
         ),
         display=ToolDisplay(),
     )
+
+
+def _normalize_status_call(arguments: JsonObject) -> JsonObject:
+    operations = ("current", "session", "agent_session")
+    if not (set(arguments) & set(operations)):
+        return dict(arguments)
+    operation, operation_arguments = extract_tool_operation(arguments, operations)
+    if operation == "current":
+        if operation_arguments:
+            raise ValueError("current does not accept target fields")
+        return {}
+    if operation == "session":
+        if set(operation_arguments) - {"session_id"}:
+            raise ValueError("session accepts only session_id")
+        return operation_arguments
+    if set(operation_arguments) - {"agent_id", "session_id"}:
+        raise ValueError("agent_session accepts only agent_id and session_id")
+    return operation_arguments

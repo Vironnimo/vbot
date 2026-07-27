@@ -114,7 +114,11 @@ def test_register_web_search_tool_schema() -> None:
         "date_before",
     }
     domains_schema = properties["domains"]
-    assert domains_schema["items"] == {"type": "string"}
+    assert domains_schema["items"] == {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 253,
+    }
     assert domains_schema["minItems"] == 1
     assert domains_schema["maxItems"] == 10
     assert domains_schema["uniqueItems"] is True
@@ -124,6 +128,8 @@ def test_register_web_search_tool_schema() -> None:
     page_schema = properties["page"]
     assert page_schema["minimum"] == 1
     assert page_schema["maximum"] == 10
+    assert properties["date_after"]["pattern"] == r"^\d{4}-\d{2}-\d{2}$"
+    assert properties["date_before"]["pattern"] == r"^\d{4}-\d{2}-\d{2}$"
 
 
 @pytest.mark.asyncio

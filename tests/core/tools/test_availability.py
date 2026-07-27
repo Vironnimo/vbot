@@ -8,6 +8,7 @@ from core.tools.availability import (
     effective_agent_allowed_tools,
     subagent_allowed_agents,
 )
+from core.tools.subagent import SUBAGENT_TOOL_PARAMETERS
 
 
 def _definitions() -> list[dict[str, object]]:
@@ -81,6 +82,33 @@ def test_wildcard_agent_targets_leave_tool_definitions_unchanged() -> None:
         apply_agent_target_tool_visibility(source, agent_id="orchestrator", allowed_agents=["*"])
         is source
     )
+
+
+def test_explicit_agent_targets_narrow_nested_subagent_operations() -> None:
+    source = [
+        {
+            "name": "subagent",
+            "description": "Start a Sub-Agent.",
+            "parameters": SUBAGENT_TOOL_PARAMETERS,
+        }
+    ]
+
+    definitions = apply_agent_target_tool_visibility(
+        source,
+        agent_id="orchestrator",
+        allowed_agents=["worker"],
+    )
+
+    operations = definitions[0]["parameters"]["properties"]
+    assert operations["start"]["properties"]["agent_id"]["enum"] == [
+        "orchestrator",
+        "worker",
+    ]
+    assert operations["continue"]["properties"]["agent_id"]["enum"] == [
+        "orchestrator",
+        "worker",
+    ]
+    assert "enum" not in SUBAGENT_TOOL_PARAMETERS["properties"]["start"]["properties"]["agent_id"]
 
 
 def test_empty_additional_targets_do_not_remove_subagent_tools_from_dispatch() -> None:

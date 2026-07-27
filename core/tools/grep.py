@@ -84,6 +84,7 @@ GREP_TOOL_PARAMETERS: JsonObject = {
     "properties": {
         "pattern": {
             "type": "string",
+            "minLength": 1,
             "description": "Regex search pattern. Set literal=true for fixed-string matching.",
         },
         "path": {
@@ -110,18 +111,21 @@ GREP_TOOL_PARAMETERS: JsonObject = {
             ),
         },
         "context": {
-            "type": "number",
+            "type": "integer",
+            "minimum": 0,
             "description": "Number of context lines before and after content matches (default: 0).",
         },
         "limit": {
-            "type": "number",
+            "type": "integer",
+            "minimum": 1,
             "description": (
                 "Maximum results (default: 100). content limits matches; "
                 "files_with_matches/count limit returned file rows."
             ),
         },
         "offset": {
-            "type": "number",
+            "type": "integer",
+            "minimum": 0,
             "description": "Skip the first N results before applying limit (default: 0).",
         },
         "include_ignored": {

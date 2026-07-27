@@ -13,6 +13,7 @@ from core.tools.tools import (
     ToolContext,
     ToolDisplay,
     ToolRegistry,
+    operation_envelope_schema,
     tool_failure,
     tool_success,
 )
@@ -25,8 +26,8 @@ CronScheduleType = Literal["cron", "once"]
 
 CRON_TOOL_NAME = "cron"
 CRON_TOOL_DESCRIPTION = (
-    "Create and manage named persisted schedules that start Runs. Calls are flat: set action to "
-    'create, list, update, delete, enable, or disable. List with {"action":"list"}. New '
+    "Create and manage named persisted schedules that start Runs. Choose exactly one operation "
+    "object: create, list, update, delete, enable, or disable. New "
     "jobs are enabled immediately, use the server timezone, and start a fresh Session on "
     "every fire. Use list to obtain job ids; disable pauses a job without deleting it."
 )
@@ -67,89 +68,161 @@ _ACTION_ARGUMENTS: dict[str, frozenset[str]] = {
 }
 _ACTION_RECOMMENDATIONS = {
     "create": (
-        'For a recurring job use {"action":"create","name":"<job name>",'
+        'For a recurring job use {"create":{"name":"<job name>",'
         '"prompt":"<instruction>",'
-        '"schedule_type":"cron","cron_expression":"0 9 * * *"}. For a one-time job use '
-        '{"action":"create","name":"<job name>","prompt":"<instruction>",'
+        '"schedule_type":"cron","cron_expression":"0 9 * * *"}}. For a one-time job use '
+        '{"create":{"name":"<job name>","prompt":"<instruction>",'
         '"schedule_type":"once",'
-        '"run_at":"2026-07-25T09:00:00+02:00"}'
+        '"run_at":"2026-07-25T09:00:00+02:00"}}'
     ),
-    "list": 'Use {"action":"list"}',
+    "list": 'Use {"list":{}}',
     "update": (
-        'Use {"action":"update","id":"<job-id>","name":"<replacement name>"}; '
+        'Use {"update":{"id":"<job-id>","name":"<replacement name>"}}; '
         "include only fields that should change"
     ),
-    "delete": 'Use {"action":"delete","id":"<job-id>"}',
-    "enable": 'Use {"action":"enable","id":"<job-id>"}',
-    "disable": 'Use {"action":"disable","id":"<job-id>"}',
+    "delete": 'Use {"delete":{"id":"<job-id>"}}',
+    "enable": 'Use {"enable":{"id":"<job-id>"}}',
+    "disable": 'Use {"disable":{"id":"<job-id>"}}',
 }
 
-CRON_TOOL_PARAMETERS: JsonObject = {
-    "type": "object",
-    "properties": {
-        "action": {
-            "type": "string",
-            "enum": sorted(CRON_ACTIONS),
-            "description": (
-                "Operation to perform. Use list by itself to obtain current job ids before "
-                "changing or deleting a job. Create requires name, prompt, schedule_type, "
-                "and the matching schedule field."
-            ),
-        },
-        "id": {
-            "type": "string",
-            "description": (
-                "Existing job id from list. Required for update, delete, enable, and disable."
-            ),
-        },
-        "target": {
-            "type": "string",
-            "description": (
-                "Agent address for create or update: agent or agent@project. Create defaults "
-                "to the current Agent and Project."
-            ),
-        },
-        "name": {
-            "type": "string",
-            "description": (
-                "Human-readable job name. Required for create; optional replacement for "
-                "update. It does not need to be unique."
-            ),
-        },
-        "prompt": {
-            "type": "string",
-            "description": (
-                "Self-contained instruction for create, or a replacement instruction for "
-                "update. Required for create because every fire starts a fresh Session."
-            ),
-        },
-        "schedule_type": {
-            "type": "string",
-            "enum": sorted(CRON_SCHEDULE_TYPES),
-            "description": (
-                "Schedule type for create or update: cron for recurring, once for one fire. "
-                "Required for create."
-            ),
-        },
-        "cron_expression": {
-            "type": "string",
-            "description": (
-                "Recurring schedule for create or update. Exactly five fields: minute hour "
-                "day-of-month month day-of-week. Required with schedule_type cron. Seconds "
-                "are unsupported; minimum cadence is one minute."
-            ),
-        },
-        "run_at": {
-            "type": "string",
-            "description": (
-                "One-time ISO 8601 date-time for create or update. Required with "
-                "schedule_type once; a value without an offset uses the server timezone."
-            ),
-        },
-    },
-    "required": ["action"],
-    "additionalProperties": False,
+_CRON_ID_PARAMETER: JsonObject = {
+    "type": "string",
+    "minLength": 1,
+    "description": "Existing job id returned by list.",
 }
+_CRON_TARGET_PARAMETER: JsonObject = {
+    "type": "string",
+    "minLength": 1,
+    "description": (
+        "Agent address: agent or agent@project. Create defaults to the current Agent and Project."
+    ),
+}
+_CRON_NAME_PARAMETER: JsonObject = {
+    "type": "string",
+    "minLength": 1,
+    "description": "Human-readable job name. It does not need to be unique.",
+}
+_CRON_PROMPT_PARAMETER: JsonObject = {
+    "type": "string",
+    "minLength": 1,
+    "description": "Self-contained instruction because every fire starts a fresh Session.",
+}
+_CRON_SCHEDULE_TYPE_PARAMETER: JsonObject = {
+    "type": "string",
+    "enum": sorted(CRON_SCHEDULE_TYPES),
+    "description": "cron for a recurring schedule; once for one fire.",
+}
+_CRON_EXPRESSION_PARAMETER: JsonObject = {
+    "type": "string",
+    "minLength": 1,
+    "description": (
+        "Recurring five-field schedule: minute hour day-of-month month day-of-week. "
+        "Seconds are unsupported; minimum cadence is one minute."
+    ),
+}
+_CRON_RUN_AT_PARAMETER: JsonObject = {
+    "type": "string",
+    "minLength": 1,
+    "description": (
+        "One-time ISO 8601 date-time. A value without an offset uses the server timezone."
+    ),
+}
+
+
+def _cron_operation(
+    description: str,
+    properties: JsonObject,
+    *,
+    required: tuple[str, ...] = (),
+) -> JsonObject:
+    return {
+        "type": "object",
+        "description": description,
+        "properties": properties,
+        "required": list(required),
+        "additionalProperties": False,
+    }
+
+
+CRON_TOOL_PARAMETERS: JsonObject = operation_envelope_schema(
+    {
+        "create": {
+            **_cron_operation(
+                "Create and immediately enable one schedule.",
+                {
+                    "target": _CRON_TARGET_PARAMETER,
+                    "name": _CRON_NAME_PARAMETER,
+                    "prompt": _CRON_PROMPT_PARAMETER,
+                    "schedule_type": _CRON_SCHEDULE_TYPE_PARAMETER,
+                    "cron_expression": _CRON_EXPRESSION_PARAMETER,
+                    "run_at": _CRON_RUN_AT_PARAMETER,
+                },
+                required=("name", "prompt", "schedule_type"),
+            ),
+            "oneOf": [
+                {
+                    "properties": {"schedule_type": {"const": "cron"}},
+                    "required": ["cron_expression"],
+                    "not": {"required": ["run_at"]},
+                },
+                {
+                    "properties": {"schedule_type": {"const": "once"}},
+                    "required": ["run_at"],
+                    "not": {"required": ["cron_expression"]},
+                },
+            ],
+        },
+        "list": _cron_operation(
+            "List current jobs and obtain ids for later operations.",
+            {},
+        ),
+        "update": {
+            **_cron_operation(
+                "Update an existing job. Include only fields that should change.",
+                {
+                    "id": _CRON_ID_PARAMETER,
+                    "target": _CRON_TARGET_PARAMETER,
+                    "name": _CRON_NAME_PARAMETER,
+                    "prompt": _CRON_PROMPT_PARAMETER,
+                    "schedule_type": _CRON_SCHEDULE_TYPE_PARAMETER,
+                    "cron_expression": _CRON_EXPRESSION_PARAMETER,
+                    "run_at": _CRON_RUN_AT_PARAMETER,
+                },
+                required=("id",),
+            ),
+            "anyOf": [
+                {"required": [field_name]}
+                for field_name in (
+                    "target",
+                    "name",
+                    "prompt",
+                    "schedule_type",
+                    "cron_expression",
+                    "run_at",
+                )
+            ],
+        },
+        "delete": _cron_operation(
+            "Delete an existing job.",
+            {"id": _CRON_ID_PARAMETER},
+            required=("id",),
+        ),
+        "enable": _cron_operation(
+            "Enable a paused job.",
+            {"id": _CRON_ID_PARAMETER},
+            required=("id",),
+        ),
+        "disable": _cron_operation(
+            "Pause a job without deleting it.",
+            {"id": _CRON_ID_PARAMETER},
+            required=("id",),
+        ),
+    },
+    description=(
+        "Choose exactly one operation property. Its value is the complete argument object "
+        "for that operation."
+    ),
+)
 
 _LOGGER = get_logger("tools.cron")
 
@@ -213,7 +286,7 @@ def _handle_cron_tool(
     except CronJobNotFoundError as error:
         return tool_failure(
             "job_not_found",
-            f'{error}. Use {{"action":"list"}} to get current job ids',
+            f'{error}. Use {{"list":{{}}}} to get current job ids',
             retryable=False,
         )
     except CronJobValidationError as error:
@@ -339,14 +412,14 @@ def _job_payload(cron_service: CronService, job: CronJob) -> JsonObject:
 
 
 def _extract_operation(arguments: JsonObject) -> tuple[str, JsonObject] | str:
-    """Normalize the flat action contract and the legacy operation envelope."""
+    """Normalize the canonical operation envelope and legacy flat action calls."""
 
     if "action" in arguments:
         action = arguments.get("action")
         if not isinstance(action, str) or action not in CRON_ACTIONS:
             return (
-                "action must be one of: create, delete, disable, enable, list, update. "
-                'To inspect jobs use {"action":"list"}'
+                "Legacy action must be one of: create, delete, disable, enable, list, update. "
+                'Use the canonical operation object; to inspect jobs use {"list":{}}'
             )
         action_arguments = {key: value for key, value in arguments.items() if key != "action"}
         if "agent_id" in action_arguments:
@@ -357,26 +430,24 @@ def _extract_operation(arguments: JsonObject) -> tuple[str, JsonObject] | str:
 
     if len(arguments) != 1:
         return (
-            "Missing flat action. Set action to create, list, update, delete, enable, or "
-            'disable. To inspect jobs use {"action":"list"}'
+            "Choose exactly one operation object: create, list, update, delete, enable, or "
+            'disable. To inspect jobs use {"list":{}}'
         )
     action, operation_arguments = next(iter(arguments.items()))
     if action not in CRON_ACTIONS:
         return (
-            f"Unknown action: {action}. Set action to create, list, update, delete, enable, "
-            'or disable. To inspect jobs use {"action":"list"}'
+            f"Unknown operation: {action}. Choose create, list, update, delete, enable, "
+            'or disable. To inspect jobs use {"list":{}}'
         )
 
-    normalized_arguments = _normalize_legacy_operation_arguments(action, operation_arguments)
+    normalized_arguments = _normalize_operation_arguments(action, operation_arguments)
     if isinstance(normalized_arguments, str):
         return normalized_arguments
     return action, normalized_arguments
 
 
-def _normalize_legacy_operation_arguments(
-    action: str, operation_arguments: object
-) -> JsonObject | str:
-    """Accept the retired envelope without making its quirks model-facing."""
+def _normalize_operation_arguments(action: str, operation_arguments: object) -> JsonObject | str:
+    """Normalize one operation object and tolerate old malformed list encodings."""
 
     if isinstance(operation_arguments, dict):
         return dict(operation_arguments)

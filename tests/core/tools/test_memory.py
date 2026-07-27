@@ -65,12 +65,10 @@ def test_register_memory_tool_exposes_provider_schema(tmp_path: Path) -> None:
     assert tool.parameters == MEMORY_TOOL_PARAMETERS
     definition = registry.provider_definitions(["memory"])[0]
     assert definition["name"] == "memory"
-    assert set(definition["parameters"]["properties"]) == {
-        "action",
-        "content",
-        "entry_id",
-        "scope",
-    }
+    operations = definition["parameters"]["properties"]
+    assert set(operations) == {"list", "add", "replace", "remove"}
+    assert operations["add"]["required"] == ["scope", "content"]
+    assert operations["replace"]["required"] == ["scope", "entry_id", "content"]
 
 
 def test_memory_tool_adds_and_lists_user_entries(tmp_path: Path) -> None:
@@ -93,6 +91,21 @@ def test_memory_tool_adds_and_lists_user_entries(tmp_path: Path) -> None:
     }
     assert list_data["entries"] == [add_data["entry"]]
     assert "Prefers direct answers." in (context.workspace / "USER.md").read_text(encoding="utf-8")
+
+
+def test_memory_tool_accepts_canonical_operation_objects(tmp_path: Path) -> None:
+    context = make_context(tmp_path)
+    service = MemoryService()
+
+    add_result = memory_handler(
+        context,
+        {"add": {"scope": "user", "content": "Prefers direct answers."}},
+        service,
+    )
+    list_result = memory_handler(context, {"list": {"scope": "user"}}, service)
+
+    assert_success(add_result)
+    assert_success(list_result)
 
 
 def test_memory_tool_replaces_and_removes_agent_entries(tmp_path: Path) -> None:
@@ -128,7 +141,7 @@ def test_memory_tool_rejects_invalid_arguments(tmp_path: Path) -> None:
     )
 
     error = assert_failure(result, "invalid_arguments")
-    assert "Unknown argument" in error["message"]
+    assert "Unknown add argument" in error["message"]
 
 
 def test_memory_tool_returns_memory_errors(tmp_path: Path) -> None:

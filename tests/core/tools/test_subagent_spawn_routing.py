@@ -67,26 +67,28 @@ async def test_register_subagent_tools_registers_both_public_tools() -> None:
     assert subagent_result.parameters == SUBAGENT_RESULT_TOOL_PARAMETERS
     assert subagent.description == SUBAGENT_TOOL_DESCRIPTION
     assert subagent_result.description == SUBAGENT_RESULT_TOOL_DESCRIPTION
-    assert subagent.parameters["properties"]["content"]["description"] == (
+    start = subagent.parameters["properties"]["start"]
+    continuation = subagent.parameters["properties"]["continue"]
+    assert start["required"] == ["content"]
+    assert continuation["required"] == ["content", "agent_id", "session_id"]
+    assert start["properties"]["content"]["description"] == (
         "Self-contained task or message to send to the target Sub-Agent."
     )
-    assert subagent.parameters["properties"]["agent_id"]["description"] == (
-        "Target Agent id from the allowed values. Omit it to run the calling Agent as a "
-        "Sub-Agent when creating a new Session. Required with session_id."
+    assert start["properties"]["agent_id"]["description"] == (
+        "Target Agent id from the allowed values."
     )
-    assert subagent.parameters["properties"]["background"]["description"] == (
+    assert start["properties"]["background"]["description"] == (
         "When true, return after the Run is started or queued. When false, wait for its "
         "final result. Defaults to true."
     )
-    assert subagent.parameters["properties"]["session_id"]["description"] == (
-        "Existing Sub-Agent Session to continue. Repeat its owning agent_id with this value. "
-        "Creates a new persisted Session when omitted."
+    assert continuation["properties"]["session_id"]["description"] == (
+        "Existing Sub-Agent Session id returned by start."
     )
-    assert subagent.parameters["properties"]["model"]["description"] == (
+    assert start["properties"]["model"]["description"] == (
         "Run-local primary Model override in <provider>/<model-id> form. "
         "Does not modify the target Agent or Session."
     )
-    assert subagent.parameters["properties"]["thinking_effort"]["enum"] == [
+    assert start["properties"]["thinking_effort"]["enum"] == [
         "",
         "high",
         "low",
@@ -96,7 +98,7 @@ async def test_register_subagent_tools_registers_both_public_tools() -> None:
         "none",
         "xhigh",
     ]
-    assert subagent.parameters["properties"]["thinking_effort"]["description"] == (
+    assert start["properties"]["thinking_effort"]["description"] == (
         "Run-local thinking effort override. Omit to inherit the target Agent; "
         "an empty string selects the Provider default."
     )
@@ -123,7 +125,7 @@ async def test_subagent_tool_enforces_depth_limit(tmp_path: Path) -> None:
     # Act
     result = await _handle_subagent(
         context,
-        {"content": "spawn"},
+        {"start": {"content": "spawn"}},
         runtime=runtime,
         batch_tracker=tracker,
     )
@@ -145,7 +147,7 @@ async def test_subagent_tool_enforces_per_turn_limit(tmp_path: Path) -> None:
     # Act
     result = await _handle_subagent(
         context,
-        {"content": "spawn"},
+        {"start": {"content": "spawn"}},
         runtime=runtime,
         batch_tracker=tracker,
     )
@@ -255,7 +257,7 @@ async def test_subagent_tool_creates_new_session_when_no_session_id_provided(
     # Act
     result = await _handle_subagent(
         context,
-        {"content": "spawn"},
+        {"start": {"content": "spawn"}},
         runtime=runtime,
         batch_tracker=tracker,
     )

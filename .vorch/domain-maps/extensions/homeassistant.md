@@ -14,7 +14,7 @@ Tool names: `ha_list_entities`, `ha_get_state`, `ha_list_services`, `ha_call_ser
 
 ### `ha_list_entities`
 
-- `GET /api/states`. Schema: optional `domain`, optional `area`; `additionalProperties: false`.
+- `GET /api/states`. Schema: optional non-empty string `domain`, optional non-empty string `area`; `additionalProperties: false`.
 - `domain` filters by `entity_id` prefix; `area` filters by `friendly_name` substring (case-insensitive).
 - Returns `{ count, entities: [{ entity_id, state, friendly_name }] }`.
 
@@ -25,12 +25,12 @@ Tool names: `ha_list_entities`, `ha_get_state`, `ha_list_services`, `ha_call_ser
 
 ### `ha_list_services`
 
-- `GET /api/services`. Schema: optional `domain`; `additionalProperties: false`.
+- `GET /api/services`. Schema: optional non-empty string `domain`; `additionalProperties: false`.
 - Returns `{ count, domains: [{ domain, services: { name: { description, fields } } }] }`.
 
 ### `ha_call_service`
 
-- `POST /api/services/{domain}/{service}`. Schema: required `domain`, required `service`, optional `entity_id`, optional `data` (object); `additionalProperties: false`.
+- `POST /api/services/{domain}/{service}`. Schema: required non-empty string `domain`, required non-empty string `service`, optional non-empty string `entity_id`, optional `data` (object); `additionalProperties: false`.
 - `domain`/`service` validated `^[a-z][a-z0-9_]*$`; `entity_id` validated with the entity regex when provided. Display summary fields: `domain`, `service`, `entity_id`.
 - `data` must not include `entity_id`; callers use the top-level `entity_id` field so entity targeting always passes the strict validator.
 - Blocked domains: `shell_command`, `command_line`, `python_script`, `pyscript`, `hassio`, `rest_command`.
@@ -63,7 +63,7 @@ All four tools share `ready=lambda: bool(api.resolve_credential("HASS_TOKEN").st
 
 | Condition | Code |
 |---|---|
-| Invalid input (entity_id/domain/service, or `data.entity_id`) | `validation_error` |
+| Invalid input (unknown arguments, wrong types, entity_id/domain/service, non-object `data`, or `data.entity_id`) | `validation_error` |
 | Blocked domain | `blocked_domain` |
 | HA HTTP error or unreachable | `home_assistant_error` |
 | Empty token at call time (handler guard) | `home_assistant_error` ("HASS_TOKEN is not configured") |
@@ -73,6 +73,7 @@ Retry signalling (inside `error`): an exhausted retryable status / transport err
 ## Constraints & Gotchas
 
 - `entity_id`, `domain`, and `service` are regex-validated before URL construction — prevents path traversal; the `ha_call_service` domain blocklist stops code-execution / SSRF domains.
+- Every handler independently rejects unknown keys and wrong optional-field types before issuing an HTTP request; the runtime does not assume the Provider enforced JSON Schema.
 - The token is **never logged** (`_ha_request` logs status/detail, never the bearer value).
 - The handler guard (empty token → `home_assistant_error`) is defense in depth behind the dispatch-time readiness check; it fires without attempting any request.
 - Tests live at `tests/resources/extensions/test_homeassistant.py` (loaded through the real bundled root); `resources/` is not a mirrored quality-runner package, so a scoped gate run must name the test file explicitly.

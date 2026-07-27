@@ -41,6 +41,7 @@ from core.tools.tools import (
     ToolContext,
     ToolDisplay,
     ToolRegistry,
+    operation_envelope_schema,
     tool_failure,
     tool_success,
 )
@@ -133,13 +134,8 @@ def _operation_parameters(
     return schema
 
 
-SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = {
-    "type": "object",
-    "description": (
-        "Choose exactly one operation property. Its value is the complete argument object "
-        "for that operation; never send flat operation/name/draft_id fields."
-    ),
-    "properties": {
+SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = operation_envelope_schema(
+    {
         "inspect": _operation_parameters(
             "Inspect one published Skill by name or one owned draft by draft_id. Provide "
             "exactly one of name or draft_id; path optionally returns one UTF-8 file.",
@@ -257,10 +253,11 @@ SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = {
             required=("name",),
         ),
     },
-    "minProperties": 1,
-    "maxProperties": 1,
-    "additionalProperties": False,
-}
+    description=(
+        "Choose exactly one operation property. Its value is the complete argument object "
+        "for that operation; never send flat operation/name/draft_id fields."
+    ),
+)
 
 _OPERATION_FIELDS: dict[str, frozenset[str]] = {
     "inspect": frozenset({"scope", "name", "draft_id", "path"}),

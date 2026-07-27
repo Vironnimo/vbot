@@ -19,6 +19,8 @@ from core.tools.tools import (
     ToolContext,
     ToolDisplay,
     ToolRegistry,
+    extract_tool_operation,
+    operation_envelope_schema,
     tool_failure,
     tool_success,
 )
@@ -33,7 +35,8 @@ _LOGGER = get_logger("tools.channel")
 CHANNEL_SEND_TOOL_NAME = "channel_send"
 CHANNEL_SEND_TOOL_DESCRIPTION = (
     "Send a proactive message or any file through a configured channel. Always use "
-    "this tool for channel file delivery, including replies."
+    "this tool for channel file delivery, including replies. Put the complete request "
+    "inside the send operation object."
 )
 _REQUIRED_CHANNEL_SEND_ARGUMENTS = frozenset(("channel_id",))
 _OPTIONAL_CHANNEL_SEND_ARGUMENTS = frozenset(
@@ -46,19 +49,23 @@ _INTERACTION_BUTTON_ARGUMENTS = frozenset(("label", "data"))
 
 CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
+    "description": "Send one message, one or more files, or both.",
     "properties": {
         "channel_id": {
             "type": "string",
+            "minLength": 1,
             "description": "Configured channel id to send through.",
         },
         "message": {
             "type": "string",
+            "minLength": 1,
             "description": (
                 "Outbound message text. At least one of message or file_paths is required."
             ),
         },
         "platform_target": {
             "type": "string",
+            "minLength": 1,
             "description": (
                 "Platform-specific target id (e.g. a chat or channel id). Omit to "
                 "send to wherever this session last replied."
@@ -66,6 +73,7 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
         },
         "thread_id": {
             "type": "string",
+            "minLength": 1,
             "description": (
                 "Optional thread/topic inside the target chat (e.g. a Telegram forum "
                 "topic id). When the target comes from session metadata, the last "
@@ -77,7 +85,9 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
             "type": "array",
             "items": {
                 "type": "string",
+                "minLength": 1,
             },
+            "minItems": 1,
             "description": (
                 "File paths to deliver through the channel. Use for every channel file "
                 "delivery, including replies. Relative paths resolve from the working "
@@ -86,13 +96,15 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
         },
         "buttons": {
             "type": "array",
+            "minItems": 1,
             "items": {
                 "type": "array",
+                "minItems": 1,
                 "items": {
                     "type": "object",
                     "properties": {
-                        "label": {"type": "string"},
-                        "data": {"type": "string"},
+                        "label": {"type": "string", "minLength": 1},
+                        "data": {"type": "string", "minLength": 1},
                     },
                     "required": ["label", "data"],
                     "additionalProperties": False,
@@ -111,8 +123,34 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
         },
     },
     "required": ["channel_id"],
+    "anyOf": [{"required": ["message"]}, {"required": ["file_paths"]}],
+    "not": {"required": ["buttons", "file_paths"]},
     "additionalProperties": False,
 }
+CHANNEL_SEND_TOOL_PARAMETERS = operation_envelope_schema(
+    {"send": CHANNEL_SEND_TOOL_PARAMETERS},
+    description="Choose the send operation and provide its complete request object.",
+)
+
+
+def _normalize_channel_send_call(arguments: JsonObject) -> JsonObject:
+    if "send" not in arguments:
+        return dict(arguments)
+    _, operation_arguments = extract_tool_operation(arguments, ("send",))
+    return operation_arguments
+
+
+def _channel_send_display_summary(arguments: JsonObject) -> str:
+    try:
+        operation_arguments = _normalize_channel_send_call(arguments)
+    except ValueError:
+        return ""
+    parts: list[str] = []
+    for field_name in ("channel_id", "message"):
+        value = operation_arguments.get(field_name)
+        if isinstance(value, str) and value.strip():
+            parts.append(value.strip())
+    return " · ".join(parts)
 
 
 def register_channel_send_tool(
@@ -142,7 +180,7 @@ def register_channel_send_tool(
         CHANNEL_SEND_TOOL_DESCRIPTION,
         CHANNEL_SEND_TOOL_PARAMETERS,
         handler,
-        display=ToolDisplay(summary_fields=("channel_id", "message")),
+        display=ToolDisplay(summary_builder=_channel_send_display_summary),
     )
 
 
@@ -154,6 +192,10 @@ async def _handle_channel_send_tool(
     *,
     max_attachment_size_bytes: int,
 ) -> JsonObject:
+    try:
+        arguments = _normalize_channel_send_call(arguments)
+    except ValueError as error:
+        return tool_failure("invalid_arguments", str(error))
     unknown_arguments = sorted(set(arguments) - _CHANNEL_SEND_ALLOWED_ARGUMENTS)
     if unknown_arguments:
         names = ", ".join(unknown_arguments)
@@ -172,6 +214,11 @@ async def _handle_channel_send_tool(
             return tool_failure(
                 "invalid_arguments",
                 "at least one of message or file_paths must be provided",
+            )
+        if buttons is not None and files:
+            return tool_failure(
+                "invalid_arguments",
+                "buttons cannot be combined with file_paths",
             )
 
         channel_config = _channel_config_for_agent(channel_service, channel_id, context.agent_id)

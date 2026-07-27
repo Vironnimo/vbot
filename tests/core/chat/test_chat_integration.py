@@ -18,7 +18,7 @@ from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY, ReasoningRep
 from core.runtime import Runtime
 from core.skills.skills import SkillRegistry
 from core.tools import tool_success
-from core.tools.memory import MEMORY_TOOL_DESCRIPTION
+from core.tools.memory import MEMORY_TOOL_DESCRIPTION, MEMORY_TOOL_PARAMETERS
 from core.utils.config import Config
 from tests.core.chat.chat_loop_support import build_chat_loop
 
@@ -614,35 +614,7 @@ def test_runtime_prompt_includes_workspace_files_and_filtered_tool_skill_metadat
             {
                 "name": "memory",
                 "description": MEMORY_TOOL_DESCRIPTION,
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "action": {
-                            "type": "string",
-                            "enum": ["list", "add", "replace", "remove"],
-                            "description": "Memory operation to perform.",
-                        },
-                        "scope": {
-                            "type": "string",
-                            "enum": ["user", "agent"],
-                            "description": (
-                                "Pinned memory file to operate on: user=USER.md, agent=MEMORY.md."
-                            ),
-                        },
-                        "content": {
-                            "type": "string",
-                            "description": (
-                                "Entry content for add/replace. Keep it concise and durable."
-                            ),
-                        },
-                        "entry_id": {
-                            "type": "integer",
-                            "description": "1-based entry id for replace/remove.",
-                        },
-                    },
-                    "required": ["action", "scope"],
-                    "additionalProperties": False,
-                },
+                "parameters": MEMORY_TOOL_PARAMETERS,
             },
         ]
         # skill/skill_manage are ordinary tools now: this agent allows only read_file,

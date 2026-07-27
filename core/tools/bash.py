@@ -71,6 +71,7 @@ BASH_TOOL_PARAMETERS: JsonObject = {
     "properties": {
         "command": {
             "type": "string",
+            "minLength": 1,
             "description": "Shell command to run.",
         },
         "workdir": {
@@ -82,6 +83,7 @@ BASH_TOOL_PARAMETERS: JsonObject = {
         },
         "yield_after": {
             "type": "number",
+            "minimum": 0,
             "description": (
                 "Seconds to wait for foreground completion before backgrounding "
                 "(default 30). This is independent of timeout; increase it only for a "
@@ -103,6 +105,7 @@ BASH_TOOL_PARAMETERS: JsonObject = {
         },
         "timeout": {
             "type": "number",
+            "exclusiveMinimum": 0,
             "description": (
                 "Seconds after which the process is killed. This does not extend yield_after."
             ),

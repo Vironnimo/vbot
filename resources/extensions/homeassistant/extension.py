@@ -71,10 +71,13 @@ HA_LIST_ENTITIES_PARAMETERS: JsonObject = {
     "properties": {
         "domain": {
             "type": "string",
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
             "description": "Optional domain filter (e.g. light, climate, sensor).",
         },
         "area": {
             "type": "string",
+            "minLength": 1,
             "description": (
                 "Optional area filter matched against entity friendly_name "
                 "(case-insensitive substring)."
@@ -92,6 +95,8 @@ HA_GET_STATE_PARAMETERS: JsonObject = {
     "properties": {
         "entity_id": {
             "type": "string",
+            "minLength": 1,
+            "pattern": r"^[a-z_][a-z0-9_]*\.[a-z0-9_]+$",
             "description": "Entity id (e.g. light.living_room, sensor.temperature).",
         },
     },
@@ -110,6 +115,8 @@ HA_LIST_SERVICES_PARAMETERS: JsonObject = {
     "properties": {
         "domain": {
             "type": "string",
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
             "description": "Optional domain filter (e.g. light, climate).",
         },
     },
@@ -127,14 +134,20 @@ HA_CALL_SERVICE_PARAMETERS: JsonObject = {
     "properties": {
         "domain": {
             "type": "string",
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
             "description": "Service domain (e.g. light, climate, switch).",
         },
         "service": {
             "type": "string",
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
             "description": "Service name (e.g. turn_on, turn_off, set_temperature).",
         },
         "entity_id": {
             "type": "string",
+            "minLength": 1,
+            "pattern": r"^[a-z_][a-z0-9_]*\.[a-z0-9_]+$",
             "description": "Optional target entity id (e.g. light.living_room).",
         },
         "data": {
@@ -161,6 +174,30 @@ def _normalize_json_object(raw: Any) -> JsonObject | None:
     if isinstance(raw, dict):
         return raw
     return None
+
+
+def _validate_arguments(arguments: JsonObject, allowed: frozenset[str]) -> JsonObject | None:
+    unknown = sorted(set(arguments) - allowed)
+    if unknown:
+        return tool_failure(
+            "validation_error",
+            f"Unknown argument(s): {', '.join(unknown)}",
+            retryable=False,
+        )
+    return None
+
+
+def _optional_text_argument(arguments: JsonObject, name: str) -> tuple[str, JsonObject | None]:
+    raw = arguments.get(name)
+    if raw is None:
+        return "", None
+    if not isinstance(raw, str):
+        return "", tool_failure(
+            "validation_error",
+            f"{name} must be a string",
+            retryable=False,
+        )
+    return raw.strip(), None
 
 
 def _invalid_entity_id_failure(entity_id: str) -> JsonObject:
@@ -295,12 +332,22 @@ async def _handle_list_entities(
 ) -> JsonObject:
     del context
 
-    domain = _normalize_text(arguments.get("domain", "")).lower()
-    area = _normalize_text(arguments.get("area", "")).lower()
+    if argument_failure := _validate_arguments(arguments, frozenset({"domain", "area"})):
+        return argument_failure
+    domain, argument_failure = _optional_text_argument(arguments, "domain")
+    if argument_failure is not None:
+        return argument_failure
+    area, argument_failure = _optional_text_argument(arguments, "area")
+    if argument_failure is not None:
+        return argument_failure
+    domain = domain.lower()
+    area = area.lower()
+    if domain and not _DOMAIN_SERVICE_RE.match(domain):
+        return tool_failure("validation_error", f"invalid domain: {domain}", retryable=False)
 
-    payload, failure = await _ha_request("GET", f"{hass_url}/api/states", token, logger)
-    if failure is not None:
-        return _ha_failure_envelope(failure)
+    payload, request_failure = await _ha_request("GET", f"{hass_url}/api/states", token, logger)
+    if request_failure is not None:
+        return _ha_failure_envelope(request_failure)
     if payload is None:
         return tool_failure(
             "home_assistant_error", "no response from Home Assistant", retryable=False
@@ -359,15 +406,24 @@ async def _handle_get_state(
 ) -> JsonObject:
     del context
 
-    entity_id = _normalize_text(arguments.get("entity_id", ""))
+    if argument_failure := _validate_arguments(arguments, frozenset({"entity_id"})):
+        return argument_failure
+    entity_id, argument_failure = _optional_text_argument(arguments, "entity_id")
+    if argument_failure is not None:
+        return argument_failure
     if not entity_id:
         return tool_failure("validation_error", "entity_id is required", retryable=False)
     if not _ENTITY_ID_RE.match(entity_id):
         return _invalid_entity_id_failure(entity_id)
 
-    payload, failure = await _ha_request("GET", f"{hass_url}/api/states/{entity_id}", token, logger)
-    if failure is not None:
-        return _ha_failure_envelope(failure)
+    payload, request_failure = await _ha_request(
+        "GET",
+        f"{hass_url}/api/states/{entity_id}",
+        token,
+        logger,
+    )
+    if request_failure is not None:
+        return _ha_failure_envelope(request_failure)
     if payload is None:
         return tool_failure(
             "home_assistant_error", f"entity {entity_id} not found", retryable=False
@@ -401,11 +457,22 @@ async def _handle_list_services(
 ) -> JsonObject:
     del context
 
-    domain_filter = _normalize_text(arguments.get("domain", "")).lower()
+    if argument_failure := _validate_arguments(arguments, frozenset({"domain"})):
+        return argument_failure
+    domain_filter, argument_failure = _optional_text_argument(arguments, "domain")
+    if argument_failure is not None:
+        return argument_failure
+    domain_filter = domain_filter.lower()
+    if domain_filter and not _DOMAIN_SERVICE_RE.match(domain_filter):
+        return tool_failure(
+            "validation_error",
+            f"invalid domain: {domain_filter}",
+            retryable=False,
+        )
 
-    payload, failure = await _ha_request("GET", f"{hass_url}/api/services", token, logger)
-    if failure is not None:
-        return _ha_failure_envelope(failure)
+    payload, request_failure = await _ha_request("GET", f"{hass_url}/api/services", token, logger)
+    if request_failure is not None:
+        return _ha_failure_envelope(request_failure)
     if payload is None:
         return tool_failure(
             "home_assistant_error", "no response from Home Assistant", retryable=False
@@ -459,10 +526,26 @@ async def _handle_call_service(
 ) -> JsonObject:
     del context
 
-    domain = _normalize_text(arguments.get("domain", "")).lower()
-    service = _normalize_text(arguments.get("service", "")).lower()
-    entity_id = _normalize_text(arguments.get("entity_id", ""))
-    data = _normalize_json_object(arguments.get("data"))
+    if argument_failure := _validate_arguments(
+        arguments,
+        frozenset({"domain", "service", "entity_id", "data"}),
+    ):
+        return argument_failure
+    domain, argument_failure = _optional_text_argument(arguments, "domain")
+    if argument_failure is not None:
+        return argument_failure
+    service, argument_failure = _optional_text_argument(arguments, "service")
+    if argument_failure is not None:
+        return argument_failure
+    entity_id, argument_failure = _optional_text_argument(arguments, "entity_id")
+    if argument_failure is not None:
+        return argument_failure
+    raw_data = arguments.get("data")
+    if raw_data is not None and not isinstance(raw_data, dict):
+        return tool_failure("validation_error", "data must be an object", retryable=False)
+    data = _normalize_json_object(raw_data)
+    domain = domain.lower()
+    service = service.lower()
 
     if not domain:
         return tool_failure("validation_error", "domain is required", retryable=False)
@@ -492,15 +575,15 @@ async def _handle_call_service(
     if data:
         body.update(data)
 
-    payload, failure = await _ha_request(
+    payload, request_failure = await _ha_request(
         "POST",
         f"{hass_url}/api/services/{domain}/{service}",
         token,
         logger,
         json_body=body,
     )
-    if failure is not None:
-        return _ha_failure_envelope(failure)
+    if request_failure is not None:
+        return _ha_failure_envelope(request_failure)
     if payload is None:
         return tool_failure(
             "home_assistant_error", "no response from Home Assistant", retryable=False
