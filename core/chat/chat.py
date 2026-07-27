@@ -119,7 +119,6 @@ from core.chat.model_resolution import (
     parse_model_with_connection as parse_model_with_connection,
 )
 from core.chat.streaming import (
-    STREAM_ACTIVE_CHUNK_TIMEOUT_SECONDS,
     STREAM_CHUNK_TIMEOUT_SECONDS,
     StreamingAccumulator,
     StreamingChunkTimeoutError,
@@ -268,7 +267,6 @@ class _ModelTarget:
     input_modalities: frozenset[str]
     wire_media_types: frozenset[str]
     chunk_timeout_seconds: float | None
-    active_chunk_timeout_seconds: float | None
 
 
 @dataclass
@@ -1039,10 +1037,6 @@ class ChatLoop:
         model_id: str,
     ) -> _ModelTarget:
         adapter = self._dependencies.get_adapter(provider_id, connection_id)
-        chunk_timeout_seconds, active_chunk_timeout_seconds = self._resolve_chunk_timeouts(
-            provider_id,
-            connection_id,
-        )
         return _ModelTarget(
             provider_id=provider_id,
             connection_id=connection_id,
@@ -1061,8 +1055,7 @@ class ChatLoop:
                 model_id,
             ),
             wire_media_types=_resolve_wire_media_support(adapter, model_id),
-            chunk_timeout_seconds=chunk_timeout_seconds,
-            active_chunk_timeout_seconds=active_chunk_timeout_seconds,
+            chunk_timeout_seconds=self._resolve_chunk_timeout(provider_id, connection_id),
         )
 
     async def _execute_run_impl(
@@ -1811,7 +1804,6 @@ class ChatLoop:
                 tools,
                 run,
                 chunk_timeout_seconds=target.chunk_timeout_seconds,
-                active_chunk_timeout_seconds=target.active_chunk_timeout_seconds,
                 continuation_tracker=context.continuation_tracker,
             )
             # A user cancel after visible streamed output returns the preserved
@@ -2311,7 +2303,6 @@ class ChatLoop:
         tools: list[JsonObject],
         run: Run,
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
-        active_chunk_timeout_seconds: float | None = STREAM_ACTIVE_CHUNK_TIMEOUT_SECONDS,
         continuation_tracker: ContinuationTracker | None = None,
     ) -> ChatMessage:
         request_context = _resolve_request_context_kwargs(adapter, run)
@@ -2325,7 +2316,6 @@ class ChatLoop:
                 tools,
                 run,
                 chunk_timeout_seconds=chunk_timeout_seconds,
-                active_chunk_timeout_seconds=active_chunk_timeout_seconds,
                 request_context=request_context,
                 continuation_tracker=continuation_tracker,
             )
@@ -2376,7 +2366,6 @@ class ChatLoop:
         tools: list[JsonObject],
         run: Run,
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
-        active_chunk_timeout_seconds: float | None = STREAM_ACTIVE_CHUNK_TIMEOUT_SECONDS,
         request_context: dict[str, Any] | None = None,
         continuation_tracker: ContinuationTracker | None = None,
     ) -> ChatMessage:
@@ -2396,7 +2385,6 @@ class ChatLoop:
                     run,
                     can_restart=attempt < MAX_STREAM_RESTARTS,
                     chunk_timeout_seconds=chunk_timeout_seconds,
-                    active_chunk_timeout_seconds=active_chunk_timeout_seconds,
                     request_context=request_context or {},
                     continuation_tracker=continuation_tracker,
                 )
@@ -2425,7 +2413,6 @@ class ChatLoop:
         *,
         can_restart: bool,
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
-        active_chunk_timeout_seconds: float | None = STREAM_ACTIVE_CHUNK_TIMEOUT_SECONDS,
         request_context: dict[str, Any] | None = None,
         continuation_tracker: ContinuationTracker | None = None,
     ) -> ChatMessage:
@@ -2444,7 +2431,6 @@ class ChatLoop:
             async for delta in iter_with_chunk_timeout(
                 stream,
                 timeout_seconds=chunk_timeout_seconds,
-                active_timeout_seconds=active_chunk_timeout_seconds,
             ):
                 run.raise_if_cancelled()
                 visible_deltas = accumulator.add_delta(delta)
@@ -2574,24 +2560,18 @@ class ChatLoop:
         _emit_streaming_assistant_events(run, assistant_message, allow_after_cancel=True)
         return assistant_message
 
-    def _resolve_chunk_timeouts(
-        self,
-        provider_id: str,
-        connection_id: str,
-    ) -> tuple[float | None, float | None]:
-        """Return initial/active stream stall timeouts, or disable both locally.
+    def _resolve_chunk_timeout(self, provider_id: str, connection_id: str) -> float | None:
+        """Return the per-chunk stall timeout for this connection, or None locally.
 
         Local/loopback inference servers (Ollama, llama.cpp, vLLM) can stay
         silent for minutes during prompt prefill, so the stall guard is disabled
-        for them. Remote streams use a short initial guard and a wider active
-        guard once any normalized delta proves the request is progressing.
-        Detection is owned by :func:`is_local_provider_base_url` so the policy
-        has one home.
+        for them; every remote provider keeps the default timeout. Detection is
+        owned by :func:`is_local_provider_base_url` so the policy has one home.
         """
         base_url = self._resolve_connection_base_url(provider_id, connection_id)
         if is_local_provider_base_url(base_url):
-            return None, None
-        return STREAM_CHUNK_TIMEOUT_SECONDS, STREAM_ACTIVE_CHUNK_TIMEOUT_SECONDS
+            return None
+        return STREAM_CHUNK_TIMEOUT_SECONDS
 
     def _resolve_connection_base_url(self, provider_id: str, connection_id: str) -> str | None:
         """Resolve the effective base URL for a provider connection, if known.

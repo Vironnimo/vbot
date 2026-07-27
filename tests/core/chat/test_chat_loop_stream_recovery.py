@@ -144,7 +144,6 @@ async def test_streaming_mode_chunk_timeout_preserves_partial_after_visible_outp
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("core.chat.chat.STREAM_CHUNK_TIMEOUT_SECONDS", 0.01)
-    monkeypatch.setattr("core.chat.chat.STREAM_ACTIVE_CHUNK_TIMEOUT_SECONDS", 0.01)
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StalledStreamingStubAdapter([])
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
@@ -542,7 +541,6 @@ async def test_local_provider_stream_not_aborted_by_chunk_stall(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("core.chat.chat.STREAM_CHUNK_TIMEOUT_SECONDS", 0.01)
-    monkeypatch.setattr("core.chat.chat.STREAM_ACTIVE_CHUNK_TIMEOUT_SECONDS", 0.01)
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = SlowStreamingStubAdapter(delay=0.05)
     runtime: Any = StubRuntime(
@@ -572,7 +570,6 @@ async def test_remote_provider_stream_aborted_by_chunk_stall(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("core.chat.chat.STREAM_CHUNK_TIMEOUT_SECONDS", 0.01)
-    monkeypatch.setattr("core.chat.chat.STREAM_ACTIVE_CHUNK_TIMEOUT_SECONDS", 0.01)
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = SlowStreamingStubAdapter(delay=0.05)
     runtime: Any = StubRuntime(

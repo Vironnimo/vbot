@@ -434,7 +434,7 @@ async def test_iter_with_chunk_timeout_resets_after_each_delta() -> None:
     ]
 
 
-async def test_iter_with_chunk_timeout_uses_active_window_after_tool_call_delta() -> None:
+async def test_iter_with_chunk_timeout_counts_tool_call_fragments_as_progress() -> None:
     async def source() -> AsyncIteratorForTest:
         yield {
             "type": "tool_call_delta",
@@ -454,8 +454,7 @@ async def test_iter_with_chunk_timeout_uses_active_window_after_tool_call_delta(
         chunk
         async for chunk in iter_with_chunk_timeout(
             source(),
-            timeout_seconds=0.01,
-            active_timeout_seconds=0.05,
+            timeout_seconds=0.05,
         )
     ]
 
