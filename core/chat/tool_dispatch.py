@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -114,6 +115,7 @@ class _EmittingToolRegistry(ToolRegistry):
         self._extension_registry = extension_registry
         self._note_hook = note_hook
         self._tool_timings: dict[str, JsonObject] = {}
+        self._extension_hook_lock = asyncio.Lock()
 
     def _hook_context(self) -> HookContext:
         return HookContext(
@@ -124,9 +126,7 @@ class _EmittingToolRegistry(ToolRegistry):
         )
 
     def is_parallel_safe(self, name: str) -> bool:
-        """Delegate execution policy and serialize while Tool hooks are active."""
-        if self._extension_registry is not None and self._extension_registry.has_tool_hooks():
-            return False
+        """Delegate the wrapped Tool's execution policy."""
         resolver = getattr(self._registry, "is_parallel_safe", None)
         return bool(callable(resolver) and resolver(name))
 
@@ -162,21 +162,22 @@ class _EmittingToolRegistry(ToolRegistry):
             effective_arguments = arguments
             result: JsonObject | None = None
             if self._extension_registry is not None:
-                decision = await self._extension_registry.dispatch_tool_call(
-                    self._hook_context(),
-                    tool_name=context.tool_name,
-                    tool_call_id=context.tool_call_id,
-                    input=arguments,
-                    validator=lambda extension_name, candidate: (
-                        _validated_extension_tool_hook_result(
-                            registry=self,
-                            tool_name=context.tool_name,
-                            extension_name=extension_name,
-                            hook_name="tool_call",
-                            result=candidate,
-                        )
-                    ),
-                )
+                async with self._extension_hook_lock:
+                    decision = await self._extension_registry.dispatch_tool_call(
+                        self._hook_context(),
+                        tool_name=context.tool_name,
+                        tool_call_id=context.tool_call_id,
+                        input=arguments,
+                        validator=lambda extension_name, candidate: (
+                            _validated_extension_tool_hook_result(
+                                registry=self,
+                                tool_name=context.tool_name,
+                                extension_name=extension_name,
+                                hook_name="tool_call",
+                                result=candidate,
+                            )
+                        ),
+                    )
                 effective_arguments = decision.effective_input
                 if decision.deny_reason is not None:
                     _LOGGER.warning(
@@ -218,22 +219,23 @@ class _EmittingToolRegistry(ToolRegistry):
                 )
 
             if self._extension_registry is not None:
-                result = await self._extension_registry.dispatch_tool_result(
-                    self._hook_context(),
-                    tool_name=context.tool_name,
-                    tool_call_id=context.tool_call_id,
-                    input=effective_arguments,
-                    result=result,
-                    validator=lambda extension_name, candidate: (
-                        _validated_extension_tool_hook_result(
-                            registry=self,
-                            tool_name=context.tool_name,
-                            extension_name=extension_name,
-                            hook_name="tool_result",
-                            result=candidate,
-                        )
-                    ),
-                )
+                async with self._extension_hook_lock:
+                    result = await self._extension_registry.dispatch_tool_result(
+                        self._hook_context(),
+                        tool_name=context.tool_name,
+                        tool_call_id=context.tool_call_id,
+                        input=effective_arguments,
+                        result=result,
+                        validator=lambda extension_name, candidate: (
+                            _validated_extension_tool_hook_result(
+                                registry=self,
+                                tool_name=context.tool_name,
+                                extension_name=extension_name,
+                                hook_name="tool_result",
+                                result=candidate,
+                            )
+                        ),
+                    )
 
             timing = _timing_payload(started_at, started_perf)
             self._tool_timings[context.tool_call_id] = timing
