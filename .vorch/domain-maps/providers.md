@@ -41,6 +41,7 @@ Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB
 - `ProviderRegistry` owns immutable Provider/Connection configuration assembled from bundled JSON plus the current data directory's normalized Custom Provider overlay, including exact `catalog_exclusions` for ids a Provider advertises but cannot serve. Custom registries are never shared through the bundled-only cache: two Runtimes using the same resources but different data directories must remain isolated. `ProviderCredentialResolver` owns credentials, Accounts, enabled overrides, and usability. Runtime owns wiring them into live Adapters.
 - Connection identity determines wire/auth/catalog behavior; Account identity determines only which credential is used. Discovery and task-target expansion stay Connection-scoped and never multiply catalogs per Account.
 - `ProviderAdapter.send()`, `stream()`, and `normalize_response()` are the Chat-facing translation boundary. Streaming yields normalized deltas; raw SSE event names, response chunks, opaque auth state, and Provider payloads never escape the Adapter layer.
+- `core/providers/tool_schema.py` owns canonical-to-wire Tool rendering through the explicit `openai_strict`, `anthropic_strict`, and `best_effort` profiles. OpenAI strict rendering makes canonical nullable optionals required while preserving their existing null semantics; a non-nullable optional deterministically downgrades instead of being weakened. Anthropic strict is an all-or-none request decision bounded by Tool count and aggregate optional/union complexity; best-effort preserves the canonical schema without claiming Provider enforcement. A deterministic downgrade never changes the canonical runtime validator.
 - Provider-specific wire selectors and replay profiles are scoped to the resolved Connection/Wire plus Model; mechanics stay in the Adapter. A Provider-wide default may be a conservative fallback, never evidence that every Model shares the same reasoning contract. Do not add generic Model fields for one Provider's protocol quirk or route Provider Models in Runtime/Chat.
 - Model facts remain honest. Unknown context/output limits remain absent in catalogs; read-side helpers resolve safe effective values without writing fake facts back to generated files.
 - All secrets and tokens remain behind credential resolvers or token getters. Never log API keys, access/refresh tokens, authorization/user codes, Provider Account ids, or raw auth headers.
@@ -53,6 +54,7 @@ Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB
 - OAuth persistence/refresh and device flow: `core/providers/token_store.py`, `token_getter.py`, `auth_flow.py`
 - Adapter contract and shared HTTP/error layer: `core/providers/adapter.py`, `_http_shared.py`, `errors.py`
 - Shared reasoning decision policy: `core/providers/reasoning.py`
+- Shared Tool-schema profile decisions and rendering: `core/providers/tool_schema.py`
 - Runtime Adapter factory: `_ADAPTER_MAP` and `Runtime.get_adapter()` in `core/runtime/runtime.py`
 - Model discovery integration: `core/models/discovery.py`; Model data semantics remain in `models.md`
 
@@ -64,6 +66,7 @@ Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB
 - A mostly OpenAI Chat Completions-compatible Provider extends `OpenAICompatibleAdapter` only when it has real runtime/discovery/policy differences. A Messages-compatible branch composes `AnthropicCompatibleAdapter`; it must not compose concrete `AnthropicAdapter` and accidentally inherit Anthropic-native discovery/media/cache policy.
 - Adapters rebuild authorization headers inside retry attempts so a refreshed OAuth token is used after backoff. Do not cache raw OAuth tokens outside `TokenGetter`.
 - `NetworkError` is retryable but deliberately not Provider-specific, so it must not trigger model fallback. Only `ProviderStreamingUnsupportedError` permits Chat's streaming-to-nonstreaming fallback.
+- A Provider profile may set strict mode only when the complete rendered request satisfies that profile. Do not enable strict per Tool when the Provider applies limits to the request Tool set, and do not strip schema keywords to manufacture eligibility; downgrade deterministically while preserving canonical runtime enforcement.
 - Generated Provider catalogs are refresh artifacts. Durable behavior belongs in Adapter code or verified override files, not hand edits to generated `resources/models/<provider>.json`.
 - A Provider listing that contains proven-unusable ids uses `catalog_exclusions` in its static Provider config; discovery preserves the raw response and omits only those exact ids from the usable Model projection. Do not use this as a preference allow/deny list.
 

@@ -124,15 +124,11 @@ def guard(ctx, *, tool_name, tool_call_id, input):
 - `Replace(result)` — stop the pipeline and skip execution; `result` must be a
   valid result envelope (use `tool_success` / `tool_failure`) or it is dropped.
 
-`tool_result` is a **full-replace** pipeline: return a complete replacement
-envelope (re-validated) or `None` to leave it unchanged — there is no patching.
+`tool_result` is a **full-replace** pipeline: return a complete replacement envelope (re-validated against both the fixed envelope and the Tool's declared success-data contract) or `None` to leave it unchanged — there is no patching.
 
 ## Tools
 
-`api.register_tool` mirrors the built-in `ToolRegistry.register`. A registered
-extension tool is a **normal tool**: it appears in provider tool definitions and
-is filtered by an agent's `allowed_tools` like any other. The handler signature
-`(context, arguments)` and the result envelope are identical to built-ins.
+`api.register_tool` mirrors the built-in `ToolRegistry.register`. A registered Extension Tool is a **normal Tool**: it appears in Provider Tool definitions and is filtered by an Agent's `allowed_tools` like any other. The handler signature `(context, arguments)` and the result envelope are identical to built-ins. Registration compiles the canonical input schema, rejects malformed or open fixed-shape objects, validates every call before the handler, and validates successful `data` against `result_schema`. Calls are serial by default; declare `parallel_safe=True` only for independent read-only or safely idempotent work. Provider strict generation is a profile-specific optimization, not an Extension guarantee; generic compatible and Ollama routes remain best-effort while the same canonical Runtime validation stays authoritative.
 
 ```python
 from core.tools import tool_failure, tool_success
@@ -141,6 +137,14 @@ PARAMETERS = {
     "type": "object",
     "properties": {"text": {"type": "string", "description": "Text to count."}},
     "required": ["text"],
+    "additionalProperties": False,
+}
+
+RESULT = {
+    "type": "object",
+    "properties": {"word_count": {"type": "integer", "minimum": 0}},
+    "required": ["word_count"],
+    "additionalProperties": False,
 }
 
 def word_count(context, arguments):
@@ -155,14 +159,12 @@ def register(api):
         "Count whitespace-separated words in a piece of text.",
         PARAMETERS,
         word_count,
+        result_schema=RESULT,
+        parallel_safe=True,
     )
 ```
 
-A tool name that **collides** with a built-in or another extension's tool is
-skipped (built-in wins; between two extensions the first-loaded wins) and the
-skip is recorded as a non-fatal diagnostic visible in `vbot extensions list` and
-the WebUI panel. Keep descriptions short — every tool enlarges the system
-prompt.
+A Tool name that **collides** with a built-in or another Extension's Tool is skipped (built-in wins; between two Extensions the first-loaded wins) and the skip is recorded as a non-fatal diagnostic visible in `vbot extensions list` and the WebUI panel. An invalid Tool contract is likewise skipped and diagnosed without disabling the Extension's other capabilities. Keep descriptions short — every Tool enlarges the System Prompt.
 
 (Tools are code that does one thing. To teach the agent a *workflow*, write a
 Skill instead.)
