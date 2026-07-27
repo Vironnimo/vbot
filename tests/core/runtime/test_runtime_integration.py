@@ -26,7 +26,7 @@ from core.recall import (
     VectorRecallBackend,
 )
 from core.runtime.runtime import Runtime
-from core.tools.read import READ_TOOL_DESCRIPTION
+from core.tools.read import READ_TOOL_DESCRIPTION, READ_TOOL_PARAMETERS
 from core.utils.config import Config
 from core.utils.errors import ConfigError
 
@@ -827,28 +827,7 @@ def test_runtime_read_provider_definition_is_compact(config: Config) -> None:
         {
             "name": "read",
             "description": READ_TOOL_DESCRIPTION,
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": (
-                            "Path to the file to read (relative to the working directory, "
-                            "or absolute)."
-                        ),
-                    },
-                    "offset": {
-                        "type": ["number", "string"],
-                        "description": "Line number to start reading from (1-indexed).",
-                    },
-                    "limit": {
-                        "type": "number",
-                        "description": "Maximum number of lines to read.",
-                    },
-                },
-                "required": ["path"],
-                "additionalProperties": False,
-            },
+            "parameters": READ_TOOL_PARAMETERS,
         }
     ]
     assert set(definitions[0]["parameters"]["properties"]) == {
@@ -937,17 +916,19 @@ def test_runtime_reload_recall_backend_creates_vector_backend(
     try:
         assert isinstance(runtime.recall_backend, JsonlSessionRecallBackend)
         jsonl_tool = runtime.tools.get("session_search")
-        assert "match" in jsonl_tool.parameters["properties"]
-        assert "order" in jsonl_tool.parameters["properties"]
+        jsonl_search = jsonl_tool.parameters["properties"]["search"]["oneOf"][0]["properties"]
+        assert "match" in jsonl_search
+        assert "order" in jsonl_search
 
         _write_settings(config, {"recall": {"backend": "vector"}})
         runtime.reload_recall_backend()
         assert isinstance(runtime.recall_backend, VectorRecallBackend)
         vector_tool = runtime.tools.get("session_search")
-        assert "match" not in vector_tool.parameters["properties"]
-        assert "literal_match" not in vector_tool.parameters["properties"]
-        assert "roles" not in vector_tool.parameters["properties"]
-        assert "order" not in vector_tool.parameters["properties"]
+        vector_search = vector_tool.parameters["properties"]["search"]["oneOf"][0]["properties"]
+        assert "match" not in vector_search
+        assert "literal_match" not in vector_search
+        assert "roles" not in vector_search
+        assert "order" not in vector_search
         assert "meaning" in vector_tool.description
     finally:
         runtime.stop()

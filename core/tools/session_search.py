@@ -37,6 +37,8 @@ from core.tools.tools import (
     ToolContext,
     ToolDisplay,
     ToolRegistry,
+    extract_tool_operation,
+    operation_envelope_schema,
     tool_failure,
     tool_success,
 )
@@ -53,11 +55,11 @@ SESSION_SEARCH_RESULT_MAX_BYTES = 50 * 1024
 SESSION_SEARCH_CURSOR_VERSION = 1
 
 _BASE_DESCRIPTION = (
-    "Discover persisted Sessions and retrieve canonical Messages. Choose an explicit action: "
+    "Discover persisted Sessions and retrieve canonical Messages. Choose one operation object: "
     "list returns Session summaries; overview returns counts and boundary references; search "
     "uses the configured Recall backend and returns ranked excerpts with read references; read "
     "returns exact canonical Message records and losslessly segments oversized records. Cursor "
-    "continuations accept only action and cursor."
+    "continuations use cursor by itself inside the same operation."
 )
 SESSION_SEARCH_TOOL_DESCRIPTION = _BASE_DESCRIPTION
 
@@ -94,31 +96,63 @@ def build_session_search_parameters(
     capabilities: RecallSearchCapabilities | None = None,
 ) -> JsonObject:
     capabilities = capabilities or _DEFAULT_CAPABILITIES
-    properties: JsonObject = {
-        "action": {
+    agent_id_parameter: JsonObject = {
+        "type": "string",
+        "minLength": 1,
+        "description": "Agent whose Sessions to access; defaults to the current Agent.",
+    }
+    session_id_parameter: JsonObject = {
+        "type": "string",
+        "minLength": 1,
+        "description": "Session to inspect, search, or read.",
+    }
+    limit_parameter: JsonObject = {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": SESSION_SEARCH_MAX_LIMIT,
+        "description": "Maximum results in this page; default 10, maximum 100.",
+    }
+    cursor_parameter: JsonObject = {
+        "type": "string",
+        "minLength": 1,
+        "description": "Opaque continuation returned by the same operation.",
+    }
+    search_properties: JsonObject = {
+        "query": {
             "type": "string",
-            "enum": list(SESSION_SEARCH_ACTIONS),
-            "description": "Operation to perform: list, overview, search, or read.",
+            "minLength": 1,
+            "description": "Non-blank query for search.",
         },
-        "query": {"type": "string", "description": "Non-blank query for search."},
-        "agent_id": {
+        "agent_id": agent_id_parameter,
+        "session_id": session_id_parameter,
+        "since": {
             "type": "string",
-            "description": "Agent whose Sessions to access; defaults to the current agent.",
+            "minLength": 1,
+            "description": "Inclusive UTC ISO-8601 timestamp or YYYY-MM-DD lower bound.",
         },
-        "session_id": {
+        "until": {
             "type": "string",
-            "description": "Session to restrict search to, inspect, or read.",
+            "minLength": 1,
+            "description": "Inclusive UTC ISO-8601 timestamp or YYYY-MM-DD upper bound.",
         },
+        "limit": limit_parameter,
+    }
+    read_properties: JsonObject = {
+        "agent_id": agent_id_parameter,
+        "session_id": session_id_parameter,
         "message_id": {
             "type": "string",
+            "minLength": 1,
             "description": "One canonical Message to read exactly.",
         },
         "start_message_id": {
             "type": "string",
+            "minLength": 1,
             "description": "First Message of an inclusive canonical read range.",
         },
         "end_message_id": {
             "type": "string",
+            "minLength": 1,
             "description": "Last Message of an inclusive canonical read range.",
         },
         "before": {
@@ -133,29 +167,12 @@ def build_session_search_parameters(
             "maximum": SESSION_SEARCH_MAX_NEIGHBORS,
             "description": "Additional canonical Messages after the read target; default 0.",
         },
-        "since": {
-            "type": "string",
-            "description": "Inclusive UTC ISO-8601 timestamp or YYYY-MM-DD lower bound.",
-        },
-        "until": {
-            "type": "string",
-            "description": "Inclusive UTC ISO-8601 timestamp or YYYY-MM-DD upper bound.",
-        },
-        "limit": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": SESSION_SEARCH_MAX_LIMIT,
-            "description": "Maximum results in this page; default 10, maximum 100.",
-        },
-        "cursor": {
-            "type": "string",
-            "description": "Opaque continuation from a previous call of the same action.",
-        },
     }
     if capabilities.supports_roles:
-        properties["roles"] = {
+        search_properties["roles"] = {
             "type": "array",
             "items": {"type": "string", "enum": list(SESSION_RECALL_SUPPORTED_ROLES)},
+            "minItems": 1,
             "uniqueItems": True,
             "description": "Message roles eligible for literal search.",
         }
@@ -165,23 +182,98 @@ def build_session_search_parameters(
             if capabilities.match_argument == "literal_match"
             else "Literal matching mode."
         )
-        properties[capabilities.match_argument] = {
+        search_properties[capabilities.match_argument] = {
             "type": "string",
             "enum": list(capabilities.match_modes),
             "description": description,
         }
     if len(capabilities.order_modes) > 1:
-        properties["order"] = {
+        search_properties["order"] = {
             "type": "string",
             "enum": list(capabilities.order_modes),
             "description": "Backend-supported search ordering.",
         }
-    return {
-        "type": "object",
-        "properties": properties,
-        "required": ["action"],
-        "additionalProperties": False,
-    }
+
+    def operation(
+        description: str,
+        properties: JsonObject,
+        *,
+        required: tuple[str, ...] = (),
+        cursor: bool = False,
+        selectors: list[JsonObject] | None = None,
+    ) -> JsonObject:
+        normal: JsonObject = {
+            "type": "object",
+            "properties": properties,
+            "required": list(required),
+            "additionalProperties": False,
+        }
+        if selectors:
+            normal["oneOf"] = selectors
+        if not cursor:
+            return {"type": "object", "description": description, **normal}
+        return {
+            "type": "object",
+            "description": description + " Continue a previous page with cursor by itself.",
+            "oneOf": [
+                normal,
+                {
+                    "type": "object",
+                    "properties": {"cursor": cursor_parameter},
+                    "required": ["cursor"],
+                    "additionalProperties": False,
+                },
+            ],
+        }
+
+    return operation_envelope_schema(
+        {
+            "list": operation(
+                "List persisted Session summaries.",
+                {"agent_id": agent_id_parameter, "limit": limit_parameter},
+                cursor=True,
+            ),
+            "overview": operation(
+                "Inspect counts and boundary references for one Session.",
+                {
+                    "agent_id": agent_id_parameter,
+                    "session_id": session_id_parameter,
+                },
+                required=("session_id",),
+            ),
+            "search": operation(
+                "Search canonical Messages through the configured Recall backend.",
+                search_properties,
+                required=("query",),
+                cursor=True,
+            ),
+            "read": operation(
+                "Read exact canonical Messages from one Session.",
+                read_properties,
+                required=("session_id",),
+                cursor=True,
+                selectors=[
+                    {
+                        "required": ["message_id"],
+                        "not": {
+                            "anyOf": [
+                                {"required": ["start_message_id"]},
+                                {"required": ["end_message_id"]},
+                            ]
+                        },
+                    },
+                    {
+                        "required": ["start_message_id", "end_message_id"],
+                        "not": {"required": ["message_id"]},
+                    },
+                ],
+            ),
+        },
+        description=(
+            "Choose exactly one operation property. Its value is the complete argument object "
+            "for that operation."
+        ),
+    )
 
 
 SESSION_SEARCH_TOOL_PARAMETERS = build_session_search_parameters()
@@ -221,14 +313,22 @@ async def session_search_handler(
     backend_name: str | None = None,
 ) -> JsonObject:
     started = time.perf_counter()
-    action = arguments.get("action") if isinstance(arguments.get("action"), str) else ""
+    action = ""
     resolved_sessions = sessions or _backend_sessions(recall_backend)
     resolved_name = backend_name or _backend_name(recall_backend)
     try:
         if not isinstance(arguments, dict):
             raise _SessionSearchError("invalid_arguments", "arguments must be an object")
-        cursor = _parse_cursor(arguments, context, resolved_name)
-        effective = dict(cursor.arguments) if cursor is not None else dict(arguments)
+        try:
+            action, operation_arguments = extract_tool_operation(
+                arguments,
+                SESSION_SEARCH_ACTIONS,
+            )
+        except ValueError as error:
+            raise _SessionSearchError("invalid_arguments", str(error)) from error
+        normalized_arguments = {"action": action, **operation_arguments}
+        cursor = _parse_cursor(normalized_arguments, context, resolved_name)
+        effective = dict(cursor.arguments) if cursor is not None else normalized_arguments
         action = _required_action(effective)
         capabilities = _search_capabilities(recall_backend)
         _validate_action_fields(action, effective, capabilities)
@@ -1181,10 +1281,11 @@ def _parse_datetime(value: Any, name: str, *, end_of_day: bool) -> datetime | No
 
 
 def _display_summary(arguments: JsonObject) -> str:
-    action = arguments.get("action")
-    if not isinstance(action, str):
+    try:
+        action, operation_arguments = extract_tool_operation(arguments, SESSION_SEARCH_ACTIONS)
+    except ValueError:
         return ""
-    session_id = arguments.get("session_id")
+    session_id = operation_arguments.get("session_id")
     return f"{action} {session_id}".strip() if session_id else action
 
 

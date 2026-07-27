@@ -5,7 +5,7 @@ Discovers persisted Sessions through backend-native search and retrieves exact c
 ## Interfaces
 
 - Tool name: `session_search`; registration receives the selected Recall backend, canonical `ChatSessionManager`, and resolved backend name.
-- `action` is required and selects exactly one operation: `list`, `overview`, `search`, or `read`. A continuation accepts only the same `action` plus its opaque `cursor`; action-specific validation rejects unrelated fields.
+- Input is exactly one top-level `list`, `overview`, `search`, or `read` operation object. Each nested object exposes and structurally requires only its operation-specific fields; a continuation uses the same operation with only its opaque `cursor`. The handler additionally accepts the retired flat `{action, ...}` form for compatibility.
 - `list` returns recent Session summaries and paginates with `limit` (default 10, maximum 100).
 - `overview` requires `session_id` and returns metadata, total Message and per-role counts, and first/last canonical Message references. It does not return Message excerpts.
 - `search` requires a non-blank query and delegates only retrieval/ranking to the configured backend. Common scope, optional Session, time bounds, limit, and cursor controls remain stable; literal matching, role filtering, and ordering appear in the schema only when the active backend declares them.

@@ -46,6 +46,7 @@ GLOB_TOOL_PARAMETERS: JsonObject = {
     "properties": {
         "pattern": {
             "type": "string",
+            "minLength": 1,
             "description": "Glob pattern to match paths, e.g. '**/*.py', 'src/*'.",
         },
         "path": {
@@ -53,11 +54,13 @@ GLOB_TOOL_PARAMETERS: JsonObject = {
             "description": "Directory to search in (default: working directory).",
         },
         "limit": {
-            "type": "number",
+            "type": "integer",
+            "minimum": 1,
             "description": "Maximum results (default: 100). Excess matches are cut and marked.",
         },
         "offset": {
-            "type": "number",
+            "type": "integer",
+            "minimum": 0,
             "description": "Skip the first N results before applying limit (default: 0).",
         },
         "include_ignored": {

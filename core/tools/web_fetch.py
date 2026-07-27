@@ -133,6 +133,8 @@ WEB_FETCH_TOOL_PARAMETERS: JsonObject = {
     "properties": {
         "url": {
             "type": "string",
+            "minLength": 1,
+            "pattern": r"^https?://",
             "description": "HTTP or HTTPS URL to fetch.",
         },
         "include_links": {

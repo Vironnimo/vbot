@@ -16,6 +16,8 @@ from core.tools.tools import (
     ToolContext,
     ToolDisplay,
     ToolRegistry,
+    extract_tool_operation,
+    operation_envelope_schema,
     tool_failure,
     tool_success,
 )
@@ -25,65 +27,113 @@ PROCESS_TOOL_DESCRIPTION = (
     "Manage background process sessions started by shell-backed tools. Use it for "
     "immediate progress or control; a terminal poll or successful kill suppresses a "
     "pending automatic completion. Supports listing, polling, reading logs, writing "
-    "stdin, submitting a line, killing, and clearing finished sessions."
+    "stdin, submitting a line, killing, and clearing finished sessions. Choose exactly "
+    "one operation object."
 )
 PROCESS_ACTIONS = {"list", "poll", "log", "write", "submit", "kill", "clear"}
-PROCESS_ALLOWED_ARGUMENTS = {
-    "action",
-    "session_id",
-    "timeout_ms",
-    "offset",
-    "limit",
-    "data",
-    "eof",
+_PROCESS_ACTION_ARGUMENTS = {
+    "list": frozenset(),
+    "poll": frozenset({"session_id", "timeout_ms"}),
+    "log": frozenset({"session_id", "offset", "limit"}),
+    "write": frozenset({"session_id", "data", "eof"}),
+    "submit": frozenset({"session_id"}),
+    "kill": frozenset({"session_id"}),
+    "clear": frozenset({"session_id"}),
 }
 MAX_POLL_TIMEOUT_MS = 30_000
 DEFAULT_LOG_LIMIT = 200
 
-PROCESS_TOOL_PARAMETERS: JsonObject = {
-    "type": "object",
-    "properties": {
-        "action": {
-            "type": "string",
-            "enum": sorted(PROCESS_ACTIONS),
-            "description": (
-                "list: all sessions; poll: wait for new output; log: read output "
-                "lines; write: send text to stdin (no newline appended); submit: "
-                "send the line ending (press Enter); kill: terminate; clear: drop "
-                "finished sessions."
-            ),
-        },
-        "session_id": {
-            "type": "string",
-            "description": "Process session id returned by bash tool.",
-        },
-        "timeout_ms": {
-            "type": "number",
-            "description": "Poll wait timeout in milliseconds, capped at 30000.",
-        },
-        "offset": {
-            "type": "number",
-            "description": "Zero-based log line offset for the log action.",
-        },
-        "limit": {
-            "type": "number",
-            "description": "Maximum log lines to return for the log action. Defaults to 200.",
-        },
-        "data": {
-            "type": "string",
-            "description": (
-                "UTF-8 text to write to process stdin. No newline is appended — "
-                "follow with submit to send the line."
-            ),
-        },
-        "eof": {
-            "type": "boolean",
-            "description": "Close stdin after writing data.",
-        },
-    },
-    "required": ["action"],
-    "additionalProperties": False,
+_PROCESS_SESSION_ID_PARAMETER: JsonObject = {
+    "type": "string",
+    "minLength": 1,
+    "description": "Process session id returned by bash.",
 }
+
+
+def _process_operation(
+    description: str,
+    properties: JsonObject,
+    *,
+    required: tuple[str, ...] = (),
+) -> JsonObject:
+    return {
+        "type": "object",
+        "description": description,
+        "properties": properties,
+        "required": list(required),
+        "additionalProperties": False,
+    }
+
+
+PROCESS_TOOL_PARAMETERS: JsonObject = operation_envelope_schema(
+    {
+        "list": _process_operation("List all owned process sessions.", {}),
+        "poll": _process_operation(
+            "Wait briefly for new output or return the current process status.",
+            {
+                "session_id": _PROCESS_SESSION_ID_PARAMETER,
+                "timeout_ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": MAX_POLL_TIMEOUT_MS,
+                    "description": "Wait timeout in milliseconds; default 0, maximum 30000.",
+                },
+            },
+            required=("session_id",),
+        ),
+        "log": _process_operation(
+            "Read a window of process output lines.",
+            {
+                "session_id": _PROCESS_SESSION_ID_PARAMETER,
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Zero-based log line offset; default 0.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Maximum log lines to return; default 200.",
+                },
+            },
+            required=("session_id",),
+        ),
+        "write": _process_operation(
+            "Write UTF-8 text to process stdin without appending a newline.",
+            {
+                "session_id": _PROCESS_SESSION_ID_PARAMETER,
+                "data": {
+                    "type": "string",
+                    "description": "Text to write. May be empty when only closing stdin.",
+                },
+                "eof": {
+                    "type": "boolean",
+                    "description": "Close stdin after writing data.",
+                },
+            },
+            required=("session_id", "data"),
+        ),
+        "submit": _process_operation(
+            "Submit the current stdin line by sending the platform line ending.",
+            {"session_id": _PROCESS_SESSION_ID_PARAMETER},
+            required=("session_id",),
+        ),
+        "kill": _process_operation(
+            "Terminate a running process.",
+            {"session_id": _PROCESS_SESSION_ID_PARAMETER},
+            required=("session_id",),
+        ),
+        "clear": _process_operation(
+            "Remove a finished process session.",
+            {"session_id": _PROCESS_SESSION_ID_PARAMETER},
+            required=("session_id",),
+        ),
+    },
+    description=(
+        "Choose exactly one operation property. Its value is the complete argument object "
+        "for that operation."
+    ),
+)
 
 
 def make_process_handler(process_manager: ProcessManager):
@@ -100,32 +150,36 @@ async def _handle_process_tool(
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
-    unknown_arguments = set(arguments) - PROCESS_ALLOWED_ARGUMENTS
+    try:
+        action, operation_arguments = extract_tool_operation(
+            arguments,
+            sorted(PROCESS_ACTIONS),
+        )
+    except ValueError as error:
+        return tool_failure("invalid_arguments", str(error))
+
+    unknown_arguments = set(operation_arguments) - _PROCESS_ACTION_ARGUMENTS[action]
     if unknown_arguments:
         names = ", ".join(sorted(unknown_arguments))
-        return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
-
-    action = arguments.get("action")
-    if not isinstance(action, str) or action not in PROCESS_ACTIONS:
         return tool_failure(
             "invalid_arguments",
-            "action must be one of: clear, kill, list, log, poll, submit, write",
+            f"Unknown {action} argument(s): {names}",
         )
 
     try:
         if action == "list":
             return _handle_list(process_manager, context)
         if action == "poll":
-            return await _handle_poll(process_manager, context, arguments)
+            return await _handle_poll(process_manager, context, operation_arguments)
         if action == "log":
-            return await _handle_log(process_manager, context, arguments)
+            return await _handle_log(process_manager, context, operation_arguments)
         if action == "write":
-            return await _handle_write(process_manager, context, arguments)
+            return await _handle_write(process_manager, context, operation_arguments)
         if action == "submit":
-            return await _handle_submit(process_manager, context, arguments)
+            return await _handle_submit(process_manager, context, operation_arguments)
         if action == "kill":
-            return await _handle_kill(process_manager, context, arguments)
-        return await _handle_clear(process_manager, context, arguments)
+            return await _handle_kill(process_manager, context, operation_arguments)
+        return await _handle_clear(process_manager, context, operation_arguments)
     except SessionNotFoundError:
         return tool_failure("session_not_found", "Process session not found")
     except SessionStillRunningError:
@@ -276,8 +330,17 @@ def register_process_tool(registry: ToolRegistry, process_manager: ProcessManage
         PROCESS_TOOL_DESCRIPTION,
         PROCESS_TOOL_PARAMETERS,
         make_process_handler(process_manager),
-        display=ToolDisplay(summary_fields=("action", "session_id")),
+        display=ToolDisplay(summary_builder=_process_display_summary),
     )
+
+
+def _process_display_summary(arguments: JsonObject) -> str:
+    try:
+        action, operation_arguments = extract_tool_operation(arguments, sorted(PROCESS_ACTIONS))
+    except ValueError:
+        return ""
+    session_id = operation_arguments.get("session_id")
+    return f"{action} · {session_id}" if isinstance(session_id, str) and session_id else action
 
 
 __all__ = [

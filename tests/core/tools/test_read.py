@@ -170,7 +170,13 @@ def test_register_read_tool_exposes_provider_schema_without_description_property
     assert parameters["required"] == ["path"]
     assert parameters["additionalProperties"] is False
     assert set(parameters["properties"]) == {"path", "offset", "limit"}
-    assert parameters["properties"]["offset"]["type"] == ["number", "string"]
+    assert parameters["properties"]["offset"]["oneOf"] == [
+        {"type": "integer", "minimum": 1},
+        {
+            "type": "string",
+            "pattern": r"^[1-9][0-9]*(?::[1-9][0-9]*)?$",
+        },
+    ]
     assert "description" not in parameters["properties"]
 
 

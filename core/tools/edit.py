@@ -38,12 +38,14 @@ EDIT_TOOL_PARAMETERS: JsonObject = {
     "properties": {
         "path": {
             "type": "string",
+            "minLength": 1,
             "description": (
                 "Path to the file to edit (relative to the working directory, or absolute)."
             ),
         },
         "old_string": {
             "type": "string",
+            "minLength": 1,
             "description": (
                 "Text to replace. Include enough unchanged surrounding text to make "
                 "the target unique; for repeated lines include a neighboring line or "

@@ -10,8 +10,8 @@ Registers the public sub-agent tools and delegates orchestration to `core/subage
 ## Interfaces
 
 - Tool name: `subagent`
-- Schema: required `content`; optional `agent_id`, `background`, `session_id`, `model`, and `thinking_effort`.
-- Display: summary fields `agent_id` and `content`; hides `content` from argument details.
+- Schema: exactly one top-level operation object. `start` requires `content` and optionally accepts `agent_id`, `background`, `model`, and `thinking_effort`; `continue` requires `content`, `agent_id`, and `session_id` and accepts the same Run overrides. The handler accepts the retired flat form for compatibility.
+- Display: the summary builder reads either shape and renders the operation, `agent_id`, and `content`; it hides `content` from argument details.
 - Tool name: `subagent_result`
 - Schema: required `session_id`; optional `agent_id` and `run_id`.
 - Display: summary fields `agent_id` and `session_id`.
@@ -21,7 +21,7 @@ Registers the public sub-agent tools and delegates orchestration to `core/subage
 
 - `tools.subagent.allowed_agents` is optional Tool-owned configuration at the root of an Identity Agent's `agent.json`, not an Agent-wide required field. It contains additional targets only: a missing block or field defaults to `['*']`, `[]` is self-only, and explicit entries use bare Identity ids or qualified `agent@project` ids. The calling Agent is always selected by omitting `agent_id` and is never repeated in the list. Disabling both Sub-Agent Tools through `allowed_tools` leaves this block persisted but inactive, so temporary Tool changes never erase its policy. Identity-Agent `['*']` reaches every other Identity Agent and every Project Agent across registered Projects; a rooted Identity Agent remains an Identity Agent. A Project Agent is always bounded to its own current Team, including when its repository policy is a wildcard.
 - Authorization covers both `subagent` and `subagent_result` immediately after canonical address parsing, before target lookup, Session work, quota reservation, or queueing. Tool availability depends only on effective `allowed_tools`; an empty `allowed_agents` list keeps both Tools available for self-delegation. An explicit list narrows the provider `agent_id` enum to the calling Agent plus the listed additional targets without making `agent_id` required; wildcard access retains the optional free-address schema. The dynamic prompt block lists only resolvable additional Agents and gates with the effective `subagent` Tool.
-- With `session_id`, `subagent` routes into an existing Session; otherwise it creates a new persisted Session for the target Agent.
+- `start` creates a new persisted Session for the target Agent; `continue` routes into the explicitly identified existing Agent-scoped Session.
 - `model` and `thinking_effort` are optional Run-local overrides for the one Child Run admitted by that invocation. Missing fields inherit the freshly resolved target Agent values; `thinking_effort: ""` explicitly selects the Provider default and `thinking_effort: "none"` disables Reasoning. The Tool accepts only the canonical vBot effort set and validates an explicit Model through the shared usable-Model/Connection rule before it creates or mutates a Child Session.
 - Run-local overrides never mutate the target Agent, Project, or Session, never become Session defaults, and are not inherited by later continuations or nested Sub-Agent calls. A queued invocation retains its own immutable override values until execution.
 - Busy target Sessions enqueue a follow-up Run through `ChatRunManager`.

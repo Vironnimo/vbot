@@ -57,16 +57,24 @@ READ_TOOL_PARAMETERS: JsonObject = {
     "properties": {
         "path": {
             "type": "string",
+            "minLength": 1,
             "description": (
                 "Path to the file to read (relative to the working directory, or absolute)."
             ),
         },
         "offset": {
-            "type": ["number", "string"],
+            "oneOf": [
+                {"type": "integer", "minimum": 1},
+                {
+                    "type": "string",
+                    "pattern": r"^[1-9][0-9]*(?::[1-9][0-9]*)?$",
+                },
+            ],
             "description": "Line number to start reading from (1-indexed).",
         },
         "limit": {
-            "type": "number",
+            "type": "integer",
+            "minimum": 1,
             "description": "Maximum number of lines to read.",
         },
     },

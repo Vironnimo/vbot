@@ -108,6 +108,7 @@ WEB_SEARCH_TOOL_PARAMETERS: JsonObject = {
     "properties": {
         "query": {
             "type": "string",
+            "minLength": 1,
             "description": "Search query text.",
         },
         "domains": {
@@ -117,7 +118,7 @@ WEB_SEARCH_TOOL_PARAMETERS: JsonObject = {
                 "Use hostnames without a scheme or path (for example, example.com). "
                 "A domain includes its subdomains; a specific subdomain narrows the scope."
             ),
-            "items": {"type": "string"},
+            "items": {"type": "string", "minLength": 1, "maxLength": 253},
             "minItems": 1,
             "maxItems": _MAX_DOMAIN_FILTERS,
             "uniqueItems": True,
@@ -150,12 +151,14 @@ WEB_SEARCH_TOOL_PARAMETERS: JsonObject = {
         },
         "date_after": {
             "type": "string",
+            "pattern": r"^\d{4}-\d{2}-\d{2}$",
             "description": (
                 "Optional lower date bound (YYYY-MM-DD); set both bounds for an exact range."
             ),
         },
         "date_before": {
             "type": "string",
+            "pattern": r"^\d{4}-\d{2}-\d{2}$",
             "description": (
                 "Optional upper date bound (YYYY-MM-DD); set both bounds for an exact range."
             ),

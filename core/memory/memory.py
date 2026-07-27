@@ -427,7 +427,7 @@ def _enforce_scope_budget(scope: MemoryScope, entries: list[str], previous_total
     if total > budget and total > previous_total:
         raise MemoryError(
             f"Memory '{scope}' scope is full ({total}/{budget} characters). "
-            "Remove or shorten an entry before adding (action='list', then 'remove')."
+            "Use the list operation, then remove or replace an entry before adding."
         )
 
 

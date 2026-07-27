@@ -6,7 +6,13 @@ from typing import Any
 
 from core.settings import ALLOWED_THINKING_EFFORTS
 from core.subagents import SubAgentCoordinator, SubAgentPromptTarget
-from core.tools.tools import JsonObject, ToolDisplay, ToolPromptBlockRegistry, ToolRegistry
+from core.tools.tools import (
+    JsonObject,
+    ToolDisplay,
+    ToolPromptBlockRegistry,
+    ToolRegistry,
+    operation_envelope_schema,
+)
 
 SUBAGENT_TOOL_NAME = "subagent"
 SUBAGENT_RESULT_TOOL_NAME = "subagent_result"
@@ -25,8 +31,9 @@ SUBAGENT_PROMPT_BLOCK_TEMPLATE = (
     "calling Agent or one of the additional Agents listed below. You remain "
     "responsible for deciding what to delegate, integrating the results, and "
     "verifying the final outcome.\n\n"
-    "To delegate to a separate Session of your own Agent, omit `agent_id`. The "
-    "calling Agent is always available and is not repeated in the list below.\n\n"
+    "Use the `start` operation to create a separate Session; omit `agent_id` there "
+    "to delegate to the calling Agent, which is always available and is not repeated "
+    "in the list below.\n\n"
     "The following additional Agents are available. Use each Agent id exactly as "
     "shown:\n\n"
     "{subagent_list}\n\n"
@@ -37,7 +44,7 @@ SUBAGENT_PROMPT_BLOCK_TEMPLATE = (
     "parallel.\n\n"
     "Project Agents may be listed with a qualified `agent@project` id. Use every "
     "Agent id exactly as listed above.\n\n"
-    "At the top level, `background` defaults to `true`. Use background Runs when you "
+    "Inside either operation, `background` defaults to `true`. Use background Runs when you "
     "can continue without their immediate results. Issue independent sibling "
     "`subagent` calls in the same turn so they can run concurrently. Do not poll "
     "background Runs: after finishing any independent work, end your turn. When "
@@ -50,73 +57,112 @@ SUBAGENT_PROMPT_BLOCK_TEMPLATE = (
     "Optional `model` and `thinking_effort` values override only the newly admitted "
     "Sub-Agent Run. They do not modify the target Agent or Session, persist into a "
     "later continuation, or pass to nested Sub-Agents.\n\n"
-    "Omit `session_id` to create a new Sub-Agent Session. To continue a specific "
-    "existing Session, repeat both the exact `agent_id` and `session_id` returned by "
-    "the original `subagent` call; Session ids are Agent-scoped and `agent_id` is "
-    "required for continuation. Use `subagent_result` only when the user explicitly "
+    "Use the `continue` operation for a specific existing Session and repeat both "
+    "the exact `agent_id` and `session_id` returned by the original `subagent` call; "
+    "Session ids are Agent-scoped. Use `subagent_result` only when the user explicitly "
     "asks for a running Sub-Agent's status or result before automatic batch delivery."
 )
 
 NO_ADDITIONAL_SUBAGENTS_TEXT = "**No additional Agents are available.**"
 
-SUBAGENT_TOOL_PARAMETERS: JsonObject = {
-    "type": "object",
-    "properties": {
-        "content": {
-            "type": "string",
-            "description": "Self-contained task or message to send to the target Sub-Agent.",
-        },
-        "agent_id": {
-            "type": "string",
-            "description": (
-                "Target Agent id from the allowed values. Omit it to run the calling Agent "
-                "as a Sub-Agent when creating a new Session. Required with session_id."
-            ),
-        },
-        "background": {
-            "type": "boolean",
-            "description": (
-                "When true, return after the Run is started or queued. When false, wait for "
-                "its final result. Defaults to true."
-            ),
-            "default": True,
-        },
-        "session_id": {
-            "type": "string",
-            "description": (
-                "Existing Sub-Agent Session to continue. Repeat its owning agent_id with "
-                "this value. Creates a new persisted Session when omitted."
-            ),
-        },
-        "model": {
-            "type": "string",
-            "description": (
-                "Run-local primary Model override in <provider>/<model-id> form. "
-                "Does not modify the target Agent or Session."
-            ),
-        },
-        "thinking_effort": {
-            "type": "string",
-            "enum": sorted(ALLOWED_THINKING_EFFORTS),
-            "description": (
-                "Run-local thinking effort override. Omit to inherit the target Agent; "
-                "an empty string selects the Provider default."
-            ),
-        },
-    },
-    "required": ["content"],
-    "additionalProperties": False,
+_SUBAGENT_CONTENT_PARAMETER: JsonObject = {
+    "type": "string",
+    "minLength": 1,
+    "description": "Self-contained task or message to send to the target Sub-Agent.",
 }
+_SUBAGENT_AGENT_ID_PARAMETER: JsonObject = {
+    "type": "string",
+    "minLength": 1,
+    "description": "Target Agent id from the allowed values.",
+}
+_SUBAGENT_BACKGROUND_PARAMETER: JsonObject = {
+    "type": "boolean",
+    "description": (
+        "When true, return after the Run is started or queued. When false, wait for "
+        "its final result. Defaults to true."
+    ),
+    "default": True,
+}
+_SUBAGENT_MODEL_PARAMETER: JsonObject = {
+    "type": "string",
+    "minLength": 1,
+    "description": (
+        "Run-local primary Model override in <provider>/<model-id> form. "
+        "Does not modify the target Agent or Session."
+    ),
+}
+_SUBAGENT_THINKING_PARAMETER: JsonObject = {
+    "type": "string",
+    "enum": sorted(ALLOWED_THINKING_EFFORTS),
+    "description": (
+        "Run-local thinking effort override. Omit to inherit the target Agent; "
+        "an empty string selects the Provider default."
+    ),
+}
+
+
+def _subagent_operation(
+    description: str,
+    properties: JsonObject,
+    *,
+    required: tuple[str, ...],
+) -> JsonObject:
+    return {
+        "type": "object",
+        "description": description,
+        "properties": properties,
+        "required": list(required),
+        "additionalProperties": False,
+    }
+
+
+SUBAGENT_TOOL_PARAMETERS: JsonObject = operation_envelope_schema(
+    {
+        "start": _subagent_operation(
+            "Create a new persisted Sub-Agent Session. Omit agent_id to use the calling Agent.",
+            {
+                "content": _SUBAGENT_CONTENT_PARAMETER,
+                "agent_id": _SUBAGENT_AGENT_ID_PARAMETER,
+                "background": _SUBAGENT_BACKGROUND_PARAMETER,
+                "model": _SUBAGENT_MODEL_PARAMETER,
+                "thinking_effort": _SUBAGENT_THINKING_PARAMETER,
+            },
+            required=("content",),
+        ),
+        "continue": _subagent_operation(
+            "Continue one existing Agent-scoped Sub-Agent Session.",
+            {
+                "content": _SUBAGENT_CONTENT_PARAMETER,
+                "agent_id": _SUBAGENT_AGENT_ID_PARAMETER,
+                "session_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Existing Sub-Agent Session id returned by start.",
+                },
+                "background": _SUBAGENT_BACKGROUND_PARAMETER,
+                "model": _SUBAGENT_MODEL_PARAMETER,
+                "thinking_effort": _SUBAGENT_THINKING_PARAMETER,
+            },
+            required=("content", "agent_id", "session_id"),
+        ),
+    },
+    description=(
+        "Choose start for a new Sub-Agent Session or continue for an existing one. "
+        "The selected property's value is the complete argument object."
+    ),
+)
 
 SUBAGENT_RESULT_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
         "session_id": {
             "type": "string",
+            "minLength": 1,
             "description": "Persisted Sub-Agent Session id returned by subagent.",
         },
         "agent_id": {
             "type": "string",
+            "minLength": 1,
             "description": (
                 "Agent id that owns the Sub-Agent Session. Omit it if the Session belongs "
                 "to the calling Agent."
@@ -124,6 +170,7 @@ SUBAGENT_RESULT_TOOL_PARAMETERS: JsonObject = {
         },
         "run_id": {
             "type": "string",
+            "minLength": 1,
             "description": (
                 "Specific in-memory Sub-Agent Run id to retrieve. Omit it to resolve the Run "
                 "associated with the Session."
@@ -147,7 +194,7 @@ def register_subagent_tools(
         SUBAGENT_TOOL_PARAMETERS,
         coordinator.spawn,
         display=ToolDisplay(
-            summary_fields=("agent_id", "content"),
+            summary_builder=_subagent_display_summary,
             hidden_argument_keys=("content",),
         ),
     )
@@ -163,6 +210,24 @@ def register_subagent_tools(
             SUBAGENT_TOOL_NAME,
             render=lambda context: _render_subagent_prompt_block(context, coordinator),
         )
+
+
+def _subagent_display_summary(arguments: JsonObject) -> str:
+    operation = next(
+        (name for name in ("start", "continue") if isinstance(arguments.get(name), dict)),
+        None,
+    )
+    operation_arguments = arguments.get(operation) if operation is not None else arguments
+    if not isinstance(operation_arguments, dict):
+        return ""
+    parts = [operation] if operation is not None else []
+    agent_id = operation_arguments.get("agent_id")
+    if isinstance(agent_id, str) and agent_id:
+        parts.append(agent_id)
+    content = operation_arguments.get("content")
+    if isinstance(content, str) and content:
+        parts.append(content)
+    return " · ".join(parts)
 
 
 def _render_subagent_prompt_block(context: Any, coordinator: SubAgentCoordinator) -> str:

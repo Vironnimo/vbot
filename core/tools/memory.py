@@ -14,12 +14,15 @@ from core.tools.tools import (
     ToolContext,
     ToolDisplay,
     ToolRegistry,
+    extract_tool_operation,
+    operation_envelope_schema,
     tool_failure,
     tool_success,
 )
 
 MEMORY_TOOL_DESCRIPTION = (
-    "List or edit pinned memory: USER.md ('user' scope — who the user is: preferences, "
+    "List or edit pinned memory by choosing exactly one operation object: USER.md "
+    "('user' scope — who the user is: preferences, "
     "role, communication style) and MEMORY.md ('agent' scope — your own environment, "
     "conventions, and tool quirks). Entries are injected into every future turn, so keep "
     "them compact and high-signal.\n\n"
@@ -32,39 +35,89 @@ MEMORY_TOOL_DESCRIPTION = (
     "that tool is available). Also skip anything stale within a week: PR/issue numbers, "
     "commit hashes, 'fixed bug X', 'phase N done', file counts. A reusable workflow belongs "
     "in a skill rather than memory (capture it with the skill_manage tool, if you have it).\n\n"
-    "IF FULL: an add is rejected once a scope is at its budget. Call action='list', then "
+    "IF FULL: an add is rejected once a scope is at its budget. Call list, then "
     "remove or shorten stale entries to make room, and re-add.\n\n"
-    "For replace/remove, call action='list' first — 1-based ids shift after a remove."
+    "For replace/remove, call list first — 1-based ids shift after a remove."
 )
 MEMORY_ACTIONS = ("list", "add", "replace", "remove")
 MEMORY_SCOPES = ("user", "agent")
-MEMORY_TOOL_PARAMETERS: JsonObject = {
-    "type": "object",
-    "properties": {
-        "action": {
-            "type": "string",
-            "enum": list(MEMORY_ACTIONS),
-            "description": "Memory operation to perform.",
-        },
-        "scope": {
-            "type": "string",
-            "enum": list(MEMORY_SCOPES),
-            "description": "Pinned memory file to operate on: user=USER.md, agent=MEMORY.md.",
-        },
-        "content": {
-            "type": "string",
-            "description": "Entry content for add/replace. Keep it concise and durable.",
-        },
-        "entry_id": {
-            "type": "integer",
-            "description": "1-based entry id for replace/remove.",
-        },
-    },
-    "required": ["action", "scope"],
-    "additionalProperties": False,
+_MEMORY_SCOPE_PARAMETER: JsonObject = {
+    "type": "string",
+    "enum": list(MEMORY_SCOPES),
+    "description": "Pinned memory file: user=USER.md, agent=MEMORY.md.",
+}
+_MEMORY_CONTENT_PARAMETER: JsonObject = {
+    "type": "string",
+    "minLength": 1,
+    "description": "Concise, durable entry content.",
+}
+_MEMORY_ENTRY_ID_PARAMETER: JsonObject = {
+    "type": "integer",
+    "minimum": 1,
+    "description": "1-based entry id returned by list.",
 }
 
-_ALLOWED_ARGUMENTS = set(MEMORY_TOOL_PARAMETERS["properties"])
+
+def _memory_operation(
+    description: str,
+    properties: JsonObject,
+    *,
+    required: tuple[str, ...],
+) -> JsonObject:
+    return {
+        "type": "object",
+        "description": description,
+        "properties": properties,
+        "required": list(required),
+        "additionalProperties": False,
+    }
+
+
+MEMORY_TOOL_PARAMETERS: JsonObject = operation_envelope_schema(
+    {
+        "list": _memory_operation(
+            "List current pinned entries and their 1-based ids.",
+            {"scope": _MEMORY_SCOPE_PARAMETER},
+            required=("scope",),
+        ),
+        "add": _memory_operation(
+            "Add one pinned entry.",
+            {
+                "scope": _MEMORY_SCOPE_PARAMETER,
+                "content": _MEMORY_CONTENT_PARAMETER,
+            },
+            required=("scope", "content"),
+        ),
+        "replace": _memory_operation(
+            "Replace one existing pinned entry. Call list first because ids can shift.",
+            {
+                "scope": _MEMORY_SCOPE_PARAMETER,
+                "entry_id": _MEMORY_ENTRY_ID_PARAMETER,
+                "content": _MEMORY_CONTENT_PARAMETER,
+            },
+            required=("scope", "entry_id", "content"),
+        ),
+        "remove": _memory_operation(
+            "Remove one existing pinned entry. Call list first because ids can shift.",
+            {
+                "scope": _MEMORY_SCOPE_PARAMETER,
+                "entry_id": _MEMORY_ENTRY_ID_PARAMETER,
+            },
+            required=("scope", "entry_id"),
+        ),
+    },
+    description=(
+        "Choose exactly one operation property. Its value is the complete argument object "
+        "for that operation."
+    ),
+)
+
+_MEMORY_ACTION_ARGUMENTS = {
+    "list": frozenset({"scope"}),
+    "add": frozenset({"scope", "content"}),
+    "replace": frozenset({"scope", "entry_id", "content"}),
+    "remove": frozenset({"scope", "entry_id"}),
+}
 
 # Actions that mutate a scope. Only these feed the thrash guard: a failed mutation
 # invites the model to consolidate and retry, so a model that keeps failing them is
@@ -132,20 +185,34 @@ def memory_handler(
     ``tracker`` is the per-run thrash guard the runtime handler supplies; when it is
     absent (direct callers, tests) the guard is simply inert and behavior is unchanged.
     """
-    unknown_arguments = set(arguments) - _ALLOWED_ARGUMENTS
+    try:
+        action, operation_arguments = extract_tool_operation(arguments, MEMORY_ACTIONS)
+    except ValueError as error:
+        return tool_failure("invalid_arguments", str(error))
+
+    unknown_arguments = set(operation_arguments) - _MEMORY_ACTION_ARGUMENTS[action]
     if unknown_arguments:
         names = ", ".join(sorted(unknown_arguments))
-        return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
+        return tool_failure("invalid_arguments", f"Unknown {action} argument(s): {names}")
 
     try:
-        action = _required_enum(arguments.get("action"), field_name="action", values=MEMORY_ACTIONS)
-        scope = _required_enum(arguments.get("scope"), field_name="scope", values=MEMORY_SCOPES)
+        scope = _required_enum(
+            operation_arguments.get("scope"),
+            field_name="scope",
+            values=MEMORY_SCOPES,
+        )
     except ValueError as error:
         return tool_failure("invalid_arguments", str(error))
 
     is_mutation = action in _MEMORY_MUTATION_ACTIONS
     try:
-        data = _dispatch_memory_action(context, arguments, memory_service, action, scope)
+        data = _dispatch_memory_action(
+            context,
+            operation_arguments,
+            memory_service,
+            action,
+            scope,
+        )
     except MemoryError as error:
         if is_mutation:
             return _mutation_failure(tracker, context.run_id, error)
@@ -255,12 +322,12 @@ def _required_enum(value: object, *, field_name: str, values: tuple[str, ...]) -
 
 
 def _required_entry_id(value: object) -> int:
-    return required_int(value, field_name="entry_id")
+    return required_int(value, field_name="entry_id", minimum=1)
 
 
 def _required_content(value: object) -> str:
-    if not isinstance(value, str):
-        raise ValueError("content must be a string")
+    if not isinstance(value, str) or not value:
+        raise ValueError("content must be a non-empty string")
     return value
 
 
@@ -280,10 +347,25 @@ def register_memory_tool(registry: ToolRegistry, memory_service: MemoryService) 
         MEMORY_TOOL_PARAMETERS,
         make_memory_handler(memory_service),
         display=ToolDisplay(
-            summary_fields=("action", "scope", "entry_id"),
+            summary_builder=_memory_display_summary,
             hidden_argument_keys=("content",),
         ),
     )
+
+
+def _memory_display_summary(arguments: JsonObject) -> str:
+    try:
+        action, operation_arguments = extract_tool_operation(arguments, MEMORY_ACTIONS)
+    except ValueError:
+        return ""
+    parts = [action]
+    scope = operation_arguments.get("scope")
+    if isinstance(scope, str) and scope:
+        parts.append(scope)
+    entry_id = operation_arguments.get("entry_id")
+    if isinstance(entry_id, int) and not isinstance(entry_id, bool):
+        parts.append(str(entry_id))
+    return " · ".join(parts)
 
 
 __all__ = [

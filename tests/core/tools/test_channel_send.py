@@ -23,9 +23,12 @@ _TEST_MAX_ATTACHMENT_SIZE_BYTES = 20_971_520
 def test_channel_send_agent_guidance_requires_tool_for_channel_files() -> None:
     assert CHANNEL_SEND_TOOL_DESCRIPTION == (
         "Send a proactive message or any file through a configured channel. Always use "
-        "this tool for channel file delivery, including replies."
+        "this tool for channel file delivery, including replies. Put the complete request "
+        "inside the send operation object."
     )
-    properties = CHANNEL_SEND_TOOL_PARAMETERS["properties"]
+    send = CHANNEL_SEND_TOOL_PARAMETERS["properties"]["send"]
+    assert send["required"] == ["channel_id"]
+    properties = send["properties"]
     assert isinstance(properties, dict)
     file_paths = properties["file_paths"]
     assert isinstance(file_paths, dict)
@@ -153,6 +156,37 @@ def test_channel_send_happy_path_with_explicit_platform_target(tmp_path: Path) -
     )
     chat_sessions.get_metadata.assert_not_called()
     channel_service.list_channels.assert_called_once_with()
+
+
+def test_channel_send_accepts_canonical_send_operation(tmp_path: Path) -> None:
+    channel_service = Mock()
+    channel_service.send = AsyncMock()
+    channel_service.list_channels.return_value = [make_channel_config()]
+    chat_sessions = make_chat_sessions()
+    registry = ToolRegistry()
+    register_channel_send_tool(
+        registry,
+        channel_service,
+        chat_sessions,
+        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
+    )
+
+    result = asyncio.run(
+        dispatch(
+            registry,
+            tmp_path,
+            {
+                "send": {
+                    "channel_id": "tg-assistant",
+                    "message": "Task finished",
+                    "platform_target": "12345",
+                }
+            },
+        )
+    )
+
+    assert_success_envelope(result)
+    channel_service.send.assert_awaited_once()
 
 
 def test_channel_send_passes_buttons_to_service(tmp_path: Path) -> None:

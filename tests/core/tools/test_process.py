@@ -103,9 +103,10 @@ async def test_register_process_tool_registers_schema(manager: ProcessManager) -
     assert tool.parameters["additionalProperties"] is False
     assert "terminal poll or successful kill suppresses" in tool.description
     assert (
-        tool.parameters["properties"]["session_id"]["description"]
-        == "Process session id returned by bash tool."
+        tool.parameters["properties"]["poll"]["properties"]["session_id"]["description"]
+        == "Process session id returned by bash."
     )
+    assert tool.parameters["properties"]["poll"]["required"] == ["session_id"]
 
 
 @pytest.mark.asyncio
@@ -114,6 +115,16 @@ async def test_list_action_returns_empty_sessions(
     context: ToolContext,
 ) -> None:
     result = await call_process(manager, context, {"action": "list"})
+
+    assert result == tool_success({"sessions": []})
+
+
+@pytest.mark.asyncio
+async def test_canonical_list_operation_returns_empty_sessions(
+    manager: ProcessManager,
+    context: ToolContext,
+) -> None:
+    result = await call_process(manager, context, {"list": {}})
 
     assert result == tool_success({"sessions": []})
 

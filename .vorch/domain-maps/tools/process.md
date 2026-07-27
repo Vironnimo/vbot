@@ -13,10 +13,10 @@ Manages background process sessions created by `bash`.
 
 - Tool name: `process`
 - Registration: `register_process_tool(registry, process_manager)`
-- Schema: required `action`; optional `session_id`, `timeout_ms`, `offset`, `limit`, `data`, and `eof`. The model-facing `session_id` description identifies it only as a process session id returned by the Bash Tool, avoiding confusion with Chat and Sub-Agent Session ids.
+- Schema: exactly one top-level operation object: `list`, `poll`, `log`, `write`, `submit`, `kill`, or `clear`. Each nested object exposes only its valid arguments and structurally requires `session_id` where needed; `write` also requires `data`. The model-facing `session_id` description identifies it only as a process session id returned by the Bash Tool, avoiding confusion with Chat and Sub-Agent Session ids.
 - The Tool description positions Process as the immediate progress/control surface and tells the model that a terminal poll or successful kill suppresses a pending automatic completion.
 - Actions: `list`, `poll`, `log`, `write`, `submit`, `kill`, `clear`. `list` entries include `log_file` (path or `null`).
-- Display: summary fields `action` and `session_id`.
+- Display: the summary builder reads either the canonical operation object or a retired flat action and renders the operation plus `session_id` when present.
 - `ProcessManager.spawn(scope_key, agent_id, argv, *, env, cwd) -> str`
 - `subprocess_creation_flags(*, new_process_group=False, platform_name=os.name) -> int` is the shared child-process launch policy for core Tools: zero on non-Windows; `CREATE_NO_WINDOW` on Windows, optionally combined with `CREATE_NEW_PROCESS_GROUP`.
 - `ProcessManager.poll/log/write/submit/kill/clear(..., agent_id=...)`
