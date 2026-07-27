@@ -455,7 +455,7 @@ export const isRowCancellable = (row) => {
 };
 
 export const toolArguments = (tool) =>
-  tool.arguments ?? tool.toolCall?.arguments;
+  tool.arguments ?? tool.toolCall?.arguments ?? streamingPreviewArguments(tool);
 
 export const toolArgumentSummary = (tool) => {
   const displaySummary = trimmedString(toolDisplay(tool)?.summary);
