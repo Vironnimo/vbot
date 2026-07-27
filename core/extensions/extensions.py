@@ -159,7 +159,7 @@ class ToolDeclaration:
     # verbatim into ``ToolRegistry.register`` and surfaced by ``tool.list``.
     readiness_hint: str | None = None
     result_schema: dict[str, Any] | None = None
-    parallel_safe: bool = False
+    parallel_safe: bool = True
 
 
 @dataclass(frozen=True)
@@ -345,7 +345,7 @@ class ExtensionAPI:
         ready: Callable[[], bool] | None = None,
         readiness_hint: str | None = None,
         result_schema: dict[str, Any] | None = None,
-        parallel_safe: bool = False,
+        parallel_safe: bool = True,
     ) -> None:
         """Declare an agent tool, mirroring ``ToolRegistry.register``.
 

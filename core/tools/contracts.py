@@ -50,7 +50,7 @@ def compile_tool_contract(
     name: str,
     input_schema: JsonObject,
     result_schema: JsonObject | None = None,
-    parallel_safe: bool = False,
+    parallel_safe: bool = True,
 ) -> ToolContract:
     """Validate, copy, compile, and fingerprint one canonical Tool contract."""
     if not isinstance(name, str) or not name:

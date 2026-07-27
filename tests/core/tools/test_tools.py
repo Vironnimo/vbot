@@ -1227,7 +1227,6 @@ class TestToolExecutor:
             "Slow tool for testing.",
             {"type": "object"},
             slow_handler,
-            parallel_safe=True,
         )
         executor = ToolExecutor(registry)
 
@@ -1264,7 +1263,6 @@ class TestToolExecutor:
             "Same tool for testing.",
             {"type": "object"},
             same_tool_handler,
-            parallel_safe=True,
         )
         executor = ToolExecutor(registry, per_run_limit=2, global_limit=2)
 
@@ -1313,6 +1311,7 @@ class TestToolExecutor:
             "Serial tool for testing.",
             {"type": "object"},
             serial_handler,
+            parallel_safe=False,
         )
         executor = ToolExecutor(registry)
 

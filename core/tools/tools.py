@@ -382,7 +382,7 @@ class Tool:
     # built-in tool. Set at extension-tool apply time so ``tool.list`` can attribute
     # a tool to its owning extension.
     extension: str | None = None
-    parallel_safe: bool = False
+    parallel_safe: bool = True
 
     def __post_init__(self) -> None:
         contract = compile_tool_contract(
@@ -523,7 +523,7 @@ class ToolRegistry:
         readiness_hint: str | None = None,
         extension: str | None = None,
         result_schema: JsonObject | None = None,
-        parallel_safe: bool = False,
+        parallel_safe: bool = True,
     ) -> Tool:
         """Register a tool and return its immutable definition.
 
@@ -847,7 +847,7 @@ class ToolPromptBlockRegistry:
 
 
 class ToolExecutor:
-    """Schedule serial barriers and proven-safe concurrent Tool groups."""
+    """Schedule concurrent Tool groups around explicit serial barriers."""
 
     _global_semaphores: ClassVar[
         weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[int, asyncio.Semaphore]]
@@ -874,7 +874,7 @@ class ToolExecutor:
         tool_calls: Sequence[ToolCall],
         config: ToolExecutionConfig,
     ) -> list[JsonObject]:
-        """Execute serial-by-default calls and return results in request order."""
+        """Execute parallel-by-default calls and return results in request order."""
         per_run_semaphore = asyncio.Semaphore(self._per_run_limit)
         results: list[JsonObject | None] = [None] * len(tool_calls)
         parallel_group: list[tuple[int, ToolCall]] = []
