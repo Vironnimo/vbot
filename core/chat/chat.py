@@ -172,7 +172,7 @@ from core.sessions import (
     project_tool_context_id,
     skill_activation_contents,
 )
-from core.tools import ANALYZE_IMAGE_TOOL_NAME, HISTORY_TOOL_NAME
+from core.tools import ANALYZE_IMAGE_TOOL_NAME, HISTORY_TOOL_NAME, ToolNotFoundError
 from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.logging import get_logger
 
@@ -221,20 +221,29 @@ class _FailedToolCallCircuitBreaker:
     """Stop one Run after repeated identical failed Tool Calls make no progress."""
 
     limit: int = MAX_IDENTICAL_FAILED_TOOL_CALLS
-    _last_signature: tuple[str, str] | None = None
+    _last_signature: tuple[str, str, str, str] | None = None
     _consecutive_count: int = 0
 
     def observe(
         self,
         tool_calls: Sequence[ToolCall],
         tool_messages: Sequence[ChatMessage],
+        registry: Any | None = None,
     ) -> str | None:
         """Return the Tool name when the failure threshold is reached."""
 
         for tool_call, tool_message in zip(tool_calls, tool_messages, strict=True):
-            if not _tool_message_is_failure(tool_message):
+            error_code = _tool_message_failure_code(tool_message)
+            if error_code is None:
                 self._reset()
                 continue
+            fingerprint = ""
+            fingerprint_resolver = getattr(registry, "schema_fingerprint", None)
+            if callable(fingerprint_resolver):
+                try:
+                    fingerprint = str(fingerprint_resolver(tool_call.name))
+                except (KeyError, ToolNotFoundError, ValueError):
+                    fingerprint = ""
             signature = (
                 tool_call.name,
                 json.dumps(
@@ -243,6 +252,8 @@ class _FailedToolCallCircuitBreaker:
                     sort_keys=True,
                     separators=(",", ":"),
                 ),
+                error_code,
+                fingerprint,
             )
             if signature == self._last_signature:
                 self._consecutive_count += 1
@@ -260,14 +271,25 @@ class _FailedToolCallCircuitBreaker:
 
 def _tool_message_is_failure(message: ChatMessage) -> bool:
     """Return whether one canonical Tool message carries a failure envelope."""
+    return _tool_message_failure_code(message) is not None
+
+
+def _tool_message_failure_code(message: ChatMessage) -> str | None:
+    """Return one stable Tool failure code, or ``None`` for non-failures."""
 
     if not isinstance(message.content, str):
-        return False
+        return None
     try:
         result = json.loads(message.content)
     except (TypeError, ValueError):
-        return False
-    return isinstance(result, dict) and result.get("ok") is False
+        return None
+    if not isinstance(result, dict) or result.get("ok") is not False:
+        return None
+    error = result.get("error")
+    if not isinstance(error, dict):
+        return "unknown_failure"
+    code = error.get("code")
+    return code if isinstance(code, str) and code else "unknown_failure"
 
 
 @dataclass(frozen=True)
@@ -1990,6 +2012,7 @@ class ChatLoop:
                     repeated_failed_tool = failed_tool_call_breaker.observe(
                         assistant_message.tool_calls,
                         tool_messages,
+                        tool_dispatch_context.registry,
                     )
                     # A tool may ask to show media (e.g. read on an image): inject it
                     # as a synthetic current-turn user message after the tool results

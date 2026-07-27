@@ -13,8 +13,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from core.tools.arguments import (
-    coerce_bool,
-    normalize_aliases,
+    optional_bool,
     optional_int,
     optional_string,
 )
@@ -61,8 +60,6 @@ ALLOWED_ARGUMENTS = {
     "include_ignored",
     "output_mode",
 }
-# camelCase variants some models emit; normalized before validation like edit's aliases.
-_GREP_ARGUMENT_ALIASES = {"ignoreCase": "ignore_case", "includeIgnored": "include_ignored"}
 # Bounded drain of a finished/killed ripgrep process; generous, never load-bearing.
 _RG_DRAIN_TIMEOUT_SECONDS = 5.0
 # rg exclusion for version-control internals; composes with any user glob.
@@ -588,7 +585,6 @@ def grep_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
     ripgrep subprocess and the fallback file scan never block the kernel
     event loop.
     """
-    arguments = normalize_aliases(arguments, _GREP_ARGUMENT_ALIASES)
     unknown_arguments = set(arguments) - ALLOWED_ARGUMENTS
     if unknown_arguments:
         names = ", ".join(sorted(unknown_arguments))
@@ -610,12 +606,12 @@ def grep_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         result_offset = optional_int(
             arguments.get("offset"), field_name="offset", default=0, minimum=0
         )
-        ignore_case = coerce_bool(
+        ignore_case = optional_bool(
             arguments.get("ignore_case"), field_name="ignore_case", default=False
         )
-        literal = coerce_bool(arguments.get("literal"), field_name="literal", default=False)
-        multiline = coerce_bool(arguments.get("multiline"), field_name="multiline", default=False)
-        include_ignored = coerce_bool(
+        literal = optional_bool(arguments.get("literal"), field_name="literal", default=False)
+        multiline = optional_bool(arguments.get("multiline"), field_name="multiline", default=False)
+        include_ignored = optional_bool(
             arguments.get("include_ignored"), field_name="include_ignored", default=False
         )
         output_mode = str(arguments.get("output_mode") or "content").strip() or "content"
@@ -763,7 +759,9 @@ def register_grep_tool(registry: ToolRegistry) -> None:
         GREP_TOOL_DESCRIPTION,
         GREP_TOOL_PARAMETERS,
         _grep_handler_async,
+        result_schema={"type": "object", "required": ["content"]},
         display=ToolDisplay(summary_fields=("pattern", "path")),
+        parallel_safe=True,
     )
 
 

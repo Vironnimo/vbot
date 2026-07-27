@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from core.providers.tool_schema import render_tool_definitions
+
 from .anthropic_test_support import (
     ANTHROPIC_CONFIG,
     ANTHROPIC_URL,
@@ -685,11 +687,16 @@ class TestSendRequestFormat:
         )
 
         request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
+        rendered = render_tool_definitions(
+            [READ_TOOL_DEFINITION],
+            profile="anthropic_strict",
+        )[0]
         assert request_body["tools"] == [
             {
                 "name": "read",
                 "description": READ_TOOL_DEFINITION["description"],
-                "input_schema": READ_TOOL_DEFINITION["parameters"],
+                "input_schema": rendered["parameters"],
+                "strict": True,
             }
         ]
 
@@ -713,18 +720,25 @@ class TestSendRequestFormat:
         )
 
         request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
+        definition = {
+            "name": HISTORY_TOOL_NAME,
+            "description": HISTORY_TOOL_DESCRIPTION,
+            "parameters": HISTORY_TOOL_PARAMETERS,
+        }
+        rendered = render_tool_definitions([definition], profile="anthropic_strict")[0]
         assert request_body["tools"] == [
             {
                 "name": HISTORY_TOOL_NAME,
                 "description": HISTORY_TOOL_DESCRIPTION,
-                "input_schema": HISTORY_TOOL_PARAMETERS,
+                "input_schema": rendered["parameters"],
+                "strict": True,
             }
         ]
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_send_sanitizes_tool_input_schema(self, anthropic_adapter):
-        """A nullable-union tool schema is collapsed before it reaches the wire."""
+    async def test_send_preserves_tool_input_schema(self, anthropic_adapter):
+        """A nullable-union schema keeps its canonical meaning on the wire."""
         route = respx.post(ANTHROPIC_URL).mock(
             return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
         )
@@ -748,7 +762,9 @@ class TestSendRequestFormat:
         )
 
         request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
-        assert request_body["tools"][0]["input_schema"]["properties"]["tag"] == {"type": "string"}
+        assert request_body["tools"][0]["input_schema"]["properties"]["tag"] == {
+            "anyOf": [{"type": "string"}, {"type": "null"}]
+        }
 
     @respx.mock
     @pytest.mark.asyncio

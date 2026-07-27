@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from core.tools.arguments import coerce_bool, normalize_aliases, optional_int, optional_string
+from core.tools.arguments import optional_bool, optional_int, optional_string
 from core.tools.search import (
     SEARCH_CANCELLED_FAILURE_CODE,
     SEARCH_CANCELLED_FAILURE_MESSAGE,
@@ -29,8 +29,6 @@ from core.tools.tools import (
 )
 
 DEFAULT_GLOB_LIMIT = 100
-
-_GLOB_ARGUMENT_ALIASES = {"includeIgnored": "include_ignored"}
 
 GLOB_TOOL_NAME = "glob"
 GLOB_TOOL_DESCRIPTION = (
@@ -117,7 +115,6 @@ def glob_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
     Sync core; registered behind an ``asyncio.to_thread`` wrapper so a large
     tree walk never blocks the kernel event loop.
     """
-    arguments = normalize_aliases(arguments, _GLOB_ARGUMENT_ALIASES)
     unknown_arguments = set(arguments) - {"pattern", "path", "limit", "offset", "include_ignored"}
     if unknown_arguments:
         names = ", ".join(sorted(unknown_arguments))
@@ -137,7 +134,7 @@ def glob_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         result_offset = optional_int(
             arguments.get("offset"), field_name="offset", default=0, minimum=0
         )
-        include_ignored = coerce_bool(
+        include_ignored = optional_bool(
             arguments.get("include_ignored"), field_name="include_ignored", default=False
         )
     except (RuntimeError, ValueError) as error:
@@ -195,7 +192,9 @@ def register_glob_tool(registry: ToolRegistry) -> None:
         GLOB_TOOL_DESCRIPTION,
         GLOB_TOOL_PARAMETERS,
         _glob_handler_async,
+        result_schema={"type": "object", "required": ["content"]},
         display=ToolDisplay(summary_fields=("pattern",)),
+        parallel_safe=True,
     )
 
 

@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from core.tools.arguments import coerce_bool, optional_number, optional_string
+from core.tools.arguments import optional_bool, optional_number, optional_string
 from core.tools.process_manager import (
     ProcessManager,
     ProcessSession,
@@ -310,6 +310,7 @@ def register_bash_tool(
         BASH_TOOL_DESCRIPTION,
         BASH_TOOL_PARAMETERS,
         handler,
+        result_schema={"type": "object", "required": ["status"]},
         display=ToolDisplay(summary_fields=("command",)),
     )
 
@@ -487,7 +488,7 @@ def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
 
     try:
         workdir = optional_string(arguments.get("workdir"), field_name="workdir")
-        background = coerce_bool(
+        background = optional_bool(
             arguments.get("background"), field_name="background", default=False
         )
         yield_after = optional_number(

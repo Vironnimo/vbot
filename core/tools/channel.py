@@ -36,7 +36,7 @@ CHANNEL_SEND_TOOL_NAME = "channel_send"
 CHANNEL_SEND_TOOL_DESCRIPTION = (
     "Send a proactive message or any file through a configured channel. Always use "
     "this tool for channel file delivery, including replies. Put the complete request "
-    "inside the send operation object."
+    "inside request with operation set to send."
 )
 _REQUIRED_CHANNEL_SEND_ARGUMENTS = frozenset(("channel_id",))
 _OPTIONAL_CHANNEL_SEND_ARGUMENTS = frozenset(
@@ -129,13 +129,11 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
 }
 CHANNEL_SEND_TOOL_PARAMETERS = operation_envelope_schema(
     {"send": CHANNEL_SEND_TOOL_PARAMETERS},
-    description="Choose the send operation and provide its complete request object.",
+    description="Set request.operation to send and provide the complete request fields.",
 )
 
 
 def _normalize_channel_send_call(arguments: JsonObject) -> JsonObject:
-    if "send" not in arguments:
-        return dict(arguments)
     _, operation_arguments = extract_tool_operation(arguments, ("send",))
     return operation_arguments
 
@@ -180,6 +178,7 @@ def register_channel_send_tool(
         CHANNEL_SEND_TOOL_DESCRIPTION,
         CHANNEL_SEND_TOOL_PARAMETERS,
         handler,
+        result_schema={"type": "object", "required": ["channel_id", "platform_target"]},
         display=ToolDisplay(summary_builder=_channel_send_display_summary),
     )
 

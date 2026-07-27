@@ -491,7 +491,12 @@ async def test_terminal_process_poll_cancels_already_pending_completion_delivery
     )
     process_result = await make_process_handler(manager)(
         process_context,
-        {"action": "poll", "session_id": process_session_id},
+        {
+            "request": {
+                "operation": "poll",
+                "session_id": process_session_id,
+            }
+        },
     )
 
     assert process_result["ok"] is True

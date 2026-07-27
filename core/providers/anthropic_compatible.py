@@ -59,7 +59,7 @@ from core.providers.reasoning import (
     resolve_reasoning_intent,
 )
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
-from core.providers.tool_schema import sanitize_anthropic_tool_input_schema
+from core.providers.tool_schema import render_tool_definitions
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 from core.utils.tokens import estimate_request_input_tokens
@@ -546,7 +546,11 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         system_content = _merge_anthropic_system_parts(system_parts)
         if system_content is not None:
             payload["system"] = system_content
-        _apply_anthropic_tools(payload, request_kwargs)
+        _apply_anthropic_tools(
+            payload,
+            request_kwargs,
+            strict_capable=self._config.id == "anthropic",
+        )
         reasoning_supported = self._model_reasoning_supported(model_id)
         # Resolve the output allowance once: it both bounds any thinking budget
         # and is the ``max_tokens`` that goes on the wire (set after overrides
@@ -1184,19 +1188,27 @@ def _is_supported_reasoning_block(block: Any) -> bool:
     return block.get("type") in (THINKING_BLOCK_TYPE, REDACTED_THINKING_BLOCK_TYPE)
 
 
-def _apply_anthropic_tools(payload: dict[str, Any], kwargs: dict[str, Any]) -> None:
+def _apply_anthropic_tools(
+    payload: dict[str, Any],
+    kwargs: dict[str, Any],
+    *,
+    strict_capable: bool,
+) -> None:
     tools = kwargs.pop("tools", None)
     if not tools:
         return
+    rendered = render_tool_definitions(
+        tools,
+        profile="anthropic_strict" if strict_capable else "best_effort",
+    )
     payload["tools"] = [
         {
             "name": tool["name"],
             "description": tool["description"],
-            "input_schema": sanitize_anthropic_tool_input_schema(
-                tool["parameters"], tool_name=tool["name"]
-            ),
+            "input_schema": tool["parameters"],
+            **({"strict": True} if tool.get("strict") is True else {}),
         }
-        for tool in tools
+        for tool in rendered
     ]
 
 

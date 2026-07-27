@@ -82,5 +82,6 @@ def register_text_to_speech_tool(registry: ToolRegistry, speech_service: Any) ->
         TEXT_TO_SPEECH_TOOL_DESCRIPTION,
         TEXT_TO_SPEECH_TOOL_PARAMETERS,
         make_text_to_speech_handler(speech_service),
+        result_schema={"type": "object", "required": ["message", "artifact"]},
         display=ToolDisplay(summary_fields=("text",)),
     )

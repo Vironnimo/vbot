@@ -85,6 +85,7 @@ def test_chat_stream_returns_sse_url_and_endpoint_replays_visible_timeline(tmp_p
     tool_result_data = cast(dict[str, Any], events[9]["data"])
     assistant_delta_data = cast(dict[str, Any], events[10]["data"])
     assistant_data = cast(dict[str, Any], events[11]["data"])
+    fingerprint = runtime.tools.schema_fingerprint("read")
     assert reasoning_delta_data["payload"]["reasoning_delta"] == "Thinking clearly"
     assert tool_delta_data["payload"]["name_delta"] == "read"
     assert reasoning_data["payload"]["message"]["reasoning"] == "Thinking clearly"
@@ -96,6 +97,7 @@ def test_chat_stream_returns_sse_url_and_endpoint_replays_visible_timeline(tmp_p
             "arguments": {"path": "note.txt"},
         },
         "display": {"summary": "note.txt", "hidden_argument_keys": []},
+        "schema_fingerprint": fingerprint,
     }
     assert tool_result_data["payload"]["tool_call"] == {
         "id": "call-one",
@@ -106,6 +108,8 @@ def test_chat_stream_returns_sse_url_and_endpoint_replays_visible_timeline(tmp_p
     assert tool_result_data["payload"]["result"]["error"] is None
     assert tool_result_data["payload"]["result"]["data"]["content"] == "1|SSE visible content"
     assert tool_result_data["payload"]["result"]["artifacts"] == []
+    assert tool_result_data["payload"]["schema_fingerprint"] == fingerprint
+    assert tool_result_data["payload"]["error_code"] is None
     assert "tool_call_failed" not in [event["event"] for event in events]
     assert "batch" not in response.text
     assert assistant_delta_data["payload"]["content_delta"] == "Done"

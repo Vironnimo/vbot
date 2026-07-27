@@ -24,7 +24,8 @@ import pytest
 import respx
 
 from core.extensions import ExtensionRegistry
-from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
+from core.tools.contracts import ToolContractError
+from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope, tool_failure
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _BUNDLED_EXTENSIONS_DIR = _REPO_ROOT / "resources" / "extensions"
@@ -145,8 +146,11 @@ async def _dispatch(
     tool_name: str,
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
-    """Dispatch a tool call through the registry."""
-    return await registry.dispatch(make_context(tool_name), arguments)
+    """Dispatch a call with the same validation envelope as ``ToolExecutor``."""
+    try:
+        return await registry.dispatch(make_context(tool_name), arguments)
+    except ToolContractError as error:
+        return tool_failure("invalid_arguments", str(error), retryable=False)
 
 
 # ---------------------------------------------------------------------------
@@ -507,7 +511,7 @@ async def test_get_state_missing_entity_id() -> None:
 
     result = await _dispatch(tools, HA_GET_STATE_NAME, {})
 
-    assert_failure_envelope(result, "validation_error")
+    assert_failure_envelope(result, "invalid_arguments")
 
 
 @pytest.mark.asyncio
@@ -528,21 +532,21 @@ async def test_get_state_invalid_entity_id(entity_id: str) -> None:
 
     result = await _dispatch(tools, HA_GET_STATE_NAME, {"entity_id": entity_id})
 
-    assert_failure_envelope(result, "validation_error")
+    assert_failure_envelope(result, "invalid_arguments")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("tool_name", "arguments", "message"),
     (
-        (HA_LIST_ENTITIES_NAME, {"unknown": True}, "Unknown argument"),
-        (HA_LIST_ENTITIES_NAME, {"domain": 42}, "domain must be a string"),
-        (HA_GET_STATE_NAME, {"entity_id": 42}, "entity_id must be a string"),
-        (HA_LIST_SERVICES_NAME, {"domain": []}, "domain must be a string"),
+        (HA_LIST_ENTITIES_NAME, {"unknown": True}, "Additional properties are not allowed"),
+        (HA_LIST_ENTITIES_NAME, {"domain": 42}, "is not of type 'string'"),
+        (HA_GET_STATE_NAME, {"entity_id": 42}, "is not of type 'string'"),
+        (HA_LIST_SERVICES_NAME, {"domain": []}, "is not of type 'string'"),
         (
             HA_CALL_SERVICE_NAME,
             {"domain": "light", "service": "turn_on", "data": []},
-            "data must be an object",
+            "is not of type 'object'",
         ),
     ),
 )
@@ -555,7 +559,7 @@ async def test_handlers_reject_unknown_or_wrong_typed_arguments(
 
     result = await _dispatch(tools, tool_name, arguments)
 
-    error = assert_failure_envelope(result, "validation_error")
+    error = assert_failure_envelope(result, "invalid_arguments")
     assert message in error["message"]
 
 
@@ -683,7 +687,7 @@ async def test_call_service_missing_domain() -> None:
 
     result = await _dispatch(tools, HA_CALL_SERVICE_NAME, {"service": "turn_on"})
 
-    assert_failure_envelope(result, "validation_error")
+    assert_failure_envelope(result, "invalid_arguments")
 
 
 @pytest.mark.asyncio
@@ -692,7 +696,7 @@ async def test_call_service_missing_service() -> None:
 
     result = await _dispatch(tools, HA_CALL_SERVICE_NAME, {"domain": "light"})
 
-    assert_failure_envelope(result, "validation_error")
+    assert_failure_envelope(result, "invalid_arguments")
 
 
 @pytest.mark.asyncio
@@ -723,7 +727,7 @@ async def test_call_service_invalid_domain(domain: str) -> None:
 
     result = await _dispatch(tools, HA_CALL_SERVICE_NAME, {"domain": domain, "service": "turn_on"})
 
-    assert_failure_envelope(result, "validation_error")
+    assert_failure_envelope(result, "invalid_arguments")
 
 
 @respx.mock
@@ -751,7 +755,7 @@ async def test_call_service_invalid_entity_id(entity_id: str) -> None:
         {"domain": "light", "service": "turn_on", "entity_id": entity_id},
     )
 
-    assert_failure_envelope(result, "validation_error")
+    assert_failure_envelope(result, "invalid_arguments")
     assert route.called is False
 
 
@@ -969,7 +973,7 @@ async def test_validation_error_signals_not_retryable() -> None:
 
     result = await _dispatch(tools, HA_GET_STATE_NAME, {"entity_id": "not a valid id"})
 
-    error = assert_failure_envelope(result, "validation_error")
+    error = assert_failure_envelope(result, "invalid_arguments")
     assert error["retryable"] is False
 
 

@@ -18,6 +18,7 @@ from core.tools import (
     ToolContext,
     ToolRegistry,
     register_skill_manage_tool,
+    tool_failure,
 )
 
 
@@ -30,7 +31,7 @@ def _skill_md(
 
 
 def _request(operation: str, **arguments: object) -> dict[str, object]:
-    return {operation: arguments}
+    return {"request": {"operation": operation, **arguments}}
 
 
 class _Harness:
@@ -65,10 +66,13 @@ class _Harness:
 
     def run(self, arguments: dict[str, object], agent_id: str = "main") -> dict[str, Any]:
         context = _context(agent_id, self.root)
-        return cast(
-            dict[str, Any],
-            asyncio.run(self.tools.dispatch(context, arguments, [SKILL_MANAGE_TOOL_NAME])),
-        )
+        try:
+            return cast(
+                dict[str, Any],
+                asyncio.run(self.tools.dispatch(context, arguments, [SKILL_MANAGE_TOOL_NAME])),
+            )
+        except ValueError as error:
+            return tool_failure("invalid_arguments", str(error), retryable=False)
 
     def begin(self, *, name: str = "demo", mode: str = "create", scope: str = "own") -> str:
         result = self.run(_request("begin", name=name, mode=mode, scope=scope))
@@ -120,7 +124,11 @@ def test_provider_schema_exposes_one_strict_object_per_operation(tmp_path: Path)
     harness = _Harness(tmp_path)
     definitions = harness.tools.provider_definitions([SKILL_MANAGE_TOOL_NAME])
     parameters = cast(dict[str, Any], definitions[0]["parameters"])
-    operations = cast(dict[str, dict[str, Any]], parameters["properties"])
+    branches = cast(
+        list[dict[str, Any]],
+        parameters["properties"]["request"]["anyOf"],
+    )
+    operations = {branch["properties"]["operation"]["enum"][0]: branch for branch in branches}
     expected_fields = {
         "inspect": {"scope", "name", "draft_id", "path"},
         "begin": {"scope", "name", "mode", "source"},
@@ -152,22 +160,25 @@ def test_provider_schema_exposes_one_strict_object_per_operation(tmp_path: Path)
     }
 
     assert parameters == SKILL_MANAGE_TOOL_PARAMETERS
-    assert parameters["minProperties"] == 1
-    assert parameters["maxProperties"] == 1
+    assert parameters["required"] == ["request"]
     assert parameters["additionalProperties"] is False
     assert set(operations) == set(expected_fields)
     for operation, schema in operations.items():
         assert schema["type"] == "object"
         assert schema["additionalProperties"] is False
-        assert set(cast(dict[str, Any], schema["properties"])) == expected_fields[operation]
-        assert set(cast(list[str], schema["required"])) == expected_required[operation]
+        assert set(cast(dict[str, Any], schema["properties"])) == {
+            "operation",
+            *expected_fields[operation],
+        }
+        assert set(cast(list[str], schema["required"])) == {
+            "operation",
+            *expected_required[operation],
+        }
 
 
 def test_provider_schema_structurally_models_exclusive_arguments() -> None:
-    operations = cast(
-        dict[str, dict[str, Any]],
-        SKILL_MANAGE_TOOL_PARAMETERS["properties"],
-    )
+    branches = SKILL_MANAGE_TOOL_PARAMETERS["properties"]["request"]["anyOf"]
+    operations = {branch["properties"]["operation"]["enum"][0]: branch for branch in branches}
 
     assert operations["inspect"]["oneOf"] == [
         {"required": ["name"]},
@@ -198,14 +209,9 @@ def test_flat_or_multiple_operation_calls_are_rejected(tmp_path: Path) -> None:
     )
 
     assert flat["ok"] is False
-    assert (
-        "exactly one top-level operation object" in cast(dict[str, Any], flat["error"])["message"]
-    )
+    assert "'request' is a required property" in cast(dict[str, Any], flat["error"])["message"]
     assert multiple["ok"] is False
-    assert (
-        "exactly one top-level operation object"
-        in cast(dict[str, Any], multiple["error"])["message"]
-    )
+    assert "'request' is a required property" in cast(dict[str, Any], multiple["error"])["message"]
 
 
 def test_begin_requires_name_and_mode_at_dispatch(tmp_path: Path) -> None:
@@ -219,7 +225,7 @@ def test_begin_requires_name_and_mode_at_dispatch(tmp_path: Path) -> None:
         error = cast(dict[str, Any], result["error"])
         assert error["code"] == "invalid_arguments"
         assert error["retryable"] is False
-        assert f"{field_name} must be a non-empty string" in error["message"]
+        assert f"'{field_name}' is a required property" in error["message"]
 
 
 def test_inspect_rejects_name_and_draft_id_together(tmp_path: Path) -> None:
@@ -229,7 +235,7 @@ def test_inspect_rejects_name_and_draft_id_together(tmp_path: Path) -> None:
     result = harness.run(_request("inspect", name="demo", draft_id=draft_id))
 
     assert result["ok"] is False
-    assert "exactly one of name or draft_id" in cast(dict[str, Any], result["error"])["message"]
+    assert "[oneOf]" in cast(dict[str, Any], result["error"])["message"]
 
 
 def test_create_package_is_invisible_until_commit(
@@ -361,7 +367,7 @@ def test_non_vbot_package_path_is_rejected(tmp_path: Path) -> None:
     )
 
     assert result["ok"] is False
-    assert "SKILL.md" in cast(dict[str, Any], result["error"])["message"]
+    assert "[pattern]" in cast(dict[str, Any], result["error"])["message"]
 
 
 def test_inspect_returns_manifest_and_selected_text(tmp_path: Path) -> None:

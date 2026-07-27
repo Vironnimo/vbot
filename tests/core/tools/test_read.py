@@ -174,7 +174,7 @@ def test_register_read_tool_exposes_provider_schema_without_description_property
         {"type": "integer", "minimum": 1},
         {
             "type": "string",
-            "pattern": r"^[1-9][0-9]*(?::[1-9][0-9]*)?$",
+            "pattern": r"^[1-9][0-9]*:[1-9][0-9]*$",
         },
     ]
     assert "description" not in parameters["properties"]
@@ -447,34 +447,31 @@ async def test_read_returns_failure_envelope_for_invalid_line_controls(
 
 
 @pytest.mark.asyncio
-async def test_read_accepts_integer_valued_float_offset(tmp_path: Path) -> None:
+async def test_read_rejects_integer_valued_float_offset(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     workspace.joinpath("lines.txt").write_text("one\ntwo\nthree\n", encoding="utf-8")
     handler = make_handler()
 
     result_float = await handler(make_context(workspace), {"path": "lines.txt", "offset": 2.0})
-    result_int = await handler(make_context(workspace), {"path": "lines.txt", "offset": 2})
-
-    assert result_float == result_int
+    error = assert_failure_envelope(result_float, "invalid_arguments")
+    assert error["message"] == "offset must be an integer"
 
 
 @pytest.mark.asyncio
-async def test_read_accepts_integer_valued_float_limit(tmp_path: Path) -> None:
+async def test_read_rejects_integer_valued_float_limit(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     workspace.joinpath("lines.txt").write_text("one\ntwo\nthree\n", encoding="utf-8")
     handler = make_handler()
 
     result_float = await handler(make_context(workspace), {"path": "lines.txt", "limit": 2.0})
-    result_int = await handler(make_context(workspace), {"path": "lines.txt", "limit": 2})
-
-    assert result_float == result_int
+    error = assert_failure_envelope(result_float, "invalid_arguments")
+    assert error["message"] == "limit must be an integer"
 
 
 @pytest.mark.asyncio
-async def test_read_accepts_string_encoded_offset_and_limit(tmp_path: Path) -> None:
-    # Models sometimes encode numeric arguments as strings; accept them.
+async def test_read_rejects_string_encoded_offset_and_limit(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     workspace.joinpath("lines.txt").write_text("one\ntwo\nthree\n", encoding="utf-8")
@@ -483,11 +480,8 @@ async def test_read_accepts_string_encoded_offset_and_limit(tmp_path: Path) -> N
     result_string = await handler(
         make_context(workspace), {"path": "lines.txt", "offset": "2", "limit": "1"}
     )
-    result_int = await handler(
-        make_context(workspace), {"path": "lines.txt", "offset": 2, "limit": 1}
-    )
-
-    assert result_string == result_int
+    error = assert_failure_envelope(result_string, "invalid_arguments")
+    assert error["message"] == "offset must be an integer"
 
 
 @pytest.mark.asyncio

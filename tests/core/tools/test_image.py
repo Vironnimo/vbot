@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.model_tasks import ImageInputError
+from core.tools import ToolContractError
 from core.tools.image import (
     ANALYZE_IMAGE_TOOL_DESCRIPTION,
     ANALYZE_IMAGE_TOOL_NAME,
@@ -68,14 +69,11 @@ async def test_image_generation_tool_rejects_unknown_arguments(tmp_path: Path) -
     registry = ToolRegistry()
     register_image_generation_tool(registry, _ImageService(tmp_path / "unused.png"))
 
-    result = await registry.dispatch(
-        _make_context(tmp_path),
-        {"prompt": "a red fox", "unexpected": True},
-    )
-
-    assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_arguments"
-    assert "unexpected" in result["error"]["message"]
+    with pytest.raises(ToolContractError, match="Additional properties"):
+        await registry.dispatch(
+            _make_context(tmp_path),
+            {"prompt": "a red fox", "unexpected": True},
+        )
 
 
 @pytest.mark.asyncio
@@ -95,19 +93,19 @@ async def test_image_generation_tool_forwards_per_call_knobs(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_image_generation_tool_omits_blank_knobs(tmp_path: Path) -> None:
+async def test_image_generation_tool_rejects_blank_knobs(tmp_path: Path) -> None:
     service = _ImageService(tmp_path / "artifact-1.png")
     registry = ToolRegistry()
     register_image_generation_tool(registry, service)
     context = _make_context(tmp_path)
 
-    result = await registry.dispatch(
-        context,
-        {"prompt": "a red fox", "aspect_ratio": "  ", "resolution": ""},
-    )
+    with pytest.raises(ToolContractError, match=r"aspect_ratio|resolution"):
+        await registry.dispatch(
+            context,
+            {"prompt": "a red fox", "aspect_ratio": "  ", "resolution": ""},
+        )
 
-    assert result["ok"] is True
-    assert service.received_call_options == {}
+    assert service.received_call_options is None
 
 
 @pytest.mark.asyncio
@@ -131,20 +129,20 @@ async def test_image_generation_tool_resolves_local_source_images(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_image_generation_tool_accepts_single_source_path_string(tmp_path: Path) -> None:
+async def test_image_generation_tool_rejects_single_source_path_string(tmp_path: Path) -> None:
     source = tmp_path / "photo.png"
     source.write_bytes(b"\x89PNG\r\n\x1a\nsource")
     service = _ImageService(tmp_path / "artifact-1.png")
     registry = ToolRegistry()
     register_image_generation_tool(registry, service)
 
-    result = await registry.dispatch(
-        _make_context(tmp_path),
-        {"prompt": "make it rainy", "source_images": str(source)},
-    )
+    with pytest.raises(ToolContractError, match="is not of type 'array'"):
+        await registry.dispatch(
+            _make_context(tmp_path),
+            {"prompt": "make it rainy", "source_images": str(source)},
+        )
 
-    assert result["ok"] is True
-    assert service.received_source_paths == (source.resolve(),)
+    assert service.received_source_paths is None
 
 
 @pytest.mark.asyncio
@@ -153,13 +151,11 @@ async def test_image_generation_tool_rejects_invalid_source_paths_shape(tmp_path
     registry = ToolRegistry()
     register_image_generation_tool(registry, service)
 
-    result = await registry.dispatch(
-        _make_context(tmp_path),
-        {"prompt": "make it rainy", "source_images": {"path": "photo.png"}},
-    )
-
-    assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_arguments"
+    with pytest.raises(ToolContractError, match="is not of type 'array'"):
+        await registry.dispatch(
+            _make_context(tmp_path),
+            {"prompt": "make it rainy", "source_images": {"path": "photo.png"}},
+        )
 
 
 @pytest.mark.asyncio
@@ -194,18 +190,18 @@ async def test_analyze_image_tool_resolves_paths_and_returns_analysis(
 
 
 @pytest.mark.asyncio
-async def test_analyze_image_tool_accepts_single_path_string(tmp_path: Path) -> None:
+async def test_analyze_image_tool_rejects_single_path_string(tmp_path: Path) -> None:
     service = _ImageService(tmp_path / "unused.png")
     registry = ToolRegistry()
     register_analyze_image_tool(registry, service)
 
-    result = await registry.dispatch(
-        _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME),
-        {"prompt": "Describe it.", "images": "photo.png"},
-    )
+    with pytest.raises(ToolContractError, match="is not of type 'array'"):
+        await registry.dispatch(
+            _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME),
+            {"prompt": "Describe it.", "images": "photo.png"},
+        )
 
-    assert result["ok"] is True
-    assert service.received_analysis_paths == ((tmp_path / "photo.png").resolve(),)
+    assert service.received_analysis_paths is None
 
 
 @pytest.mark.asyncio
@@ -220,18 +216,18 @@ async def test_analyze_image_tool_rejects_invalid_arguments_and_maps_image_error
     register_analyze_image_tool(registry, service)
     context = _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME)
 
-    empty = await registry.dispatch(context, {"prompt": "Describe it.", "images": []})
-    unknown = await registry.dispatch(
-        context,
-        {"prompt": "Describe it.", "images": ["photo.png"], "extra": True},
-    )
+    with pytest.raises(ToolContractError, match="non-empty"):
+        await registry.dispatch(context, {"prompt": "Describe it.", "images": []})
+    with pytest.raises(ToolContractError, match="Additional properties"):
+        await registry.dispatch(
+            context,
+            {"prompt": "Describe it.", "images": ["photo.png"], "extra": True},
+        )
     image_error = await registry.dispatch(
         context,
         {"prompt": "Describe it.", "images": ["photo.png"]},
     )
 
-    assert empty["error"]["code"] == "invalid_arguments"
-    assert unknown["error"]["code"] == "invalid_arguments"
     assert image_error["error"]["code"] == "image_understanding_error"
 
 

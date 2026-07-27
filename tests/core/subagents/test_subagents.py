@@ -830,10 +830,7 @@ async def test_resolver_failure_maps_to_tool_failure_not_raised() -> None:
     assert failure["error"]["code"] == "agent_not_found"
 
 
-async def test_subagent_blank_session_id_creates_new_session(tmp_path: Path) -> None:
-    # Models routinely emit an omitted optional string field as "" (schema-valid
-    # for ``type: string``). A blank session_id must mean "create a new session",
-    # exactly like omitting it — not a hard rejection.
+async def test_subagent_blank_session_id_is_rejected(tmp_path: Path) -> None:
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
     tracker = SubAgentBatchTracker(RecordingTriggerService())
@@ -847,24 +844,9 @@ async def test_subagent_blank_session_id_creates_new_session(tmp_path: Path) -> 
         batch_tracker=tracker,
     )
 
-    # Assert: a fresh project-scoped session was created, never an empty-id lookup.
-    assert result["ok"] is True
-    child_session_id = result["data"]["session_id"]
-    assert child_session_id
-    project_session = (
-        tmp_path
-        / "projects"
-        / "acme"
-        / "agents"
-        / "worker"
-        / "sessions"
-        / f"{child_session_id}.jsonl"
-    )
-    assert project_session.exists()
-    # Settle the background completion tracker task before the loop closes.
-    started_run = manager.started[0]["run"]
-    started_run.mark_completed(ChatMessage.assistant(model="openai/gpt-5.2", content="done"))
-    await asyncio.sleep(0)
+    assert result["ok"] is False
+    assert result["error"]["code"] == "session_not_found"
+    assert manager.started == []
 
 
 async def test_subagent_blank_agent_id_falls_back_to_calling_agent(tmp_path: Path) -> None:

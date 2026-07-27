@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from core.tools.arguments import coerce_bool, optional_int, required_string
+from core.tools.arguments import optional_bool, optional_int, required_string
 from core.tools.process_manager import (
     ProcessManager,
     SessionInputClosedError,
@@ -27,8 +27,8 @@ PROCESS_TOOL_DESCRIPTION = (
     "Manage background process sessions started by shell-backed tools. Use it for "
     "immediate progress or control; a terminal poll or successful kill suppresses a "
     "pending automatic completion. Supports listing, polling, reading logs, writing "
-    "stdin, submitting a line, killing, and clearing finished sessions. Choose exactly "
-    "one operation object."
+    "stdin, submitting a line, killing, and clearing finished sessions. Set request.operation "
+    "to list, poll, log, write, submit, kill, or clear."
 )
 PROCESS_ACTIONS = {"list", "poll", "log", "write", "submit", "kill", "clear"}
 _PROCESS_ACTION_ARGUMENTS = {
@@ -130,8 +130,8 @@ PROCESS_TOOL_PARAMETERS: JsonObject = operation_envelope_schema(
         ),
     },
     description=(
-        "Choose exactly one operation property. Its value is the complete argument object "
-        "for that operation."
+        "Set request.operation to list, poll, log, write, submit, kill, or clear and include "
+        "that operation's arguments in the same request object."
     ),
 )
 
@@ -265,7 +265,7 @@ async def _handle_write(
     data = arguments.get("data")
     if not isinstance(data, str):
         raise ValueError("data must be a string")
-    eof = coerce_bool(arguments.get("eof"), field_name="eof", default=False)
+    eof = optional_bool(arguments.get("eof"), field_name="eof", default=False)
 
     await process_manager.write(session_id, context.agent_id, data, eof=eof)
     return tool_success({"session_id": session_id, "written": len(data)})
@@ -330,6 +330,7 @@ def register_process_tool(registry: ToolRegistry, process_manager: ProcessManage
         PROCESS_TOOL_DESCRIPTION,
         PROCESS_TOOL_PARAMETERS,
         make_process_handler(process_manager),
+        result_schema={"type": "object"},
         display=ToolDisplay(summary_builder=_process_display_summary),
     )
 

@@ -178,6 +178,7 @@ def register_skill_tool(
         SKILL_TOOL_DESCRIPTION,
         SKILL_TOOL_PARAMETERS,
         make_skill_handler(resolve_registry, refresh_skills),
+        result_schema={"type": "object"},
         display=ToolDisplay(summary_fields=("name",)),
     )
 

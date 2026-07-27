@@ -916,7 +916,11 @@ def test_runtime_reload_recall_backend_creates_vector_backend(
     try:
         assert isinstance(runtime.recall_backend, JsonlSessionRecallBackend)
         jsonl_tool = runtime.tools.get("session_search")
-        jsonl_search = jsonl_tool.parameters["properties"]["search"]["oneOf"][0]["properties"]
+        jsonl_search = next(
+            branch
+            for branch in jsonl_tool.parameters["properties"]["request"]["anyOf"]
+            if branch["properties"]["operation"]["enum"] == ["search"]
+        )["properties"]
         assert "match" in jsonl_search
         assert "order" in jsonl_search
 
@@ -924,7 +928,11 @@ def test_runtime_reload_recall_backend_creates_vector_backend(
         runtime.reload_recall_backend()
         assert isinstance(runtime.recall_backend, VectorRecallBackend)
         vector_tool = runtime.tools.get("session_search")
-        vector_search = vector_tool.parameters["properties"]["search"]["oneOf"][0]["properties"]
+        vector_search = next(
+            branch
+            for branch in vector_tool.parameters["properties"]["request"]["anyOf"]
+            if branch["properties"]["operation"]["enum"] == ["search"]
+        )["properties"]
         assert "match" not in vector_search
         assert "literal_match" not in vector_search
         assert "roles" not in vector_search

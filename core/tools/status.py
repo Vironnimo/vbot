@@ -83,7 +83,10 @@ STATUS_TOOL_PARAMETERS: JsonObject = operation_envelope_schema(
             required=("agent_id", "session_id"),
         ),
     },
-    description=("Choose exactly one target operation. Its value is the complete target object."),
+    description=(
+        "Set request.operation to current, session, or agent_session and include the target "
+        "arguments in the same request object."
+    ),
 )
 
 
@@ -219,14 +222,14 @@ def register_status_tool(
             projects,
             local_context_windows_loader,
         ),
+        result_schema={"type": "object", "required": ["text", "agent_id", "session_id"]},
         display=ToolDisplay(),
+        parallel_safe=True,
     )
 
 
 def _normalize_status_call(arguments: JsonObject) -> JsonObject:
     operations = ("current", "session", "agent_session")
-    if not (set(arguments) & set(operations)):
-        return dict(arguments)
     operation, operation_arguments = extract_tool_operation(arguments, operations)
     if operation == "current":
         if operation_arguments:

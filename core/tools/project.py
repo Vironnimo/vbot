@@ -199,7 +199,12 @@ def register_project_tool(
         PROJECT_TOOL_DESCRIPTION,
         PROJECT_TOOL_PARAMETERS,
         make_project_handler(projects, get_renderer, list_project_skills, file_state),
+        result_schema={
+            "type": "object",
+            "required": ["status", "project_id", "display_name", "cwd", "content"],
+        },
         display=ToolDisplay(summary_fields=("project_id",)),
+        parallel_safe=True,
     )
     if prompt_blocks is not None:
         prompt_blocks.register(

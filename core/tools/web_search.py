@@ -878,7 +878,9 @@ def register_web_search_tool(
         WEB_SEARCH_TOOL_DESCRIPTION,
         WEB_SEARCH_TOOL_PARAMETERS,
         _handler,
+        result_schema={"type": "object", "required": ["query", "results"]},
         display=ToolDisplay(summary_fields=("query",)),
+        parallel_safe=True,
     )
 
 

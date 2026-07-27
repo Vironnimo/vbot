@@ -475,6 +475,48 @@ class TestExtensionDecisionWiring:
     """The tool_call decision model wired through ``_dispatch_tool_calls``."""
 
     @pytest.mark.asyncio
+    async def test_tool_hooks_serialize_parallel_safe_calls(self, tmp_path: Path) -> None:
+        active = 0
+        max_active = 0
+
+        async def handler(_context: ToolContext, _arguments: JsonObject) -> JsonObject:
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+            return tool_success({"ran": True})
+
+        tools = ToolRegistry()
+        tools.register(
+            "safe_read",
+            "Parallel-safe test tool.",
+            {"type": "object", "additionalProperties": False},
+            handler,
+            parallel_safe=True,
+        )
+        runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+        registry = ExtensionRegistry()
+        registry.install_handler("observer", "tool_call", lambda _ctx, **_payload: None)
+        runtime.extensions = registry
+        session = _build_session(tmp_path)
+        run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+        await _dispatch_tool_calls(
+            runtime,
+            agent,
+            [
+                ToolCall(id="call-1", name="safe_read", arguments={}),
+                ToolCall(id="call-2", name="safe_read", arguments={}),
+            ],
+            session,
+            run,
+            nesting_depth=0,
+        )
+
+        assert max_active == 1
+
+    @pytest.mark.asyncio
     async def test_denied_tool_call_yields_error_envelope_and_never_executes(
         self, tmp_path: Path
     ) -> None:

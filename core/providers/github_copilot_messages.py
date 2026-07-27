@@ -18,7 +18,7 @@ from core.providers.errors import ProviderError
 from core.providers.github_copilot_policy import GitHubCopilotModelPolicy
 from core.providers.openai_compatible import DEFAULT_MAX_OUTPUT_TOKENS
 from core.providers.reasoning import effort_to_budget
-from core.providers.tool_schema import sanitize_anthropic_tool_input_schema
+from core.providers.tool_schema import render_tool_definitions
 
 TEXT_BLOCK_TYPE = "text"
 IMAGE_BLOCK_TYPE = "image"
@@ -297,7 +297,8 @@ def _apply_safe_messages_tools(
     if not policy.supports_tools or not isinstance(tools, list) or not tools:
         return
 
-    payload["tools"] = [tool for tool in (_safe_tool(tool) for tool in tools) if tool]
+    rendered = render_tool_definitions(tools, profile="best_effort")
+    payload["tools"] = [tool for tool in (_safe_tool(tool) for tool in rendered) if tool]
     if not payload["tools"]:
         payload.pop("tools")
         return
@@ -318,7 +319,7 @@ def _safe_tool(tool: Any) -> dict[str, Any]:
     return {
         "name": name,
         "description": description if isinstance(description, str) else "",
-        "input_schema": sanitize_anthropic_tool_input_schema(parameters, tool_name=name),
+        "input_schema": parameters,
     }
 
 

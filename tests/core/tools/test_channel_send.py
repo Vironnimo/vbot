@@ -24,10 +24,11 @@ def test_channel_send_agent_guidance_requires_tool_for_channel_files() -> None:
     assert CHANNEL_SEND_TOOL_DESCRIPTION == (
         "Send a proactive message or any file through a configured channel. Always use "
         "this tool for channel file delivery, including replies. Put the complete request "
-        "inside the send operation object."
+        "inside request with operation set to send."
     )
-    send = CHANNEL_SEND_TOOL_PARAMETERS["properties"]["send"]
-    assert send["required"] == ["channel_id"]
+    send = CHANNEL_SEND_TOOL_PARAMETERS["properties"]["request"]["anyOf"][0]
+    assert send["required"] == ["operation", "channel_id"]
+    assert send["properties"]["operation"] == {"type": "string", "enum": ["send"]}
     properties = send["properties"]
     assert isinstance(properties, dict)
     file_paths = properties["file_paths"]
@@ -94,11 +95,25 @@ async def dispatch(
     workspace: Path,
     arguments: dict[str, object],
 ) -> dict[str, object]:
-    return await registry.dispatch(
-        make_context(workspace),
-        arguments,
-        [CHANNEL_SEND_TOOL_NAME],
-    )
+    if set(arguments) == {"request"}:
+        canonical = arguments
+    elif set(arguments) == {"send"} and isinstance(arguments["send"], dict):
+        canonical = {
+            "request": {
+                "operation": "send",
+                **arguments["send"],
+            }
+        }
+    else:
+        canonical = {"request": {"operation": "send", **arguments}}
+    try:
+        return await registry.dispatch(
+            make_context(workspace),
+            canonical,
+            [CHANNEL_SEND_TOOL_NAME],
+        )
+    except ValueError as error:
+        return tool_failure("invalid_arguments", str(error))
 
 
 def assert_success_envelope(
@@ -296,10 +311,13 @@ def test_project_channel_send_keeps_legacy_unbound_run_button_behavior(tmp_path:
         registry.dispatch(
             make_context(tmp_path, project_id="project-1"),
             {
-                "channel_id": "tg-assistant",
-                "message": "Project approval",
-                "platform_target": "12345",
-                "buttons": [[{"label": "Approve", "data": "run:approve"}]],
+                "request": {
+                    "operation": "send",
+                    "channel_id": "tg-assistant",
+                    "message": "Project approval",
+                    "platform_target": "12345",
+                    "buttons": [[{"label": "Approve", "data": "run:approve"}]],
+                }
             },
             [CHANNEL_SEND_TOOL_NAME],
         )
@@ -343,10 +361,10 @@ def test_channel_send_rejects_malformed_buttons(tmp_path: Path) -> None:
         )
     )
 
-    assert result == tool_failure(
-        "invalid_arguments",
-        "buttons[0][0].data must be a non-empty string",
-    )
+    error = result["error"]
+    assert isinstance(error, dict)
+    assert error["code"] == "invalid_arguments"
+    assert "'data' is a required property" in str(error["message"])
     channel_service.send.assert_not_awaited()
 
 
@@ -376,10 +394,10 @@ def test_channel_send_rejects_unknown_button_fields(tmp_path: Path) -> None:
         )
     )
 
-    assert result == tool_failure(
-        "invalid_arguments",
-        "buttons[0][0] has unknown field(s): unexpected",
-    )
+    error = result["error"]
+    assert isinstance(error, dict)
+    assert error["code"] == "invalid_arguments"
+    assert "Additional properties are not allowed" in str(error["message"])
     channel_service.send.assert_not_awaited()
 
 
@@ -728,10 +746,10 @@ def test_channel_send_requires_message_or_file_paths(tmp_path: Path) -> None:
         )
     )
 
-    assert result == tool_failure(
-        "invalid_arguments",
-        "at least one of message or file_paths must be provided",
-    )
+    error = result["error"]
+    assert isinstance(error, dict)
+    assert error["code"] == "invalid_arguments"
+    assert "is a required property" in str(error["message"])
     channel_service.send.assert_not_called()
 
 
@@ -801,9 +819,12 @@ def test_channel_send_relative_file_path_resolves_from_cwd(tmp_path: Path) -> No
         registry.dispatch(
             make_context(workspace, cwd=repo),
             {
-                "channel_id": "tg-assistant",
-                "platform_target": "12345",
-                "file_paths": ["note.txt"],
+                "request": {
+                    "operation": "send",
+                    "channel_id": "tg-assistant",
+                    "platform_target": "12345",
+                    "file_paths": ["note.txt"],
+                }
             },
             [CHANNEL_SEND_TOOL_NAME],
         )

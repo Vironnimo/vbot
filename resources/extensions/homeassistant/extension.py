@@ -697,6 +697,8 @@ def register(api: Any) -> None:
         HA_LIST_ENTITIES_DESCRIPTION,
         HA_LIST_ENTITIES_PARAMETERS,
         list_entities_handler,
+        result_schema={"type": "object", "required": ["count", "entities"]},
+        parallel_safe=True,
         ready=_is_ready,
         readiness_hint=_HASS_READINESS_HINT,
     )
@@ -705,7 +707,12 @@ def register(api: Any) -> None:
         HA_GET_STATE_DESCRIPTION,
         HA_GET_STATE_PARAMETERS,
         get_state_handler,
+        result_schema={
+            "type": "object",
+            "required": ["entity_id", "state", "attributes", "last_changed", "last_updated"],
+        },
         display=ToolDisplay(summary_fields=("entity_id",)),
+        parallel_safe=True,
         ready=_is_ready,
         readiness_hint=_HASS_READINESS_HINT,
     )
@@ -714,6 +721,8 @@ def register(api: Any) -> None:
         HA_LIST_SERVICES_DESCRIPTION,
         HA_LIST_SERVICES_PARAMETERS,
         list_services_handler,
+        result_schema={"type": "object", "required": ["count", "domains"]},
+        parallel_safe=True,
         ready=_is_ready,
         readiness_hint=_HASS_READINESS_HINT,
     )
@@ -722,6 +731,7 @@ def register(api: Any) -> None:
         HA_CALL_SERVICE_DESCRIPTION,
         HA_CALL_SERVICE_PARAMETERS,
         call_service_handler,
+        result_schema={"type": "object", "required": ["result"]},
         display=ToolDisplay(summary_fields=("domain", "service", "entity_id")),
         ready=_is_ready,
         readiness_hint=_HASS_READINESS_HINT,

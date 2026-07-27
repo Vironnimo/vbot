@@ -147,8 +147,8 @@ SUBAGENT_TOOL_PARAMETERS: JsonObject = operation_envelope_schema(
         ),
     },
     description=(
-        "Choose start for a new Sub-Agent Session or continue for an existing one. "
-        "The selected property's value is the complete argument object."
+        "Set request.operation to start for a new Sub-Agent Session or continue for an "
+        "existing one, and include the operation arguments in the same request object."
     ),
 )
 
@@ -193,6 +193,7 @@ def register_subagent_tools(
         SUBAGENT_TOOL_DESCRIPTION,
         SUBAGENT_TOOL_PARAMETERS,
         coordinator.spawn,
+        result_schema={"type": "object"},
         display=ToolDisplay(
             summary_builder=_subagent_display_summary,
             hidden_argument_keys=("content",),
@@ -203,6 +204,7 @@ def register_subagent_tools(
         SUBAGENT_RESULT_TOOL_DESCRIPTION,
         SUBAGENT_RESULT_TOOL_PARAMETERS,
         coordinator.result,
+        result_schema={"type": "object"},
         display=ToolDisplay(summary_fields=("agent_id", "session_id")),
     )
     if prompt_blocks is not None:
@@ -213,14 +215,13 @@ def register_subagent_tools(
 
 
 def _subagent_display_summary(arguments: JsonObject) -> str:
-    operation = next(
-        (name for name in ("start", "continue") if isinstance(arguments.get(name), dict)),
-        None,
-    )
-    operation_arguments = arguments.get(operation) if operation is not None else arguments
+    operation_arguments = arguments.get("request")
     if not isinstance(operation_arguments, dict):
         return ""
-    parts = [operation] if operation is not None else []
+    operation = operation_arguments.get("operation")
+    if operation not in {"start", "continue"}:
+        return ""
+    parts = [operation]
     agent_id = operation_arguments.get("agent_id")
     if isinstance(agent_id, str) and agent_id:
         parts.append(agent_id)

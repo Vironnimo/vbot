@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from core.providers.providers import resolve_request_output_limit
+from core.providers.tool_schema import render_tool_definitions
 from core.utils.tokens import estimate_request_input_tokens
 
 from .openai_compatible_test_support import (
@@ -442,16 +443,45 @@ class TestSendRequestFormat:
         await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", tools=[READ_TOOL_DEFINITION])
 
         request_body = json.loads(route.calls.last.request.content)
+        rendered = render_tool_definitions(
+            [READ_TOOL_DEFINITION],
+            profile="openai_strict",
+        )[0]
         assert request_body["tools"] == [
             {
                 "type": "function",
                 "function": {
                     "name": "read",
                     "description": READ_TOOL_DEFINITION["description"],
-                    "parameters": READ_TOOL_DEFINITION["parameters"],
+                    "parameters": rendered["parameters"],
                 },
             }
         ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_uses_strict_only_for_canonical_nullable_optional(self, openai_adapter):
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+        definition = {
+            "name": "inspect",
+            "description": "Inspect one key.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string"},
+                    "note": {"type": ["string", "null"]},
+                },
+                "required": ["key"],
+                "additionalProperties": False,
+            },
+        }
+
+        await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", tools=[definition])
+
+        function = json.loads(route.calls.last.request.content)["tools"][0]["function"]
+        assert function["strict"] is True
+        assert function["parameters"]["required"] == ["key", "note"]
+        assert function["parameters"]["properties"]["note"]["type"] == ["string", "null"]
 
     @respx.mock
     @pytest.mark.asyncio
@@ -466,7 +496,17 @@ class TestSendRequestFormat:
         await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", tools=[definition])
 
         request_body = json.loads(route.calls.last.request.content)
-        assert request_body["tools"] == [{"type": "function", "function": definition}]
+        rendered = render_tool_definitions([definition], profile="openai_strict")[0]
+        assert request_body["tools"] == [
+            {
+                "type": "function",
+                "function": {
+                    "name": rendered["name"],
+                    "description": rendered["description"],
+                    "parameters": rendered["parameters"],
+                },
+            }
+        ]
 
     @respx.mock
     @pytest.mark.asyncio

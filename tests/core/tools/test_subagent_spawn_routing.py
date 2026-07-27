@@ -67,10 +67,12 @@ async def test_register_subagent_tools_registers_both_public_tools() -> None:
     assert subagent_result.parameters == SUBAGENT_RESULT_TOOL_PARAMETERS
     assert subagent.description == SUBAGENT_TOOL_DESCRIPTION
     assert subagent_result.description == SUBAGENT_RESULT_TOOL_DESCRIPTION
-    start = subagent.parameters["properties"]["start"]
-    continuation = subagent.parameters["properties"]["continue"]
-    assert start["required"] == ["content"]
-    assert continuation["required"] == ["content", "agent_id", "session_id"]
+    branches = subagent.parameters["properties"]["request"]["anyOf"]
+    by_operation = {branch["properties"]["operation"]["enum"][0]: branch for branch in branches}
+    start = by_operation["start"]
+    continuation = by_operation["continue"]
+    assert start["required"] == ["operation", "content"]
+    assert continuation["required"] == ["operation", "content", "agent_id", "session_id"]
     assert start["properties"]["content"]["description"] == (
         "Self-contained task or message to send to the target Sub-Agent."
     )

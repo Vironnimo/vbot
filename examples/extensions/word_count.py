@@ -26,6 +26,16 @@ _PARAMETERS = {
         "text": {"type": "string", "description": "Text to count words in."},
     },
     "required": ["text"],
+    "additionalProperties": False,
+}
+
+_RESULT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "word_count": {"type": "integer", "minimum": 0},
+    },
+    "required": ["word_count"],
+    "additionalProperties": False,
 }
 
 
@@ -45,4 +55,6 @@ def register(api):
         "Count the number of whitespace-separated words in a piece of text.",
         _PARAMETERS,
         _word_count,
+        result_schema=_RESULT_SCHEMA,
+        parallel_safe=True,
     )

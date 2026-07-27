@@ -32,7 +32,11 @@ def _read_tool_registry() -> ToolRegistry:
     tools.register(
         "read",
         "Read a file.",
-        {"type": "object", "properties": {"path": {"type": "string"}}},
+        {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "additionalProperties": False,
+        },
         read,
     )
     return tools
@@ -121,6 +125,7 @@ async def test_project_tool_makes_project_skill_loadable_in_same_run_without_pro
             "type": "object",
             "properties": {"project_id": {"type": "string"}},
             "required": ["project_id"],
+            "additionalProperties": False,
         },
         lambda _context, arguments: tool_success(
             {

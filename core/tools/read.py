@@ -67,7 +67,7 @@ READ_TOOL_PARAMETERS: JsonObject = {
                 {"type": "integer", "minimum": 1},
                 {
                     "type": "string",
-                    "pattern": r"^[1-9][0-9]*(?::[1-9][0-9]*)?$",
+                    "pattern": r"^[1-9][0-9]*:[1-9][0-9]*$",
                 },
             ],
             "description": "Line number to start reading from (1-indexed).",
@@ -196,10 +196,16 @@ def _parse_read_position(offset: object) -> _ReadPosition:
         parts = offset.split(":")
         if len(parts) != 2:
             raise ValueError("offset must be a line number or line:character address")
-        line = optional_int(parts[0], field_name="offset line", minimum=1)
-        character = optional_int(parts[1], field_name="offset character", minimum=1)
-        if line is None or character is None:
-            raise ValueError("offset must be a line number or line:character address")
+        if not parts[0].isdigit():
+            raise ValueError("offset line must be an integer")
+        if not parts[1].isdigit():
+            raise ValueError("offset character must be an integer")
+        line = int(parts[0])
+        character = int(parts[1])
+        if line < 1:
+            raise ValueError("offset line must be >= 1")
+        if character < 1:
+            raise ValueError("offset character must be >= 1")
         return _ReadPosition(line, character)
 
     line = optional_int(offset, field_name="offset", minimum=1) or 1
@@ -793,7 +799,9 @@ def register_read_tool(
             file_state,
             speech_max_size_bytes=speech_max_size_bytes,
         ),
+        result_schema={"type": "object", "required": ["content"]},
         display=ToolDisplay(summary_fields=("path",)),
+        parallel_safe=True,
     )
 
 
