@@ -425,6 +425,37 @@ describe('ChatAssistantRun tool dot state', () => {
     expect(dot.classList.contains('running')).toBe(true);
     expect(dot.classList.contains('preparing')).toBe(false);
   });
+
+  it('shows recognized preview arguments before the tool call is dispatched', () => {
+    const item = createAssistantRunItem({
+      items: [
+        {
+          type: 'tool_call',
+          id: 'tool-bash-preparing',
+          name: 'bash',
+          toolCallId: 'call-bash-preparing',
+          status: 'preparing',
+          streaming: true,
+          arguments: undefined,
+          previewArguments: {
+            command: 'cd C:\\Development\\projects\\vBot; npm install',
+          },
+          partialArgumentsText:
+            '{"command":"cd C:\\\\Development\\\\projects\\\\vBot; npm install"}',
+          startedEvent: null,
+        },
+      ],
+    });
+    mountedComponent = mountRun({ item });
+
+    const argsRow = Array.from(document.querySelectorAll('.teb-row')).find(
+      (row) => row.querySelector('.teb-label')?.textContent === 'Args',
+    );
+
+    expect(argsRow.querySelector('.teb-code').textContent).toBe(
+      'command: cd C:\\Development\\projects\\vBot; npm install',
+    );
+  });
 });
 
 describe('ChatAssistantRun copy actions', () => {
