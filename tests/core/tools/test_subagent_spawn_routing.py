@@ -71,14 +71,16 @@ async def test_register_subagent_tools_registers_both_public_tools() -> None:
         "Self-contained task or message to send to the target Sub-Agent."
     )
     assert subagent.parameters["properties"]["agent_id"]["description"] == (
-        "Target Agent id from the allowed values. Omit it to run the calling Agent as a Sub-Agent."
+        "Target Agent id from the allowed values. Omit it to run the calling Agent as a "
+        "Sub-Agent when creating a new Session. Required with session_id."
     )
     assert subagent.parameters["properties"]["background"]["description"] == (
         "When true, return after the Run is started or queued. When false, wait for its "
         "final result. Defaults to true."
     )
     assert subagent.parameters["properties"]["session_id"]["description"] == (
-        "Existing Sub-Agent Session to continue. Creates a new persisted Session when omitted."
+        "Existing Sub-Agent Session to continue. Repeat its owning agent_id with this value. "
+        "Creates a new persisted Session when omitted."
     )
     assert subagent.parameters["properties"]["model"]["description"] == (
         "Run-local primary Model override in <provider>/<model-id> form. "
@@ -380,7 +382,11 @@ async def test_subagent_tool_routes_into_existing_session_when_session_id_provid
     # Act
     result = await _handle_subagent(
         context,
-        {"content": "spawn", "session_id": "existing-sub-session"},
+        {
+            "content": "spawn",
+            "agent_id": context.agent_id,
+            "session_id": "existing-sub-session",
+        },
         runtime=runtime,
         batch_tracker=tracker,
     )
@@ -416,6 +422,7 @@ async def test_queued_subagent_runs_capture_independent_overrides(tmp_path: Path
         context,
         {
             "content": "first",
+            "agent_id": context.agent_id,
             "session_id": session_id,
             "model": "openai/gpt-mini",
             "thinking_effort": "low",
@@ -427,6 +434,7 @@ async def test_queued_subagent_runs_capture_independent_overrides(tmp_path: Path
         context,
         {
             "content": "second",
+            "agent_id": context.agent_id,
             "session_id": session_id,
             "model": "openai/gpt-5.2",
             "thinking_effort": "max",
@@ -462,13 +470,21 @@ async def test_reused_session_gets_a_distinct_activity_file_per_run(tmp_path: Pa
 
     first = await _handle_subagent(
         context,
-        {"content": "first", "session_id": "existing-sub-session"},
+        {
+            "content": "first",
+            "agent_id": context.agent_id,
+            "session_id": "existing-sub-session",
+        },
         runtime=runtime,
         batch_tracker=tracker,
     )
     second = await _handle_subagent(
         context,
-        {"content": "second", "session_id": "existing-sub-session"},
+        {
+            "content": "second",
+            "agent_id": context.agent_id,
+            "session_id": "existing-sub-session",
+        },
         runtime=runtime,
         batch_tracker=tracker,
     )
@@ -521,7 +537,11 @@ async def test_subagent_tool_rejects_nonexistent_session_id(tmp_path: Path) -> N
     # Act
     result = await _handle_subagent(
         context,
-        {"content": "spawn", "session_id": "missing-sub-session"},
+        {
+            "content": "spawn",
+            "agent_id": context.agent_id,
+            "session_id": "missing-sub-session",
+        },
         runtime=runtime,
         batch_tracker=tracker,
     )
@@ -529,4 +549,29 @@ async def test_subagent_tool_rejects_nonexistent_session_id(tmp_path: Path) -> N
     # Assert
     assert result["ok"] is False
     assert result["error"]["code"] == "session_not_found"
+    assert manager.started == []
+
+
+async def test_subagent_tool_requires_agent_id_to_continue_session(tmp_path: Path) -> None:
+    manager = FakeRunManager()
+    runtime = make_runtime(tmp_path, manager)
+    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    context = make_context()
+    runtime.chat_sessions.create(context.agent_id, session_id="existing-sub-session")
+
+    result = await _handle_subagent(
+        context,
+        {"content": "continue", "session_id": "existing-sub-session"},
+        runtime=runtime,
+        batch_tracker=tracker,
+    )
+
+    assert result["ok"] is False
+    assert result["error"] == {
+        "code": "invalid_arguments",
+        "message": (
+            "agent_id is required with session_id because Sub-Agent Sessions are "
+            "Agent-scoped; repeat both values returned by the original subagent call"
+        ),
+    }
     assert manager.started == []

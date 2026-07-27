@@ -38,6 +38,16 @@ from core.utils.tokens import estimate_message_tokens
 
 INTERRUPTED_TOOL_RESULT_CODE = "result_unavailable"
 INTERRUPTED_TOOL_RESULT_MESSAGE = "Tool run was interrupted before a result was recorded."
+INTERRUPTION_CAUSES = frozenset(
+    {
+        "user",
+        "provider",
+        "network",
+        "timeout",
+        "process_restart",
+        "internal",
+    }
+)
 
 MessageRole = Literal[
     "system",
@@ -297,6 +307,7 @@ class ChatMessage:
     status: str | None = None
     sender: MessageSender | None = None
     interrupted: bool = False
+    interruption_cause: str | None = None
 
     @classmethod
     def system(cls, content: str, model: str, *, timestamp: datetime | None = None) -> ChatMessage:
@@ -366,6 +377,7 @@ class ChatMessage:
         usage: JsonObject | None = None,
         tool_calls: list[ToolCall] | None = None,
         interrupted: bool = False,
+        interruption_cause: str | None = None,
         timestamp: datetime | None = None,
     ) -> ChatMessage:
         """Create an assistant message.
@@ -373,6 +385,8 @@ class ChatMessage:
         ``interrupted`` marks a turn whose provider stream broke after visible
         output was emitted: the accumulated answer is preserved, but the turn did
         not finish, so the next request continues it (see chat domain map).
+        ``interruption_cause`` keeps the normalized reason with that durable
+        partial turn for result consumers; neither field reaches Provider wires.
         """
         return cls(
             id=_new_message_id(),
@@ -387,6 +401,7 @@ class ChatMessage:
             usage=dict(usage) if usage is not None else None,
             tool_calls=list(tool_calls) if tool_calls is not None else None,
             interrupted=interrupted,
+            interruption_cause=interruption_cause,
         )
 
     @classmethod
@@ -519,6 +534,7 @@ class ChatMessage:
             message["sender"] = self.sender.to_dict()
         if self.interrupted:
             message["interrupted"] = True
+        _add_if_not_none(message, "interruption_cause", self.interruption_cause)
         return message
 
     @classmethod
@@ -541,6 +557,7 @@ class ChatMessage:
         interrupted = data.get("interrupted", False)
         if not isinstance(interrupted, bool):
             raise ChatMessageValidationError("interrupted must be a boolean")
+        interruption_cause = _optional_string(data, "interruption_cause")
 
         projection_data = data.get("projection")
         if projection_data is not None:
@@ -575,6 +592,7 @@ class ChatMessage:
             status=_optional_string(data, "status"),
             sender=MessageSender.from_dict(sender_data) if sender_data is not None else None,
             interrupted=interrupted,
+            interruption_cause=interruption_cause,
         )
         message.validate()
         return message
@@ -584,6 +602,15 @@ class ChatMessage:
         _validate_core_fields(self)
         if self.interrupted and self.role != "assistant":
             raise ChatMessageValidationError(f"{self.role} messages cannot include interrupted")
+        if self.interruption_cause is not None:
+            if self.role != "assistant" or not self.interrupted:
+                raise ChatMessageValidationError(
+                    "interruption_cause requires an interrupted assistant message"
+                )
+            if self.interruption_cause not in INTERRUPTION_CAUSES:
+                raise ChatMessageValidationError(
+                    f"invalid interruption_cause: {self.interruption_cause}"
+                )
         match self.role:
             case "system":
                 _validate_system_message(self)
@@ -725,6 +752,7 @@ def _message_to_request_dict(
         data.pop("usage", None)
         # ``interrupted`` is a vBot-internal turn annotation, never a wire field.
         data.pop("interrupted", None)
+        data.pop("interruption_cause", None)
     data.pop("timing", None)
     # Sender attribution exists only in the provider request: persisted content stays
     # clean and the tag cannot be spoofed by typing a look-alike prefix in message text.
@@ -795,6 +823,7 @@ def _assistant_continuation_dict(
     data.pop("usage", None)
     data.pop("timing", None)
     data.pop("interrupted", None)
+    data.pop("interruption_cause", None)
     data.pop("reasoning_scope", None)
     if replay_policy == REASONING_REPLAY_NONE:
         data.pop("reasoning", None)
@@ -1250,6 +1279,7 @@ def _assistant_message_from_response(
     *,
     reasoning_scope: str | None = None,
     interrupted: bool = False,
+    interruption_cause: str | None = None,
 ) -> ChatMessage:
     tool_calls = _parse_tool_calls(response.get("tool_calls"))
     reasoning = _nullable_response_string(response, "reasoning")
@@ -1266,6 +1296,7 @@ def _assistant_message_from_response(
         usage=response.get("usage"),
         tool_calls=tool_calls,
         interrupted=interrupted,
+        interruption_cause=interruption_cause,
     )
 
 

@@ -36,7 +36,7 @@ Every admitted visible Run owns a provider-neutral append-only Continuation jour
 
 An interrupted checkpoint attaches exactly once at executor start to the next visible Run, immediately before that Run's newly persisted user message. Its wrapper only states that the previous Run was interrupted and that the checkpoint records what happened before the interruption; it does not direct the Model to resume, continue, inspect, or repeat anything. A complete non-interrupted Assistant result resolves it; a further interruption extends the chain. Internal Runs neither consume nor resolve visible Continuation state. There is no separate Continue or Discard action.
 
-The checkpoint and its interruption cause remain internal to Chat and are not projected through history, terminal Run events, RPC, or the UI. User Cancel, provider failure, network failure, timeout, process restart, and internal failure all use the same next-visible-Run recovery path. Missing or unknown effects from `write`, `edit`, or `bash` are labeled as uncertain filesystem or process effects without an accompanying instruction.
+The checkpoint remains internal to Chat. Its normalized cause is also stored on a preserved partial as `interruption_cause` beside `interrupted: true`, so internal result consumers such as Sub-Agents can distinguish a partial terminal result; both annotations are removed from Provider requests. User Cancel, provider failure, network failure, timeout, process restart, and internal failure all use the same next-visible-Run recovery path. Missing or unknown effects from `write`, `edit`, or `bash` are labeled as uncertain filesystem or process effects without an accompanying instruction.
 
 ## Streaming recovery
 
@@ -45,7 +45,7 @@ The checkpoint and its interruption cause remain internal to Chat and are not pr
 - After a normalized finish delta, a later transport/provider failure accepts the completed response; later Usage deltas already accumulated remain valid.
 - Before visible output, unsupported streaming falls back once to non-streaming; retryable transient failures restart the stream while the two-restart budget remains; other failures propagate. Restart attempts persist no discarded partial state.
 - After visible content, Chat never replays the request because that would duplicate output. It finalizes an `interrupted` Assistant message, drops any in-flight unexecuted Tool Call, preserves the partial answer, and leaves Continuation for the next visible Run. A reasoning-only interruption propagates while the checkpoint retains readable reasoning.
-- Remote Providers use the per-chunk stall guard. Loopback, localhost/local-domain, RFC1918 private, and link-local base URLs are exempt so long local prefill does not look like a dead stream.
+- Remote Providers use a 180-second initial normalized-delta stall guard and, after the first normalized delta, a 900-second active per-delta guard for long Reasoning and Tool-call generation. Every normalized delta resets the current window; raw transport bytes, SSE comments/heartbeats, and incomplete SSE events do not reach this guard and therefore cannot reset it. Loopback, localhost/local-domain, RFC1918 private, and link-local base URLs are exempt so long local prefill does not look like a dead stream.
 
 ## Cancellation
 
