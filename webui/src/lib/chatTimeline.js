@@ -945,6 +945,17 @@ function appendHistoryRunSummary(assistantRun, message) {
   assistantRun.endTimestamp = timing?.completed_at ?? assistantRun.endTimestamp;
   assistantRun.durationMs = timingDurationMs(timing) ?? assistantRun.durationMs;
   assistantRun.runSummaryMessage = message;
+  if (assistantRun.status === CHAT_STATUS_CANCELLED) {
+    // Live run_cancelled events settle every still-open Tool row. History must
+    // project the same terminal truth after those transient events are pruned;
+    // otherwise a cancelled foreground Sub-Agent is rebuilt as "starting"
+    // forever even though both Parent and Child Runs already stopped.
+    markPendingToolsCancelled(assistantRun, {
+      type: 'run_cancelled',
+      timestamp: message.timestamp,
+      payload: { status: CHAT_STATUS_CANCELLED },
+    });
+  }
 }
 
 function appendTextSection(

@@ -583,3 +583,63 @@ describe('per-tool-call user cancel projection', () => {
     expect(run.status).not.toBe('failed');
   });
 });
+
+describe('cancelled history projection', () => {
+  it('settles only pending Tool rows when a cancelled Run reloads from history', () => {
+    const chatState = createChatState();
+    const sessionState = ensureSessionState(chatState, 'alpha', 'session-1');
+    loadHistory(sessionState, [
+      { id: 'user-1', role: 'user', content: 'Run both' },
+      {
+        id: 'assistant-tools',
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: 'call-read',
+            name: 'read',
+            arguments: { path: 'README.md' },
+          },
+          {
+            id: 'call-subagent',
+            name: 'subagent',
+            arguments: {
+              agent_id: 'researcher',
+              background: false,
+              content: 'Research the API',
+            },
+          },
+        ],
+      },
+      {
+        id: 'tool-read',
+        role: 'tool',
+        tool_call_id: 'call-read',
+        name: 'read',
+        content: JSON.stringify({
+          ok: true,
+          error: null,
+          data: { content: 'done' },
+          artifacts: [],
+        }),
+      },
+      {
+        id: 'summary-1',
+        role: 'run_summary',
+        run_id: 'run-1',
+        status: 'cancelled',
+        timestamp: '2026-07-27T09:14:23Z',
+      },
+    ]);
+
+    const items = visibleTimelineItemsForRender(sessionState);
+    const run = items.find((item) => item.type === 'assistant_run');
+    const toolsByName = Object.fromEntries(
+      run.tools.map((tool) => [tool.name, tool]),
+    );
+
+    expect(run.status).toBe('cancelled');
+    expect(toolsByName.read.status).toBe('success');
+    expect(toolsByName.subagent.status).toBe('cancelled');
+  });
+});
