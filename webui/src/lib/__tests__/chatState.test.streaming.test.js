@@ -921,7 +921,7 @@ describe('chat state helpers', () => {
     ]);
   });
 
-  it('clears streaming run events on terminal cleanup', () => {
+  it('keeps the final streamed answer visible when completion arrives before canonical output', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -938,15 +938,41 @@ describe('chat state helpers', () => {
       sequence: 1,
       payload: { content_delta: 'Draft' },
     });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_delta',
+      run_id: 'run-one',
+      sequence: 2,
+      payload: {
+        tool_call_id: 'call-incomplete',
+        name_delta: 'read',
+      },
+    });
 
     appendRunEvent(sessionState, {
       type: 'run_completed',
       run_id: 'run-one',
-      sequence: 2,
+      sequence: 3,
       payload: { status: CHAT_STATUS_COMPLETED },
     });
 
-    expect(sessionState.streamingRunEvents).toEqual([]);
+    expect(sessionState.streamingRunEvents).toEqual([
+      expect.objectContaining({
+        type: 'assistant_output_delta',
+        payload: expect.objectContaining({ content_delta: 'Draft' }),
+      }),
+    ]);
+    expect(visibleTimelineItemsForRender(sessionState)).toEqual([
+      expect.objectContaining({
+        type: 'assistant_run',
+        status: CHAT_STATUS_COMPLETED,
+        outputs: [
+          expect.objectContaining({
+            content: 'Draft',
+            streaming: true,
+          }),
+        ],
+      }),
+    ]);
   });
 
   it('tracks the highest contiguous active-run sequence for replay handoff', () => {

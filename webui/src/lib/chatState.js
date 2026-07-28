@@ -41,6 +41,10 @@ export const TERMINAL_RUN_EVENTS = new Set([
   'run_failed',
   'run_cancelled',
 ]);
+const TERMINAL_VISIBLE_DRAFT_EVENT_TYPES = new Set([
+  RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
+  RUN_EVENT_REASONING_DELTA,
+]);
 
 const HISTORY_INITIAL_LIMIT = 100;
 const HISTORY_OLDER_LIMIT = 50;
@@ -1085,9 +1089,15 @@ export function finishRun(sessionState, event) {
   sessionState.status = status ?? terminalStatus(type);
   sessionState.streamStatus = CHAT_STATUS_IDLE;
   sessionState.streamError = '';
-  sessionState.streamingRunEvents = [];
-  sessionState.streamingPhase = 0;
-  sessionState.seenStreamingEventKeys = new Set();
+  sessionState.streamingRunEvents = sessionState.streamingRunEvents.filter(
+    (streamingEvent) =>
+      TERMINAL_VISIBLE_DRAFT_EVENT_TYPES.has(streamingEvent.type),
+  );
+  // The terminal lifecycle summary can arrive over WebSocket before the
+  // canonical Assistant output reaches this client over SSE. Keep the
+  // compressed text deltas as the visible fallback until stable output,
+  // History, or the next Run replaces them; clearing them here makes a
+  // completed answer disappear even though it is durable on the server.
   if (type === 'run_failed') {
     sessionState.error = event?.payload?.error ?? 'Run failed';
   }
