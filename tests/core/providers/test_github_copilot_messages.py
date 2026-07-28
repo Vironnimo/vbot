@@ -755,7 +755,7 @@ def test_stream_normalizes_tool_use_stop_reason_to_tool_calls_finish() -> None:
     ]
 
 
-def test_stream_falls_back_to_tool_calls_finish_when_tool_use_block_is_present() -> None:
+def test_stream_preserves_unknown_finish_when_tool_use_block_is_present() -> None:
     state = CopilotMessagesStreamState()
 
     events: list[dict[str, Any]] = [
@@ -781,7 +781,7 @@ def test_stream_falls_back_to_tool_calls_finish_when_tool_use_block_is_present()
             "name_delta": "search",
             "arguments_delta": "",
         },
-        {"type": "finish", "reason": "tool_calls"},
+        {"type": "finish", "reason": "unknown"},
     ]
 
 

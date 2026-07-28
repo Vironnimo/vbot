@@ -38,6 +38,7 @@ from core.tools import (
     tool_success,
 )
 from core.tools import JsonObject as ToolJsonObject
+from core.utils.errors import ProviderError
 from tests.core.chat.chat_loop_support import (
     StubAdapter,
     StubAgent,
@@ -819,6 +820,148 @@ async def test_invalid_arguments_can_be_corrected_without_running_handler_twice(
     assert tool_results[0]["error"]["code"] == "invalid_arguments"
     assert "arguments/city" in tool_results[0]["error"]["message"]
     assert tool_results[1] == tool_success({"city": "Berlin"})
+
+
+@pytest.mark.asyncio
+async def test_output_truncated_tool_calls_persist_failures_without_handler_side_effects(
+    tmp_path: Path,
+) -> None:
+    invocations: list[ToolJsonObject] = []
+
+    def write_handler(
+        _context: ToolContext,
+        arguments: ToolJsonObject,
+    ) -> ToolJsonObject:
+        invocations.append(arguments)
+        return tool_success({"written": arguments["path"]})
+
+    tools = ToolRegistry()
+    tools.register(
+        "write_probe",
+        "Write a probe file.",
+        {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "minLength": 1},
+                "content": {"type": "string"},
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+        write_handler,
+    )
+    adapter = StubAdapter(
+        [
+            {
+                "content": "I started preparing both writes.",
+                "terminal_outcome": "output_truncated",
+                "tool_calls": [
+                    {
+                        "id": "call_first",
+                        "name": "write_probe",
+                        "arguments": {"path": "first.txt"},
+                    },
+                    {
+                        "id": "call_second",
+                        "name": "write_probe",
+                        "arguments": {"path": "second.txt", "content": ""},
+                    },
+                ],
+            },
+            {"content": "I will reissue complete calls if needed.", "tool_calls": None},
+        ]
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=StubAgent(
+            id="coder",
+            model="openai/gpt-5.2",
+            allowed_tools=["write_probe"],
+        ),
+        adapter=adapter,
+        tools=tools,
+    )
+
+    assistant = await build_chat_loop(runtime).send(
+        "coder",
+        "Write both files",
+        session_id="session-one",
+    )
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    tool_messages = [message for message in messages if message.role == "tool"]
+    assert assistant.content == "I will reissue complete calls if needed."
+    assert invocations == []
+    assert [message.tool_call_id for message in tool_messages] == [
+        "call_first",
+        "call_second",
+    ]
+    assert [
+        json.loads(cast(str, message.content))["error"]["code"] for message in tool_messages
+    ] == [
+        "tool_call_truncated",
+        "tool_call_truncated",
+    ]
+    assert [message["tool_call_id"] for message in adapter.requests[1]["messages"][-2:]] == [
+        "call_first",
+        "call_second",
+    ]
+    assert messages[1].content == "I started preparing both writes."
+    assert persisted_roles(messages) == [
+        "user",
+        "assistant",
+        "tool",
+        "tool",
+        "assistant",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_outcome", ["content_filtered", "error", "unknown"])
+async def test_unsafe_terminal_outcome_fails_closed_before_tool_handler(
+    tmp_path: Path,
+    terminal_outcome: str,
+) -> None:
+    invocation_count = 0
+
+    def handler(_context: ToolContext, _arguments: ToolJsonObject) -> ToolJsonObject:
+        nonlocal invocation_count
+        invocation_count += 1
+        return tool_success({})
+
+    tools = ToolRegistry()
+    tools.register("probe", "Probe.", {"type": "object"}, handler)
+    adapter = StubAdapter(
+        [
+            {
+                "content": "unsafe partial",
+                "terminal_outcome": terminal_outcome,
+                "tool_calls": [{"id": "call_probe", "name": "probe", "arguments": {}}],
+            }
+        ]
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=StubAgent(
+            id="coder",
+            model="openai/gpt-5.2",
+            allowed_tools=["probe"],
+        ),
+        adapter=adapter,
+        tools=tools,
+    )
+
+    with pytest.raises(ProviderError, match="unsafe terminal outcome"):
+        await build_chat_loop(runtime).send(
+            "coder",
+            "Run probe",
+            session_id="session-one",
+        )
+
+    messages = runtime.chat_sessions.get("coder", "session-one").load()
+    assert invocation_count == 0
+    assert persisted_roles(messages) == ["user", "assistant", "tool", "error"]
+    assert json.loads(cast(str, messages[2].content))["error"]["code"] == "tool_call_rejected"
 
 
 @pytest.mark.asyncio

@@ -74,7 +74,38 @@ class TestSendSuccess:
             "tool_calls": [
                 {"id": "call_abc", "name": "get_weather", "arguments": {"city": "Berlin"}}
             ],
+            "terminal_outcome": "unknown",
         }
+
+    @pytest.mark.parametrize(
+        ("finish_reason", "expected_outcome"),
+        [
+            ("stop", "stop"),
+            ("tool_calls", "tool_calls"),
+            ("length", "output_truncated"),
+            ("content_filter", "content_filtered"),
+            ("network_error", "error"),
+            ("provider_added_reason", "unknown"),
+        ],
+    )
+    def test_normalize_response_preserves_terminal_outcome(
+        self,
+        openai_adapter,
+        finish_reason,
+        expected_outcome,
+    ):
+        response = {
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": "partial"},
+                    "finish_reason": finish_reason,
+                }
+            ]
+        }
+
+        normalized = openai_adapter.normalize_response(response)
+
+        assert normalized["terminal_outcome"] == expected_outcome
 
     def test_normalize_response_drops_tool_call_for_malformed_tool_json(self, openai_adapter):
         """Malformed provider tool-call JSON is ignored instead of becoming fake empty arguments."""

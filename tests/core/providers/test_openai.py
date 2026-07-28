@@ -874,6 +874,7 @@ async def test_default_mode_normalize_response_falls_back_to_openai_compatible()
         "reasoning": None,
         "reasoning_meta": None,
         "tool_calls": None,
+        "terminal_outcome": "unknown",
     }
 
 

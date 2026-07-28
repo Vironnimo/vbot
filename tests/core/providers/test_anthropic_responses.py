@@ -331,7 +331,34 @@ class TestSendSuccess:
             "tool_calls": [
                 {"id": "toolu_abc", "name": "get_weather", "arguments": {"city": "Berlin"}}
             ],
+            "terminal_outcome": "unknown",
         }
+
+    @pytest.mark.parametrize(
+        ("stop_reason", "expected_outcome"),
+        [
+            ("end_turn", "stop"),
+            ("tool_use", "tool_calls"),
+            ("max_tokens", "output_truncated"),
+            ("refusal", "content_filtered"),
+            ("pause_turn", "error"),
+            ("provider_added_reason", "unknown"),
+        ],
+    )
+    def test_normalize_response_preserves_terminal_outcome(
+        self,
+        anthropic_adapter,
+        stop_reason,
+        expected_outcome,
+    ):
+        response = {
+            "content": [{"type": "text", "text": "partial"}],
+            "stop_reason": stop_reason,
+        }
+
+        normalized = anthropic_adapter.normalize_response(response)
+
+        assert normalized["terminal_outcome"] == expected_outcome
 
     def test_normalize_response_preserves_redacted_thinking_block(self, anthropic_adapter):
         """Opaque redacted thinking metadata is preserved unchanged."""

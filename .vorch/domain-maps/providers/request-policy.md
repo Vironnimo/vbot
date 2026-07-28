@@ -4,11 +4,19 @@ Read this reference only for Adapter request/response/SSE translation, shared HT
 
 ## Adapter ownership
 
-`ProviderAdapter` defines `send()`, `stream()`, `normalize_response()`, `aclose()`, and the per-request policy hooks. `stream()` yields normalized delta types for content, reasoning, Tool calls, opaque reasoning metadata, usage, finish, and transport-only heartbeat; raw Provider frames stay private.
+`ProviderAdapter` defines `send()`, `stream()`, `normalize_response()`, `aclose()`, and the per-request policy hooks. `stream()` yields normalized delta types for content, reasoning, Tool calls, opaque reasoning metadata, usage, finish, and transport-only heartbeat; raw Provider frames stay private. Every production response and finish normalizes Provider stop state to `stop`, `tool_calls`, `output_truncated`, `content_filtered`, `error`, or `unknown`.
 
 `OpenAICompatibleAdapter` deeply owns generic Chat Completions mechanics. `AnthropicCompatibleAdapter` deeply owns Messages-compatible requests, content blocks, SSE, usage/cache normalization, and retry. Concrete Provider Adapters extend or compose those mechanics only for verified Provider differences. A Provider-owned router may inspect its injected Model lookup and Connection mode, but Runtime never selects an inner wire per Model.
 
 `normalize_response(response, *, model_id=None)` produces canonical assistant fields. The optional Model id supports data-driven wire selectors; shape inference is compatibility fallback only. Opaque `reasoning_meta` crosses only the Adapter/Chat boundary and is preserved, not interpreted.
+
+## Tool-call terminal safety and correlation
+
+Only the canonical `tool_calls` terminal outcome authorizes dispatch. When a Provider ends with `output_truncated`, Chat persists the partial Assistant turn and emits ordered, correlated `tool_call_truncated` Results without invoking Tool handlers or Extensions, then lets the Model recover. `content_filtered`, `error`, `unknown`, and inconsistent outcome/call combinations likewise produce correlated `tool_call_rejected` Results without dispatch before failing the Model step. Missing outcomes remain inferable only for source compatibility with legacy third-party/test Adapters; an explicit unrecognized outcome becomes `unknown` and fails closed.
+
+OpenAI-compatible streamed Tool fragments carry a stable slot independently of the Provider id. The accumulator groups by that slot, adopts a real id whenever a later fragment supplies it, and synthesizes a deterministic fallback only when finalization has no Provider id.
+
+Canonical Session Tool-call ids are Provider-origin evidence and remain immutable. `normalize_tool_call_ids()` deep-copies the outgoing request view, preserves already-valid unused ids, and deterministically allocates collision-free target-wire ids while rewriting each Assistant Tool Call together with the matching Results in its immediately following Tool batch. The explicit profiles are Anthropic Messages (`[A-Za-z0-9_-]`, at most 64 characters), Mistral (exactly 9 alphanumeric characters), and Responses (`[A-Za-z0-9_-]`, at most 64 characters, no trailing underscore); ordinary OpenAI Chat requests do not use this transform. Responses replay also rewrites matching `reasoning_meta.response_output` function-call `call_id` values and removes a Provider-owned item `id` only when the call identity changed, preventing a foreign item from falsely pairing with opaque reasoning.
 
 ## Reasoning and CoT
 
