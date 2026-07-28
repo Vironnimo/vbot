@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
@@ -961,6 +962,7 @@ def test_shell_detection_uses_native_shell(monkeypatch: pytest.MonkeyPatch) -> N
 
     assert bash_module._shell_argv("Write-Output hello") == [
         "pwsh",
+        "-NonInteractive",
         "-Command",
         "Write-Output hello",
     ]
@@ -968,6 +970,31 @@ def test_shell_detection_uses_native_shell(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(bash_module.sys, "platform", "linux")
 
     assert bash_module._shell_argv("echo hello") == ["bash", "-c", "echo hello"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform != "win32", reason="PowerShell-specific regression")
+async def test_windows_unknown_pipeline_command_exits_non_interactively(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(bash_module, "_cached_shell_env", dict(os.environ))
+    context = make_context(tmp_path, nesting_depth=1)
+
+    result = await asyncio.wait_for(
+        bash_handler(
+            context,
+            {"command": "Get-ChildItem . | __vbot_missing_pipeline_command__"},
+            manager,
+        ),
+        timeout=5,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "completed"
+    assert result["data"]["exit_code"] != 0
+    assert "__vbot_missing_pipeline_command__" in result["data"]["output"]
 
 
 def test_shell_env_probe_requests_windowless_process_group(
