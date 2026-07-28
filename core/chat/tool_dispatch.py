@@ -251,11 +251,11 @@ class _EmittingToolRegistry(ToolRegistry):
                 result.get("ok"),
                 error_code,
             )
-            # Do not discard a completed tool result when the run is
-            # cancelled: the executor already returned the result, the
-            # per-tool cancel callback was the proper signal to interrupt
-            # the handler, and the chat loop's persist loop will record
-            # the result before honoring the run cancel.
+            # Return a completed result even when cancellation was requested so
+            # a cooperatively terminating batch can still persist it. A forceful
+            # Run cancellation may stop the batch before Chat receives every
+            # sibling; the next Provider request repairs those missing Results
+            # from durable Session evidence instead.
             self._run.emit(
                 TOOL_CALL_RESULT_EVENT,
                 {

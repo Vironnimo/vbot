@@ -266,6 +266,14 @@ class Run:
             return
         self.cancel_reason = reason
         self.cancel_requested = True
+        # A Run cancel subsumes every still-active per-call cancel. Fire those
+        # callbacks before cancelling the executor task so Tool-owned processes,
+        # connections, and other resources receive their cleanup signal even
+        # when they are not managed by the Run-level ProcessManager scope.
+        # Registration order is stable and completed calls have already cleared
+        # their entries, so only active calls participate.
+        for tool_call_id in list(self._tool_cancel_callbacks):
+            self.cancel_tool_call(tool_call_id)
         for callback in list(self._cancel_callbacks):
             _schedule_callback(callback)
         if self._task is not None and self._execution_started:
@@ -273,6 +281,13 @@ class Run:
 
     def register_tool_cancel(self, tool_call_id: str, callback: CancelCallback) -> None:
         """Register a per-tool-call cancel callback without cancelling the run."""
+        if self.cancel_requested:
+            # Close the same-tick registration race with ``request_cancel``:
+            # late registration belongs to an already-cancelled Run and must
+            # receive the same cleanup signal rather than becoming an orphan.
+            self._tool_cancel_callbacks[tool_call_id] = _CANCELLED_TOOL_CALL
+            _schedule_callback(callback)
+            return
         self._tool_cancel_callbacks[tool_call_id] = callback
 
     def cancel_tool_call(self, tool_call_id: str) -> bool:
