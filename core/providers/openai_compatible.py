@@ -80,8 +80,9 @@ CHAT_COMPLETIONS_ENDPOINT = "/chat/completions"
 OPENAI_REASONING_EFFORTS = {"low", "medium", "high"}
 OPENAI_REASONING_EFFORTS_WITH_NONE = {"none", *OPENAI_REASONING_EFFORTS}
 OPENAI_NONE_REASONING_PROVIDER_IDS = {"openai"}
-OPENAI_REASONING_KEYS = ("reasoning", "reasoning_content", "thinking")
+OPENAI_REASONING_KEYS = ("reasoning", "reasoning_content", "reasoning_text", "thinking")
 OPENAI_REASONING_META_KEYS = ("encrypted_content", "reasoning_details")
+_OPENAI_STREAM_REASONING_DETAILS_STATE_KEY = "openai_reasoning_details"
 # The provider-scoped metadata field naming WHICH wire field carries the
 # response reasoning (Phase 5, projected from models.dev ``interleaved``):
 # ``{field: "reasoning_content"}`` → visible text, ``{field: "reasoning_details"}``
@@ -724,13 +725,18 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         tool_call_slots: set[int],
         normalization_state: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
-        del normalization_state
-        return _normalize_openai_stream_chunk(raw_chunk, tool_call_slots)
+        return _normalize_openai_stream_chunk(
+            raw_chunk,
+            tool_call_slots,
+            normalization_state=normalization_state,
+        )
 
 
 def _normalize_openai_stream_chunk(
     chunk: dict[str, Any],
     tool_call_slots: set[int],
+    *,
+    normalization_state: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     error = chunk.get("error")
     if isinstance(error, dict):
@@ -741,7 +747,13 @@ def _normalize_openai_stream_chunk(
     for choice in _stream_choices(chunk):
         delta = choice.get("delta", {})
         if isinstance(delta, dict):
-            normalized_deltas.extend(_normalize_openai_message_delta(delta, tool_call_slots))
+            normalized_deltas.extend(
+                _normalize_openai_message_delta(
+                    delta,
+                    tool_call_slots,
+                    normalization_state=normalization_state,
+                )
+            )
 
         finish_reason = choice.get("finish_reason")
         if finish_reason is not None:
@@ -774,6 +786,8 @@ def _stream_choices(chunk: dict[str, Any]) -> list[dict[str, Any]]:
 def _normalize_openai_message_delta(
     delta: dict[str, Any],
     tool_call_slots: set[int],
+    *,
+    normalization_state: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     normalized_deltas: list[dict[str, Any]] = []
     content = delta.get("content")
@@ -786,6 +800,10 @@ def _normalize_openai_message_delta(
 
     reasoning_meta = _extract_openai_reasoning_meta(delta)
     if reasoning_meta:
+        reasoning_meta = _accumulate_openai_stream_reasoning_details(
+            reasoning_meta,
+            normalization_state,
+        )
         normalized_deltas.append({"type": "reasoning_meta", "reasoning_meta": reasoning_meta})
 
     normalized_deltas.extend(_normalize_openai_tool_call_deltas(delta, tool_call_slots))
@@ -1108,11 +1126,11 @@ def _extract_openai_reasoning(
 
     if preferred_field is not None and preferred_field not in OPENAI_REASONING_META_KEYS:
         value = message.get(preferred_field)
-        if isinstance(value, str):
+        if isinstance(value, str) and value:
             return value
     for key in OPENAI_REASONING_KEYS:
         value = message.get(key)
-        if isinstance(value, str):
+        if isinstance(value, str) and value:
             return value
     return None
 
@@ -1140,6 +1158,54 @@ def _extract_openai_reasoning_meta(
     ):
         meta[preferred_field] = message[preferred_field]
     return meta or None
+
+
+def _accumulate_openai_stream_reasoning_details(
+    reasoning_meta: dict[str, Any],
+    normalization_state: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Preserve separately streamed reasoning details in Provider order.
+
+    OpenAI-compatible gateways may emit one ``reasoning_details`` array per
+    sibling Tool Call. Chat intentionally treats reasoning metadata as opaque
+    and therefore shallow-merges normalized metadata deltas. Emit the complete
+    accumulated array from this Adapter so a later sibling cannot overwrite an
+    earlier detail. Details carrying a stable ``id`` update in place, retaining
+    first-seen order while allowing a Provider's cumulative snapshot to refine
+    an earlier fragment.
+    """
+
+    details = reasoning_meta.get("reasoning_details")
+    if normalization_state is None or not isinstance(details, list):
+        return reasoning_meta
+
+    accumulated = normalization_state.get(_OPENAI_STREAM_REASONING_DETAILS_STATE_KEY)
+    if not isinstance(accumulated, list):
+        accumulated = []
+        normalization_state[_OPENAI_STREAM_REASONING_DETAILS_STATE_KEY] = accumulated
+
+    for detail in details:
+        normalized_detail = dict(detail) if isinstance(detail, Mapping) else detail
+        detail_id = detail.get("id") if isinstance(detail, Mapping) else None
+        if isinstance(detail_id, str) and detail_id:
+            matching_index = next(
+                (
+                    index
+                    for index, existing in enumerate(accumulated)
+                    if isinstance(existing, Mapping) and existing.get("id") == detail_id
+                ),
+                None,
+            )
+            if matching_index is not None:
+                accumulated[matching_index] = normalized_detail
+                continue
+        accumulated.append(normalized_detail)
+
+    merged = dict(reasoning_meta)
+    merged["reasoning_details"] = [
+        dict(detail) if isinstance(detail, Mapping) else detail for detail in accumulated
+    ]
+    return merged
 
 
 def _apply_openai_reasoning_meta(

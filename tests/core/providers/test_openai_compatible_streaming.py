@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.chat.streaming import StreamingAccumulator
+
 from .openai_compatible_test_support import (
     API_KEY,
     OPENAI_CONFIG,
@@ -259,6 +261,87 @@ class TestStreamSSE:
                     "reasoning_details": reasoning_details,
                 },
             },
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_stream_preserves_separate_tool_reasoning_details_through_replay(
+        self,
+        openai_adapter,
+    ):
+        first_detail = {
+            "type": "reasoning.encrypted",
+            "id": "call_first",
+            "data": "opaque-first",
+        }
+        second_detail = {
+            "type": "reasoning.encrypted",
+            "id": "call_second",
+            "data": "opaque-second",
+        }
+        chunks = [
+            {"choices": [{"delta": {"reasoning_details": [first_detail]}}]},
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_first",
+                                    "function": {"name": "first", "arguments": "{}"},
+                                },
+                                {
+                                    "index": 1,
+                                    "id": "call_second",
+                                    "function": {"name": "second", "arguments": "{}"},
+                                },
+                            ]
+                        }
+                    }
+                ]
+            },
+            {"choices": [{"delta": {"reasoning_details": [second_detail]}}]},
+            {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+        ]
+        sse_body = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks)
+        sse_body += "data: [DONE]\n\n"
+        respx.post(OPENAI_URL).mock(
+            return_value=httpx.Response(
+                200,
+                text=sse_body,
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+
+        accumulator = StreamingAccumulator()
+        async for delta in openai_adapter.stream(SAMPLE_MESSAGES, model_id="gpt-5.2"):
+            accumulator.add_delta(delta)
+
+        fields = accumulator.finalize_assistant_fields()
+        assert fields.reasoning_meta == {
+            "reasoning_details": [first_detail, second_detail],
+        }
+        assert [call["id"] for call in fields.tool_calls or []] == [
+            "call_first",
+            "call_second",
+        ]
+
+        payload = openai_adapter._build_payload(
+            [
+                {
+                    "role": "assistant",
+                    "content": fields.content,
+                    "reasoning": fields.reasoning,
+                    "reasoning_meta": fields.reasoning_meta,
+                    "tool_calls": fields.tool_calls,
+                }
+            ],
+            model_id="gpt-5.2",
+        )
+        assert payload["messages"][0]["reasoning_details"] == [
+            first_detail,
+            second_detail,
         ]
 
     @respx.mock
