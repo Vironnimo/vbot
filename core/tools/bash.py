@@ -524,7 +524,10 @@ def _resolve_workdir(context: ToolContext, workdir: object) -> Path:
 
 def _shell_argv(command: str) -> list[str]:
     if sys.platform == "win32":
-        return ["pwsh", "-Command", command]
+        # stdin stays open so backgrounded native programs can still receive
+        # input through the process tool. Prevent PowerShell itself from
+        # treating that pipe as an interactive host after a command failure.
+        return ["pwsh", "-NonInteractive", "-Command", command]
     return ["bash", "-c", command]
 
 
