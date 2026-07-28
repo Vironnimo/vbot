@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import string
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
@@ -58,6 +59,35 @@ _ALPHANUMERIC_TOOL_CALL_ID_CHARACTERS = frozenset(string.ascii_letters + string.
 _DASH_UNDERSCORE_TOOL_CALL_ID_CHARACTERS = frozenset(string.ascii_letters + string.digits + "_-")
 _TOOL_CALL_ID_HASH_LENGTH = 12
 _RESPONSES_OUTPUT_META_KEY = "response_output"
+_TOOL_RESULT_ENVELOPE_KEYS = frozenset({"ok", "error", "data", "artifacts"})
+
+
+def canonical_tool_result_is_error(message: Mapping[str, Any]) -> bool:
+    """Return whether a canonical Tool message carries a failure envelope.
+
+    Provider Adapters use this request-only projection to add native error
+    signals without changing the serialized Tool Result content or teaching
+    Chat about Provider wire fields. Legacy/non-envelope Tool content remains
+    ordinary content and therefore receives no native failure flag.
+    """
+
+    if message.get("role") != "tool":
+        return False
+    content = message.get("content")
+    if not isinstance(content, str):
+        return False
+    try:
+        result = json.loads(content)
+    except (TypeError, ValueError):
+        return False
+    return (
+        isinstance(result, Mapping)
+        and frozenset(result) == _TOOL_RESULT_ENVELOPE_KEYS
+        and result.get("ok") is False
+        and result.get("data") is None
+        and isinstance(result.get("error"), Mapping)
+        and isinstance(result.get("artifacts"), list)
+    )
 
 
 @dataclass(frozen=True)
