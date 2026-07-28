@@ -26,21 +26,7 @@ def memory_handler(
     service: MemoryService,
     tracker: _MemoryThrashTracker | None = None,
 ) -> JsonObject:
-    if "action" in arguments:
-        fields = dict(arguments)
-        operation = fields.pop("action")
-    elif len(arguments) == 1:
-        operation, fields = next(iter(arguments.items()))
-        if not isinstance(fields, dict):
-            return _memory_handler(context, arguments, service, tracker)
-    else:
-        return _memory_handler(context, arguments, service, tracker)
-    return _memory_handler(
-        context,
-        {"request": {"operation": operation, **fields}},
-        service,
-        tracker,
-    )
+    return _memory_handler(context, arguments, service, tracker)
 
 
 def make_context(data_root: Path) -> ToolContext:
@@ -90,16 +76,11 @@ def test_register_memory_tool_exposes_provider_schema(tmp_path: Path) -> None:
     assert tool.parameters == MEMORY_TOOL_PARAMETERS
     definition = registry.provider_definitions(["memory"])[0]
     assert definition["name"] == "memory"
-    branches = definition["parameters"]["properties"]["request"]["anyOf"]
-    operations = {branch["properties"]["operation"]["enum"][0]: branch for branch in branches}
-    assert set(operations) == {"list", "add", "replace", "remove"}
-    assert operations["add"]["required"] == ["operation", "scope", "content"]
-    assert operations["replace"]["required"] == [
-        "operation",
-        "scope",
-        "entry_id",
-        "content",
-    ]
+    parameters = definition["parameters"]
+    assert parameters["required"] == ["action", "scope"]
+    assert parameters["additionalProperties"] is False
+    assert parameters["properties"]["action"]["enum"] == ["list", "add", "replace", "remove"]
+    assert set(parameters["properties"]) == {"action", "scope", "content", "entry_id"}
 
 
 def test_memory_tool_adds_and_lists_user_entries(tmp_path: Path) -> None:
@@ -124,19 +105,30 @@ def test_memory_tool_adds_and_lists_user_entries(tmp_path: Path) -> None:
     assert "Prefers direct answers." in (context.workspace / "USER.md").read_text(encoding="utf-8")
 
 
-def test_memory_tool_accepts_canonical_operation_objects(tmp_path: Path) -> None:
+def test_memory_tool_rejects_retired_operation_shapes(tmp_path: Path) -> None:
     context = make_context(tmp_path)
     service = MemoryService()
 
-    add_result = memory_handler(
+    nested_result = memory_handler(
+        context,
+        {
+            "request": {
+                "operation": "add",
+                "scope": "user",
+                "content": "Prefers direct answers.",
+            }
+        },
+        service,
+    )
+    operation_key_result = memory_handler(
         context,
         {"add": {"scope": "user", "content": "Prefers direct answers."}},
         service,
     )
-    list_result = memory_handler(context, {"list": {"scope": "user"}}, service)
 
-    assert_success(add_result)
-    assert_success(list_result)
+    for result in (nested_result, operation_key_result):
+        error = assert_failure(result, "invalid_arguments")
+        assert "action must be one of" in error["message"]
 
 
 def test_memory_tool_replaces_and_removes_agent_entries(tmp_path: Path) -> None:

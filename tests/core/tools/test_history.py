@@ -49,16 +49,7 @@ def _call(
     session: ChatSession,
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
-    canonical = arguments
-    if "action" in arguments:
-        fields = dict(arguments)
-        operation = fields.pop("action")
-        canonical = {"request": {"operation": operation, **fields}}
-    elif len(arguments) == 1:
-        operation, fields = next(iter(arguments.items()))
-        if isinstance(fields, dict):
-            canonical = {"request": {"operation": operation, **fields}}
-    return cast(dict[str, Any], make_history_handler(manager)(_context(session.id), canonical))
+    return cast(dict[str, Any], make_history_handler(manager)(_context(session.id), arguments))
 
 
 def _data(result: dict[str, Any]) -> dict[str, Any]:
@@ -74,7 +65,7 @@ def _serialized_size(result: dict[str, Any]) -> int:
     return len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
-def test_registration_is_session_scoped_and_schema_is_strict(tmp_path: Path) -> None:
+def test_registration_is_session_scoped_and_schema_is_closed(tmp_path: Path) -> None:
     manager = ChatSessionManager(tmp_path)
     registry = ToolRegistry()
 
@@ -83,31 +74,32 @@ def test_registration_is_session_scoped_and_schema_is_strict(tmp_path: Path) -> 
     tool = registry.get(HISTORY_TOOL_NAME)
     assert tool.session_scoped is True
     assert tool.parameters["additionalProperties"] is False
-    assert tool.parameters["required"] == ["request"]
-    branches = tool.parameters["properties"]["request"]["anyOf"]
-    operations = {branch["properties"]["operation"]["enum"][0] for branch in branches}
-    assert operations == {
+    assert tool.parameters["required"] == ["action"]
+    assert tool.parameters["properties"]["action"]["enum"] == [
         "overview",
         "search",
         "read",
         "around",
+    ]
+    assert set(tool.parameters["properties"]) == {
+        "action",
+        "cursor",
+        "query",
+        "message_id",
+        "checkpoint",
+        "roles",
+        "match",
+        "direction",
+        "limit",
+        "before",
+        "after",
     }
-    search_schema = next(
-        branch for branch in branches if branch["properties"]["operation"]["enum"] == ["search"]
-    )
-    around_schema = next(
-        branch for branch in branches if branch["properties"]["operation"]["enum"] == ["around"]
-    )
-    assert search_schema["required"] == ["operation", "query"]
-    assert around_schema["required"] == ["operation", "message_id"]
     display = registry.display_for_call(
         HISTORY_TOOL_NAME,
         {
-            "request": {
-                "operation": "search",
-                "query": "secret",
-                "cursor": "opaque",
-            }
+            "action": "search",
+            "query": "secret",
+            "cursor": "opaque",
         },
     )
     assert display["summary"] == "search · all earlier history"
@@ -125,7 +117,7 @@ def test_checkpoint_grant_and_cursor_lifecycle_across_restart_move_takeover_and_
     first = _data(
         make_history_handler(manager)(
             _context(source.id, agent_id="alpha"),
-            {"request": {"operation": "read", "limit": 1}},
+            {"action": "read", "limit": 1},
         )
     )
     cursor = first["next_cursor"]
@@ -134,21 +126,21 @@ def test_checkpoint_grant_and_cursor_lifecycle_across_restart_move_takeover_and_
     restarted_source = restarted.get("alpha", source.id)
     restarted_page = make_history_handler(restarted)(
         _context(source.id, agent_id="alpha"),
-        {"request": {"operation": "read", "cursor": cursor}},
+        {"action": "read", "cursor": cursor},
     )
     assert restarted_page["ok"] is True
 
     moved = asyncio.run(restarted.move("alpha", restarted_source.id, "beta"))
     moved_page = make_history_handler(restarted)(
         _context(moved.id, agent_id="beta"),
-        {"request": {"operation": "read", "cursor": cursor}},
+        {"action": "read", "cursor": cursor},
     )
     assert moved_page["ok"] is True
     moved.append(ChatMessage.agent_takeover(from_address="alpha", to_address="beta"))
     assert (
         make_history_handler(restarted)(
             _context(moved.id, agent_id="beta"),
-            {"request": {"operation": "overview"}},
+            {"action": "overview"},
         )["ok"]
         is True
     )
@@ -157,13 +149,13 @@ def test_checkpoint_grant_and_cursor_lifecycle_across_restart_move_takeover_and_
     assert (
         make_history_handler(restarted)(
             _context(fork.id, agent_id="gamma"),
-            {"request": {"operation": "overview"}},
+            {"action": "overview"},
         )["ok"]
         is True
     )
     fork_cursor_result = make_history_handler(restarted)(
         _context(fork.id, agent_id="gamma"),
-        {"request": {"operation": "read", "cursor": cursor}},
+        {"action": "read", "cursor": cursor},
     )
     assert fork_cursor_result["error"]["code"] == "invalid_cursor"
 
@@ -177,6 +169,24 @@ def test_checkpoint_free_session_returns_history_unavailable(tmp_path: Path) -> 
 
     assert result["ok"] is False
     assert result["error"]["code"] == "history_unavailable"
+
+
+def test_history_tool_rejects_retired_operation_shapes(tmp_path: Path) -> None:
+    manager = ChatSessionManager(tmp_path)
+    session = manager.create("agent", session_id="session-one")
+    session.append(_checkpoint())
+
+    nested_result = _call(
+        manager,
+        session,
+        {"request": {"operation": "overview"}},
+    )
+    operation_key_result = _call(manager, session, {"overview": {}})
+
+    for result in (nested_result, operation_key_result):
+        assert result["ok"] is False
+        assert result["error"]["code"] == "invalid_arguments"
+        assert "action must be one of" in result["error"]["message"]
 
 
 def test_overview_reports_fixed_checkpoint_sections(tmp_path: Path) -> None:
@@ -196,7 +206,7 @@ def test_overview_reports_fixed_checkpoint_sections(tmp_path: Path) -> None:
     ):
         session.append(message)
 
-    data = _data(_call(manager, session, {"overview": {}}))
+    data = _data(_call(manager, session, {"action": "overview"}))
 
     assert [item["checkpoint"] for item in data["items"]] == [1, 2]
     assert data["items"][0] == {
