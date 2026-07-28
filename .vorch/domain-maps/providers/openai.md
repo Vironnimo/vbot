@@ -42,6 +42,7 @@ Used when `connection_mode` is `None` or `chat_completions`. Delegates to `OpenA
 
 - A Model whose `metadata.openai.wire_policies.api-key.protocol` is `responses` uses public `POST /responses`; currently the durable profiles cover GPT-5.5, the `gpt-5.6` alias, and GPT-5.6 Sol/Terra/Luna. Unprofiled Platform Models remain on Chat Completions.
 - Requests use the shared Responses item protocol with `store: false`. Assistant history replays each original output item verbatim from `reasoning_meta.response_output`, preserving encrypted reasoning, ids, Tool items, ordering, and assistant `phase`; reconstruction exists only for legacy Sessions that predate item capture.
+- Structured `error`, `response.error`, and `response.failed` events use the shared Responses error classifier. Retryable failures may restart only before visible output; `response.incomplete` instead completes with a safe non-Tool terminal outcome.
 - Public Responses may send native PDF `input_file` parts. Its optional request-parameter set is distinct from the private subscription wire.
 
 ### Codex Responses (`subscription` connection — `mode: codex_responses`)
@@ -50,7 +51,7 @@ Used when `connection_mode` is `None` or `chat_completions`. Delegates to `OpenA
 - The Codex backend requires an `instructions` field. The adapter uses assembled system instructions when present and falls back to `You are a helpful assistant.`.
 - The Codex backend requires `store: false`; omission is rejected like an enabled store request.
 - The Codex backend rejects output-token limit parameters. The adapter filters both `max_tokens` and `max_output_tokens` instead of forwarding provider defaults or caller kwargs.
-- The wire requires `stream: true`, including when a caller uses the adapter's logical `send()` interface. `stream()` yields normalized vBot deltas; `send()` consumes exactly one Responses SSE request internally through `response.completed` and accumulates text, reasoning, metadata, usage, and Tool Call fragments across the whole stream into one canonical response. The live wire may leave `response.completed.response.output` empty even after emitting text deltas, so the completed object alone is not an answer. Do not retry a rejected non-streaming request as a stream — that would create a second billable request.
+- The wire requires `stream: true`, including when a caller uses the adapter's logical `send()` interface. `stream()` yields normalized vBot deltas; `send()` consumes exactly one Responses SSE request internally through a terminal event and accumulates text, reasoning, metadata, usage, Tool Call fragments, and the normalized terminal outcome across the whole stream into one canonical response. The live wire may leave `response.completed.response.output` empty even after emitting text deltas, so the completed object alone is not an answer. Do not retry a rejected non-streaming request as a stream — that would create a second billable request.
 
 ## OAuth (subscription connection)
 
@@ -146,6 +147,7 @@ The subscription usage fetcher in `core/providers/usage.py` (see `providers/usag
 - Other 4xx/5xx -> non-retryable `ProviderError`
 - Timeout -> `ProviderTimeoutError`
 - Connect errors -> `NetworkError`
+- Responses in-band errors are classified by exact structured code rather than message text; auth, rate-limit, timeout, transient service, and fatal codes enter the same exception taxonomy. Unknown codes fail closed as non-retryable.
 
 ## Constraints & Gotchas
 
