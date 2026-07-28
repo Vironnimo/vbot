@@ -4,7 +4,7 @@ Each skill below has a name and a description. Before starting a task, scan them
 
 Users may explicitly request a skill with `/skill-name` at the start of a message or `$skill-name` anywhere in a message. When matching `<skill_content>` is already present in the conversation, treat those tokens as activation hints and follow the loaded skill instructions without repeating the marker. The rest of such a message — everything besides the token — is the user's task or input for that skill; apply the skill to it.
 
-Loaded Skill content may list relative resource files under `scripts/`, `references/`, or `assets/`. Read one only when needed by calling `skill` again with the same `name` and that relative `file_path`. Use the announced absolute Skill directory only when another Tool needs a filesystem path to execute or otherwise access a file.
+Loaded Skill content lists files under `scripts/` with absolute paths so they can be passed directly to `bash`. Files under `references/` and `assets/` remain relative; read one only when needed by calling `skill` again with the same `name` and that relative `file_path`. To inspect a script as text instead of executing it, `skill(name, file_path)` also accepts its relative `scripts/...` path.
 
 {generated:skill_list}
 

@@ -53,7 +53,8 @@ SKILL_STATUS_FILE_LOADED = "file_loaded"
 # directory at activation time.
 SKILL_BASE_DIR_MARKER = "{baseDir}"
 SKILL_PATH_RESOLUTION_NOTE = (
-    "Read a listed resource with the skill tool using this skill name and its relative path."
+    "Scripts are listed with absolute paths for direct bash execution. Read relative "
+    "references and assets with the skill tool using this skill name and file_path."
 )
 SKILL_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -389,12 +390,20 @@ def _wrap_skill_content(skill_name: str, body: str, resources: list[str], direct
     lines.append(SKILL_PATH_RESOLUTION_NOTE)
     if resources:
         lines.append("<resources>")
-        lines.extend(f"- {resource}" for resource in resources)
+        lines.extend(
+            f"- {escape(_present_resource_path(resource, directory))}" for resource in resources
+        )
         lines.append("</resources>")
     if body:
         lines.append(body)
     lines.append("</skill_content>")
     return "\n".join(lines)
+
+
+def _present_resource_path(resource: str, directory: str) -> str:
+    if PurePosixPath(resource).parts[0] == "scripts":
+        return f"{directory}/{resource}"
+    return resource
 
 
 __all__ = [
