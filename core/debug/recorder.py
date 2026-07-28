@@ -1,16 +1,16 @@
 """Provider debug recorder for vBot.
 
-A single :class:`ProviderDebugRecorder` is attached to a provider's
-debug-aware HTTP client. The capturing transport (see
-``core/providers/_http_shared.py``) calls :meth:`begin_capture` for every
-request that flows over the wire and feeds raw request/response data into
-the returned :class:`_TraceCapture`. The capture builds one canonical
-trace (see ``.vorch/domain-maps/debug.md``), applies structured secret
-redaction, and persists it through :class:`DebugTraceStore`.
+A :class:`ProviderDebugRecorder` is attached to a Provider adapter. The
+shared HTTP capture transport (see ``core/providers/_http_shared.py``)
+calls :meth:`begin_capture` for HTTP requests; a stateful non-HTTP
+transport may feed the same recorder directly. The capture builds one
+canonical trace (see ``.vorch/domain-maps/debug.md``), applies structured
+secret redaction, and persists it through :class:`DebugTraceStore`.
 
-Adapters contain no capture logic — they only set the per-request
-:class:`DebugContext` via :meth:`set_context` and build their client
-through the shared factory.
+Adapters normally only set the per-request :class:`DebugContext` and build
+their client through the shared factory. OpenAI Subscription WebSocket
+streaming is the sanctioned direct-capture exception because its frames do
+not pass through httpx.
 """
 
 from __future__ import annotations
