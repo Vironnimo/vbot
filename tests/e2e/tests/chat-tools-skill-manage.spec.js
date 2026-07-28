@@ -17,7 +17,7 @@ test("an Agent can author, activate, and clean up a private Skill", async ({
     finalText: "Skill authoring lifecycle completed.",
   });
 
-  for (let index = 0; index < 11; index += 1) {
+  for (let index = 0; index < 5; index += 1) {
     await expectToolSucceeded(page, chat, "skill_manage", index);
   }
   const activation = await expectToolSucceeded(page, chat, "skill");
@@ -26,8 +26,13 @@ test("an Agent can author, activate, and clean up a private Skill", async ({
   await expect(activation).toContainText("Updated instruction marker.");
   await expect(activation).toContainText("references/evidence.txt");
 
-  const deletion = await expectToolSucceeded(page, chat, "skill_manage", 10);
+  const supportFile = await expectToolSucceeded(page, chat, "skill", 1);
+  await openToolRow(supportFile);
+  await expect(supportFile).toContainText("references/evidence.txt");
+  await expect(supportFile).toContainText("temporary support-file evidence");
+
+  const deletion = await expectToolSucceeded(page, chat, "skill_manage", 4);
   await openToolRow(deletion);
   await expect(deletion).toContainText("delete");
-  await expect(deletion).toContainText("was archived and can be recovered");
+  await expect(deletion).toContainText("deleted");
 });

@@ -1332,7 +1332,7 @@ async def test_identical_failed_tool_call_stops_run_on_eighth_call(tmp_path: Pat
 
     repeated_call = {
         "name": "skill_manage",
-        "arguments": {"begin": {"mode": "create"}},
+        "arguments": {"action": "create", "name": "demo"},
     }
     adapter = StubAdapter(
         [

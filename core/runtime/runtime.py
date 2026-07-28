@@ -143,7 +143,6 @@ _PACKAGE_NAME = "vbot"
 _UNKNOWN_VBOT_VERSION = "0.0.0+unknown"
 _SKILLS_DIRNAME = "skills"
 _AGENTS_DIRNAME = "agents"
-_ARCHIVE_DIRNAME = "archive"
 
 
 def _detect_vbot_version() -> str:
@@ -587,8 +586,6 @@ class Runtime:
         # the shared global pool (only when the user asked).
         self._skill_authoring = SkillAuthoringService(
             protected_roots=[resources_path / _SKILLS_DIRNAME],
-            drafts_root=storage.layout.skill_drafts,
-            archive_root=storage.data_dir / _ARCHIVE_DIRNAME,
         )
         register_skill_manage_tool(
             self._tools,

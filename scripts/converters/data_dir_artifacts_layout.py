@@ -63,9 +63,11 @@ LEGACY_DIRECTORY_MAPPINGS = (
     DirectoryMapping(Path(".tmp"), "atomic_temporary"),
     DirectoryMapping(Path("temp/bash"), "bash_temporary"),
     DirectoryMapping(Path("temp/subagents"), "subagent_temporary"),
-    DirectoryMapping(Path("temp/skill-drafts"), "skill_drafts"),
     DirectoryMapping(Path("provider-usage"), "provider_usage"),
 )
+# Skill drafts were temporary authoring state, not durable product data. The
+# retired legacy category remains allowlisted so conversion can proceed without
+# deleting it, but it is deliberately not moved into the canonical layout.
 _LEGACY_TEMP_CATEGORIES = frozenset({"bash", "subagents", "skill-drafts"})
 
 

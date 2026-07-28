@@ -19,7 +19,6 @@ DATA_DIRECTORY_RELATIVE_PATHS = (
     Path("artifacts/temp/atomic"),
     Path("artifacts/temp/bash"),
     Path("artifacts/temp/subagents"),
-    Path("artifacts/temp/skill-drafts"),
     Path("statistics"),
     Path("statistics/provider-usage"),
     Path("agents"),
@@ -89,10 +88,6 @@ class DataDirectoryLayout:
     @property
     def subagent_temporary(self) -> Path:
         return self.temporary / "subagents"
-
-    @property
-    def skill_drafts(self) -> Path:
-        return self.temporary / "skill-drafts"
 
     @property
     def statistics(self) -> Path:

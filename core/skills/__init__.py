@@ -4,10 +4,6 @@ from core.skills.authoring import (
     SkillAuthor,
     SkillAuthoringError,
     SkillAuthoringService,
-    SkillDraft,
-    SkillDraftMode,
-    SkillPackageFile,
-    SkillPackageInspection,
     SkillWriteResult,
 )
 from core.skills.requirements import SkillAvailability, SkillRequirements
@@ -38,11 +34,7 @@ __all__ = [
     "SkillAuthoringError",
     "SkillAuthoringService",
     "SkillAvailability",
-    "SkillDraft",
-    "SkillDraftMode",
     "SkillMetadata",
-    "SkillPackageFile",
-    "SkillPackageInspection",
     "SkillRegistry",
     "SkillRequirements",
     "SkillWriteResult",

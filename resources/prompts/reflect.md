@@ -10,14 +10,12 @@ Review this session and update two things: your memory of the user, and your ski
 
 Preference order — pick the earliest that fits:
 
-1. UPDATE A SKILL USED THIS SESSION (only if it is one of your own private Skills). If a Skill that was loaded or consulted covers the new learning, inspect it, begin an `update` draft, patch the relevant draft file, validate the complete package, and commit it.
-2. UPDATE ANOTHER OF YOUR EXISTING SKILLS. Call `skill` with no name to list your Skills; inspect the published candidate with `skill_manage`, begin an `update` draft, add the step or pitfall, broaden its triggers when appropriate, validate, and commit.
-3. ADD A SUPPORT FILE to an existing Skill inside an `update` draft: `references/<topic>.md` for condensed knowledge (quoted findings, API notes, error recipes — concise and task-focused), `scripts/<name>` for re-runnable helpers, `assets/<name>` for starter files meant to be copied and adapted. Use `put_file` with `content` for text or `source_path` for a byte-for-byte copy, and add a one-line pointer in `SKILL.md` so future Sessions find it. Validate and commit the complete package.
+1. UPDATE A SKILL USED THIS SESSION (only if it is one of your own private Skills). If a Skill that was loaded or consulted covers the new learning, read the relevant file with `skill`, then use `skill_manage` with `patch` or `edit`.
+2. UPDATE ANOTHER OF YOUR EXISTING SKILLS. Call `skill` with no name to list your Skills, read the candidate with `skill`, then add the step or pitfall and broaden its triggers when appropriate.
+3. ADD A SUPPORT FILE to an existing Skill: `references/<topic>.md` for condensed knowledge (quoted findings, API notes, error recipes — concise and task-focused), `scripts/<name>` for re-runnable text helpers, `assets/<name>` for text starter files meant to be copied and adapted. Use `write_file` with UTF-8 `file_content`, then add a one-line pointer in `SKILL.md` so future Sessions find it.
 4. CREATE A NEW SKILL only when nothing existing covers the class of task. Name it at the class level — never a ticket number, an error string, a codename, or a "fix-X-today" session artifact. If the name only makes sense for today's task, fall back to 1–3 instead.
 
-Every create or update uses an isolated draft. Abort rather than commit an invalid or unwanted draft. You can write your own private Skills here. If the flawed Skill is bundled, global, or Project-owned, note the problem in your final summary instead of editing it.
-
-`skill_manage` takes exactly one top-level operation object per call: `{"begin":{"name":"wiki-research","mode":"create"}}`, then for example `{"put_file":{"draft_id":"<returned id>","path":"SKILL.md","content":"..."}}`. Never send flat `operation`, `name`, or `draft_id` fields; copy every required field from the selected operation's schema.
+Each `skill_manage` action changes the Skill directly. Use flat fields such as `{"action":"patch","name":"wiki-research","old_string":"...","new_string":"..."}` and `{"action":"write_file","name":"wiki-research","file_path":"references/api.md","file_content":"..."}`. You can write your own private Skills here. If the flawed Skill is bundled, global, or Project-owned, note the problem in your final summary instead of editing it.
 
 Do NOT capture (these harden into false constraints that bite later):
 
