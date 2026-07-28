@@ -11,7 +11,12 @@ from typing import get_type_hints
 
 import pytest
 
-from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, ProviderAdapter
+from core.providers.adapter import (
+    IMAGE_WIRE_MEDIA_TYPES,
+    TOOL_RESULT_CONTENT_BLOCKS_FIELD,
+    ProviderAdapter,
+    project_tool_result_content_fallbacks,
+)
 from core.providers.reasoning import REASONING_REPLAY_CURRENT_RUN
 
 # ---------------------------------------------------------------------------
@@ -117,6 +122,65 @@ class TestProviderAdapterABC:
             frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
             == IMAGE_WIRE_MEDIA_TYPES
         )
+
+    def test_text_only_tool_wire_fallback_preserves_parallel_result_order(self) -> None:
+        projected = project_tool_result_content_fallbacks(
+            [
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_one",
+                    "content": "one",
+                    TOOL_RESULT_CONTENT_BLOCKS_FIELD: [
+                        {
+                            "type": "media",
+                            "base64": "b25l",
+                            "media_type": "image/png",
+                        },
+                        {"type": "text", "text": "path one"},
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_two",
+                    "content": "two",
+                    TOOL_RESULT_CONTENT_BLOCKS_FIELD: [
+                        {
+                            "type": "media",
+                            "base64": "dHdv",
+                            "media_type": "image/png",
+                        }
+                    ],
+                },
+            ]
+        )
+
+        assert projected == [
+            {
+                "role": "tool",
+                "tool_call_id": "call_one",
+                "content": "one\n\npath one",
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_two",
+                "content": "two",
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "media",
+                        "base64": "b25l",
+                        "media_type": "image/png",
+                    },
+                    {
+                        "type": "media",
+                        "base64": "dHdv",
+                        "media_type": "image/png",
+                    },
+                ],
+            },
+        ]
 
     def test_default_normalize_response_requires_adapter_implementation(self) -> None:
         """Response normalization is optional for ABC construction but required at use."""

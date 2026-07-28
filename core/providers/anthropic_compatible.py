@@ -48,6 +48,7 @@ from core.providers.adapter import (
     TerminalOutcome,
     canonical_tool_result_is_error,
     normalize_tool_call_ids,
+    tool_result_content_blocks,
 )
 from core.providers.errors import NetworkError, ProviderError
 from core.providers.providers import (
@@ -1112,10 +1113,17 @@ def _to_anthropic_tool_result_message(blocks: list[dict[str, Any]]) -> dict[str,
 
 
 def _to_anthropic_tool_result_block(message: dict[str, Any]) -> dict[str, Any]:
+    rich_content = tool_result_content_blocks(message)
+    content: str | list[dict[str, Any]] = message["content"]
+    if rich_content:
+        content = [
+            {"type": "text", "text": message["content"]},
+            *[_to_anthropic_user_content_block(block) for block in rich_content],
+        ]
     block: dict[str, Any] = {
         "type": "tool_result",
         "tool_use_id": message["tool_call_id"],
-        "content": message["content"],
+        "content": content,
     }
     if canonical_tool_result_is_error(message):
         block["is_error"] = True

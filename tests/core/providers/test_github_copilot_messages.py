@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.errors import ProviderError
 from core.providers.github_copilot_messages import (
     CopilotMessagesStreamState,
@@ -127,6 +128,50 @@ def test_build_payload_extracts_system_and_translates_messages_tools_and_results
     assert "parallel_tool_calls" not in payload
     assert "response_format" not in payload
     assert "cache_control" not in payload
+
+
+def test_build_payload_renders_image_inside_native_tool_result() -> None:
+    payload = build_copilot_messages_payload(
+        [
+            {
+                "role": "tool",
+                "tool_call_id": "toolu_image",
+                "content": '{"ok":true}',
+                TOOL_RESULT_CONTENT_BLOCKS_FIELD: [
+                    {
+                        "type": "media",
+                        "base64": "aW1hZ2U=",
+                        "media_type": "image/png",
+                    }
+                ],
+            }
+        ],
+        model_id="claude-sonnet-4.6",
+        policy=_messages_policy(),
+    )
+
+    assert payload["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_image",
+                    "content": [
+                        {"type": "text", "text": '{"ok":true}'},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "aW1hZ2U=",
+                            },
+                        },
+                    ],
+                }
+            ],
+        }
+    ]
 
 
 def test_build_payload_maps_history_tool_without_special_case() -> None:

@@ -669,11 +669,11 @@ class TestExtensionDecisionWiring:
         assert "hook was here" in note_contents
 
 
-class TestReadMediaInjections:
-    """``read_media`` artifacts surface as media injections for the chat loop."""
+class TestReadMediaOutputs:
+    """``read_media`` artifacts surface as rich Tool Result descriptors."""
 
     @pytest.mark.asyncio
-    async def test_read_media_artifact_becomes_media_injection(self, tmp_path: Path) -> None:
+    async def test_read_media_artifact_becomes_media_output(self, tmp_path: Path) -> None:
         def handler(_context: ToolContext, _arguments: JsonObject) -> JsonObject:
             return tool_success(
                 {"content": "loaded"},
@@ -694,17 +694,22 @@ class TestReadMediaInjections:
         run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
         tool_calls = [ToolCall(id="call-1", name="read", arguments={})]
 
-        tool_messages, media_injections = await _dispatch_tool_calls(
+        tool_messages, media_outputs = await _dispatch_tool_calls(
             runtime, agent, tool_calls, session, run, nesting_depth=0
         )
 
         assert len(tool_messages) == 1
-        assert media_injections == [
-            {"attachment_id": "att-1", "filename": "diagram.png", "media_type": "image/png"}
+        assert media_outputs == [
+            {
+                "tool_call_id": "call-1",
+                "attachment_id": "att-1",
+                "filename": "diagram.png",
+                "media_type": "image/png",
+            }
         ]
 
     @pytest.mark.asyncio
-    async def test_non_read_media_artifacts_produce_no_injection(self, tmp_path: Path) -> None:
+    async def test_non_read_media_artifacts_produce_no_media_output(self, tmp_path: Path) -> None:
         def handler(_context: ToolContext, _arguments: JsonObject) -> JsonObject:
             return tool_success(
                 {"message": "image generated"},
@@ -718,12 +723,12 @@ class TestReadMediaInjections:
         run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
         tool_calls = [ToolCall(id="call-1", name="image_generation", arguments={})]
 
-        tool_messages, media_injections = await _dispatch_tool_calls(
+        tool_messages, media_outputs = await _dispatch_tool_calls(
             runtime, agent, tool_calls, session, run, nesting_depth=0
         )
 
         assert len(tool_messages) == 1
-        assert media_injections == []
+        assert media_outputs == []
 
 
 class TestUnexpectedToolCrashLogging:

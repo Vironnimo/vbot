@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.tool_schema import render_tool_definitions
 
 from .anthropic_test_support import (
@@ -525,6 +526,52 @@ class TestSendRequestFormat:
         user_msg = request_body["messages"][2]
         assert user_msg["role"] == "user"
         assert any(block["type"] == "tool_result" for block in user_msg["content"])
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_renders_image_inside_native_tool_result(self, anthropic_adapter):
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        messages = [
+            {
+                "role": "tool",
+                "tool_call_id": "toolu_image",
+                "content": '{"ok":true}',
+                TOOL_RESULT_CONTENT_BLOCKS_FIELD: [
+                    {
+                        "type": "media",
+                        "base64": "aW1hZ2U=",
+                        "media_type": "image/png",
+                    },
+                    {"type": "text", "text": "[Image path: C:/diagram.png]"},
+                ],
+            }
+        ]
+
+        await anthropic_adapter.send(
+            messages,
+            model_id="claude-sonnet-4-20250219",
+        )
+
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
+        tool_result = request_body["messages"][0]["content"][0]
+        assert tool_result == {
+            "type": "tool_result",
+            "tool_use_id": "toolu_image",
+            "content": [
+                {"type": "text", "text": '{"ok":true}'},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": "aW1hZ2U=",
+                    },
+                },
+                {"type": "text", "text": "[Image path: C:/diagram.png]"},
+            ],
+        }
 
     @respx.mock
     @pytest.mark.asyncio

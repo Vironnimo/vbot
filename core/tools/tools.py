@@ -474,11 +474,10 @@ READ_MEDIA_ARTIFACT_KIND = "read_media"
 def read_media_artifact(*, attachment_id: str, filename: str, media_type: str) -> JsonObject:
     """Build a ``read_media`` artifact describing a stored media blob.
 
-    A tool emits this artifact to ask the chat loop to inject the media as a
-    synthetic current-turn user message so a vision model actually sees it (see
-    ``core/chat/tool_dispatch.py``). Both ``read`` (local image files) and
-    ``web_fetch`` (fetched image URLs) produce it, so the contract shape lives
-    here once instead of being duplicated in each tool.
+    A Tool emits this artifact so Chat can attach the stored image as Run-local
+    rich content on the correlated Tool Result. Both ``read`` (local image
+    files) and ``web_fetch`` (fetched image URLs) produce it, so the contract
+    shape lives here once instead of being duplicated in each Tool.
     """
     return {
         "kind": READ_MEDIA_ARTIFACT_KIND,

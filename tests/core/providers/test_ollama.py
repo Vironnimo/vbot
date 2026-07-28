@@ -22,6 +22,7 @@ from core.models.models import (
     Model,
     ReasoningCapabilities,
 )
+from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.errors import ProviderError
 from core.providers.ollama import OllamaAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
@@ -506,6 +507,46 @@ class TestMessageTranslation:
             "content": "Sunny, 25°C",
             "tool_call_id": "call_dmop6zf4",
         }
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_rich_tool_result_uses_request_only_user_fallback(
+        self,
+        adapter: OllamaAdapter,
+    ) -> None:
+        route = respx.post(OLLAMA_CHAT_URL).mock(
+            return_value=httpx.Response(200, json=TEXT_RESPONSE)
+        )
+        messages = [
+            {
+                "role": "tool",
+                "tool_call_id": "call_image",
+                "content": '{"ok":true}',
+                TOOL_RESULT_CONTENT_BLOCKS_FIELD: [
+                    {
+                        "type": "media",
+                        "base64": "aW1hZ2U=",
+                        "media_type": "image/png",
+                    },
+                    {"type": "text", "text": "[Image path: C:/diagram.png]"},
+                ],
+            }
+        ]
+
+        await adapter.send(messages, model_id="ministral-3:8b")
+
+        assert _last_request_payload(route)["messages"] == [
+            {
+                "role": "tool",
+                "content": '{"ok":true}\n\n[Image path: C:/diagram.png]',
+                "tool_call_id": "call_image",
+            },
+            {
+                "role": "user",
+                "content": "",
+                "images": ["aW1hZ2U="],
+            },
+        ]
 
     @respx.mock
     @pytest.mark.asyncio

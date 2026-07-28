@@ -953,14 +953,7 @@ def _is_binary_payload(media_type: str, sniffed: str, raw: bytes) -> bool:
 
 
 def _fetch_image_result(attachment_store: Any, url: str, raw: bytes) -> JsonObject:
-    """Store a fetched image as an attachment and signal current-turn injection.
-
-    Mirrors the read tool's image branch: the blob goes through the attachment
-    store (reusing its size limit and allowlist) and a ``read_media`` artifact
-    tells the chat loop to inject the image as a synthetic user message so a vision
-    model actually sees it. A non-vision model degrades to a text note in the chat
-    loop, not here.
-    """
+    """Store a fetched image and expose it as rich Tool Result content."""
     if attachment_store is None:
         return tool_success(
             {"content": f"[Image at {url} could not be loaded (no attachment store available).]"}
@@ -971,12 +964,7 @@ def _fetch_image_result(attachment_store: Any, url: str, raw: bytes) -> JsonObje
         return tool_failure("attachment_error", str(error), retryable=False)
 
     return tool_success(
-        {
-            "content": (
-                f"Fetched image {record.filename} ({record.media_type}) from {url} — "
-                "shown to you in the following message."
-            )
-        },
+        {"content": (f"Fetched image {record.filename} ({record.media_type}) from {url}.")},
         artifacts=[
             read_media_artifact(
                 attachment_id=record.id,

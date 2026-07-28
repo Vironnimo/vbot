@@ -22,6 +22,7 @@ from core.providers.adapter import (
     TERMINAL_OUTCOME_UNKNOWN,
     TerminalOutcome,
     normalize_tool_call_ids,
+    tool_result_content_blocks,
 )
 from core.providers.errors import (
     ProviderAuthError,
@@ -252,7 +253,12 @@ def _messages_to_responses_input(
             input_items.extend(_assistant_message_to_input_items(message))
             continue
         if role == "tool":
-            input_items.append(_tool_message_to_function_output(message))
+            input_items.append(
+                _tool_message_to_function_output(
+                    message,
+                    document_media_types=document_media_types,
+                )
+            )
             continue
         if role == "user":
             input_items.append(
@@ -405,11 +411,25 @@ def _tool_call_to_function_call(tool_call: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _tool_message_to_function_output(message: Mapping[str, Any]) -> dict[str, Any]:
+def _tool_message_to_function_output(
+    message: Mapping[str, Any],
+    *,
+    document_media_types: frozenset[str],
+) -> dict[str, Any]:
+    output: str | list[dict[str, Any]] = _string_or(message.get("content"), "")
+    rich_content = tool_result_content_blocks(message)
+    if rich_content:
+        output = [
+            {"type": "input_text", "text": output},
+            *_user_content_parts(
+                rich_content,
+                document_media_types=document_media_types,
+            ),
+        ]
     return {
         "type": "function_call_output",
         "call_id": _string_or(message.get("tool_call_id"), ""),
-        "output": _string_or(message.get("content"), ""),
+        "output": output,
     }
 
 

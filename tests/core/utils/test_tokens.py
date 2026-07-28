@@ -249,10 +249,22 @@ def test_estimate_request_input_tokens_reserves_native_media_without_counting_ba
                     "base64": encoded,
                 },
             ],
-        }
+        },
+        {
+            "role": "tool",
+            "content": '{"ok":true}',
+            "tool_call_id": "call_image",
+            "tool_result_content": [
+                {
+                    "type": "media",
+                    "media_type": "image/png",
+                    "base64": encoded,
+                }
+            ],
+        },
     ]
 
     request_tokens, _ = estimate_request_input_tokens(messages)
 
-    assert request_tokens >= 3 * NATIVE_MEDIA_TOKEN_RESERVE
-    assert request_tokens < (3 * NATIVE_MEDIA_TOKEN_RESERVE) + 100
+    assert request_tokens >= 4 * NATIVE_MEDIA_TOKEN_RESERVE
+    assert request_tokens < (4 * NATIVE_MEDIA_TOKEN_RESERVE) + 100
