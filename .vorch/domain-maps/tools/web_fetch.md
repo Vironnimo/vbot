@@ -6,7 +6,7 @@ Fetches public HTTP(S) content: readable text for pages, a viewable image for im
 
 - Tool name: `web_fetch`
 - Registration: `register_web_fetch_tool(registry, *, attachment_store)`. The handler is built by `make_web_fetch_handler(attachment_store)` (factory pattern, mirrors `read`) and is async; the injected store is consulted only for the image branch, every text/binary path is store-independent.
-- Schema: required `url`; optional booleans `include_links` and `raw`; `additionalProperties: false`.
+- Schema: required `url`; optional JSON boolean `include_links` defaults to `true` and controls link targets only in cleaned HTML; optional JSON boolean `raw` defaults to `false` and disables HTML cleanup when `true`; `additionalProperties: false`. An Agent can omit either optional field to use its default; boolean-looking strings such as `"false"` remain invalid.
 - Success `data.content` is text for pages/text responses. An **image** URL instead promotes the fetched bytes to an attachment and returns a `read_media` artifact (same contract as `read` — built via `read_media_artifact`) so the chat loop injects the image as a current-turn message for a vision model; a non-image **binary** returns a short `[Binary content …]` notice string.
 - Display: summary field `url`.
 

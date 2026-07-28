@@ -268,6 +268,18 @@ def test_register_web_fetch_tool_schema() -> None:
     assert parameters["required"] == ["url"]
     assert parameters["additionalProperties"] is False
     assert set(parameters["properties"]) == {"url", "include_links", "raw"}
+    include_links = parameters["properties"]["include_links"]
+    assert include_links["type"] == "boolean"
+    assert include_links["default"] is True
+    assert "Omit it" in include_links["description"]
+    assert "without quotes" in include_links["description"]
+    assert "cleaned HTML" in include_links["description"]
+    raw = parameters["properties"]["raw"]
+    assert raw["type"] == "boolean"
+    assert raw["default"] is False
+    assert "Omit it" in raw["description"]
+    assert "without quotes" in raw["description"]
+    assert "Non-HTML text" in raw["description"]
 
 
 @pytest.mark.asyncio
@@ -606,6 +618,7 @@ async def test_web_fetch_handler_html_extraction(
     assert isinstance(content, str)
     assert "Hello" in content
     assert "World" in content
+    assert "[Docs](https://example.com/docs)" in content
     assert "<h1>" not in content
     assert "<p>" not in content
 
