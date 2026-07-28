@@ -265,8 +265,7 @@ Setup, Runtime, direct `core/storage/layout.py` use, and managed Worktree creati
 │   └── temp/
 │       ├── atomic/
 │       ├── bash/
-│       ├── subagents/
-│       └── skill-drafts/
+│       └── subagents/
 ├── statistics/
 │   └── provider-usage/
 ├── agents/
@@ -285,7 +284,7 @@ Setup, Runtime, direct `core/storage/layout.py` use, and managed Worktree creati
 └── settings.json
 ```
 
-`artifacts/attachments/`, `artifacts/images/`, `artifacts/speech/`, `artifacts/models/`, and `artifacts/debug/` contain durable domain-owned artifacts. The four `artifacts/temp/` children remain separate: atomic replacement staging, 72-hour retained Bash output, 24-hour retained Sub-Agent activity, and isolated Skill Drafts. `statistics/provider-usage/` is normalized Provider-owned upstream history; local Statistics still derive from Sessions and add no persistence. The tracked system Model DB remains `resources/models/`; only the complete instance runtime Model DB moves under `artifacts/models/`.
+`artifacts/attachments/`, `artifacts/images/`, `artifacts/speech/`, `artifacts/models/`, and `artifacts/debug/` contain durable domain-owned artifacts. The three `artifacts/temp/` children remain separate: atomic replacement staging, 72-hour retained Bash output, and 24-hour retained Sub-Agent activity. `statistics/provider-usage/` is normalized Provider-owned upstream history; local Statistics still derive from Sessions and add no persistence. The tracked system Model DB remains `resources/models/`; only the complete instance runtime Model DB moves under `artifacts/models/`.
 
 Independent roots keep their established ownership: `agents/` contains Identity Agent configs, default Workspaces, private Skills, and Sessions; `projects/` contains Project metadata and Project Agent Sessions; `skills/` contains global user Skills; `channels/`, `cron/`, `extensions/`, `prompts/`, `recall/`, `logs/`, `oauth/`, and `archive/` retain their existing records. Custom absolute Workspaces remain outside the data directory. `processes/` is reserved for future persistent process records and is not the Bash-output location.
 
@@ -323,7 +322,7 @@ Current application code reads only the canonical paths. Convert every older dat
 
 7. Start the instance and verify its reported data root, Agents and Sessions, artifact serving, Debug status when enabled, and Provider usage history.
 
-The structural converter defaults to a read-only preflight, rejects symlinks, special files, unknown legacy temporary categories, and every matching destination, and never overwrites data. Apply moves regular leaf files atomically within the data root and is resumable after interruption. Previously persisted absolute paths in old Session text are not rewritten.
+The structural converter defaults to a read-only preflight, rejects symlinks, special files, unknown legacy temporary categories, and every matching destination, and never overwrites data. Apply moves regular leaf files atomically within the data root and is resumable after interruption. Retired `temp/skill-drafts/` content is preserved in place but ignored by current vBot; remove it manually only after confirming it contains nothing you want to recover. Previously persisted absolute paths in old Session text are not rewritten.
 
 Desktop owns separate per-user settings because it can connect to different servers. On Windows they live under `%APPDATA%\vbot`; on Linux they live under `$XDG_CONFIG_HOME/vbot` or `~/.config/vbot`. Remembered servers, wakeword configuration, and imported wakeword Models are Desktop-local and are not server Settings.
 

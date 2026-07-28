@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from html import escape
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from core.skills.skills import (
     FRONT_MATTER_DELIMITER,
+    RESOURCE_DIRECTORIES,
+    SKILL_FILENAME,
     SkillRegistry,
     _scan_skill_resources,
     skill_origin_sort_key,
@@ -39,20 +41,19 @@ SkillRefresh = Callable[[], None]
 
 SKILL_TOOL_NAME = "skill"
 SKILL_TOOL_DESCRIPTION = (
-    "Load an allowed skill by name to add its instructions to session context, or "
-    "call with no name to list the skills currently available to you (grouped by "
-    "origin), including any not yet in your system-prompt skill catalog (that "
-    "catalog is snapshotted at session start)."
+    "List available skills, activate one by name, or read one of its files by "
+    "skill-relative path. Call with no arguments to list; with name to activate "
+    "SKILL.md; or with name and file_path to read that UTF-8 file."
 )
 SKILL_STATUS_LOADED = "loaded"
 SKILL_STATUS_ALREADY_ACTIVE = "already_active"
+SKILL_STATUS_FILE_LOADED = "file_loaded"
 # OpenClaw-compatible marker skill authors may use in the body to reference bundled
 # files (e.g. ``python {baseDir}/scripts/run.py``); replaced with the absolute skill
 # directory at activation time.
 SKILL_BASE_DIR_MARKER = "{baseDir}"
 SKILL_PATH_RESOLUTION_NOTE = (
-    "Relative paths in this skill resolve against the skill directory; "
-    "use absolute paths in tool calls."
+    "Read a listed resource with the skill tool using this skill name and its relative path."
 )
 SKILL_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -63,7 +64,17 @@ SKILL_TOOL_PARAMETERS: JsonObject = {
                 "Name of the skill to activate. Omit to list the currently available "
                 "skills instead of activating one."
             ),
-        }
+        },
+        "file_path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": r"^(SKILL\.md|(?:scripts|references|assets)/.+)$",
+            "description": (
+                "Optional path relative to the named skill, such as "
+                "'references/api.md'. When present, return that UTF-8 file instead "
+                "of activating the skill."
+            ),
+        },
     },
     "required": [],
     "additionalProperties": False,
@@ -85,7 +96,7 @@ def make_skill_handler(
     """
 
     def skill_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        unknown_arguments = set(arguments) - {"name"}
+        unknown_arguments = set(arguments) - {"name", "file_path"}
         if unknown_arguments:
             names = ", ".join(sorted(unknown_arguments))
             return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
@@ -98,13 +109,24 @@ def make_skill_handler(
         skill_registry = resolve_registry(context.skill_project_id, identity_agent_id)
 
         skill_name = arguments.get("name")
+        file_path = arguments.get("file_path")
         # No name → list mode: report the live, agent-aware catalog instead of
         # activating, so an agent can see skills it authored after the session's
         # pinned catalog was fixed.
         if skill_name is None or (isinstance(skill_name, str) and not skill_name.strip()):
+            if file_path is not None:
+                return tool_failure(
+                    "invalid_arguments",
+                    "file_path requires a non-empty skill name",
+                )
             return _skill_list_result(skill_registry, context.allowed_skills)
         if not isinstance(skill_name, str):
             return tool_failure("invalid_arguments", "name must be a string")
+        if file_path is not None and (not isinstance(file_path, str) or not file_path.strip()):
+            return tool_failure(
+                "invalid_arguments",
+                "file_path must be a non-empty string",
+            )
 
         try:
             skill = skill_registry.get(skill_name)
@@ -134,6 +156,22 @@ def make_skill_handler(
         )
         if unavailable_message is not None:
             return tool_failure("skill_unavailable", unavailable_message)
+
+        if isinstance(file_path, str):
+            try:
+                data = load_skill_file(skill_name, skill.path, file_path)
+            except OSError as error:
+                return tool_failure(
+                    "skill_read_error",
+                    f"Failed to read skill '{skill_name}' file '{file_path}': {error}",
+                )
+            except ValueError as error:
+                return tool_failure("skill_read_error", str(error))
+            return _loaded_skill_file_result(
+                skill_name,
+                str(data["file_path"]),
+                str(data["content"]),
+            )
 
         try:
             data = load_skill_content(skill_name, skill.path)
@@ -179,7 +217,7 @@ def register_skill_tool(
         SKILL_TOOL_PARAMETERS,
         make_skill_handler(resolve_registry, refresh_skills),
         result_schema={"type": "object"},
-        display=ToolDisplay(summary_fields=("name",)),
+        display=ToolDisplay(summary_fields=("name", "file_path")),
     )
 
 
@@ -197,6 +235,24 @@ def load_skill_content(skill_name: str, skill_file: Path) -> JsonObject:
     }
 
 
+def load_skill_file(skill_name: str, skill_file: Path, file_path: str) -> JsonObject:
+    """Read one UTF-8 package file by skill-relative path."""
+    normalized = _normalized_skill_file_path(file_path)
+    skill_directory = skill_file.resolve().parent
+    candidate = skill_directory.joinpath(*PurePosixPath(normalized).parts).resolve()
+    try:
+        candidate.relative_to(skill_directory)
+    except ValueError as error:
+        raise ValueError(f"Illegal file path for skill '{skill_name}': {file_path}") from error
+    if not candidate.is_file():
+        raise ValueError(f"Skill '{skill_name}' file not found: {normalized}")
+    try:
+        content = candidate.read_text(encoding="utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError(f"Skill '{skill_name}' file is not UTF-8 text: {normalized}") from error
+    return {"name": skill_name, "file_path": normalized, "content": content}
+
+
 def _loaded_skill_result(skill_name: str, content: str) -> JsonObject:
     """Success envelope of a fresh activation — the tool result IS the content carrier.
 
@@ -210,6 +266,21 @@ def _loaded_skill_result(skill_name: str, content: str) -> JsonObject:
         {
             "name": skill_name,
             "status": SKILL_STATUS_LOADED,
+            "content": content,
+        }
+    )
+
+
+def _loaded_skill_file_result(
+    skill_name: str,
+    file_path: str,
+    content: str,
+) -> JsonObject:
+    return tool_success(
+        {
+            "name": skill_name,
+            "status": SKILL_STATUS_FILE_LOADED,
+            "file_path": file_path,
             "content": content,
         }
     )
@@ -297,6 +368,21 @@ def _read_skill_body(skill_file: Path) -> str:
     raise ValueError(f"Skill metadata front matter is not closed: {skill_file}")
 
 
+def _normalized_skill_file_path(file_path: str) -> str:
+    if not isinstance(file_path, str) or not file_path.strip():
+        raise ValueError("file_path must be a non-empty string")
+    raw = PurePosixPath(file_path.replace("\\", "/"))
+    if raw.is_absolute() or any(part in {"", ".", ".."} for part in raw.parts):
+        raise ValueError(f"Illegal skill file path: {file_path}")
+    normalized = raw.as_posix()
+    if normalized == SKILL_FILENAME:
+        return normalized
+    if len(raw.parts) < 2 or raw.parts[0] not in RESOURCE_DIRECTORIES:
+        allowed = ", ".join(f"{name}/" for name in RESOURCE_DIRECTORIES)
+        raise ValueError(f"Skill files must be {SKILL_FILENAME} or live under {allowed}")
+    return normalized
+
+
 def _wrap_skill_content(skill_name: str, body: str, resources: list[str], directory: str) -> str:
     lines = [f'<skill_content name="{escape(skill_name, quote=True)}">']
     lines.append(f"Skill directory: {escape(directory)}")
@@ -315,6 +401,7 @@ __all__ = [
     "SKILL_TOOL_DESCRIPTION",
     "SKILL_TOOL_NAME",
     "SKILL_TOOL_PARAMETERS",
+    "load_skill_file",
     "make_skill_handler",
     "load_skill_content",
     "register_skill_tool",

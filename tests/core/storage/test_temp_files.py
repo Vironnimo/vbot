@@ -35,7 +35,6 @@ def test_create_allocates_unique_category_confined_files(tmp_path: Path) -> None
     [
         ("unknown", ".log"),
         ("atomic", ".tmp"),
-        ("skill-drafts", ".md"),
         ("bash", "log"),
         ("bash", "../escape"),
     ],

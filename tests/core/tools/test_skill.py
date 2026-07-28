@@ -47,7 +47,7 @@ def test_skill_tool_result_carries_full_content(tmp_path: Path) -> None:
     content = cast(str, data["content"])
     assert content.startswith('<skill_content name="debugging">')
     assert f"Skill directory: {skill_directory}" in content
-    assert "resolve against the skill directory" in content
+    assert "Read a listed resource with the skill tool" in content
     assert "- scripts/run.py" in content
     assert "- references/guide.md" in content
     assert "Investigate failures methodically." in content
@@ -182,6 +182,79 @@ def test_skill_tool_dedup_uses_session_activation_hook(tmp_path: Path) -> None:
     assert "<skill_content" not in str(actual)
 
 
+def test_skill_tool_reads_relative_support_file_without_activation(tmp_path: Path) -> None:
+    registry = SkillRegistry.load(_skills_dir(tmp_path))
+    tools = ToolRegistry()
+    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
+    activations: list[str] = []
+
+    def activate(name: str, _content: str) -> bool:
+        activations.append(name)
+        return True
+
+    result = asyncio.run(
+        async_dispatch(
+            tools,
+            _context(tmp_path, activate),
+            {"name": "debugging", "file_path": "references/guide.md"},
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["data"] == {
+        "name": "debugging",
+        "status": "file_loaded",
+        "file_path": "references/guide.md",
+        "content": "Read the evidence first.\n",
+    }
+    assert activations == []
+    assert str(_skill_directory(tmp_path)) not in str(result)
+
+
+def test_skill_tool_file_path_requires_name(tmp_path: Path) -> None:
+    tools = ToolRegistry()
+    register_skill_tool(
+        tools,
+        _fixed_registry(SkillRegistry.load(_skills_dir(tmp_path))),
+        _no_refresh,
+    )
+
+    result = asyncio.run(
+        async_dispatch(
+            tools,
+            _context(tmp_path),
+            {"file_path": "references/guide.md"},
+        )
+    )
+
+    assert result == tool_failure(
+        "invalid_arguments",
+        "file_path requires a non-empty skill name",
+    )
+
+
+def test_skill_tool_rejects_missing_relative_file(tmp_path: Path) -> None:
+    tools = ToolRegistry()
+    register_skill_tool(
+        tools,
+        _fixed_registry(SkillRegistry.load(_skills_dir(tmp_path))),
+        _no_refresh,
+    )
+
+    result = asyncio.run(
+        async_dispatch(
+            tools,
+            _context(tmp_path),
+            {"name": "debugging", "file_path": "references/missing.md"},
+        )
+    )
+
+    assert result == tool_failure(
+        "skill_read_error",
+        "Skill 'debugging' file not found: references/missing.md",
+    )
+
+
 def test_skill_tool_file_read_error(tmp_path: Path) -> None:
     skills_dir = _skills_dir(tmp_path)
     skill_file = skills_dir / "debugging" / "SKILL.md"
@@ -313,8 +386,8 @@ Body.
     assert result["content"] == (
         '<skill_content name="bad&quot; name&gt;&lt;tag">\n'
         f"Skill directory: {directory}\n"
-        "Relative paths in this skill resolve against the skill directory; "
-        "use absolute paths in tool calls.\n"
+        "Read a listed resource with the skill tool using this skill name and its "
+        "relative path.\n"
         "Body.\n</skill_content>"
     )
 
@@ -357,7 +430,10 @@ def _skills_dir(tmp_path: Path) -> Path:
     (skill_dir / "scripts").mkdir(parents=True)
     (skill_dir / "references").mkdir()
     (skill_dir / "scripts" / "run.py").write_text("", encoding="utf-8")
-    (skill_dir / "references" / "guide.md").write_text("", encoding="utf-8")
+    (skill_dir / "references" / "guide.md").write_text(
+        "Read the evidence first.\n",
+        encoding="utf-8",
+    )
     (skill_dir / "SKILL.md").write_text(
         """---
 name: debugging

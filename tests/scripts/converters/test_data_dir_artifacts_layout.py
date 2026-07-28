@@ -112,6 +112,19 @@ def test_apply_merges_noncolliding_current_target_tree(tmp_path: Path) -> None:
     assert current.read_bytes() == b"current"
 
 
+def test_apply_preserves_retired_legacy_skill_drafts_in_place(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    draft = data_dir / "temp" / "skill-drafts" / "draft-1" / "SKILL.md"
+    draft.parent.mkdir(parents=True)
+    draft.write_text("unfinished\n", encoding="utf-8")
+
+    result = apply_data_directory_conversion(data_dir)
+
+    assert result.moved_files == 0
+    assert draft.read_text(encoding="utf-8") == "unfinished\n"
+    assert not (data_dir / "artifacts" / "temp" / "skill-drafts").exists()
+
+
 def test_preflight_rejects_destination_collision_before_any_move(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     first = data_dir / "attachments" / "first.bin"

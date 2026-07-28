@@ -92,21 +92,6 @@ _OPERATION_CONTRACTS: tuple[
         },
     ),
     (
-        "skill_manage",
-        SKILL_MANAGE_TOOL_PARAMETERS,
-        {
-            "inspect": (),
-            "begin": ("name", "mode"),
-            "put_file": ("draft_id", "path"),
-            "patch": ("draft_id", "old_string", "new_string"),
-            "remove_file": ("draft_id", "path"),
-            "validate": ("draft_id",),
-            "commit": ("draft_id",),
-            "abort": ("draft_id",),
-            "delete": ("name",),
-        },
-    ),
-    (
         "status",
         STATUS_TOOL_PARAMETERS,
         {
@@ -137,6 +122,7 @@ _DIRECT_TOOL_SCHEMAS: tuple[tuple[str, JsonObject], ...] = (
     ("project", PROJECT_TOOL_PARAMETERS),
     ("read", READ_TOOL_PARAMETERS),
     ("skill", SKILL_TOOL_PARAMETERS),
+    ("skill_manage", SKILL_MANAGE_TOOL_PARAMETERS),
     ("subagent_result", SUBAGENT_RESULT_TOOL_PARAMETERS),
     ("text_to_speech", TEXT_TO_SPEECH_TOOL_PARAMETERS),
     ("web_fetch", WEB_FETCH_TOOL_PARAMETERS),
