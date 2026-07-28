@@ -20,12 +20,13 @@ from core.storage import TemporaryFileManager
 from core.subagents.subagents import (
     SubAgentBatchTracker,
     SubAgentCoordinator,
-    _handle_subagent,
-    _handle_subagent_result,
+    _handle_subagent_status,
     _wait_for_subagent_result,
 )
+from core.subagents.subagents import (
+    _handle_subagent as _handle_subagent_impl,
+)
 from core.tools.subagent import (
-    SUBAGENT_RESULT_TOOL_NAME,
     SUBAGENT_TOOL_NAME,
     register_subagent_tools,
 )
@@ -53,7 +54,6 @@ __all__ = [
     "_handle_subagent",
     "_handle_subagent_result",
     "_wait_for_subagent_result",
-    "SUBAGENT_RESULT_TOOL_NAME",
     "SUBAGENT_TOOL_NAME",
     "register_subagent_tools",
     "ToolContext",
@@ -75,6 +75,39 @@ pytestmark = pytest.mark.asyncio
 
 JsonObject = dict[str, Any]
 BACKGROUND_TASK_SETTLE_TICKS = 5
+
+
+async def _handle_subagent(
+    context: ToolContext,
+    arguments: JsonObject,
+    *,
+    runtime: Any,
+    batch_tracker: SubAgentBatchTracker,
+) -> JsonObject:
+    """Call the canonical handler while keeping behavioral tests compact."""
+    canonical = {"action": "run", **arguments}
+    return await _handle_subagent_impl(
+        context,
+        canonical,
+        runtime=runtime,
+        batch_tracker=batch_tracker,
+    )
+
+
+async def _handle_subagent_result(
+    context: ToolContext,
+    arguments: JsonObject,
+    *,
+    runtime: Any,
+    batch_tracker: SubAgentBatchTracker,
+) -> JsonObject:
+    """Exercise the status action for result-oriented coordinator tests."""
+    return await _handle_subagent_status(
+        context,
+        {"action": "status", **arguments},
+        runtime=runtime,
+        batch_tracker=batch_tracker,
+    )
 
 
 def make_context(

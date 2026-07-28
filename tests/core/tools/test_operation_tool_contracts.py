@@ -31,7 +31,7 @@ from core.tools.skill import SKILL_TOOL_PARAMETERS
 from core.tools.skill_manage import SKILL_MANAGE_TOOL_PARAMETERS
 from core.tools.speech import TEXT_TO_SPEECH_TOOL_PARAMETERS
 from core.tools.status import STATUS_TOOL_PARAMETERS
-from core.tools.subagent import SUBAGENT_RESULT_TOOL_PARAMETERS, SUBAGENT_TOOL_PARAMETERS
+from core.tools.subagent import SUBAGENT_TOOL_PARAMETERS
 from core.tools.tools import extract_tool_operation, operation_envelope_schema
 from core.tools.web_fetch import WEB_FETCH_TOOL_PARAMETERS
 from core.tools.web_search import WEB_SEARCH_TOOL_PARAMETERS
@@ -71,15 +71,6 @@ _OPERATION_CONTRACTS: tuple[
             "read": ("session_id",),
         },
     ),
-    (
-        "subagent",
-        SUBAGENT_TOOL_PARAMETERS,
-        {
-            "start": ("content",),
-            "continue": ("content", "agent_id", "session_id"),
-            "cancel": ("agent_id", "session_id"),
-        },
-    ),
 )
 
 _DIRECT_TOOL_SCHEMAS: tuple[tuple[str, JsonObject], ...] = (
@@ -97,7 +88,7 @@ _DIRECT_TOOL_SCHEMAS: tuple[tuple[str, JsonObject], ...] = (
     ("skill", SKILL_TOOL_PARAMETERS),
     ("skill_manage", SKILL_MANAGE_TOOL_PARAMETERS),
     ("status", STATUS_TOOL_PARAMETERS),
-    ("subagent_result", SUBAGENT_RESULT_TOOL_PARAMETERS),
+    ("subagent", SUBAGENT_TOOL_PARAMETERS),
     ("text_to_speech", TEXT_TO_SPEECH_TOOL_PARAMETERS),
     ("web_fetch", WEB_FETCH_TOOL_PARAMETERS),
     ("web_search", WEB_SEARCH_TOOL_PARAMETERS),

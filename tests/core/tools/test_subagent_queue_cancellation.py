@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from .subagent_test_support import (
     BACKGROUND_TASK_SETTLE_TICKS,
-    SUBAGENT_RESULT_TOOL_NAME,
+    SUBAGENT_TOOL_NAME,
     ActiveRunError,
     ChatMessage,
     FakeRunManager,
@@ -52,7 +52,9 @@ async def test_subagent_tool_queues_busy_session_and_returns_running(tmp_path: P
     assert result["ok"] is True
     assert result["data"]["status"] == "running"
     assert result["data"]["session_id"] == "busy-sub-session"
-    assert result["data"]["run_id"] == manager.enqueued[0]["run"].id
+    assert result["data"]["id"].startswith("sub_")
+    assert "run_id" not in result["data"]
+    assert "queue_item_id" not in result["data"]
     assert manager.started == []
     assert len(manager.enqueued) == 1
     assert manager.enqueued[0]["display_content"] == "spawn"
@@ -86,7 +88,9 @@ async def test_subagent_tool_queues_when_start_races_active_run(
     assert result["ok"] is True
     assert result["data"]["status"] == "running"
     assert result["data"]["session_id"] == "raced-sub-session"
-    assert result["data"]["run_id"] == manager.enqueued[0]["run"].id
+    assert result["data"]["id"].startswith("sub_")
+    assert "run_id" not in result["data"]
+    assert "queue_item_id" not in result["data"]
     assert manager.started == []
     assert len(manager.enqueued) == 1
 
@@ -130,18 +134,14 @@ async def test_subagent_tool_returns_queued_without_waiting_for_busy_session_sta
     activity_file = result["data"]["activity_file"]
     assert isinstance(activity_file, str)
     assert Path(activity_file).exists()
-    assert result["data"] == {
-        "agent_id": "parent",
-        "session_id": "waiting-sub-session",
-        "queue_item_id": "queued-item-1",
-        "status": "queued",
-        "activity_file": activity_file,
-        "activity_note": (
-            "Current Sub-Agent activity is available at "
-            f"{activity_file}. Read this file if the Sub-Agent's status or progress becomes "
-            "relevant."
-        ),
-    }
+    assert result["data"]["id"].startswith("sub_")
+    assert result["data"]["agent_id"] == "parent"
+    assert result["data"]["session_id"] == "waiting-sub-session"
+    assert result["data"]["status"] == "queued"
+    assert result["data"]["delivery"] == "automatic"
+    assert "run_id" not in result["data"]
+    assert "queue_item_id" not in result["data"]
+    assert result["data"]["activity_file"] == activity_file
     manager.remove_queued("parent", "waiting-sub-session", "queued-item-1", project_id=None)
     for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
         await asyncio.sleep(0)
@@ -202,7 +202,7 @@ async def test_parent_cancellation_removes_foreground_queued_subagent(tmp_path: 
     manager.hold_enqueued_starts = True
     runtime = make_runtime(tmp_path, manager)
     tracker = SubAgentBatchTracker(RecordingTriggerService())
-    context = make_context()
+    context = make_context(nesting_depth=1)
     parent_key = (context.agent_id, context.session_id, context.run_id)
     runtime.chat_sessions.create(context.agent_id, session_id="cancel-sub-session")
     manager.busy_sessions[(context.agent_id, "cancel-sub-session")] = Run(
@@ -219,7 +219,6 @@ async def test_parent_cancellation_removes_foreground_queued_subagent(tmp_path: 
                 "content": "spawn",
                 "agent_id": context.agent_id,
                 "session_id": "cancel-sub-session",
-                "background": False,
             },
             runtime=runtime,
             batch_tracker=tracker,
@@ -280,14 +279,14 @@ async def test_parent_cancellation_does_not_remove_background_queued_subagent(
         await asyncio.sleep(0)
 
 
-async def test_subagent_result_reports_queued_session(tmp_path: Path) -> None:
+async def test_subagent_status_reports_queued_work(tmp_path: Path) -> None:
     # Arrange
     manager = FakeRunManager()
     manager.hold_enqueued_starts = True
     runtime = make_runtime(tmp_path, manager)
     tracker = SubAgentBatchTracker(RecordingTriggerService())
     context = make_context()
-    result_context = make_context(tool_name=SUBAGENT_RESULT_TOOL_NAME)
+    result_context = make_context(tool_name=SUBAGENT_TOOL_NAME)
     runtime.chat_sessions.create(context.agent_id, session_id="queued-result-sub-session")
     manager.busy_sessions[(context.agent_id, "queued-result-sub-session")] = Run(
         run_id="busy-run",
@@ -309,7 +308,7 @@ async def test_subagent_result_reports_queued_session(tmp_path: Path) -> None:
     # Act
     result = await _handle_subagent_result(
         result_context,
-        {"agent_id": "parent", "session_id": "queued-result-sub-session"},
+        {"id": spawn_result["data"]["id"]},
         runtime=runtime,
         batch_tracker=tracker,
     )
@@ -320,13 +319,10 @@ async def test_subagent_result_reports_queued_session(tmp_path: Path) -> None:
     activity_file = spawn_result["data"]["activity_file"]
     assert "activity_note" not in result["data"]
     assert result["data"] == {
+        "id": spawn_result["data"]["id"],
         "agent_id": "parent",
         "session_id": "queued-result-sub-session",
-        "run_id": None,
-        "queue_item_id": "queued-item-1",
         "status": "queued",
-        "result": None,
-        "usage": None,
         "activity_file": activity_file,
     }
     manager.remove_queued("parent", "queued-result-sub-session", "queued-item-1", project_id=None)
@@ -343,7 +339,7 @@ async def test_qualified_subagent_queue_and_result_keep_target_project(
     tracker = SubAgentBatchTracker(RecordingTriggerService())
     context = make_context(project_id=None)
     result_context = make_context(
-        tool_name=SUBAGENT_RESULT_TOOL_NAME,
+        tool_name=SUBAGENT_TOOL_NAME,
         project_id=None,
     )
     runtime.chat_sessions.create("worker", session_id="qualified-queued", project_id="vbot")
@@ -366,7 +362,7 @@ async def test_qualified_subagent_queue_and_result_keep_target_project(
     )
     result = await _handle_subagent_result(
         result_context,
-        {"agent_id": "worker@vbot", "session_id": "qualified-queued"},
+        {"id": spawn_result["data"]["id"]},
         runtime=runtime,
         batch_tracker=tracker,
     )
@@ -377,14 +373,11 @@ async def test_qualified_subagent_queue_and_result_keep_target_project(
     assert result["ok"] is True
     activity_file = spawn_result["data"]["activity_file"]
     assert result["data"] == {
+        "id": spawn_result["data"]["id"],
         "agent_id": "worker",
         "project_id": "vbot",
         "session_id": "qualified-queued",
-        "run_id": None,
-        "queue_item_id": "queued-item-1",
         "status": "queued",
-        "result": None,
-        "usage": None,
         "activity_file": activity_file,
     }
     manager.remove_queued(
@@ -410,7 +403,7 @@ async def test_subagent_tool_foreground_waits_for_queued_run_to_complete(
     manager.next_result = assistant
     runtime = make_runtime(tmp_path, manager)
     tracker = SubAgentBatchTracker(RecordingTriggerService())
-    context = make_context()
+    context = make_context(nesting_depth=1)
     runtime.chat_sessions.create(context.agent_id, session_id="queued-foreground-sub-session")
     manager.busy_sessions[(context.agent_id, "queued-foreground-sub-session")] = Run(
         run_id="busy-run",
@@ -425,7 +418,6 @@ async def test_subagent_tool_foreground_waits_for_queued_run_to_complete(
             "content": "spawn",
             "agent_id": context.agent_id,
             "session_id": "queued-foreground-sub-session",
-            "background": False,
         },
         runtime=runtime,
         batch_tracker=tracker,

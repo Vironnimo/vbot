@@ -1,42 +1,35 @@
-# Sub-Agent Tools
+# Sub-Agent Tool
 
-Registers the public sub-agent tools and delegates orchestration to `core/subagents/`.
+Registers the single public `subagent` Tool and delegates lifecycle orchestration to `core/subagents/`.
 
 ## Data Model
 
-- `core.tools.subagent` owns tool names, descriptions, JSON Schemas, display metadata, and registration.
-- `SubAgentCoordinator` in `core/subagents/` owns queueing, cancellation, batch tracking, and result lookup.
+- `core.tools.subagent` owns the Tool name, description, flat JSON Schema, display metadata, registration, and Tool-owned System Prompt block.
+- `SubAgentCoordinator` in `core/subagents/` owns admission, queueing, status, cancellation, batch tracking, automatic delivery, and Agent-facing result shaping.
 
 ## Interfaces
 
-- Tool name: `subagent`
-- Schema: exactly one closed root `request` object whose required `operation` is `start`, `continue`, or `cancel`. `start` requires `content` and optionally accepts `agent_id`, `background`, `model`, and `thinking_effort`; `continue` requires `content`, `agent_id`, and `session_id` and accepts the same Run overrides; `cancel` requires `agent_id` and `session_id` plus exactly one `run_id` or `queue_item_id`. Public calls accept no retired flat or operation-key form.
-- Display: the summary builder renders the operation and `agent_id`, followed by `content` for work admission or the exact cancellation handle; it hides `content` from argument details.
-- Tool name: `subagent_result`
-- Schema: required `session_id`; optional `agent_id` and `run_id`.
-- Display: summary fields `agent_id` and `session_id`.
-- Registration: `register_subagent_tools(registry, coordinator, prompt_blocks=None)`; when the Tool prompt registry is supplied, registration also contributes the dynamic `tool:subagent` block.
+- Tool name: `subagent`.
+- Schema: one closed flat object with required `action: "run" | "status" | "cancel"`. `run` requires `content` and optionally accepts `agent_id`, `session_id`, `model`, and `thinking_effort`; `session_id` requires its owning `agent_id`. `status` and `cancel` require only the stable public `id` returned by `run`. Legacy `request`, `operation`, `background`, `run_id`, and `queue_item_id` fields are not public.
+- Result identity: every admitted `run` returns one stable `id`. Agent-facing results never expose the internal Run or Queue handle, including queued, running, terminal, and cancelled results.
+- Delivery: a depth-0 caller receives `delivery: "automatic"` and an immediate queued/running descriptor; a nested caller receives `delivery: "inline"` only after completion. The caller cannot override this policy.
+- Display: `run` summaries show the action, optional target Agent, and task preview; `status`/`cancel` summaries show the action and public id. `content` remains hidden from expanded argument details.
+- Registration: `register_subagent_tools(registry, coordinator, prompt_blocks=None)` registers exactly one Tool; when the Tool prompt registry is supplied, registration also contributes the dynamic `tool:subagent` block.
 
 ## Conventions
 
-- `tools.subagent.allowed_agents` is optional Tool-owned configuration at the root of an Identity Agent's `agent.json`, not an Agent-wide required field. It contains additional targets only: a missing block or field defaults to `['*']`, `[]` is self-only, and explicit entries use bare Identity ids or qualified `agent@project` ids. The calling Agent is always selected by omitting `agent_id` and is never repeated in the list. Disabling both Sub-Agent Tools through `allowed_tools` leaves this block persisted but inactive, so temporary Tool changes never erase its policy. Identity-Agent `['*']` reaches every other Identity Agent and every Project Agent across registered Projects; a rooted Identity Agent remains an Identity Agent. A Project Agent is always bounded to its own current Team, including when its repository policy is a wildcard.
-- Authorization covers both `subagent` and `subagent_result` immediately after canonical address parsing, before target lookup, Session work, quota reservation, or queueing. Tool availability depends only on effective `allowed_tools`; an empty `allowed_agents` list keeps both Tools available for self-delegation. An explicit list narrows the provider `agent_id` enum to the calling Agent plus the listed additional targets without making `agent_id` required; wildcard access retains the optional free-address schema. The dynamic prompt block lists only resolvable additional Agents and gates with the effective `subagent` Tool.
-- `start` creates a new persisted Session for the target Agent; `continue` routes into the explicitly identified existing Agent-scoped Session; `cancel` stops only the exact open batch entry owned by the calling Parent Agent Session.
-- `model` and `thinking_effort` are optional Run-local overrides for the one Child Run admitted by that invocation. Missing fields inherit the freshly resolved target Agent values; `thinking_effort: ""` explicitly selects the Provider default and `thinking_effort: "none"` disables Reasoning. The Tool accepts only the canonical vBot effort set and validates an explicit Model through the shared usable-Model/Connection rule before it creates or mutates a Child Session.
-- Run-local overrides never mutate the target Agent, Project, or Session, never become Session defaults, and are not inherited by later continuations or nested Sub-Agent calls. A queued invocation retains its own immutable override values until execution.
-- Busy target Sessions enqueue a follow-up Run through `ChatRunManager`.
-- Foreground mode waits for completion and returns the result payload; spawn/result payloads carry `activity_file: string | null` for the matching Run. Every successful `subagent` result whose file was allocated also carries `activity_note` with the concrete path and the instruction to read it if the Sub-Agent's status or progress becomes relevant.
-- Background mode returns a running descriptor when a Run has started. If the target Session is still busy and the child Run is only queued, it returns a queued descriptor containing `agent_id`, `session_id`, `queue_item_id`, `status: "queued"`, and the already-created `activity_file` instead of waiting for the child Run to start.
-- `subagent_result` is a non-blocking status snapshot: it returns tracked or manager-owned `queued`/`running` work immediately, otherwise returns a terminal result only when the target Session contains the matching terminal Run Summary. An Assistant turn without that summary is intermediate output, not completion.
-- `subagent_result` returns a queued descriptor while the tracked child Run is still queued and has no `run_id` yet. The activity path points to a live temporary Markdown projection of visible Assistant text and concise Tool activity, not the canonical child Session or full Tool output. This lookup result keeps the structured `activity_file` field but does not repeat the spawn-only `activity_note`.
+- `tools.subagent.allowed_agents` is optional Tool-owned configuration at the root of an Identity Agent's `agent.json`, not an Agent-wide required field. It contains additional targets only: a missing block or field defaults to `['*']`, `[]` is self-only, and explicit entries use bare Identity ids or qualified `agent@project` ids. Omitting `agent_id` on a new `run` always selects the calling Agent, which is never repeated in the list. A Project Agent remains bounded to its own current Team.
+- Authorization applies to `run` immediately after canonical address parsing and before target lookup, Session work, quota reservation, or queueing. `status` and `cancel` recover their already-authorized target from an id owned by the same Parent Agent Session and Project. Provider-schema narrowing and Tool visibility are guidance; `SubAgentCoordinator` remains the security boundary.
+- `run` without `session_id` creates a new persisted Session. Continuing an existing Session requires both its exact `session_id` and owning `agent_id`.
+- `model` and `thinking_effort` are optional Run-local overrides for only the newly admitted Child Run. Missing fields inherit the freshly resolved target Agent; `thinking_effort: ""` selects the Provider default and `"none"` disables Reasoning. Overrides never mutate or become defaults for the target Agent, Project, or Session and do not flow into later continuations or nested calls.
+- Busy target Sessions enqueue a follow-up Run through `ChatRunManager` without changing the public id.
+- Successful `run` results carry `activity_file: string | null`; when allocated they also carry an `activity_note` with its concrete path. Status snapshots keep `activity_file` but do not repeat that contextual note.
+- `status` is non-blocking: queued/running work returns immediately, while terminal output is accepted only from the exact Run or a matching terminal Run Summary. Intermediate Assistant output without that Summary is not completion.
 
 ## Constraints & Gotchas
 
 - The caller cannot target its own active Session.
-- Authorization is repeated inside `SubAgentCoordinator` for both operations; provider-schema narrowing and Tool availability are visibility and guidance, not the security boundary.
-- An explicit Model changes the normal Chat Model target only; the target Agent's temperature, fallback Model, Tools, Skills, prompt, Workspace, Memory, permissions, and Compaction Policy remain unchanged. The Run-local `thinking_effort` therefore also applies if the existing fallback Model is activated during that Run.
 - Depth and per-turn limits are enforced from runtime settings.
-- Cancelling the calling Run cascades only to foreground children; top-level background children survive. The explicit `cancel` operation is the separate Agent-controlled path and remains usable from a later Run in the same Parent Session.
-- Completed entries that were fetched are pruned from the in-memory tracker.
-- When all unfetched sub-agent Runs in a batch finish, the tracker sends one internal automation trigger to continue the parent Agent via a system-reminder note. The note includes each sub-agent's complete final output (untruncated), run status, and activity-file path when available, so no follow-up `subagent_result` call is needed to read batch results.
-- The `tool:subagent` System Prompt block tells callers how to delegate, parallelize, continue Sessions, explicitly cancel exact owned children, and wait for automatic completion, while the native Tool and parameter descriptions remain short operation/schema descriptions. Contextual activity-file guidance belongs to the concrete successful spawn result, while `subagent_result` remains the explicit status/result lookup and does not repeat that instruction.
+- Cancelling the calling Run cascades only to nested foreground children; top-level background children survive. `action: "cancel"` is the separate Agent-controlled path and remains usable from a later Run in the same Parent Session while the process-local tracker owns the id.
+- Completed entries are pruned after inline fetch or automatic delivery, so Agents should not poll top-level work. The completion note names each public id and includes the complete final output, status, and activity path.
+- The `tool:subagent` System Prompt block lists additional allowed targets and renders context-specific execution guidance from `nesting_depth`: top-level callers are told to continue or end their turn and wait for automatic delivery; nested callers are told that the Tool waits inline.

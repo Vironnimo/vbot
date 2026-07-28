@@ -170,10 +170,7 @@ async def test_subagent_tool_without_overrides_keeps_executor_default(
     await asyncio.sleep(0)
 
 
-async def test_subagent_tool_forces_foreground_at_depth(tmp_path: Path) -> None:
-    # A sub-agent (depth >= 1) cannot park background work, so an omitted background
-    # flag is forced to the foreground: the tool returns the finished child result
-    # payload (not a "running" descriptor) and tags it with the forced-foreground note.
+async def test_subagent_tool_runs_in_foreground_at_depth(tmp_path: Path) -> None:
     assistant = ChatMessage.assistant(
         model="openai/gpt-5.2",
         content="child done",
@@ -197,18 +194,17 @@ async def test_subagent_tool_forces_foreground_at_depth(tmp_path: Path) -> None:
     assert result["ok"] is True
     assert result["data"]["status"] == "completed"
     assert result["data"]["result"] == "child done"
-    assert result["data"]["spawn_note"] == subagent_module.FORCED_FOREGROUND_NOTE
-    # The forced-foreground child is fully fetched, so the batch drains with no note.
+    assert result["data"]["delivery"] == "inline"
+    assert "run_id" not in result["data"]
+    assert "queue_item_id" not in result["data"]
+    # The foreground child is fully fetched, so the batch drains with no note.
     assert tracker.spawn_count((context.agent_id, context.session_id, context.run_id)) == 0
 
 
-async def test_subagent_tool_forces_foreground_at_depth_when_background_true(
+async def test_subagent_tool_rejects_retired_background_true(
     tmp_path: Path,
 ) -> None:
-    # An explicit background=true at depth is overridden too, not just an omitted flag.
-    assistant = ChatMessage.assistant(model="openai/gpt-5.2", content="child done")
     manager = FakeRunManager()
-    manager.next_result = assistant
     runtime = make_runtime(tmp_path, manager)
     tracker = SubAgentBatchTracker(RecordingTriggerService())
     context = make_context(nesting_depth=1)
@@ -222,19 +218,16 @@ async def test_subagent_tool_forces_foreground_at_depth_when_background_true(
     )
 
     # Assert
-    assert result["ok"] is True
-    assert result["data"]["status"] == "completed"
-    assert result["data"]["spawn_note"] == subagent_module.FORCED_FOREGROUND_NOTE
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
+    assert "background" in result["error"]["message"]
+    assert manager.started == []
 
 
-async def test_subagent_tool_explicit_foreground_at_depth_has_no_forced_note(
+async def test_subagent_tool_rejects_retired_background_false(
     tmp_path: Path,
 ) -> None:
-    # Explicit foreground at depth is honored as-is, with no forced-foreground note:
-    # the caller already asked to wait, nothing was overridden.
-    assistant = ChatMessage.assistant(model="openai/gpt-5.2", content="child done")
     manager = FakeRunManager()
-    manager.next_result = assistant
     runtime = make_runtime(tmp_path, manager)
     tracker = SubAgentBatchTracker(RecordingTriggerService())
     context = make_context(nesting_depth=1)
@@ -248,9 +241,10 @@ async def test_subagent_tool_explicit_foreground_at_depth_has_no_forced_note(
     )
 
     # Assert
-    assert result["ok"] is True
-    assert result["data"]["status"] == "completed"
-    assert "spawn_note" not in result["data"]
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
+    assert "background" in result["error"]["message"]
+    assert manager.started == []
 
 
 async def test_subagent_tool_top_level_background_keeps_running_descriptor(
@@ -274,7 +268,10 @@ async def test_subagent_tool_top_level_background_keeps_running_descriptor(
     # Assert
     assert result["ok"] is True
     assert result["data"]["status"] == "running"
-    assert "spawn_note" not in result["data"]
+    assert result["data"]["delivery"] == "automatic"
+    assert result["data"]["id"].startswith("sub_")
+    assert "run_id" not in result["data"]
+    assert "queue_item_id" not in result["data"]
     activity_file = result["data"]["activity_file"]
     assert result["data"]["activity_note"] == (
         "Current Sub-Agent activity is available at "
@@ -354,13 +351,13 @@ async def test_subagent_tool_propagates_parent_cancellation_for_foreground(tmp_p
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
     tracker = SubAgentBatchTracker(RecordingTriggerService())
-    context = make_context()
+    context = make_context(nesting_depth=1)
 
     # Act
     task = asyncio.create_task(
         _handle_subagent(
             context,
-            {"content": "do work", "agent_id": "worker", "background": False},
+            {"content": "do work", "agent_id": "worker"},
             runtime=runtime,
             batch_tracker=tracker,
         )
@@ -421,12 +418,12 @@ async def test_subagent_tool_foreground_waits_for_full_result(tmp_path: Path) ->
     runtime = make_runtime(tmp_path, manager)
     trigger_service = RecordingTriggerService()
     tracker = SubAgentBatchTracker(trigger_service)
-    context = make_context()
+    context = make_context(nesting_depth=1)
 
     # Act
     result = await _handle_subagent(
         context,
-        {"content": "do work", "background": False},
+        {"content": "do work"},
         runtime=runtime,
         batch_tracker=tracker,
     )
@@ -454,7 +451,7 @@ async def test_subagent_tool_foreground_timeout_completes_tracker(
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager, {"subagent_timeout_minutes": 1})
     tracker = SubAgentBatchTracker(RecordingTriggerService())
-    context = make_context()
+    context = make_context(nesting_depth=1)
 
     async def raise_timeout(_awaitable: Any, *, timeout: float | None = None) -> Any:
         _awaitable.close()
@@ -465,7 +462,7 @@ async def test_subagent_tool_foreground_timeout_completes_tracker(
     # Act
     result = await _handle_subagent(
         context,
-        {"content": "do work", "background": False},
+        {"content": "do work"},
         runtime=runtime,
         batch_tracker=tracker,
     )
@@ -548,13 +545,13 @@ async def test_subagent_tool_foreground_user_cancelled_result_includes_cancelled
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
     tracker = SubAgentBatchTracker(RecordingTriggerService())
-    context = make_context()
+    context = make_context(nesting_depth=1)
     parent_key = (context.agent_id, context.session_id, context.run_id)
 
     task = asyncio.create_task(
         _handle_subagent(
             context,
-            {"content": "do work", "agent_id": "worker", "background": False},
+            {"content": "do work", "agent_id": "worker"},
             runtime=runtime,
             batch_tracker=tracker,
         )

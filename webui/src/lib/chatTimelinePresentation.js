@@ -13,8 +13,7 @@ const TOOL_DISPLAY_ARGS = {
   bash: ['command'],
   glob: ['pattern'],
   grep: ['pattern', 'path'],
-  subagent: ['agent_id', 'content'],
-  subagent_result: ['agent_id', 'session_id'],
+  subagent: ['action', 'id', 'agent_id', 'content'],
   web_fetch: ['url'],
   web_search: ['query'],
   process: ['action', 'session_id'],
@@ -25,7 +24,7 @@ const TOOL_DISPLAY_ARGS = {
 const TOOL_NO_SUMMARY_NAMES = new Set(['status']);
 const MAX_TOOL_LABEL_LENGTH = 80;
 const MAX_SUBAGENT_PREVIEW_LENGTH = 96;
-const SUBAGENT_TOOL_NAMES = new Set(['subagent', 'subagent_result']);
+const SUBAGENT_TOOL_NAMES = new Set(['subagent']);
 
 export { compactToolValue };
 
@@ -396,7 +395,7 @@ export const subAgentRunDurationMs = (tool, subAgentStatuses = {}) => {
 // Returns '' when the child has made no tool call yet (or the entry was
 // reset on run start / evicted from the capped projection).
 export const subAgentLastToolName = (tool, subAgentStatuses = {}) => {
-  if (toolNameForRunTool(tool) !== 'subagent') {
+  if (!isSubAgentSpawnTool(tool)) {
     return '';
   }
   const statuses = isPlainObject(subAgentStatuses) ? subAgentStatuses : {};
@@ -491,13 +490,25 @@ const streamingPreviewArguments = (tool) =>
     ? tool.previewArguments
     : undefined;
 
-export const isSubAgentSpawnTool = (tool) =>
-  toolNameForRunTool(tool) === 'subagent' &&
-  subAgentArguments(tool).operation !== 'cancel';
+export const isSubAgentSpawnTool = (tool) => {
+  if (toolNameForRunTool(tool) !== 'subagent') {
+    return false;
+  }
+  const args = subAgentArguments(tool);
+  if (args.action) {
+    return args.action === 'run';
+  }
+  // Persisted history from before the action contract had no top-level action.
+  return args.operation !== 'cancel';
+};
 
 export const isStartingForegroundSubAgent = (tool) => {
   if (!isSubAgentSpawnTool(tool) || !tool.startedEvent) {
     return false;
+  }
+  const delivery = trimmedString(subAgentResultData(tool).delivery);
+  if (delivery) {
+    return delivery === 'inline';
   }
   return subAgentArguments(tool).background !== true;
 };
@@ -592,19 +603,10 @@ export const subAgentPreview = (tool) => {
   );
 };
 
-export const subAgentDotStatus = (
-  tool,
-  assistantRun = null,
-  subAgentStatuses = {},
-) => {
+export const subAgentDotStatus = (tool, subAgentStatuses = {}) => {
   const parentStatus = toolStatus(tool);
   if (['failed', 'cancelled'].includes(parentStatus)) {
     return parentStatus;
-  }
-
-  const fetchedStatus = matchingSubAgentResultStatus(tool, assistantRun);
-  if (fetchedStatus) {
-    return fetchedStatus;
   }
 
   const externalStatus = externalSubAgentStatus(tool, subAgentStatuses);
@@ -643,6 +645,10 @@ export const subAgentNavigationTarget = (tool) => {
 // final output; the session-level key is only the fallback for rows without a
 // resolvable run id.
 export const subAgentResultKey = (tool, subAgentStatuses = {}) => {
+  const workId = trimmedString(subAgentResultData(tool).id);
+  if (workId) {
+    return `work:${workId}`;
+  }
   const target = subAgentNavigationTarget(tool);
   if (!target) {
     return '';
@@ -676,13 +682,20 @@ export const subAgentResultEntryAllowsFetch = (entry, now = Date.now()) => {
 // data.result. When the child run has finished and no inline result exists, the
 // child session's last assistant message must be fetched to show the response.
 export const subAgentShouldFetchResult = (tool, dotStatus) => {
-  if (toolNameForRunTool(tool) !== 'subagent') {
+  if (!isSubAgentSpawnTool(tool)) {
     return false;
   }
   if (dotStatus !== 'success') {
     return false;
   }
   if (trimmedString(subAgentResultData(tool).result)) {
+    return false;
+  }
+  const delivery = trimmedString(subAgentResultData(tool).delivery);
+  if (
+    delivery !== 'automatic' &&
+    !(delivery === '' && subAgentArguments(tool).background === true)
+  ) {
     return false;
   }
   return Boolean(subAgentNavigationTarget(tool));
@@ -741,9 +754,9 @@ export const subAgentDisplayResult = (tool, fetchedResult = null) => {
   const target = subAgentNavigationTarget(tool) ?? {};
   const data = subAgentResultData(tool);
   const payload = {
+    id: trimmedString(data.id),
     agent_id: target.agentId ?? trimmedString(data.agent_id),
     session_id: target.sessionId ?? subAgentSessionId(tool),
-    run_id: trimmedString(data.run_id) || null,
     status: 'completed',
     result: resultText,
   };
@@ -1257,43 +1270,16 @@ export function subAgentResultData(tool) {
 }
 
 function subAgentToolLabel(toolName, args) {
+  const action = trimmedString(args.action);
+  if (action && action !== 'run') {
+    return [action, trimmedString(args.id)].filter(Boolean).join(' · ');
+  }
   const agentId = trimmedString(args.agent_id);
-  const preview =
-    toolName === 'subagent'
-      ? truncateToolLabel(
-          trimmedString(args.content),
-          MAX_SUBAGENT_PREVIEW_LENGTH,
-        )
-      : truncateToolLabel(
-          trimmedString(args.session_id),
-          MAX_SUBAGENT_PREVIEW_LENGTH,
-        );
-  return [agentId, preview].filter(Boolean).join(' · ');
-}
-
-function matchingSubAgentResultStatus(tool, assistantRun) {
-  if (toolNameForRunTool(tool) !== 'subagent') {
-    return '';
-  }
-
-  const sessionId = subAgentSessionId(tool);
-  const agentId = subAgentTargetAddress(tool);
-  if (!sessionId) {
-    return '';
-  }
-
-  const matchingResultTool = (assistantRun?.tools ?? []).find(
-    (candidate) =>
-      toolNameForRunTool(candidate) === 'subagent_result' &&
-      subAgentTargetAddress(candidate) === agentId &&
-      subAgentSessionId(candidate) === sessionId &&
-      candidate.resultEvent,
+  const preview = truncateToolLabel(
+    trimmedString(args.content),
+    MAX_SUBAGENT_PREVIEW_LENGTH,
   );
-  if (!matchingResultTool) {
-    return '';
-  }
-
-  return subAgentStatusToDotStatus(subAgentChildStatus(matchingResultTool));
+  return [agentId, preview].filter(Boolean).join(' · ');
 }
 
 function externalSubAgentStatus(tool, subAgentStatuses) {

@@ -141,6 +141,9 @@ class BlockRenderContext:
     # ``project_context``: a Rooted Identity Agent may receive Working Project
     # context while remaining identity-scoped for Sub-Agent routing.
     agent_project_id: str | None = None
+    # Child Chat loops use this to render Tool-owned guidance for the caller's
+    # actual orchestration role without changing the Tool schema.
+    nesting_depth: int = 0
     scope: str = "default"
     # Optional side channel for build-time file reads. When set, every prompt file
     # whose content actually reaches the prompt (a workspace ``{include:…}``, SOUL,

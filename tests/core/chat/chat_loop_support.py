@@ -207,6 +207,7 @@ class StubPrompts:
         project_context: Any = None,
         working_project_context: str | None = None,
         agent_project_id: str | None = None,
+        nesting_depth: int = 0,
         skill_registry: Any = None,
         skill_catalog: Any = None,
         read_paths: list[Path] | None = None,

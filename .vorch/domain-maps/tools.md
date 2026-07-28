@@ -73,7 +73,7 @@ Domain-specific vocabulary for tools. The core Tool term lives in `.vorch/GLOSSA
 - `tools/project.md` - Identity-only explicit Project Context loading
 - `tools/skill.md` - `skill` (ordinary allow-list tool; default-on in the Project Tool Whitelist)
 - `skill_manage` - direct Agent Skill authoring (no child map; see `skills.md` → Authoring & Write Scope): one flat object with required `action` and `name`; actions are `create`, `edit`, `patch`, `write_file`, `remove_file`, and `delete`. It supports complete validated `SKILL.md` text plus UTF-8 support files under `scripts/`, `references/`, and `assets/`, rejects action-inapplicable fields, applies every successful mutation directly, and is identity-only — withheld from an empty-`workspace` Config Agent at both dispatch and prompt visibility and excluded from the Project Tool Whitelist.
-- `tools/subagent.md` - `subagent` and `subagent_result` registration wrapper
+- `tools/subagent.md` - single action-based `subagent` registration wrapper
 - `tools/cron.md` - `cron`
 - `tools/channel_send.md` - `channel_send`
 - `tools/speech.md` - `text_to_speech`

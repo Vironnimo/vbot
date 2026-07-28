@@ -21,10 +21,11 @@ from core.projects import AgentResolutionError
 from core.runs import ActiveRunError, Run, RunNotFoundError
 from core.storage import TemporaryFileManager
 from core.subagents.subagents import (
-    FORCED_FOREGROUND_NOTE,
     SubAgentBatchTracker,
-    _handle_subagent,
-    _handle_subagent_result,
+    _handle_subagent_status,
+)
+from core.subagents.subagents import (
+    _handle_subagent as _handle_subagent_impl,
 )
 from core.tools.tools import ToolContext
 
@@ -32,6 +33,37 @@ pytestmark = pytest.mark.asyncio
 
 JsonObject = dict[str, Any]
 SUBAGENT_TOOL_NAME = "subagent"
+
+
+async def _handle_subagent(
+    context: ToolContext,
+    arguments: JsonObject,
+    *,
+    runtime: Any,
+    batch_tracker: SubAgentBatchTracker,
+) -> JsonObject:
+    canonical = {"action": "run", **arguments}
+    return await _handle_subagent_impl(
+        context,
+        canonical,
+        runtime=runtime,
+        batch_tracker=batch_tracker,
+    )
+
+
+async def _handle_subagent_result(
+    context: ToolContext,
+    arguments: JsonObject,
+    *,
+    runtime: Any,
+    batch_tracker: SubAgentBatchTracker,
+) -> JsonObject:
+    return await _handle_subagent_status(
+        context,
+        {"action": "status", **arguments},
+        runtime=runtime,
+        batch_tracker=batch_tracker,
+    )
 
 
 def make_context(
@@ -73,13 +105,14 @@ async def test_foreground_result_acknowledges_child_only_after_parent_persistenc
     tracker = SubAgentBatchTracker(RecordingTriggerService())
     persisted_callbacks: list[Any] = []
     context = make_context(
+        nesting_depth=1,
         result_persisted_hook=persisted_callbacks.append,
     )
 
     task = asyncio.create_task(
         _handle_subagent(
             context,
-            {"content": "spawn", "agent_id": "worker", "background": False},
+            {"content": "spawn", "agent_id": "worker"},
             runtime=runtime,
             batch_tracker=tracker,
         )
@@ -96,7 +129,7 @@ async def test_foreground_result_acknowledges_child_only_after_parent_persistenc
     assert result["ok"] is True
     assert len(persisted_callbacks) == 1
     child_session_id = result["data"]["session_id"]
-    child_run_id = result["data"]["run_id"]
+    child_run_id = manager.started[0]["run"].id
     runtime.chat_sessions.record_terminal_run(
         "worker",
         child_session_id,
@@ -139,16 +172,24 @@ async def test_result_lookup_acknowledges_persisted_child_run_only_after_parent_
     )
     persisted_callbacks: list[Any] = []
     context = make_context(result_persisted_hook=persisted_callbacks.append)
+    tracker.register(
+        (context.agent_id, context.session_id, context.run_id),
+        "worker",
+        "child-session",
+        "child-run",
+        work_id="sub_child",
+    )
 
     result = await _handle_subagent_result(
         context,
-        {"agent_id": "worker", "session_id": "child-session"},
+        {"id": "sub_child"},
         runtime=runtime,
         batch_tracker=tracker,
     )
 
     assert result["ok"] is True
-    assert result["data"]["run_id"] == "child-run"
+    assert result["data"]["id"] == "sub_child"
+    assert "run_id" not in result["data"]
     assert len(persisted_callbacks) == 1
     assert runtime.chat_sessions.list_with_metadata("worker")[0]["has_unread_completion"] is True
 
@@ -514,6 +555,7 @@ async def test_project_subagent_parent_link_metadata_carries_project_id(
     metadata = runtime.chat_sessions.get_metadata("worker", child_session_id, "acme")
     assert metadata["is_subagent_session"] is True
     assert metadata["subagent_parent"] == {
+        "id": result["data"]["id"],
         "agent_id": "parent",
         "session_id": "parent-session",
         "run_id": "parent-run",
@@ -579,15 +621,12 @@ async def test_qualified_subagent_result_uses_target_project_for_persisted_fallb
         "project-child",
         "missing-run",
         "vbot",
+        work_id="sub_project",
     )
 
     result = await _handle_subagent_result(
         context,
-        {
-            "agent_id": "worker@vbot",
-            "session_id": "project-child",
-            "run_id": "missing-run",
-        },
+        {"id": "sub_project"},
         runtime=runtime,
         batch_tracker=tracker,
     )
@@ -597,7 +636,7 @@ async def test_qualified_subagent_result_uses_target_project_for_persisted_fallb
     assert result["data"]["result"] == "project result"
 
 
-async def test_project_parent_cannot_read_cross_project_subagent_result(tmp_path: Path) -> None:
+async def test_status_cannot_read_unowned_subagent_work(tmp_path: Path) -> None:
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
     tracker = SubAgentBatchTracker(RecordingTriggerService())
@@ -613,34 +652,25 @@ async def test_project_parent_cannot_read_cross_project_subagent_result(tmp_path
 
     result = await _handle_subagent_result(
         context,
-        {
-            "agent_id": "worker@vbot",
-            "session_id": "project-child",
-            "run_id": run.id,
-        },
+        {"id": "sub_unowned"},
         runtime=runtime,
         batch_tracker=tracker,
     )
 
     assert result["ok"] is False
-    assert result["error"]["code"] == "agent_not_allowed"
+    assert result["error"]["code"] == "subagent_not_owned"
 
 
-@pytest.mark.parametrize("tool_name", ["subagent", "subagent_result"])
 async def test_malformed_qualified_subagent_address_fails_cleanly(
     tmp_path: Path,
-    tool_name: str,
 ) -> None:
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
     tracker = SubAgentBatchTracker(RecordingTriggerService())
     context = make_context(project_id=None)
     arguments: JsonObject = {"agent_id": "worker@vbot@extra", "session_id": "child"}
-    if tool_name == "subagent":
-        arguments["content"] = "spawn"
-
-    handler = _handle_subagent if tool_name == "subagent" else _handle_subagent_result
-    result = await handler(
+    arguments["content"] = "spawn"
+    result = await _handle_subagent(
         context,
         arguments,
         runtime=runtime,
@@ -651,21 +681,19 @@ async def test_malformed_qualified_subagent_address_fails_cleanly(
     assert result["error"]["code"] == "invalid_arguments"
 
 
-@pytest.mark.parametrize("tool_name", ["subagent", "subagent_result"])
-async def test_subagent_tools_reject_unknown_arguments(
-    tmp_path: Path,
-    tool_name: str,
-) -> None:
+@pytest.mark.parametrize("action", ["run", "status", "cancel"])
+async def test_subagent_actions_reject_unknown_arguments(tmp_path: Path, action: str) -> None:
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
     tracker = SubAgentBatchTracker(RecordingTriggerService())
     context = make_context()
-    arguments: JsonObject = {"session_id": "child", "unexpected": True}
-    if tool_name == "subagent":
+    arguments: JsonObject = {"action": action, "unexpected": True}
+    if action == "run":
         arguments["content"] = "spawn"
+    else:
+        arguments["id"] = "sub_test"
 
-    handler = _handle_subagent if tool_name == "subagent" else _handle_subagent_result
-    result = await handler(
+    result = await _handle_subagent_impl(
         context,
         arguments,
         runtime=runtime,
@@ -874,19 +902,17 @@ async def test_subagent_blank_agent_id_falls_back_to_calling_agent(tmp_path: Pat
     await asyncio.sleep(0)
 
 
-async def test_project_subagent_forced_foreground_at_depth_stays_project_scoped(
+async def test_project_subagent_foreground_at_depth_stays_project_scoped(
     tmp_path: Path,
 ) -> None:
-    # Option A composes with project inheritance: a depth >= 1 spawn is forced to
-    # the foreground (returns the finished child payload plus the forced-foreground
-    # note) while the child run still carries the parent's project end-to-end.
+    # A depth >= 1 caller runs its child in the foreground while project scope
+    # still carries end-to-end.
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
     tracker = SubAgentBatchTracker(RecordingTriggerService())
     context = make_context(project_id="acme", nesting_depth=1)
 
-    # Act: a background request that Option A forces to the foreground. Drive the
-    # started run to completion so the foreground wait resolves.
+    # Drive the started Run to completion so the foreground wait resolves.
     task = asyncio.create_task(
         _handle_subagent(
             context,
@@ -904,7 +930,7 @@ async def test_project_subagent_forced_foreground_at_depth_stays_project_scoped(
     assert result["ok"] is True
     assert result["data"]["status"] == "completed"
     assert result["data"]["result"] == "child done"
-    assert result["data"]["spawn_note"] == FORCED_FOREGROUND_NOTE
+    assert result["data"]["delivery"] == "inline"
     assert manager.started[0]["project_id"] == "acme"
     assert started_run.project_id == "acme"
 

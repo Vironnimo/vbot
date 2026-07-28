@@ -488,25 +488,20 @@ function plannedToolResponse(prompt, results, offeredTools) {
       return {
         calls: [
           toolCall("subagent", {
+            action: "run",
             agent_id: "e2e-worker",
-            background: false,
             content: "E2E_SUBAGENT_CHILD Return the deterministic child result",
           }),
         ],
       };
     }
-    if (resultsFor(results, "subagent_result").length === 0) {
-      const child = subagentResults[0]?.envelope?.data ?? {};
-      return {
-        calls: [
-          toolCall("subagent_result", {
-            agent_id: "e2e-worker",
-            session_id: child.session_id ?? "",
-            run_id: child.run_id ?? "",
-          }),
-        ],
-      };
-    }
+    return { text: "Sub-agent started; awaiting automatic delivery." };
+  }
+
+  if (
+    prompt.includes("Sub-agent batch complete") &&
+    prompt.includes("Fake sub-agent result.")
+  ) {
     return { text: "Sub-agent tool completed." };
   }
 

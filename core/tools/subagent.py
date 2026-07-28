@@ -1,4 +1,4 @@
-"""Tool registration for sub-agent spawning and result lookup."""
+"""Tool registration for Sub-Agent work."""
 
 from __future__ import annotations
 
@@ -11,18 +11,14 @@ from core.tools.tools import (
     ToolDisplay,
     ToolPromptBlockRegistry,
     ToolRegistry,
-    operation_envelope_schema,
 )
 
 SUBAGENT_TOOL_NAME = "subagent"
-SUBAGENT_RESULT_TOOL_NAME = "subagent_result"
 
 SUBAGENT_TOOL_DESCRIPTION = (
-    "Start, continue, or cancel an owned Run in a persisted Sub-Agent Session."
-)
-SUBAGENT_RESULT_TOOL_DESCRIPTION = (
-    "Return the current queued or running status, or the terminal result, of a spawned "
-    "Sub-Agent Run without waiting for active work to finish."
+    "Run, inspect, or cancel owned Sub-Agent work. Top-level run actions return "
+    "immediately and deliver results automatically; run actions made by a Sub-Agent "
+    "wait for completion."
 )
 
 SUBAGENT_PROMPT_BLOCK_TEMPLATE = (
@@ -31,9 +27,10 @@ SUBAGENT_PROMPT_BLOCK_TEMPLATE = (
     "calling Agent or one of the additional Agents listed below. You remain "
     "responsible for deciding what to delegate, integrating the results, and "
     "verifying the final outcome.\n\n"
-    "Use the `start` operation to create a separate Session; omit `agent_id` there "
-    "to delegate to the calling Agent, which is always available and is not repeated "
-    "in the list below.\n\n"
+    'Use `action: "run"` to admit work. Omit `session_id` to create a separate '
+    "Session; omit `agent_id` there to use the calling Agent, which is always available "
+    "and is not repeated in the list below. To continue a prior Sub-Agent Session, "
+    "repeat both its exact `agent_id` and `session_id`.\n\n"
     "The following additional Agents are available. Use each Agent id exactly as "
     "shown:\n\n"
     "{subagent_list}\n\n"
@@ -44,51 +41,56 @@ SUBAGENT_PROMPT_BLOCK_TEMPLATE = (
     "parallel.\n\n"
     "Project Agents may be listed with a qualified `agent@project` id. Use every "
     "Agent id exactly as listed above.\n\n"
-    "Inside either operation, `background` defaults to `true`. Use background Runs when you "
-    "can continue without their immediate results. Issue independent sibling "
-    "`subagent` calls in the same turn so they can run concurrently. Do not poll "
-    "background Runs: after finishing any independent work, end your turn. When "
-    "every Sub-Agent in the batch finishes, their complete final outputs are "
-    "delivered to you automatically.\n\n"
-    "Set `background` to `false` when your next step depends immediately on the "
-    "result. When you are yourself a Sub-Agent, every spawn runs in the foreground "
-    "regardless of the requested setting; issue sibling calls in the same turn to "
-    "run them concurrently.\n\n"
+    "{execution_guidance}\n\n"
+    "Issue independent sibling `subagent` calls in the same turn so they can run "
+    "concurrently.\n\n"
     "Optional `model` and `thinking_effort` values override only the newly admitted "
     "Sub-Agent Run. They do not modify the target Agent or Session, persist into a "
     "later continuation, or pass to nested Sub-Agents.\n\n"
-    "Use the `continue` operation for a specific existing Session and repeat both "
-    "the exact `agent_id` and `session_id` returned by the original `subagent` call; "
-    "Session ids are Agent-scoped.\n\n"
-    "Cancelling the calling Run does not cancel background Sub-Agents. Use the `cancel` "
-    "operation in this or a later Run to stop one exact Sub-Agent owned by this Parent "
-    "Agent Session. Repeat its returned `agent_id` and `session_id`, then pass its "
-    "`run_id`; if the spawn returned only a `queue_item_id`, pass that instead. "
-    "Cancellation waits until the exact child is actually cancelled and cannot target "
-    "another Parent Session's work.\n\n"
-    "Use `subagent_result` only when the user explicitly asks for a running Sub-Agent's "
-    "status or result before automatic batch delivery."
+    "Each admitted run action returns one stable `id`. Use only that `id` with "
+    '`action: "status"` or `action: "cancel"`; queued and running state are internal '
+    "and never change the handle. Status is a non-blocking snapshot. Cancellation waits "
+    "until that exact owned work is cancelled and cannot target another Parent Session's "
+    "work."
 )
 
 NO_ADDITIONAL_SUBAGENTS_TEXT = "**No additional Agents are available.**"
+TOP_LEVEL_EXECUTION_GUIDANCE = (
+    "You are the top-level Agent. Every `run` action starts in the background and "
+    "returns immediately. Continue independent work or end your turn; results are "
+    "delivered automatically when the batch finishes. Do not poll."
+)
+NESTED_EXECUTION_GUIDANCE = (
+    "You are a Sub-Agent. Every `run` action executes in the foreground and the Tool "
+    "Call returns only when that work finishes. Sibling calls issued together still "
+    "run concurrently."
+)
 
+_SUBAGENT_ACTION_PARAMETER: JsonObject = {
+    "type": "string",
+    "enum": ["run", "status", "cancel"],
+    "description": (
+        "run admits new work, status returns a non-blocking snapshot for an id, and "
+        "cancel stops the exact owned work for an id."
+    ),
+}
+_SUBAGENT_ID_PARAMETER: JsonObject = {
+    "type": "string",
+    "minLength": 1,
+    "description": "Stable id returned by run. Required for status and cancel.",
+}
 _SUBAGENT_CONTENT_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
-    "description": "Self-contained task or message to send to the target Sub-Agent.",
+    "description": "Self-contained task or message. Required for run.",
 }
 _SUBAGENT_AGENT_ID_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
-    "description": "Target Agent id from the allowed values.",
-}
-_SUBAGENT_BACKGROUND_PARAMETER: JsonObject = {
-    "type": "boolean",
     "description": (
-        "When true, return after the Run is started or queued. When false, wait for "
-        "its final result. Defaults to true."
+        "Target Agent id from the allowed values for run. Omit for the calling Agent "
+        "when creating a Session; required with session_id."
     ),
-    "default": True,
 }
 _SUBAGENT_MODEL_PARAMETER: JsonObject = {
     "type": "string",
@@ -109,122 +111,25 @@ _SUBAGENT_THINKING_PARAMETER: JsonObject = {
 _SUBAGENT_SESSION_ID_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
-    "description": "Existing Sub-Agent Session id returned by start.",
-}
-_SUBAGENT_RUN_ID_PARAMETER: JsonObject = {
-    "type": "string",
-    "minLength": 1,
-    "description": "Exact running Sub-Agent Run id returned by start or continue.",
-}
-_SUBAGENT_QUEUE_ITEM_ID_PARAMETER: JsonObject = {
-    "type": "string",
-    "minLength": 1,
-    "description": "Exact queued-item id returned when the Sub-Agent Run has not started.",
-}
-
-
-def _subagent_operation(
-    description: str,
-    properties: JsonObject,
-    *,
-    required: tuple[str, ...],
-) -> JsonObject:
-    return {
-        "type": "object",
-        "description": description,
-        "properties": properties,
-        "required": list(required),
-        "additionalProperties": False,
-    }
-
-
-def _subagent_cancel_operation() -> JsonObject:
-    common_properties = {
-        "agent_id": _SUBAGENT_AGENT_ID_PARAMETER,
-        "session_id": _SUBAGENT_SESSION_ID_PARAMETER,
-    }
-    return {
-        "type": "object",
-        "oneOf": [
-            _subagent_operation(
-                "Cancel one exact running child owned by this Parent Agent Session.",
-                {
-                    **common_properties,
-                    "run_id": _SUBAGENT_RUN_ID_PARAMETER,
-                },
-                required=("agent_id", "session_id", "run_id"),
-            ),
-            _subagent_operation(
-                "Cancel one exact queued child owned by this Parent Agent Session.",
-                {
-                    **common_properties,
-                    "queue_item_id": _SUBAGENT_QUEUE_ITEM_ID_PARAMETER,
-                },
-                required=("agent_id", "session_id", "queue_item_id"),
-            ),
-        ],
-    }
-
-
-SUBAGENT_TOOL_PARAMETERS: JsonObject = operation_envelope_schema(
-    {
-        "start": _subagent_operation(
-            "Create a new persisted Sub-Agent Session. Omit agent_id to use the calling Agent.",
-            {
-                "content": _SUBAGENT_CONTENT_PARAMETER,
-                "agent_id": _SUBAGENT_AGENT_ID_PARAMETER,
-                "background": _SUBAGENT_BACKGROUND_PARAMETER,
-                "model": _SUBAGENT_MODEL_PARAMETER,
-                "thinking_effort": _SUBAGENT_THINKING_PARAMETER,
-            },
-            required=("content",),
-        ),
-        "continue": _subagent_operation(
-            "Continue one existing Agent-scoped Sub-Agent Session.",
-            {
-                "content": _SUBAGENT_CONTENT_PARAMETER,
-                "agent_id": _SUBAGENT_AGENT_ID_PARAMETER,
-                "session_id": _SUBAGENT_SESSION_ID_PARAMETER,
-                "background": _SUBAGENT_BACKGROUND_PARAMETER,
-                "model": _SUBAGENT_MODEL_PARAMETER,
-                "thinking_effort": _SUBAGENT_THINKING_PARAMETER,
-            },
-            required=("content", "agent_id", "session_id"),
-        ),
-        "cancel": _subagent_cancel_operation(),
-    },
-    description=(
-        "Set request.operation to start, continue, or cancel, and include the operation "
-        "arguments in the same request object."
+    "description": (
+        "Existing Sub-Agent Session id returned by run. With agent_id, continues that "
+        "Session instead of creating one."
     ),
-)
+}
 
-SUBAGENT_RESULT_TOOL_PARAMETERS: JsonObject = {
+
+SUBAGENT_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
-        "session_id": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Persisted Sub-Agent Session id returned by subagent.",
-        },
-        "agent_id": {
-            "type": "string",
-            "minLength": 1,
-            "description": (
-                "Agent id that owns the Sub-Agent Session. Omit it if the Session belongs "
-                "to the calling Agent."
-            ),
-        },
-        "run_id": {
-            "type": "string",
-            "minLength": 1,
-            "description": (
-                "Specific in-memory Sub-Agent Run id to retrieve. Omit it to resolve the Run "
-                "associated with the Session."
-            ),
-        },
+        "action": _SUBAGENT_ACTION_PARAMETER,
+        "id": _SUBAGENT_ID_PARAMETER,
+        "content": _SUBAGENT_CONTENT_PARAMETER,
+        "agent_id": _SUBAGENT_AGENT_ID_PARAMETER,
+        "session_id": _SUBAGENT_SESSION_ID_PARAMETER,
+        "model": _SUBAGENT_MODEL_PARAMETER,
+        "thinking_effort": _SUBAGENT_THINKING_PARAMETER,
     },
-    "required": ["session_id"],
+    "required": ["action"],
     "additionalProperties": False,
 }
 
@@ -234,7 +139,7 @@ def register_subagent_tools(
     coordinator: SubAgentCoordinator,
     prompt_blocks: ToolPromptBlockRegistry | None = None,
 ) -> None:
-    """Register the public sub-agent tools."""
+    """Register the public Sub-Agent Tool."""
     registry.register(
         SUBAGENT_TOOL_NAME,
         SUBAGENT_TOOL_DESCRIPTION,
@@ -246,14 +151,6 @@ def register_subagent_tools(
             hidden_argument_keys=("content",),
         ),
     )
-    registry.register(
-        SUBAGENT_RESULT_TOOL_NAME,
-        SUBAGENT_RESULT_TOOL_DESCRIPTION,
-        SUBAGENT_RESULT_TOOL_PARAMETERS,
-        coordinator.result,
-        result_schema={"type": "object"},
-        display=ToolDisplay(summary_fields=("agent_id", "session_id")),
-    )
     if prompt_blocks is not None:
         prompt_blocks.register(
             SUBAGENT_TOOL_NAME,
@@ -262,18 +159,15 @@ def register_subagent_tools(
 
 
 def _subagent_display_summary(arguments: JsonObject) -> str:
-    operation_arguments = arguments.get("request")
-    if not isinstance(operation_arguments, dict):
+    action = arguments.get("action")
+    if action not in {"run", "status", "cancel"}:
         return ""
-    operation = operation_arguments.get("operation")
-    if operation not in {"start", "continue", "cancel"}:
-        return ""
-    parts = [operation]
-    agent_id = operation_arguments.get("agent_id")
+    parts = [action]
+    agent_id = arguments.get("agent_id")
     if isinstance(agent_id, str) and agent_id:
         parts.append(agent_id)
-    for key in ("content", "run_id", "queue_item_id"):
-        value = operation_arguments.get(key)
+    for key in ("content", "id"):
+        value = arguments.get(key)
         if isinstance(value, str) and value:
             parts.append(value)
             break
@@ -283,7 +177,14 @@ def _subagent_display_summary(arguments: JsonObject) -> str:
 def _render_subagent_prompt_block(context: Any, coordinator: SubAgentCoordinator) -> str:
     targets = coordinator.prompt_targets(context.agent, context.agent_project_id)
     rendered_targets = _format_subagent_targets(targets)
-    return SUBAGENT_PROMPT_BLOCK_TEMPLATE.replace("{subagent_list}", rendered_targets)
+    execution_guidance = (
+        NESTED_EXECUTION_GUIDANCE
+        if getattr(context, "nesting_depth", 0) > 0
+        else TOP_LEVEL_EXECUTION_GUIDANCE
+    )
+    return SUBAGENT_PROMPT_BLOCK_TEMPLATE.replace("{subagent_list}", rendered_targets).replace(
+        "{execution_guidance}", execution_guidance
+    )
 
 
 def _format_subagent_targets(targets: list[SubAgentPromptTarget]) -> str:
@@ -305,9 +206,6 @@ def _single_line(value: str) -> str:
 
 
 __all__ = [
-    "SUBAGENT_RESULT_TOOL_DESCRIPTION",
-    "SUBAGENT_RESULT_TOOL_NAME",
-    "SUBAGENT_RESULT_TOOL_PARAMETERS",
     "SUBAGENT_PROMPT_BLOCK_TEMPLATE",
     "SUBAGENT_TOOL_DESCRIPTION",
     "SUBAGENT_TOOL_NAME",

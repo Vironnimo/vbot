@@ -1813,6 +1813,7 @@ class ChatLoop:
             project_context=project_context,
             working_project_context=working_project_context,
             agent_project_id=agent_project_id,
+            nesting_depth=self._nesting_depth,
             skill_registry=skill_registry,
             skill_catalog=skill_catalog,
             read_paths=prompt_read_paths,

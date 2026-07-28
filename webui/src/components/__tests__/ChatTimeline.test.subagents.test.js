@@ -36,7 +36,7 @@ describe('ChatTimeline', () => {
     vi.useRealTimers();
   });
 
-  it('updates the spawn row while rendering subagent_result as an ordinary tool call', () => {
+  it('renders a subagent status action as an ordinary tool call', () => {
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -53,6 +53,7 @@ describe('ChatTimeline', () => {
           index: 0,
           name: 'subagent',
           arguments: {
+            action: 'run',
             agent_id: 'beta',
             content: 'Inspect the logs',
           },
@@ -72,10 +73,11 @@ describe('ChatTimeline', () => {
         result: {
           ok: true,
           data: {
+            id: 'sub_work_1',
             agent_id: 'beta',
             session_id: 'sub-session-1',
-            run_id: 'sub-run-1',
             status: 'running',
+            delivery: 'automatic',
           },
         },
       },
@@ -86,13 +88,12 @@ describe('ChatTimeline', () => {
       sequence: 3,
       payload: {
         tool_call: {
-          id: 'call-subagent-result',
+          id: 'call-subagent-status',
           index: 1,
-          name: 'subagent_result',
+          name: 'subagent',
           arguments: {
-            agent_id: 'beta',
-            session_id: 'sub-session-1',
-            run_id: 'sub-run-1',
+            action: 'status',
+            id: 'sub_work_1',
           },
         },
       },
@@ -103,16 +104,16 @@ describe('ChatTimeline', () => {
       sequence: 4,
       payload: {
         tool_call: {
-          id: 'call-subagent-result',
+          id: 'call-subagent-status',
           index: 1,
-          name: 'subagent_result',
+          name: 'subagent',
         },
         result: {
           ok: true,
           data: {
+            id: 'sub_work_1',
             agent_id: 'beta',
             session_id: 'sub-session-1',
-            run_id: 'sub-run-1',
             status: 'completed',
           },
         },
@@ -137,16 +138,15 @@ describe('ChatTimeline', () => {
       ),
     );
     const resultRow = ordinaryToolRows.find(
-      (row) => row.querySelector('.te-fn')?.textContent === 'subagent_result',
+      (row) => row.querySelector('.te-fn')?.textContent === 'subagent',
     );
 
     expect(subagentRows).toHaveLength(1);
     expect(subagentRows[0].textContent).not.toContain('Status: completed');
     expect(subagentRows[0].querySelector('.subagent-status')).toBeNull();
-    expect(subagentRows[0].querySelector('.te-dot.done')).not.toBeNull();
-    expect(subagentRows[0].querySelector('.te-dot.running')).toBeNull();
+    expect(subagentRows[0].querySelector('.te-dot.running')).not.toBeNull();
     expect(resultRow).toBeTruthy();
-    expect(resultRow.textContent).toContain('beta · sub-session-1');
+    expect(resultRow.textContent).toContain('status · sub_work_1');
     expect(resultRow.textContent).not.toContain('Sub-agent');
     expect(resultRow.querySelector('.subagent-link')).toBeNull();
     expect(resultRow.querySelector('[data-cancel="subagent"]')).toBeNull();
