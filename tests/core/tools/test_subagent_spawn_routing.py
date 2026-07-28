@@ -4,14 +4,11 @@ from __future__ import annotations
 
 from core.projects import ModelConfigurationError
 from core.tools.subagent import (
-    SUBAGENT_RESULT_TOOL_DESCRIPTION,
-    SUBAGENT_RESULT_TOOL_PARAMETERS,
     SUBAGENT_TOOL_DESCRIPTION,
     SUBAGENT_TOOL_PARAMETERS,
 )
 
 from .subagent_test_support import (
-    SUBAGENT_RESULT_TOOL_NAME,
     SUBAGENT_TOOL_NAME,
     Any,
     ChatMessage,
@@ -39,7 +36,7 @@ from .subagent_test_support import (
 pytestmark = pytest.mark.asyncio
 
 
-async def test_register_subagent_tools_registers_both_public_tools() -> None:
+async def test_register_subagent_tools_registers_one_flat_public_tool() -> None:
     # Arrange
     registry = ToolRegistry()
     trigger_service = RecordingTriggerService()
@@ -50,58 +47,38 @@ async def test_register_subagent_tools_registers_both_public_tools() -> None:
     register_subagent_tools(registry, coordinator)
 
     # Assert
-    assert [tool.name for tool in registry.list_tools()] == [
-        SUBAGENT_TOOL_NAME,
-        SUBAGENT_RESULT_TOOL_NAME,
-    ]
+    assert [tool.name for tool in registry.list_tools()] == [SUBAGENT_TOOL_NAME]
     subagent = registry.get(SUBAGENT_TOOL_NAME)
-    subagent_result = registry.get(SUBAGENT_RESULT_TOOL_NAME)
     assert subagent.description == (
-        "Start, continue, or cancel an owned Run in a persisted Sub-Agent Session."
+        "Run, inspect, or cancel owned Sub-Agent work. Top-level run actions return "
+        "immediately and deliver results automatically; run actions made by a Sub-Agent "
+        "wait for completion."
     )
-    assert subagent_result.description == (
-        "Return the current queued or running status, or the terminal result, of a spawned "
-        "Sub-Agent Run without waiting for active work to finish."
-    )
-    assert subagent.parameters == SUBAGENT_TOOL_PARAMETERS
-    assert subagent_result.parameters == SUBAGENT_RESULT_TOOL_PARAMETERS
     assert subagent.description == SUBAGENT_TOOL_DESCRIPTION
-    assert subagent_result.description == SUBAGENT_RESULT_TOOL_DESCRIPTION
-    branches = subagent.parameters["properties"]["request"]["anyOf"]
-    by_operation = {branch["properties"]["operation"]["enum"][0]: branch for branch in branches}
-    start = by_operation["start"]
-    continuation = by_operation["continue"]
-    cancellation_branches = [
-        branch for branch in branches if branch["properties"]["operation"]["enum"] == ["cancel"]
-    ]
-    assert start["required"] == ["operation", "content"]
-    assert continuation["required"] == ["operation", "content", "agent_id", "session_id"]
-    assert len(cancellation_branches) == 2
-    assert {
-        tuple(field for field in branch["required"] if field != "operation")
-        for branch in cancellation_branches
-    } == {
-        ("agent_id", "session_id", "run_id"),
-        ("agent_id", "session_id", "queue_item_id"),
-    }
-    assert start["properties"]["content"]["description"] == (
-        "Self-contained task or message to send to the target Sub-Agent."
+    assert subagent.parameters == SUBAGENT_TOOL_PARAMETERS
+    assert subagent.parameters["required"] == ["action"]
+    assert subagent.parameters["additionalProperties"] is False
+    properties = subagent.parameters["properties"]
+    assert properties["action"]["enum"] == ["run", "status", "cancel"]
+    assert properties["id"]["description"] == (
+        "Stable id returned by run. Required for status and cancel."
     )
-    assert start["properties"]["agent_id"]["description"] == (
-        "Target Agent id from the allowed values."
+    assert properties["content"]["description"] == (
+        "Self-contained task or message. Required for run."
     )
-    assert start["properties"]["background"]["description"] == (
-        "When true, return after the Run is started or queued. When false, wait for its "
-        "final result. Defaults to true."
+    assert properties["agent_id"]["description"] == (
+        "Target Agent id from the allowed values for run. Omit for the calling Agent "
+        "when creating a Session; required with session_id."
     )
-    assert continuation["properties"]["session_id"]["description"] == (
-        "Existing Sub-Agent Session id returned by start."
+    assert properties["session_id"]["description"] == (
+        "Existing Sub-Agent Session id returned by run. With agent_id, continues that "
+        "Session instead of creating one."
     )
-    assert start["properties"]["model"]["description"] == (
+    assert properties["model"]["description"] == (
         "Run-local primary Model override in <provider>/<model-id> form. "
         "Does not modify the target Agent or Session."
     )
-    assert start["properties"]["thinking_effort"]["enum"] == [
+    assert properties["thinking_effort"]["enum"] == [
         "",
         "high",
         "low",
@@ -111,21 +88,13 @@ async def test_register_subagent_tools_registers_both_public_tools() -> None:
         "none",
         "xhigh",
     ]
-    assert start["properties"]["thinking_effort"]["description"] == (
+    assert properties["thinking_effort"]["description"] == (
         "Run-local thinking effort override. Omit to inherit the target Agent; "
         "an empty string selects the Provider default."
     )
-    assert subagent_result.parameters["properties"]["session_id"]["description"] == (
-        "Persisted Sub-Agent Session id returned by subagent."
-    )
-    assert subagent_result.parameters["properties"]["agent_id"]["description"] == (
-        "Agent id that owns the Sub-Agent Session. Omit it if the Session belongs to the "
-        "calling Agent."
-    )
-    assert subagent_result.parameters["properties"]["run_id"]["description"] == (
-        "Specific in-memory Sub-Agent Run id to retrieve. Omit it to resolve the Run "
-        "associated with the Session."
-    )
+    assert "background" not in properties
+    assert "run_id" not in properties
+    assert "queue_item_id" not in properties
 
 
 async def test_subagent_tool_enforces_depth_limit(tmp_path: Path) -> None:
@@ -138,7 +107,7 @@ async def test_subagent_tool_enforces_depth_limit(tmp_path: Path) -> None:
     # Act
     result = await _handle_subagent(
         context,
-        {"start": {"content": "spawn"}},
+        {"content": "spawn"},
         runtime=runtime,
         batch_tracker=tracker,
     )
@@ -160,7 +129,7 @@ async def test_subagent_tool_enforces_per_turn_limit(tmp_path: Path) -> None:
     # Act
     result = await _handle_subagent(
         context,
-        {"start": {"content": "spawn"}},
+        {"content": "spawn"},
         runtime=runtime,
         batch_tracker=tracker,
     )
@@ -270,7 +239,7 @@ async def test_subagent_tool_creates_new_session_when_no_session_id_provided(
     # Act
     result = await _handle_subagent(
         context,
-        {"start": {"content": "spawn"}},
+        {"content": "spawn"},
         runtime=runtime,
         batch_tracker=tracker,
     )
@@ -306,6 +275,7 @@ async def test_subagent_tool_marks_created_session_with_parent_metadata(
     )
     assert metadata["is_subagent_session"] is True
     assert metadata["subagent_parent"] == {
+        "id": result["data"]["id"],
         "agent_id": context.agent_id,
         "session_id": context.session_id,
         "run_id": context.run_id,
@@ -324,14 +294,15 @@ async def test_subagent_tool_emits_session_started_before_foreground_result(
     tracker = SubAgentBatchTracker(RecordingTriggerService())
     emitted_events: list[tuple[str, JsonObject]] = []
     context = make_context(
-        emit_hook=lambda event_type, payload: emitted_events.append((event_type, payload))
+        nesting_depth=1,
+        emit_hook=lambda event_type, payload: emitted_events.append((event_type, payload)),
     )
 
     # Act
     task = asyncio.create_task(
         _handle_subagent(
             context,
-            {"content": "spawn", "background": False},
+            {"content": "spawn"},
             runtime=runtime,
             batch_tracker=tracker,
         )
@@ -343,6 +314,7 @@ async def test_subagent_tool_emits_session_started_before_foreground_result(
     session_id = manager.started[0][1]
     run = manager.started[0][3]
     activity_file = emitted_events[0][1]["data"]["activity_file"]
+    work_id = emitted_events[0][1]["data"]["id"]
     assert isinstance(activity_file, str)
     assert Path(activity_file).exists()
     assert emitted_events[:2] == [
@@ -351,9 +323,11 @@ async def test_subagent_tool_emits_session_started_before_foreground_result(
             {
                 "tool_call": {"id": "tool-call-one", "index": 0, "name": "subagent"},
                 "data": {
+                    "id": work_id,
                     "agent_id": "parent",
                     "session_id": session_id,
                     "status": "running",
+                    "delivery": "inline",
                     "activity_file": activity_file,
                 },
             },
@@ -363,10 +337,12 @@ async def test_subagent_tool_emits_session_started_before_foreground_result(
             {
                 "tool_call": {"id": "tool-call-one", "index": 0, "name": "subagent"},
                 "data": {
+                    "id": work_id,
                     "agent_id": "parent",
                     "session_id": session_id,
                     "run_id": run.id,
                     "status": "running",
+                    "delivery": "inline",
                     "activity_file": activity_file,
                 },
             },
@@ -376,6 +352,8 @@ async def test_subagent_tool_emits_session_started_before_foreground_result(
     run.mark_completed(ChatMessage.assistant(model="openai/gpt-5.2", content="done"))
     result = await task
     assert result["ok"] is True
+    assert result["data"]["id"] == work_id
+    assert result["data"]["delivery"] == "inline"
 
 
 async def test_subagent_tool_routes_into_existing_session_when_session_id_provided(

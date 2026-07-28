@@ -23,24 +23,15 @@ def _definitions() -> list[dict[str, object]]:
             "description": "Start a Sub-Agent.",
             "parameters": target_parameters,
         },
-        {
-            "name": "subagent_result",
-            "description": "Read a Sub-Agent result.",
-            "parameters": target_parameters,
-        },
     ]
 
 
-def test_empty_additional_targets_keep_self_delegation_in_both_schemas() -> None:
+def test_empty_additional_targets_keep_self_delegation_in_subagent_schema() -> None:
     definitions = apply_agent_target_tool_visibility(
         _definitions(), agent_id="orchestrator", allowed_agents=[]
     )
 
-    assert [definition["name"] for definition in definitions] == [
-        "read",
-        "subagent",
-        "subagent_result",
-    ]
+    assert [definition["name"] for definition in definitions] == ["read", "subagent"]
     for definition in definitions[1:]:
         parameters = definition["parameters"]
         assert isinstance(parameters, dict)
@@ -50,7 +41,7 @@ def test_empty_additional_targets_keep_self_delegation_in_both_schemas() -> None
         assert "required" not in parameters
 
 
-def test_explicit_agent_targets_narrow_both_tool_schemas_without_mutating_source() -> None:
+def test_explicit_agent_targets_narrow_subagent_schema_without_mutating_source() -> None:
     source = _definitions()
 
     definitions = apply_agent_target_tool_visibility(
@@ -84,7 +75,7 @@ def test_wildcard_agent_targets_leave_tool_definitions_unchanged() -> None:
     )
 
 
-def test_explicit_agent_targets_narrow_nested_subagent_operations() -> None:
+def test_explicit_agent_targets_narrow_flat_subagent_run_target() -> None:
     source = [
         {
             "name": "subagent",
@@ -99,38 +90,19 @@ def test_explicit_agent_targets_narrow_nested_subagent_operations() -> None:
         allowed_agents=["worker"],
     )
 
-    branches = definitions[0]["parameters"]["properties"]["request"]["anyOf"]
-    operations = {branch["properties"]["operation"]["enum"][0]: branch for branch in branches}
-    assert operations["start"]["properties"]["agent_id"]["enum"] == [
+    properties = definitions[0]["parameters"]["properties"]
+    assert properties["agent_id"]["enum"] == [
         "orchestrator",
         "worker",
     ]
-    assert operations["continue"]["properties"]["agent_id"]["enum"] == [
-        "orchestrator",
-        "worker",
-    ]
-    cancel_branches = [
-        branch for branch in branches if branch["properties"]["operation"]["enum"] == ["cancel"]
-    ]
-    assert len(cancel_branches) == 2
-    assert all(
-        branch["properties"]["agent_id"]["enum"] == ["orchestrator", "worker"]
-        for branch in cancel_branches
-    )
-    source_branches = SUBAGENT_TOOL_PARAMETERS["properties"]["request"]["anyOf"]
-    source_start = next(
-        branch
-        for branch in source_branches
-        if branch["properties"]["operation"]["enum"] == ["start"]
-    )
-    assert "enum" not in source_start["properties"]["agent_id"]
+    assert "enum" not in SUBAGENT_TOOL_PARAMETERS["properties"]["agent_id"]
 
 
 def test_empty_additional_targets_do_not_remove_subagent_tools_from_dispatch() -> None:
     allowed = effective_agent_allowed_tools(
         ["*"],
         "agent_user",
-        registered_tool_names=["read", "subagent", "subagent_result"],
+        registered_tool_names=["read", "subagent"],
         workspace="workspace",
     )
 

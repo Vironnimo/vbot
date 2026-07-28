@@ -134,7 +134,7 @@ async def test_batch_completion_message_marks_user_cancelled_entry_in_note() -> 
     # Assert
     assert len(trigger_service.calls) == 1
     message = trigger_service.calls[0][1]
-    assert "### worker (session session-one) — cancelled by user" in message
+    assert "### worker (id run-one, session session-one) — cancelled by user" in message
     assert "Cancelled by the user" in message
 
 
@@ -174,13 +174,13 @@ async def test_batch_completion_message_keeps_generic_cancellation_wording() -> 
     # Assert
     assert len(trigger_service.calls) == 1
     message = trigger_service.calls[0][1]
-    assert "### worker (session session-one) — cancelled" in message
+    assert "### worker (id run-one, session session-one) — cancelled" in message
     assert "cancelled by user" not in message
 
 
 async def test_batch_is_pruned_after_completion_note_for_unfetched_entries() -> None:
     # Arrange: a non-blocking batch whose entries are never fetched via
-    # subagent_result (the standard flow — the completion note embeds the
+    # an explicit status fetch (the standard flow embeds the
     # results and forbids re-fetching). Regression test for handoff3 B4.
     trigger_service = RecordingTriggerService()
     tracker = SubAgentBatchTracker(trigger_service)
@@ -292,7 +292,7 @@ async def test_completion_trigger_keeps_none_project_for_identity_parent() -> No
 
 
 async def test_batch_with_fetched_entries_prunes_without_second_note() -> None:
-    # Arrange: one entry already fetched via subagent_result, one not. The note
+    # Arrange: one entry already fetched via status, one not. The note
     # must only embed the unfetched entry, and the batch is dropped afterwards.
     trigger_service = RecordingTriggerService()
     tracker = SubAgentBatchTracker(trigger_service)

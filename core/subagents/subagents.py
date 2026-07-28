@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import TYPE_CHECKING, Any, cast
+from uuid import uuid4
 
 from core.chat import (
     ChatMessage,
@@ -40,7 +41,6 @@ from core.subagents.tracker import (
 )
 from core.tools.arguments import (
     ToolArgumentError,
-    optional_bool,
     optional_string,
     required_string,
 )
@@ -48,7 +48,6 @@ from core.tools.availability import subagent_allowed_agents
 from core.tools.tools import (
     JsonObject,
     ToolContext,
-    extract_tool_operation,
     tool_failure,
     tool_success,
 )
@@ -71,9 +70,14 @@ SUBAGENT_PARENT_METADATA_KEY = "subagent_parent"
 USER_CANCEL_REASON = "user"
 PARENT_AGENT_CANCEL_REASON = "parent_agent"
 SUBAGENT_USER_CANCEL_MESSAGE = "Cancelled by the user"
+SUBAGENT_WORK_ID_PREFIX = "sub_"
 SUBAGENT_ACTIVITY_NOTE_TEMPLATE = (
     "Current Sub-Agent activity is available at {path}. Read this file if the Sub-Agent's "
     "status or progress becomes relevant."
+)
+TOP_LEVEL_BACKGROUND_NOTE = (
+    "This Sub-Agent is running in the background. Continue independent work or end your "
+    "turn; its result will be delivered automatically. Do not poll."
 )
 
 # Cascade policy switch: when True, a parent Run cancellation cascades to every
@@ -82,26 +86,6 @@ SUBAGENT_ACTIVITY_NOTE_TEMPLATE = (
 # the cascade; background spawns survive the parent cancel.
 # FLIP-BACK: set CASCADE_BACKGROUND_CHILDREN = True to restore the old behaviour.
 CASCADE_BACKGROUND_CHILDREN = False
-
-# Background-at-depth block: a sub-agent (nesting depth >= 1) runs in an ephemeral
-# session nobody reads once it returns its single result, so it cannot park work
-# for a later run the way the top level can — a background spawn there would strand
-# the child's result one level down (the completion hand-off reaches only one level
-# up). When True, a spawn at depth >= 1 is forced to run in the foreground
-# regardless of the requested mode, so the sub-agent's run ends only once its work
-# is truly done. The top level (depth 0) is unaffected. Mirrors the bash tool's
-# BLOCK_BACKGROUND_AT_DEPTH.
-# FLIP-BACK: set BLOCK_BACKGROUND_AT_DEPTH = False to allow background spawns at depth.
-BLOCK_BACKGROUND_AT_DEPTH = True
-
-# Appended to a forced-foreground spawn's success result so the sub-agent learns why
-# it could not run in the background and how to still parallelise. Expendable
-# guidance, not load-bearing: the result payload is complete with or without it.
-FORCED_FOREGROUND_NOTE = (
-    "Ran in the foreground: sub-agents can't spawn background work (your session "
-    "ends with this run). To parallelize, make all subagent calls in one turn — "
-    "siblings run concurrently."
-)
 
 
 def _should_register_parent_cascade(background: bool) -> bool:
@@ -151,35 +135,6 @@ class SubAgentCoordinator:
             batch_tracker=self._batch_tracker,
         )
 
-    async def result(self, context: ToolContext, arguments: JsonObject) -> JsonObject:
-        """Return a spawned sub-agent result for a tool invocation."""
-        return await _handle_subagent_result(
-            context,
-            arguments,
-            runtime=self._runtime,
-            batch_tracker=self._batch_tracker,
-        )
-
-
-def _normalize_subagent_call(arguments: JsonObject) -> tuple[str, JsonObject]:
-    """Return operation arguments at the public or internal boundary.
-
-    Registered Tool calls always arrive through the compiled nested contract.
-    Direct internal callers already pass the operation payload and are not a
-    second model-facing wire format.
-    """
-    operations = ("start", "continue", "cancel")
-    if set(arguments) == {"request"}:
-        return extract_tool_operation(arguments, operations)
-    if len(arguments) == 1:
-        operation, payload = next(iter(arguments.items()))
-        if operation in operations and isinstance(payload, dict):
-            return operation, dict(payload)
-    if "content" not in arguments and ("run_id" in arguments or "queue_item_id" in arguments):
-        return "cancel", dict(arguments)
-    operation = "continue" if "session_id" in arguments else "start"
-    return operation, dict(arguments)
-
 
 async def _handle_subagent(
     context: ToolContext,
@@ -189,22 +144,34 @@ async def _handle_subagent(
     batch_tracker: SubAgentBatchTracker,
 ) -> JsonObject:
     try:
-        operation, arguments = _normalize_subagent_call(arguments)
-    except ValueError as error:
+        action = required_string(arguments.get("action"), field_name="action")
+    except ToolArgumentError as error:
         return tool_failure("invalid_arguments", str(error))
 
-    if operation == "cancel":
+    if action == "cancel":
         return await _handle_subagent_cancel(
             context,
             arguments,
             runtime=runtime,
             batch_tracker=batch_tracker,
         )
+    if action == "status":
+        return await _handle_subagent_status(
+            context,
+            arguments,
+            runtime=runtime,
+            batch_tracker=batch_tracker,
+        )
+    if action != "run":
+        return tool_failure(
+            "invalid_arguments",
+            "action must be one of: run, status, cancel",
+        )
 
     unknown_arguments = set(arguments) - {
+        "action",
         "content",
         "agent_id",
-        "background",
         "session_id",
         "model",
         "thinking_effort",
@@ -222,16 +189,6 @@ async def _handle_subagent(
     try:
         explicit_agent_address = optional_string(arguments.get("agent_id"), field_name="agent_id")
         session_id = optional_string(arguments.get("session_id"), field_name="session_id")
-        if operation == "start" and session_id is not None:
-            return tool_failure(
-                "invalid_arguments",
-                "start creates a new Session and does not accept session_id",
-            )
-        if operation == "continue" and session_id is None:
-            return tool_failure(
-                "invalid_arguments",
-                "continue requires session_id",
-            )
         if session_id is not None and explicit_agent_address is None:
             return tool_failure(
                 "invalid_arguments",
@@ -242,25 +199,13 @@ async def _handle_subagent(
         target_agent_id, target_project_id = _resolve_target_address(
             target_agent_address, context.project_id
         )
-        background = optional_bool(
-            arguments.get("background"),
-            field_name="background",
-            default=True,
-        )
         run_overrides = _parse_agent_run_overrides(arguments)
     except (ToolArgumentError, InvalidAgentAddressError, SettingsValidationError) as error:
         return tool_failure("invalid_arguments", str(error))
 
+    background = context.nesting_depth == 0
     if not _target_is_allowed(context, target_agent_id, target_project_id):
         return tool_failure("agent_not_allowed", "target agent is not allowed for this parent")
-
-    # A sub-agent (depth >= 1) cannot park work for a later run, so force its spawns
-    # to run in the foreground regardless of the requested mode; the top level keeps
-    # the requested mode. See BLOCK_BACKGROUND_AT_DEPTH. ``forced_foreground`` is true
-    # only when an explicit background request was overridden, and tags the result.
-    forced_foreground = BLOCK_BACKGROUND_AT_DEPTH and context.nesting_depth >= 1 and background
-    if forced_foreground:
-        background = False
 
     if (
         session_id is not None
@@ -298,6 +243,7 @@ async def _handle_subagent(
         )
 
     slot_registered = False
+    work_id = _new_subagent_work_id()
     activity: SubAgentActivity | None = None
     activity_handed_off = False
     try:
@@ -318,13 +264,22 @@ async def _handle_subagent(
             session_id=session.id,
         )
         activity_file = _activity_file(activity)
-        _mark_subagent_session(runtime, target_agent_id, target_project_id, session.id, context)
+        _mark_subagent_session(
+            runtime,
+            target_agent_id,
+            target_project_id,
+            session.id,
+            work_id,
+            context,
+        )
         await _emit_subagent_session_started(
             context,
+            work_id,
             target_agent_id,
             target_project_id,
             session.id,
             status=RunStatus.RUNNING.value,
+            delivery="automatic" if background else "inline",
             activity_file=activity_file,
         )
 
@@ -364,11 +319,13 @@ async def _handle_subagent(
                 activity.mark_queued()
             await _emit_subagent_session_started(
                 context,
+                work_id,
                 target_agent_id,
                 target_project_id,
                 session.id,
                 queue_item_id=item.item_id,
                 status=SUBAGENT_STATUS_QUEUED,
+                delivery="automatic" if background else "inline",
                 activity_file=activity_file,
             )
             if background:
@@ -381,6 +338,7 @@ async def _handle_subagent(
                         item.item_id,
                         target_project_id,
                         activity_file,
+                        work_id=work_id,
                     )
                     slot_registered = True
                     if _should_register_parent_cascade(background=True):
@@ -406,10 +364,12 @@ async def _handle_subagent(
                         _with_activity_note(
                             _with_target_project(
                                 {
+                                    "id": work_id,
                                     "agent_id": target_agent_id,
                                     "session_id": session.id,
-                                    "queue_item_id": item.item_id,
                                     "status": SUBAGENT_STATUS_QUEUED,
+                                    "delivery": "automatic",
+                                    "note": TOP_LEVEL_BACKGROUND_NOTE,
                                     "activity_file": activity_file,
                                 },
                                 target_project_id,
@@ -442,11 +402,13 @@ async def _handle_subagent(
             activity_handed_off = True
         await _emit_subagent_session_started(
             context,
+            work_id,
             target_agent_id,
             target_project_id,
             session.id,
             run_id=sub_run.id,
             status=RunStatus.RUNNING.value,
+            delivery="automatic" if background else "inline",
             activity_file=activity_file,
         )
         batch_tracker.register_reserved(
@@ -456,6 +418,7 @@ async def _handle_subagent(
             sub_run.id,
             target_project_id,
             activity_file,
+            work_id=work_id,
         )
         slot_registered = True
         if _should_register_parent_cascade(background=background):
@@ -473,10 +436,12 @@ async def _handle_subagent(
                 _with_activity_note(
                     _with_target_project(
                         {
+                            "id": work_id,
                             "agent_id": target_agent_id,
                             "session_id": session.id,
-                            "run_id": sub_run.id,
                             "status": RunStatus.RUNNING.value,
+                            "delivery": "automatic",
+                            "note": TOP_LEVEL_BACKGROUND_NOTE,
                             "activity_file": activity_file,
                         },
                         target_project_id,
@@ -530,9 +495,15 @@ async def _handle_subagent(
             sub_run.id,
             target_project_id,
         )
-        if forced_foreground:
-            result = {**result, "spawn_note": FORCED_FOREGROUND_NOTE}
-        return tool_success(_with_activity_note(result, activity_file))
+        public_result = _public_subagent_result(
+            work_id,
+            target_agent_id,
+            target_project_id,
+            session.id,
+            result,
+            delivery="inline",
+        )
+        return tool_success(_with_activity_note(public_result, activity_file))
     finally:
         if activity is not None and not activity_handed_off:
             activity.finish_unstarted()
@@ -547,160 +518,107 @@ async def _handle_subagent_cancel(
     runtime: RuntimeServices,
     batch_tracker: SubAgentBatchTracker,
 ) -> JsonObject:
-    """Cancel one exact queued or running child owned by the calling Parent Session."""
-    unknown_arguments = set(arguments) - {
-        "agent_id",
-        "session_id",
-        "run_id",
-        "queue_item_id",
-    }
+    """Cancel one exact owned child through its stable public work id."""
+    unknown_arguments = set(arguments) - {"action", "id"}
     if unknown_arguments:
         names = ", ".join(sorted(unknown_arguments))
         return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
 
     try:
-        agent_address = required_string(arguments.get("agent_id"), field_name="agent_id")
-        session_id = required_string(arguments.get("session_id"), field_name="session_id")
-        run_id = optional_string(arguments.get("run_id"), field_name="run_id")
-        queue_item_id = optional_string(
-            arguments.get("queue_item_id"),
-            field_name="queue_item_id",
-        )
-        if (run_id is None) == (queue_item_id is None):
-            return tool_failure(
-                "invalid_arguments",
-                "cancel requires exactly one of run_id or queue_item_id",
-            )
-        target_agent_id, target_project_id = _resolve_target_address(
-            agent_address,
-            context.project_id,
-        )
-    except (ToolArgumentError, InvalidAgentAddressError) as error:
+        work_id = required_string(arguments.get("id"), field_name="id")
+    except ToolArgumentError as error:
         return tool_failure("invalid_arguments", str(error))
 
-    if not _target_is_allowed(context, target_agent_id, target_project_id):
-        return tool_failure("agent_not_allowed", "target agent is not allowed for this parent")
+    owned = batch_tracker.owned_entry(
+        context.agent_id,
+        context.session_id,
+        context.project_id,
+        work_id,
+    )
+    if owned is None:
+        return _subagent_not_owned_failure(work_id)
+    parent_key, entry = owned
+    if entry.complete:
+        return tool_failure(
+            "subagent_not_running",
+            f"Sub-Agent work is already complete: {work_id}",
+        )
 
-    try:
-        runtime.chat_sessions.get(target_agent_id, session_id, target_project_id)
-    except ChatSessionError:
-        return tool_failure("session_not_found", f"session does not exist: {session_id}")
-
-    if run_id is not None:
-        if not batch_tracker.owns_run(
-            context.agent_id,
-            context.session_id,
-            context.project_id,
-            target_agent_id,
-            session_id,
-            target_project_id,
-            run_id,
-        ):
-            return _subagent_not_owned_failure()
+    if entry.run_id is not None:
         return await _cancel_owned_subagent_run(
             context,
             runtime,
-            target_agent_id,
-            target_project_id,
-            session_id,
-            run_id,
+            work_id,
+            entry,
         )
 
-    assert queue_item_id is not None
-    if not batch_tracker.owns_queue_item(
-        context.agent_id,
-        context.session_id,
-        context.project_id,
-        target_agent_id,
-        session_id,
-        target_project_id,
-        queue_item_id,
-    ):
-        return _subagent_not_owned_failure()
-
+    queue_item_id = entry.queue_item_id
+    if queue_item_id is None:
+        return tool_failure(
+            "subagent_not_running",
+            f"Sub-Agent work has no queued item or active Run: {work_id}",
+        )
     removed = runtime.chat_run_manager.remove_queued(
-        target_agent_id,
-        session_id,
+        entry.agent_id,
+        entry.session_id,
         queue_item_id,
-        project_id=target_project_id,
+        project_id=entry.project_id,
     )
     if removed:
+        batch_tracker.remove_queued(parent_key, queue_item_id)
         data = _cancelled_subagent_descriptor(
-            target_agent_id,
-            target_project_id,
-            session_id,
+            work_id,
+            entry.agent_id,
+            entry.project_id,
+            entry.session_id,
             queue_item_id=queue_item_id,
         )
         await _emit_subagent_status_changed(context, data)
-        return tool_success(data)
+        return tool_success(_without_internal_handles(data))
 
-    # A queue item can become a Run between the caller receiving its handle and
-    # this operation. The tracker retains the queue origin after that transition,
-    # so the exact handle still resolves to — and only to — its own Run.
-    resolved_run_id = batch_tracker.run_id_for_owned_queue_item(
-        context.agent_id,
-        context.session_id,
-        context.project_id,
-        target_agent_id,
-        session_id,
-        target_project_id,
-        queue_item_id,
-    )
-    if resolved_run_id is None:
+    # The queued work may have become a Run while cancellation was resolving.
+    if entry.run_id is None:
         await asyncio.sleep(0)
-        resolved_run_id = batch_tracker.run_id_for_owned_queue_item(
-            context.agent_id,
-            context.session_id,
-            context.project_id,
-            target_agent_id,
-            session_id,
-            target_project_id,
-            queue_item_id,
-        )
-    if resolved_run_id is None:
+    if entry.run_id is None:
         return tool_failure(
             "subagent_not_running",
-            "the owned queue item is no longer queued and has no active Run",
+            f"Sub-Agent work is no longer queued and has no active Run: {work_id}",
         )
     return await _cancel_owned_subagent_run(
         context,
         runtime,
-        target_agent_id,
-        target_project_id,
-        session_id,
-        resolved_run_id,
-        queue_item_id=queue_item_id,
+        work_id,
+        entry,
     )
 
 
 async def _cancel_owned_subagent_run(
     context: ToolContext,
     runtime: RuntimeServices,
-    target_agent_id: str,
-    target_project_id: str | None,
-    session_id: str,
-    run_id: str,
-    *,
-    queue_item_id: str | None = None,
+    work_id: str,
+    entry: _SubAgentEntry,
 ) -> JsonObject:
+    run_id = entry.run_id
+    if run_id is None:
+        return tool_failure("subagent_not_running", f"Sub-Agent work has not started: {work_id}")
     try:
         run = runtime.chat_run_manager.get(run_id)
     except RunNotFoundError:
-        return tool_failure("subagent_not_running", f"sub-agent Run not found: {run_id}")
+        return tool_failure("subagent_not_running", f"Sub-Agent work is not running: {work_id}")
     if not _run_matches_target(
         run,
-        target_agent_id,
-        session_id,
-        target_project_id,
+        entry.agent_id,
+        entry.session_id,
+        entry.project_id,
     ):
         return tool_failure(
             "subagent_target_mismatch",
-            "the Run does not belong to the specified Sub-Agent Session",
+            f"Sub-Agent work resolved to the wrong Session: {work_id}",
         )
     if run.status != RunStatus.RUNNING:
         return tool_failure(
             "subagent_not_running",
-            f"sub-agent Run is already {run.status.value}: {run_id}",
+            f"Sub-Agent work is already {run.status.value}: {work_id}",
         )
 
     cancelled_run = await runtime.chat_run_manager.cancel(
@@ -710,21 +628,23 @@ async def _cancel_owned_subagent_run(
     if cancelled_run.status != RunStatus.CANCELLED:
         return tool_failure(
             "subagent_not_running",
-            f"sub-agent Run reached {cancelled_run.status.value} before cancellation: {run_id}",
+            f"Sub-Agent work reached {cancelled_run.status.value} before cancellation: {work_id}",
         )
 
     data = _cancelled_subagent_descriptor(
-        target_agent_id,
-        target_project_id,
-        session_id,
+        work_id,
+        entry.agent_id,
+        entry.project_id,
+        entry.session_id,
         run_id=run_id,
-        queue_item_id=queue_item_id,
+        queue_item_id=entry.queue_item_id,
     )
     await _emit_subagent_status_changed(context, data)
-    return tool_success(data)
+    return tool_success(_without_internal_handles(data))
 
 
 def _cancelled_subagent_descriptor(
+    work_id: str,
     target_agent_id: str,
     target_project_id: str | None,
     session_id: str,
@@ -733,6 +653,7 @@ def _cancelled_subagent_descriptor(
     queue_item_id: str | None = None,
 ) -> JsonObject:
     data: JsonObject = {
+        "id": work_id,
         "agent_id": target_agent_id,
         "session_id": session_id,
         "status": RunStatus.CANCELLED.value,
@@ -746,165 +667,133 @@ def _cancelled_subagent_descriptor(
     return data
 
 
-def _subagent_not_owned_failure() -> JsonObject:
+def _subagent_not_owned_failure(work_id: str) -> JsonObject:
     return tool_failure(
         "subagent_not_owned",
-        "the exact Sub-Agent Run or queue item is not owned by this Parent Agent Session",
+        f"Sub-Agent work is not owned by this Parent Agent Session: {work_id}",
     )
 
 
-async def _handle_subagent_result(
+async def _handle_subagent_status(
     context: ToolContext,
     arguments: JsonObject,
     *,
     runtime: RuntimeServices,
     batch_tracker: SubAgentBatchTracker,
 ) -> JsonObject:
-    unknown_arguments = set(arguments) - {"session_id", "agent_id", "run_id"}
+    unknown_arguments = set(arguments) - {"action", "id"}
     if unknown_arguments:
         names = ", ".join(sorted(unknown_arguments))
         return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
 
     try:
-        session_id = required_string(arguments.get("session_id"), field_name="session_id")
-        agent_address = (
-            optional_string(arguments.get("agent_id"), field_name="agent_id") or context.agent_id
-        )
-        agent_id, target_project_id = _resolve_target_address(agent_address, context.project_id)
-        run_id = optional_string(arguments.get("run_id"), field_name="run_id")
-    except (ToolArgumentError, InvalidAgentAddressError) as error:
+        work_id = required_string(arguments.get("id"), field_name="id")
+    except ToolArgumentError as error:
         return tool_failure("invalid_arguments", str(error))
 
-    if not _target_is_allowed(context, agent_id, target_project_id):
-        return tool_failure("agent_not_allowed", "target agent is not allowed for this parent")
-
-    parent_key = _parent_key(context)
-    resolved_run_id = run_id or batch_tracker.run_id_for_session(
-        parent_key,
-        session_id,
-        sub_agent_id=agent_id,
-        project_id=target_project_id,
+    owned = batch_tracker.owned_entry(
+        context.agent_id,
+        context.session_id,
+        context.project_id,
+        work_id,
     )
-    if resolved_run_id is None:
-        queued_entry = batch_tracker.queued_entry_for_session(
-            parent_key,
-            session_id,
-            sub_agent_id=agent_id,
-            project_id=target_project_id,
+    if owned is None:
+        return _subagent_not_owned_failure(work_id)
+    parent_key, entry = owned
+
+    if entry.run_id is None:
+        return tool_success(
+            _public_subagent_result(
+                work_id,
+                entry.agent_id,
+                entry.project_id,
+                entry.session_id,
+                {
+                    "status": SUBAGENT_STATUS_QUEUED,
+                    "activity_file": entry.activity_file,
+                },
+            )
         )
-        if queued_entry is not None:
-            return tool_success(_queued_result_dict(queued_entry))
-
-    activity_file = batch_tracker.activity_file_for_session(
-        parent_key,
-        session_id,
-        sub_run_id=resolved_run_id,
-        sub_agent_id=agent_id,
-        project_id=target_project_id,
-    )
 
     result: JsonObject
     terminal_result = False
-    if resolved_run_id:
-        try:
-            run = runtime.chat_run_manager.get(resolved_run_id)
-        except RunNotFoundError:
+    try:
+        run = runtime.chat_run_manager.get(entry.run_id)
+    except RunNotFoundError:
+        if entry.complete and entry.result is not None:
+            result = dict(entry.result)
+            terminal_result = True
+        else:
             result, terminal_result = await _poll_result_from_session(
                 runtime,
-                agent_id,
-                session_id,
-                run_id=resolved_run_id,
-                project_id=target_project_id,
-                activity_file=activity_file,
+                entry.agent_id,
+                entry.session_id,
+                run_id=entry.run_id,
+                project_id=entry.project_id,
+                activity_file=entry.activity_file,
             )
-        else:
-            if not _run_matches_target(run, agent_id, session_id, target_project_id):
-                return tool_failure(
-                    "run_not_found",
-                    f"run does not belong to target sub-agent session: {resolved_run_id}",
-                )
-            if run.status == RunStatus.RUNNING:
-                return tool_success(
+    else:
+        if not _run_matches_target(run, entry.agent_id, entry.session_id, entry.project_id):
+            return tool_failure(
+                "run_not_found",
+                f"Sub-Agent work resolved to the wrong Session: {work_id}",
+            )
+        if run.status == RunStatus.RUNNING:
+            return tool_success(
+                _public_subagent_result(
+                    work_id,
+                    entry.agent_id,
+                    entry.project_id,
+                    entry.session_id,
                     _result_dict(
                         run,
                         status=RunStatus.RUNNING.value,
                         message=None,
-                        activity_file=activity_file,
-                    )
-                )
-            result = await _wait_for_subagent_result(run, activity_file)
-            terminal_result = True
-            if _should_poll_session_result(result):
-                session_result, session_terminal = await _poll_result_from_session(
-                    runtime,
-                    agent_id,
-                    session_id,
-                    run_id=resolved_run_id,
-                    project_id=target_project_id,
-                    activity_file=activity_file,
-                )
-                if session_terminal and (
-                    _session_result_has_output(session_result) or not result.get("result")
-                ):
-                    result = session_result
-    else:
-        active_run = runtime.chat_run_manager.active_run(
-            agent_id=agent_id,
-            session_id=session_id,
-            project_id=target_project_id,
-        )
-        if active_run is not None:
-            return tool_success(
-                _result_dict(
-                    active_run,
-                    status=RunStatus.RUNNING.value,
-                    message=None,
-                    activity_file=activity_file,
+                        activity_file=entry.activity_file,
+                    ),
                 )
             )
-        queued_items = runtime.chat_run_manager.list_queued(
-            agent_id,
-            session_id,
-            project_id=target_project_id,
-        )
-        if queued_items:
-            return tool_success(
-                _queued_manager_result_dict(
-                    agent_id,
-                    session_id,
-                    queued_items[-1],
-                    target_project_id,
-                    activity_file,
-                )
+        result = await _wait_for_subagent_result(run, entry.activity_file)
+        terminal_result = True
+        if _should_poll_session_result(result):
+            session_result, session_terminal = await _poll_result_from_session(
+                runtime,
+                entry.agent_id,
+                entry.session_id,
+                run_id=entry.run_id,
+                project_id=entry.project_id,
+                activity_file=entry.activity_file,
             )
-        result, terminal_result = await _poll_result_from_session(
-            runtime,
-            agent_id,
-            session_id,
-            run_id=None,
-            project_id=target_project_id,
-            activity_file=activity_file,
-        )
+            if session_terminal and (
+                _session_result_has_output(session_result) or not result.get("result")
+            ):
+                result = session_result
 
     if terminal_result:
-        result_run_id = result.get("run_id")
-        terminal_run_id = result_run_id if isinstance(result_run_id, str) else None
         batch_tracker.mark_fetched(
             parent_key,
-            session_id,
-            terminal_run_id,
-            sub_agent_id=agent_id,
-            project_id=target_project_id,
+            entry.session_id,
+            entry.run_id,
+            sub_agent_id=entry.agent_id,
+            project_id=entry.project_id,
         )
         _register_result_read_after_parent_persistence(
             context,
             runtime,
-            agent_id,
-            session_id,
-            terminal_run_id,
-            target_project_id,
+            entry.agent_id,
+            entry.session_id,
+            entry.run_id,
+            entry.project_id,
         )
-    return tool_success(result)
+    return tool_success(
+        _public_subagent_result(
+            work_id,
+            entry.agent_id,
+            entry.project_id,
+            entry.session_id,
+            result,
+        )
+    )
 
 
 def _register_result_read_after_parent_persistence(
@@ -1413,6 +1302,7 @@ def _mark_subagent_session(
     sub_agent_id: str,
     sub_project_id: str | None,
     sub_session_id: str,
+    work_id: str,
     context: ToolContext,
 ) -> None:
     # The child session's metadata is the durable side of the parent→child link.
@@ -1424,6 +1314,7 @@ def _mark_subagent_session(
     metadata = dict(session_manager.get_metadata(sub_agent_id, sub_session_id, sub_project_id))
     metadata[SUBAGENT_SESSION_METADATA_FLAG] = True
     metadata[SUBAGENT_PARENT_METADATA_KEY] = {
+        "id": work_id,
         "agent_id": context.agent_id,
         "session_id": context.session_id,
         "run_id": context.run_id,
@@ -1436,6 +1327,7 @@ def _mark_subagent_session(
 
 async def _emit_subagent_session_started(
     context: ToolContext,
+    work_id: str,
     sub_agent_id: str,
     sub_project_id: str | None,
     sub_session_id: str,
@@ -1444,11 +1336,14 @@ async def _emit_subagent_session_started(
     queue_item_id: str | None = None,
     activity_file: str | None = None,
     status: str,
+    delivery: str,
 ) -> None:
     data: JsonObject = {
+        "id": work_id,
         "agent_id": sub_agent_id,
         "session_id": sub_session_id,
         "status": status,
+        "delivery": delivery,
         "activity_file": activity_file,
     }
     if sub_project_id is not None:
@@ -1617,6 +1512,39 @@ def _activity_file(activity: SubAgentActivity | None) -> str | None:
 def _with_activity_note(data: JsonObject, activity_file: str | None) -> JsonObject:
     if activity_file is not None:
         data["activity_note"] = SUBAGENT_ACTIVITY_NOTE_TEMPLATE.format(path=activity_file)
+    return data
+
+
+def _new_subagent_work_id() -> str:
+    return f"{SUBAGENT_WORK_ID_PREFIX}{uuid4().hex}"
+
+
+def _without_internal_handles(data: JsonObject) -> JsonObject:
+    return {key: value for key, value in data.items() if key not in {"run_id", "queue_item_id"}}
+
+
+def _public_subagent_result(
+    work_id: str,
+    agent_id: str,
+    project_id: str | None,
+    session_id: str,
+    result: JsonObject,
+    *,
+    delivery: str | None = None,
+    note: str | None = None,
+) -> JsonObject:
+    data: JsonObject = {
+        "id": work_id,
+        "agent_id": agent_id,
+        "session_id": session_id,
+        **_without_internal_handles(result),
+    }
+    if project_id is not None:
+        data["project_id"] = project_id
+    if delivery is not None:
+        data["delivery"] = delivery
+    if note is not None:
+        data["note"] = note
     return data
 
 

@@ -1005,7 +1005,7 @@ def _effective_allowed_agents(scanned: ScannedAgent, team: list[ScannedAgent]) -
 
 def _project_agent_tools(allowed_tools: list[str], allowed_agents: list[str]) -> dict[str, Any]:
     """Project effective targets into the optional root Tool-settings block."""
-    if not {"subagent", "subagent_result"}.intersection(allowed_tools):
+    if "subagent" not in allowed_tools:
         return {}
     return {"subagent": {"allowed_agents": allowed_agents}}
 

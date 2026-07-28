@@ -91,36 +91,40 @@ function createSubAgentChild({
     name: 'subagent',
     toolCallId,
     status,
-    arguments: { agent_id: 'worker', content: 'Inspect' },
+    arguments: { action: 'run', agent_id: 'worker', content: 'Inspect' },
     startedEvent: {
       type: 'tool_call_started',
       payload: { tool_call: { id: toolCallId, name: 'subagent' } },
     },
     subAgentSession: {
+      id: 'sub_child',
       agent_id: 'worker',
       session_id: 'session-child',
       run_id: dataRunId,
       status: dataStatus,
+      delivery: 'automatic',
+      ...(queueItemId ? { queue_item_id: queueItemId } : {}),
     },
     result: queueItemId
       ? {
           ok: true,
           data: {
+            id: 'sub_child',
             agent_id: 'worker',
             session_id: 'session-child',
-            run_id: dataRunId,
             status: dataStatus,
-            queue_item_id: queueItemId,
+            delivery: 'automatic',
           },
           artifacts: [],
         }
       : {
           ok: true,
           data: {
+            id: 'sub_child',
             agent_id: 'worker',
             session_id: 'session-child',
-            run_id: dataRunId,
             status: dataStatus,
+            delivery: 'automatic',
           },
           artifacts: [],
         },

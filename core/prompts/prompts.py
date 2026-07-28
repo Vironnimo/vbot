@@ -982,6 +982,7 @@ class SystemPromptManager:
         project_context: ProjectPromptContext | None = None,
         working_project_context: str | None = None,
         agent_project_id: str | None = None,
+        nesting_depth: int = 0,
         skill_registry: SkillPromptRegistry | None = None,
         skill_catalog: PinnedSkillCatalog | None = None,
         read_paths: list[Path] | None = None,
@@ -1032,6 +1033,7 @@ class SystemPromptManager:
             project_context=project_context,
             working_project_context=working_project_context,
             agent_project_id=agent_project_id,
+            nesting_depth=nesting_depth,
             scope=scope_key,
             read_observer=observer,
         )

@@ -709,8 +709,7 @@
   function accessAllowsSubagent(items) {
     return (
       isWildcardAccess(items) ||
-      (Array.isArray(items) &&
-        items.some((item) => ['subagent', 'subagent_result'].includes(item)))
+      (Array.isArray(items) && items.includes('subagent'))
     );
   }
 
@@ -1558,7 +1557,7 @@
               <InfoHint
                 text={t(
                   'agents.form.allowedAgentsHelp',
-                  'Additional targets for subagent and subagent_result. The calling Agent is always available by omitting agent_id and is not listed here. Project Agents use agent@project ids. Rooting does not narrow this permission.',
+                  'Additional targets for subagent. The calling Agent is always available by omitting agent_id and is not listed here. Project Agents use agent@project ids. Rooting does not narrow this permission.',
                 )}
               />
             </span>

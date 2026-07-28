@@ -35,7 +35,7 @@ async def test_later_parent_run_can_cancel_its_surviving_background_child(
         runtime=runtime,
         batch_tracker=tracker,
     )
-    child_run = manager.get(spawned["data"]["run_id"])
+    child_run = manager.started[0][3]
 
     manager.parent_run.request_cancel()
     for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
@@ -51,14 +51,7 @@ async def test_later_parent_run_can_cancel_its_surviving_background_child(
     )
     cancelled = await _handle_subagent(
         later_context,
-        {
-            "request": {
-                "operation": "cancel",
-                "agent_id": spawned["data"]["agent_id"],
-                "session_id": spawned["data"]["session_id"],
-                "run_id": spawned["data"]["run_id"],
-            }
-        },
+        {"action": "cancel", "id": spawned["data"]["id"]},
         runtime=runtime,
         batch_tracker=tracker,
     )
@@ -67,9 +60,9 @@ async def test_later_parent_run_can_cancel_its_surviving_background_child(
         "ok": True,
         "error": None,
         "data": {
+            "id": spawned["data"]["id"],
             "agent_id": "parent",
             "session_id": spawned["data"]["session_id"],
-            "run_id": child_run.id,
             "status": "cancelled",
         },
         "artifacts": [],
@@ -85,7 +78,10 @@ async def test_later_parent_run_can_cancel_its_surviving_background_child(
                     "index": 0,
                     "name": "subagent",
                 },
-                "data": cancelled["data"],
+                "data": {
+                    **cancelled["data"],
+                    "run_id": child_run.id,
+                },
             },
         )
     ]
@@ -103,18 +99,11 @@ async def test_parent_cannot_cancel_another_parent_sessions_child(
         runtime=runtime,
         batch_tracker=tracker,
     )
-    child_run = manager.get(spawned["data"]["run_id"])
+    child_run = manager.started[0][3]
 
     result = await _handle_subagent(
         make_context(session_id="different-parent-session", run_id="different-parent-run"),
-        {
-            "request": {
-                "operation": "cancel",
-                "agent_id": spawned["data"]["agent_id"],
-                "session_id": spawned["data"]["session_id"],
-                "run_id": spawned["data"]["run_id"],
-            }
-        },
+        {"action": "cancel", "id": spawned["data"]["id"]},
         runtime=runtime,
         batch_tracker=tracker,
     )
@@ -156,23 +145,16 @@ async def test_parent_can_remove_its_exact_queued_child(
             run_id="parent-run-two",
             emit_hook=lambda event_type, payload: emitted_events.append((event_type, payload)),
         ),
-        {
-            "request": {
-                "operation": "cancel",
-                "agent_id": "parent",
-                "session_id": target_session_id,
-                "queue_item_id": spawned["data"]["queue_item_id"],
-            }
-        },
+        {"action": "cancel", "id": spawned["data"]["id"]},
         runtime=runtime,
         batch_tracker=tracker,
     )
 
     assert result["ok"] is True
     assert result["data"] == {
+        "id": spawned["data"]["id"],
         "agent_id": "parent",
         "session_id": target_session_id,
-        "queue_item_id": "queued-item-1",
         "status": "cancelled",
     }
     assert manager.list_queued("parent", target_session_id, project_id=None) == []
@@ -211,49 +193,36 @@ async def test_queue_handle_cancels_the_same_child_after_it_starts(
 
     result = await _handle_subagent(
         make_context(run_id="parent-run-two"),
-        {
-            "request": {
-                "operation": "cancel",
-                "agent_id": "parent",
-                "session_id": target_session_id,
-                "queue_item_id": spawned["data"]["queue_item_id"],
-            }
-        },
+        {"action": "cancel", "id": spawned["data"]["id"]},
         runtime=runtime,
         batch_tracker=tracker,
     )
 
     assert result["ok"] is True
-    assert result["data"]["queue_item_id"] == spawned["data"]["queue_item_id"]
-    assert result["data"]["run_id"] == started_run.id
+    assert result["data"]["id"] == spawned["data"]["id"]
+    assert "queue_item_id" not in result["data"]
+    assert "run_id" not in result["data"]
     assert started_run.status.value == "cancelled"
 
 
 @pytest.mark.parametrize(
-    "handle_arguments",
+    "id_value",
     (
-        {},
-        {"run_id": "run-one", "queue_item_id": "queue-one"},
+        None,
+        "",
     ),
 )
-async def test_cancel_requires_exactly_one_child_handle(
+async def test_cancel_requires_public_id(
     tmp_path: Path,
-    handle_arguments: JsonObject,
+    id_value: str | None,
 ) -> None:
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
     tracker = SubAgentBatchTracker(RecordingTriggerService())
 
-    result = await _handle_subagent(
+    result = await subagent_module._handle_subagent(
         make_context(),
-        {
-            "request": {
-                "operation": "cancel",
-                "agent_id": "parent",
-                "session_id": "child-session",
-                **handle_arguments,
-            }
-        },
+        {"action": "cancel", "id": id_value},
         runtime=runtime,
         batch_tracker=tracker,
     )

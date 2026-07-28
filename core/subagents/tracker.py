@@ -26,12 +26,17 @@ class _SubAgentEntry:
     agent_id: str
     session_id: str
     run_id: str | None
+    work_id: str = ""
     project_id: str | None = None
     activity_file: str | None = None
     queue_item_id: str | None = None
     complete: bool = False
     fetched: bool = False
     result: JsonObject | None = None
+
+    def __post_init__(self) -> None:
+        if not self.work_id:
+            self.work_id = self.run_id or self.queue_item_id or ""
 
 
 @dataclass
@@ -62,10 +67,14 @@ class SubAgentBatchTracker:
         sub_run_id: str,
         project_id: str | None = None,
         activity_file: str | None = None,
+        *,
+        work_id: str | None = None,
     ) -> None:
         """Register one spawned sub-agent run under a parent run batch."""
+        work_id = work_id or sub_run_id
         batch = self._batches.setdefault(parent_key, _SubAgentBatch(entries={}))
-        batch.entries[sub_run_id] = _SubAgentEntry(
+        batch.entries[work_id] = _SubAgentEntry(
+            work_id=work_id,
             agent_id=sub_agent_id,
             project_id=project_id,
             session_id=sub_session_id,
@@ -109,12 +118,16 @@ class SubAgentBatchTracker:
         sub_run_id: str,
         project_id: str | None = None,
         activity_file: str | None = None,
+        *,
+        work_id: str | None = None,
     ) -> None:
         """Convert one reserved slot into a live sub-agent run entry."""
+        work_id = work_id or sub_run_id
         batch = self._batches.setdefault(parent_key, _SubAgentBatch(entries={}))
         if batch.reserved_count > 0:
             batch.reserved_count -= 1
-        batch.entries[sub_run_id] = _SubAgentEntry(
+        batch.entries[work_id] = _SubAgentEntry(
+            work_id=work_id,
             agent_id=sub_agent_id,
             project_id=project_id,
             session_id=sub_session_id,
@@ -130,12 +143,16 @@ class SubAgentBatchTracker:
         queue_item_id: str,
         project_id: str | None = None,
         activity_file: str | None = None,
+        *,
+        work_id: str | None = None,
     ) -> None:
         """Convert one reserved slot into a queued sub-agent run entry."""
+        work_id = work_id or queue_item_id
         batch = self._batches.setdefault(parent_key, _SubAgentBatch(entries={}))
         if batch.reserved_count > 0:
             batch.reserved_count -= 1
-        batch.entries[_queue_entry_key(queue_item_id)] = _SubAgentEntry(
+        batch.entries[work_id] = _SubAgentEntry(
+            work_id=work_id,
             agent_id=sub_agent_id,
             project_id=project_id,
             session_id=sub_session_id,
@@ -150,16 +167,21 @@ class SubAgentBatchTracker:
         queue_item_id: str,
         sub_run_id: str,
     ) -> bool:
-        """Move a queued sub-agent entry to its live run id."""
+        """Attach the started Run to a queued entry without changing its public id."""
         batch = self._batches.get(parent_key)
         if batch is None:
             return False
-        queued_key = _queue_entry_key(queue_item_id)
-        entry = batch.entries.pop(queued_key, None)
+        entry = next(
+            (
+                candidate
+                for candidate in batch.entries.values()
+                if candidate.queue_item_id == queue_item_id
+            ),
+            None,
+        )
         if entry is None:
             return False
         entry.run_id = sub_run_id
-        batch.entries[sub_run_id] = entry
         return True
 
     def remove_queued(self, parent_key: ParentKey, queue_item_id: str) -> None:
@@ -174,7 +196,15 @@ class SubAgentBatchTracker:
         batch = self._batches.get(parent_key)
         if batch is None:
             return
-        if batch.entries.pop(_queue_entry_key(queue_item_id), None) is None:
+        work_id = next(
+            (
+                candidate_work_id
+                for candidate_work_id, entry in batch.entries.items()
+                if entry.queue_item_id == queue_item_id
+            ),
+            None,
+        )
+        if work_id is None or batch.entries.pop(work_id, None) is None:
             return
         self._prune_if_empty(parent_key, batch)
         self._notify_or_prune_if_complete(parent_key, batch)
@@ -214,7 +244,10 @@ class SubAgentBatchTracker:
         batch = self._batches.get(parent_key)
         if batch is None:
             return
-        entry = batch.entries.get(sub_run_id)
+        entry = next(
+            (candidate for candidate in batch.entries.values() if candidate.run_id == sub_run_id),
+            None,
+        )
         if entry is None:
             return
 
@@ -270,10 +303,10 @@ class SubAgentBatchTracker:
             )
         )
         # The completion note embeds every pending entry's full result and the
-        # tool contract forbids fetching them again via subagent_result, so no
-        # later fetch will ever mark them. Without this the batch (including
-        # each child's complete final output string) leaks for the lifetime of
-        # the server process.
+        # Automatic delivery is terminal for these public work handles, so no
+        # later status fetch is needed to mark them. Without this the batch
+        # (including each child's complete final output string) leaks for the
+        # lifetime of the server process.
         for pending_entry in pending_entries:
             pending_entry.fetched = True
         self._prune_if_finished(parent_key, batch)
@@ -323,7 +356,14 @@ class SubAgentBatchTracker:
         )
         if target_run_id is None:
             return
-        entry = batch.entries.get(target_run_id)
+        entry = next(
+            (
+                candidate
+                for candidate in batch.entries.values()
+                if candidate.run_id == target_run_id
+            ),
+            None,
+        )
         if (
             entry is None
             or entry.session_id != sub_session_id
@@ -354,84 +394,14 @@ class SubAgentBatchTracker:
                 return entry.run_id
         return None
 
-    def owns_run(
+    def owned_entry(
         self,
         parent_agent_id: str,
         parent_session_id: str,
         parent_project_id: str | None,
-        sub_agent_id: str,
-        sub_session_id: str,
-        sub_project_id: str | None,
-        sub_run_id: str,
-    ) -> bool:
-        """Return whether this exact live entry belongs to the parent Session."""
-        return any(
-            parent_key[0] == parent_agent_id
-            and parent_key[1] == parent_session_id
-            and batch.project_id == parent_project_id
-            and (entry := batch.entries.get(sub_run_id)) is not None
-            and entry.run_id == sub_run_id
-            and entry.session_id == sub_session_id
-            and _entry_matches_target(entry, sub_agent_id, sub_project_id)
-            for parent_key, batch in self._batches.items()
-        )
-
-    def owns_queue_item(
-        self,
-        parent_agent_id: str,
-        parent_session_id: str,
-        parent_project_id: str | None,
-        sub_agent_id: str,
-        sub_session_id: str,
-        sub_project_id: str | None,
-        queue_item_id: str,
-    ) -> bool:
-        """Return whether this exact queued-origin entry belongs to the parent Session."""
-        return (
-            self._owned_queue_entry(
-                parent_agent_id,
-                parent_session_id,
-                parent_project_id,
-                sub_agent_id,
-                sub_session_id,
-                sub_project_id,
-                queue_item_id,
-            )
-            is not None
-        )
-
-    def run_id_for_owned_queue_item(
-        self,
-        parent_agent_id: str,
-        parent_session_id: str,
-        parent_project_id: str | None,
-        sub_agent_id: str,
-        sub_session_id: str,
-        sub_project_id: str | None,
-        queue_item_id: str,
-    ) -> str | None:
-        """Resolve an owned queue handle after its item has started."""
-        entry = self._owned_queue_entry(
-            parent_agent_id,
-            parent_session_id,
-            parent_project_id,
-            sub_agent_id,
-            sub_session_id,
-            sub_project_id,
-            queue_item_id,
-        )
-        return entry.run_id if entry is not None else None
-
-    def _owned_queue_entry(
-        self,
-        parent_agent_id: str,
-        parent_session_id: str,
-        parent_project_id: str | None,
-        sub_agent_id: str,
-        sub_session_id: str,
-        sub_project_id: str | None,
-        queue_item_id: str,
-    ) -> _SubAgentEntry | None:
+        work_id: str,
+    ) -> tuple[ParentKey, _SubAgentEntry] | None:
+        """Return one public work handle owned by the calling Parent Session."""
         for parent_key, batch in reversed(list(self._batches.items())):
             if (
                 parent_key[0] != parent_agent_id
@@ -439,13 +409,9 @@ class SubAgentBatchTracker:
                 or batch.project_id != parent_project_id
             ):
                 continue
-            for entry in reversed(list(batch.entries.values())):
-                if (
-                    entry.queue_item_id == queue_item_id
-                    and entry.session_id == sub_session_id
-                    and _entry_matches_target(entry, sub_agent_id, sub_project_id)
-                ):
-                    return entry
+            entry = batch.entries.get(work_id)
+            if entry is not None:
+                return parent_key, entry
         return None
 
     def activity_file_for_session(
@@ -537,14 +503,17 @@ def _log_background_task_result(task: asyncio.Task[Any], message: str) -> None:
 def _batch_completion_message(entries: list[_SubAgentEntry]) -> str:
     lines = [
         "Sub-agent batch complete. Each sub-agent's full output is below — "
-        "don't call subagent_result for these again.",
+        "the results were delivered automatically, so do not request their status again.",
         "",
         "Results:",
     ]
     for entry in entries:
         lines.append("")
         address = format_agent_address(entry.agent_id, entry.project_id)
-        lines.append(f"### {address} (session {entry.session_id}) — {_entry_status(entry)}")
+        lines.append(
+            f"### {address} (id {entry.work_id}, session {entry.session_id}) — "
+            f"{_entry_status(entry)}"
+        )
         if entry.activity_file is not None:
             lines.append(f"Activity file: {entry.activity_file}")
         lines.append(_entry_result_text(entry))
@@ -584,10 +553,6 @@ def _entry_result_text(entry: _SubAgentEntry) -> str:
     if isinstance(note, str) and note:
         return f"(no output) {note}"
     return "(no output)"
-
-
-def _queue_entry_key(queue_item_id: str) -> str:
-    return f"queued:{queue_item_id}"
 
 
 def _entry_matches_target(

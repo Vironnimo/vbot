@@ -11,7 +11,7 @@ from core.memory import MEMORY_PROMPT_MODE_OFF, MemoryPromptMode
 MEMORY_TOOL_NAME = "memory"
 SKILL_MANAGE_TOOL_NAME = "skill_manage"
 PROJECT_TOOL_NAME = "project"
-SUBAGENT_TOOL_NAMES: frozenset[str] = frozenset({"subagent", "subagent_result"})
+SUBAGENT_TOOL_NAMES: frozenset[str] = frozenset({"subagent"})
 SUBAGENT_TOOL_SETTINGS_KEY = "subagent"
 SUBAGENT_ALLOWED_AGENTS_KEY = "allowed_agents"
 DEFAULT_SUBAGENT_ALLOWED_AGENTS: tuple[str, ...] = ("*",)

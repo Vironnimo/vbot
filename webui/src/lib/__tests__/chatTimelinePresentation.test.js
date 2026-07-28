@@ -33,15 +33,28 @@ function runningSubAgentTool(overrides = {}) {
   return {
     name: 'subagent',
     status: 'success',
-    arguments: { agent_id: 'worker', content: 'Inspect the project' },
+    arguments: {
+      action: 'run',
+      agent_id: 'worker',
+      content: 'Inspect the project',
+    },
+    subAgentSession: {
+      id: 'sub_child',
+      agent_id: 'worker',
+      session_id: 'session-child',
+      run_id: 'run-child',
+      status: 'running',
+      delivery: 'automatic',
+    },
     result: {
       ok: true,
       error: null,
       data: {
+        id: 'sub_child',
         agent_id: 'worker',
         session_id: 'session-child',
-        run_id: 'run-child',
         status: 'running',
+        delivery: 'automatic',
       },
       artifacts: [],
     },
@@ -53,15 +66,28 @@ function queuedSubAgentTool(overrides = {}) {
   return {
     name: 'subagent',
     status: 'success',
-    arguments: { agent_id: 'worker', content: 'Inspect the project' },
+    arguments: {
+      action: 'run',
+      agent_id: 'worker',
+      content: 'Inspect the project',
+    },
+    subAgentSession: {
+      id: 'sub_queued',
+      agent_id: 'worker',
+      session_id: 'session-child',
+      queue_item_id: 'queue-item-1',
+      status: 'queued',
+      delivery: 'automatic',
+    },
     result: {
       ok: true,
       error: null,
       data: {
+        id: 'sub_queued',
         agent_id: 'worker',
         session_id: 'session-child',
-        queue_item_id: 'queue-item-1',
         status: 'queued',
+        delivery: 'automatic',
       },
       artifacts: [],
     },
@@ -146,6 +172,7 @@ describe('chatTimelinePresentation', () => {
       name: 'subagent',
       status: 'running',
       arguments: {
+        action: 'run',
         agent_id: 'worker',
         content: 'Inspect the project',
       },
@@ -154,11 +181,12 @@ describe('chatTimelinePresentation', () => {
         session_id: 'session-child',
         run_id: 'run-child',
         status: 'running',
+        delivery: 'automatic',
       },
       startedEvent: {},
     };
 
-    const status = subAgentDotStatus(tool, null, {
+    const status = subAgentDotStatus(tool, {
       'run:run-child': 'completed',
     });
 
@@ -171,7 +199,7 @@ describe('chatTimelinePresentation', () => {
     // A previous run of the same reused child session left its terminal
     // status under the session key; this spawn's own run has no status yet,
     // so the dot must stay running instead of showing the old run's success.
-    const status = subAgentDotStatus(tool, null, {
+    const status = subAgentDotStatus(tool, {
       'session:worker::session-child': 'completed',
     });
 
@@ -182,14 +210,14 @@ describe('chatTimelinePresentation', () => {
     const tool = queuedSubAgentTool();
 
     expect(
-      subAgentDotStatus(tool, null, {
+      subAgentDotStatus(tool, {
         'queueRun:queue-item-1': 'run-from-queue',
         'run:run-from-queue': 'completed',
         'session:worker::session-child': 'running',
       }),
     ).toBe('success');
     // Without the mapping the queued descriptor keeps the dot running.
-    expect(subAgentDotStatus(tool, null, {})).toBe('running');
+    expect(subAgentDotStatus(tool, {})).toBe('running');
   });
 
   it('flags a frozen-descriptor running row for status verification when no live status has arrived', () => {
@@ -197,7 +225,7 @@ describe('chatTimelinePresentation', () => {
 
     // The dot says "running" but no run: or session: key exists in
     // subAgentStatuses, so the only signal is the persisted descriptor.
-    expect(subAgentDotStatus(tool, null, {})).toBe('running');
+    expect(subAgentDotStatus(tool, {})).toBe('running');
     expect(subAgentNeedsStatusVerification(tool, 'running', {})).toBe(true);
   });
 
@@ -253,18 +281,14 @@ describe('chatTimelinePresentation', () => {
     );
   });
 
-  it('keys a sub-agent result by run id when known, by session otherwise', () => {
-    expect(subAgentResultKey(runningSubAgentTool())).toBe(
-      'worker::session-child::run-child',
-    );
-    expect(subAgentResultKey(queuedSubAgentTool())).toBe(
-      'worker::session-child',
-    );
+  it('keys a sub-agent result by its stable public work id', () => {
+    expect(subAgentResultKey(runningSubAgentTool())).toBe('work:sub_child');
+    expect(subAgentResultKey(queuedSubAgentTool())).toBe('work:sub_queued');
     expect(
       subAgentResultKey(queuedSubAgentTool(), {
         'queueRun:queue-item-1': 'run-from-queue',
       }),
-    ).toBe('worker::session-child::run-from-queue');
+    ).toBe('work:sub_queued');
     expect(subAgentResultKey({ name: 'subagent', arguments: {} })).toBe('');
   });
 
@@ -285,7 +309,7 @@ describe('chatTimelinePresentation', () => {
       agentId: 'worker@vbot',
       sessionId: 'session-child',
     });
-    expect(subAgentResultKey(tool)).toBe('worker@vbot::session-child');
+    expect(subAgentResultKey(tool)).toBe('work:sub_queued');
     expect(
       subAgentRunDurationMs(tool, {
         'sessionDuration:worker@vbot::session-child': 8700,
@@ -362,7 +386,7 @@ describe('chatTimelinePresentation', () => {
     expect(subAgentResultEntryAllowsFetch(failedEntry, now + 20000)).toBe(true);
   });
 
-  it('requests a result only for a finished non-blocking spawn without inline output', () => {
+  it('requests a result only for a finished automatic-delivery spawn without inline output', () => {
     expect(subAgentShouldFetchResult(runningSubAgentTool(), 'success')).toBe(
       true,
     );
@@ -370,10 +394,13 @@ describe('chatTimelinePresentation', () => {
     expect(subAgentShouldFetchResult(runningSubAgentTool(), 'running')).toBe(
       false,
     );
-    // subagent_result lookups carry their own result already.
+    // Status calls are ordinary subagent tool rows, not spawn rows.
     expect(
       subAgentShouldFetchResult(
-        { ...runningSubAgentTool(), name: 'subagent_result' },
+        {
+          ...runningSubAgentTool(),
+          arguments: { action: 'status', id: 'sub_child' },
+        },
         'success',
       ),
     ).toBe(false);
@@ -385,30 +412,21 @@ describe('chatTimelinePresentation', () => {
       isSubAgentSpawnTool({
         name: 'subagent',
         arguments: {
-          request: {
-            operation: 'start',
-            content: 'canonical child task',
-          },
+          action: 'run',
+          content: 'canonical child task',
         },
       }),
     ).toBe(true);
     expect(
       isSubAgentSpawnTool({
         name: 'subagent',
-        arguments: {
-          request: {
-            operation: 'cancel',
-            agent_id: 'worker',
-            session_id: 'session-child',
-            run_id: 'run-child',
-          },
-        },
+        arguments: { action: 'cancel', id: 'sub_child' },
       }),
     ).toBe(false);
     expect(
       isSubAgentSpawnTool({
         ...runningSubAgentTool(),
-        name: 'subagent_result',
+        arguments: { action: 'status', id: 'sub_child' },
       }),
     ).toBe(false);
   });
@@ -417,7 +435,7 @@ describe('chatTimelinePresentation', () => {
     const tool = queuedSubAgentTool();
 
     expect(
-      subAgentDotStatus(tool, null, {
+      subAgentDotStatus(tool, {
         'queue:queue-item-1': 'cancelled',
         'session:worker::session-child': 'running',
       }),
@@ -430,11 +448,12 @@ describe('chatTimelinePresentation', () => {
         ok: true,
         error: null,
         data: {
+          id: 'sub_child',
           agent_id: 'worker',
           session_id: 'session-child',
-          run_id: 'run-child',
           status: 'completed',
           result: 'Final answer from the worker.',
+          delivery: 'inline',
         },
         artifacts: [],
       },
@@ -558,10 +577,9 @@ describe('chatTimelinePresentation', () => {
     ).toBe('bash');
   });
 
-  it('reports no last tool name for subagent_result rows', () => {
+  it('reports no last tool name for subagent status rows', () => {
     const resultTool = runningSubAgentTool({
-      name: 'subagent_result',
-      arguments: { agent_id: 'worker', session_id: 'session-child' },
+      arguments: { action: 'status', id: 'sub_child' },
     });
     expect(
       subAgentLastToolName(resultTool, { 'runTool:run-child': 'bash' }),
@@ -595,11 +613,12 @@ describe('chatTimelinePresentation', () => {
         ok: true,
         error: null,
         data: {
+          id: 'sub_child',
           agent_id: 'worker',
           session_id: 'session-child',
-          run_id: 'run-child',
           status: 'completed',
           result: 'Final answer from the worker.',
+          delivery: 'inline',
         },
         artifacts: [],
       },

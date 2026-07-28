@@ -104,7 +104,7 @@
       .filter((child) =>
         subAgentShouldFetchResult(
           child,
-          subAgentDotStatus(child, item, subAgentStatuses),
+          subAgentDotStatus(child, subAgentStatuses),
         ),
       )
       .map((child) => {
@@ -146,7 +146,7 @@
       .filter((child) =>
         subAgentNeedsStatusVerification(
           child,
-          subAgentDotStatus(child, item, subAgentStatuses),
+          subAgentDotStatus(child, subAgentStatuses),
           subAgentStatuses,
         ),
       )
@@ -288,7 +288,7 @@
         </details>
       {:else if child.type === 'tool_call'}
         {#if isSubAgentSpawnTool(child)}
-          {@const dotStatus = subAgentDotStatus(child, item, subAgentStatuses)}
+          {@const dotStatus = subAgentDotStatus(child, subAgentStatuses)}
           {@const subAgentResult =
             subAgentResults[subAgentResultKey(child, subAgentStatuses)]}
           {@const subAgentTimeLabel = subAgentToolStatusLabel(

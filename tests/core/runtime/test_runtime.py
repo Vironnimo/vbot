@@ -49,7 +49,6 @@ CANONICAL_BUILTIN_TOOLS = [
     "skill_manage",
     "status",
     "subagent",
-    "subagent_result",
     "text_to_speech",
     "web_fetch",
     "web_search",
@@ -748,7 +747,6 @@ def test_runtime_registers_subagent_tools(config: Config) -> None:
 
     assert isinstance(runtime._subagent_coordinator, SubAgentCoordinator)  # noqa: SLF001
     assert runtime.tools.get("subagent").name == "subagent"
-    assert runtime.tools.get("subagent_result").name == "subagent_result"
 
 
 @pytest.mark.asyncio
@@ -1493,6 +1491,7 @@ class _StubPrompts:
         project_context: object = None,
         working_project_context: str | None = None,
         agent_project_id: str | None = None,
+        nesting_depth: int = 0,
         skill_registry: object = None,
         skill_catalog: object = None,
         read_paths: list[Path] | None = None,

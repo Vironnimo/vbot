@@ -7,7 +7,7 @@ import {
   runToolScenario,
 } from "./chat-tool-support.js";
 
-test("a foreground subagent Tool Run returns its child result to the parent", async ({
+test("a top-level subagent Tool Run delivers its child result automatically", async ({
   page,
 }) => {
   try {
@@ -32,9 +32,6 @@ test("a foreground subagent Tool Run returns its child result to the parent", as
     const subagent = await expectToolSucceeded(page, chat, "Sub-agent");
     await openToolRow(subagent);
     await expect(subagent).toContainText("Fake sub-agent result.");
-    const result = await expectToolSucceeded(page, chat, "subagent_result");
-    await openToolRow(result);
-    await expect(result).toContainText("Fake sub-agent result.");
   } finally {
     await page.request.post("/api/rpc", {
       data: {

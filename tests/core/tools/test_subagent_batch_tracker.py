@@ -67,9 +67,9 @@ async def test_batch_tracker_triggers_once_when_all_sub_agents_complete() -> Non
     assert session_id == "parent-session"
     assert internal is True
     assert "Sub-agent batch complete." in message
-    assert "### worker (session session-one) — completed" in message
+    assert "### worker (id run-one, session session-one) — completed" in message
     assert "First result" in message
-    assert "### worker (session session-two) — completed" in message
+    assert "### worker (id run-two, session session-two) — completed" in message
     assert "Second result" in message
 
 
@@ -111,7 +111,7 @@ async def test_batch_tracker_surfaces_failure_note() -> None:
     # Assert
     assert len(trigger_service.calls) == 1
     _agent_id, message, _session_id, _internal = trigger_service.calls[0]
-    assert "### worker (session session-one) — failed" in message
+    assert "### worker (id run-one, session session-one) — failed" in message
     assert "boom" in message
 
 

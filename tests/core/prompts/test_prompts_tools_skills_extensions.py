@@ -74,17 +74,16 @@ def test_provider_tool_definitions_keep_subagent_tools_for_self_only(
     workspace: Path, tmp_path: Path
 ) -> None:
     registry = ToolRegistry()
-    for name in ("subagent", "subagent_result"):
-        registry.register(
-            name=name,
-            description=f"{name} description",
-            parameters={
-                "type": "object",
-                "properties": {"agent_id": {"type": "string"}},
-                "additionalProperties": False,
-            },
-            handler=lambda _context, _arguments: tool_success({}),
-        )
+    registry.register(
+        name="subagent",
+        description="subagent description",
+        parameters={
+            "type": "object",
+            "properties": {"agent_id": {"type": "string"}},
+            "additionalProperties": False,
+        },
+        handler=lambda _context, _arguments: tool_success({}),
+    )
     manager = _manager(tmp_path, tools=registry)
     agent = _agent(
         workspace,
@@ -94,10 +93,7 @@ def test_provider_tool_definitions_keep_subagent_tools_for_self_only(
 
     definitions = manager.provider_tool_definitions(agent)
 
-    assert [definition["name"] for definition in definitions] == [
-        "subagent",
-        "subagent_result",
-    ]
+    assert [definition["name"] for definition in definitions] == ["subagent"]
     for definition in definitions:
         parameters = definition["parameters"]
         assert parameters["properties"]["agent_id"]["enum"] == ["coder"]
@@ -325,9 +321,6 @@ def test_subagent_block_renders_only_with_tool_and_lists_additional_targets(
         async def spawn(self, _context: Any, _arguments: Any) -> Any:
             return tool_success({})
 
-        async def result(self, _context: Any, _arguments: Any) -> Any:
-            return tool_success({})
-
         def prompt_targets(self, _agent: Any, project_id: str | None) -> Any:
             assert project_id == "vbot"
             return [
@@ -350,10 +343,19 @@ def test_subagent_block_renders_only_with_tool_and_lists_additional_targets(
     denied = _agent(workspace, allowed_tools=[])
 
     prompt = manager.build_system_prompt(allowed, agent_project_id="vbot")
+    nested_prompt = manager.build_system_prompt(
+        allowed,
+        agent_project_id="vbot",
+        nesting_depth=1,
+    )
 
     assert "## Sub-Agents" in prompt
     assert "omit `agent_id`" in prompt
     assert "- `reviewer` — Reviewer — Reviews completed work." in prompt
+    assert "You are the top-level Agent." in prompt
+    assert "results are delivered automatically" in prompt
+    assert "You are a Sub-Agent." in nested_prompt
+    assert "executes in the foreground" in nested_prompt
     assert "## Sub-Agents" not in manager.build_system_prompt(
         denied,
         agent_project_id="vbot",
@@ -365,7 +367,6 @@ def test_subagent_block_stays_visible_without_additional_targets(
 ) -> None:
     coordinator = SimpleNamespace(
         spawn=lambda _context, _arguments: tool_success({}),
-        result=lambda _context, _arguments: tool_success({}),
         prompt_targets=lambda _agent, _project_id: [],
     )
     tools = ToolRegistry()
