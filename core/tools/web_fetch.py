@@ -140,14 +140,21 @@ WEB_FETCH_TOOL_PARAMETERS: JsonObject = {
         "include_links": {
             "type": "boolean",
             "description": (
-                "Preserve hyperlinks as [text](url) in the output. "
-                "Set to false when URLs are not needed."
+                "Optional JSON boolean; use true or false without quotes. Omit it "
+                "to preserve Markdown links (default: true). Set to false to keep "
+                "link text without target URLs. Applies only to cleaned HTML; "
+                "ignored when raw is true and for non-HTML responses."
             ),
             "default": True,
         },
         "raw": {
             "type": "boolean",
-            "description": ("Return the unmodified HTTP response body instead of cleaned text."),
+            "description": (
+                "Optional JSON boolean; use true or false without quotes. Omit it "
+                "to clean HTML into readable text (default: false). Set to true to "
+                "return HTML without cleanup. Non-HTML text is already returned "
+                "unchanged."
+            ),
             "default": False,
         },
     },

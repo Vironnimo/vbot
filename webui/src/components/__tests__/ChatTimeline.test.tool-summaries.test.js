@@ -951,14 +951,25 @@ describe('ChatTimeline', () => {
   describe('compactToolValue', () => {
     it('plain object → inner fields without the outer JSON object wrapper', () => {
       const text = getArgsCodeText({ path: 'file.txt', count: 3 }, 'ctv-obj');
-      expect(text).toContain('path');
-      expect(text).toContain('file.txt');
-      expect(text).toContain('count');
-      expect(text).toContain('3');
-      expect(text.indexOf('path')).toBeLessThan(text.indexOf('count'));
+      expect(text).toBe('path: "file.txt"\ncount: 3');
       expect(text).not.toBe('{"path":"file.txt","count":3}');
       expect(text.trim().startsWith('{')).toBe(false);
       expect(text.trim().endsWith('}')).toBe(false);
+    });
+
+    it('nested strings remain visibly distinct from JSON scalars', () => {
+      const text = getArgsCodeText(
+        {
+          stringFalse: 'false',
+          booleanFalse: false,
+          stringNumber: '3',
+          number: 3,
+        },
+        'ctv-scalar-types',
+      );
+      expect(text).toBe(
+        'stringFalse: "false"\nbooleanFalse: false\nstringNumber: "3"\nnumber: 3',
+      );
     });
 
     it('plain string → returned as-is', () => {

@@ -76,7 +76,10 @@ def test_compile_rejects_nonportable_tool_names(name: str) -> None:
     ("arguments", "message"),
     [
         ({}, "arguments: 'count' is a required property [required]"),
-        ({"count": "1"}, "arguments/count: '1' is not of type 'integer' [type]"),
+        (
+            {"count": "1"},
+            'arguments/count: expected JSON integer, received JSON string "1" [type]',
+        ),
         (
             {"count": 1, "extra": True},
             "arguments: Additional properties are not allowed ('extra' was unexpected) "
@@ -103,6 +106,48 @@ async def test_dispatch_rejects_invalid_arguments_before_handler(
 
     assert str(exc_info.value) == message
     assert calls == 0
+
+
+def test_type_error_explains_optional_default_without_coercion() -> None:
+    contract = compile_tool_contract(
+        name="sample",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "include_links": {"type": "boolean", "default": True},
+            },
+            "additionalProperties": False,
+        },
+    )
+
+    with pytest.raises(ToolContractError) as exc_info:
+        contract.validate_arguments({"include_links": "false"})
+
+    assert str(exc_info.value) == (
+        'arguments/include_links: expected JSON boolean, received JSON string "false"; '
+        "omit this optional field to use its default true [type]"
+    )
+
+
+def test_type_error_does_not_recommend_omitting_a_required_default() -> None:
+    contract = compile_tool_contract(
+        name="sample",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "enabled": {"type": "boolean", "default": True},
+            },
+            "required": ["enabled"],
+            "additionalProperties": False,
+        },
+    )
+
+    with pytest.raises(ToolContractError) as exc_info:
+        contract.validate_arguments({"enabled": "true"})
+
+    message = str(exc_info.value)
+    assert 'expected JSON boolean, received JSON string "true"' in message
+    assert "omit" not in message
 
 
 @pytest.mark.asyncio

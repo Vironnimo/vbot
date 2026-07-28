@@ -453,7 +453,7 @@ describe('ChatAssistantRun tool dot state', () => {
     );
 
     expect(argsRow.querySelector('.teb-code').textContent).toBe(
-      'command: cd C:\\Development\\projects\\vBot; npm install',
+      'command: "cd C:\\\\Development\\\\projects\\\\vBot; npm install"',
     );
   });
 });
@@ -571,7 +571,7 @@ describe('ChatAssistantRun copy actions', () => {
     argsRow.querySelector('.tool-detail-copy').click();
     await flushAsync();
 
-    expect(writeText).toHaveBeenCalledWith('path: safe.txt');
+    expect(writeText).toHaveBeenCalledWith('path: "safe.txt"');
     expect(writeText.mock.calls[0][0]).not.toContain('hidden file body');
   });
 });

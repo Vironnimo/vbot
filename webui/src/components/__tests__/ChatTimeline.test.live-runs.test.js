@@ -1029,7 +1029,7 @@ describe('ChatTimeline', () => {
       (el) => el.querySelector('.teb-label')?.textContent === 'Result',
     );
     const resultText = resultRow.querySelector('.teb-code').textContent;
-    expect(resultText).toContain('status: completed');
+    expect(resultText).toContain('status: "completed"');
     expect(resultText).toContain('exit_code: 0');
     expect(resultText).not.toContain('hello');
     expect(resultText).not.toContain('warn');

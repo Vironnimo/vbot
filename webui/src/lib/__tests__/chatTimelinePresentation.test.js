@@ -420,8 +420,8 @@ describe('chatTimelinePresentation', () => {
       tool,
     });
 
-    expect(rendered).toContain('result: Final answer from the worker.');
-    expect(rendered).toContain('status: completed');
+    expect(rendered).toContain('result: "Final answer from the worker."');
+    expect(rendered).toContain('status: "completed"');
   });
 
   it('keeps the original tool result when no fetched output exists', () => {

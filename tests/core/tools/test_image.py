@@ -136,7 +136,7 @@ async def test_image_generation_tool_rejects_single_source_path_string(tmp_path:
     registry = ToolRegistry()
     register_image_generation_tool(registry, service)
 
-    with pytest.raises(ToolContractError, match="is not of type 'array'"):
+    with pytest.raises(ToolContractError, match="expected JSON array"):
         await registry.dispatch(
             _make_context(tmp_path),
             {"prompt": "make it rainy", "source_images": str(source)},
@@ -151,7 +151,7 @@ async def test_image_generation_tool_rejects_invalid_source_paths_shape(tmp_path
     registry = ToolRegistry()
     register_image_generation_tool(registry, service)
 
-    with pytest.raises(ToolContractError, match="is not of type 'array'"):
+    with pytest.raises(ToolContractError, match="expected JSON array"):
         await registry.dispatch(
             _make_context(tmp_path),
             {"prompt": "make it rainy", "source_images": {"path": "photo.png"}},
@@ -195,7 +195,7 @@ async def test_analyze_image_tool_rejects_single_path_string(tmp_path: Path) -> 
     registry = ToolRegistry()
     register_analyze_image_tool(registry, service)
 
-    with pytest.raises(ToolContractError, match="is not of type 'array'"):
+    with pytest.raises(ToolContractError, match="expected JSON array"):
         await registry.dispatch(
             _make_context(tmp_path, tool_name=ANALYZE_IMAGE_TOOL_NAME),
             {"prompt": "Describe it.", "images": "photo.png"},

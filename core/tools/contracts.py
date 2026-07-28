@@ -162,7 +162,78 @@ def _validate_instance(
     best = _best_validation_error(error)
     path = _format_path(best.absolute_path)
     keyword = best.validator if isinstance(best.validator, str) else "schema"
-    raise ToolContractError(f"{label}{path}: {best.message} [{keyword}]")
+    message = (
+        _format_type_validation_error(validator.schema, best)
+        if best.validator == "type"
+        else best.message
+    )
+    raise ToolContractError(f"{label}{path}: {message} [{keyword}]")
+
+
+def _format_type_validation_error(root_schema: Any, error: ValidationError) -> str:
+    expected = error.validator_value
+    if isinstance(expected, str):
+        expected_types = [expected]
+    elif isinstance(expected, list):
+        expected_types = [str(item) for item in expected]
+    else:
+        expected_types = [str(expected)]
+    expected_text = " or ".join(f"JSON {item}" for item in expected_types)
+    received_text = _describe_json_value(error.instance)
+    default_hint = _optional_property_default_hint(root_schema, error)
+    return f"expected {expected_text}, received {received_text}{default_hint}"
+
+
+def _describe_json_value(value: Any) -> str:
+    if value is None:
+        return "JSON null"
+    if isinstance(value, bool):
+        return f"JSON boolean {json.dumps(value)}"
+    if isinstance(value, str):
+        return f"JSON string {json.dumps(value, ensure_ascii=False)}"
+    if isinstance(value, int):
+        return f"JSON integer {value}"
+    if isinstance(value, float):
+        return f"JSON number {value}"
+    if isinstance(value, list):
+        return "JSON array"
+    if isinstance(value, dict):
+        return "JSON object"
+    return type(value).__name__
+
+
+def _optional_property_default_hint(root_schema: Any, error: ValidationError) -> str:
+    if not isinstance(error.schema, dict) or "default" not in error.schema:
+        return ""
+
+    schema_path = tuple(error.absolute_schema_path)
+    for index in range(len(schema_path) - 2, -1, -1):
+        if schema_path[index] != "properties":
+            continue
+        property_name = schema_path[index + 1]
+        parent_schema = _schema_node_at_path(root_schema, schema_path[:index])
+        if not isinstance(parent_schema, dict):
+            continue
+        required = parent_schema.get("required", [])
+        if isinstance(required, list) and property_name not in required:
+            default = json.dumps(error.schema["default"], ensure_ascii=False)
+            return f"; omit this optional field to use its default {default}"
+    return ""
+
+
+def _schema_node_at_path(root_schema: Any, path: tuple[Any, ...]) -> Any:
+    node = root_schema
+    for segment in path:
+        if isinstance(node, dict):
+            if segment not in node:
+                return None
+            node = node[segment]
+            continue
+        if isinstance(node, list) and isinstance(segment, int) and 0 <= segment < len(node):
+            node = node[segment]
+            continue
+        return None
+    return node
 
 
 def _best_validation_error(error: ValidationError) -> ValidationError:

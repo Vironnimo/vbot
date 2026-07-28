@@ -1155,7 +1155,7 @@ class TestToolExecutor:
         assert results == [
             tool_failure(
                 "invalid_arguments",
-                "arguments: [] is not of type 'object' [type]",
+                "arguments: expected JSON object, received JSON array [type]",
             )
         ]
 

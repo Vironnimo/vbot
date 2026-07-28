@@ -540,13 +540,13 @@ async def test_get_state_invalid_entity_id(entity_id: str) -> None:
     ("tool_name", "arguments", "message"),
     (
         (HA_LIST_ENTITIES_NAME, {"unknown": True}, "Additional properties are not allowed"),
-        (HA_LIST_ENTITIES_NAME, {"domain": 42}, "is not of type 'string'"),
-        (HA_GET_STATE_NAME, {"entity_id": 42}, "is not of type 'string'"),
-        (HA_LIST_SERVICES_NAME, {"domain": []}, "is not of type 'string'"),
+        (HA_LIST_ENTITIES_NAME, {"domain": 42}, "expected JSON string"),
+        (HA_GET_STATE_NAME, {"entity_id": 42}, "expected JSON string"),
+        (HA_LIST_SERVICES_NAME, {"domain": []}, "expected JSON string"),
         (
             HA_CALL_SERVICE_NAME,
             {"domain": "light", "service": "turn_on", "data": []},
-            "is not of type 'object'",
+            "expected JSON object",
         ),
     ),
 )

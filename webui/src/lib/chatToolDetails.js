@@ -28,6 +28,7 @@ export const compactToolValue = (
         tool
           ? hiddenArgumentKeysForTool(tool, toolName)
           : hiddenArgumentKeysForTool(toolName),
+        true,
       );
 
   if (!hasMeaningfulToolDetail(processed)) {
@@ -83,8 +84,12 @@ function toolNameForRunTool(tool) {
   return tool.name || tool.toolCall?.name || t('chat.toolPendingName', 'tool');
 }
 
-function sanitizeToolDetailNode(value, additionalHiddenKeys = null) {
-  const parsedValue = parseJsonValue(value);
+function sanitizeToolDetailNode(
+  value,
+  additionalHiddenKeys = null,
+  parseSerializedValue = false,
+) {
+  const parsedValue = parseSerializedValue ? parseJsonValue(value) : value;
 
   if (Array.isArray(parsedValue)) {
     return parsedValue
@@ -111,7 +116,7 @@ function sanitizeToolDetailNode(value, additionalHiddenKeys = null) {
 }
 
 function preferredToolResultValue(value, toolName = '', tool = null) {
-  const sanitizedValue = sanitizeToolDetailNode(value);
+  const sanitizedValue = sanitizeToolDetailNode(value, null, true);
 
   if (!isPlainObject(sanitizedValue)) {
     return sanitizedValue;
@@ -250,7 +255,7 @@ function formatPlainObjectInner(value) {
 
 function formatToolFieldValue(value) {
   if (typeof value === 'string') {
-    return value;
+    return JSON.stringify(value);
   }
 
   if (typeof value === 'number' || typeof value === 'boolean') {
