@@ -9,6 +9,7 @@ import pytest
 
 from core.chat import (
     ChatMessage,
+    ToolCall,
 )
 from core.chat.messages import HISTORY_COMPACTION_GUIDANCE
 from core.providers.reasoning import (
@@ -86,6 +87,7 @@ async def test_fresh_follow_up_skips_reasoning_only_assistant_history_message(
             content=None,
             reasoning="Old readable reasoning",
             reasoning_meta={"opaque": "provider-signed"},
+            reasoning_scope="anthropic/claude-sonnet-4::api-key",
         )
     )
 
@@ -156,6 +158,64 @@ async def test_full_history_policy_replays_same_model_reasoning_across_runs(
     mismatched_entry = request[4]
     assert "reasoning" not in mismatched_entry
     assert "reasoning_meta" not in mismatched_entry
+
+
+@pytest.mark.asyncio
+async def test_session_model_switch_projects_completed_tool_reasoning_as_context(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="anthropic/claude-sonnet-4", allowed_tools=["*"])
+    adapter = PolicyStubAdapter(
+        [{"content": "Fresh answer", "tool_calls": None}],
+        policy=REASONING_REPLAY_FULL_HISTORY,
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Inspect the file."))
+    session.append(
+        ChatMessage.assistant(
+            model="openai/gpt-5.6-sol::api-key",
+            content=None,
+            reasoning="The Tool output needs validation.",
+            reasoning_meta={
+                "response_output": [
+                    {
+                        "type": "reasoning",
+                        "id": "rs_foreign",
+                        "encrypted_content": "foreign-encrypted",
+                    }
+                ]
+            },
+            reasoning_scope="openai/gpt-5.6-sol::api-key:work",
+            tool_calls=[ToolCall(id="call_one", name="read", arguments={"path": "a.py"})],
+        )
+    )
+    session.append(
+        ChatMessage.tool(
+            tool_call_id="call_one",
+            name="read",
+            content='{"ok":true,"data":"contents"}',
+        )
+    )
+
+    await build_chat_loop(runtime).send("coder", "Continue.", session_id="session-one")
+
+    request = adapter.requests[0]["messages"]
+    assert [message["role"] for message in request] == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+        "user",
+        "user",
+    ]
+    assert "reasoning" not in request[2]
+    assert "reasoning_meta" not in request[2]
+    assert request[3]["tool_call_id"] == "call_one"
+    assert "The Tool output needs validation." in request[4]["content"]
+    assert "rs_foreign" not in str(request)
+    assert "foreign-encrypted" not in str(request)
+    assert request[5]["content"] == "Continue."
 
 
 @pytest.mark.asyncio

@@ -326,6 +326,7 @@ async def test_streaming_mode_restarts_after_transient_drop_before_visible_outpu
     messages = runtime.chat_sessions.get("coder", "session-one").load()
     assert assistant.content == "Recovered"
     assert len(adapter.stream_requests) == 2
+    assert adapter.stream_requests[0]["messages"] == adapter.stream_requests[1]["messages"]
     assert run.status == RunStatus.COMPLETED
     # The discarded attempt leaves no error or durable readable state.
     assert persisted_roles(messages) == ["user", "assistant"]

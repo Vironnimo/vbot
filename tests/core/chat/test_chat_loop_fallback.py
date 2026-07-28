@@ -416,6 +416,22 @@ async def test_fallback_request_strips_primary_provider_reasoning_meta(tmp_path:
         "reasoning" not in message and "reasoning_meta" not in message
         for message in fallback_assistants
     )
+    # The completed Tool turn's readable work survives the route change only
+    # as explicitly provider-neutral context, after its Tool result.
+    fallback_messages = fallback_adapter.requests[0]["messages"]
+    portable_notes = [
+        message
+        for message in fallback_messages
+        if message.get("role") == "user"
+        and "Primary readable reasoning" in message.get("content", "")
+    ]
+    assert len(portable_notes) == 1
+    tool_result_index = next(
+        index for index, message in enumerate(fallback_messages) if message.get("role") == "tool"
+    )
+    portable_note_index = fallback_messages.index(portable_notes[0])
+    assert portable_note_index > tool_result_index
+    assert "primary-opaque" not in str(fallback_messages)
 
 
 @pytest.mark.asyncio

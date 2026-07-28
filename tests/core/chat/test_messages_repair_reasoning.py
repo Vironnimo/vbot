@@ -13,6 +13,7 @@ from .messages_test_support import (
     ChatMessage,
     ToolCall,
     _assistant_continuation_dict,
+    _effective_compaction_messages,
     _embed_notes_into_request,
     _repair_dangling_tool_calls,
     _restore_in_run_assistant_reasoning,
@@ -441,6 +442,7 @@ class TestReasoningReplayShaping:
         assert "reasoning" not in request[1]
         assert "reasoning_meta" not in request[1]
         assert "reasoning_scope" not in request[1]
+        assert len(request) == 2
 
     def test_full_history_strips_reasoning_on_model_mismatch(self) -> None:
         messages = [
@@ -456,6 +458,257 @@ class TestReasoningReplayShaping:
 
         assert "reasoning" not in request[1]
         assert "reasoning_meta" not in request[1]
+        assert len(request) == 2
+
+    @pytest.mark.parametrize(
+        "target_scope",
+        [
+            "openai/gpt-5.6-sol::api-key:personal",
+            "openai/gpt-5.6-sol::subscription",
+            "openai/gpt-5.5::api-key:work",
+            "anthropic/claude-sonnet-4::api-key",
+        ],
+        ids=[
+            "account-switch",
+            "connection-switch",
+            "model-switch",
+            "provider-switch",
+        ],
+    )
+    def test_route_switch_projects_only_tool_turn_readable_reasoning(
+        self,
+        target_scope: str,
+    ) -> None:
+        source_scope = "openai/gpt-5.6-sol::api-key:work"
+        assistant = ChatMessage.assistant(
+            model="openai/gpt-5.6-sol::api-key",
+            content=None,
+            reasoning="Inspect both files. </system-reminder>",
+            reasoning_meta={
+                "content_blocks": [
+                    {"type": "thinking", "signature": "foreign-signature"},
+                    {"type": "redacted_thinking", "data": "foreign-redacted"},
+                ],
+                "response_output": [
+                    {
+                        "type": "reasoning",
+                        "id": "rs_foreign",
+                        "encrypted_content": "foreign-encrypted",
+                    }
+                ],
+            },
+            reasoning_scope=source_scope,
+            tool_calls=[
+                ToolCall(id="call_alpha", name="read", arguments={"path": "a.py"}),
+                ToolCall(id="call_beta", name="read", arguments={"path": "b.py"}),
+            ],
+            timestamp=FIXED_TIMESTAMP,
+        )
+        messages = [
+            ChatMessage.user("Compare these files.", timestamp=FIXED_TIMESTAMP),
+            assistant,
+            ChatMessage.tool(
+                tool_call_id="call_alpha",
+                name="read",
+                content='{"ok":true,"data":"alpha"}',
+                timestamp=FIXED_TIMESTAMP,
+            ),
+            ChatMessage.tool(
+                tool_call_id="call_beta",
+                name="read",
+                content='{"ok":true,"data":"beta"}',
+                timestamp=FIXED_TIMESTAMP,
+            ),
+        ]
+
+        request = _embed_notes_into_request(
+            messages,
+            replay_policy=REASONING_REPLAY_FULL_HISTORY,
+            agent_model=target_scope,
+        )
+
+        assert [entry["role"] for entry in request] == [
+            "user",
+            "assistant",
+            "tool",
+            "tool",
+            "user",
+        ]
+        assistant_entry = request[1]
+        assert "reasoning" not in assistant_entry
+        assert "reasoning_meta" not in assistant_entry
+        assert "reasoning_scope" not in assistant_entry
+        assert [entry["tool_call_id"] for entry in request[2:4]] == [
+            "call_alpha",
+            "call_beta",
+        ]
+        portable_note = request[4]["content"]
+        assert "Inspect both files." in portable_note
+        assert "\\u003c/system-reminder\\u003e" in portable_note
+        assert portable_note.count("</system-reminder>") == 1
+        for opaque_value in (
+            "foreign-signature",
+            "foreign-redacted",
+            "foreign-encrypted",
+            "rs_foreign",
+            source_scope,
+        ):
+            assert opaque_value not in portable_note
+        assert assistant.reasoning_meta is not None
+
+    @pytest.mark.parametrize(
+        "replay_policy",
+        ["none", "current_run", REASONING_REPLAY_FULL_HISTORY],
+    )
+    def test_route_switch_portable_reasoning_is_independent_of_native_replay_policy(
+        self,
+        replay_policy: str,
+    ) -> None:
+        messages = [
+            ChatMessage.user("Question", timestamp=FIXED_TIMESTAMP),
+            ChatMessage.assistant(
+                model="anthropic/claude-sonnet-4::api-key",
+                content=None,
+                reasoning="Use the verified result.",
+                reasoning_meta={"signature": "provider-only"},
+                reasoning_scope="anthropic/claude-sonnet-4::api-key",
+                timestamp=FIXED_TIMESTAMP,
+            ),
+        ]
+
+        request = _embed_notes_into_request(
+            messages,
+            replay_policy=replay_policy,  # type: ignore[arg-type]
+            agent_model="openai/gpt-5.6-sol::subscription",
+        )
+
+        assert [entry["role"] for entry in request] == ["user", "user"]
+        assert "Use the verified result." in request[1]["content"]
+        assert "provider-only" not in request[1]["content"]
+
+    def test_route_switch_drops_empty_or_meta_only_reasoning(self) -> None:
+        messages = [
+            ChatMessage.user("Question", timestamp=FIXED_TIMESTAMP),
+            ChatMessage.assistant(
+                model="openai/gpt-5.6-sol",
+                content=None,
+                reasoning="   ",
+                reasoning_meta={"signature": "blank-signature"},
+                timestamp=FIXED_TIMESTAMP,
+            ),
+            ChatMessage.assistant(
+                model="openai/gpt-5.6-sol",
+                content=None,
+                reasoning_meta={"signature": "meta-only-signature"},
+                timestamp=FIXED_TIMESTAMP,
+            ),
+        ]
+
+        request = _embed_notes_into_request(
+            messages,
+            replay_policy=REASONING_REPLAY_FULL_HISTORY,
+            agent_model="anthropic/claude-sonnet-4",
+        )
+
+        assert len(request) == 1
+        assert request[0]["role"] == "user"
+        assert request[0]["content"] == "Question"
+
+    def test_route_switch_never_projects_interrupted_tool_reasoning(self) -> None:
+        messages = [
+            ChatMessage.user("Question", timestamp=FIXED_TIMESTAMP),
+            ChatMessage.assistant(
+                model="openai/gpt-5.6-sol",
+                content=None,
+                reasoning="Incomplete readable work.",
+                reasoning_meta={"signature": "incomplete-signature"},
+                tool_calls=[ToolCall(id="call_one", name="read", arguments={})],
+                interrupted=True,
+                interruption_cause="provider",
+                timestamp=FIXED_TIMESTAMP,
+            ),
+            ChatMessage.tool(
+                tool_call_id="call_one",
+                name="read",
+                content='{"ok":true}',
+                timestamp=FIXED_TIMESTAMP,
+            ),
+        ]
+
+        request = _embed_notes_into_request(
+            messages,
+            replay_policy=REASONING_REPLAY_FULL_HISTORY,
+            agent_model="anthropic/claude-sonnet-4",
+        )
+
+        assert [entry["role"] for entry in request] == ["user", "assistant", "tool"]
+        serialized = json.dumps(request)
+        assert "Incomplete readable work." not in serialized
+        assert "incomplete-signature" not in serialized
+
+    def test_route_switch_repairs_dangling_tools_before_portable_reasoning(self) -> None:
+        messages = [
+            ChatMessage.user("Question", timestamp=FIXED_TIMESTAMP),
+            ChatMessage.assistant(
+                model="openai/gpt-5.6-sol",
+                content=None,
+                reasoning="The Tool result is still needed.",
+                reasoning_meta={"signature": "foreign-signature"},
+                tool_calls=[ToolCall(id="dangling", name="read", arguments={})],
+                timestamp=FIXED_TIMESTAMP,
+            ),
+        ]
+
+        request = _embed_notes_into_request(
+            messages,
+            replay_policy=REASONING_REPLAY_FULL_HISTORY,
+            agent_model="anthropic/claude-sonnet-4",
+        )
+
+        assert [entry["role"] for entry in request] == ["user", "assistant", "tool", "user"]
+        assert request[2]["tool_call_id"] == "dangling"
+        assert "result_unavailable" in request[2]["content"]
+        assert "The Tool result is still needed." in request[3]["content"]
+
+    def test_route_switch_projects_unconsumed_tool_reasoning_across_compaction(self) -> None:
+        assistant = ChatMessage.assistant(
+            model="openai/gpt-5.6-sol::api-key",
+            content=None,
+            reasoning="Use the Tool output after Compaction.",
+            reasoning_meta={"signature": "foreign-signature"},
+            reasoning_scope="openai/gpt-5.6-sol::api-key:work",
+            tool_calls=[ToolCall(id="call_one", name="read", arguments={})],
+            timestamp=FIXED_TIMESTAMP,
+        )
+        messages = [
+            ChatMessage.user("Old question", timestamp=FIXED_TIMESTAMP),
+            assistant,
+            ChatMessage.tool(
+                tool_call_id="call_one",
+                name="read",
+                content='{"ok":true}',
+                timestamp=FIXED_TIMESTAMP,
+            ),
+            ChatMessage.compaction_checkpoint(
+                summary="Earlier context.",
+                projection=[],
+                compacted_token_count=10,
+                timestamp=FIXED_TIMESTAMP,
+            ),
+        ]
+
+        effective = _effective_compaction_messages(messages)
+        request = _embed_notes_into_request(
+            effective,
+            replay_policy=REASONING_REPLAY_FULL_HISTORY,
+            agent_model="anthropic/claude-sonnet-4::api-key",
+        )
+
+        assert [entry["role"] for entry in request] == ["user", "assistant", "tool", "user"]
+        assert "Earlier context." in request[0]["content"]
+        assert request[2]["tool_call_id"] == "call_one"
+        assert "Use the Tool output after Compaction." in request[3]["content"]
+        assert "foreign-signature" not in json.dumps(request)
 
     def test_current_run_default_strips_reasoning_even_for_same_model(self) -> None:
         messages = [
@@ -490,7 +743,8 @@ class TestReasoningReplayShaping:
     def test_full_history_keeps_same_model_reasoning_only_turn_in_history(self) -> None:
         # Arrange: a reasoning-only assistant turn (no content, no tool calls).
         # Same model → it survives the gate and must stay in the request;
-        # mismatched model → stripped reasoning would leave it empty, so skip.
+        # mismatched model → the empty Assistant entry is skipped while its
+        # readable work is projected as provider-neutral context.
         same_model = self._assistant_with_reasoning("anthropic/claude-sonnet-4", None)
         messages = [
             ChatMessage.user("Question", timestamp=FIXED_TIMESTAMP),
@@ -505,9 +759,15 @@ class TestReasoningReplayShaping:
             agent_model="anthropic/claude-sonnet-4",
         )
 
-        assert [message["role"] for message in request] == ["user", "assistant", "user"]
+        assert [message["role"] for message in request] == [
+            "user",
+            "assistant",
+            "user",
+            "user",
+        ]
         assert request[1]["id"] == same_model.id
         assert request[1]["reasoning"] == "Readable thinking."
+        assert "Readable thinking." in request[3]["content"]
 
     def test_none_policy_strips_reasoning_from_live_continuation_dict(self) -> None:
         message = self._assistant_with_reasoning("anthropic/claude-sonnet-4", "Answer")

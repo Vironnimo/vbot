@@ -35,7 +35,7 @@ _BAD_EFFORT_STATUS_CODE = 400
 _NONE_EFFORT = "none"
 
 ReasoningReplayPolicy = Literal["none", "current_run", "full_history"]
-"""How persisted assistant ``reasoning``/``reasoning_meta`` replays into provider requests.
+"""How persisted assistant ``reasoning``/``reasoning_meta`` replays natively.
 
 - ``none`` — assistant request entries never carry reasoning fields, not even
   the live in-run continuation turn.
@@ -43,6 +43,10 @@ ReasoningReplayPolicy = Literal["none", "current_run", "full_history"]
   fields; history from earlier runs is stripped (the historical default).
 - ``full_history`` — assistant entries whose persisted model passes the chat
   layer's same-model gate keep their reasoning fields across runs.
+
+This policy does not govern Chat's bounded request-only projection of readable
+Reasoning across a mismatched route; that projection is provider-neutral context
+and never carries native reasoning fields or opaque metadata.
 """
 
 REASONING_REPLAY_NONE: ReasoningReplayPolicy = "none"
