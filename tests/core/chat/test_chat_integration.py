@@ -11,9 +11,12 @@ from typing import Any, cast
 import pytest
 
 from core.chat import ChatMessage
-from core.chat.content_blocks import MediaBlock
 from core.prompts import SkillPromptRegistry
-from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, ProviderAdapter
+from core.providers.adapter import (
+    IMAGE_WIRE_MEDIA_TYPES,
+    TOOL_RESULT_CONTENT_BLOCKS_FIELD,
+    ProviderAdapter,
+)
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY, ReasoningReplayPolicy
 from core.runtime import Runtime
 from core.skills.skills import SkillRegistry
@@ -259,19 +262,20 @@ async def test_read_tool_missing_file_persists_failure_and_run_recovers(
 _PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 
 
-def _user_media_parts(messages: list[JsonObject]) -> list[JsonObject]:
-    """Return every resolved ``media`` part across user messages in a request."""
+def _tool_result_content_parts(messages: list[JsonObject]) -> list[JsonObject]:
+    """Return every Run-local rich content part across Tool Results."""
     return [
         part
         for message in messages
-        if message.get("role") == "user" and isinstance(message.get("content"), list)
-        for part in message["content"]
-        if isinstance(part, dict) and part.get("type") == "media"
+        if message.get("role") == "tool"
+        and isinstance(message.get(TOOL_RESULT_CONTENT_BLOCKS_FIELD), list)
+        for part in message[TOOL_RESULT_CONTENT_BLOCKS_FIELD]
+        if isinstance(part, dict)
     ]
 
 
 @pytest.mark.asyncio
-async def test_read_image_injects_base64_for_vision_model(
+async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_model(
     tmp_path: Path,
     resources_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -307,25 +311,40 @@ async def test_read_image_injects_base64_for_vision_model(
 
         assert assistant.content == "I can see the diagram."
 
-        # The follow-up provider request carries the image as a base64 media part
-        # in a synthetic current-turn user message.
-        media_parts = _user_media_parts(adapter.requests[1].messages)
+        # The follow-up provider request carries the image on its correlated
+        # Tool Result, without fabricating another user turn.
+        tool_result_parts = _tool_result_content_parts(adapter.requests[1].messages)
+        media_parts = [part for part in tool_result_parts if part.get("type") == "media"]
         assert len(media_parts) == 1
         assert media_parts[0]["media_type"] == "image/png"
         assert media_parts[0]["base64"]
 
-        # The persisted session stores only a small MediaBlock reference, never base64.
+        # The canonical Session persists only the original user turn and the
+        # compact Tool envelope; request-only base64 never reaches history.
         messages = runtime.chat_sessions.get("coder", "session-one").load()
-        injected = next(
-            message
-            for message in messages
-            if message.role == "user" and isinstance(message.content, list)
+        assert [message.role for message in messages] == [
+            "user",
+            "assistant",
+            "tool",
+            "assistant",
+            "run_summary",
+        ]
+        assert all(
+            not isinstance(message.content, list) for message in messages if message.role == "user"
         )
-        assert isinstance(injected.content, list)
-        assert isinstance(injected.content[0], MediaBlock)
-        assert injected.content[0].media_type == "image/png"
         persisted = json.dumps([message.to_dict() for message in messages])
         assert "base64" not in persisted
+
+        assert isinstance(adapter.response, list)
+        adapter.response.append({"content": "The image is no longer active.", "tool_calls": None})
+        await runtime.chat_loop.send(
+            "coder",
+            "Continue without reopening it.",
+            session_id="session-one",
+        )
+        next_run_messages = adapter.requests[2].messages
+        assert all(TOOL_RESULT_CONTENT_BLOCKS_FIELD not in message for message in next_run_messages)
+        assert "base64" not in json.dumps(next_run_messages)
     finally:
         runtime.stop()
 
@@ -371,26 +390,29 @@ async def test_read_image_degrades_to_note_for_non_vision_model(
 
         assert assistant.content == "I cannot view the image directly."
 
-        # No base64 image part reaches the non-vision provider; a text note does.
-        assert _user_media_parts(adapter.requests[1].messages) == []
+        # No base64 image part reaches the non-vision provider; the correlated
+        # Tool Result receives a path-bearing capability note instead.
+        tool_result_parts = _tool_result_content_parts(adapter.requests[1].messages)
+        assert all(part.get("type") != "media" for part in tool_result_parts)
         note = next(
-            message
-            for message in adapter.requests[1].messages
-            if message.get("role") == "user"
-            and isinstance(message.get("content"), str)
-            and "cannot be shown" in message["content"]
+            part
+            for part in tool_result_parts
+            if part.get("type") == "text" and "no vision capability" in str(part.get("text"))
         )
-        assert "diagram.png" in note["content"]
+        assert "diagram.png" in note["text"]
 
-        # The MediaBlock is still persisted (so a later run degrades it to a path note).
+        # No synthetic user message is persisted for the fallback either.
         messages = runtime.chat_sessions.get("coder", "session-one").load()
-        injected = next(
-            message
-            for message in messages
-            if message.role == "user" and isinstance(message.content, list)
+        assert [message.role for message in messages] == [
+            "user",
+            "assistant",
+            "tool",
+            "assistant",
+            "run_summary",
+        ]
+        assert all(
+            not isinstance(message.content, list) for message in messages if message.role == "user"
         )
-        assert isinstance(injected.content, list)
-        assert isinstance(injected.content[0], MediaBlock)
     finally:
         runtime.stop()
 

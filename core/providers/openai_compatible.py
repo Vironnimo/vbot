@@ -38,6 +38,7 @@ from core.providers.adapter import (
     ModelLookup,
     ProviderAdapter,
     TerminalOutcome,
+    project_tool_result_content_fallbacks,
 )
 from core.providers.errors import NetworkError, ProviderError
 from core.providers.providers import (
@@ -330,9 +331,10 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         # (e.g. ``temperature=0.0``) must survive.
         request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
         self._apply_model_output_limit(request_kwargs, model_id, messages)
+        projected_messages = project_tool_result_content_fallbacks(messages)
         payload: dict[str, Any] = {
             "model": model_id,
-            "messages": [self._format_message(message) for message in messages],
+            "messages": [self._format_message(message) for message in projected_messages],
         }
         _apply_openai_tools(
             payload,

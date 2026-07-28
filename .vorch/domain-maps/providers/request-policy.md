@@ -52,6 +52,8 @@ Compatible Adapters resolve a positive output allowance in this order: explicit 
 
 `wire_media_support(model_id)` declares exact MIME types the concrete wire can carry. Chat intersects this with Model input modalities and degrades unsupported content; the ABC default is empty so a missing declaration degrades rather than crashes. PDF support is declared only on verified concrete wires, not compatible bases.
 
+Run-local rich Tool Results retain their persisted JSON-string envelope and carry resolved media/path blocks in the request-only `tool_result_content` field. Anthropic-compatible and GitHub Copilot Messages adapters render it as nested Tool Result content; Responses-shaped adapters render it as the `function_call_output.output` content array. OpenAI Chat Completions and Ollama Tool roles are text-only, so `project_tool_result_content_fallbacks()` appends supplemental text to each correlated Result and emits all media in one request-only user message after the complete consecutive Result batch. This fallback never mutates canonical Session history and must preserve sibling Result order.
+
 `request_context_kwargs(agent_id, session_id, project_id=None)` lets an Adapter derive Provider routing/cache hints from stable conversation identity. The default adds nothing. Chat supplies the Run's Project anchor and merges returned kwargs without knowing their Provider meaning. OpenAI Codex uses Agent + Session for its conversation headers; OpenRouter hashes Project + Agent + Session into its top-level sticky-routing `session_id`.
 
 ## HTTP, retry, and streaming

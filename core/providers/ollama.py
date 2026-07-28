@@ -53,7 +53,12 @@ from core.providers._http_shared import (
     parse_sse_json_data,
     wrap_network_error,
 )
-from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, ModelLookup, ProviderAdapter
+from core.providers.adapter import (
+    IMAGE_WIRE_MEDIA_TYPES,
+    ModelLookup,
+    ProviderAdapter,
+    project_tool_result_content_fallbacks,
+)
 from core.providers.errors import NetworkError, ProviderError
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import (
@@ -582,7 +587,9 @@ class OllamaAdapter(ProviderAdapter):
 
 
 def _to_ollama_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [_to_ollama_message(message) for message in messages]
+    return [
+        _to_ollama_message(message) for message in project_tool_result_content_fallbacks(messages)
+    ]
 
 
 def _to_ollama_message(message: dict[str, Any]) -> dict[str, Any]:

@@ -34,7 +34,7 @@ from core.sessions import (
     skill_context_note_payload,
 )
 from core.tools import tool_failure
-from core.utils.tokens import estimate_message_tokens
+from core.utils.tokens import estimate_message_tokens, estimate_request_input_tokens
 
 INTERRUPTED_TOOL_RESULT_CODE = "result_unavailable"
 INTERRUPTED_TOOL_RESULT_MESSAGE = "Tool run was interrupted before a result was recorded."
@@ -1358,9 +1358,7 @@ def _apply_usage_estimation(
     request_messages: list[JsonObject],
 ) -> ChatMessage:
     """Estimate token usage when the provider doesn't supply usage data."""
-    estimated_input = sum(
-        estimate_message_tokens(request_message)[0] for request_message in request_messages
-    )
+    estimated_input, _ = estimate_request_input_tokens(request_messages)
     estimated_output, _ = estimate_message_tokens(message.to_dict())
     usage: JsonObject = {
         "input_tokens": estimated_input,

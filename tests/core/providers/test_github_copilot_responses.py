@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.errors import (
     ProviderAuthError,
     ProviderError,
@@ -257,6 +258,43 @@ def test_build_payload_replays_tool_calls_tool_results_and_reasoning_meta() -> N
             "arguments": '{"q":"docs"}',
         },
         {"type": "function_call_output", "call_id": "call_1", "output": "result"},
+    ]
+
+
+def test_build_payload_renders_image_inside_function_call_output() -> None:
+    payload = build_responses_payload(
+        [
+            {
+                "role": "tool",
+                "tool_call_id": "call_image",
+                "content": '{"ok":true}',
+                TOOL_RESULT_CONTENT_BLOCKS_FIELD: [
+                    {
+                        "type": "media",
+                        "base64": "aW1hZ2U=",
+                        "media_type": "image/png",
+                    },
+                    {"type": "text", "text": "[Image path: C:/diagram.png]"},
+                ],
+            }
+        ],
+        model_id="gpt-5.4",
+        policy=responses_policy(),
+    )
+
+    assert payload["input"] == [
+        {
+            "type": "function_call_output",
+            "call_id": "call_image",
+            "output": [
+                {"type": "input_text", "text": '{"ok":true}'},
+                {
+                    "type": "input_image",
+                    "image_url": "data:image/png;base64,aW1hZ2U=",
+                },
+                {"type": "input_text", "text": "[Image path: C:/diagram.png]"},
+            ],
+        }
     ]
 
 

@@ -138,6 +138,7 @@ from core.chat.tool_dispatch import (
     _activate_triggered_skills,
     _dispatch_tool_calls,
     _fail_tool_calls_without_dispatch,
+    _read_media_outputs,
 )
 from core.chat.usage import add_session_turn_usage, aggregate_session_usage
 from core.debug import DebugContext
@@ -157,6 +158,7 @@ from core.providers.adapter import (
     TERMINAL_OUTCOME_STOP,
     TERMINAL_OUTCOME_TOOL_CALLS,
     TERMINAL_OUTCOME_UNKNOWN,
+    TOOL_RESULT_CONTENT_BLOCKS_FIELD,
     TerminalOutcome,
     terminal_outcome_from_response,
 )
@@ -579,15 +581,60 @@ def _usage_token_count(usage: Any, key: str) -> int:
     return value
 
 
-def _read_media_text_note(filename: str, media_type: str) -> JsonObject:
-    """Plain-text fallback when a read-media image cannot be shown to the model."""
-    return {
-        "role": "user",
-        "content": (
-            f"[Loaded media {filename} ({media_type}) from disk, but it cannot be "
-            "shown to this model directly.]"
-        ),
+def _current_run_read_media_outputs(
+    messages: list[ChatMessage],
+) -> list[JsonObject]:
+    """Recover compact media references from the active Run's Tool Results."""
+
+    tail_start = 0
+    for index, message in enumerate(messages):
+        if message.role == "run_summary":
+            tail_start = index + 1
+
+    outputs: list[JsonObject] = []
+    for message in messages[tail_start:]:
+        if (
+            message.role != "tool"
+            or not isinstance(message.tool_call_id, str)
+            or not isinstance(message.content, str)
+        ):
+            continue
+        try:
+            result = json.loads(message.content)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(result, dict):
+            outputs.extend(
+                _read_media_outputs(
+                    result,
+                    tool_call_id=message.tool_call_id,
+                )
+            )
+    return outputs
+
+
+def _restore_in_run_tool_result_content(
+    rebuilt_messages: list[JsonObject],
+    live_messages: list[JsonObject],
+) -> list[JsonObject]:
+    """Restore request-only rich Tool Results after in-Run Compaction."""
+
+    rich_content_by_call_id = {
+        message["tool_call_id"]: message[TOOL_RESULT_CONTENT_BLOCKS_FIELD]
+        for message in live_messages
+        if message.get("role") == "tool"
+        and isinstance(message.get("tool_call_id"), str)
+        and isinstance(message.get(TOOL_RESULT_CONTENT_BLOCKS_FIELD), list)
     }
+    for message in rebuilt_messages:
+        tool_call_id = message.get("tool_call_id")
+        if (
+            message.get("role") == "tool"
+            and isinstance(tool_call_id, str)
+            and tool_call_id in rich_content_by_call_id
+        ):
+            message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] = rich_content_by_call_id[tool_call_id]
+    return rebuilt_messages
 
 
 def _serialize_continuation_request(
@@ -1816,34 +1863,29 @@ class ChatLoop:
                 allowed_tool_names,
                 session_tool_grants,
             )
-        if not _session_has_any_content_blocks(effective_messages):
-            return _RequestState(
-                request_messages,
-                tools,
-                allowed_tool_names,
-                session_tool_grants,
-            )
 
-        # Use the most recently appended user turn as the current-turn marker.
-        # If that turn is plain text, all content blocks resolve as historical.
-        current_user_message = _last_user_message_with_content_blocks(
-            effective_messages
-        ) or _last_user_message(effective_messages)
-        if current_user_message is None:
-            return _RequestState(
-                request_messages,
-                tools,
-                allowed_tool_names,
-                session_tool_grants,
-            )
+        if _session_has_any_content_blocks(effective_messages):
+            # Use the most recently appended user turn as the current-turn marker.
+            # If that turn is plain text, all user content blocks resolve as historical.
+            current_user_message = _last_user_message_with_content_blocks(
+                effective_messages
+            ) or _last_user_message(effective_messages)
+            if current_user_message is not None:
+                request_messages = await self._attachment_resolver.resolve_messages(
+                    request_messages,
+                    current_user_message_id=current_user_message.id,
+                    input_modalities=effective_input_modalities,
+                    wire_media_types=wire_media_types,
+                )
 
+        await self._attach_tool_result_content(
+            [message for message in request_messages if message.get("role") == "tool"],
+            _current_run_read_media_outputs(session_messages),
+            effective_input_modalities,
+            wire_media_types,
+        )
         return _RequestState(
-            await self._attachment_resolver.resolve_messages(
-                request_messages,
-                current_user_message_id=current_user_message.id,
-                input_modalities=effective_input_modalities,
-                wire_media_types=wire_media_types,
-            ),
+            request_messages,
             tools,
             allowed_tool_names,
             session_tool_grants,
@@ -2068,7 +2110,7 @@ class ChatLoop:
                         has_tool_calls=True,
                     )
                     if terminal_outcome == TERMINAL_OUTCOME_TOOL_CALLS:
-                        tool_messages, media_injections = await _dispatch_tool_calls(
+                        tool_messages, media_outputs = await _dispatch_tool_calls(
                             tool_dispatch_context,
                             assistant_message.tool_calls,
                         )
@@ -2080,12 +2122,15 @@ class ChatLoop:
                             code=failure_code,
                             message=failure_message,
                         )
-                        media_injections = []
+                        media_outputs = []
+                    tool_request_messages: list[JsonObject] = []
                     for tool_message in tool_messages:
                         session.append(tool_message)
                         assert tool_message.tool_call_id is not None
                         tool_dispatch_context.notify_result_persisted(tool_message.tool_call_id)
-                        messages.append(_message_to_request_dict(tool_message))
+                        request_message = _message_to_request_dict(tool_message)
+                        messages.append(request_message)
+                        tool_request_messages.append(request_message)
                         loaded_project_id = project_tool_context_id(tool_message)
                         if project_id is None and loaded_project_id is not None:
                             self._apply_project_skill_context(context, loaded_project_id)
@@ -2098,18 +2143,12 @@ class ChatLoop:
                     )
                     if terminal_error is not None:
                         raise terminal_error
-                    # A tool may ask to show media (e.g. read on an image): inject it
-                    # as a synthetic current-turn user message after the tool results
-                    # so the tool-cycle invariant (results before any non-tool message)
-                    # is preserved.
-                    for injection in media_injections:
-                        await self._inject_read_media(
-                            session,
-                            messages,
-                            injection,
-                            target.input_modalities,
-                            target.wire_media_types,
-                        )
+                    await self._attach_tool_result_content(
+                        tool_request_messages,
+                        media_outputs,
+                        target.input_modalities,
+                        target.wire_media_types,
+                    )
                     # Honored only after every sibling tool result is persisted, so
                     # this cooperative stop never itself dangles the assistant turn.
                     # It is not a full JSONL guarantee, though: the forceful
@@ -2142,47 +2181,63 @@ class ChatLoop:
 
         raise ToolIterationLimitError("maximum tool iterations exceeded")
 
-    async def _inject_read_media(
+    async def _attach_tool_result_content(
         self,
-        session: ChatSession,
-        messages: list[JsonObject],
-        injection: JsonObject,
+        tool_messages: list[JsonObject],
+        media_outputs: list[JsonObject],
         input_modalities: frozenset[str],
         wire_media_types: frozenset[str],
     ) -> None:
-        """Inject a tool-loaded media file as a synthetic current-turn user message.
+        """Attach resolved media blocks to their correlated Tool Results.
 
-        Only the small ``MediaBlock`` reference is persisted to the session, so a
-        later run degrades it to a path note through the once-at-start resolver
-        and context stays small. The base64-resolved request dict is appended to
-        the in-flight ``messages`` so the model sees the image this turn — the
-        resolver does not run again inside the tool loop. A non-vision model (or a
-        missing resolver) gets a plain text note instead of a hard error, so the
-        run never aborts.
+        The persisted Tool message keeps only its compact result envelope. Base64
+        blocks live exclusively in the in-flight request, so reading an image does
+        not fabricate or persist a user turn.
         """
-        media_type = injection["media_type"]
-        filename = injection["filename"]
-        media_block = MediaBlock(
-            type="media",
-            attachment_id=injection["attachment_id"],
-            filename=filename,
-            media_type=media_type,
-        )
-        user_message = ChatMessage.user([media_block])
-        session.append(user_message)
 
-        vision_unavailable = media_type.startswith("image/") and "image" not in input_modalities
-        if self._attachment_resolver is None or vision_unavailable:
-            messages.append(_read_media_text_note(filename, media_type))
+        if self._attachment_resolver is None or not media_outputs:
             return
 
-        resolved = await self._attachment_resolver.resolve_messages(
-            [_message_to_request_dict(user_message)],
-            current_user_message_id=user_message.id,
-            input_modalities=input_modalities,
-            wire_media_types=wire_media_types,
-        )
-        messages.append(resolved[0])
+        by_tool_call_id: dict[str, list[JsonObject]] = {}
+        for media_output in media_outputs:
+            tool_call_id = media_output.get("tool_call_id")
+            if isinstance(tool_call_id, str):
+                by_tool_call_id.setdefault(tool_call_id, []).append(media_output)
+
+        for tool_message in tool_messages:
+            tool_call_id = tool_message.get("tool_call_id")
+            matching = (
+                by_tool_call_id.get(tool_call_id, []) if isinstance(tool_call_id, str) else []
+            )
+            if not matching:
+                continue
+            content_blocks = [
+                content_block_to_dict(
+                    MediaBlock(
+                        type="media",
+                        attachment_id=media_output["attachment_id"],
+                        filename=media_output["filename"],
+                        media_type=media_output["media_type"],
+                    )
+                )
+                for media_output in matching
+            ]
+            transient_message_id = f"tool-result:{tool_call_id}"
+            resolved = await self._attachment_resolver.resolve_messages(
+                [
+                    {
+                        "id": transient_message_id,
+                        "role": "user",
+                        "content": content_blocks,
+                    }
+                ],
+                current_user_message_id=transient_message_id,
+                input_modalities=input_modalities,
+                wire_media_types=wire_media_types,
+            )
+            resolved_content = resolved[0].get("content")
+            if isinstance(resolved_content, list):
+                tool_message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] = resolved_content
 
     async def _maybe_auto_compact_state(
         self,
@@ -2345,7 +2400,10 @@ class ChatLoop:
             self._compaction_service.estimate_messages_tokens(rebuilt_messages),
         )
         return _RequestState(
-            _restore_in_run_assistant_reasoning(rebuilt_messages, messages),
+            _restore_in_run_tool_result_content(
+                _restore_in_run_assistant_reasoning(rebuilt_messages, messages),
+                messages,
+            ),
             rebuilt_state.tools,
             rebuilt_state.allowed_tool_names,
             rebuilt_state.session_tool_grants,

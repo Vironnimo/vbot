@@ -397,7 +397,7 @@ async def _dispatch_tool_calls(
         ),
     )
     tool_messages: list[ChatMessage] = []
-    media_injections: list[JsonObject] = []
+    media_outputs: list[JsonObject] = []
     for tool_call, result in zip(tool_calls, results, strict=True):
         tool_messages.append(
             ChatMessage.tool(
@@ -407,8 +407,8 @@ async def _dispatch_tool_calls(
                 timing=emitting_registry.timing_for_call(tool_call.id),
             )
         )
-        media_injections.extend(_read_media_injections(result))
-    return tool_messages, media_injections
+        media_outputs.extend(_read_media_outputs(result, tool_call_id=tool_call.id))
+    return tool_messages, media_outputs
 
 
 def _fail_tool_calls_without_dispatch(
@@ -477,20 +477,22 @@ def _fail_tool_calls_without_dispatch(
     return tool_messages
 
 
-def _read_media_injections(result: JsonObject) -> list[JsonObject]:
-    """Extract ``read_media`` injection descriptors from a tool result envelope.
+def _read_media_outputs(
+    result: JsonObject,
+    *,
+    tool_call_id: str,
+) -> list[JsonObject]:
+    """Extract request-local rich-content descriptors from a Tool Result.
 
-    A tool (currently ``read`` on an image) emits a ``read_media`` artifact to
-    ask the chat loop to inject the media as a synthetic current-turn user
-    message so a vision model actually sees it. Each descriptor carries the
-    attachment reference the loop needs to build a ``MediaBlock``. Artifacts of
-    any other ``kind`` (e.g. ``image_generation`` output) yield nothing.
+    ``read`` and ``web_fetch`` image results carry compact attachment
+    references. Chat resolves them into media content on the correlated Tool
+    Result for the active Run. Other artifact kinds yield nothing.
     """
     artifacts = result.get("artifacts")
     if not isinstance(artifacts, list):
         return []
 
-    injections: list[JsonObject] = []
+    outputs: list[JsonObject] = []
     for artifact in artifacts:
         if not isinstance(artifact, dict) or artifact.get("kind") != READ_MEDIA_ARTIFACT_KIND:
             continue
@@ -502,14 +504,15 @@ def _read_media_injections(result: JsonObject) -> list[JsonObject]:
             and isinstance(filename, str)
             and isinstance(media_type, str)
         ):
-            injections.append(
+            outputs.append(
                 {
+                    "tool_call_id": tool_call_id,
                     "attachment_id": attachment_id,
                     "filename": filename,
                     "media_type": media_type,
                 }
             )
-    return injections
+    return outputs
 
 
 def _activate_triggered_skills(

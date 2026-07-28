@@ -25,6 +25,7 @@ MESSAGE_TOKEN_ESTIMATE_FIELDS = (
     "tool_call_id",
     "name",
     "error_kind",
+    "tool_result_content",
 )
 
 # Native media reaches providers as large base64/data-URL strings, but Models

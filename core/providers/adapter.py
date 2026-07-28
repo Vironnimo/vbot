@@ -60,6 +60,7 @@ _DASH_UNDERSCORE_TOOL_CALL_ID_CHARACTERS = frozenset(string.ascii_letters + stri
 _TOOL_CALL_ID_HASH_LENGTH = 12
 _RESPONSES_OUTPUT_META_KEY = "response_output"
 _TOOL_RESULT_ENVELOPE_KEYS = frozenset({"ok", "error", "data", "artifacts"})
+TOOL_RESULT_CONTENT_BLOCKS_FIELD = "tool_result_content"
 
 
 def canonical_tool_result_is_error(message: Mapping[str, Any]) -> bool:
@@ -88,6 +89,69 @@ def canonical_tool_result_is_error(message: Mapping[str, Any]) -> bool:
         and isinstance(result.get("error"), Mapping)
         and isinstance(result.get("artifacts"), list)
     )
+
+
+def tool_result_content_blocks(message: Mapping[str, Any]) -> list[JsonObject]:
+    """Return the Run-local rich content attached to one Tool Result.
+
+    Persisted Tool messages keep their stable JSON-string envelope. Chat adds
+    this request-only field after resolving attachment references, so Provider
+    adapters can render native multimodal Tool Results without putting base64
+    data into Session history.
+    """
+
+    value = message.get(TOOL_RESULT_CONTENT_BLOCKS_FIELD)
+    if not isinstance(value, list):
+        return []
+    return [dict(block) for block in value if isinstance(block, Mapping)]
+
+
+def project_tool_result_content_fallbacks(
+    messages: list[JsonObject],
+) -> list[JsonObject]:
+    """Project rich Tool Results onto text-only Tool wires.
+
+    Supplemental text remains part of its correlated Tool Result. Media blocks
+    are emitted in one request-only user message after the complete consecutive
+    Tool Result batch, preserving Provider tool-cycle ordering without writing
+    a synthetic user message to the canonical Session.
+    """
+
+    projected: list[JsonObject] = []
+    pending_media: list[JsonObject] = []
+
+    def flush_media() -> None:
+        if pending_media:
+            projected.append({"role": "user", "content": list(pending_media)})
+            pending_media.clear()
+
+    for message in messages:
+        if message.get("role") != "tool":
+            flush_media()
+            projected.append(dict(message))
+            continue
+
+        projected_message = dict(message)
+        projected_message.pop(TOOL_RESULT_CONTENT_BLOCKS_FIELD, None)
+        supplemental_text: list[str] = []
+        for block in tool_result_content_blocks(message):
+            block_type = block.get("type")
+            if block_type == "text":
+                text = block.get("text")
+                if isinstance(text, str) and text:
+                    supplemental_text.append(text)
+            elif block_type in {"media", "document"}:
+                pending_media.append(block)
+        if supplemental_text:
+            content = projected_message.get("content")
+            base_text = content if isinstance(content, str) else ""
+            projected_message["content"] = "\n\n".join(
+                part for part in (base_text, *supplemental_text) if part
+            )
+        projected.append(projected_message)
+
+    flush_media()
+    return projected
 
 
 @dataclass(frozen=True)

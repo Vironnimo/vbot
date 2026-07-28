@@ -690,24 +690,14 @@ def _read_image(
     raw: bytes,
     media_type: str,
 ) -> JsonObject:
-    """Promote an image to an attachment and signal it for current-turn injection.
-
-    The blob goes through the attachment store (reusing its size limit and
-    allowlist); a ``read_media`` artifact tells the chat loop to inject the image
-    as a synthetic current-turn user message so a vision model actually sees it.
-    """
+    """Promote an image to an attachment-backed rich Tool Result."""
     try:
         record = attachment_store.store(resolved.name, raw)
     except AttachmentError as error:
         return tool_failure("attachment_error", str(error))
 
     return tool_success(
-        {
-            "content": (
-                f"Loaded image {record.filename} ({record.media_type}) — "
-                "shown to you in the following message."
-            )
-        },
+        {"content": (f"Loaded image {record.filename} ({record.media_type}).")},
         artifacts=[
             read_media_artifact(
                 attachment_id=record.id,

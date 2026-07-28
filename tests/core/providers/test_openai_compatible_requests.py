@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.providers import resolve_request_output_limit
 from core.providers.tool_schema import render_tool_definitions
 from core.utils.tokens import estimate_request_input_tokens
@@ -433,6 +434,49 @@ class TestSendRequestFormat:
             }
         ]
         assert request_body["reasoning_effort"] == "high"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_send_uses_request_only_user_fallback_for_rich_tool_result(
+        self,
+        openai_adapter,
+    ):
+        route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
+        messages = [
+            {
+                "role": "tool",
+                "tool_call_id": "call_image",
+                "content": '{"ok":true}',
+                TOOL_RESULT_CONTENT_BLOCKS_FIELD: [
+                    {
+                        "type": "media",
+                        "base64": "aW1hZ2U=",
+                        "media_type": "image/png",
+                    },
+                    {"type": "text", "text": "[Image path: C:/diagram.png]"},
+                ],
+            }
+        ]
+
+        await openai_adapter.send(messages, model_id="gpt-5.2")
+
+        request_body = json.loads(route.calls.last.request.content)
+        assert request_body["messages"] == [
+            {
+                "role": "tool",
+                "tool_call_id": "call_image",
+                "content": '{"ok":true}\n\n[Image path: C:/diagram.png]',
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,aW1hZ2U="},
+                    }
+                ],
+            },
+        ]
 
     @respx.mock
     @pytest.mark.asyncio

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.providers.adapter import tool_result_content_blocks
 from core.providers.anthropic_compatible import (
     AnthropicMessagesStreamDecoder,
     apply_anthropic_cache_usage,
@@ -150,10 +151,17 @@ def _tool_result_message(blocks: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _to_tool_result_block(message: dict[str, Any]) -> dict[str, Any]:
+    rich_content = tool_result_content_blocks(message)
+    content: str | list[dict[str, Any]] = _text_from_content(message.get("content", ""))
+    if rich_content:
+        content = [
+            {"type": TEXT_BLOCK_TYPE, "text": content},
+            *_safe_content_blocks(rich_content),
+        ]
     return {
         "type": TOOL_RESULT_BLOCK_TYPE,
         "tool_use_id": str(message.get("tool_call_id", "")),
-        "content": _text_from_content(message.get("content", "")),
+        "content": content,
     }
 
 

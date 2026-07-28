@@ -16,7 +16,7 @@ from core.chat.messages import (
 )
 from core.sessions import skill_context_note_name
 from core.utils.errors import VBotError
-from core.utils.tokens import estimate_message_tokens
+from core.utils.tokens import estimate_message_tokens, estimate_request_input_tokens
 
 TOOL_RESULT_CONTENT_PLACEHOLDER = "[tool result content omitted during compaction]"
 SKILL_ACTIVATION_CONTENT_PLACEHOLDER = "[skill '{name}' activated - content omitted]"
@@ -312,11 +312,8 @@ class CompactionService:
         )
 
     def estimate_messages_tokens(self, messages: list[dict]) -> int:
-        total_tokens = 0
-        for message in messages:
-            estimated_tokens, _ = estimate_message_tokens(message)
-            total_tokens += estimated_tokens
-        return total_tokens
+        estimated_tokens, _ = estimate_request_input_tokens(messages)
+        return estimated_tokens
 
 
 def _plan_model_target(

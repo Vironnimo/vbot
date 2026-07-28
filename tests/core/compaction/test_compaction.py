@@ -15,6 +15,7 @@ from core.compaction import (
     CompactionSettings,
     find_tail_boundary,
 )
+from core.utils.tokens import NATIVE_MEDIA_TOKEN_RESERVE
 
 TIMESTAMP = "2026-05-19T12:00:00+00:00"
 
@@ -83,6 +84,29 @@ def test_context_ratio_and_absolute_token_triggers() -> None:
     settings = CompactionSettings(trigger="input_tokens", trigger_tokens=100_000)
     assert service.should_auto_compact(100_000, 1_000_000, 0.8, settings=settings)
     assert not service.should_auto_compact(99_999, 1_000_000, 0.8, settings=settings)
+
+
+def test_request_estimate_reserves_tool_result_media_without_counting_base64() -> None:
+    encoded = "A" * 100_000
+    messages = [
+        {
+            "role": "tool",
+            "content": '{"ok":true}',
+            "tool_call_id": "call-image",
+            "tool_result_content": [
+                {
+                    "type": "media",
+                    "media_type": "image/png",
+                    "base64": encoded,
+                }
+            ],
+        }
+    ]
+
+    estimated_tokens = CompactionService().estimate_messages_tokens(messages)
+
+    assert estimated_tokens >= NATIVE_MEDIA_TOKEN_RESERVE
+    assert estimated_tokens < NATIVE_MEDIA_TOKEN_RESERVE + 100
 
 
 @pytest.mark.asyncio
