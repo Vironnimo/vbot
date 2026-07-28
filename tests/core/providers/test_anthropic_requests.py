@@ -810,6 +810,59 @@ class TestSendRequestFormat:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_send_marks_only_failed_canonical_tool_results_as_native_errors(
+        self,
+        anthropic_adapter,
+    ):
+        route = respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(200, json=SUCCESS_RESPONSE)
+        )
+        success = json.dumps(
+            {"ok": True, "error": None, "data": {"value": 1}, "artifacts": []},
+            separators=(",", ":"),
+        )
+        failure = json.dumps(
+            {
+                "ok": False,
+                "error": {"code": "lookup_failed", "message": "Lookup failed."},
+                "data": None,
+                "artifacts": [],
+            },
+            separators=(",", ":"),
+        )
+        messages = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "toolu_ok", "name": "lookup", "arguments": {}},
+                    {"id": "toolu_failed", "name": "lookup", "arguments": {}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": "toolu_ok", "content": success},
+            {"role": "tool", "tool_call_id": "toolu_failed", "content": failure},
+        ]
+
+        await anthropic_adapter.send(messages, model_id="claude-sonnet-4-20250219")
+
+        request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
+        result_blocks = request_body["messages"][1]["content"]
+        assert result_blocks == [
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_ok",
+                "content": success,
+            },
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_failed",
+                "content": failure,
+                "is_error": True,
+            },
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_send_round_trips_reasoning_meta_blocks_unchanged(self, anthropic_adapter):
         """Supported opaque reasoning blocks keep provider wire shape on resend."""
         route = respx.post(ANTHROPIC_URL).mock(
