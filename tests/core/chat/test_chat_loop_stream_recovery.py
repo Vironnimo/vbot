@@ -19,6 +19,10 @@ from core.providers.errors import (
     NetworkError,
     ProviderStreamingUnsupportedError,
 )
+from core.providers.github_copilot_responses import (
+    ResponsesStreamState,
+    normalize_responses_stream_event,
+)
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
 from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
@@ -333,6 +337,45 @@ async def test_streaming_mode_restarts_after_transient_drop_before_visible_outpu
 
 
 @pytest.mark.asyncio
+async def test_streaming_mode_restarts_after_classified_responses_error_before_output(
+    tmp_path: Path,
+) -> None:
+    classified_error = _classified_responses_error(
+        "response.failed",
+        {
+            "type": "response.failed",
+            "response": {
+                "status": "failed",
+                "error": {"code": "server_error", "message": "Provider overloaded."},
+                "error_type": "provider_overloaded",
+            },
+        },
+    )
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            classified_error,
+            [
+                {"type": "content_delta", "text": "Recovered"},
+                {"type": "finish", "reason": "stop"},
+            ],
+        ],
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    assistant = await build_chat_loop(runtime, streaming=True).send(
+        "coder",
+        "Hi",
+        session_id="session-one",
+    )
+
+    assert assistant.content == "Recovered"
+    assert len(adapter.stream_requests) == 2
+    assert adapter.stream_requests[0]["messages"] == adapter.stream_requests[1]["messages"]
+
+
+@pytest.mark.asyncio
 async def test_streaming_mode_does_not_restart_after_visible_delta(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter(
@@ -360,6 +403,57 @@ async def test_streaming_mode_does_not_restart_after_visible_delta(tmp_path: Pat
     assert run.status == RunStatus.COMPLETED
     assert persisted_roles(messages) == ["user", "assistant"]
     assert messages[1].interrupted is True
+
+
+@pytest.mark.asyncio
+async def test_streaming_mode_preserves_partial_after_classified_responses_error(
+    tmp_path: Path,
+) -> None:
+    classified_error = _classified_responses_error(
+        "response.failed",
+        {
+            "type": "response.failed",
+            "response": {
+                "status": "failed",
+                "error": {"code": "server_error", "message": "Provider overloaded."},
+                "error_type": "provider_overloaded",
+            },
+        },
+    )
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "content_delta", "text": "Visible"},
+                classified_error,
+            ]
+        ],
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    assistant = await build_chat_loop(runtime, streaming=True).send(
+        "coder",
+        "Hi",
+        session_id="session-one",
+    )
+
+    assert len(adapter.stream_requests) == 1
+    assert assistant.content == "Visible"
+    assert assistant.interrupted is True
+
+
+def _classified_responses_error(
+    event_name: str,
+    event_data: JsonObject,
+) -> ProviderError:
+    with pytest.raises(ProviderError) as exc_info:
+        normalize_responses_stream_event(
+            event_name,
+            event_data,
+            ResponsesStreamState(),
+        )
+    return exc_info.value
 
 
 @pytest.mark.asyncio

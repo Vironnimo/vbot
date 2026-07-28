@@ -281,6 +281,7 @@ async def test_codex_send_posts_responses_payload_with_account_and_beta_headers(
         },
         "tool_calls": None,
         "usage": {"input_tokens": 2, "output_tokens": 3},
+        "terminal_outcome": "stop",
     }
 
 
@@ -322,6 +323,7 @@ async def test_codex_send_collects_text_deltas_when_completed_output_is_empty() 
         "reasoning_meta": {"response_id": "resp_1"},
         "tool_calls": None,
         "usage": {"input_tokens": 2, "output_tokens": 2},
+        "terminal_outcome": "stop",
     }
 
 

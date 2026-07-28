@@ -12,8 +12,23 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from core.providers.adapter import RESPONSES_TOOL_CALL_ID_PROFILE, normalize_tool_call_ids
-from core.providers.errors import ProviderError
+from core.providers.adapter import (
+    RESPONSES_TOOL_CALL_ID_PROFILE,
+    TERMINAL_OUTCOME_CONTENT_FILTERED,
+    TERMINAL_OUTCOME_ERROR,
+    TERMINAL_OUTCOME_OUTPUT_TRUNCATED,
+    TERMINAL_OUTCOME_STOP,
+    TERMINAL_OUTCOME_TOOL_CALLS,
+    TERMINAL_OUTCOME_UNKNOWN,
+    TerminalOutcome,
+    normalize_tool_call_ids,
+)
+from core.providers.errors import (
+    ProviderAuthError,
+    ProviderError,
+    ProviderRateLimitError,
+    ProviderTimeoutError,
+)
 from core.providers.reasoning import reasoning_token_count
 from core.providers.tool_schema import render_tool_definitions
 
@@ -25,9 +40,19 @@ REASONING_SUMMARY_DELTA_EVENTS = {
     "response.reasoning_text.delta",
     "response.output_item.reasoning_summary_text.delta",
 }
-RESPONSES_ERROR_EVENTS = {"error", "response.failed", "response.incomplete"}
+RESPONSES_ERROR_EVENTS = {"error", "response.error", "response.failed"}
+RESPONSES_INCOMPLETE_EVENTS = {"response.incomplete"}
 _REASONING_META_KEYS = ("reasoning_items", "response_output")
 RESPONSES_RESPONSE_OUTPUT_META_KEY = "response_output"
+_RESPONSES_RATE_LIMIT_CODES = frozenset({"rate_limit_exceeded"})
+_RESPONSES_TIMEOUT_CODES = frozenset({"timeout"})
+_RESPONSES_AUTH_CODES = frozenset(
+    {"authentication", "authentication_error", "invalid_api_key", "unauthorized"}
+)
+_RESPONSES_TRANSIENT_CODES = frozenset(
+    {"provider_overloaded", "provider_unavailable", "server", "server_error"}
+)
+_RESPONSES_RETRYABLE_NUMERIC_CODES = frozenset({429, 502, 503, 504})
 
 
 class ResponsesRequestPolicy(Protocol):
@@ -101,6 +126,11 @@ class ResponsesStreamState:
             result["phase"] = phase
         if self.usage is not None:
             result["usage"] = dict(self.usage)
+        if self.completed_response is not None:
+            result["terminal_outcome"] = _responses_finish_reason(
+                self.completed_response,
+                self,
+            )
         return result
 
 
@@ -186,7 +216,9 @@ def normalize_responses_stream_event(
 
     event_type = _event_type(event_name, event_data)
     if event_type in RESPONSES_ERROR_EVENTS:
-        raise ProviderError(_responses_error_message(event_data), retryable=False)
+        raise _classify_responses_stream_error(event_data)
+    if event_type in RESPONSES_INCOMPLETE_EVENTS:
+        return _completed_event_deltas(event_data, state, implied_status="incomplete")
     if event_type == "response.output_text.delta":
         return _output_text_delta(event_data, state)
     if event_type in REASONING_SUMMARY_DELTA_EVENTS:
@@ -196,7 +228,7 @@ def normalize_responses_stream_event(
     if event_type in {"response.output_item.added", "response.output_item.done"}:
         return _output_item_event_deltas(event_data, state)
     if event_type in {"response.completed", "response.done"}:
-        return _completed_event_deltas(event_data, state)
+        return _completed_event_deltas(event_data, state, implied_status="completed")
     return []
 
 
@@ -846,10 +878,14 @@ def _record_tool_argument_delta(
 def _completed_event_deltas(
     event_data: Mapping[str, Any],
     state: ResponsesStreamState,
+    *,
+    implied_status: str | None = None,
 ) -> list[dict[str, Any]]:
     response = event_data.get("response")
     if not isinstance(response, Mapping):
         response = event_data
+    if implied_status is not None and not isinstance(response.get("status"), str):
+        response = {**response, "status": implied_status}
     state.completed_response = dict(response)
     deltas: list[dict[str, Any]] = []
     completed_output_items = _mapping_list(response.get("output"))
@@ -965,16 +1001,29 @@ def _suffix_prefix_overlap(left: str, right: str) -> int:
 def _responses_finish_reason(
     response: Mapping[str, Any],
     state: ResponsesStreamState | None = None,
-) -> str:
+) -> TerminalOutcome:
+    status = response.get("status")
+    if status == "failed":
+        return TERMINAL_OUTCOME_ERROR
+    if status == "incomplete":
+        incomplete_details = response.get("incomplete_details")
+        reason = (
+            incomplete_details.get("reason") if isinstance(incomplete_details, Mapping) else None
+        )
+        if reason == "max_output_tokens":
+            return TERMINAL_OUTCOME_OUTPUT_TRUNCATED
+        if reason in {"content_filter", "content_policy_violation"}:
+            return TERMINAL_OUTCOME_CONTENT_FILTERED
+        return TERMINAL_OUTCOME_UNKNOWN
+    if status != "completed":
+        return TERMINAL_OUTCOME_UNKNOWN
+
     output_items = _mapping_list(response.get("output"))
     if any(item.get("type") == "function_call" for item in output_items):
-        return "tool_calls"
+        return TERMINAL_OUTCOME_TOOL_CALLS
     if state is not None and _stream_has_tool_calls(state):
-        return "tool_calls"
-    status = response.get("status")
-    if status == "completed":
-        return "stop"
-    return "stop"
+        return TERMINAL_OUTCOME_TOOL_CALLS
+    return TERMINAL_OUTCOME_STOP
 
 
 def _stream_has_tool_calls(state: ResponsesStreamState) -> bool:
@@ -986,15 +1035,51 @@ def _stream_has_tool_calls(state: ResponsesStreamState) -> bool:
 
 
 def _responses_error_message(event_data: Mapping[str, Any]) -> str:
-    error = event_data.get("error")
+    payload = _responses_error_payload(event_data)
+    error = payload.get("error")
     if isinstance(error, Mapping):
         message = error.get("message")
         if isinstance(message, str) and message:
             return message
-    message = event_data.get("message")
+    message = payload.get("message")
     if isinstance(message, str) and message:
         return message
-    return "GitHub Copilot Responses request failed"
+    return "Responses request failed"
+
+
+def _classify_responses_stream_error(event_data: Mapping[str, Any]) -> ProviderError:
+    """Map exact Responses error facts into vBot's shared recovery taxonomy."""
+
+    payload = _responses_error_payload(event_data)
+    error = payload.get("error")
+    error_mapping = error if isinstance(error, Mapping) else {}
+    error_type = _non_empty_string_or_none(payload.get("error_type"))
+    if error_type is None:
+        error_type = _non_empty_string_or_none(error_mapping.get("error_type"))
+    code: Any = error_mapping.get("code")
+    if code is None:
+        code = payload.get("code")
+    classifier = error_type or (_non_empty_string_or_none(code) if isinstance(code, str) else None)
+    numeric_code = code if isinstance(code, int) and not isinstance(code, bool) else None
+    message = _responses_error_message(event_data)
+
+    if classifier in _RESPONSES_AUTH_CODES or numeric_code in {401, 403}:
+        return ProviderAuthError(message)
+    if classifier in _RESPONSES_RATE_LIMIT_CODES or numeric_code == 429:
+        return ProviderRateLimitError(message)
+    if classifier in _RESPONSES_TIMEOUT_CODES or numeric_code == 504:
+        return ProviderTimeoutError(message)
+    if (
+        classifier in _RESPONSES_TRANSIENT_CODES
+        or numeric_code in _RESPONSES_RETRYABLE_NUMERIC_CODES
+    ):
+        return ProviderError(message, retryable=True)
+    return ProviderError(message, retryable=False)
+
+
+def _responses_error_payload(event_data: Mapping[str, Any]) -> Mapping[str, Any]:
+    response = event_data.get("response")
+    return response if isinstance(response, Mapping) else event_data
 
 
 def _stream_tool_call_id(event_data: Mapping[str, Any], state: ResponsesStreamState) -> str:
