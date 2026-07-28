@@ -78,6 +78,49 @@ class TestSendSuccess:
         }
 
     @pytest.mark.parametrize(
+        ("message_fields", "expected"),
+        [
+            (
+                {
+                    "reasoning": "",
+                    "reasoning_content": "",
+                    "reasoning_text": "Visible fallback",
+                },
+                "Visible fallback",
+            ),
+            (
+                {
+                    "reasoning": "Primary",
+                    "reasoning_content": "Duplicate",
+                    "reasoning_text": "Duplicate",
+                },
+                "Primary",
+            ),
+        ],
+    )
+    def test_normalize_response_uses_first_non_empty_reasoning_alias(
+        self,
+        openai_adapter,
+        message_fields,
+        expected,
+    ):
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Done",
+                        **message_fields,
+                    }
+                }
+            ]
+        }
+
+        normalized = openai_adapter.normalize_response(response)
+
+        assert normalized["reasoning"] == expected
+
+    @pytest.mark.parametrize(
         ("finish_reason", "expected_outcome"),
         [
             ("stop", "stop"),
