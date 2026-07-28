@@ -13,6 +13,11 @@ from enum import Enum
 from typing import Any
 from urllib.parse import urlparse
 
+from core.providers.adapter import (
+    TERMINAL_OUTCOME_UNKNOWN,
+    TerminalOutcome,
+    terminal_outcome_from_response,
+)
 from core.providers.errors import ProviderStreamingUnsupportedError
 from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
@@ -178,7 +183,7 @@ class StreamingAssistantFields:
     reasoning: str | None
     reasoning_meta: JsonObject | None
     tool_calls: list[JsonObject] | None
-    finish_reason: str | None
+    finish_reason: TerminalOutcome | None
     usage: JsonObject | None = None
 
     def to_response_dict(self) -> JsonObject:
@@ -189,6 +194,8 @@ class StreamingAssistantFields:
             "reasoning_meta": self.reasoning_meta,
             "tool_calls": self.tool_calls,
         }
+        if self.finish_reason is not None:
+            result["terminal_outcome"] = self.finish_reason
         if self.usage is not None:
             result["usage"] = self.usage
         return result
@@ -196,9 +203,21 @@ class StreamingAssistantFields:
 
 @dataclass
 class _ToolCallFragments:
-    tool_call_id: str
+    stream_slot: str
+    synthetic_id_suffix: str
+    provider_id: str | None = None
     name_text: str = ""
     arguments_text: str = ""
+
+    @property
+    def tool_call_id(self) -> str:
+        """Return the Provider id, or a finalization-safe deterministic fallback."""
+        return self.provider_id or f"tool_call_{self.synthetic_id_suffix}"
+
+    def accept_provider_id(self, provider_id: str | None) -> None:
+        """Adopt a real id whenever its stable stream slot supplies one."""
+        if provider_id is not None:
+            self.provider_id = provider_id
 
     def append(self, *, name_delta: str, arguments_delta: str) -> tuple[str, str]:
         self.name_text, normalized_name_delta = _merge_stream_fragment(self.name_text, name_delta)
@@ -233,7 +252,7 @@ class StreamingAccumulator:
         self._reasoning_meta: JsonObject | None = None
         self._tool_calls: OrderedDict[str, _ToolCallFragments] = OrderedDict()
         self._visible_deltas: list[StreamingVisibleDelta] = []
-        self._finish_reason: str | None = None
+        self._finish_reason: TerminalOutcome | None = None
         self._usage: JsonObject | None = None
 
     @property
@@ -242,7 +261,7 @@ class StreamingAccumulator:
         return list(self._visible_deltas)
 
     @property
-    def finish_reason(self) -> str | None:
+    def finish_reason(self) -> TerminalOutcome | None:
         """Return the normalized finish reason, if the stream provided one."""
         return self._finish_reason
 
@@ -337,16 +356,21 @@ class StreamingAccumulator:
         )
 
     def _add_tool_call_delta(self, delta: JsonObject) -> StreamingVisibleDelta | None:
-        tool_call_id = _require_delta_string(delta, "id")
+        stream_slot, synthetic_id_suffix = _tool_call_stream_slot(delta)
+        provider_id = _optional_tool_call_provider_id(delta)
         name_delta = _optional_delta_string(delta, "name_delta")
         arguments_delta = _optional_delta_string(delta, "arguments_delta")
-        if not name_delta and not arguments_delta:
-            return None
 
         fragments = self._tool_calls.setdefault(
-            tool_call_id,
-            _ToolCallFragments(tool_call_id=tool_call_id),
+            stream_slot,
+            _ToolCallFragments(
+                stream_slot=stream_slot,
+                synthetic_id_suffix=synthetic_id_suffix,
+            ),
         )
+        fragments.accept_provider_id(provider_id)
+        if not name_delta and not arguments_delta:
+            return None
         name_delta, arguments_delta = fragments.append(
             name_delta=name_delta,
             arguments_delta=arguments_delta,
@@ -354,7 +378,12 @@ class StreamingAccumulator:
         if not name_delta and not arguments_delta:
             return None
 
-        payload: JsonObject = {"tool_call_id": tool_call_id}
+        # Tool-call deltas are transient. Before an index-based wire supplies its
+        # real id, this field is only a stable display correlation handle; the
+        # persisted Tool Call is synthesized only at finalization if no id ever
+        # arrived. This keeps public Run-event order unchanged while allowing a
+        # late Provider id to become canonical.
+        payload: JsonObject = {"tool_call_id": fragments.tool_call_id}
         if name_delta:
             payload["name_delta"] = name_delta
         if arguments_delta:
@@ -388,7 +417,10 @@ class StreamingAccumulator:
         reason = delta.get("reason")
         if reason is not None and not isinstance(reason, str):
             raise StreamingDeltaError("finish reason must be a string")
-        self._finish_reason = reason
+        if reason is None:
+            self._finish_reason = TERMINAL_OUTCOME_UNKNOWN
+            return
+        self._finish_reason = terminal_outcome_from_response({"terminal_outcome": reason})
 
 
 async def iter_with_chunk_timeout(
@@ -472,6 +504,26 @@ def _optional_delta_string(delta: JsonObject, key: str) -> str:
     if not isinstance(value, str):
         raise StreamingDeltaError(f"streaming delta {key} must be a string")
     return value
+
+
+def _tool_call_stream_slot(delta: JsonObject) -> tuple[str, str]:
+    slot = delta.get("slot")
+    if isinstance(slot, int) and not isinstance(slot, bool):
+        return f"index:{slot}", str(slot)
+    if isinstance(slot, str) and slot:
+        return f"slot:{slot}", slot
+
+    provider_id = _require_delta_string(delta, "id")
+    return f"id:{provider_id}", provider_id
+
+
+def _optional_tool_call_provider_id(delta: JsonObject) -> str | None:
+    provider_id = delta.get("id")
+    if provider_id is None:
+        return None
+    if not isinstance(provider_id, str) or not provider_id:
+        raise StreamingDeltaError("streaming delta id must be a non-empty string")
+    return provider_id
 
 
 def _joined_or_none(parts: list[str]) -> str | None:

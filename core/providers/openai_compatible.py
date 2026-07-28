@@ -27,7 +27,18 @@ from core.providers._http_shared import (
     parse_sse_json_data,
     wrap_network_error,
 )
-from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, ModelLookup, ProviderAdapter
+from core.providers.adapter import (
+    IMAGE_WIRE_MEDIA_TYPES,
+    TERMINAL_OUTCOME_CONTENT_FILTERED,
+    TERMINAL_OUTCOME_ERROR,
+    TERMINAL_OUTCOME_OUTPUT_TRUNCATED,
+    TERMINAL_OUTCOME_STOP,
+    TERMINAL_OUTCOME_TOOL_CALLS,
+    TERMINAL_OUTCOME_UNKNOWN,
+    ModelLookup,
+    ProviderAdapter,
+    TerminalOutcome,
+)
 from core.providers.errors import NetworkError, ProviderError
 from core.providers.providers import (
     AuthConfig,
@@ -78,7 +89,13 @@ OPENAI_REASONING_META_KEYS = ("encrypted_content", "reasoning_details")
 # hardcoded default-key scan, so it works whether or not catalogs carry the field.
 REASONING_RESPONSE_FIELD_METADATA_KEY = "reasoning_response_field"
 OPENAI_TOOL_FINISH_REASONS = {"tool_calls", "function_call"}
-OPENAI_STOP_FINISH_REASONS = {"stop", "length", "content_filter"}
+OPENAI_ERROR_FINISH_REASONS = {
+    "cancelled",
+    "error",
+    "failed",
+    "network_error",
+    "server_error",
+}
 DEFAULT_MAX_OUTPUT_TOKENS = 8192
 CONTEXT_WINDOW_KEYS = ("context_length", "context_window", "contextWindow")
 MAX_OUTPUT_TOKEN_KEYS = (
@@ -254,6 +271,10 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             ),
             "tool_calls": _extract_openai_tool_calls(message),
         }
+        normalized["terminal_outcome"] = _extract_openai_terminal_outcome(
+            response,
+            has_tool_calls=bool(normalized["tool_calls"]),
+        )
         usage = _extract_openai_usage(response)
         if usage is not None:
             normalized["usage"] = usage
@@ -657,7 +678,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
 
         response = await retry_async(_connect_stream)
 
-        tool_call_ids_by_index: dict[int, str] = {}
+        tool_call_slots: set[int] = set()
         normalization_state: dict[str, Any] = {}
         seen_done_marker = False
 
@@ -683,7 +704,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                     )
                 for normalized_delta in self._normalize_stream_chunk(
                     raw_chunk,
-                    tool_call_ids_by_index,
+                    tool_call_slots,
                     normalization_state,
                 ):
                     yield normalized_delta
@@ -699,16 +720,16 @@ class OpenAICompatibleAdapter(ProviderAdapter):
     def _normalize_stream_chunk(
         self,
         raw_chunk: dict[str, Any],
-        tool_call_ids_by_index: dict[int, str],
+        tool_call_slots: set[int],
         normalization_state: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         del normalization_state
-        return _normalize_openai_stream_chunk(raw_chunk, tool_call_ids_by_index)
+        return _normalize_openai_stream_chunk(raw_chunk, tool_call_slots)
 
 
 def _normalize_openai_stream_chunk(
     chunk: dict[str, Any],
-    tool_call_ids_by_index: dict[int, str],
+    tool_call_slots: set[int],
 ) -> list[dict[str, Any]]:
     error = chunk.get("error")
     if isinstance(error, dict):
@@ -719,7 +740,7 @@ def _normalize_openai_stream_chunk(
     for choice in _stream_choices(chunk):
         delta = choice.get("delta", {})
         if isinstance(delta, dict):
-            normalized_deltas.extend(_normalize_openai_message_delta(delta, tool_call_ids_by_index))
+            normalized_deltas.extend(_normalize_openai_message_delta(delta, tool_call_slots))
 
         finish_reason = choice.get("finish_reason")
         if finish_reason is not None:
@@ -728,7 +749,7 @@ def _normalize_openai_stream_chunk(
                     "type": "finish",
                     "reason": _normalize_openai_finish_reason(
                         finish_reason,
-                        has_tool_calls=bool(tool_call_ids_by_index),
+                        has_tool_calls=bool(tool_call_slots),
                     ),
                 }
             )
@@ -751,7 +772,7 @@ def _stream_choices(chunk: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _normalize_openai_message_delta(
     delta: dict[str, Any],
-    tool_call_ids_by_index: dict[int, str],
+    tool_call_slots: set[int],
 ) -> list[dict[str, Any]]:
     normalized_deltas: list[dict[str, Any]] = []
     content = delta.get("content")
@@ -766,13 +787,13 @@ def _normalize_openai_message_delta(
     if reasoning_meta:
         normalized_deltas.append({"type": "reasoning_meta", "reasoning_meta": reasoning_meta})
 
-    normalized_deltas.extend(_normalize_openai_tool_call_deltas(delta, tool_call_ids_by_index))
+    normalized_deltas.extend(_normalize_openai_tool_call_deltas(delta, tool_call_slots))
     return normalized_deltas
 
 
 def _normalize_openai_tool_call_deltas(
     delta: dict[str, Any],
-    tool_call_ids_by_index: dict[int, str],
+    tool_call_slots: set[int],
 ) -> list[dict[str, Any]]:
     raw_tool_calls = delta.get("tool_calls")
     if not isinstance(raw_tool_calls, list):
@@ -783,9 +804,10 @@ def _normalize_openai_tool_call_deltas(
         if not isinstance(raw_tool_call, dict):
             continue
         tool_call_index = _openai_tool_call_index(raw_tool_call, position)
-        tool_call_id = _openai_stream_tool_call_id(
-            raw_tool_call, tool_call_index, tool_call_ids_by_index
-        )
+        tool_call_slots.add(tool_call_index)
+        provider_id = raw_tool_call.get("id")
+        if not isinstance(provider_id, str) or not provider_id:
+            provider_id = None
         function = raw_tool_call.get("function", {})
         if not isinstance(function, dict):
             function = {}
@@ -795,16 +817,17 @@ def _normalize_openai_tool_call_deltas(
             name_delta = ""
         if not isinstance(arguments_delta, str):
             arguments_delta = ""
-        if not name_delta and not arguments_delta:
+        if provider_id is None and not name_delta and not arguments_delta:
             continue
-        normalized_deltas.append(
-            {
-                "type": "tool_call_delta",
-                "id": tool_call_id,
-                "name_delta": name_delta,
-                "arguments_delta": arguments_delta,
-            }
-        )
+        normalized_delta: dict[str, Any] = {
+            "type": "tool_call_delta",
+            "slot": tool_call_index,
+            "name_delta": name_delta,
+            "arguments_delta": arguments_delta,
+        }
+        if provider_id is not None:
+            normalized_delta["id"] = provider_id
+        normalized_deltas.append(normalized_delta)
     return normalized_deltas
 
 
@@ -813,29 +836,36 @@ def _openai_tool_call_index(raw_tool_call: dict[str, Any], position: int) -> int
     return index if isinstance(index, int) else position
 
 
-def _openai_stream_tool_call_id(
-    raw_tool_call: dict[str, Any],
-    index: int,
-    tool_call_ids_by_index: dict[int, str],
-) -> str:
-    existing_id = tool_call_ids_by_index.get(index)
-    if existing_id:
-        return existing_id
-    provider_id = raw_tool_call.get("id")
-    if isinstance(provider_id, str) and provider_id:
-        tool_call_ids_by_index[index] = provider_id
-        return provider_id
-    generated_id = f"tool_call_{index}"
-    tool_call_ids_by_index[index] = generated_id
-    return generated_id
-
-
-def _normalize_openai_finish_reason(finish_reason: Any, *, has_tool_calls: bool) -> str:
+def _normalize_openai_finish_reason(
+    finish_reason: Any,
+    *,
+    has_tool_calls: bool,
+) -> TerminalOutcome:
     if finish_reason in OPENAI_TOOL_FINISH_REASONS:
-        return "tool_calls"
-    if finish_reason in OPENAI_STOP_FINISH_REASONS:
-        return "stop"
-    return "tool_calls" if has_tool_calls else "stop"
+        return TERMINAL_OUTCOME_TOOL_CALLS
+    if finish_reason == "stop":
+        return TERMINAL_OUTCOME_TOOL_CALLS if has_tool_calls else TERMINAL_OUTCOME_STOP
+    if finish_reason == "length":
+        return TERMINAL_OUTCOME_OUTPUT_TRUNCATED
+    if finish_reason == "content_filter":
+        return TERMINAL_OUTCOME_CONTENT_FILTERED
+    if finish_reason in OPENAI_ERROR_FINISH_REASONS:
+        return TERMINAL_OUTCOME_ERROR
+    return TERMINAL_OUTCOME_UNKNOWN
+
+
+def _extract_openai_terminal_outcome(
+    response: dict[str, Any],
+    *,
+    has_tool_calls: bool,
+) -> TerminalOutcome:
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        return TERMINAL_OUTCOME_UNKNOWN
+    return _normalize_openai_finish_reason(
+        choices[0].get("finish_reason"),
+        has_tool_calls=has_tool_calls,
+    )
 
 
 def _to_openai_message(message: dict[str, Any]) -> dict[str, Any]:

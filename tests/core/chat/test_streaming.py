@@ -144,6 +144,102 @@ async def test_finalized_streamed_tool_calls_keep_stable_indexes_in_arrival_orde
     ]
 
 
+async def test_late_provider_id_replaces_unknown_identity_for_same_stream_slot() -> None:
+    accumulator = StreamingAccumulator()
+
+    first_visible = accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "slot": 0,
+            "name_delta": "search",
+            "arguments_delta": '{"query":"',
+        }
+    )[0]
+    second_visible = accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "slot": 0,
+            "id": "call_provider_late",
+            "arguments_delta": 'Berlin"}',
+        }
+    )[0]
+
+    fields = accumulator.finalize_assistant_fields()
+
+    assert first_visible.payload["tool_call_id"] == "tool_call_0"
+    assert second_visible.payload["tool_call_id"] == "call_provider_late"
+    assert fields.tool_calls == [
+        {
+            "id": "call_provider_late",
+            "name": "search",
+            "arguments": {"query": "Berlin"},
+        }
+    ]
+
+
+async def test_never_supplied_provider_id_is_synthesized_only_at_finalization() -> None:
+    accumulator = StreamingAccumulator()
+
+    accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "slot": 3,
+            "name_delta": "read",
+            "arguments_delta": '{"path":"README.md"}',
+        }
+    )
+
+    fields = accumulator.finalize_assistant_fields()
+
+    assert fields.tool_calls == [
+        {"id": "tool_call_3", "name": "read", "arguments": {"path": "README.md"}}
+    ]
+
+
+async def test_interleaved_stream_slots_merge_independently_with_late_ids() -> None:
+    accumulator = StreamingAccumulator()
+
+    accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "slot": 0,
+            "name_delta": "write",
+            "arguments_delta": '{"path":"',
+        }
+    )
+    accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "slot": 1,
+            "id": "call_read",
+            "name_delta": "read",
+            "arguments_delta": '{"path":"README',
+        }
+    )
+    accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "slot": 0,
+            "id": "call_write",
+            "arguments_delta": 'notes.md"}',
+        }
+    )
+    accumulator.add_delta(
+        {
+            "type": "tool_call_delta",
+            "slot": 1,
+            "arguments_delta": '.md"}',
+        }
+    )
+
+    fields = accumulator.finalize_assistant_fields()
+
+    assert fields.tool_calls == [
+        {"id": "call_write", "name": "write", "arguments": {"path": "notes.md"}},
+        {"id": "call_read", "name": "read", "arguments": {"path": "README.md"}},
+    ]
+
+
 async def test_preserves_reasoning_meta_without_public_delta() -> None:
     accumulator = StreamingAccumulator()
 
@@ -548,6 +644,7 @@ async def test_assistant_fields_includes_usage_in_response_dict_when_set() -> No
     result = fields.to_response_dict()
 
     assert result["usage"] == {"input_tokens": 100, "output_tokens": 50}
+    assert result["terminal_outcome"] == "stop"
 
 
 async def test_assistant_fields_omits_usage_from_response_dict_when_none() -> None:

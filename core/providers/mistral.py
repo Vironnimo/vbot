@@ -6,10 +6,12 @@ from collections.abc import Mapping
 from typing import Any
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.providers.adapter import MISTRAL_TOOL_CALL_ID_PROFILE, normalize_tool_call_ids
 from core.providers.errors import CatalogEntrySkipped
 from core.providers.openai_compatible import (
     OpenAICompatibleAdapter,
     _extract_openai_reasoning_meta,
+    _extract_openai_terminal_outcome,
     _extract_openai_tool_calls,
     _extract_openai_usage,
     _extract_stream_usage,
@@ -128,7 +130,8 @@ class MistralAdapter(OpenAICompatibleAdapter):
         """Build a Mistral payload with model-specific reasoning protocol mapping."""
 
         thinking_effort = kwargs.pop("thinking_effort", "")
-        payload = super()._build_payload(messages, model_id, **kwargs)
+        wire_messages = normalize_tool_call_ids(messages, MISTRAL_TOOL_CALL_ID_PROFILE)
+        payload = super()._build_payload(wire_messages, model_id, **kwargs)
 
         if self._model_reasoning_supported(model_id) is False:
             payload.pop("reasoning_effort", None)
@@ -253,6 +256,10 @@ class MistralAdapter(OpenAICompatibleAdapter):
             "reasoning_meta": _mistral_reasoning_meta(message, content),
             "tool_calls": _extract_openai_tool_calls(message),
         }
+        normalized["terminal_outcome"] = _extract_openai_terminal_outcome(
+            response,
+            has_tool_calls=bool(normalized["tool_calls"]),
+        )
         usage = _extract_openai_usage(response)
         if usage is not None:
             normalized["usage"] = usage
@@ -261,12 +268,12 @@ class MistralAdapter(OpenAICompatibleAdapter):
     def _normalize_stream_chunk(
         self,
         raw_chunk: dict[str, Any],
-        tool_call_ids_by_index: dict[int, str],
+        tool_call_slots: set[int],
         normalization_state: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         choices_raw = raw_chunk.get("choices", [])
         if not isinstance(choices_raw, list):
-            return super()._normalize_stream_chunk(raw_chunk, tool_call_ids_by_index)
+            return super()._normalize_stream_chunk(raw_chunk, tool_call_slots)
 
         choices = [choice for choice in choices_raw if isinstance(choice, dict)]
         state = normalization_state if normalization_state is not None else {}
@@ -279,7 +286,7 @@ class MistralAdapter(OpenAICompatibleAdapter):
         if not has_typed_content_delta and not isinstance(recorded_chunks, list):
             return super()._normalize_stream_chunk(
                 raw_chunk,
-                tool_call_ids_by_index,
+                tool_call_slots,
                 normalization_state,
             )
 
@@ -329,7 +336,7 @@ class MistralAdapter(OpenAICompatibleAdapter):
                         "type": "finish",
                         "reason": _normalize_openai_finish_reason(
                             finish_reason,
-                            has_tool_calls=bool(tool_call_ids_by_index),
+                            has_tool_calls=bool(tool_call_slots),
                         ),
                     }
                 )

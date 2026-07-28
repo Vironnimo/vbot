@@ -52,6 +52,8 @@ Every Assistant request entry with `tool_calls` must be followed by exactly one 
 
 If loaded history is missing a Result because a Run was cancelled, crashed, or was interrupted before persistence, `_repair_dangling_tool_calls` creates request-only `result_unavailable` failure envelopes for the missing calls. It never mutates Session JSONL. Cancel during dispatch likewise cannot discard Results already computed: all sibling Result messages persist before the Run honors cancellation.
 
+After Chat completes canonical history shaping and dangling-cycle repair, an Adapter with an explicit target-wire Tool-call-id profile may deep-copy that outgoing request view and normalize paired call/result ids for its wire. This transform is Provider-owned, request-only, and correlation-scoped to each Assistant batch; it never changes the canonical ids persisted in the Session or reused by Chat events.
+
 ## Source and tests
 
 - Canonical messages and shaping: `core/chat/messages.py`; tests under `tests/core/chat/test_messages_*.py`, `test_chat_loop_messages.py`, `test_chat_loop_requests.py`, and `test_chat_loop_reasoning_replay.py`.

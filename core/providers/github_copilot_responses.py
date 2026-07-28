@@ -12,6 +12,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from core.providers.adapter import RESPONSES_TOOL_CALL_ID_PROFILE, normalize_tool_call_ids
 from core.providers.errors import ProviderError
 from core.providers.tool_schema import render_tool_definitions
 
@@ -114,15 +115,16 @@ def build_responses_payload(
 ) -> dict[str, Any]:
     """Build a stateless ``/responses`` request payload from canonical messages."""
 
+    wire_messages = normalize_tool_call_ids(messages, RESPONSES_TOOL_CALL_ID_PROFILE)
     request_kwargs = policy.filter_request_kwargs(kwargs)
     payload: dict[str, Any] = {
         "model": model_id,
         "input": _messages_to_responses_input(
-            messages,
+            wire_messages,
             document_media_types=document_media_types,
         ),
     }
-    instructions = _system_instructions(messages)
+    instructions = _system_instructions(wire_messages)
     if instructions:
         payload["instructions"] = instructions
     if stream:

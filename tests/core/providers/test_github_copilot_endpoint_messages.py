@@ -238,6 +238,7 @@ def test_normalize_response_extracts_gemini_visible_thinking_from_reasoning_deta
             "reasoning_details": [{"type": "reasoning.text", "text": "Need docs lookup."}]
         },
         "tool_calls": None,
+        "terminal_outcome": "stop",
     }
 
 
@@ -485,7 +486,7 @@ async def test_stream_messages_normalizes_tool_use_finish_reason(
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_stream_messages_falls_back_to_tool_calls_finish_when_tool_block_is_present(
+async def test_stream_messages_preserves_unknown_finish_when_tool_block_is_present(
     metadata_copilot_adapter: GitHubCopilotAdapter,
 ) -> None:
     sse_body = (
@@ -512,5 +513,5 @@ async def test_stream_messages_falls_back_to_tool_calls_finish_when_tool_block_i
             "name_delta": "search",
             "arguments_delta": "",
         },
-        {"type": "finish", "reason": "tool_calls"},
+        {"type": "finish", "reason": "unknown"},
     ]

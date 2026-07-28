@@ -131,6 +131,35 @@ class TestStreamSSE:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_stream_preserves_max_tokens_as_output_truncation(self, anthropic_adapter):
+        sse_body = (
+            "event: message_delta\n"
+            'data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"}}\n'
+            "\n"
+            "event: message_stop\n"
+            'data: {"type":"message_stop"}\n'
+            "\n"
+        )
+        respx.post(ANTHROPIC_URL).mock(
+            return_value=httpx.Response(
+                200,
+                text=sse_body,
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+
+        chunks = [
+            chunk
+            async for chunk in anthropic_adapter.stream(
+                SAMPLE_MESSAGES,
+                model_id="claude-sonnet-4-20250219",
+            )
+        ]
+
+        assert chunks == [{"type": "finish", "reason": "output_truncated"}]
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_stream_accepts_multiline_sse_data_frames(self, anthropic_adapter):
         """SSE data fields may be split across multiple data lines."""
         # Arrange

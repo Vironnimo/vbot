@@ -34,7 +34,20 @@ from core.providers._http_shared import (
     parse_sse_json_data,
     wrap_network_error,
 )
-from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, ModelLookup, ProviderAdapter
+from core.providers.adapter import (
+    ANTHROPIC_MESSAGES_TOOL_CALL_ID_PROFILE,
+    IMAGE_WIRE_MEDIA_TYPES,
+    TERMINAL_OUTCOME_CONTENT_FILTERED,
+    TERMINAL_OUTCOME_ERROR,
+    TERMINAL_OUTCOME_OUTPUT_TRUNCATED,
+    TERMINAL_OUTCOME_STOP,
+    TERMINAL_OUTCOME_TOOL_CALLS,
+    TERMINAL_OUTCOME_UNKNOWN,
+    ModelLookup,
+    ProviderAdapter,
+    TerminalOutcome,
+    normalize_tool_call_ids,
+)
 from core.providers.errors import NetworkError, ProviderError
 from core.providers.providers import (
     AuthConfig,
@@ -115,13 +128,8 @@ MAX_HISTORY_CACHE_BREAKPOINTS = 3
 # rides on a stabler block (text / tool_use / tool_result) instead.
 CACHE_UNMARKABLE_BLOCK_TYPES = frozenset({THINKING_BLOCK_TYPE, REDACTED_THINKING_BLOCK_TYPE})
 ANTHROPIC_TOOL_STOP_REASONS = {"tool_use"}
-ANTHROPIC_STOP_REASONS = {
-    "end_turn",
-    "max_tokens",
-    "pause_turn",
-    "refusal",
-    "stop_sequence",
-}
+ANTHROPIC_STOP_REASONS = {"end_turn", "stop_sequence"}
+ANTHROPIC_ERROR_STOP_REASONS = {"error", "pause_turn"}
 
 
 class AnthropicMessagesStreamDecoder:
@@ -363,12 +371,22 @@ class AnthropicMessagesStreamDecoder:
         ]
 
     @staticmethod
-    def _normalize_stop_reason(stop_reason: Any, *, has_tool_calls: bool) -> str:
+    def _normalize_stop_reason(
+        stop_reason: Any,
+        *,
+        has_tool_calls: bool,
+    ) -> TerminalOutcome:
         if stop_reason in ANTHROPIC_TOOL_STOP_REASONS:
-            return "tool_calls"
+            return TERMINAL_OUTCOME_TOOL_CALLS
         if stop_reason in ANTHROPIC_STOP_REASONS:
-            return "stop"
-        return "tool_calls" if has_tool_calls else "stop"
+            return TERMINAL_OUTCOME_TOOL_CALLS if has_tool_calls else TERMINAL_OUTCOME_STOP
+        if stop_reason == "max_tokens":
+            return TERMINAL_OUTCOME_OUTPUT_TRUNCATED
+        if stop_reason == "refusal":
+            return TERMINAL_OUTCOME_CONTENT_FILTERED
+        if stop_reason in ANTHROPIC_ERROR_STOP_REASONS:
+            return TERMINAL_OUTCOME_ERROR
+        return TERMINAL_OUTCOME_UNKNOWN
 
     @staticmethod
     def _stream_index(event: dict[str, Any]) -> int | None:
@@ -507,6 +525,10 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             "reasoning_meta": _extract_anthropic_reasoning_meta(content_blocks),
             "tool_calls": _extract_anthropic_tool_calls(content_blocks),
         }
+        normalized["terminal_outcome"] = AnthropicMessagesStreamDecoder._normalize_stop_reason(
+            response.get("stop_reason"),
+            has_tool_calls=bool(normalized["tool_calls"]),
+        )
         usage = _extract_anthropic_usage(response)
         if usage is not None:
             normalized["usage"] = usage
@@ -527,11 +549,15 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         # ``None``-valued caller kwargs mean "not specified" — drop them so they
         # do not clobber provider defaults below. Falsy-but-non-None values
         # (e.g. ``temperature=0.0``) must survive.
+        wire_messages = normalize_tool_call_ids(
+            messages,
+            ANTHROPIC_MESSAGES_TOOL_CALL_ID_PROFILE,
+        )
         request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
         system_parts: list[str | list[dict[str, Any]]] = []
         conversation_messages: list[dict[str, Any]] = []
 
-        for message in messages:
+        for message in wire_messages:
             role = message.get("role")
             if role == "system":
                 # Anthropic requires system messages in a separate top-level
@@ -558,7 +584,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         resolved_max_tokens = self._resolve_max_tokens(
             request_kwargs,
             model_id,
-            messages,
+            wire_messages,
             tools=payload.get("tools"),
         )
         self._apply_reasoning(

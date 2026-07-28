@@ -137,6 +137,7 @@ from core.chat.tool_dispatch import (
     ToolDispatchContext,
     _activate_triggered_skills,
     _dispatch_tool_calls,
+    _fail_tool_calls_without_dispatch,
 )
 from core.chat.usage import add_session_turn_usage, aggregate_session_usage
 from core.debug import DebugContext
@@ -151,6 +152,14 @@ from core.projects import (
 )
 from core.prompts import PinnedSkillCatalog, ProjectPromptContext
 from core.providers.accounts import DEFAULT_ACCOUNT_ID, split_connection_id
+from core.providers.adapter import (
+    TERMINAL_OUTCOME_OUTPUT_TRUNCATED,
+    TERMINAL_OUTCOME_STOP,
+    TERMINAL_OUTCOME_TOOL_CALLS,
+    TERMINAL_OUTCOME_UNKNOWN,
+    TerminalOutcome,
+    terminal_outcome_from_response,
+)
 from core.providers.errors import NetworkError
 from core.providers.providers import resolve_effective_context_window
 from core.providers.reasoning import REASONING_REPLAY_CURRENT_RUN, ReasoningReplayPolicy
@@ -214,6 +223,14 @@ class _RequestState:
     tools: list[JsonObject]
     allowed_tool_names: tuple[str, ...]
     session_tool_grants: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _AssistantStep:
+    """One canonical Assistant message plus its Provider terminal meaning."""
+
+    message: ChatMessage
+    terminal_outcome: TerminalOutcome | None
 
 
 @dataclass
@@ -290,6 +307,48 @@ def _tool_message_failure_code(message: ChatMessage) -> str | None:
         return "unknown_failure"
     code = error.get("code")
     return code if isinstance(code, str) and code else "unknown_failure"
+
+
+def _terminal_outcome_error(
+    terminal_outcome: TerminalOutcome | None,
+    *,
+    has_tool_calls: bool,
+) -> ProviderError | None:
+    """Return a fail-closed error for an unsafe or inconsistent terminal state."""
+
+    if terminal_outcome is None:
+        return None
+    if terminal_outcome == TERMINAL_OUTCOME_OUTPUT_TRUNCATED:
+        return None
+    if (
+        terminal_outcome == TERMINAL_OUTCOME_STOP
+        and not has_tool_calls
+        or terminal_outcome == TERMINAL_OUTCOME_TOOL_CALLS
+        and has_tool_calls
+    ):
+        return None
+    return ProviderError(
+        f"Provider ended the Assistant turn with unsafe terminal outcome {terminal_outcome!r}",
+        retryable=False,
+    )
+
+
+def _terminal_tool_failure(
+    terminal_outcome: TerminalOutcome | None,
+) -> tuple[str, str]:
+    """Return the canonical Tool failure used when dispatch is forbidden."""
+
+    if terminal_outcome == TERMINAL_OUTCOME_OUTPUT_TRUNCATED:
+        return (
+            "tool_call_truncated",
+            "The Provider reached its output-token limit before completing this Tool "
+            "Call. The Tool was not executed. Reissue the complete Tool Call.",
+        )
+    return (
+        "tool_call_rejected",
+        f"The Provider ended this turn with terminal outcome "
+        f"{terminal_outcome or TERMINAL_OUTCOME_UNKNOWN!r}. The Tool was not executed.",
+    )
 
 
 @dataclass(frozen=True)
@@ -1877,7 +1936,7 @@ class ChatLoop:
                 len(messages_for_request),
             )
             step_started_perf = time.perf_counter()
-            assistant_message = await self._send_assistant_request(
+            assistant_step = await self._send_assistant_request(
                 agent,
                 target.adapter,
                 target.model_id,
@@ -1888,6 +1947,8 @@ class ChatLoop:
                 chunk_timeout_seconds=target.chunk_timeout_seconds,
                 continuation_tracker=context.continuation_tracker,
             )
+            assistant_message = assistant_step.message
+            terminal_outcome = assistant_step.terminal_outcome
             # A user cancel after visible streamed output returns the preserved
             # partial as an interrupted turn — it must reach the persist block
             # below before the cancel is honored, or the answer the user
@@ -1948,6 +2009,12 @@ class ChatLoop:
                 )
 
                 if not assistant_message.tool_calls:
+                    terminal_error = _terminal_outcome_error(
+                        terminal_outcome,
+                        has_tool_calls=False,
+                    )
+                    if terminal_error is not None:
+                        raise terminal_error
                     if preserve_cancelled_partial:
                         # The preserved partial is persisted; end the turn
                         # without new provider work (no auto-compaction). The
@@ -1995,10 +2062,24 @@ class ChatLoop:
                         base_allowed_tools=state.allowed_tool_names,
                         session_tool_grants=state.session_tool_grants,
                     )
-                    tool_messages, media_injections = await _dispatch_tool_calls(
-                        tool_dispatch_context,
-                        assistant_message.tool_calls,
+                    terminal_error = _terminal_outcome_error(
+                        terminal_outcome,
+                        has_tool_calls=True,
                     )
+                    if terminal_outcome == TERMINAL_OUTCOME_TOOL_CALLS:
+                        tool_messages, media_injections = await _dispatch_tool_calls(
+                            tool_dispatch_context,
+                            assistant_message.tool_calls,
+                        )
+                    else:
+                        failure_code, failure_message = _terminal_tool_failure(terminal_outcome)
+                        tool_messages = _fail_tool_calls_without_dispatch(
+                            tool_dispatch_context,
+                            assistant_message.tool_calls,
+                            code=failure_code,
+                            message=failure_message,
+                        )
+                        media_injections = []
                     for tool_message in tool_messages:
                         session.append(tool_message)
                         assert tool_message.tool_call_id is not None
@@ -2014,6 +2095,8 @@ class ChatLoop:
                         tool_messages,
                         tool_dispatch_context.registry,
                     )
+                    if terminal_error is not None:
+                        raise terminal_error
                     # A tool may ask to show media (e.g. read on an image): inject it
                     # as a synthetic current-turn user message after the tool results
                     # so the tool-cycle invariant (results before any non-tool message)
@@ -2399,7 +2482,7 @@ class ChatLoop:
         run: Run,
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
         continuation_tracker: ContinuationTracker | None = None,
-    ) -> ChatMessage:
+    ) -> _AssistantStep:
         request_context = _resolve_request_context_kwargs(adapter, run)
         if self._streaming:
             return await self._send_streaming_assistant_request(
@@ -2435,7 +2518,7 @@ class ChatLoop:
         tools: list[JsonObject],
         *,
         request_context: dict[str, Any],
-    ) -> ChatMessage:
+    ) -> _AssistantStep:
         response = await adapter.send(
             messages,
             model_id=model_id,
@@ -2445,10 +2528,13 @@ class ChatLoop:
             **request_context,
         )
         normalized = adapter.normalize_response(response, model_id=model_id)
-        return _assistant_message_from_response(
-            agent.model,
-            normalized,
-            reasoning_scope=response_model,
+        return _AssistantStep(
+            message=_assistant_message_from_response(
+                agent.model,
+                normalized,
+                reasoning_scope=response_model,
+            ),
+            terminal_outcome=terminal_outcome_from_response(normalized),
         )
 
     async def _send_streaming_assistant_request(
@@ -2463,7 +2549,7 @@ class ChatLoop:
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
         request_context: dict[str, Any] | None = None,
         continuation_tracker: ContinuationTracker | None = None,
-    ) -> ChatMessage:
+    ) -> _AssistantStep:
         # A transient drop before any visible output is replayed as a full stream
         # restart (the not-yet-visible analogue of the non-streaming fallback).
         # Once anything visible has been emitted, the failure propagates instead —
@@ -2510,7 +2596,7 @@ class ChatLoop:
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
         request_context: dict[str, Any] | None = None,
         continuation_tracker: ContinuationTracker | None = None,
-    ) -> ChatMessage:
+    ) -> _AssistantStep:
         accumulator = StreamingAccumulator()
         emitted_visible_delta = False
         stream = adapter.stream(
@@ -2579,7 +2665,7 @@ class ChatLoop:
                 )
                 assistant_fields = accumulator.finalize_assistant_fields()
             elif action is StreamRecoveryAction.FALLBACK:
-                assistant_message = await self._send_non_streaming_assistant_request(
+                assistant_step = await self._send_non_streaming_assistant_request(
                     agent,
                     adapter,
                     model_id,
@@ -2588,8 +2674,8 @@ class ChatLoop:
                     tools,
                     request_context=request_context or {},
                 )
-                _emit_assistant_events(run, assistant_message)
-                return assistant_message
+                _emit_assistant_events(run, assistant_step.message)
+                return assistant_step
             elif action is StreamRecoveryAction.RESTART:
                 raise _StreamRestartNeeded(exc) from exc
             elif action is StreamRecoveryAction.PRESERVE_PARTIAL:
@@ -2639,7 +2725,10 @@ class ChatLoop:
             reasoning_scope=response_model,
         )
         _emit_streaming_assistant_events(run, assistant_message)
-        return assistant_message
+        return _AssistantStep(
+            message=assistant_message,
+            terminal_outcome=assistant_fields.finish_reason,
+        )
 
     def _finalize_interrupted_partial(
         self,
@@ -2649,7 +2738,7 @@ class ChatLoop:
         run: Run,
         *,
         interruption_cause: ContinuationCause,
-    ) -> ChatMessage:
+    ) -> _AssistantStep:
         """Preserve a stream broken after visible output as an interrupted turn.
 
         The visible answer streamed so far is finalized into an assistant message
@@ -2672,7 +2761,7 @@ class ChatLoop:
             interruption_cause=interruption_cause,
         )
         _emit_streaming_assistant_events(run, assistant_message, allow_after_cancel=True)
-        return assistant_message
+        return _AssistantStep(message=assistant_message, terminal_outcome=None)
 
     def _resolve_chunk_timeout(self, provider_id: str, connection_id: str) -> float | None:
         """Return the per-chunk stall timeout for this connection, or None locally.

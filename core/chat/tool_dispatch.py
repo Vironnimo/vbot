@@ -411,6 +411,72 @@ async def _dispatch_tool_calls(
     return tool_messages, media_injections
 
 
+def _fail_tool_calls_without_dispatch(
+    context: ToolDispatchContext,
+    tool_calls: list[ToolCall],
+    *,
+    code: str,
+    message: str,
+) -> list[ChatMessage]:
+    """Produce normal correlated failure Results without invoking any handler.
+
+    Chat uses this when the Provider's terminal outcome proves the emitted Tool
+    Calls are unsafe to execute. Lifecycle events and canonical envelopes stay
+    identical in shape to ordinary dispatch; extensions and handlers are
+    deliberately bypassed because no untrusted call may cross the execution
+    boundary.
+    """
+
+    tool_messages: list[ChatMessage] = []
+    for index, tool_call in enumerate(tool_calls):
+        context.run.tool_call_count += 1
+        started_at = datetime.now(UTC)
+        started_perf = time.perf_counter()
+        fingerprint = _safe_schema_fingerprint(context.registry, tool_call.name)
+        context.run.emit(
+            TOOL_CALL_STARTED_EVENT,
+            {
+                "tool_call": {
+                    "id": tool_call.id,
+                    "index": index,
+                    "name": tool_call.name,
+                    "arguments": deepcopy(tool_call.arguments),
+                },
+                "display": _tool_display_payload(
+                    context.registry,
+                    tool_call.name,
+                    tool_call.arguments,
+                ),
+                "schema_fingerprint": fingerprint,
+            },
+        )
+        result = tool_failure(code, message)
+        timing = _timing_payload(started_at, started_perf)
+        context.run.emit(
+            TOOL_CALL_RESULT_EVENT,
+            {
+                "tool_call": {
+                    "id": tool_call.id,
+                    "index": index,
+                    "name": tool_call.name,
+                },
+                "result": result,
+                "timing": timing,
+                "schema_fingerprint": fingerprint,
+                "error_code": code,
+            },
+        )
+        tool_messages.append(
+            ChatMessage.tool(
+                tool_call_id=tool_call.id,
+                name=tool_call.name,
+                content=json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+                timing=timing,
+            )
+        )
+    return tool_messages
+
+
 def _read_media_injections(result: JsonObject) -> list[JsonObject]:
     """Extract ``read_media`` injection descriptors from a tool result envelope.
 
