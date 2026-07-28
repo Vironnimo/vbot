@@ -224,6 +224,8 @@ class UsageTotals:
     estimated_turns: int
     measured_input_tokens: int
     measured_output_tokens: int
+    reasoning_tokens: int
+    reasoning_turns: int
     estimated_input_tokens: int
     estimated_output_tokens: int
     cache_read_tokens: int
@@ -243,6 +245,8 @@ class ProviderUsage:
     assistant_messages: int
     measured_input_tokens: int
     measured_output_tokens: int
+    reasoning_tokens: int
+    reasoning_turns: int
     estimated_input_tokens: int
     estimated_output_tokens: int
     estimated_turns: int
@@ -264,6 +268,8 @@ class ModelUsage:
     assistant_messages: int
     measured_input_tokens: int
     measured_output_tokens: int
+    reasoning_tokens: int
+    reasoning_turns: int
     estimated_input_tokens: int
     estimated_output_tokens: int
     estimated_turns: int
@@ -283,6 +289,8 @@ class UsageDailyPoint:
     errors: int
     measured_input_tokens: int
     measured_output_tokens: int
+    reasoning_tokens: int
+    reasoning_turns: int
     estimated_input_tokens: int
     estimated_output_tokens: int
     cache_read_tokens: int
@@ -532,6 +540,8 @@ class _ModelAcc:
     assistant_messages: int = 0
     measured_input_tokens: int = 0
     measured_output_tokens: int = 0
+    reasoning_tokens: int = 0
+    reasoning_turns: int = 0
     estimated_input_tokens: int = 0
     estimated_output_tokens: int = 0
     estimated_turns: int = 0
@@ -551,6 +561,8 @@ class _ProviderAcc:
     assistant_messages: int = 0
     measured_input_tokens: int = 0
     measured_output_tokens: int = 0
+    reasoning_tokens: int = 0
+    reasoning_turns: int = 0
     estimated_input_tokens: int = 0
     estimated_output_tokens: int = 0
     estimated_turns: int = 0
@@ -570,6 +582,8 @@ class _DailyAcc:
     errors: int = 0
     measured_input_tokens: int = 0
     measured_output_tokens: int = 0
+    reasoning_tokens: int = 0
+    reasoning_turns: int = 0
     estimated_input_tokens: int = 0
     estimated_output_tokens: int = 0
     cache_read_tokens: int = 0
@@ -732,6 +746,8 @@ class _Aggregator:
         self._usage_assistant_messages = 0
         self._usage_measured_turns = 0
         self._usage_estimated_turns = 0
+        self._reasoning_tokens = 0
+        self._reasoning_turns = 0
         self._cache_read_tokens = 0
         self._cache_write_tokens = 0
         self._cache_turns = 0
@@ -909,6 +925,15 @@ class _Aggregator:
             if daily is not None:
                 daily.measured_input_tokens += facts.input_tokens
                 daily.measured_output_tokens += facts.output_tokens
+            if facts.has_reasoning_data:
+                self._reasoning_tokens += facts.reasoning
+                self._reasoning_turns += 1
+                for reasoning_acc in (model, provider_acc):
+                    reasoning_acc.reasoning_tokens += facts.reasoning
+                    reasoning_acc.reasoning_turns += 1
+                if daily is not None:
+                    daily.reasoning_tokens += facts.reasoning
+                    daily.reasoning_turns += 1
             if facts.has_cache_data:
                 self._cache_turns += 1
                 self._cache_input_tokens += facts.input_tokens
@@ -1125,6 +1150,8 @@ class _Aggregator:
             measured_output_tokens=sum(
                 model.measured_output_tokens for model in self._models.values()
             ),
+            reasoning_tokens=self._reasoning_tokens,
+            reasoning_turns=self._reasoning_turns,
             estimated_input_tokens=sum(
                 model.estimated_input_tokens for model in self._models.values()
             ),
@@ -1155,6 +1182,8 @@ class _Aggregator:
                     errors=bucket.errors,
                     measured_input_tokens=bucket.measured_input_tokens,
                     measured_output_tokens=bucket.measured_output_tokens,
+                    reasoning_tokens=bucket.reasoning_tokens,
+                    reasoning_turns=bucket.reasoning_turns,
                     estimated_input_tokens=bucket.estimated_input_tokens,
                     estimated_output_tokens=bucket.estimated_output_tokens,
                     cache_read_tokens=bucket.cache_read_tokens,
@@ -1288,6 +1317,8 @@ class _Aggregator:
             assistant_messages=accumulator.assistant_messages,
             measured_input_tokens=accumulator.measured_input_tokens,
             measured_output_tokens=accumulator.measured_output_tokens,
+            reasoning_tokens=accumulator.reasoning_tokens,
+            reasoning_turns=accumulator.reasoning_turns,
             estimated_input_tokens=accumulator.estimated_input_tokens,
             estimated_output_tokens=accumulator.estimated_output_tokens,
             estimated_turns=accumulator.estimated_turns,
@@ -1318,6 +1349,8 @@ class _Aggregator:
             assistant_messages=accumulator.assistant_messages,
             measured_input_tokens=accumulator.measured_input_tokens,
             measured_output_tokens=accumulator.measured_output_tokens,
+            reasoning_tokens=accumulator.reasoning_tokens,
+            reasoning_turns=accumulator.reasoning_turns,
             estimated_input_tokens=accumulator.estimated_input_tokens,
             estimated_output_tokens=accumulator.estimated_output_tokens,
             estimated_turns=accumulator.estimated_turns,
@@ -1673,12 +1706,16 @@ class _UsageFacts:
 
     input_tokens: int
     output_tokens: int
+    reasoning: int
     estimated: bool
     cache_read: int
     cache_write: int
     # Field *presence*, not value: distinguishes "provider reported zero cache"
     # from "provider does not report caching at all".
     has_cache_data: bool
+    # Like cache data, field presence distinguishes a reported zero from a
+    # Provider that supplied no reasoning-token breakdown.
+    has_reasoning_data: bool
 
 
 def _read_usage(usage: JsonObject | None) -> _UsageFacts:
@@ -1688,14 +1725,19 @@ def _read_usage(usage: JsonObject | None) -> _UsageFacts:
     are surfaced only as separate informational totals — never added on top.
     """
     if not isinstance(usage, dict):
-        return _UsageFacts(0, 0, False, 0, 0, False)
+        return _UsageFacts(0, 0, 0, False, 0, 0, False, False)
     return _UsageFacts(
         input_tokens=_non_negative_int(usage.get("input_tokens")),
         output_tokens=_non_negative_int(usage.get("output_tokens")),
+        reasoning=_non_negative_int(usage.get("reasoning_tokens")),
         estimated=usage.get("estimated") is True,
         cache_read=_non_negative_int(usage.get("cache_read_tokens")),
         cache_write=_non_negative_int(usage.get("cache_write_tokens")),
         has_cache_data="cache_read_tokens" in usage or "cache_write_tokens" in usage,
+        has_reasoning_data=(
+            "reasoning_tokens" in usage
+            and _optional_non_negative_int(usage.get("reasoning_tokens")) is not None
+        ),
     )
 
 
@@ -1743,6 +1785,12 @@ def _timing_field(timing: JsonObject | None, key: str) -> str | None:
 def _non_negative_int(value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return 0
+    return value
+
+
+def _optional_non_negative_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
     return value
 
 

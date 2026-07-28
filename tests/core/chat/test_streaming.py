@@ -689,7 +689,7 @@ async def test_finalize_assistant_fields_includes_usage_when_received_via_delta(
     assert response_dict["usage"] == {"input_tokens": 500, "output_tokens": 200}
 
 
-async def test_accumulator_keeps_cache_token_fields_from_usage_delta() -> None:
+async def test_accumulator_keeps_optional_token_details_from_usage_delta() -> None:
     accumulator = StreamingAccumulator()
 
     visible = accumulator.add_delta(
@@ -699,6 +699,7 @@ async def test_accumulator_keeps_cache_token_fields_from_usage_delta() -> None:
             "output_tokens": 80,
             "cache_read_tokens": 200,
             "cache_write_tokens": 30,
+            "reasoning_tokens": 50,
         }
     )
 
@@ -709,6 +710,7 @@ async def test_accumulator_keeps_cache_token_fields_from_usage_delta() -> None:
         "output_tokens": 80,
         "cache_read_tokens": 200,
         "cache_write_tokens": 30,
+        "reasoning_tokens": 50,
     }
 
 
@@ -722,6 +724,7 @@ async def test_accumulator_drops_non_integer_cache_token_fields() -> None:
             "output_tokens": 80,
             "cache_read_tokens": None,
             "cache_write_tokens": "bad",
+            "reasoning_tokens": -1,
         }
     )
 

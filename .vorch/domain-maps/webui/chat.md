@@ -56,7 +56,7 @@ An Agent address can be global or Project-scoped. `resolveAgentAddressing()` and
 
 ## Usage and errors
 
-Usage displayed in Chat is a server-produced Session projection. The frontend formats values and updates the current Session state, but it does not recalculate Provider cost or infer missing usage from rendered text.
+Usage displayed in Chat is a server-produced Session projection. The frontend formats values and updates the current Session state, but it does not recalculate Provider cost or infer missing usage from rendered text. The token tooltip presents cache counts as input subsets and provider-reported Reasoning as an output subset; an absent optional counter stays absent, while `reasoning_turns` lets Session display distinguish no reporting from a reported zero.
 
 Errors are normalized at the transport boundary, then attached to the relevant Session, Run, Queue operation, or transient toast. Session action errors and Run-stream recovery warnings live on their addressed Session; command-catalog errors use a separate latest-request-wins projection. History/send admission failures must not be promoted into Run failures. Rendering a failure must not discard recoverable history or leave a finished Run marked active.
 

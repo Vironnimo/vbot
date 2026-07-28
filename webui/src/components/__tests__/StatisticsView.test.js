@@ -83,6 +83,8 @@ function makeReport(overrides = {}) {
         estimated_turns: 1,
         measured_input_tokens: 1000,
         measured_output_tokens: 200,
+        reasoning_tokens: 120,
+        reasoning_turns: 4,
         estimated_input_tokens: 30,
         estimated_output_tokens: 5,
         cache_read_tokens: 50,
@@ -97,6 +99,8 @@ function makeReport(overrides = {}) {
           assistant_messages: 5,
           measured_input_tokens: 1000,
           measured_output_tokens: 200,
+          reasoning_tokens: 120,
+          reasoning_turns: 4,
           estimated_input_tokens: 0,
           estimated_output_tokens: 0,
           estimated_turns: 0,
@@ -116,6 +120,8 @@ function makeReport(overrides = {}) {
           assistant_messages: 5,
           measured_input_tokens: 1000,
           measured_output_tokens: 200,
+          reasoning_tokens: 120,
+          reasoning_turns: 4,
           estimated_input_tokens: 30,
           estimated_output_tokens: 5,
           estimated_turns: 1,
@@ -135,6 +141,8 @@ function makeReport(overrides = {}) {
           errors: 0,
           measured_input_tokens: 1000,
           measured_output_tokens: 200,
+          reasoning_tokens: 120,
+          reasoning_turns: 4,
           estimated_input_tokens: 30,
           estimated_output_tokens: 5,
           cache_read_tokens: 50,
@@ -582,6 +590,16 @@ describe('StatisticsView', () => {
       'openrouter/anthropic/claude-sonnet-4',
     );
     expect(document.body.textContent).toContain('~ estimated');
+    expect(document.body.textContent).toContain('Reasoning (output subset)');
+    expect(document.body.textContent).toContain(
+      'Reasoning tokens are provider-reported subsets of measured output',
+    );
+    const reasoningCard = [...document.querySelectorAll('.stats-card')].find(
+      (card) => card.textContent.includes('Reasoning (output subset)'),
+    );
+    expect(reasoningCard.querySelector('.stats-card__value').textContent).toBe(
+      '120',
+    );
     expect(document.body.textContent).toContain(
       'A fallback Run can appear in multiple rows',
     );

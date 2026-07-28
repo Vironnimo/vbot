@@ -400,14 +400,18 @@ class TestNormalizeResponseUsage:
 
         assert normalized["usage"] == {"input_tokens": 100, "output_tokens": 0}
 
-    def test_usage_includes_cache_read_tokens_from_prompt_tokens_details(self, openai_adapter):
-        """prompt_tokens_details.cached_tokens is exposed as cache_read_tokens."""
+    def test_usage_preserves_reported_token_details(self, openai_adapter):
+        """Prompt cache and output Reasoning subsets remain canonical Usage details."""
         response = {
             "choices": [{"message": {"role": "assistant", "content": "Hi"}}],
             "usage": {
                 "prompt_tokens": 42,
                 "completion_tokens": 13,
-                "prompt_tokens_details": {"cached_tokens": 30},
+                "prompt_tokens_details": {
+                    "cached_tokens": 30,
+                    "cache_write_tokens": 5,
+                },
+                "completion_tokens_details": {"reasoning_tokens": 8},
             },
         }
 
@@ -417,6 +421,8 @@ class TestNormalizeResponseUsage:
             "input_tokens": 42,
             "output_tokens": 13,
             "cache_read_tokens": 30,
+            "cache_write_tokens": 5,
+            "reasoning_tokens": 8,
         }
 
     def test_usage_omits_cache_read_tokens_when_cached_tokens_not_int(self, openai_adapter):

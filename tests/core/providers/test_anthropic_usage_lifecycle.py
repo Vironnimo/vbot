@@ -42,7 +42,8 @@ class TestStreamUsageDelta:
             "event: message_delta\n"
             'data: {"type":"message_delta",'
             '"delta":{"stop_reason":"end_turn"},'
-            '"usage":{"output_tokens":10}}\n'
+            '"usage":{"output_tokens":10,'
+            '"output_tokens_details":{"thinking_tokens":6}}}\n'
             "\n"
             "event: message_stop\n"
             'data: {"type":"message_stop"}\n'
@@ -70,6 +71,7 @@ class TestStreamUsageDelta:
             "type": "usage",
             "input_tokens": 25,
             "output_tokens": 10,
+            "reasoning_tokens": 6,
         }
 
     @respx.mock

@@ -167,8 +167,11 @@ export const englishCatalog = Object.freeze({
   'chat.tokenTooltipCacheWrite': '  · newly written to cache: {tokens}',
   'chat.tokenTooltipUncached': '  · uncached: {tokens}',
   'chat.tokenTooltipOutput': 'Output: {tokens} tok',
+  'chat.tokenTooltipReasoning': '  · reasoning (included in output): {tokens}',
   'chat.tokenTooltipEstimated': 'Estimated (provider sent no usage data)',
   'chat.tokenTooltipSession': 'Session ({turns} measured turns)',
+  'chat.tokenTooltipSessionReasoning':
+    '  · reasoning: {tokens} tok ({turns} reporting turns; included in output)',
   'chat.tokenTooltipSessionAvgCacheRead':
     'Avg cache read per turn: {tokens} tok',
   'chat.tokenTooltipSessionEstimatedTurns': '{count} estimated turns excluded',
@@ -1701,6 +1704,7 @@ export const englishCatalog = Object.freeze({
   'statistics.col.provider': 'Provider',
   'statistics.col.model': 'Model',
   'statistics.col.tokens': 'Tokens',
+  'statistics.col.reasoning': 'Reasoning',
   'statistics.col.share': 'Share',
   'statistics.col.avgDuration': 'Avg',
   'statistics.col.duration': 'Duration',
@@ -1731,11 +1735,14 @@ export const englishCatalog = Object.freeze({
   'statistics.usage.estimatedTurns': 'Estimated Model steps',
   'statistics.usage.cacheRead': 'Cache read',
   'statistics.usage.cacheWrite': 'Cache write',
+  'statistics.usage.reasoning': 'Reasoning (output subset)',
   'statistics.usage.cacheHitRate': 'Cache hit rate',
   'statistics.usage.cacheIntro':
     'Cache metrics track provider-side prompt caching. A higher hit rate can reduce billed input where the Provider discounts cache reads.',
   'statistics.usage.cacheHitHint':
     'Cache hit rate: tokens read from cache as a share of the input, over the turns that report cache data.',
+  'statistics.usage.reasoningHint':
+    'Reasoning tokens are provider-reported subsets of measured output and are never added to token totals.',
   'statistics.usage.runAttributionHint':
     'Provider and Model Run counts mean “involved in this Run.” A fallback Run can appear in multiple rows, and Model duration is the full Run duration.',
   'statistics.usage.cacheSessions': 'Sessions with lowest cache hit rate',

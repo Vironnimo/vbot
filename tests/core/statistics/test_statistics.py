@@ -481,12 +481,22 @@ def test_measured_and_estimated_tokens_stay_separate(tmp_path: Path) -> None:
             _assistant(
                 model=model,
                 at=BASE,
-                usage={"input_tokens": 100, "output_tokens": 20, "cache_read_tokens": 30},
+                usage={
+                    "input_tokens": 100,
+                    "output_tokens": 20,
+                    "cache_read_tokens": 30,
+                    "reasoning_tokens": 12,
+                },
             ),
             _assistant(
                 model=model,
                 at=BASE + timedelta(seconds=1),
-                usage={"input_tokens": 7, "output_tokens": 3, "estimated": True},
+                usage={
+                    "input_tokens": 7,
+                    "output_tokens": 3,
+                    "reasoning_tokens": 2,
+                    "estimated": True,
+                },
             ),
             _run_summary(
                 status="completed", at=BASE + timedelta(seconds=2), duration_ms=1000, run_id="r1"
@@ -504,13 +514,28 @@ def test_measured_and_estimated_tokens_stay_separate(tmp_path: Path) -> None:
     assert totals.measured_turns == 1
     assert totals.estimated_turns == 1
     assert totals.cache_read_tokens == 30
+    assert totals.reasoning_tokens == 12
+    assert totals.reasoning_turns == 1
 
     model_usage = report.usage.models[0]
     assert model_usage.provider == "openrouter"
     assert model_usage.model == "openrouter/anthropic/claude-sonnet-4"
     assert model_usage.measured_input_tokens == 100
     assert model_usage.estimated_input_tokens == 7
+    assert model_usage.reasoning_tokens == 12
+    assert model_usage.reasoning_turns == 1
+    # Reasoning is already included in measured output, so it is not added.
+    assert model_usage.total_tokens == 130
     assert model_usage.runs == 1
+
+    provider_usage = report.usage.providers[0]
+    assert provider_usage.reasoning_tokens == 12
+    assert provider_usage.reasoning_turns == 1
+    assert provider_usage.total_tokens == 130
+
+    day = report.usage.daily[0]
+    assert day.reasoning_tokens == 12
+    assert day.reasoning_turns == 1
 
 
 def test_cache_totals_split_per_provider_model_and_day(tmp_path: Path) -> None:

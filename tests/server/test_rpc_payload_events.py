@@ -135,9 +135,25 @@ class TestRemoveOpaqueProviderMetadata:
 
     def test_preserves_usage(self) -> None:
         result = payloads.remove_opaque_provider_metadata(
-            {"role": "assistant", "usage": {"input_tokens": 100, "output_tokens": 50}}
+            {
+                "role": "assistant",
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "cache_write_tokens": 10,
+                    "reasoning_tokens": 30,
+                },
+            }
         )
-        assert result == {"role": "assistant", "usage": {"input_tokens": 100, "output_tokens": 50}}
+        assert result == {
+            "role": "assistant",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_write_tokens": 10,
+                "reasoning_tokens": 30,
+            },
+        }
 
     def test_preserves_usage_and_strips_reasoning_meta(self) -> None:
         result = payloads.remove_opaque_provider_metadata(

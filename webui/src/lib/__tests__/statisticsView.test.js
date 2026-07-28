@@ -316,6 +316,8 @@ describe('statisticsView rollupDaily', () => {
       completed: 1,
       failed: 0,
       cancelled: 0,
+      reasoning_tokens: 4,
+      reasoning_turns: 1,
     },
     {
       date: '2026-06-02',
@@ -323,6 +325,8 @@ describe('statisticsView rollupDaily', () => {
       completed: 1,
       failed: 1,
       cancelled: 0,
+      reasoning_tokens: 6,
+      reasoning_turns: 1,
     },
     {
       date: '2026-06-08',
@@ -330,6 +334,8 @@ describe('statisticsView rollupDaily', () => {
       completed: 2,
       failed: 1,
       cancelled: 1,
+      reasoning_tokens: 8,
+      reasoning_turns: 1,
     },
   ];
 
@@ -349,6 +355,8 @@ describe('statisticsView rollupDaily', () => {
         completed: 2,
         failed: 1,
         cancelled: 0,
+        reasoning_tokens: 10,
+        reasoning_turns: 2,
       },
       {
         date: '2026-06-08',
@@ -356,6 +364,8 @@ describe('statisticsView rollupDaily', () => {
         completed: 2,
         failed: 1,
         cancelled: 1,
+        reasoning_tokens: 8,
+        reasoning_turns: 1,
       },
     ]);
   });

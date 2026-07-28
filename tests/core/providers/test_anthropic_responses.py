@@ -423,6 +423,7 @@ class TestSendSuccess:
                 "output_tokens": 87,
                 "cache_read_input_tokens": 1000,
                 "cache_creation_input_tokens": 200,
+                "output_tokens_details": {"thinking_tokens": 55},
             },
         }
 
@@ -433,6 +434,7 @@ class TestSendSuccess:
             "output_tokens": 87,
             "cache_read_tokens": 1000,
             "cache_write_tokens": 200,
+            "reasoning_tokens": 55,
         }
 
     def test_normalize_response_ignores_non_int_cache_tokens(self, anthropic_adapter):

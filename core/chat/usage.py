@@ -18,7 +18,8 @@ def aggregate_session_usage(messages: list[ChatMessage]) -> JsonObject:
     their approximated token figures never merge into the measured totals.
     Canonical ``input_tokens`` already includes cached tokens, so
     ``cache_read_tokens``/``cache_write_tokens`` are informational subsets of
-    the input total, never added on top.
+    the input total, never added on top. Canonical ``reasoning_tokens`` is an
+    optional subset of ``output_tokens`` and likewise never changes totals.
     """
     totals = _empty_session_usage()
     for message in messages:
@@ -41,6 +42,12 @@ def add_session_turn_usage(totals: JsonObject, usage: JsonObject) -> JsonObject:
     # painting a non-caching provider as a 0% hit rate.
     if "cache_read_tokens" in usage or "cache_write_tokens" in usage:
         updated["cache_turns"] = _non_negative_int(updated.get("cache_turns")) + 1
+    reasoning_tokens = _optional_non_negative_int(usage.get("reasoning_tokens"))
+    if reasoning_tokens is not None:
+        updated["reasoning_turns"] = _non_negative_int(updated.get("reasoning_turns")) + 1
+        updated["reasoning_tokens"] = (
+            _non_negative_int(updated.get("reasoning_tokens")) + reasoning_tokens
+        )
     for key in (
         "input_tokens",
         "output_tokens",
@@ -66,4 +73,10 @@ def _empty_session_usage() -> JsonObject:
 def _non_negative_int(value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return 0
+    return value
+
+
+def _optional_non_negative_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
     return value

@@ -407,10 +407,14 @@ class StreamingAccumulator:
                 "usage delta must include integer input_tokens and output_tokens"
             )
         usage: JsonObject = {"input_tokens": input_tokens, "output_tokens": output_tokens}
-        for cache_key in ("cache_read_tokens", "cache_write_tokens"):
-            cache_tokens = delta.get(cache_key)
-            if isinstance(cache_tokens, int):
-                usage[cache_key] = cache_tokens
+        for detail_key in ("cache_read_tokens", "cache_write_tokens", "reasoning_tokens"):
+            detail_tokens = delta.get(detail_key)
+            if (
+                isinstance(detail_tokens, int)
+                and not isinstance(detail_tokens, bool)
+                and detail_tokens >= 0
+            ):
+                usage[detail_key] = detail_tokens
         self._usage = usage
 
     def _add_finish(self, delta: JsonObject) -> None:

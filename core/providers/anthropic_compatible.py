@@ -68,6 +68,7 @@ from core.providers.reasoning import (
     model_reasoning_control,
     model_reasoning_levels,
     model_reasoning_supported,
+    reasoning_token_count,
     remove_reasoning_kwargs,
     resolve_reasoning_intent,
 )
@@ -299,13 +300,13 @@ class AnthropicMessagesStreamDecoder:
             if isinstance(output_tokens, int) and (
                 self.usage_from_start is not None or self._emit_usage_without_start
             ):
-                normalized_deltas.append(
-                    {
-                        "type": "usage",
-                        **(self.usage_from_start or {"input_tokens": 0}),
-                        "output_tokens": output_tokens,
-                    }
-                )
+                normalized_usage = {
+                    "type": "usage",
+                    **(self.usage_from_start or {"input_tokens": 0}),
+                    "output_tokens": output_tokens,
+                }
+                apply_anthropic_reasoning_usage(normalized_usage, usage)
+                normalized_deltas.append(normalized_usage)
         return normalized_deltas
 
     def _normalize_text_delta(
@@ -1432,7 +1433,15 @@ def _extract_anthropic_usage(response: dict[str, Any]) -> dict[str, Any] | None:
         "output_tokens": output_tokens if output_tokens is not None else 0,
     }
     apply_anthropic_cache_usage(normalized, usage)
+    apply_anthropic_reasoning_usage(normalized, usage)
     return normalized
+
+
+def apply_anthropic_reasoning_usage(normalized: dict[str, Any], usage: dict[str, Any]) -> None:
+    """Preserve Anthropic's optional Thinking-token output subset."""
+    reasoning_tokens = reasoning_token_count(usage)
+    if isinstance(reasoning_tokens, int) and reasoning_tokens >= 0:
+        normalized["reasoning_tokens"] = reasoning_tokens
 
 
 def apply_anthropic_cache_usage(normalized: dict[str, Any], usage: dict[str, Any]) -> None:

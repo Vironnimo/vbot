@@ -521,6 +521,7 @@ def test_normalize_response_folds_cache_tokens_into_input_tokens() -> None:
                 "output_tokens": 20,
                 "cache_read_input_tokens": 500,
                 "cache_creation_input_tokens": 50,
+                "output_tokens_details": {"thinking_tokens": 12},
             },
         }
     )
@@ -530,6 +531,7 @@ def test_normalize_response_folds_cache_tokens_into_input_tokens() -> None:
         "output_tokens": 20,
         "cache_read_tokens": 500,
         "cache_write_tokens": 50,
+        "reasoning_tokens": 12,
     }
 
 
@@ -550,7 +552,10 @@ def test_stream_usage_delta_folds_cache_tokens_from_message_start() -> None:
         {
             "type": "message_delta",
             "delta": {"stop_reason": "end_turn"},
-            "usage": {"output_tokens": 11},
+            "usage": {
+                "output_tokens": 11,
+                "output_tokens_details": {"thinking_tokens": 7},
+            },
         },
     ]
 
@@ -566,6 +571,7 @@ def test_stream_usage_delta_folds_cache_tokens_from_message_start() -> None:
             "output_tokens": 11,
             "cache_read_tokens": 300,
             "cache_write_tokens": 40,
+            "reasoning_tokens": 7,
         },
     ]
 
