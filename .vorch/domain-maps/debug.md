@@ -1,12 +1,12 @@
 # Debug
 
-Captures complete raw provider HTTP requests and responses for local inspection, and probes provider model endpoints. Off by default.
+Captures complete raw provider HTTP or WebSocket exchanges for local inspection, and probes provider model endpoints. Off by default.
 
 ## Overview
 
 `core/debug/` owns trace storage, structured secret redaction, and the recorder that captures provider wire traffic exactly as it goes over the socket. Debug Mode is enabled through `settings.json` (`debug.enabled: true`).
 
-Capture happens in **one place**: a debug-aware `httpx.AsyncClient` built by the shared provider HTTP factory. When a recorder is attached, every request and response that flows through that client is captured — raw method, URL, headers, and complete body — regardless of whether the provider call is streaming or non-streaming and regardless of which provider adapter issued it. Adapters do **not** contain capture logic; they only opt in by building their client through the factory and forwarding the active recorder.
+All Provider traffic feeds one canonical recorder contract. HTTP capture happens in a debug-aware `httpx.AsyncClient` built by the shared Provider HTTP factory. The sanctioned non-HTTP exception is OpenAI Subscription WebSocket streaming: `OpenAIAdapter` opens one recorder capture for each `response.create` exchange because those frames never pass through httpx. Both paths record raw method, URL, headers, and complete request/response bodies into the same trace shape.
 
 Traces are local-only JSON files under `<data_dir>/artifacts/debug/traces/`, with a metadata-only `index.json` for listing without reading full bodies. Storage owns the canonical placement; Debug owns the trace/index schema, redaction, retention, and authorization. Retention is capped by `debug.trace_limit`; oldest traces are pruned after each write.
 
@@ -48,7 +48,7 @@ One canonical shape, shared verbatim by backend writers and the WebUI. Field nam
 ```
 
 - `request.body` / `response.body` are the **raw** wire payloads as text. No parsing, no re-serialization, no `normalized` view.
-- For streaming provider calls, `response.body` is the complete aggregate raw streaming HTTP body exactly as captured from the transport, including SSE framing text such as `data:` lines and frame separators. Debug traces do **not** split successful streaming responses into per-event records.
+- For streaming HTTP calls, `response.body` is the complete aggregate raw body exactly as captured from the transport, including SSE framing text such as `data:` lines and frame separators. For OpenAI Subscription WebSocket calls, `request.method` is `WEBSOCKET`, `response.status_code` is the upgrade status (normally `101`), `request.body` is the sent `response.create` frame, and `response.body` joins received raw JSON frames with newlines. Debug traces do **not** split successful streaming responses into per-event records.
 - `model_probe` traces omit `context`; `model_id` is the empty string.
 
 ### Index entry (`<data_dir>/artifacts/debug/index.json`)
@@ -82,7 +82,7 @@ Exports `DebugTraceStore`, `ProviderDebugRecorder`, `DebugContext`, `redact_head
   - `get_trace(trace_id) -> dict` — full trace; raises `FileNotFoundError`.
   - `clear_all()` — delete all traces and the index.
   - `get_data_dir() -> Path` — the `<data_dir>/artifacts/debug/` directory.
-- `ProviderDebugRecorder(store)` — holds one shared `DebugContext` and is the entry point the capture transport drives; it keeps **no** per-request state and is never called from adapter bodies.
+- `ProviderDebugRecorder(store)` — holds one shared `DebugContext` and is the entry point each wire transport drives; it keeps **no** per-request state.
   - `set_context(ctx: DebugContext)` — set the context applied to the next captured request(s).
   - `begin_capture(*, method, url, headers, body) -> capture` — called by the transport before the request goes out. Redacts the request URL + headers, stores the body raw, and returns a **fresh per-request capture**; that capture tees the response body and, on `finalize()`, builds the canonical trace and persists it. A separate capture per request means concurrent or retried calls never share buffers.
 
@@ -90,10 +90,14 @@ Exports `DebugTraceStore`, `ProviderDebugRecorder`, `DebugContext`, `redact_head
 
 - `build_async_client(*, base_url, timeout=None, debug_recorder=None) -> httpx.AsyncClient` — the single client factory. There is no per-client `headers` argument; headers are passed per request. With `debug_recorder`, the returned client's transport is wrapped (`_DebugCaptureTransport`) so it captures request + response, teeing the byte stream for streaming responses into the aggregate `response.body`, and feeds the recorder. With no recorder, returns a plain client with zero capture overhead.
 
+### OpenAI Subscription WebSocket capture (`core/providers/openai.py`)
+
+- Each WebSocket `response.create` owns a fresh recorder capture. The adapter records the upgrade response head, feeds every received raw frame before normalization, records transport errors, and finalizes the capture without buffering frames ahead of Provider consumption.
+
 ### Adapter contract (`core/providers/adapter.py`)
 
-- `ProviderAdapter.set_debug_context(ctx: DebugContext)` — base-class method, forwards to `recorder.set_context`. Subclasses do **not** override it and add no capture code. The only adapter change is constructing their client via `build_async_client(..., debug_recorder=...)`.
-- Recorder lifecycle: `Runtime._build_debug_recorder()` (`core/runtime/runtime.py`) builds a fresh `ProviderDebugRecorder` + `DebugTraceStore` **each time it constructs an adapter**, reading `debug.enabled` / `trace_limit` live, and returns `None` when debug is off. Adapters are built per provider call, so toggling Debug Mode takes effect on the next call — no restart, no cached recorder.
+- `ProviderAdapter.set_debug_context(ctx: DebugContext)` — base-class method, forwards to `recorder.set_context`. Subclasses do not override it. HTTP-only adapters add no capture code; a stateful non-HTTP transport must explicitly feed the same recorder contract, as OpenAI Subscription WebSocket streaming does.
+- Recorder lifecycle: `Runtime._build_debug_recorder()` (`core/runtime/runtime.py`) builds a fresh `ProviderDebugRecorder` + `DebugTraceStore` **each time it constructs an adapter**, reading `debug.enabled` / `trace_limit` live, and returns `None` when debug is off. A Chat Run retains one adapter for its Model/Tool loop and closes it at Run cleanup, so toggling Debug Mode takes effect on the next adapter construction rather than mutating an active Run's transport.
 
 ### RPC (`server/rpc/debug_methods.py`)
 
@@ -118,7 +122,7 @@ See `.vorch/domain-maps/server.md` for the envelope. All gated on `debug.enabled
 ## Constraints & Gotchas
 
 - The trace shape in **Data Model** is a hard contract. The previous version drifted (backend wrote nested `request`/`response`; the WebUI read flat `request_body`/`response_status`/`normalized_response`), so the detail view showed empty panes. Backend writers and the WebUI must use these exact field names.
-- Capture lives only in `build_async_client` / its transport. Do not reintroduce `if self._debug_recorder is not None:` capture blocks inside adapter `send()` / `stream()` bodies — that scatter was the source of the original bloat.
+- HTTP capture lives only in `build_async_client` / its transport. Do not reintroduce per-adapter HTTP capture blocks. A non-HTTP transport may capture only at its narrow wire-exchange boundary and must preserve the canonical trace contract.
 - Streaming bodies are captured by teeing the response byte stream. The tee must not buffer the whole stream before yielding to the adapter, or it changes streaming latency/back-pressure. Aggregation into `response.body` happens from bytes already tee-captured by the recorder and must not move into adapter `stream()` implementations.
 - Trace files are not size-truncated; a single trace is bounded only by the provider response size. `trace_limit` caps file count, not bytes.
 - `debug.model_probe` is diagnostic only and never mutates the model catalog.

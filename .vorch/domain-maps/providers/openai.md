@@ -10,7 +10,7 @@ Single `openai` provider covering both OpenAI Platform API-key access and ChatGP
 - Connections:
   - `openai:api-key` — `type: api_key`, `auth.credential_key: OPENAI_API_KEY`, `base_url` defaults to the provider-level OpenAI Platform URL. Per-Model `metadata.openai.wire_policies.api-key.protocol` selects public Responses; absent metadata keeps the conservative `/chat/completions` fallback.
   - `openai:subscription` — `type: oauth`, `base_url: https://chatgpt.com/backend-api`, `mode: codex_responses`, `models_endpoint: /codex/models`. ChatGPT Plus/Pro Codex OAuth device flow.
-- Runtime endpoints: `POST <base_url>/chat/completions` or `POST <base_url>/responses` (api-key, selected per Model) and `POST <base_url>/codex/responses` (subscription).
+- Runtime endpoints: `POST <base_url>/chat/completions` or `POST <base_url>/responses` (api-key, selected per Model); subscription Runs prefer `WS(S) <base_url>/codex/responses` and retain `POST <base_url>/codex/responses` SSE as the compatibility path.
 - Catalog: the provider has no provider-level `models_endpoint`. Only the `subscription` connection carries `models_endpoint`; refresh of the `api-key` connection is not supported in this provider.
 
 ## Connection Configuration
@@ -51,7 +51,10 @@ Used when `connection_mode` is `None` or `chat_completions`. Delegates to `OpenA
 - The Codex backend requires an `instructions` field. The adapter uses assembled system instructions when present and falls back to `You are a helpful assistant.`.
 - The Codex backend requires `store: false`; omission is rejected like an enabled store request.
 - The Codex backend rejects output-token limit parameters. The adapter filters both `max_tokens` and `max_output_tokens` instead of forwarding provider defaults or caller kwargs.
-- The wire requires `stream: true`, including when a caller uses the adapter's logical `send()` interface. `stream()` yields normalized vBot deltas; `send()` consumes exactly one Responses SSE request internally through a terminal event and accumulates text, reasoning, metadata, usage, Tool Call fragments, and the normalized terminal outcome across the whole stream into one canonical response. The live wire may leave `response.completed.response.output` empty even after emitting text deltas, so the completed object alone is not an answer. Do not retry a rejected non-streaming request as a stream — that would create a second billable request.
+- The wire requires `stream: true`, including when a caller uses the adapter's logical `send()` interface. `stream()` yields normalized vBot deltas; `send()` consumes exactly one streaming exchange internally through a terminal event and accumulates text, reasoning, metadata, usage, Tool Call fragments, and the normalized terminal outcome across the whole stream into one canonical response. The live wire may leave `response.completed.response.output` empty even after emitting text deltas, so the completed object alone is not an answer. Do not retry a rejected non-streaming request as a stream — that would create a second billable request.
+- A subscription call with a conversation id prefers one persistent WebSocket for the active Run. The first Model step sends a full `response.create`; a later step on the identical route may send `previous_response_id` plus only the newly appended input suffix when every non-input request field still matches and canonical input is exactly the preceding input followed by the preceding response output. Any mismatch uses a full request.
+- WebSocket continuation is isolated by conversation, Model, and ChatGPT Account; the adapter instance already isolates Provider Connection and one Run. Changing any route component closes the old socket and clears its continuation. Run cleanup closes the socket.
+- A connection-scoped `previous_response_not_found` response clears the continuation, opens a fresh socket, and retries that step once with full context. A WebSocket transport failure before any Provider event disables WebSocket for that route for the rest of the adapter lifetime and falls back to the existing full-context SSE path. Once any Provider event arrived, the adapter never replays the request over SSE. Calls without a conversation id and the explicit `sse` test/compatibility mode use SSE directly.
 
 ## OAuth (subscription connection)
 
@@ -77,15 +80,15 @@ The Codex required extra headers live in the adapter, not in provider-level `ext
 CODEX_EXTRA_HEADERS = {"OpenAI-Beta": "responses=experimental", "originator": "vbot"}
 ```
 
-`OpenAIAdapter._build_headers()` (and `discovery_headers()`) merge `CODEX_EXTRA_HEADERS` **only** on the `codex_responses` path. The chat-completions path uses the inherited `OpenAICompatibleAdapter._build_headers()` and must never include them.
+`OpenAIAdapter._build_headers()` (and `discovery_headers()`) merge `CODEX_EXTRA_HEADERS` **only** on the `codex_responses` path. SSE and discovery use `OpenAI-Beta: responses=experimental`; WebSocket upgrade replaces that value with `OpenAI-Beta: responses_websockets=2026-02-06`, carries `session-id` plus `x-client-request-id`, and omits the SSE-only `session_id` spelling. Conversation routing values are clamped to OpenAI's 64-character prompt-cache-key limit before either transport sends them; the full logical conversation id remains the local route key. The chat-completions path uses the inherited `OpenAICompatibleAdapter._build_headers()` and must never include Codex headers.
 
-## Codex Prompt Caching
+## Codex Continuation And Prompt Caching
 
-The ChatGPT Codex backend routes its prompt cache by **per-request HTTP headers scoped to the conversation** — `session_id` and `x-client-request-id` (`CODEX_CACHE_SCOPE_HEADERS`) — **not** by the body-level `prompt_cache_key` field. Live-verified 2026-07-09: sending `prompt_cache_key` in the body has no measurable effect (~1/6 hit rate, same as sending nothing), while a stable conversation scope on those two headers lifts hits to ~5/6 (only the cold first request misses). Mirrors the Codex CLI and the `hermes-agent` `codex_responses` transport.
+The ChatGPT Codex backend routes its prompt cache by **per-request transport headers scoped to the conversation** — SSE uses `session_id` plus `x-client-request-id`; WebSocket uses `session-id` plus `x-client-request-id` — **not** by the body-level `prompt_cache_key` field. Live-verified 2026-07-09 on SSE: sending `prompt_cache_key` in the body has no measurable effect (~1/6 hit rate, same as sending nothing), while a stable conversation scope on the two routing headers lifts hits to ~5/6 (only the cold first request misses). Mirrors the Codex CLI and the `hermes-agent` `codex_responses` transport.
 
 - The value is a stable conversation id (`agent_id:session_id`) the chat layer hands the adapter through `ProviderAdapter.request_context_kwargs(agent_id, session_id, project_id=None)`; `OpenAIAdapter` ignores the Project anchor, returns `{"conversation_id": ...}`, and `send()`/`stream()` pop it and thread it into `_build_codex_headers` as the cache scope. It is a **routing hint only** — the wire prefix still decides what actually caches — so a collision is harmless. The value rides on headers only, never in the request body.
 - The `api-key` `/chat/completions` path ignores the conversation id (it pops and drops it) and relies on OpenAI's default prefix-hash cache routing. Every non-OpenAI adapter never receives it (the base `request_context_kwargs` returns `{}`), so no other wire sees an unknown field.
-- `store: true` is rejected by this backend (`{"detail":"Store must be set to false"}`), so `previous_response_id` chaining is unavailable — the wire is always a stateless full-context resend and these headers are the only cache lever we control.
+- `store: true` remains rejected (`{"detail":"Store must be set to false"}`). The WebSocket beta nevertheless supports connection-scoped `previous_response_id` continuation while that socket retains the response; it is an optimization, not durable server state. Full-context replay remains the correctness path after socket loss, route change, prefix mismatch, or missing continuation.
 
 ## Reasoning
 

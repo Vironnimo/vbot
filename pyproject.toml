@@ -21,7 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
-dependencies = ["httpx", "idna>=3,<4", "curl_cffi>=0.7,<1", "pyyaml", "croniter", "tzdata", "tzlocal>=5,<6", "beautifulsoup4", "pypdf>=4,<6", "sqlite-vec>=0.1.9,<0.2", "pathspec>=1.1", "jsonschema>=4.25,<5"]
+dependencies = ["httpx", "idna>=3,<4", "curl_cffi>=0.7,<1", "pyyaml", "croniter", "tzdata", "tzlocal>=5,<6", "beautifulsoup4", "pypdf>=4,<6", "sqlite-vec>=0.1.9,<0.2", "pathspec>=1.1", "jsonschema>=4.25,<5", "websockets>=14,<17"]
 
 [project.scripts]
 vbot = "cli.main:main"
@@ -36,10 +36,10 @@ Repository = "https://github.com/Vironnimo/vbot"
 Issues = "https://github.com/Vironnimo/vbot/issues"
 
 [project.optional-dependencies]
-server  = ["fastapi", "uvicorn[standard]", "websockets", "watchfiles", "python-telegram-bot[rate-limiter]", "discord.py>=2.7,<3", "python-multipart", "av>=18,<19"]
+server  = ["fastapi", "uvicorn[standard]", "watchfiles", "python-telegram-bot[rate-limiter]", "discord.py>=2.7,<3", "python-multipart", "av>=18,<19"]
 cli     = ["psutil"]
 desktop = ["pywebview", "pyopen-wakeword>=1.1,<2", "sounddevice", "webrtcvad-wheels>=2.0.14,<3"]
-dev     = ["pytest", "pytest-asyncio", "ruff", "mypy", "types-jsonschema", "hatchling", "pytest-xdist", "pytest-timeout", "respx", "fastapi", "uvicorn[standard]", "websockets", "watchfiles", "python-telegram-bot[rate-limiter]", "discord.py>=2.7,<3", "python-multipart", "psutil", "numpy", "av>=18,<19"]
+dev     = ["pytest", "pytest-asyncio", "ruff", "mypy", "types-jsonschema", "hatchling", "pytest-xdist", "pytest-timeout", "respx", "fastapi", "uvicorn[standard]", "watchfiles", "python-telegram-bot[rate-limiter]", "discord.py>=2.7,<3", "python-multipart", "psutil", "numpy", "av>=18,<19"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["core", "server", "cli", "desktop"]
