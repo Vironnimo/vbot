@@ -150,3 +150,30 @@ async def test_tool_call_cancel_isolates_state_between_tool_call_ids() -> None:
     assert run.tool_call_cancelled("tool-2") is False
     assert run.cancel_tool_call("tool-2") is True
     assert run.tool_call_cancelled("tool-2") is True
+
+
+async def test_run_cancel_cascades_active_tool_callbacks_in_registration_order() -> None:
+    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
+    invocations: list[str] = []
+
+    run.register_tool_cancel("tool-1", lambda: invocations.append("tool-1"))
+    run.register_tool_cancel("tool-2", lambda: invocations.append("tool-2"))
+
+    run.request_cancel(reason="user")
+
+    assert invocations == ["tool-1", "tool-2"]
+    assert run.tool_call_cancelled("tool-1") is True
+    assert run.tool_call_cancelled("tool-2") is True
+    assert run.cancel_requested is True
+    assert run.cancel_reason == "user"
+
+
+async def test_tool_cancel_registered_after_run_cancel_fires_immediately() -> None:
+    run = Run(run_id="run-one", agent_id="coder", session_id="session-one")
+    invocations: list[str] = []
+    run.request_cancel(reason="user")
+
+    run.register_tool_cancel("tool-late", lambda: invocations.append("tool-late"))
+
+    assert invocations == ["tool-late"]
+    assert run.tool_call_cancelled("tool-late") is True
