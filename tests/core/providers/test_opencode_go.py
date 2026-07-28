@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -15,6 +15,7 @@ import core.providers.opencode_go as opencode_go_module
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES
 from core.providers.anthropic_compatible import AnthropicCompatibleAdapter
+from core.providers.errors import ProviderError
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
@@ -22,6 +23,16 @@ from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfi
 API_KEY = "test-opencode-go-key"
 OPENCODE_GO_URL = "https://opencode-go.example/v1/chat/completions"
 OPENCODE_GO_MESSAGES_URL = "https://opencode-go.example/v1/messages"
+STRICT_TOOL = {
+    "name": "inspect_probe",
+    "description": "Inspect one synthetic value.",
+    "parameters": {
+        "type": "object",
+        "properties": {"key": {"type": "string"}},
+        "required": ["key"],
+        "additionalProperties": False,
+    },
+}
 # Per-model wire protocol is now DATA (metadata.opencode_go.protocol), not a
 # hardcoded adapter set. These ids carry "anthropic" in the protocol map below
 # and must route through the internal Messages adapter.
@@ -609,6 +620,69 @@ class TestOpenCodeGoAdapterMinimaxRouting:
 
     @respx.mock
     @pytest.mark.asyncio
+    async def test_messages_path_uses_live_verified_anthropic_strict_tools(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        messages_route = respx.post(OPENCODE_GO_MESSAGES_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "ok"}],
+                    "stop_reason": "end_turn",
+                },
+            )
+        )
+
+        await opencode_go_adapter.send(
+            [{"role": "user", "content": "inspect"}],
+            model_id="minimax-m3",
+            tools=[STRICT_TOOL],
+        )
+
+        body = json.loads(messages_route.calls.last.request.content)
+        assert body["tools"] == [
+            {
+                "name": STRICT_TOOL["name"],
+                "description": STRICT_TOOL["description"],
+                "input_schema": STRICT_TOOL["parameters"],
+                "strict": True,
+            }
+        ]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_messages_path_downgrades_whole_oversized_strict_tool_set(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        messages_route = respx.post(OPENCODE_GO_MESSAGES_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "ok"}],
+                    "stop_reason": "end_turn",
+                },
+            )
+        )
+        tools = [{**STRICT_TOOL, "name": f"inspect_probe_{index}"} for index in range(21)]
+
+        await opencode_go_adapter.send(
+            [{"role": "user", "content": "inspect"}],
+            model_id="minimax-m3",
+            tools=tools,
+        )
+
+        body = json.loads(messages_route.calls.last.request.content)
+        assert len(body["tools"]) == 21
+        assert all("strict" not in tool for tool in body["tools"])
+
+    @respx.mock
+    @pytest.mark.asyncio
     async def test_openai_marked_model_send_uses_openai_path(
         self,
         opencode_go_adapter: OpenCodeGoAdapter,
@@ -645,6 +719,182 @@ class TestOpenCodeGoAdapterMinimaxRouting:
 
         assert chat_route.called
         assert not messages_route.called
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_openai_path_keeps_best_effort_tool_profile(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        chat_route = respx.post(OPENCODE_GO_URL).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop",
+                        }
+                    ]
+                },
+            )
+        )
+
+        await opencode_go_adapter.send(
+            [{"role": "user", "content": "inspect"}],
+            model_id="deepseek-v4-flash",
+            tools=[STRICT_TOOL],
+        )
+
+        body = json.loads(chat_route.calls.last.request.content)
+        assert "strict" not in body["tools"][0]["function"]
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_openai_path_does_not_retry_permanent_subscription_limit(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        chat_route = respx.post(OPENCODE_GO_URL).mock(
+            return_value=httpx.Response(
+                429,
+                json={
+                    "error": {
+                        "type": "GoUsageLimitError",
+                        "message": "Monthly usage limit reached. Enable available balance.",
+                    }
+                },
+            )
+        )
+
+        with pytest.raises(ProviderError, match="subscription limit reached") as exc_info:
+            await opencode_go_adapter.send(
+                [{"role": "user", "content": "hello"}],
+                model_id="deepseek-v4-flash",
+            )
+
+        assert exc_info.value.retryable is False
+        assert chat_route.call_count == 1
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_messages_path_does_not_retry_permanent_subscription_limit(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        messages_route = respx.post(OPENCODE_GO_MESSAGES_URL).mock(
+            return_value=httpx.Response(
+                429,
+                json={
+                    "type": "error",
+                    "error": {
+                        "type": "FreeUsageLimitError",
+                        "message": "Monthly usage limit has been reached.",
+                    },
+                },
+            )
+        )
+
+        with pytest.raises(ProviderError, match="subscription limit reached") as exc_info:
+            await opencode_go_adapter.send(
+                [{"role": "user", "content": "hello"}],
+                model_id="minimax-m3",
+            )
+
+        assert exc_info.value.retryable is False
+        assert messages_route.call_count == 1
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_openai_stream_does_not_retry_permanent_subscription_limit(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        chat_route = respx.post(OPENCODE_GO_URL).mock(
+            return_value=httpx.Response(
+                429,
+                json={
+                    "error": {
+                        "code": "insufficient_quota",
+                        "message": "Quota exceeded.",
+                    }
+                },
+            )
+        )
+
+        with pytest.raises(ProviderError, match="subscription limit reached") as exc_info:
+            async for _ in opencode_go_adapter.stream(
+                [{"role": "user", "content": "hello"}],
+                model_id="deepseek-v4-flash",
+            ):
+                pass
+
+        assert exc_info.value.retryable is False
+        assert chat_route.call_count == 1
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_messages_stream_does_not_retry_permanent_subscription_limit(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        messages_route = respx.post(OPENCODE_GO_MESSAGES_URL).mock(
+            return_value=httpx.Response(
+                429,
+                json={
+                    "type": "error",
+                    "error": {
+                        "type": "GoUsageLimitError",
+                        "message": "Use available balance to continue.",
+                    },
+                },
+            )
+        )
+
+        with pytest.raises(ProviderError, match="subscription limit reached") as exc_info:
+            async for _ in opencode_go_adapter.stream(
+                [{"role": "user", "content": "hello"}],
+                model_id="minimax-m3",
+            ):
+                pass
+
+        assert exc_info.value.retryable is False
+        assert messages_route.call_count == 1
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_openai_path_still_retries_transient_rate_limit(
+        self,
+        opencode_go_adapter: OpenCodeGoAdapter,
+    ) -> None:
+        chat_route = respx.post(OPENCODE_GO_URL).mock(
+            side_effect=[
+                httpx.Response(
+                    429,
+                    json={"error": {"type": "rate_limit_error", "message": "Slow down."}},
+                ),
+                httpx.Response(
+                    200,
+                    json={
+                        "choices": [
+                            {
+                                "message": {"role": "assistant", "content": "ok"},
+                                "finish_reason": "stop",
+                            }
+                        ]
+                    },
+                ),
+            ]
+        )
+
+        with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+            response = await opencode_go_adapter.send(
+                [{"role": "user", "content": "hello"}],
+                model_id="deepseek-v4-flash",
+            )
+
+        assert response["choices"][0]["message"]["content"] == "ok"
+        assert chat_route.call_count == 2
 
     @respx.mock
     @pytest.mark.asyncio

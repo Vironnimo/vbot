@@ -527,6 +527,21 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         ):
             payload["reasoning_effort"] = "none"
 
+    def _classify_http_status(
+        self,
+        status_code: int,
+        *,
+        detail: str,
+        response_headers: httpx.Headers,
+    ) -> None:
+        """Classify one response status, allowing concrete gateways to refine it."""
+
+        classify_http_status(
+            status_code,
+            detail=detail,
+            response_headers=response_headers,
+        )
+
     # ------------------------------------------------------------------
     # send() — non-streaming
     # ------------------------------------------------------------------
@@ -588,8 +603,10 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 selected_effort=selected_effort,
                 provider_logger=_LOGGER,
             )
-            classify_http_status(
-                response.status_code, detail=detail, response_headers=response.headers
+            self._classify_http_status(
+                response.status_code,
+                detail=detail,
+                response_headers=response.headers,
             )
             parsed = dict(decode_response_json(response, "OpenAI-compatible provider"))
             # A non-``none`` effort that comes back with 0 reasoning tokens was
@@ -669,8 +686,10 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                     if error_body
                     else str(response.status_code)
                 )
-                classify_http_status(
-                    response.status_code, detail=detail, response_headers=response.headers
+                self._classify_http_status(
+                    response.status_code,
+                    detail=detail,
+                    response_headers=response.headers,
                 )
                 # classify_http_status always raises for >= 400; this is unreachable
                 # but satisfies type checkers.
