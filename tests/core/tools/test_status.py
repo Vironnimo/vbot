@@ -81,34 +81,10 @@ async def _dispatch(
     *,
     project_id: str | None = None,
 ) -> dict[str, object]:
-    supplied = arguments or {"action": "current"}
-    canonical = supplied
-    if set(supplied) == {"request"}:
-        canonical = supplied
-    elif "action" in supplied:
-        fields = dict(supplied)
-        operation = fields.pop("action")
-        canonical = {"request": {"operation": operation, **fields}}
-    elif len(supplied) == 1:
-        operation_name, operation_fields = next(iter(supplied.items()))
-        if operation_name in {"current", "session", "agent_session"} and isinstance(
-            operation_fields, dict
-        ):
-            canonical = {"request": {"operation": operation_name, **operation_fields}}
-        elif "session_id" in supplied:
-            canonical = {"request": {"operation": "session", **supplied}}
-        else:
-            canonical = {"request": {"operation": "current", **supplied}}
-    elif "agent_id" in supplied and "session_id" in supplied:
-        canonical = {"request": {"operation": "agent_session", **supplied}}
-    elif "session_id" in supplied:
-        canonical = {"request": {"operation": "session", **supplied}}
-    else:
-        canonical = {"request": {"operation": "current", **supplied}}
     try:
         return await registry.dispatch(
             _context(tmp_path, project_id=project_id),
-            canonical,
+            arguments or {},
             [STATUS_TOOL_NAME],
         )
     except ValueError as error:
@@ -208,21 +184,11 @@ def test_status_tool_registered_with_correct_name() -> None:
 
     tool = registry.get(STATUS_TOOL_NAME)
     assert tool.name == STATUS_TOOL_NAME
-    assert "session for another Session owned by this Agent" in tool.description
+    assert "session_id for another Session owned by this Agent" in tool.description
     assert "Returns activity running/idle" not in tool.description
-    branches = tool.parameters["properties"]["request"]["anyOf"]
-    assert [branch["properties"]["operation"]["enum"][0] for branch in branches] == [
-        "current",
-        "session",
-        "agent_session",
-    ]
-    by_operation = {branch["properties"]["operation"]["enum"][0]: branch for branch in branches}
-    assert by_operation["session"]["required"] == ["operation", "session_id"]
-    assert by_operation["agent_session"]["required"] == [
-        "operation",
-        "agent_id",
-        "session_id",
-    ]
+    assert tool.parameters["additionalProperties"] is False
+    assert "required" not in tool.parameters
+    assert set(tool.parameters["properties"]) == {"agent_id", "session_id"}
 
 
 def test_status_tool_returns_text_with_full_deps(tmp_path: Path) -> None:
@@ -252,7 +218,7 @@ def test_status_tool_returns_text_with_full_deps(tmp_path: Path) -> None:
         datetime(2026, 5, 18, 9, 0, tzinfo=UTC),
     )
 
-    result = asyncio.run(_dispatch(registry, tmp_path, {"current": {}}))
+    result = asyncio.run(_dispatch(registry, tmp_path))
 
     assert result["ok"] is True
     data = cast(dict[str, Any], result["data"])
@@ -355,6 +321,35 @@ def test_status_tool_rejects_unknown_arguments(tmp_path: Path) -> None:
     assert "unexpected" in error["message"]
 
 
+@pytest.mark.parametrize(
+    "arguments",
+    (
+        {"request": {"operation": "current"}},
+        {"current": {}},
+        {"action": "current"},
+    ),
+)
+def test_status_tool_rejects_retired_operation_shapes(
+    tmp_path: Path,
+    arguments: dict[str, object],
+) -> None:
+    registry = ToolRegistry()
+    register_status_tool(
+        registry,
+        cast(AgentResolver, _StubResolver(_make_agent())),
+        cast(ChatSessionManager, _StubSessions([])),
+        cast(ModelRegistry, _StubModels(_make_model())),
+        ChatRunManager(),
+        None,
+    )
+
+    result = asyncio.run(_dispatch(registry, tmp_path, arguments))
+
+    assert result["ok"] is False
+    error = cast(dict[str, str], result["error"])
+    assert error["code"] == "invalid_arguments"
+
+
 @pytest.mark.asyncio
 async def test_status_tool_reports_running_target_session(tmp_path: Path) -> None:
     started = asyncio.Event()
@@ -383,11 +378,8 @@ async def test_status_tool_reports_running_target_session(tmp_path: Path) -> Non
     result = await registry.dispatch(
         _context(tmp_path),
         {
-            "request": {
-                "operation": "agent_session",
-                "agent_id": "reviewer",
-                "session_id": "session-two",
-            }
+            "agent_id": "reviewer",
+            "session_id": "session-two",
         },
         [STATUS_TOOL_NAME],
     )
