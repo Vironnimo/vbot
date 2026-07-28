@@ -49,18 +49,6 @@ _OPERATION_CONTRACTS: tuple[
         {"send": ("channel_id",)},
     ),
     (
-        "cron",
-        CRON_TOOL_PARAMETERS,
-        {
-            "create": ("name", "prompt", "schedule_type"),
-            "list": (),
-            "update": ("id",),
-            "delete": ("id",),
-            "enable": ("id",),
-            "disable": ("id",),
-        },
-    ),
-    (
         "history",
         HISTORY_TOOL_PARAMETERS,
         {
@@ -141,6 +129,7 @@ _OPERATION_CONTRACTS: tuple[
 _DIRECT_TOOL_SCHEMAS: tuple[tuple[str, JsonObject], ...] = (
     ("analyze_image", ANALYZE_IMAGE_TOOL_PARAMETERS),
     ("bash", BASH_TOOL_PARAMETERS),
+    ("cron", CRON_TOOL_PARAMETERS),
     ("edit", EDIT_TOOL_PARAMETERS),
     ("glob", GLOB_TOOL_PARAMETERS),
     ("grep", GREP_TOOL_PARAMETERS),

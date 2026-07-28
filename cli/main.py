@@ -1229,15 +1229,21 @@ def dispatch_cron_command(
 def _cron_create_fields_from_args(args: argparse.Namespace) -> dict[str, Any]:
     fields: dict[str, Any] = {
         "agent_id": args.agent,
-        "name": args.name,
         "prompt": args.prompt,
     }
+    if args.name is not None:
+        fields["name"] = args.name
     if args.cron is not None:
         fields["schedule_type"] = "cron"
         fields["cron_expression"] = args.cron
+    elif args.every is not None:
+        fields["schedule_type"] = "interval"
+        fields["interval_seconds"] = args.every * 60
     else:
         fields["schedule_type"] = "once"
         fields["run_at"] = args.at
+    if args.repeat is not None:
+        fields["repeat"] = args.repeat
     if args.session is not None:
         fields["session_id"] = args.session
     return fields
@@ -1254,9 +1260,14 @@ def _cron_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
     if args.cron is not None:
         changes["schedule_type"] = "cron"
         changes["cron_expression"] = args.cron
+    elif args.every is not None:
+        changes["schedule_type"] = "interval"
+        changes["interval_seconds"] = args.every * 60
     elif args.at is not None:
         changes["schedule_type"] = "once"
         changes["run_at"] = args.at
+    if args.repeat is not None:
+        changes["repeat"] = args.repeat
     if args.session is not None:
         changes["session_id"] = args.session
     if args.status is not None:

@@ -938,6 +938,130 @@ async def test_sleep_until_utc_returns_immediately_for_past_target(
     assert naps == []
 
 
+@pytest.mark.parametrize(
+    ("schedule", "expected_type"),
+    [
+        ("2026-07-28T15:00:00+02:00", "once"),
+        ("in 30m", "once"),
+        ("every 2h", "interval"),
+        ("0 9 * * 1-5", "cron"),
+    ],
+)
+def test_parse_schedule_accepts_only_the_supported_forms(
+    tmp_path: Path,
+    schedule: str,
+    expected_type: str,
+) -> None:
+    service, _trigger_service = make_service(tmp_path)
+
+    parsed = service.parse_schedule(
+        schedule,
+        reference_time=datetime(2026, 7, 28, 12, 0, tzinfo=UTC),
+    )
+
+    assert parsed.schedule_type == expected_type
+    if schedule == "in 30m":
+        assert parsed.run_at == "2026-07-28T12:30:00+00:00"
+    if schedule == "every 2h":
+        assert parsed.interval_seconds == 7200
+        assert parsed.interval_anchor_at == "2026-07-28T12:00:00+00:00"
+
+
+@pytest.mark.parametrize(
+    "schedule",
+    [
+        "30m",
+        "2026-07-28",
+        "tomorrow morning",
+        "every 5s",
+        "* * * * * *",
+        "in two hours",
+    ],
+)
+def test_parse_schedule_rejects_ambiguous_or_unsupported_forms(
+    tmp_path: Path,
+    schedule: str,
+) -> None:
+    service, _trigger_service = make_service(tmp_path)
+
+    with pytest.raises(CronJobValidationError):
+        service.parse_schedule(schedule)
+
+
+def test_unnamed_job_uses_stable_first_prompt_line(tmp_path: Path) -> None:
+    service, _trigger_service = make_service(tmp_path)
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="\n## Daily status\nInclude blockers and next steps.",
+        schedule_type="cron",
+        cron_expression="0 9 * * *",
+    )
+
+    updated = service.update_job(job.id, prompt="A completely different prompt")
+
+    assert job.name == "Daily status"
+    assert updated.name == "Daily status"
+
+
+def test_interval_next_fire_uses_persisted_anchor_and_skips_missed_ticks(tmp_path: Path) -> None:
+    service, _trigger_service = make_service(tmp_path)
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Check status",
+        schedule_type="interval",
+        interval_seconds=7200,
+        interval_anchor_at="2026-07-28T08:00:00+00:00",
+    )
+
+    next_fire_at = service.next_fire_at(
+        job,
+        reference_time=datetime(2026, 7, 28, 13, 15, tzinfo=UTC),
+    )
+
+    assert next_fire_at == "2026-07-28T14:00:00+00:00"
+    assert service.format_schedule(job) == "every 2h"
+
+
+@pytest.mark.asyncio
+async def test_repeat_is_consumed_when_run_is_admitted_even_if_run_fails(tmp_path: Path) -> None:
+    service, trigger_service = make_service(tmp_path)
+    run = SimpleNamespace(id="run-one", wait=AsyncMock(side_effect=RuntimeError("run failed")))
+    trigger_service.trigger_run.return_value = run
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Finite check",
+        schedule_type="interval",
+        interval_seconds=3600,
+        remaining_runs=1,
+    )
+
+    assert await service._trigger_job_run(job) is False
+
+    updated = service.get_job(job.id)
+    assert updated.remaining_runs == 0
+    assert updated.status == "failed"
+    assert updated.last_run_id == "run-one"
+
+
+@pytest.mark.asyncio
+async def test_repeat_is_not_consumed_when_run_admission_fails(tmp_path: Path) -> None:
+    service, trigger_service = make_service(tmp_path)
+    trigger_service.trigger_run.side_effect = RuntimeError("not admitted")
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Finite check",
+        schedule_type="cron",
+        cron_expression="0 9 * * *",
+        remaining_runs=2,
+    )
+
+    assert await service._trigger_job_run(job) is False
+
+    updated = service.get_job(job.id)
+    assert updated.remaining_runs == 2
+    assert updated.status == "active"
+
+
 @pytest.mark.asyncio
 async def test_sleep_until_utc_realigns_after_wall_clock_jump(
     monkeypatch: pytest.MonkeyPatch,

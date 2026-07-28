@@ -24,6 +24,14 @@ def _state_with_cron_service(
     agent_resolver = resolver if resolver is not None else Mock()
     if isinstance(agent_resolver, Mock):
         agent_resolver.resolve_agent.return_value = SimpleNamespace(id="main")
+    if isinstance(cron_service, Mock):
+        cron_service.format_schedule.side_effect = lambda job: (
+            job.cron_expression
+            if job.schedule_type == "cron"
+            else f"every {job.interval_seconds // 3600}h"
+            if job.schedule_type == "interval"
+            else job.run_at
+        )
     return SimpleNamespace(
         runtime=SimpleNamespace(cron_service=cron_service, agent_resolver=agent_resolver)
     )
@@ -38,7 +46,10 @@ def _cron_job(**changes: Any) -> SimpleNamespace:
         "prompt": "Run status check",
         "schedule_type": "cron",
         "cron_expression": "*/5 * * * *",
+        "interval_seconds": None,
+        "interval_anchor_at": None,
         "run_at": None,
+        "remaining_runs": None,
         "session_id": "session-1",
         "status": "active",
         "last_fired_at": None,
@@ -86,7 +97,9 @@ async def test_cron_create_happy_path() -> None:
         prompt="Run status check",
         schedule_type="cron",
         cron_expression="*/5 * * * *",
+        interval_seconds=None,
         run_at=None,
+        remaining_runs=None,
         session_id="session-1",
         project_id=None,
     )
@@ -125,9 +138,55 @@ async def test_cron_create_parses_project_qualified_target() -> None:
         prompt="Run status check",
         schedule_type="cron",
         cron_expression="*/5 * * * *",
+        interval_seconds=None,
         run_at=None,
+        remaining_runs=None,
         session_id=None,
         project_id="vbot",
+    )
+
+
+@pytest.mark.asyncio
+async def test_cron_create_accepts_interval_repeat_and_omitted_name() -> None:
+    cron_service = Mock()
+    cron_service.create_job.return_value = _cron_job(
+        name="Check status",
+        schedule_type="interval",
+        cron_expression=None,
+        interval_seconds=7200,
+        interval_anchor_at="2026-07-28T12:00:00+00:00",
+        remaining_runs=3,
+    )
+    state = _state_with_cron_service(cron_service)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "cron.create",
+            "params": {
+                "agent_id": "main",
+                "prompt": "Check status",
+                "schedule_type": "interval",
+                "interval_seconds": 7200,
+                "repeat": 3,
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    assert response["result"]["schedule"] == "every 2h"
+    assert response["result"]["remaining_runs"] == 3
+    cron_service.create_job.assert_called_once_with(
+        agent_id="main",
+        name=None,
+        prompt="Check status",
+        schedule_type="interval",
+        cron_expression=None,
+        interval_seconds=7200,
+        run_at=None,
+        remaining_runs=3,
+        session_id=None,
+        project_id=None,
     )
 
 
@@ -141,7 +200,10 @@ async def test_cron_list_happy_path_includes_canonical_service_projection() -> N
         prompt="Check reports",
         schedule_type="cron",
         cron_expression="*/5 * * * *",
+        interval_seconds=None,
+        interval_anchor_at=None,
         run_at=None,
+        remaining_runs=None,
         session_id="session-1",
         status="active",
         last_fired_at="2026-05-14T09:55:00+00:00",
@@ -173,8 +235,12 @@ async def test_cron_list_happy_path_includes_canonical_service_projection() -> N
                     "name": "Report check",
                     "prompt": "Check reports",
                     "schedule_type": "cron",
+                    "schedule": "*/5 * * * *",
                     "cron_expression": "*/5 * * * *",
+                    "interval_seconds": None,
+                    "interval_anchor_at": None,
                     "run_at": None,
+                    "remaining_runs": None,
                     "session_id": "session-1",
                     "status": "active",
                     "last_fired_at": "2026-05-14T09:55:00+00:00",
@@ -334,7 +400,7 @@ async def test_cron_disable_happy_path() -> None:
             "cron.create",
             {
                 "agent_id": "main",
-                "prompt": "Run status check",
+                "name": "Status check",
                 "schedule_type": "cron",
                 "cron_expression": "*/5 * * * *",
             },

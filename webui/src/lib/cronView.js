@@ -3,6 +3,7 @@ import cronstrue from 'cronstrue';
 import { formatAgentAddress } from './agentAddress.js';
 
 export const CRON_SCHEDULE_TYPE_CRON = 'cron';
+export const CRON_SCHEDULE_TYPE_INTERVAL = 'interval';
 export const CRON_SCHEDULE_TYPE_ONCE = 'once';
 
 // The "Custom" preset key: the selection state when the cron expression matches
@@ -103,7 +104,9 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
       prompt: '',
       schedule_type: CRON_SCHEDULE_TYPE_CRON,
       cron_expression: '',
+      interval_minutes: '',
       run_at: '',
+      repeat: '',
       session_id: '',
       original_run_at: '',
       system_timezone: systemTimezone,
@@ -119,7 +122,15 @@ export function createCronFormValues(job = null, systemTimezone = 'UTC') {
     prompt: normalized.prompt,
     schedule_type: normalized.schedule_type,
     cron_expression: normalized.cron_expression ?? '',
+    interval_minutes:
+      normalized.interval_seconds === null
+        ? ''
+        : String(normalized.interval_seconds / 60),
     run_at: toDateTimeLocalInput(normalized.run_at, systemTimezone),
+    repeat:
+      normalized.remaining_runs === null
+        ? ''
+        : String(normalized.remaining_runs),
     session_id: normalized.session_id ?? '',
     original_run_at: normalized.run_at ?? '',
     system_timezone: systemTimezone,
@@ -160,7 +171,9 @@ export function cronFormFingerprint(formValues) {
     prompt: asText(values.prompt),
     schedule_type: normalizeScheduleType(values.schedule_type),
     cron_expression: asText(values.cron_expression),
+    interval_minutes: asText(values.interval_minutes),
     run_at: asText(values.run_at),
+    repeat: asText(values.repeat),
     session_id: asText(values.session_id),
   });
 }
@@ -170,15 +183,25 @@ export function buildCreateCronPayload(formValues) {
 
   const payload = {
     agent_id: requiredText(formValues?.agent_id),
-    name: requiredText(formValues?.name),
     prompt: requiredText(formValues?.prompt),
     schedule_type: scheduleType,
   };
+  const name = optionalText(formValues?.name);
+  if (name !== null) {
+    payload.name = name;
+  }
 
   if (scheduleType === CRON_SCHEDULE_TYPE_CRON) {
     payload.cron_expression = requiredText(formValues?.cron_expression);
+  } else if (scheduleType === CRON_SCHEDULE_TYPE_INTERVAL) {
+    payload.interval_seconds =
+      positiveInteger(formValues?.interval_minutes) * 60;
   } else {
     payload.run_at = requiredText(formValues?.run_at);
+  }
+  const repeat = optionalPositiveInteger(formValues?.repeat);
+  if (repeat !== null) {
+    payload.repeat = repeat;
   }
 
   const sessionId = optionalText(formValues?.session_id);
@@ -203,8 +226,15 @@ export function buildUpdateCronPayload(formValues) {
 
   if (scheduleType === CRON_SCHEDULE_TYPE_CRON) {
     payload.cron_expression = requiredText(formValues?.cron_expression);
+  } else if (scheduleType === CRON_SCHEDULE_TYPE_INTERVAL) {
+    payload.interval_seconds =
+      positiveInteger(formValues?.interval_minutes) * 60;
   } else {
     payload.run_at = resolveOnceRunAtValue(formValues);
+  }
+  const repeat = optionalPositiveInteger(formValues?.repeat);
+  if (repeat !== null) {
+    payload.repeat = repeat;
   }
 
   return payload;
@@ -228,7 +258,15 @@ function resolveOnceRunAtValue(formValues) {
 function normalizeCronJob(job, systemTimezone = 'UTC') {
   const scheduleType = normalizeScheduleType(job?.schedule_type);
   const cronExpression = optionalText(job?.cron_expression);
+  const intervalSeconds =
+    Number.isInteger(job?.interval_seconds) && job.interval_seconds > 0
+      ? job.interval_seconds
+      : null;
   const runAt = optionalText(job?.run_at);
+  const remainingRuns =
+    Number.isInteger(job?.remaining_runs) && job.remaining_runs >= 0
+      ? job.remaining_runs
+      : null;
   const lastFiredAt = optionalText(job?.last_fired_at);
   const lastAttemptAt = optionalText(job?.last_attempt_at);
   const lastCompletedAt = optionalText(job?.last_completed_at);
@@ -245,7 +283,9 @@ function normalizeCronJob(job, systemTimezone = 'UTC') {
     prompt: asText(job?.prompt),
     schedule_type: scheduleType,
     cron_expression: cronExpression,
+    interval_seconds: intervalSeconds,
     run_at: runAt,
+    remaining_runs: remainingRuns,
     session_id: optionalText(job?.session_id),
     status: normalizeStatus(job?.status),
     last_fired_at: lastFiredAt,
@@ -262,6 +302,7 @@ function normalizeCronJob(job, systemTimezone = 'UTC') {
     schedule_description: deriveScheduleDescription(
       scheduleType,
       cronExpression,
+      intervalSeconds,
       runAt,
       systemTimezone,
     ),
@@ -275,11 +316,15 @@ function normalizeCronJob(job, systemTimezone = 'UTC') {
 function deriveScheduleDescription(
   scheduleType,
   cronExpression,
+  intervalSeconds,
   runAt,
   systemTimezone,
 ) {
   if (scheduleType === CRON_SCHEDULE_TYPE_CRON) {
     return cronExpression ?? '';
+  }
+  if (scheduleType === CRON_SCHEDULE_TYPE_INTERVAL) {
+    return formatInterval(intervalSeconds);
   }
 
   return formatTimestamp(runAt, systemTimezone);
@@ -369,6 +414,9 @@ export {
 } from './agentTargetOptions.js';
 
 function normalizeScheduleType(value) {
+  if (value === CRON_SCHEDULE_TYPE_INTERVAL) {
+    return CRON_SCHEDULE_TYPE_INTERVAL;
+  }
   return value === CRON_SCHEDULE_TYPE_ONCE
     ? CRON_SCHEDULE_TYPE_ONCE
     : CRON_SCHEDULE_TYPE_CRON;
@@ -389,6 +437,29 @@ function normalizeStatus(value) {
 
 function requiredText(value) {
   return asText(value).trim();
+}
+
+function positiveInteger(value) {
+  const normalized = Number(asText(value).trim());
+  return Number.isInteger(normalized) && normalized > 0 ? normalized : 0;
+}
+
+function optionalPositiveInteger(value) {
+  const normalized = asText(value).trim();
+  return normalized ? positiveInteger(normalized) : null;
+}
+
+function formatInterval(seconds) {
+  if (!Number.isInteger(seconds) || seconds < 60) {
+    return '';
+  }
+  if (seconds % 86400 === 0) {
+    return `every ${seconds / 86400}d`;
+  }
+  if (seconds % 3600 === 0) {
+    return `every ${seconds / 3600}h`;
+  }
+  return `every ${seconds / 60}m`;
 }
 
 function optionalText(value) {

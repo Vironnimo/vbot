@@ -34,6 +34,7 @@
     createCronViewState,
     CRON_PRESET_CUSTOM,
     CRON_SCHEDULE_TYPE_CRON,
+    CRON_SCHEDULE_TYPE_INTERVAL,
     CRON_SCHEDULE_TYPE_ONCE,
     CRON_STATUS_ACTIVE,
     CRON_STATUS_COMPLETED,
@@ -112,6 +113,12 @@
   );
   let isCronSchedule = $derived(
     formValues.schedule_type === CRON_SCHEDULE_TYPE_CRON,
+  );
+  let isIntervalSchedule = $derived(
+    formValues.schedule_type === CRON_SCHEDULE_TYPE_INTERVAL,
+  );
+  let isOnceSchedule = $derived(
+    formValues.schedule_type === CRON_SCHEDULE_TYPE_ONCE,
   );
   let cronExpressionPreview = $derived(
     describeCronExpression(formValues.cron_expression),
@@ -413,17 +420,27 @@
   function validateFormValues() {
     const hasCoreValues =
       formValues.agent_id.trim().length > 0 &&
-      formValues.name.trim().length > 0 &&
       formValues.prompt.trim().length > 0;
-    const hasScheduleValue =
-      formValues.schedule_type === CRON_SCHEDULE_TYPE_CRON
-        ? formValues.cron_expression.trim().length > 0
-        : formValues.run_at.trim().length > 0;
+    let hasScheduleValue = formValues.run_at.trim().length > 0;
+    if (isCronSchedule) {
+      hasScheduleValue = formValues.cron_expression.trim().length > 0;
+    } else if (isIntervalSchedule) {
+      const intervalMinutes = Number(formValues.interval_minutes);
+      hasScheduleValue =
+        Number.isInteger(intervalMinutes) && intervalMinutes > 0;
+    }
+    const repeat = formValues.repeat.trim();
+    const repeatValue = Number(repeat);
+    const hasValidRepeat =
+      repeat.length === 0 ||
+      (Number.isInteger(repeatValue) &&
+        repeatValue > 0 &&
+        (!isOnceSchedule || repeatValue === 1));
 
-    if (!hasCoreValues || !hasScheduleValue) {
+    if (!hasCoreValues || !hasScheduleValue || !hasValidRepeat) {
       formErrorMessage = t(
         'cron.errors.missingRequired',
-        'Name, agent, prompt, and schedule details are required.',
+        'Agent, prompt, and valid schedule details are required. Repeat must be a positive integer; one-time schedules allow only 1.',
       );
       return false;
     }
@@ -590,6 +607,9 @@
     if (job.schedule_type === CRON_SCHEDULE_TYPE_ONCE) {
       return t('cron.form.scheduleType.once', 'Once');
     }
+    if (job.schedule_type === CRON_SCHEDULE_TYPE_INTERVAL) {
+      return displayValue(job.schedule_description);
+    }
 
     return (
       describeCronExpression(job.cron_expression) ||
@@ -600,6 +620,9 @@
   function scheduleTechnicalValue(job) {
     if (job?.schedule_type === CRON_SCHEDULE_TYPE_ONCE) {
       return displayValue(job.run_at ? job.schedule_description : '');
+    }
+    if (job?.schedule_type === CRON_SCHEDULE_TYPE_INTERVAL) {
+      return displayValue(job.schedule_description);
     }
 
     return displayValue(job?.cron_expression);
@@ -617,6 +640,12 @@
     }
 
     return job.last_completed_at_display;
+  }
+
+  function remainingRunsLabel(job) {
+    return job?.remaining_runs === null
+      ? t('cron.detail.unlimited', 'Unlimited')
+      : String(job?.remaining_runs ?? 0);
   }
 
   function statusLabel(status) {
@@ -958,6 +987,10 @@
                     <dd>{selectedJob.consecutive_failures}</dd>
                   </div>
                   <div>
+                    <dt>{t('cron.detail.remainingRuns', 'Remaining Runs')}</dt>
+                    <dd>{remainingRunsLabel(selectedJob)}</dd>
+                  </div>
+                  <div>
                     <dt>{t('cron.detail.scheduleId', 'Schedule ID')}</dt>
                     <dd>{selectedJob.id}</dd>
                   </div>
@@ -982,14 +1015,13 @@
                   <FormField
                     controlId="cron-job-name"
                     label={t('cron.form.name', 'Name')}
-                    required
                   >
                     <TextField
                       id="cron-job-name"
                       value={formValues.name}
                       placeholder={t(
                         'cron.form.namePlaceholder',
-                        'Morning news digest',
+                        'Optional — derived from the prompt',
                       )}
                       disabled={submittingForm}
                       onInput={(value) => updateFormField('name', value)}
@@ -1079,8 +1111,25 @@
                           <input
                             type="radio"
                             name="cron-schedule-type"
+                            value={CRON_SCHEDULE_TYPE_INTERVAL}
+                            checked={isIntervalSchedule}
+                            disabled={submittingForm}
+                            onchange={() =>
+                              setScheduleType(CRON_SCHEDULE_TYPE_INTERVAL)}
+                          />
+                          <span
+                            >{t(
+                              'cron.form.scheduleType.interval',
+                              'Interval',
+                            )}</span
+                          >
+                        </label>
+                        <label class="cron-radio-option">
+                          <input
+                            type="radio"
+                            name="cron-schedule-type"
                             value={CRON_SCHEDULE_TYPE_ONCE}
-                            checked={!isCronSchedule}
+                            checked={isOnceSchedule}
                             disabled={submittingForm}
                             onchange={() =>
                               setScheduleType(CRON_SCHEDULE_TYPE_ONCE)}
@@ -1134,6 +1183,30 @@
                           </span>
                         {/if}
                       </FormField>
+                    {:else if isIntervalSchedule}
+                      <FormField
+                        controlId="cron-job-interval"
+                        label={t(
+                          'cron.form.intervalMinutes',
+                          'Every (minutes)',
+                        )}
+                        required
+                      >
+                        <TextField
+                          id="cron-job-interval"
+                          type="number"
+                          min="1"
+                          step="1"
+                          value={formValues.interval_minutes}
+                          placeholder={t(
+                            'cron.form.intervalMinutesPlaceholder',
+                            '120',
+                          )}
+                          disabled={submittingForm}
+                          onInput={(next) =>
+                            updateFormField('interval_minutes', next)}
+                        />
+                      </FormField>
                     {:else}
                       <FormField
                         controlId="cron-job-run-at"
@@ -1149,6 +1222,24 @@
                         />
                       </FormField>
                     {/if}
+
+                    <FormField
+                      controlId="cron-job-repeat"
+                      label={t('cron.form.repeat', 'Repeat limit')}
+                    >
+                      <TextField
+                        id="cron-job-repeat"
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={formValues.repeat}
+                        placeholder={isOnceSchedule
+                          ? '1'
+                          : t('cron.form.repeatPlaceholder', 'Unlimited')}
+                        disabled={submittingForm}
+                        onInput={(next) => updateFormField('repeat', next)}
+                      />
+                    </FormField>
                   </div>
                 </section>
 

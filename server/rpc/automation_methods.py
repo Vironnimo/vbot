@@ -10,6 +10,7 @@ from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.validation import (
+    _optional_positive_integer,
     _optional_string,
     _reject_unsupported,
     _required_agent_address,
@@ -17,7 +18,7 @@ from server.rpc.validation import (
 )
 
 JsonObject = dict[str, Any]
-CRON_SCHEDULE_TYPES = frozenset(("cron", "once"))
+CRON_SCHEDULE_TYPES = frozenset(("cron", "interval", "once"))
 CRON_JOB_STATUSES = frozenset(("active", "paused"))
 
 
@@ -28,7 +29,9 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
         "prompt",
         "schedule_type",
         "cron_expression",
+        "interval_seconds",
         "run_at",
+        "repeat",
         "session_id",
     }
     _reject_unsupported(params, supported_fields, "cron.create")
@@ -37,7 +40,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
     # the edge into a bare ``agent_id`` plus the optional ``project_id`` stored on
     # the job — never an ``@`` string kept in ``agent_id``.
     agent_id, project_id = _required_agent_address(params, "agent_id")
-    name = _required_string(params, "name")
+    name = _optional_string(params, "name")
     prompt = _required_string(params, "prompt")
     schedule_type = _required_string(params, "schedule_type")
     if schedule_type not in CRON_SCHEDULE_TYPES:
@@ -48,7 +51,9 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
         )
 
     cron_expression = _optional_string(params, "cron_expression")
+    interval_seconds = _optional_positive_integer(params, "interval_seconds")
     run_at = _optional_string(params, "run_at")
+    repeat = _optional_positive_integer(params, "repeat")
     session_id = _optional_string(params, "session_id")
 
     if schedule_type == "cron":
@@ -58,6 +63,15 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
                 "params.cron_expression is required when params.schedule_type is 'cron'",
             )
         run_at = None
+        interval_seconds = None
+    elif schedule_type == "interval":
+        if interval_seconds is None:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                "params.interval_seconds is required when params.schedule_type is 'interval'",
+            )
+        cron_expression = None
+        run_at = None
     else:
         if run_at is None:
             raise RpcError(
@@ -65,6 +79,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
                 "params.run_at is required when params.schedule_type is 'once'",
             )
         cron_expression = None
+        interval_seconds = None
 
     try:
         async with _agent_reference_lock(state):
@@ -74,7 +89,9 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
                 prompt=prompt,
                 schedule_type=schedule_type,
                 cron_expression=cron_expression,
+                interval_seconds=interval_seconds,
                 run_at=run_at,
+                remaining_runs=repeat,
                 session_id=session_id,
                 project_id=project_id,
             )
@@ -106,7 +123,9 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
         "prompt",
         "schedule_type",
         "cron_expression",
+        "interval_seconds",
         "run_at",
+        "repeat",
         "session_id",
         "status",
     }
@@ -136,8 +155,21 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
         updates["schedule_type"] = schedule_type
     if "cron_expression" in params:
         updates["cron_expression"] = _required_string(params, "cron_expression")
+    if "interval_seconds" in params:
+        interval_seconds = _optional_positive_integer(params, "interval_seconds")
+        if interval_seconds is None:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                "params.interval_seconds must be a positive integer",
+            )
+        updates["interval_seconds"] = interval_seconds
     if "run_at" in params:
         updates["run_at"] = _required_string(params, "run_at")
+    if "repeat" in params:
+        repeat = _optional_positive_integer(params, "repeat")
+        if repeat is None:
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.repeat must be a positive integer")
+        updates["remaining_runs"] = repeat
     if "session_id" in params:
         updates["session_id"] = _optional_string(params, "session_id")
     if "status" in params:
@@ -149,6 +181,8 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
                 f"params.status must be one of: {options}",
             )
         updates["status"] = status
+    if "schedule_type" in params and "repeat" not in params:
+        updates["remaining_runs"] = 1 if updates["schedule_type"] == "once" else None
 
     if "agent_id" in updates:
         try:
@@ -209,8 +243,12 @@ def _cron_job_response(cron_service: Any, job: Any) -> JsonObject:
         "name": job.name,
         "prompt": job.prompt,
         "schedule_type": job.schedule_type,
+        "schedule": cron_service.format_schedule(job),
         "cron_expression": job.cron_expression,
+        "interval_seconds": job.interval_seconds,
+        "interval_anchor_at": job.interval_anchor_at,
         "run_at": job.run_at,
+        "remaining_runs": job.remaining_runs,
         "session_id": job.session_id,
         "status": job.status,
         "last_fired_at": job.last_fired_at,
