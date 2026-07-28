@@ -111,6 +111,10 @@ def fold_continuation_records(records: list[JsonObject]) -> ContinuationState | 
                 step.reasoning += reasoning
             if isinstance(content, str):
                 step.content += content
+        elif record_type == "stream_attempt_discarded" and state is not None:
+            run_id = _required_string(record, "run_id")
+            step_number = _required_int(record, "step")
+            state.model_steps.pop((run_id, step_number), None)
         elif record_type == "assistant_boundary" and state is not None:
             run_id = _required_string(record, "run_id")
             step_number = _required_int(record, "step")
@@ -294,6 +298,19 @@ class ContinuationTracker:
 
     def mark_interruption_cause(self, cause: ContinuationCause) -> None:
         self.interruption_cause = cause
+
+    async def discard_stream_attempt(self) -> None:
+        """Remove one replayed attempt's readable deltas from active checkpoint state."""
+        if self._closed:
+            return
+        cancelled_task = self._periodic_task
+        if cancelled_task is not None:
+            cancelled_task.cancel()
+            self._periodic_task = None
+        self._pending_reasoning.clear()
+        self._pending_content.clear()
+        self._sink([self._record("stream_attempt_discarded", step=self._step)])
+        await self._close_timer(cancelled_task)
 
     async def interrupt(self, cause: ContinuationCause) -> None:
         cancelled_task = self._flush_boundary(

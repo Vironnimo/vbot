@@ -282,6 +282,7 @@ async def test_second_interrupted_message_extends_same_checkpoint(tmp_path: Path
                 {"type": "reasoning_delta", "text": "Resume plan"},
                 NetworkError("offline again"),
             ]
+            for _ in range(3)
         ],
     )
     second_run = await loop.start_run(

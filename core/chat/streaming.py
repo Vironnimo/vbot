@@ -68,7 +68,7 @@ class StreamRecoveryAction(Enum):
 def decide_stream_recovery(
     error: Exception,
     *,
-    emitted_visible_delta: bool,
+    emitted_replay_blocking_delta: bool,
     can_restart: bool,
     has_partial_content: bool,
     finish_received: bool = False,
@@ -76,25 +76,26 @@ def decide_stream_recovery(
     """Decide how to recover from a broken streaming attempt.
 
     Provider-agnostic: it reads only normalized vBot errors plus the attempt's
-    state, so the same matrix holds for every adapter. The discriminators mirror
-    the converged design of the reference harnesses — "did visible output
-    escape?" gates whether a replay could duplicate, and the accumulated content
-    decides whether a partial answer can be preserved.
+    state, so the same matrix holds for every adapter. Answer text and Tool Call
+    fragments block replay because a second attempt could duplicate durable or
+    actionable output. Readable reasoning alone does not: it has no Tool side
+    effect and can be discarded from the active Continuation Checkpoint before
+    the attempt is retried.
 
     A normalized finish delta is the provider's logical completion boundary. A
     later transport error therefore cannot turn the completed response back into
     a partial one; the accumulated response is accepted as complete. Before any
-    visible delta a not-yet-visible drop can otherwise be replayed cleanly: a
+    replay-blocking delta a drop can otherwise be replayed cleanly: a
     streaming-unsupported error falls back to a non-streaming request, a
     restartable transient (transport/timeout drop or chunk stall) replays the
-    whole stream while restarts remain, anything else fails. Once visible output
-    has escaped, the stream is never replayed: accumulated content is preserved
-    as an interrupted assistant turn, while a reasoning-only interruption
-    propagates and its readable state remains in the Continuation Checkpoint.
+    whole stream while restarts remain, anything else fails. Once answer text or
+    a Tool Call fragment has escaped, the stream is never replayed: accumulated
+    content is preserved as an interrupted assistant turn, while a Tool-only
+    interruption propagates without reissuing an actionable prefix.
     """
     if finish_received:
         return StreamRecoveryAction.ACCEPT_COMPLETE
-    if not emitted_visible_delta:
+    if not emitted_replay_blocking_delta:
         if _is_streaming_fallback_error(error):
             return StreamRecoveryAction.FALLBACK
         if can_restart and _is_stream_restartable_error(error):
@@ -274,6 +275,11 @@ class StreamingAccumulator:
     def partial_content(self) -> str | None:
         """Return accumulated visible content so far, or None if empty."""
         return _joined_or_none(self._content_parts)
+
+    @property
+    def has_partial_tool_call(self) -> bool:
+        """Whether any Tool Call fragment arrived during this attempt."""
+        return bool(self._tool_calls)
 
     def add_delta(self, delta: JsonObject) -> list[StreamingVisibleDelta]:
         """Accept one normalized provider delta and return public deltas to emit."""

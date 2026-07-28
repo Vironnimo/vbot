@@ -239,7 +239,7 @@ async def test_streaming_cancellation_with_reasoning_retains_continuation(
 
 
 @pytest.mark.asyncio
-async def test_streaming_network_error_with_reasoning_retains_continuation(
+async def test_streaming_network_error_with_reasoning_restarts_cleanly(
     tmp_path: Path,
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
@@ -247,24 +247,55 @@ async def test_streaming_network_error_with_reasoning_retains_continuation(
         [],
         stream_responses=[
             [
-                {"type": "reasoning_delta", "text": "Need network."},
+                {"type": "reasoning_delta", "text": "Discarded plan."},
                 NetworkError("offline"),
-            ]
+            ],
+            [
+                {"type": "reasoning_delta", "text": "Recovered plan."},
+                {"type": "content_delta", "text": "Recovered"},
+                {"type": "finish", "reason": "stop"},
+            ],
         ],
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    loop = build_chat_loop(runtime, streaming=True)
-    with pytest.raises(NetworkError, match="offline"):
-        await loop.send("coder", "Hi", session_id="session-one")
+    assistant = await build_chat_loop(runtime, streaming=True).send(
+        "coder", "Hi", session_id="session-one"
+    )
 
-    messages = runtime.chat_sessions.get("coder", "session-one").load()
-    assert persisted_roles(messages) == ["user", "error"]
-    state = recover_continuation(runtime.chat_sessions.get("coder", "session-one"))
+    session = runtime.chat_sessions.get("coder", "session-one")
+    assert assistant.content == "Recovered"
+    assert assistant.reasoning == "Recovered plan."
+    assert len(adapter.stream_requests) == 2
+    assert recover_continuation(session) is None
+
+
+@pytest.mark.asyncio
+async def test_reasoning_only_restart_exhaustion_keeps_only_final_attempt_checkpoint(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "reasoning_delta", "text": f"Attempt {attempt}"},
+                NetworkError(f"drop {attempt}"),
+            ]
+            for attempt in range(1, 4)
+        ],
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    with pytest.raises(NetworkError, match="drop 3"):
+        await build_chat_loop(runtime, streaming=True).send("coder", "Hi", session_id="session-one")
+
+    session = runtime.chat_sessions.get("coder", "session-one")
+    state = recover_continuation(session)
     assert state is not None
-    assert state.reasoning == "Need network."
+    assert state.reasoning == "Attempt 3"
     assert state.cause == "network"
-    assert messages[1].error_kind == "network_error"
+    assert len(adapter.stream_requests) == 3
 
 
 @pytest.mark.asyncio
@@ -376,6 +407,46 @@ async def test_streaming_mode_restarts_after_classified_responses_error_before_o
 
 
 @pytest.mark.asyncio
+async def test_streaming_mode_restarts_after_reasoning_only_responses_error(
+    tmp_path: Path,
+) -> None:
+    classified_error = _classified_responses_error(
+        "error",
+        {
+            "type": "error",
+            "error": {"code": "server_error", "message": "Provider overloaded."},
+        },
+    )
+    agent = StubAgent(id="coder", model="openai/gpt-5.6-terra", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {"type": "reasoning_delta", "text": "Discarded reasoning"},
+                classified_error,
+            ],
+            [
+                {"type": "reasoning_delta", "text": "Recovered reasoning"},
+                {"type": "content_delta", "text": "Recovered"},
+                {"type": "finish", "reason": "stop"},
+            ],
+        ],
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    assistant = await build_chat_loop(runtime, streaming=True).send(
+        "coder",
+        "Hi",
+        session_id="session-one",
+    )
+
+    assert assistant.content == "Recovered"
+    assert assistant.reasoning == "Recovered reasoning"
+    assert len(adapter.stream_requests) == 2
+    assert adapter.stream_requests[0]["messages"] == adapter.stream_requests[1]["messages"]
+
+
+@pytest.mark.asyncio
 async def test_streaming_mode_does_not_restart_after_visible_delta(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter(
@@ -441,6 +512,35 @@ async def test_streaming_mode_preserves_partial_after_classified_responses_error
     assert len(adapter.stream_requests) == 1
     assert assistant.content == "Visible"
     assert assistant.interrupted is True
+
+
+@pytest.mark.asyncio
+async def test_streaming_mode_does_not_restart_after_tool_call_delta(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.6-terra", allowed_tools=["*"])
+    adapter = StubAdapter(
+        [],
+        stream_responses=[
+            [
+                {
+                    "type": "tool_call_delta",
+                    "id": "call_1",
+                    "name_delta": "read",
+                    "arguments_delta": '{"path":"note.txt"}',
+                },
+                NetworkError("dropped after Tool Call"),
+            ]
+        ],
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+
+    with pytest.raises(NetworkError, match="dropped after Tool Call"):
+        await build_chat_loop(runtime, streaming=True).send(
+            "coder",
+            "Hi",
+            session_id="session-one",
+        )
+
+    assert len(adapter.stream_requests) == 1
 
 
 def _classified_responses_error(

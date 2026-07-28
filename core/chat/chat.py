@@ -2598,7 +2598,6 @@ class ChatLoop:
         continuation_tracker: ContinuationTracker | None = None,
     ) -> _AssistantStep:
         accumulator = StreamingAccumulator()
-        emitted_visible_delta = False
         stream = adapter.stream(
             messages,
             model_id=model_id,
@@ -2636,7 +2635,6 @@ class ChatLoop:
                             reasoning=str(visible_delta.payload.get("reasoning_delta", "")),
                             content=str(visible_delta.payload.get("content_delta", "")),
                         )
-                    emitted_visible_delta = True
                 run.raise_if_cancelled()
             if accumulator.finish_reason is None:
                 raise NetworkError("Provider stream ended without finish delta")
@@ -2651,7 +2649,9 @@ class ChatLoop:
             # action stays here (the chat loop owns side effects, not the policy).
             action = decide_stream_recovery(
                 exc,
-                emitted_visible_delta=emitted_visible_delta,
+                emitted_replay_blocking_delta=(
+                    accumulator.partial_content is not None or accumulator.has_partial_tool_call
+                ),
                 can_restart=can_restart,
                 has_partial_content=accumulator.partial_content is not None,
                 finish_received=accumulator.finish_reason is not None,
@@ -2677,6 +2677,8 @@ class ChatLoop:
                 _emit_assistant_events(run, assistant_step.message)
                 return assistant_step
             elif action is StreamRecoveryAction.RESTART:
+                if continuation_tracker is not None:
+                    await continuation_tracker.discard_stream_attempt()
                 raise _StreamRestartNeeded(exc) from exc
             elif action is StreamRecoveryAction.PRESERVE_PARTIAL:
                 interruption_cause = normalize_interruption_cause(exc)
