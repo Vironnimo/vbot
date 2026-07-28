@@ -109,6 +109,14 @@ def test_explicit_agent_targets_narrow_nested_subagent_operations() -> None:
         "orchestrator",
         "worker",
     ]
+    cancel_branches = [
+        branch for branch in branches if branch["properties"]["operation"]["enum"] == ["cancel"]
+    ]
+    assert len(cancel_branches) == 2
+    assert all(
+        branch["properties"]["agent_id"]["enum"] == ["orchestrator", "worker"]
+        for branch in cancel_branches
+    )
     source_branches = SUBAGENT_TOOL_PARAMETERS["properties"]["request"]["anyOf"]
     source_start = next(
         branch

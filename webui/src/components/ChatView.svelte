@@ -890,7 +890,8 @@
     const trimmedRunId = typeof runId === 'string' ? runId.trim() : '';
     const trimmedQueueItemId =
       typeof queueItemId === 'string' ? queueItemId.trim() : '';
-    const key = trimmedRunId || `${agentId}::${sessionId}`;
+    const key =
+      trimmedRunId || trimmedQueueItemId || `${agentId}::${sessionId}`;
     if (
       subAgentStatusVerificationKeys.has(key) ||
       subAgentStatusInflightKeys.has(key)
@@ -975,6 +976,9 @@
         }
         if (!trimmedRunId) {
           updates[`session:${agentId}::${sessionId}`] = status;
+        }
+        if (trimmedQueueItemId) {
+          updates[`queue:${trimmedQueueItemId}`] = status;
         }
         const durationMs = summary?.timing?.duration_ms;
         if (Number.isFinite(durationMs) && durationMs >= 0) {
@@ -1902,6 +1906,7 @@
         // summary), so settle the row's run-id-less session key here.
         applySubAgentRunStatusUpdates({
           [`session:${plan.agentId}::${plan.sessionId}`]: 'cancelled',
+          [`queue:${plan.queueItemId}`]: 'cancelled',
         });
       } catch (error) {
         if (error?.code !== RPC_ERROR_QUEUE_ITEM_NOT_FOUND) {

@@ -133,6 +133,7 @@ _OPERATION_CONTRACTS: tuple[
         {
             "start": ("content",),
             "continue": ("content", "agent_id", "session_id"),
+            "cancel": ("agent_id", "session_id"),
         },
     ),
 )

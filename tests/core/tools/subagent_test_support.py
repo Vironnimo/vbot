@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -14,7 +15,7 @@ import core.subagents.subagents as subagent_module
 from core.agents import AgentNotFoundError
 from core.chat import ChatMessage, ChatSessionManager
 from core.projects import AgentResolutionError
-from core.runs import ActiveRunError, Run, RunNotFoundError
+from core.runs import ActiveRunError, Run, RunCancelledError, RunNotFoundError
 from core.storage import TemporaryFileManager
 from core.subagents.subagents import (
     SubAgentBatchTracker,
@@ -45,6 +46,7 @@ __all__ = [
     "AgentResolutionError",
     "ActiveRunError",
     "Run",
+    "RunCancelledError",
     "RunNotFoundError",
     "SubAgentBatchTracker",
     "SubAgentCoordinator",
@@ -264,6 +266,7 @@ class FakeRunManager:
                 record["agent_id"] != agent_id
                 or record["session_id"] != session_id
                 or item.item_id != item_id
+                or item.future.done()
             ):
                 continue
             self.enqueued.remove(record)
@@ -286,6 +289,15 @@ class FakeRunManager:
             return self.runs[run_id]
         except KeyError as exc:
             raise RunNotFoundError(f"run not found: {run_id}") from exc
+
+    async def cancel(self, run_id: str, reason: str | None = None) -> Run:
+        run = self.get(run_id)
+        run.request_cancel(reason=reason)
+        if run.status.value == "running":
+            run.mark_cancelled()
+        with suppress(RunCancelledError):
+            await run.wait()
+        return run
 
     def active_run(
         self, *, agent_id: str, session_id: str, project_id: str | None = None

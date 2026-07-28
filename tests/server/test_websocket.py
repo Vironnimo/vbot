@@ -13,7 +13,10 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-found]
 
 from core.runs import ChatRunManager, RunStatus
-from core.subagents import SUBAGENT_SESSION_STARTED_EVENT
+from core.subagents import (
+    SUBAGENT_SESSION_STARTED_EVENT,
+    SUBAGENT_STATUS_CHANGED_EVENT,
+)
 from server.app import _parse_after_sequence, create_app
 from server.events import ALLOWED_SERVER_EVENT_TYPES, APP_ERROR_EVENT, ServerEventBus
 from server.rpc.event_bridge import (
@@ -136,8 +139,9 @@ def test_websocket_output_mappings_exclude_streaming_delta_event_types() -> None
     assert RUN_DELTA_EVENT_TYPES.isdisjoint(SERVER_EVENT_TYPES)
 
 
-def test_websocket_output_mappings_include_subagent_session_started() -> None:
+def test_websocket_output_mappings_include_subagent_lifecycle_events() -> None:
     assert SUBAGENT_SESSION_STARTED_EVENT in RUN_OUTPUT_EVENT_TYPES
+    assert SUBAGENT_STATUS_CHANGED_EVENT in RUN_OUTPUT_EVENT_TYPES
 
 
 def test_websocket_disconnect_removes_event_bus_subscriber(tmp_path: Path) -> None:

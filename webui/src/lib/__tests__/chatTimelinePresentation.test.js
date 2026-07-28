@@ -383,10 +383,45 @@ describe('chatTimelinePresentation', () => {
     expect(isSubAgentSpawnTool(runningSubAgentTool())).toBe(true);
     expect(
       isSubAgentSpawnTool({
+        name: 'subagent',
+        arguments: {
+          request: {
+            operation: 'start',
+            content: 'canonical child task',
+          },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      isSubAgentSpawnTool({
+        name: 'subagent',
+        arguments: {
+          request: {
+            operation: 'cancel',
+            agent_id: 'worker',
+            session_id: 'session-child',
+            run_id: 'run-child',
+          },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isSubAgentSpawnTool({
         ...runningSubAgentTool(),
         name: 'subagent_result',
       }),
     ).toBe(false);
+  });
+
+  it('keeps an exact queued cancellation settled when its Session runs again', () => {
+    const tool = queuedSubAgentTool();
+
+    expect(
+      subAgentDotStatus(tool, null, {
+        'queue:queue-item-1': 'cancelled',
+        'session:worker::session-child': 'running',
+      }),
+    ).toBe('cancelled');
   });
 
   it('does not request a result when a blocking spawn already carries one', () => {

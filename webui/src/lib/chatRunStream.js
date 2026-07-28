@@ -240,7 +240,10 @@ export function createChatRunStream({
     if (!event) {
       return;
     }
-    if (event.contributes_to_agent_activity !== false) {
+    if (
+      event.contributes_to_agent_activity !== false ||
+      event.type === 'subagent_status_changed'
+    ) {
       trackSubAgentRunStatus(event);
     }
     if (event.type === 'compaction_completed' && event.payload?.message) {
@@ -270,6 +273,7 @@ export function createChatRunStream({
 
   function trackSubAgentRunStatus(event) {
     const updates = {};
+    trackExplicitSubAgentStatus(event, updates);
     const statusAgentId = bareAgentIdForStatusKey(event.agent_id);
 
     // The most recent tool call a run made, so a running sub-agent row can
@@ -333,6 +337,48 @@ export function createChatRunStream({
 
     if (Object.keys(updates).length > 0) {
       updateSubAgentRunStatuses(updates);
+    }
+  }
+
+  function trackExplicitSubAgentStatus(event, updates) {
+    if (event.type !== 'subagent_status_changed') {
+      return;
+    }
+    const data = event.payload?.data;
+    const childAgentId =
+      typeof data?.agent_id === 'string' ? data.agent_id.trim() : '';
+    const childSessionId =
+      typeof data?.session_id === 'string' ? data.session_id.trim() : '';
+    const childStatus =
+      typeof data?.status === 'string' ? data.status.trim() : '';
+    if (!childAgentId || !childSessionId || !childStatus) {
+      return;
+    }
+
+    const childProjectId =
+      typeof data?.project_id === 'string' ? data.project_id.trim() : '';
+    const childAddresses = new Set([
+      bareAgentIdForStatusKey(childAgentId),
+      formatAgentAddress(childAgentId, childProjectId),
+    ]);
+    for (const childAddress of childAddresses) {
+      if (childAddress) {
+        updates[`session:${childAddress}::${childSessionId}`] = childStatus;
+      }
+    }
+
+    const childRunId =
+      typeof data?.run_id === 'string' ? data.run_id.trim() : '';
+    if (childRunId) {
+      updates[`run:${childRunId}`] = childStatus;
+    }
+    const queueItemId =
+      typeof data?.queue_item_id === 'string' ? data.queue_item_id.trim() : '';
+    if (queueItemId) {
+      updates[`queue:${queueItemId}`] = childStatus;
+      if (childRunId) {
+        updates[`queueRun:${queueItemId}`] = childRunId;
+      }
     }
   }
 

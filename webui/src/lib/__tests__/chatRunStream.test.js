@@ -807,6 +807,42 @@ describe('createChatRunStream() queue removal on run_started (regression for B7)
     );
   });
 
+  it('projects an explicit Parent-Agent cancellation onto the exact child row', () => {
+    const harness = makeStreamHarness({
+      chatState,
+      displayedAgentId: DISPLAYED_AGENT_ID,
+      displayedSessionId: DISPLAYED_SESSION_ID,
+    });
+
+    harness.stream.handleServerEvents({
+      type: 'run_output',
+      payload: {
+        run_id: 'parent-run-two',
+        agent_id: 'parent',
+        session_id: 'parent-session',
+        run_event_type: 'subagent_status_changed',
+        run_event_sequence: 4,
+        contributes_to_agent_activity: false,
+        output: {
+          data: {
+            agent_id: DISPLAYED_AGENT_ID,
+            session_id: DISPLAYED_SESSION_ID,
+            run_id: DRAINED_RUN_ID,
+            queue_item_id: QUEUED_ITEM_ID,
+            status: 'cancelled',
+          },
+        },
+      },
+    });
+
+    expect(harness.subAgentRunStatuses).toMatchObject({
+      [`run:${DRAINED_RUN_ID}`]: 'cancelled',
+      [`queue:${QUEUED_ITEM_ID}`]: 'cancelled',
+      [`queueRun:${QUEUED_ITEM_ID}`]: DRAINED_RUN_ID,
+      [`session:${DISPLAYED_AGENT_ID}::${DISPLAYED_SESSION_ID}`]: 'cancelled',
+    });
+  });
+
   it('removes the queued item when an SSE run_started event carries its queue_item_id, without any chat.queue_list round-trip', () => {
     let capturedOnEvent = null;
     const subscribeRunEvents = vi.fn((_sseUrl, handlers) => {

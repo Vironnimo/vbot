@@ -18,7 +18,7 @@ SUBAGENT_TOOL_NAME = "subagent"
 SUBAGENT_RESULT_TOOL_NAME = "subagent_result"
 
 SUBAGENT_TOOL_DESCRIPTION = (
-    "Delegate work by starting or queueing a Run in a persisted Sub-Agent Session."
+    "Start, continue, or cancel an owned Run in a persisted Sub-Agent Session."
 )
 SUBAGENT_RESULT_TOOL_DESCRIPTION = (
     "Return the current queued or running status, or the terminal result, of a spawned "
@@ -59,8 +59,15 @@ SUBAGENT_PROMPT_BLOCK_TEMPLATE = (
     "later continuation, or pass to nested Sub-Agents.\n\n"
     "Use the `continue` operation for a specific existing Session and repeat both "
     "the exact `agent_id` and `session_id` returned by the original `subagent` call; "
-    "Session ids are Agent-scoped. Use `subagent_result` only when the user explicitly "
-    "asks for a running Sub-Agent's status or result before automatic batch delivery."
+    "Session ids are Agent-scoped.\n\n"
+    "Cancelling the calling Run does not cancel background Sub-Agents. Use the `cancel` "
+    "operation in this or a later Run to stop one exact Sub-Agent owned by this Parent "
+    "Agent Session. Repeat its returned `agent_id` and `session_id`, then pass its "
+    "`run_id`; if the spawn returned only a `queue_item_id`, pass that instead. "
+    "Cancellation waits until the exact child is actually cancelled and cannot target "
+    "another Parent Session's work.\n\n"
+    "Use `subagent_result` only when the user explicitly asks for a running Sub-Agent's "
+    "status or result before automatic batch delivery."
 )
 
 NO_ADDITIONAL_SUBAGENTS_TEXT = "**No additional Agents are available.**"
@@ -99,6 +106,21 @@ _SUBAGENT_THINKING_PARAMETER: JsonObject = {
         "an empty string selects the Provider default."
     ),
 }
+_SUBAGENT_SESSION_ID_PARAMETER: JsonObject = {
+    "type": "string",
+    "minLength": 1,
+    "description": "Existing Sub-Agent Session id returned by start.",
+}
+_SUBAGENT_RUN_ID_PARAMETER: JsonObject = {
+    "type": "string",
+    "minLength": 1,
+    "description": "Exact running Sub-Agent Run id returned by start or continue.",
+}
+_SUBAGENT_QUEUE_ITEM_ID_PARAMETER: JsonObject = {
+    "type": "string",
+    "minLength": 1,
+    "description": "Exact queued-item id returned when the Sub-Agent Run has not started.",
+}
 
 
 def _subagent_operation(
@@ -113,6 +135,34 @@ def _subagent_operation(
         "properties": properties,
         "required": list(required),
         "additionalProperties": False,
+    }
+
+
+def _subagent_cancel_operation() -> JsonObject:
+    common_properties = {
+        "agent_id": _SUBAGENT_AGENT_ID_PARAMETER,
+        "session_id": _SUBAGENT_SESSION_ID_PARAMETER,
+    }
+    return {
+        "type": "object",
+        "oneOf": [
+            _subagent_operation(
+                "Cancel one exact running child owned by this Parent Agent Session.",
+                {
+                    **common_properties,
+                    "run_id": _SUBAGENT_RUN_ID_PARAMETER,
+                },
+                required=("agent_id", "session_id", "run_id"),
+            ),
+            _subagent_operation(
+                "Cancel one exact queued child owned by this Parent Agent Session.",
+                {
+                    **common_properties,
+                    "queue_item_id": _SUBAGENT_QUEUE_ITEM_ID_PARAMETER,
+                },
+                required=("agent_id", "session_id", "queue_item_id"),
+            ),
+        ],
     }
 
 
@@ -134,21 +184,18 @@ SUBAGENT_TOOL_PARAMETERS: JsonObject = operation_envelope_schema(
             {
                 "content": _SUBAGENT_CONTENT_PARAMETER,
                 "agent_id": _SUBAGENT_AGENT_ID_PARAMETER,
-                "session_id": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "Existing Sub-Agent Session id returned by start.",
-                },
+                "session_id": _SUBAGENT_SESSION_ID_PARAMETER,
                 "background": _SUBAGENT_BACKGROUND_PARAMETER,
                 "model": _SUBAGENT_MODEL_PARAMETER,
                 "thinking_effort": _SUBAGENT_THINKING_PARAMETER,
             },
             required=("content", "agent_id", "session_id"),
         ),
+        "cancel": _subagent_cancel_operation(),
     },
     description=(
-        "Set request.operation to start for a new Sub-Agent Session or continue for an "
-        "existing one, and include the operation arguments in the same request object."
+        "Set request.operation to start, continue, or cancel, and include the operation "
+        "arguments in the same request object."
     ),
 )
 
@@ -219,15 +266,17 @@ def _subagent_display_summary(arguments: JsonObject) -> str:
     if not isinstance(operation_arguments, dict):
         return ""
     operation = operation_arguments.get("operation")
-    if operation not in {"start", "continue"}:
+    if operation not in {"start", "continue", "cancel"}:
         return ""
     parts = [operation]
     agent_id = operation_arguments.get("agent_id")
     if isinstance(agent_id, str) and agent_id:
         parts.append(agent_id)
-    content = operation_arguments.get("content")
-    if isinstance(content, str) and content:
-        parts.append(content)
+    for key in ("content", "run_id", "queue_item_id"):
+        value = operation_arguments.get(key)
+        if isinstance(value, str) and value:
+            parts.append(value)
+            break
     return " · ".join(parts)
 
 

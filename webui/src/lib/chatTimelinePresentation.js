@@ -492,10 +492,11 @@ const streamingPreviewArguments = (tool) =>
     : undefined;
 
 export const isSubAgentSpawnTool = (tool) =>
-  toolNameForRunTool(tool) === 'subagent';
+  toolNameForRunTool(tool) === 'subagent' &&
+  subAgentArguments(tool).operation !== 'cancel';
 
 export const isStartingForegroundSubAgent = (tool) => {
-  if (toolNameForRunTool(tool) !== 'subagent' || !tool.startedEvent) {
+  if (!isSubAgentSpawnTool(tool) || !tool.startedEvent) {
     return false;
   }
   return subAgentArguments(tool).background !== true;
@@ -1228,7 +1229,12 @@ function trimmedString(value) {
 
 function subAgentArguments(tool) {
   const parsedArguments = parseJsonValue(toolArguments(tool));
-  return isPlainObject(parsedArguments) ? parsedArguments : {};
+  if (!isPlainObject(parsedArguments)) {
+    return {};
+  }
+  return isPlainObject(parsedArguments.request)
+    ? parsedArguments.request
+    : parsedArguments;
 }
 
 function subAgentResultEnvelope(tool) {
@@ -1300,6 +1306,16 @@ function externalSubAgentStatus(tool, subAgentStatuses) {
   if (runId) {
     return subAgentStatusToDotStatus(
       trimmedString(statuses[`run:${runId}`]).toLowerCase(),
+    );
+  }
+
+  const queueItemId = subAgentQueueItemId(tool);
+  if (
+    queueItemId &&
+    Object.prototype.hasOwnProperty.call(statuses, `queue:${queueItemId}`)
+  ) {
+    return subAgentStatusToDotStatus(
+      trimmedString(statuses[`queue:${queueItemId}`]).toLowerCase(),
     );
   }
 
