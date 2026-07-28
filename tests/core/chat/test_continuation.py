@@ -147,6 +147,36 @@ async def test_boundary_timer_cancellation_cannot_lose_next_dirty_flush(tmp_path
     await tracker.resolve()
 
 
+def test_fold_discards_replayed_attempt_before_accepting_replacement_delta() -> None:
+    records = [
+        _record(
+            "run_started",
+            checkpoint_id="checkpoint",
+            origin_run_id="run-one",
+            request="work",
+        ),
+        _record(
+            "stream_delta",
+            step=1,
+            reasoning_delta="discarded",
+            content_delta="",
+        ),
+        _record("stream_attempt_discarded", step=1),
+        _record(
+            "stream_delta",
+            step=1,
+            reasoning_delta="replacement",
+            content_delta="",
+        ),
+        _record("run_interrupted", cause="network"),
+    ]
+
+    state = fold_continuation_records(records)
+
+    assert state is not None
+    assert state.reasoning == "replacement"
+
+
 def test_fold_preserves_chain_across_repeated_interruptions() -> None:
     records = [
         _record(
