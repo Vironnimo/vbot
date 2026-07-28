@@ -43,6 +43,7 @@ export const RUN_EVENT_TYPES = [
   RUN_EVENT_TOOL_CALL_STDERR,
   'tool_call_result',
   'subagent_session_started',
+  'subagent_status_changed',
   RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
   'assistant_output',
   'model_step_usage',

@@ -57,7 +57,7 @@ async def test_register_subagent_tools_registers_both_public_tools() -> None:
     subagent = registry.get(SUBAGENT_TOOL_NAME)
     subagent_result = registry.get(SUBAGENT_RESULT_TOOL_NAME)
     assert subagent.description == (
-        "Delegate work by starting or queueing a Run in a persisted Sub-Agent Session."
+        "Start, continue, or cancel an owned Run in a persisted Sub-Agent Session."
     )
     assert subagent_result.description == (
         "Return the current queued or running status, or the terminal result, of a spawned "
@@ -71,8 +71,19 @@ async def test_register_subagent_tools_registers_both_public_tools() -> None:
     by_operation = {branch["properties"]["operation"]["enum"][0]: branch for branch in branches}
     start = by_operation["start"]
     continuation = by_operation["continue"]
+    cancellation_branches = [
+        branch for branch in branches if branch["properties"]["operation"]["enum"] == ["cancel"]
+    ]
     assert start["required"] == ["operation", "content"]
     assert continuation["required"] == ["operation", "content", "agent_id", "session_id"]
+    assert len(cancellation_branches) == 2
+    assert {
+        tuple(field for field in branch["required"] if field != "operation")
+        for branch in cancellation_branches
+    } == {
+        ("agent_id", "session_id", "run_id"),
+        ("agent_id", "session_id", "queue_item_id"),
+    }
     assert start["properties"]["content"]["description"] == (
         "Self-contained task or message to send to the target Sub-Agent."
     )

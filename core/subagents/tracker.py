@@ -354,6 +354,100 @@ class SubAgentBatchTracker:
                 return entry.run_id
         return None
 
+    def owns_run(
+        self,
+        parent_agent_id: str,
+        parent_session_id: str,
+        parent_project_id: str | None,
+        sub_agent_id: str,
+        sub_session_id: str,
+        sub_project_id: str | None,
+        sub_run_id: str,
+    ) -> bool:
+        """Return whether this exact live entry belongs to the parent Session."""
+        return any(
+            parent_key[0] == parent_agent_id
+            and parent_key[1] == parent_session_id
+            and batch.project_id == parent_project_id
+            and (entry := batch.entries.get(sub_run_id)) is not None
+            and entry.run_id == sub_run_id
+            and entry.session_id == sub_session_id
+            and _entry_matches_target(entry, sub_agent_id, sub_project_id)
+            for parent_key, batch in self._batches.items()
+        )
+
+    def owns_queue_item(
+        self,
+        parent_agent_id: str,
+        parent_session_id: str,
+        parent_project_id: str | None,
+        sub_agent_id: str,
+        sub_session_id: str,
+        sub_project_id: str | None,
+        queue_item_id: str,
+    ) -> bool:
+        """Return whether this exact queued-origin entry belongs to the parent Session."""
+        return (
+            self._owned_queue_entry(
+                parent_agent_id,
+                parent_session_id,
+                parent_project_id,
+                sub_agent_id,
+                sub_session_id,
+                sub_project_id,
+                queue_item_id,
+            )
+            is not None
+        )
+
+    def run_id_for_owned_queue_item(
+        self,
+        parent_agent_id: str,
+        parent_session_id: str,
+        parent_project_id: str | None,
+        sub_agent_id: str,
+        sub_session_id: str,
+        sub_project_id: str | None,
+        queue_item_id: str,
+    ) -> str | None:
+        """Resolve an owned queue handle after its item has started."""
+        entry = self._owned_queue_entry(
+            parent_agent_id,
+            parent_session_id,
+            parent_project_id,
+            sub_agent_id,
+            sub_session_id,
+            sub_project_id,
+            queue_item_id,
+        )
+        return entry.run_id if entry is not None else None
+
+    def _owned_queue_entry(
+        self,
+        parent_agent_id: str,
+        parent_session_id: str,
+        parent_project_id: str | None,
+        sub_agent_id: str,
+        sub_session_id: str,
+        sub_project_id: str | None,
+        queue_item_id: str,
+    ) -> _SubAgentEntry | None:
+        for parent_key, batch in reversed(list(self._batches.items())):
+            if (
+                parent_key[0] != parent_agent_id
+                or parent_key[1] != parent_session_id
+                or batch.project_id != parent_project_id
+            ):
+                continue
+            for entry in reversed(list(batch.entries.values())):
+                if (
+                    entry.queue_item_id == queue_item_id
+                    and entry.session_id == sub_session_id
+                    and _entry_matches_target(entry, sub_agent_id, sub_project_id)
+                ):
+                    return entry
+        return None
+
     def activity_file_for_session(
         self,
         parent_key: ParentKey,

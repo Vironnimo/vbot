@@ -913,6 +913,7 @@ describe('subscribeRunEvents()', () => {
     expect(RUN_EVENT_TYPES).toContain('error_message_persisted');
     expect(RUN_EVENT_TYPES).toContain('compaction_completed');
     expect(RUN_EVENT_TYPES).toContain('subagent_session_started');
+    expect(RUN_EVENT_TYPES).toContain('subagent_status_changed');
     expect(RUN_EVENT_TYPES).toContain('model_step_usage');
   });
 
