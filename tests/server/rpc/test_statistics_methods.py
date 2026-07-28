@@ -101,7 +101,12 @@ def _seed_session(manager: ChatSessionManager, agent_id: str) -> None:
         ChatMessage.assistant(
             model="openrouter/anthropic/claude-sonnet-4",
             content="hi",
-            usage={"input_tokens": 30, "output_tokens": 5},
+            usage={
+                "input_tokens": 30,
+                "output_tokens": 5,
+                "cache_write_tokens": 4,
+                "reasoning_tokens": 3,
+            },
             timestamp=BASE,
         )
     )
@@ -134,6 +139,12 @@ def test_report_returns_full_shape_for_seeded_data(tmp_path: Path) -> None:
     assert result["overview"]["total_agents"] == 1
     assert result["overview"]["total_runs"] == 1
     assert result["usage"]["totals"]["measured_input_tokens"] == 30
+    assert result["usage"]["totals"]["cache_write_tokens"] == 4
+    assert result["usage"]["totals"]["reasoning_tokens"] == 3
+    assert result["usage"]["totals"]["reasoning_turns"] == 1
+    assert result["usage"]["providers"][0]["reasoning_tokens"] == 3
+    assert result["usage"]["models"][0]["reasoning_tokens"] == 3
+    assert result["usage"]["daily"][0]["reasoning_tokens"] == 3
     assert result["runs"]["duration"]["p95_ms"] == 1200.0
     assert result["window"] == {"since": None, "until": None}
 

@@ -69,7 +69,7 @@ Task-specific payload/response semantics remain in `model_tasks.md` and its task
 
 ## Usage normalization
 
-Across Adapters, `input_tokens` means total prompt tokens including cached tokens. Optional `cache_read_tokens` and `cache_write_tokens` preserve Provider counters. Canonical Session aggregation and display semantics live in `chat/usage.md`; Adapters only normalize their wire's numbers.
+Across Adapters, `input_tokens` means total prompt tokens including cached tokens. Optional `cache_read_tokens` and `cache_write_tokens` preserve Provider counters, while optional `reasoning_tokens` preserves a reported subset of output and never changes `output_tokens`. OpenAI Chat reads prompt/completion detail blocks, Responses-shaped wires read input/output detail blocks, and Anthropic Messages reads cache fields from input Usage plus `output_tokens_details.thinking_tokens` from final output Usage. Adapters omit unsupported or malformed optional counters rather than inventing zero; canonical Session aggregation and display semantics live in `chat/usage.md`.
 
 ## Source and tests
 

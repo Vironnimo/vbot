@@ -13,6 +13,7 @@ from typing import Any
 from core.providers.anthropic_compatible import (
     AnthropicMessagesStreamDecoder,
     apply_anthropic_cache_usage,
+    apply_anthropic_reasoning_usage,
 )
 from core.providers.errors import ProviderError
 from core.providers.github_copilot_policy import GitHubCopilotModelPolicy
@@ -597,6 +598,7 @@ def _extract_messages_usage(response: dict[str, Any]) -> dict[str, Any] | None:
         "output_tokens": output_tokens if isinstance(output_tokens, int) else 0,
     }
     apply_anthropic_cache_usage(normalized, usage)
+    apply_anthropic_reasoning_usage(normalized, usage)
     return normalized
 
 

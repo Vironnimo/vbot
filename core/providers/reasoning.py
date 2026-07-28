@@ -27,7 +27,7 @@ _BAD_EFFORT_DETAIL_SUBSTRINGS = ("reasoning_effort", "reasoning effort", "reason
 
 # Where OpenAI-compatible ``usage`` reports the model's reasoning-token count.
 _REASONING_TOKEN_DETAILS_KEYS = ("completion_tokens_details", "output_tokens_details")
-_REASONING_TOKENS_KEY = "reasoning_tokens"
+_REASONING_TOKEN_KEYS = ("reasoning_tokens", "thinking_tokens")
 
 # HTTP status a strict provider returns when a reasoning effort is invalid.
 _BAD_EFFORT_STATUS_CODE = 400
@@ -448,10 +448,11 @@ def warn_rejected_effort(
 def reasoning_token_count(usage: Mapping[str, Any] | None) -> int | None:
     """Return the reasoning-token count from a normalized-or-raw ``usage`` mapping.
 
-    Reads the OpenAI-compatible ``completion_tokens_details.reasoning_tokens``
-    (or Responses-style ``output_tokens_details.reasoning_tokens``). Returns
-    ``None`` when the counter is absent or not an int — "unknown", not "zero" —
-    so callers do not treat a sparse usage block as a swallowed effort.
+    Reads the OpenAI-compatible ``completion_tokens_details.reasoning_tokens``,
+    Responses-style ``output_tokens_details.reasoning_tokens``, or Anthropic
+    ``output_tokens_details.thinking_tokens``. Returns ``None`` when the counter
+    is absent or not an int — "unknown", not "zero" — so callers do not treat a
+    sparse usage block as a swallowed effort.
     """
 
     if not isinstance(usage, Mapping):
@@ -460,11 +461,12 @@ def reasoning_token_count(usage: Mapping[str, Any] | None) -> int | None:
         details = usage.get(details_key)
         if not isinstance(details, Mapping):
             continue
-        value = details.get(_REASONING_TOKENS_KEY)
-        if isinstance(value, bool):
-            continue
-        if isinstance(value, int):
-            return value
+        for token_key in _REASONING_TOKEN_KEYS:
+            value = details.get(token_key)
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int):
+                return value
     return None
 
 

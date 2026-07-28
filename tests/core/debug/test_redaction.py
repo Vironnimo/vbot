@@ -218,6 +218,13 @@ def test_recursively_redacts_nested_dict_keys():
     }
 
 
+def test_preserves_non_secret_usage_counter_keys():
+    """Token counter names are observability data, not credential fields."""
+    body = {"reasoning_tokens": 12, "cache_write_tokens": 3}
+
+    assert redact_json_body(body) == body
+
+
 def test_recursively_redacts_keys_in_list_items():
     """Sensitive keys inside list elements are redacted."""
     body = {

@@ -305,8 +305,9 @@ class ProviderAdapter(ABC):
     - ``{"type": "reasoning_meta", "reasoning_meta": {...}}``
     - ``{"type": "usage", "input_tokens": 1, "output_tokens": 1}``
       (optional ``cache_read_tokens`` / ``cache_write_tokens`` ints when the
-      provider reports prompt-cache usage; ``input_tokens`` is always the
-      total prompt including cached tokens)
+      provider reports prompt-cache usage, plus optional ``reasoning_tokens``
+      as a subset of output; ``input_tokens`` is always the total prompt
+      including cached tokens)
     - ``{"type": "finish", "reason": "stop" | "tool_calls" |
       "output_truncated" | "content_filtered" | "error" | "unknown"}``
 

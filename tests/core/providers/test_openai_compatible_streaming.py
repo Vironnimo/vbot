@@ -822,14 +822,15 @@ class TestStreamUsageDelta:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_stream_usage_delta_includes_cache_read_tokens(self, openai_adapter):
-        """A final chunk with prompt_tokens_details.cached_tokens yields cache_read_tokens."""
+    async def test_stream_usage_delta_preserves_reported_token_details(self, openai_adapter):
+        """The final Usage chunk retains cache and Reasoning output subsets."""
         # Arrange
         sse_body = (
             'data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"Hi"}}]}\n\n'
             'data: {"id":"chatcmpl-1","choices":[],'
             '"usage":{"prompt_tokens":42,"completion_tokens":13,'
-            '"prompt_tokens_details":{"cached_tokens":30}}}\n\n'
+            '"prompt_tokens_details":{"cached_tokens":30,"cache_write_tokens":5},'
+            '"completion_tokens_details":{"reasoning_tokens":8}}}\n\n'
             "data: [DONE]\n\n"
         )
         respx.post(OPENAI_URL).mock(
@@ -851,6 +852,8 @@ class TestStreamUsageDelta:
                 "input_tokens": 42,
                 "output_tokens": 13,
                 "cache_read_tokens": 30,
+                "cache_write_tokens": 5,
+                "reasoning_tokens": 8,
             },
         ]
 

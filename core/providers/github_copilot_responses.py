@@ -14,6 +14,7 @@ from typing import Any, Protocol
 
 from core.providers.adapter import RESPONSES_TOOL_CALL_ID_PROFILE, normalize_tool_call_ids
 from core.providers.errors import ProviderError
+from core.providers.reasoning import reasoning_token_count
 from core.providers.tool_schema import render_tool_definitions
 
 RESPONSES_DONE_MARKER = "[DONE]"
@@ -637,6 +638,12 @@ def _extract_responses_usage(usage: Any) -> dict[str, int] | None:
     cache_read_tokens = _responses_cached_input_tokens(usage)
     if cache_read_tokens is not None:
         normalized["cache_read_tokens"] = cache_read_tokens
+    cache_write_tokens = _responses_cache_write_tokens(usage)
+    if cache_write_tokens is not None:
+        normalized["cache_write_tokens"] = cache_write_tokens
+    reasoning_tokens = reasoning_token_count(usage)
+    if isinstance(reasoning_tokens, int) and reasoning_tokens >= 0:
+        normalized["reasoning_tokens"] = reasoning_tokens
     return normalized
 
 
@@ -651,6 +658,19 @@ def _responses_cached_input_tokens(usage: Mapping[str, Any]) -> int | None:
         return None
     cached_tokens = details.get("cached_tokens")
     return cached_tokens if isinstance(cached_tokens, int) else None
+
+
+def _responses_cache_write_tokens(usage: Mapping[str, Any]) -> int | None:
+    """Read ``input_tokens_details.cache_write_tokens`` when present."""
+    details = usage.get("input_tokens_details", usage.get("prompt_tokens_details"))
+    if not isinstance(details, Mapping):
+        return None
+    cache_write_tokens = details.get("cache_write_tokens")
+    if isinstance(cache_write_tokens, bool):
+        return None
+    if isinstance(cache_write_tokens, int) and cache_write_tokens >= 0:
+        return cache_write_tokens
+    return None
 
 
 def _iter_sse_events(lines: Iterable[str]) -> Iterator[tuple[str, Mapping[str, Any]]]:

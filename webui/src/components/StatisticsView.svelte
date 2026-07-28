@@ -248,6 +248,12 @@
     return fallback;
   }
 
+  function formatReasoningTokens(record) {
+    return record?.reasoning_turns > 0
+      ? formatTokens(record.reasoning_tokens, locale)
+      : '—';
+  }
+
   function subViewLabel(id) {
     switch (id) {
       case 'usage':
@@ -878,6 +884,10 @@
         t('statistics.usage.cacheWrite', 'Cache write'),
         formatTokens(usage.totals.cache_write_tokens, locale),
       )}
+      {@render statCard(
+        t('statistics.usage.reasoning', 'Reasoning (output subset)'),
+        formatReasoningTokens(usage.totals),
+      )}
     </div>
     <p class="stats-note">
       {t(
@@ -889,6 +899,10 @@
       {t(
         'statistics.estimatedHint',
         'Estimated tokens are approximated, not provider-reported.',
+      )}
+      {t(
+        'statistics.usage.reasoningHint',
+        'Reasoning tokens are provider-reported subsets of measured output and are never added to token totals.',
       )}
       {t(
         'statistics.usage.cacheHitHint',
@@ -918,6 +932,7 @@
               <th>{t('statistics.col.provider', 'Provider')}</th>
               <th>{t('statistics.col.runs', 'Runs')}</th>
               <th>{t('statistics.col.tokens', 'Tokens')}</th>
+              <th>{t('statistics.col.reasoning', 'Reasoning')}</th>
               <th>{t('statistics.col.cacheHit', 'Cache hit')}</th>
               <th>{t('statistics.col.share', 'Share')}</th>
               <th>{t('statistics.col.errors', 'Errors')}</th>
@@ -929,6 +944,7 @@
                 <td class="stats-mono">{provider.provider}</td>
                 <td>{formatInteger(provider.runs, locale)}</td>
                 <td>{@render tokenCell(provider)}</td>
+                <td>{formatReasoningTokens(provider)}</td>
                 <td>{formatPercent(cacheHitRate(provider))}</td>
                 <td>{formatShare(provider.total_tokens, usageTotalTokens)}</td>
                 <td>{formatInteger(provider.errors, locale)}</td>
@@ -951,6 +967,7 @@
               <th>{t('statistics.col.model', 'Model')}</th>
               <th>{t('statistics.col.runs', 'Runs')}</th>
               <th>{t('statistics.col.tokens', 'Tokens')}</th>
+              <th>{t('statistics.col.reasoning', 'Reasoning')}</th>
               <th>{t('statistics.col.cacheHit', 'Cache hit')}</th>
               <th>{t('statistics.col.avgDuration', 'Avg')}</th>
               <th>{t('statistics.col.errors', 'Errors')}</th>
@@ -962,6 +979,7 @@
                 <td class="stats-mono">{model.model}</td>
                 <td>{formatInteger(model.runs, locale)}</td>
                 <td>{@render tokenCell(model)}</td>
+                <td>{formatReasoningTokens(model)}</td>
                 <td>{formatPercent(cacheHitRate(model))}</td>
                 <td>{formatDurationMs(model.average_run_duration_ms)}</td>
                 <td>{formatInteger(model.errors, locale)}</td>

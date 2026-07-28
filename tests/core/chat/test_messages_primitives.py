@@ -387,13 +387,24 @@ class TestChatMessageFactories:
         message = ChatMessage.assistant(
             model="openai/gpt-4.1",
             content="The answer is 42.",
-            usage={"input_tokens": 150, "output_tokens": 12},
+            usage={
+                "input_tokens": 150,
+                "output_tokens": 12,
+                "cache_write_tokens": 20,
+                "reasoning_tokens": 7,
+            },
             timestamp=FIXED_TIMESTAMP,
         )
 
-        assert message.usage == {"input_tokens": 150, "output_tokens": 12}
+        expected_usage = {
+            "input_tokens": 150,
+            "output_tokens": 12,
+            "cache_write_tokens": 20,
+            "reasoning_tokens": 7,
+        }
+        assert message.usage == expected_usage
         result = message.to_dict()
-        assert result["usage"] == {"input_tokens": 150, "output_tokens": 12}
+        assert result["usage"] == expected_usage
 
     def test_assistant_message_without_usage_defaults_to_none(self):
         message = ChatMessage.assistant(

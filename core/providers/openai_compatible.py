@@ -57,6 +57,7 @@ from core.providers.reasoning import (
     model_reasoning_levels,
     model_reasoning_supported,
     normalize_thinking_effort,
+    reasoning_token_count,
     remove_reasoning_kwargs,
     resolve_reasoning_intent,
     warn_effort_swallowed,
@@ -1175,6 +1176,12 @@ def _extract_openai_usage(response: dict[str, Any]) -> dict[str, int] | None:
     cache_read_tokens = _openai_cached_prompt_tokens(usage)
     if cache_read_tokens is not None:
         normalized["cache_read_tokens"] = cache_read_tokens
+    cache_write_tokens = _openai_cache_write_tokens(usage)
+    if cache_write_tokens is not None:
+        normalized["cache_write_tokens"] = cache_write_tokens
+    reasoning_tokens = reasoning_token_count(usage)
+    if isinstance(reasoning_tokens, int) and reasoning_tokens >= 0:
+        normalized["reasoning_tokens"] = reasoning_tokens
     return normalized
 
 
@@ -1205,6 +1212,12 @@ def _extract_stream_usage(chunk: dict[str, Any]) -> dict[str, Any] | None:
     cache_read_tokens = _openai_cached_prompt_tokens(usage)
     if cache_read_tokens is not None:
         delta["cache_read_tokens"] = cache_read_tokens
+    cache_write_tokens = _openai_cache_write_tokens(usage)
+    if cache_write_tokens is not None:
+        delta["cache_write_tokens"] = cache_write_tokens
+    reasoning_tokens = reasoning_token_count(usage)
+    if isinstance(reasoning_tokens, int) and reasoning_tokens >= 0:
+        delta["reasoning_tokens"] = reasoning_tokens
     return delta
 
 
@@ -1219,6 +1232,19 @@ def _openai_cached_prompt_tokens(usage: dict[str, Any]) -> int | None:
         return None
     cached_tokens = details.get("cached_tokens")
     return cached_tokens if isinstance(cached_tokens, int) else None
+
+
+def _openai_cache_write_tokens(usage: dict[str, Any]) -> int | None:
+    """Read ``prompt_tokens_details.cache_write_tokens`` when present."""
+    details = usage.get("prompt_tokens_details")
+    if not isinstance(details, dict):
+        return None
+    cache_write_tokens = details.get("cache_write_tokens")
+    if isinstance(cache_write_tokens, bool):
+        return None
+    if isinstance(cache_write_tokens, int) and cache_write_tokens >= 0:
+        return cache_write_tokens
+    return None
 
 
 def _read_optional_mapping(data: Mapping[str, Any], key: str) -> Mapping[str, Any]:

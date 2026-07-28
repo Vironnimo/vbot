@@ -20,6 +20,7 @@ describe('formatTokenUsageTooltip', () => {
         output_tokens: 2190,
         cache_read_tokens: 6656,
         cache_write_tokens: 1200,
+        reasoning_tokens: 1400,
       },
       null,
     );
@@ -32,6 +33,7 @@ describe('formatTokenUsageTooltip', () => {
         '  · newly written to cache: 1,200',
         '  · uncached: 28,848',
         'Output: 2,190 tok',
+        '  · reasoning (included in output): 1,400',
       ].join('\n'),
     );
   });
@@ -78,6 +80,8 @@ describe('formatTokenUsageTooltip', () => {
         output_tokens: 48300,
         cache_read_tokens: 1019000,
         cache_write_tokens: 22000,
+        reasoning_turns: 30,
+        reasoning_tokens: 32000,
       },
     );
 
@@ -89,6 +93,7 @@ describe('formatTokenUsageTooltip', () => {
         'Input: 1,243,000 tok',
         '  · read from cache: 1,019,000 (82%)',
         'Output: 48,300 tok',
+        '  · reasoning: 32,000 tok (30 reporting turns; included in output)',
         'Avg cache read per turn: 25,475 tok',
         '3 estimated turns excluded',
       ].join('\n'),
@@ -113,6 +118,19 @@ describe('formatTokenUsageTooltip', () => {
         'Output: 600 tok',
       ].join('\n'),
     );
+  });
+
+  it('keeps missing Reasoning detail absent instead of rendering zero', () => {
+    const tooltip = formatTokenUsageTooltip(
+      { input_tokens: 500, output_tokens: 20 },
+      {
+        measured_turns: 1,
+        input_tokens: 500,
+        output_tokens: 20,
+      },
+    );
+
+    expect(tooltip).not.toContain('reasoning');
   });
 
   it('skips the session block entirely without measured turns', () => {

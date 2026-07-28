@@ -487,7 +487,7 @@ def test_normalize_response_extracts_text_tool_calls_usage_and_reasoning_meta() 
     }
 
 
-def test_normalize_response_extracts_cached_tokens_from_input_tokens_details() -> None:
+def test_normalize_response_preserves_reported_token_details() -> None:
     response = {
         "id": "resp_1",
         "status": "completed",
@@ -495,7 +495,11 @@ def test_normalize_response_extracts_cached_tokens_from_input_tokens_details() -
         "usage": {
             "input_tokens": 11,
             "output_tokens": 7,
-            "input_tokens_details": {"cached_tokens": 8},
+            "input_tokens_details": {
+                "cached_tokens": 8,
+                "cache_write_tokens": 2,
+            },
+            "output_tokens_details": {"reasoning_tokens": 5},
         },
     }
 
@@ -505,6 +509,8 @@ def test_normalize_response_extracts_cached_tokens_from_input_tokens_details() -
         "input_tokens": 11,
         "output_tokens": 7,
         "cache_read_tokens": 8,
+        "cache_write_tokens": 2,
+        "reasoning_tokens": 5,
     }
 
 
@@ -704,7 +710,15 @@ def test_stream_normalizes_text_reasoning_tool_usage_and_finish() -> None:
                     "id": "resp_1",
                     "status": "completed",
                     "output": [{"type": "reasoning", "id": "rs_1", "encrypted_content": "opaque"}],
-                    "usage": {"input_tokens": 5, "output_tokens": 3},
+                    "usage": {
+                        "input_tokens": 5,
+                        "output_tokens": 3,
+                        "input_tokens_details": {
+                            "cached_tokens": 2,
+                            "cache_write_tokens": 1,
+                        },
+                        "output_tokens_details": {"reasoning_tokens": 2},
+                    },
                 }
             },
         ),
@@ -753,7 +767,14 @@ def test_stream_normalizes_text_reasoning_tool_usage_and_finish() -> None:
                 "encrypted_content": ["opaque"],
             },
         },
-        {"type": "usage", "input_tokens": 5, "output_tokens": 3},
+        {
+            "type": "usage",
+            "input_tokens": 5,
+            "output_tokens": 3,
+            "cache_read_tokens": 2,
+            "cache_write_tokens": 1,
+            "reasoning_tokens": 2,
+        },
         {"type": "finish", "reason": "tool_calls"},
     ]
 

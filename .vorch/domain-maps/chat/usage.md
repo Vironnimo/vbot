@@ -4,7 +4,7 @@ Task-gated reference for canonical per-step and whole-Session token Usage. Read 
 
 ## Canonical shape
 
-Assistant `usage` uses canonical `input_tokens` and `output_tokens`, with optional `cache_read_tokens`, `cache_write_tokens`, and `estimated`. Usage is valid only on Assistant messages. `input_tokens` means the total prompt including cached tokens. Wires that report cache tokens separately must add them into the canonical input total; OpenAI-style cached-token detail is already a subset of its input count.
+Assistant `usage` uses canonical `input_tokens` and `output_tokens`, with optional `cache_read_tokens`, `cache_write_tokens`, `reasoning_tokens`, and `estimated`. Usage is valid only on Assistant messages. `input_tokens` means the total prompt including cached tokens. Wires that report cache tokens separately must add them into the canonical input total; OpenAI-style cached-token detail is already a subset of its input count. `reasoning_tokens` is a provider-reported subset of `output_tokens`, never an additional token total.
 
 Provider adapters normalize their wire fields before Chat sees them. If a Provider supplies no Usage, `_apply_usage_estimation` uses the structured estimator in `core/utils/tokens.py` and marks the payload `estimated=true`; it counts provider-relevant text, Content Blocks, Tool Calls, and active reasoning fields while ignoring persistence metadata.
 
@@ -12,7 +12,7 @@ Usage is persisted on finalized Assistant messages but never echoed into later P
 
 ## Session aggregation and events
 
-`core/chat/usage.py::aggregate_session_usage(messages)` produces `{measured_turns, estimated_turns, cache_turns, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens}`. Token totals include measured turns only; estimated turns are counted but not summed. `cache_turns` counts cache-field presence so consumers can distinguish reported zero cache from no cache reporting.
+`core/chat/usage.py::aggregate_session_usage(messages)` always produces `{measured_turns, estimated_turns, cache_turns, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens}` and conditionally adds `{reasoning_turns, reasoning_tokens}` after at least one measured turn reports a valid Reasoning counter. Token totals include measured turns only; estimated turns are counted but not summed. `cache_turns` and `reasoning_turns` count field presence so consumers can distinguish a reported zero from no Provider reporting.
 
 At the first Model step the loop seeds totals from persisted Session history and advances them after each Assistant append through `add_session_turn_usage`. Every finalized Assistant step emits non-visual `model_step_usage` with the exact step payload and current `session_usage`, including Tool-only steps. `Run.terminal_payload_extras` carries the final Session total for every terminal outcome; the loop recomputes it from persisted history in `finally` after the run-summary append, logging and swallowing only diagnostic recomputation failure.
 
@@ -20,7 +20,7 @@ At the first Model step the loop seeds totals from persisted Session history and
 
 ## Streaming and Provider boundaries
 
-Streaming adapters yield a normalized `usage` delta. `StreamingAccumulator` merges it with the response and forwards optional cache fields only when they are integers. OpenAI generally supplies final-chunk Usage; Anthropic may split input/cache counts at `message_start` and output count at `message_delta`. Provider-specific wire shapes stay in the Provider maps.
+Streaming adapters yield a normalized `usage` delta. `StreamingAccumulator` merges it with the response and forwards optional cache and Reasoning fields only when they are non-negative integers. OpenAI generally supplies final-chunk Usage; Anthropic may split input/cache counts at `message_start` and output/Thinking detail at `message_delta`. Provider-specific wire shapes stay in the Provider maps.
 
 The WebUI token badge consumes the server-owned projections: history seeds last-step and Session totals, `model_step_usage` updates them during an active Run, and the terminal payload provides final reconciliation. Context-window resolution is not owned by Usage; it comes from the active Model/Provider configuration.
 

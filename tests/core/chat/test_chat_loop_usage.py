@@ -33,7 +33,12 @@ async def test_non_streaming_response_with_usage_produces_assistant_with_usage(
                 "content": "Hello",
                 "reasoning": None,
                 "tool_calls": None,
-                "usage": {"input_tokens": 150, "output_tokens": 12},
+                "usage": {
+                    "input_tokens": 150,
+                    "output_tokens": 12,
+                    "cache_write_tokens": 10,
+                    "reasoning_tokens": 8,
+                },
             }
         ]
     )
@@ -41,15 +46,21 @@ async def test_non_streaming_response_with_usage_produces_assistant_with_usage(
 
     assistant = await build_chat_loop(runtime).send("coder", "Hi", session_id="session-one")
 
-    assert assistant.usage == {"input_tokens": 150, "output_tokens": 12}
+    expected_usage = {
+        "input_tokens": 150,
+        "output_tokens": 12,
+        "cache_write_tokens": 10,
+        "reasoning_tokens": 8,
+    }
+    assert assistant.usage == expected_usage
     session = runtime.chat_sessions.get("coder", "session-one")
     persisted = session.load()
-    assert persisted[1].usage == {"input_tokens": 150, "output_tokens": 12}
+    assert persisted[1].usage == expected_usage
     run = next(iter(runtime.chat_runs._runs.values()))
     completed = [event for event in run.events if event.type == "run_completed"]
     assert len(completed) == 1
     assert completed[0].payload["status"] == "completed"
-    assert completed[0].payload["usage"] == {"input_tokens": 150, "output_tokens": 12}
+    assert completed[0].payload["usage"] == expected_usage
     assert completed[0].payload["timing"]["duration_ms"] >= 0
 
 
@@ -69,6 +80,7 @@ async def test_run_completed_payload_carries_whole_session_usage_totals(
                     "output_tokens": 40,
                     "cache_read_tokens": 700,
                     "cache_write_tokens": 200,
+                    "reasoning_tokens": 25,
                 },
             }
         ]
@@ -88,6 +100,8 @@ async def test_run_completed_payload_carries_whole_session_usage_totals(
         "output_tokens": 40,
         "cache_read_tokens": 700,
         "cache_write_tokens": 200,
+        "reasoning_turns": 1,
+        "reasoning_tokens": 25,
     }
 
 
@@ -101,7 +115,12 @@ async def test_streaming_response_with_usage_delta_produces_assistant_with_usage
         stream_responses=[
             [
                 {"type": "content_delta", "text": "Hello"},
-                {"type": "usage", "input_tokens": 200, "output_tokens": 25},
+                {
+                    "type": "usage",
+                    "input_tokens": 200,
+                    "output_tokens": 25,
+                    "reasoning_tokens": 15,
+                },
                 {"type": "finish", "reason": "stop"},
             ]
         ],
@@ -113,15 +132,20 @@ async def test_streaming_response_with_usage_delta_produces_assistant_with_usage
     )
 
     assert assistant.content == "Hello"
-    assert assistant.usage == {"input_tokens": 200, "output_tokens": 25}
+    expected_usage = {
+        "input_tokens": 200,
+        "output_tokens": 25,
+        "reasoning_tokens": 15,
+    }
+    assert assistant.usage == expected_usage
     session = runtime.chat_sessions.get("coder", "session-one")
     persisted = session.load()
-    assert persisted[1].usage == {"input_tokens": 200, "output_tokens": 25}
+    assert persisted[1].usage == expected_usage
     run = next(iter(runtime.chat_runs._runs.values()))
     completed = [event for event in run.events if event.type == "run_completed"]
     assert len(completed) == 1
     assert completed[0].payload["status"] == "completed"
-    assert completed[0].payload["usage"] == {"input_tokens": 200, "output_tokens": 25}
+    assert completed[0].payload["usage"] == expected_usage
     assert completed[0].payload["timing"]["duration_ms"] >= 0
 
 

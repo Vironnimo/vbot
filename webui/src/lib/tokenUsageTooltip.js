@@ -29,6 +29,7 @@ function lastTurnLines(usage, format) {
   const output = nonNegative(usage.output_tokens);
   const cacheRead = finiteOrNull(usage.cache_read_tokens);
   const cacheWrite = finiteOrNull(usage.cache_write_tokens);
+  const reasoning = nonNegativeOrNull(usage.reasoning_tokens);
 
   const lines = [
     t('chat.tokenTooltipLastTurn', 'Last turn'),
@@ -59,6 +60,15 @@ function lastTurnLines(usage, format) {
       tokens: format(output),
     }),
   );
+  if (reasoning !== null) {
+    lines.push(
+      t(
+        'chat.tokenTooltipReasoning',
+        '  · reasoning (included in output): {tokens}',
+        { tokens: format(reasoning) },
+      ),
+    );
+  }
   if (usage.estimated === true) {
     lines.push(
       t(
@@ -82,6 +92,8 @@ function sessionUsageLines(sessionUsage, format) {
   // cache reporting must not render as a 0% hit rate.
   const cacheTurns = nonNegative(sessionUsage.cache_turns);
   const estimatedTurns = nonNegative(sessionUsage.estimated_turns);
+  const reasoningTurns = nonNegative(sessionUsage.reasoning_turns);
+  const reasoning = nonNegative(sessionUsage.reasoning_tokens);
 
   const lines = [
     t('chat.tokenTooltipSession', 'Session ({turns} measured turns)', {
@@ -99,6 +111,18 @@ function sessionUsageLines(sessionUsage, format) {
       tokens: format(output),
     }),
   );
+  if (reasoningTurns > 0) {
+    lines.push(
+      t(
+        'chat.tokenTooltipSessionReasoning',
+        '  · reasoning: {tokens} tok ({turns} reporting turns; included in output)',
+        {
+          tokens: format(reasoning),
+          turns: format(reasoningTurns),
+        },
+      ),
+    );
+  }
   if (cacheTurns > 0) {
     lines.push(
       t(
@@ -138,6 +162,10 @@ function cacheReadShareLine(cacheRead, input, format) {
 
 function finiteOrNull(value) {
   return Number.isFinite(value) ? value : null;
+}
+
+function nonNegativeOrNull(value) {
+  return Number.isFinite(value) && value >= 0 ? value : null;
 }
 
 function nonNegative(value) {

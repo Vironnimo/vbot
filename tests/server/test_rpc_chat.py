@@ -66,7 +66,12 @@ async def test_chat_history_includes_whole_session_usage_totals(tmp_path: Path) 
         ChatMessage.assistant(
             model="openai/gpt-5.2",
             content="One",
-            usage={"input_tokens": 1000, "output_tokens": 50, "cache_read_tokens": 800},
+            usage={
+                "input_tokens": 1000,
+                "output_tokens": 50,
+                "cache_read_tokens": 800,
+                "reasoning_tokens": 20,
+            },
         )
     )
     session.append(
@@ -78,6 +83,7 @@ async def test_chat_history_includes_whole_session_usage_totals(tmp_path: Path) 
                 "output_tokens": 100,
                 "cache_read_tokens": 1500,
                 "cache_write_tokens": 300,
+                "reasoning_tokens": 40,
             },
         )
     )
@@ -98,6 +104,8 @@ async def test_chat_history_includes_whole_session_usage_totals(tmp_path: Path) 
         "output_tokens": 150,
         "cache_read_tokens": 2300,
         "cache_write_tokens": 300,
+        "reasoning_turns": 2,
+        "reasoning_tokens": 60,
     }
 
 
@@ -211,7 +219,12 @@ async def test_chat_history_includes_usage_on_assistant_messages(tmp_path: Path)
         ChatMessage.assistant(
             model="openai/gpt-5.2",
             content="Hello",
-            usage={"input_tokens": 150, "output_tokens": 42},
+            usage={
+                "input_tokens": 150,
+                "output_tokens": 42,
+                "cache_write_tokens": 12,
+                "reasoning_tokens": 30,
+            },
         )
     )
     session.append(
@@ -234,7 +247,12 @@ async def test_chat_history_includes_usage_on_assistant_messages(tmp_path: Path)
     assert len(messages) == 3
 
     # Assistant message with usage includes it in the response
-    assert messages[0]["usage"] == {"input_tokens": 150, "output_tokens": 42}
+    assert messages[0]["usage"] == {
+        "input_tokens": 150,
+        "output_tokens": 42,
+        "cache_write_tokens": 12,
+        "reasoning_tokens": 30,
+    }
     assert messages[0]["content"] == "Hello"
 
     # User message does not carry usage

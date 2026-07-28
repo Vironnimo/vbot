@@ -442,6 +442,7 @@ def test_warn_rejected_effort_silent_when_detail_unrelated(caplog: Any) -> None:
 def test_reasoning_token_count_reads_openai_and_responses_shapes() -> None:
     assert reasoning_token_count({"completion_tokens_details": {"reasoning_tokens": 7}}) == 7
     assert reasoning_token_count({"output_tokens_details": {"reasoning_tokens": 0}}) == 0
+    assert reasoning_token_count({"output_tokens_details": {"thinking_tokens": 5}}) == 5
 
 
 def test_reasoning_token_count_unknown_when_absent_or_malformed() -> None:
