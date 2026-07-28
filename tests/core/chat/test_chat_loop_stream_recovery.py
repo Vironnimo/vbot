@@ -19,6 +19,7 @@ from core.providers.errors import (
     NetworkError,
     ProviderStreamingUnsupportedError,
 )
+from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
 from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     MODEL_STEP_USAGE_EVENT,
@@ -34,6 +35,7 @@ from tests.core.chat.chat_loop_support import (
     BlockingReasoningStreamingStubAdapter,
     BlockingStreamingStubAdapter,
     MidStreamCancelledStubAdapter,
+    PolicyStubAdapter,
     SilentBlockingStreamingStubAdapter,
     SlowStreamingStubAdapter,
     StalledStreamingStubAdapter,
@@ -623,7 +625,7 @@ async def test_user_cancel_after_visible_stream_preserves_partial_and_stays_canc
 
 
 @pytest.mark.asyncio
-async def test_user_cancel_after_visible_reasoning_persists_it_and_retains_checkpoint(
+async def test_user_cancel_replays_interrupted_reasoning_only_through_checkpoint(
     tmp_path: Path,
 ) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
@@ -646,6 +648,7 @@ async def test_user_cancel_after_visible_reasoning_persists_it_and_retains_check
     assert persisted_roles(messages) == ["user", "assistant"]
     assert messages[1].content is None
     assert messages[1].reasoning == "Thinking hard."
+    assert messages[1].reasoning_meta == {"signature": "interrupted-signed-state"}
     assert messages[1].interrupted is True
 
     reasoning_events = [event for event in run.events if event.type == "reasoning"]
@@ -659,6 +662,25 @@ async def test_user_cancel_after_visible_reasoning_persists_it_and_retains_check
     assert state.reasoning == "Thinking hard."
     summaries = [message for message in messages if message.role == "run_summary"]
     assert summaries[-1].status == "cancelled"
+
+    followup_adapter = PolicyStubAdapter(
+        [{"content": "Recovered safely.", "tool_calls": None}],
+        policy=REASONING_REPLAY_FULL_HISTORY,
+    )
+    runtime.adapter = followup_adapter
+    await build_chat_loop(runtime).send("coder", "Continue safely", session_id="session-one")
+
+    request_messages = followup_adapter.requests[0]["messages"]
+    reminder = next(
+        str(message["content"])
+        for message in request_messages
+        if "<continuation-checkpoint" in str(message.get("content") or "")
+    )
+    assert "Thinking hard." in reminder
+    assert not [message for message in request_messages if message["role"] == "assistant"]
+    persisted = runtime.chat_sessions.get("coder", "session-one").load()
+    assert persisted[1].reasoning == "Thinking hard."
+    assert persisted[1].reasoning_meta == {"signature": "interrupted-signed-state"}
 
 
 @pytest.mark.asyncio

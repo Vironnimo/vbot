@@ -773,8 +773,13 @@ def _replays_assistant_reasoning(
     the entry's persisted Provider/Model/Connection identity exactly matches the
     active resolved request scope. A Model, wire, Connection, or account mismatch
     means the opaque reasoning belongs to a different context and is stripped
-    exactly like under ``current_run``.
+    exactly like under ``current_run``. An interrupted turn is never a complete
+    Provider reasoning boundary: its readable work survives through the
+    provider-neutral Continuation checkpoint, while native reasoning fields
+    remain canonical evidence only.
     """
+    if message.interrupted:
+        return False
     if replay_policy != REASONING_REPLAY_FULL_HISTORY:
         return False
     if agent_model is None or message.model is None:

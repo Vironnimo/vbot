@@ -18,6 +18,7 @@ from .messages_test_support import (
     _restore_in_run_assistant_reasoning,
     asyncio,
     json,
+    pytest,
 )
 
 
@@ -343,6 +344,80 @@ class TestReasoningReplayShaping:
             "content_blocks": [{"type": "thinking", "signature": "signed"}]
         }
         assert "usage" not in request[1]
+
+    @pytest.mark.parametrize("interruption_cause", ["user", "provider", "timeout"])
+    def test_full_history_strips_interrupted_same_scope_reasoning(
+        self,
+        interruption_cause: str,
+    ) -> None:
+        interrupted = ChatMessage.assistant(
+            model="anthropic/claude-sonnet-4::api-key",
+            content="Partial answer",
+            reasoning="Incomplete readable thinking.",
+            reasoning_meta={
+                "content_blocks": [{"type": "thinking", "signature": "incomplete-signed"}]
+            },
+            reasoning_scope="anthropic/claude-sonnet-4::api-key",
+            interrupted=True,
+            interruption_cause=interruption_cause,
+            timestamp=FIXED_TIMESTAMP,
+        )
+        complete = self._assistant_with_reasoning(
+            "anthropic/claude-sonnet-4::api-key",
+            "Complete answer",
+        )
+        messages = [
+            ChatMessage.user("Question", timestamp=FIXED_TIMESTAMP),
+            interrupted,
+            ChatMessage.user("Follow up", timestamp=FIXED_TIMESTAMP),
+            complete,
+        ]
+
+        request = _embed_notes_into_request(
+            messages,
+            replay_policy=REASONING_REPLAY_FULL_HISTORY,
+            agent_model="anthropic/claude-sonnet-4::api-key",
+        )
+
+        interrupted_entry = request[1]
+        assert interrupted_entry["content"] == "Partial answer"
+        assert "reasoning" not in interrupted_entry
+        assert "reasoning_meta" not in interrupted_entry
+        assert "interrupted" not in interrupted_entry
+        assert "interruption_cause" not in interrupted_entry
+        assert request[3]["reasoning"] == "Readable thinking."
+        assert request[3]["reasoning_meta"] == {
+            "content_blocks": [{"type": "thinking", "signature": "signed"}]
+        }
+        assert interrupted.reasoning == "Incomplete readable thinking."
+        assert interrupted.reasoning_meta == {
+            "content_blocks": [{"type": "thinking", "signature": "incomplete-signed"}]
+        }
+
+    def test_full_history_drops_interrupted_reasoning_only_entry(self) -> None:
+        interrupted = ChatMessage.assistant(
+            model="anthropic/claude-sonnet-4::api-key",
+            content=None,
+            reasoning="Incomplete readable thinking.",
+            reasoning_meta={"signature": "incomplete-signed"},
+            interrupted=True,
+            interruption_cause="provider",
+            timestamp=FIXED_TIMESTAMP,
+        )
+
+        request = _embed_notes_into_request(
+            [
+                ChatMessage.user("Question", timestamp=FIXED_TIMESTAMP),
+                interrupted,
+                ChatMessage.user("Follow up", timestamp=FIXED_TIMESTAMP),
+            ],
+            replay_policy=REASONING_REPLAY_FULL_HISTORY,
+            agent_model="anthropic/claude-sonnet-4::api-key",
+        )
+
+        assert [entry["role"] for entry in request] == ["user", "user"]
+        assert interrupted.reasoning == "Incomplete readable thinking."
+        assert interrupted.reasoning_meta == {"signature": "incomplete-signed"}
 
     def test_full_history_strips_reasoning_on_connection_mismatch(self) -> None:
         messages = [
