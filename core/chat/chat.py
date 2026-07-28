@@ -442,14 +442,15 @@ SKILL_AVAILABLE_NEW_SKILLS_HEADER = (
 )
 
 # How often a streaming attempt may be restarted from scratch after a transient
-# drop that occurred before any visible output. Each restart re-issues the whole
-# request (the adapter's own connect-level retry still applies per attempt), so
-# this bounds only the post-connect mid-stream replays.
+# drop that occurred before answer text or a Tool Call fragment. Readable
+# Reasoning alone is replay-safe. Each restart re-issues the whole request (the
+# adapter's own connect-level retry still applies per attempt), so this bounds
+# only the post-connect mid-stream replays.
 MAX_STREAM_RESTARTS = 2
 
 
 class _StreamRestartNeeded(Exception):  # noqa: N818 — control-flow signal, not an error
-    """Internal signal: a streaming attempt dropped before any visible output.
+    """Internal signal: a stream dropped before answer text or a Tool Call.
 
     Raised by ``_consume_stream_attempt`` and caught by
     ``_send_streaming_assistant_request`` to replay the stream. It never escapes
@@ -2550,9 +2551,9 @@ class ChatLoop:
         request_context: dict[str, Any] | None = None,
         continuation_tracker: ContinuationTracker | None = None,
     ) -> _AssistantStep:
-        # A transient drop before any visible output is replayed as a full stream
-        # restart (the not-yet-visible analogue of the non-streaming fallback).
-        # Once anything visible has been emitted, the failure propagates instead —
+        # A transient drop before answer text or a Tool Call fragment is replayed
+        # as a full stream restart. Readable Reasoning alone is discarded from the
+        # active checkpoint before replay. Once replay-blocking output arrives,
         # partial output cannot be replayed cleanly.
         for attempt in range(MAX_STREAM_RESTARTS + 1):
             try:
@@ -2571,7 +2572,7 @@ class ChatLoop:
                 )
             except _StreamRestartNeeded as restart:
                 _LOGGER.warning(
-                    "Streaming attempt %d/%d dropped before any visible output "
+                    "Streaming attempt %d/%d dropped before answer or Tool Call output "
                     "(%s: %s); restarting stream",
                     attempt + 1,
                     MAX_STREAM_RESTARTS + 1,
