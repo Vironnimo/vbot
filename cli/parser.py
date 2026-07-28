@@ -1499,13 +1499,20 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
         "agent", metavar="<agent>", help="Agent that runs the job, as agent or agent@projekt"
     )
     create_parser.add_argument(
-        "--name", required=True, help="Human-readable job name; it does not need to be unique"
+        "--name",
+        help="Optional human-readable job name; defaults to the first useful prompt line",
     )
     create_parser.add_argument(
         "--prompt", required=True, help="Prompt text injected when the job fires"
     )
     create_schedule_group = create_parser.add_mutually_exclusive_group(required=True)
     _add_cron_schedule_arguments(create_schedule_group)
+    create_parser.add_argument(
+        "--repeat",
+        type=int,
+        metavar="<count>",
+        help="Maximum future fires; recurring schedules are unlimited when omitted",
+    )
     _add_cron_session_argument(create_parser)
 
     update_parser = _add_command_parser(
@@ -1522,6 +1529,12 @@ def _add_cron_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentPa
     update_parser.add_argument("--prompt", help="Prompt text injected when the job fires")
     update_schedule_group = update_parser.add_mutually_exclusive_group()
     _add_cron_schedule_arguments(update_schedule_group)
+    update_parser.add_argument(
+        "--repeat",
+        type=int,
+        metavar="<count>",
+        help="Replace the number of remaining fires",
+    )
     _add_cron_session_argument(update_parser)
     update_parser.add_argument(
         "--status", choices=CRON_STATUSES, help="Set the job status directly"
@@ -1542,6 +1555,12 @@ def _add_cron_schedule_arguments(group: argparse._MutuallyExclusiveGroup) -> Non
             "Recurring schedule as exactly five cron fields (minimum one minute), for example "
             '"0 9 * * *"'
         ),
+    )
+    group.add_argument(
+        "--every",
+        type=int,
+        metavar="<minutes>",
+        help="Recurring fixed interval in whole minutes",
     )
     group.add_argument(
         "--at",

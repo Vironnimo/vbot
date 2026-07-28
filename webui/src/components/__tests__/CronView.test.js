@@ -191,7 +191,7 @@ describe('CronView', () => {
     expect(document.querySelector('.detail-sub').textContent).not.toContain(
       'job-first',
     );
-    expect(document.querySelectorAll('.cron-card .form-field').length).toBe(6);
+    expect(document.querySelectorAll('.cron-card .form-field').length).toBe(7);
   });
 
   it('disables the selected job via the detail toggle', async () => {

@@ -9,11 +9,16 @@ from unittest.mock import Mock
 
 import pytest
 
-from core.automation.cron import CronJob, CronJobNotFoundError, CronJobValidationError
+from core.automation.cron import (
+    CronJob,
+    CronJobNotFoundError,
+    CronJobValidationError,
+    ParsedSchedule,
+)
 from core.tools.cron import CRON_TOOL_NAME, CRON_TOOL_PARAMETERS, register_cron_tool
 from core.tools.tools import ToolContext, ToolRegistry, tool_failure
 
-ScheduleType = Literal["cron", "once"]
+ScheduleType = Literal["cron", "interval", "once"]
 CronStatus = Literal["active", "paused", "completed", "failed", "missed"]
 
 
@@ -39,20 +44,9 @@ async def _dispatch(
     *,
     project_id: str | None = None,
 ) -> dict[str, object]:
-    canonical = arguments
-    if set(arguments) == {"request"}:
-        canonical = arguments
-    elif "action" in arguments:
-        fields = dict(arguments)
-        operation = fields.pop("action")
-        canonical = {"request": {"operation": operation, **fields}}
-    elif len(arguments) == 1:
-        operation_name, operation_fields = next(iter(arguments.items()))
-        if isinstance(operation_fields, dict):
-            canonical = {"request": {"operation": operation_name, **operation_fields}}
     try:
         return await registry.dispatch(
-            _context(tmp_path, project_id=project_id), canonical, [CRON_TOOL_NAME]
+            _context(tmp_path, project_id=project_id), arguments, [CRON_TOOL_NAME]
         )
     except ValueError as error:
         return tool_failure("invalid_arguments", str(error), retryable=False)
@@ -65,7 +59,10 @@ def _make_job(
     prompt: str = "Run task",
     schedule_type: ScheduleType = "cron",
     cron_expression: str | None = "*/5 * * * *",
+    interval_seconds: int | None = None,
+    interval_anchor_at: str | None = None,
     run_at: str | None = None,
+    remaining_runs: int | None = None,
     session_id: str | None = None,
     status: CronStatus = "active",
     last_fired_at: str | None = None,
@@ -77,7 +74,10 @@ def _make_job(
         prompt=prompt,
         schedule_type=schedule_type,
         cron_expression=cron_expression,
+        interval_seconds=interval_seconds,
+        interval_anchor_at=interval_anchor_at,
         run_at=run_at,
+        remaining_runs=remaining_runs,
         session_id=session_id,
         status=status,
         last_fired_at=last_fired_at,
@@ -88,6 +88,26 @@ def _make_job(
 def _cron_service_mock() -> Mock:
     service = Mock()
     service.system_timezone_name.return_value = "UTC"
+    service.parse_schedule.side_effect = lambda schedule: (
+        ParsedSchedule(
+            schedule_type="interval",
+            interval_seconds=7200,
+            interval_anchor_at="2026-05-14T12:00:00+00:00",
+        )
+        if schedule == "every 2h"
+        else ParsedSchedule(schedule_type="once", run_at="2026-05-14T12:30:00+00:00")
+        if schedule == "in 30m"
+        else ParsedSchedule(schedule_type="once", run_at=schedule)
+        if "T" in schedule
+        else ParsedSchedule(schedule_type="cron", cron_expression=schedule)
+    )
+    service.format_schedule.side_effect = lambda job: (
+        job.cron_expression
+        if job.schedule_type == "cron"
+        else f"every {job.interval_seconds // 3600}h"
+        if job.schedule_type == "interval"
+        else job.run_at
+    )
     service.next_fire_at.side_effect = lambda job: (
         "2026-05-14T12:05:00+00:00"
         if job.status == "active" and job.schedule_type == "cron"
@@ -98,13 +118,13 @@ def _cron_service_mock() -> Mock:
     return service
 
 
-def test_schema_exposes_strict_operation_objects() -> None:
-    request = cast(dict[str, Any], CRON_TOOL_PARAMETERS["properties"]["request"])
-    branches = cast(list[dict[str, Any]], request["anyOf"])
-    operations = {
-        cast(list[str], branch["properties"]["operation"]["enum"])[0] for branch in branches
-    }
-    assert operations == {
+def test_schema_exposes_flat_action_contract() -> None:
+    assert CRON_TOOL_PARAMETERS["type"] == "object"
+    assert CRON_TOOL_PARAMETERS["required"] == ["action"]
+    assert CRON_TOOL_PARAMETERS["additionalProperties"] is False
+    properties = cast(dict[str, Any], CRON_TOOL_PARAMETERS["properties"])
+    assert set(properties) == {"action", "id", "target", "name", "prompt", "schedule", "repeat"}
+    assert set(properties["action"]["enum"]) == {
         "create",
         "list",
         "update",
@@ -112,28 +132,9 @@ def test_schema_exposes_strict_operation_objects() -> None:
         "enable",
         "disable",
     }
-    assert CRON_TOOL_PARAMETERS["required"] == ["request"]
-    create_branches = [
-        branch for branch in branches if branch["properties"]["operation"]["enum"] == ["create"]
-    ]
-    assert create_branches
-    assert all(
-        {"operation", "name", "prompt", "schedule_type"}.issubset(branch["required"])
-        for branch in create_branches
-    )
-    by_operation = {
-        branch["properties"]["operation"]["enum"][0]: branch
-        for branch in branches
-        if branch["properties"]["operation"]["enum"][0] != "create"
-    }
-    assert by_operation["update"]["required"] == ["operation", "id"]
-    for operation in ("delete", "enable", "disable"):
-        assert by_operation[operation]["required"] == ["operation", "id"]
-    for removed_field in ("status", "session_id", "timezone", "agent_id"):
-        assert all(removed_field not in branch["properties"] for branch in create_branches)
 
 
-def test_canonical_create_operation_returns_success(tmp_path: Path) -> None:
+def test_nested_create_operation_is_rejected(tmp_path: Path) -> None:
     cron_service = _cron_service_mock()
     cron_service.create_job.return_value = _make_job(job_id="job-create")
     registry = ToolRegistry()
@@ -144,18 +145,17 @@ def test_canonical_create_operation_returns_success(tmp_path: Path) -> None:
             registry,
             tmp_path,
             {
-                "create": {
-                    "name": "Later task",
+                "request": {
+                    "operation": "create",
                     "prompt": "Run this later",
-                    "schedule_type": "cron",
-                    "cron_expression": "*/5 * * * *",
+                    "schedule": "every 2h",
                 }
             },
         )
     )
 
-    assert result["ok"] is True
-    cron_service.create_job.assert_called_once()
+    assert result["ok"] is False
+    cron_service.create_job.assert_not_called()
 
 
 def test_create_action_returns_success(tmp_path: Path) -> None:
@@ -173,8 +173,8 @@ def test_create_action_returns_success(tmp_path: Path) -> None:
                 "target": "agent-one",
                 "name": "Later task",
                 "prompt": "Run this later",
-                "schedule_type": "cron",
-                "cron_expression": "*/5 * * * *",
+                "schedule": "every 2h",
+                "repeat": 3,
             },
         )
     )
@@ -188,9 +188,12 @@ def test_create_action_returns_success(tmp_path: Path) -> None:
         agent_id="agent-one",
         name="Later task",
         prompt="Run this later",
-        schedule_type="cron",
-        cron_expression="*/5 * * * *",
+        schedule_type="interval",
+        cron_expression=None,
+        interval_seconds=7200,
+        interval_anchor_at="2026-05-14T12:00:00+00:00",
         run_at=None,
+        remaining_runs=3,
         session_id=None,
         project_id=None,
     )
@@ -210,8 +213,7 @@ def test_create_defaults_to_current_agent_and_project(tmp_path: Path) -> None:
                 "action": "create",
                 "name": "Continue project",
                 "prompt": "Continue project work",
-                "schedule_type": "cron",
-                "cron_expression": "0 9 * * *",
+                "schedule": "0 9 * * *",
             },
             project_id="vbot",
         )
@@ -224,13 +226,41 @@ def test_create_defaults_to_current_agent_and_project(tmp_path: Path) -> None:
         prompt="Continue project work",
         schedule_type="cron",
         cron_expression="0 9 * * *",
+        interval_seconds=None,
+        interval_anchor_at=None,
         run_at=None,
+        remaining_runs=None,
         session_id=None,
         project_id="vbot",
     )
 
 
-def test_create_requires_a_name_and_recommends_a_valid_call(tmp_path: Path) -> None:
+def test_create_derives_name_when_omitted(tmp_path: Path) -> None:
+    cron_service = _cron_service_mock()
+    cron_service.create_job.return_value = _make_job(
+        job_id="job-derived",
+        name="Run this later",
+    )
+    registry = ToolRegistry()
+    register_cron_tool(registry, cron_service)
+
+    result = asyncio.run(
+        _dispatch(
+            registry,
+            tmp_path,
+            {
+                "action": "create",
+                "prompt": "Run this later",
+                "schedule": "*/5 * * * *",
+            },
+        )
+    )
+
+    assert result["ok"] is True
+    assert cron_service.create_job.call_args.kwargs["name"] is None
+
+
+def test_create_rejects_repeat_above_one_for_one_time_schedule(tmp_path: Path) -> None:
     cron_service = _cron_service_mock()
     registry = ToolRegistry()
     register_cron_tool(registry, cron_service)
@@ -242,16 +272,15 @@ def test_create_requires_a_name_and_recommends_a_valid_call(tmp_path: Path) -> N
             {
                 "action": "create",
                 "prompt": "Run this later",
-                "schedule_type": "cron",
-                "cron_expression": "*/5 * * * *",
+                "schedule": "in 30m",
+                "repeat": 2,
             },
         )
     )
 
     error = cast(dict[str, Any], result["error"])
     assert error["code"] == "invalid_arguments"
-    assert error["retryable"] is False
-    assert "'name' is a required property" in error["message"]
+    assert "repeat must be 1 for a one-time schedule" in error["message"]
     cron_service.create_job.assert_not_called()
 
 
@@ -409,12 +438,12 @@ def test_invalid_operation_returns_contract_failure(tmp_path: Path) -> None:
     registry = ToolRegistry()
     register_cron_tool(registry, cron_service)
 
-    result = asyncio.run(_dispatch(registry, tmp_path, {"request": {"operation": "invalid"}}))
+    result = asyncio.run(_dispatch(registry, tmp_path, {"action": "invalid"}))
 
     error = cast(dict[str, Any], result["error"])
     assert error["code"] == "invalid_arguments"
     assert error["retryable"] is False
-    assert "[anyOf]" in error["message"]
+    assert "[enum]" in error["message"]
 
 
 def test_multiple_top_level_operation_objects_are_rejected(tmp_path: Path) -> None:
@@ -433,7 +462,7 @@ def test_multiple_top_level_operation_objects_are_rejected(tmp_path: Path) -> No
     error = cast(dict[str, Any], result["error"])
     assert error["code"] == "invalid_arguments"
     assert error["retryable"] is False
-    assert "'request' is a required property" in error["message"]
+    assert "'action' is a required property" in error["message"]
 
 
 def test_update_requires_a_change_beyond_id(tmp_path: Path) -> None:
@@ -452,7 +481,7 @@ def test_update_requires_a_change_beyond_id(tmp_path: Path) -> None:
     error = cast(dict[str, Any], result["error"])
     assert error["code"] == "invalid_arguments"
     assert error["retryable"] is False
-    assert "[minProperties]" in error["message"]
+    assert "at least one field to change" in error["message"]
     cron_service.update_job.assert_not_called()
 
 
@@ -467,8 +496,7 @@ def test_removed_agent_fields_are_rejected(
     arguments: dict[str, object] = {
         "name": "Later task",
         "prompt": "Run this later",
-        "schedule_type": "cron",
-        "cron_expression": "*/5 * * * *",
+        "schedule": "*/5 * * * *",
         removed_field: "active",
     }
 
@@ -497,8 +525,7 @@ def test_removed_agent_id_is_rejected(tmp_path: Path) -> None:
                 "agent_id": "builder@vbot",
                 "name": "Later task",
                 "prompt": "Run this later",
-                "schedule_type": "cron",
-                "cron_expression": "*/5 * * * *",
+                "schedule": "*/5 * * * *",
             },
         )
     )
@@ -519,11 +546,11 @@ def test_stringified_operation_payload_is_rejected(tmp_path: Path) -> None:
 
     error = cast(dict[str, Any], result["error"])
     assert error["code"] == "invalid_arguments"
-    assert "'request' is a required property" in error["message"]
+    assert "'action' is a required property" in error["message"]
     cron_service.list_jobs.assert_not_called()
 
 
-def test_nested_create_request_is_supported(tmp_path: Path) -> None:
+def test_nested_create_request_is_rejected(tmp_path: Path) -> None:
     cron_service = _cron_service_mock()
     cron_service.create_job.return_value = _make_job(job_id="job-envelope")
     registry = ToolRegistry()
@@ -538,20 +565,21 @@ def test_nested_create_request_is_supported(tmp_path: Path) -> None:
                     "operation": "create",
                     "name": "Later task",
                     "prompt": "Run this later",
-                    "schedule_type": "cron",
-                    "cron_expression": "*/5 * * * *",
+                    "schedule": "*/5 * * * *",
                 }
             },
         )
     )
 
-    assert result["ok"] is True
-    cron_service.create_job.assert_called_once()
+    assert result["ok"] is False
+    cron_service.create_job.assert_not_called()
 
 
 def test_create_invalid_cron_expression_returns_failure(tmp_path: Path) -> None:
     cron_service = _cron_service_mock()
-    cron_service.create_job.side_effect = CronJobValidationError("cron_expression is invalid")
+    cron_service.parse_schedule.side_effect = CronJobValidationError(
+        "schedule is not a valid five-field cron expression"
+    )
     registry = ToolRegistry()
     register_cron_tool(registry, cron_service)
 
@@ -564,8 +592,7 @@ def test_create_invalid_cron_expression_returns_failure(tmp_path: Path) -> None:
                 "target": "agent-one",
                 "name": "Later task",
                 "prompt": "Run this later",
-                "schedule_type": "cron",
-                "cron_expression": "not-a-cron-expression",
+                "schedule": "not a valid cron expression",
             },
         )
     )
@@ -573,9 +600,9 @@ def test_create_invalid_cron_expression_returns_failure(tmp_path: Path) -> None:
     error = cast(dict[str, Any], result["error"])
     assert error["code"] == "invalid_arguments"
     assert error["retryable"] is False
-    assert "cron_expression is invalid" in error["message"]
-    assert "For a recurring job use" in error["message"]
-    cron_service.create_job.assert_called_once()
+    assert "schedule is not a valid five-field cron expression" in error["message"]
+    assert '"schedule":"0 9 * * *"' in error["message"]
+    cron_service.create_job.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -610,5 +637,5 @@ def test_unknown_id_failures_return_job_not_found(
     assert error["code"] == "job_not_found"
     assert error["retryable"] is False
     assert "Cron job not found: missing" in error["message"]
-    assert '{"list":{}}' in error["message"]
+    assert '{"action":"list"}' in error["message"]
     getattr(cron_service, method_name).assert_called_once()

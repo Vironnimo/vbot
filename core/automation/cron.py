@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, tzinfo
+from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
@@ -40,15 +41,26 @@ if TYPE_CHECKING:
     from core.projects import AgentResolver
     from core.sessions import ChatSessionManager
 
-ScheduleType = Literal["cron", "once"]
+ScheduleType = Literal["cron", "interval", "once"]
 CronJobStatus = Literal["active", "paused", "completed", "failed", "missed"]
 CronRunOutcome = Literal["success", "failed", "cancelled", "missed", "unknown"]
 
-_ALLOWED_SCHEDULE_TYPES = frozenset(("cron", "once"))
+_ALLOWED_SCHEDULE_TYPES = frozenset(("cron", "interval", "once"))
 _ALLOWED_STATUSES = frozenset(("active", "paused", "completed", "failed", "missed"))
 _ALLOWED_RUN_OUTCOMES = frozenset(("success", "failed", "cancelled", "missed", "unknown"))
-_RESTART_FIELDS = frozenset(("schedule_type", "cron_expression", "run_at", "status"))
+_RESTART_FIELDS = frozenset(
+    (
+        "schedule_type",
+        "cron_expression",
+        "interval_seconds",
+        "interval_anchor_at",
+        "run_at",
+        "remaining_runs",
+        "status",
+    )
+)
 CRON_EXPRESSION_FIELD_COUNT = 5
+MIN_INTERVAL_SECONDS = 60
 MAX_ACTIVE_CRON_JOBS = 64
 MAX_STORED_CRON_JOBS = 512
 MAX_CONCURRENT_CRON_RUNS = 4
@@ -69,7 +81,10 @@ _ONCE_FIRE_CLAIMS_DIR_NAME = "once-fire-claims"
 # wall clock, re-aligning the wake-up to within one interval of the corrected
 # clock.
 _WALL_CLOCK_RECHECK_SECONDS = 60.0
-_LEGACY_CRON_JOB_NAME_MAX_LENGTH = 80
+_CRON_JOB_NAME_MAX_LENGTH = 80
+_DURATION_PATTERN = re.compile(r"^(?P<amount>[1-9]\d*)(?P<unit>[mhd])$")
+_DURATION_UNIT_SECONDS = {"m": 60, "h": 60 * 60, "d": 24 * 60 * 60}
+_MARKDOWN_PREFIX_PATTERN = re.compile(r"^(?:(?:#{1,6}|>|[-*+])\s+|\d+[.)]\s+|\[[ xX]\]\s*)+")
 _MUTABLE_FIELDS = frozenset(
     (
         "agent_id",
@@ -77,7 +92,10 @@ _MUTABLE_FIELDS = frozenset(
         "prompt",
         "schedule_type",
         "cron_expression",
+        "interval_seconds",
+        "interval_anchor_at",
         "run_at",
+        "remaining_runs",
         "session_id",
         "status",
         "project_id",
@@ -204,6 +222,7 @@ def _validate_cron_job_data(diagnostics: list[JsonDiagnostic], index: int, item:
     )
     for field_name in (
         "cron_expression",
+        "interval_anchor_at",
         "run_at",
         # Accepted only so installations with pre-migration data can load. The
         # runtime ignores this legacy per-job override and the next save drops it.
@@ -238,6 +257,29 @@ def _validate_cron_job_data(diagnostics: list[JsonDiagnostic], index: int, item:
             f"{item_path}.consecutive_failures",
             "must be a non-negative integer",
         )
+    interval_seconds = item.get("interval_seconds")
+    if interval_seconds is not None and (
+        isinstance(interval_seconds, bool)
+        or not isinstance(interval_seconds, int)
+        or interval_seconds < MIN_INTERVAL_SECONDS
+        or interval_seconds % MIN_INTERVAL_SECONDS != 0
+    ):
+        add_error(
+            diagnostics,
+            f"{item_path}.interval_seconds",
+            f"must be a whole number of minutes ({MIN_INTERVAL_SECONDS} seconds or more)",
+        )
+    remaining_runs = item.get("remaining_runs")
+    if remaining_runs is not None and (
+        isinstance(remaining_runs, bool)
+        or not isinstance(remaining_runs, int)
+        or remaining_runs < 0
+    ):
+        add_error(
+            diagnostics,
+            f"{item_path}.remaining_runs",
+            "must be a non-negative integer or null",
+        )
     validate_non_empty_string(
         diagnostics, f"{item_path}.created_at", item.get("created_at"), required=False
     )
@@ -252,6 +294,27 @@ def _validate_cron_agent_id(diagnostics: list[JsonDiagnostic], path: str, value:
             path,
             "must be 1-64 characters using only letters, numbers, hyphen, or underscore",
         )
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedSchedule:
+    """Canonical schedule fields derived from one agent-facing schedule string."""
+
+    schedule_type: ScheduleType
+    cron_expression: str | None = None
+    interval_seconds: int | None = None
+    interval_anchor_at: str | None = None
+    run_at: str | None = None
+
+    def as_job_fields(self) -> dict[str, str | int | None]:
+        """Return all persisted schedule fields, clearing incompatible kinds."""
+        return {
+            "schedule_type": self.schedule_type,
+            "cron_expression": self.cron_expression,
+            "interval_seconds": self.interval_seconds,
+            "interval_anchor_at": self.interval_anchor_at,
+            "run_at": self.run_at,
+        }
 
 
 @dataclass(slots=True)
@@ -277,6 +340,9 @@ class CronJob:
     last_fired_at: str | None
     created_at: str
     project_id: str | None = None
+    interval_seconds: int | None = None
+    interval_anchor_at: str | None = None
+    remaining_runs: int | None = None
     last_attempt_at: str | None = None
     last_completed_at: str | None = None
     last_run_id: str | None = None
@@ -293,7 +359,10 @@ class CronJob:
             "prompt": self.prompt,
             "schedule_type": self.schedule_type,
             "cron_expression": self.cron_expression,
+            "interval_seconds": self.interval_seconds,
+            "interval_anchor_at": self.interval_anchor_at,
             "run_at": self.run_at,
+            "remaining_runs": self.remaining_runs,
             "session_id": self.session_id,
             "status": self.status,
             "last_fired_at": self.last_fired_at,
@@ -317,7 +386,16 @@ class CronJob:
             prompt=str(payload["prompt"]),
             schedule_type=payload["schedule_type"],
             cron_expression=payload.get("cron_expression"),
+            interval_seconds=payload.get("interval_seconds"),
+            interval_anchor_at=payload.get("interval_anchor_at"),
             run_at=payload.get("run_at"),
+            remaining_runs=(
+                payload.get("remaining_runs")
+                if payload.get("remaining_runs") is not None
+                else 1
+                if payload["schedule_type"] == "once"
+                else None
+            ),
             session_id=payload.get("session_id"),
             status=payload.get("status") or "active",
             last_fired_at=payload.get("last_fired_at"),
@@ -376,7 +454,10 @@ class CronService:
         prompt: str,
         schedule_type: ScheduleType,
         cron_expression: str | None = None,
+        interval_seconds: int | None = None,
+        interval_anchor_at: str | None = None,
         run_at: str | None = None,
+        remaining_runs: int | None = None,
         session_id: str | None = None,
         status: CronJobStatus = "active",
         project_id: str | None = None,
@@ -391,6 +472,8 @@ class CronService:
             raise CronJobValidationError(
                 f"Cron stores at most {MAX_STORED_CRON_JOBS} jobs; delete history first"
             )
+        if schedule_type == "interval" and interval_anchor_at is None:
+            interval_anchor_at = _utc_now_iso()
         job = CronJob(
             id=str(uuid4()),
             agent_id=agent_id,
@@ -398,7 +481,10 @@ class CronService:
             prompt=prompt,
             schedule_type=schedule_type,
             cron_expression=cron_expression,
+            interval_seconds=interval_seconds,
+            interval_anchor_at=interval_anchor_at,
             run_at=run_at,
+            remaining_runs=remaining_runs,
             session_id=session_id,
             status=status,
             last_fired_at=None,
@@ -449,12 +535,83 @@ class CronService:
             _LOGGER.warning("Could not resolve system timezone name: %s", error)
             return "UTC"
 
+    def parse_schedule(
+        self,
+        schedule: str,
+        *,
+        reference_time: datetime | None = None,
+    ) -> ParsedSchedule:
+        """Parse the small agent-facing schedule language into persisted fields."""
+        if not isinstance(schedule, str) or not schedule.strip():
+            raise CronJobValidationError("schedule must be a non-empty string")
+
+        normalized = " ".join(schedule.split())
+        reference_utc = _as_utc(reference_time or _utc_now())
+
+        relative_prefix, separator, duration_text = normalized.partition(" ")
+        if separator and relative_prefix in {"in", "every"}:
+            duration_seconds = _parse_duration_seconds(duration_text)
+            try:
+                first_fire_at = reference_utc + timedelta(seconds=duration_seconds)
+            except OverflowError as error:
+                raise CronJobValidationError("duration is too large") from error
+            if relative_prefix == "in":
+                return ParsedSchedule(
+                    schedule_type="once",
+                    run_at=first_fire_at.isoformat(),
+                )
+            return ParsedSchedule(
+                schedule_type="interval",
+                interval_seconds=duration_seconds,
+                interval_anchor_at=reference_utc.isoformat(),
+            )
+
+        if len(normalized.split()) == CRON_EXPRESSION_FIELD_COUNT:
+            if not croniter.is_valid(normalized):
+                raise CronJobValidationError("schedule is not a valid five-field cron expression")
+            return ParsedSchedule(schedule_type="cron", cron_expression=normalized)
+
+        if "T" not in normalized and " " not in normalized:
+            raise CronJobValidationError(
+                "schedule must be an ISO 8601 timestamp, 'in <duration>', "
+                "'every <duration>', or a five-field cron expression"
+            )
+        try:
+            parsed = _parse_iso_datetime(
+                normalized,
+                field_name="schedule",
+                allow_naive=True,
+            )
+        except CronJobValidationError as error:
+            raise CronJobValidationError(
+                "schedule must be an ISO 8601 timestamp, 'in <duration>', "
+                "'every <duration>', or a five-field cron expression"
+            ) from error
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=self._system_timezone())
+        return ParsedSchedule(schedule_type="once", run_at=parsed.astimezone(UTC).isoformat())
+
+    @staticmethod
+    def format_schedule(job: CronJob) -> str:
+        """Return the canonical agent-facing schedule string for one job."""
+        if job.schedule_type == "cron":
+            return job.cron_expression or ""
+        if job.schedule_type == "interval":
+            return (
+                f"every {_format_duration(job.interval_seconds)}"
+                if job.interval_seconds is not None
+                else ""
+            )
+        return job.run_at or ""
+
     def next_fire_at(self, job: CronJob, *, reference_time: datetime | None = None) -> str | None:
         """Project the next UTC fire instant from the canonical schedule rules."""
-        if job.status != "active":
+        if job.status != "active" or job.remaining_runs == 0:
             return None
         if job.schedule_type == "once":
             return self._parse_run_at_utc(job).isoformat()
+        if job.schedule_type == "interval":
+            return self._next_interval_fire_at(job, reference_time=reference_time).isoformat()
         if job.cron_expression is None:
             return None
 
@@ -491,12 +648,22 @@ class CronService:
 
         for field_name, field_value in fields.items():
             setattr(candidate, field_name, field_value)
+        if "schedule_type" in fields and "remaining_runs" not in fields:
+            candidate.remaining_runs = 1 if candidate.schedule_type == "once" else None
+        if (
+            candidate.schedule_type == "interval"
+            and "interval_anchor_at" not in fields
+            and ("schedule_type" in fields or "interval_seconds" in fields)
+        ):
+            candidate.interval_anchor_at = _utc_now_iso()
         if job.status in TERMINAL_CRON_JOB_STATUSES and candidate.status != job.status:
             raise CronJobValidationError(
                 "Completed or missed jobs are immutable history and cannot change status"
             )
         if fields.get("status") == "active" and job.status == "failed":
             candidate.consecutive_failures = 0
+            if candidate.remaining_runs == 0:
+                candidate.remaining_runs = 1
 
         changed_fields = sorted(
             field_name
@@ -606,6 +773,13 @@ class CronService:
                     needs_save = True
                     once_claims_to_remove.append(job.id)
                     continue
+            if job.remaining_runs == 0:
+                job.status = "completed"
+                if job.last_outcome is None:
+                    job.last_outcome = "unknown"
+                    job.last_error = "vBot restarted after the final Run was admitted"
+                needs_save = True
+                continue
             if job.schedule_type == "once" and self._is_missed_once_job(job, reference_time):
                 _LOGGER.warning(
                     "Marking missed once job as missed (id=%s run_at=%s)",
@@ -699,7 +873,7 @@ class CronService:
 
     def _start_job_task(self, job: CronJob) -> None:
         """Create and track one asyncio task for an active cron job."""
-        if job.status != "active":
+        if job.status != "active" or job.remaining_runs == 0:
             return
 
         self._cancel_job_task(job.id)
@@ -707,6 +881,11 @@ class CronService:
         task: asyncio.Task[None]
         if job.schedule_type == "cron":
             task = asyncio.create_task(self._run_cron_job(job), name=f"cron-job:{job.id}:cron")
+        elif job.schedule_type == "interval":
+            task = asyncio.create_task(
+                self._run_interval_job(job),
+                name=f"cron-job:{job.id}:interval",
+            )
         else:
             task = asyncio.create_task(self._run_once_job(job), name=f"cron-job:{job.id}:once")
 
@@ -744,6 +923,26 @@ class CronService:
 
             latest = self._jobs.get(job.id)
             if latest is None or latest.status != "active" or latest.schedule_type != "cron":
+                return
+
+            await self._trigger_job_run(latest)
+
+    async def _run_interval_job(self, job: CronJob) -> None:
+        """Schedule native fixed intervals from their persisted cadence anchor."""
+        while True:
+            current = self._jobs.get(job.id)
+            if current is None or current.status != "active" or current.schedule_type != "interval":
+                return
+
+            next_fire_at = self.next_fire_at(current)
+            if next_fire_at is None:
+                return
+            await _sleep_until_utc(
+                _parse_iso_datetime(next_fire_at, field_name="next_fire_at", allow_naive=False)
+            )
+
+            latest = self._jobs.get(job.id)
+            if latest is None or latest.status != "active" or latest.schedule_type != "interval":
                 return
 
             await self._trigger_job_run(latest)
@@ -787,6 +986,9 @@ class CronService:
 
             if not await self._trigger_job_run(latest):
                 self._remove_once_fire_claim(latest.id)
+                current_after_failure = self._jobs.get(latest.id)
+                if current_after_failure is None or current_after_failure.remaining_runs == 0:
+                    return
                 failed_fire_attempts += 1
                 if await self._back_off_or_abandon_once_job(job.id, failed_fire_attempts):
                     return
@@ -796,10 +998,11 @@ class CronService:
             if latest is None:
                 return
 
-            latest.status = "completed"
-            self._jobs[latest.id] = latest
-            while not self._save_jobs_after_fire(latest.id):
-                await asyncio.sleep(_ONCE_RETRY_DELAY_SECONDS)
+            if latest.status == "active":
+                latest.status = "completed"
+                self._jobs[latest.id] = latest
+                while not self._save_jobs_after_fire(latest.id):
+                    await asyncio.sleep(_ONCE_RETRY_DELAY_SECONDS)
             self._remove_once_fire_claim(latest.id)
             return
 
@@ -868,8 +1071,11 @@ class CronService:
                 latest.last_fired_at = _utc_now_iso()
                 run_id = getattr(run, "id", None)
                 latest.last_run_id = run_id if isinstance(run_id, str) else None
+                if latest.remaining_runs is not None:
+                    latest.remaining_runs = max(latest.remaining_runs - 1, 0)
                 self._jobs[latest.id] = latest
-                self._save_jobs_after_fire(latest.id)
+                while not self._save_jobs_after_fire(latest.id):
+                    await asyncio.sleep(_ONCE_RETRY_DELAY_SECONDS)
 
                 wait_for_run = getattr(run, "wait", None)
                 if callable(wait_for_run):
@@ -878,6 +1084,7 @@ class CronService:
                 raise
             except Exception as error:
                 self._record_run_failure(job.id, error)
+                self._finalize_exhausted_job(job.id)
                 _LOGGER.error(
                     "Cron job Run failed for job=%s: %s",
                     job.id,
@@ -895,6 +1102,7 @@ class CronService:
             latest.consecutive_failures = 0
             self._jobs[latest.id] = latest
             self._save_jobs_after_fire(latest.id)
+            self._finalize_exhausted_job(latest.id)
             return True
 
     def _record_run_failure(self, job_id: str, error: BaseException) -> None:
@@ -905,11 +1113,18 @@ class CronService:
         job.last_outcome = "cancelled" if type(error).__name__ == "RunCancelledError" else "failed"
         job.last_error = _truncate_error(str(error) or type(error).__name__)
         job.consecutive_failures += 1
-        if (
-            job.schedule_type == "cron"
-            and job.consecutive_failures >= MAX_CONSECUTIVE_CRON_FAILURES
+        if job.schedule_type != "once" and (
+            job.consecutive_failures >= MAX_CONSECUTIVE_CRON_FAILURES
         ):
             job.status = "failed"
+        self._jobs[job_id] = job
+        self._save_jobs_after_fire(job_id)
+
+    def _finalize_exhausted_job(self, job_id: str) -> None:
+        job = self._jobs.get(job_id)
+        if job is None or job.status != "active" or job.remaining_runs != 0:
+            return
+        job.status = "completed" if job.last_outcome == "success" else "failed"
         self._jobs[job_id] = job
         self._save_jobs_after_fire(job_id)
 
@@ -1005,7 +1220,7 @@ class CronService:
         job.prompt = job.prompt.strip()
 
         if job.schedule_type not in _ALLOWED_SCHEDULE_TYPES:
-            raise CronJobValidationError("schedule_type must be 'cron' or 'once'")
+            raise CronJobValidationError("schedule_type must be 'cron', 'interval', or 'once'")
 
         if job.status not in _ALLOWED_STATUSES:
             raise CronJobValidationError(
@@ -1046,6 +1261,12 @@ class CronService:
             or job.consecutive_failures < 0
         ):
             raise CronJobValidationError("consecutive_failures must be a non-negative integer")
+        if job.remaining_runs is not None and (
+            isinstance(job.remaining_runs, bool)
+            or not isinstance(job.remaining_runs, int)
+            or job.remaining_runs < 0
+        ):
+            raise CronJobValidationError("remaining_runs must be a non-negative integer or null")
         if job.last_error is not None:
             if not isinstance(job.last_error, str):
                 raise CronJobValidationError("last_error must be a string when provided")
@@ -1068,14 +1289,48 @@ class CronService:
             if not croniter.is_valid(normalized_expression):
                 raise CronJobValidationError("cron_expression is invalid")
             job.cron_expression = normalized_expression
+            job.interval_seconds = None
+            job.interval_anchor_at = None
+            job.run_at = None
+            return
+
+        if job.schedule_type == "interval":
+            if (
+                isinstance(job.interval_seconds, bool)
+                or not isinstance(job.interval_seconds, int)
+                or job.interval_seconds < MIN_INTERVAL_SECONDS
+                or job.interval_seconds % MIN_INTERVAL_SECONDS != 0
+            ):
+                raise CronJobValidationError(
+                    "interval_seconds must be a whole number of minutes "
+                    f"({MIN_INTERVAL_SECONDS} seconds or more)"
+                )
+            if not isinstance(job.interval_anchor_at, str) or not job.interval_anchor_at.strip():
+                raise CronJobValidationError("interval_anchor_at is required for interval jobs")
+            anchor_utc = self._parse_utc_timestamp(
+                job.interval_anchor_at.strip(),
+                field_name="interval_anchor_at",
+            )
+            job.interval_anchor_at = anchor_utc.isoformat()
+            try:
+                _first_fire_at = anchor_utc + timedelta(seconds=job.interval_seconds)
+            except OverflowError as error:
+                raise CronJobValidationError("interval_seconds is too large") from error
+            job.cron_expression = None
             job.run_at = None
             return
 
         if not isinstance(job.run_at, str) or not job.run_at.strip():
             raise CronJobValidationError("run_at is required for once jobs")
+        if job.remaining_runs is None:
+            job.remaining_runs = 1
+        if job.remaining_runs not in {0, 1}:
+            raise CronJobValidationError("once jobs require repeat to be 1")
         job.run_at = job.run_at.strip()
         job.run_at = self._parse_run_at_utc(job).isoformat()
         job.cron_expression = None
+        job.interval_seconds = None
+        job.interval_anchor_at = None
 
     def _validate_references(self, job: CronJob) -> None:
         if self._agent_resolver is not None:
@@ -1114,6 +1369,27 @@ class CronService:
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=self._system_timezone())
         return parsed.astimezone(UTC)
+
+    def _next_interval_fire_at(
+        self,
+        job: CronJob,
+        *,
+        reference_time: datetime | None = None,
+    ) -> datetime:
+        if job.interval_seconds is None or job.interval_anchor_at is None:
+            raise CronJobValidationError(
+                "interval_seconds and interval_anchor_at are required for interval jobs"
+            )
+        reference_utc = _as_utc(reference_time or _utc_now())
+        anchor_utc = self._parse_utc_timestamp(
+            job.interval_anchor_at,
+            field_name="interval_anchor_at",
+        )
+        if reference_utc < anchor_utc:
+            return anchor_utc
+        elapsed_seconds = (reference_utc - anchor_utc).total_seconds()
+        elapsed_intervals = int(elapsed_seconds // job.interval_seconds)
+        return anchor_utc + timedelta(seconds=(elapsed_intervals + 1) * job.interval_seconds)
 
     def _parse_utc_timestamp(self, value: str, *, field_name: str) -> datetime:
         parsed = _parse_iso_datetime(value, field_name=field_name, allow_naive=False)
@@ -1196,11 +1472,33 @@ def _once_retry_delay(attempt: int) -> float:
 
 
 def _derive_legacy_cron_job_name(prompt: object) -> str:
-    """Derive a stable readable name for records created before names existed."""
-    collapsed_prompt = " ".join(str(prompt).split())
-    if not collapsed_prompt:
-        return "Scheduled Run"
-    return collapsed_prompt[:_LEGACY_CRON_JOB_NAME_MAX_LENGTH]
+    """Derive and persist the same stable fallback used for unnamed new jobs."""
+    for line in str(prompt).splitlines():
+        collapsed_line = " ".join(line.split())
+        if not collapsed_line:
+            continue
+        without_markdown = _MARKDOWN_PREFIX_PATTERN.sub("", collapsed_line).strip()
+        if without_markdown:
+            return without_markdown[:_CRON_JOB_NAME_MAX_LENGTH]
+    return "Scheduled Run"
+
+
+def _parse_duration_seconds(value: str) -> int:
+    match = _DURATION_PATTERN.fullmatch(value)
+    if match is None:
+        raise CronJobValidationError(
+            "duration must be a positive whole number followed by m, h, or d"
+        )
+    amount = int(match.group("amount"))
+    return amount * _DURATION_UNIT_SECONDS[match.group("unit")]
+
+
+def _format_duration(seconds: int) -> str:
+    for unit in ("d", "h", "m"):
+        unit_seconds = _DURATION_UNIT_SECONDS[unit]
+        if seconds % unit_seconds == 0:
+            return f"{seconds // unit_seconds}{unit}"
+    return f"{seconds // _DURATION_UNIT_SECONDS['m']}m"
 
 
 def _truncate_error(message: str) -> str:
@@ -1212,6 +1510,12 @@ def _truncate_error(message: str) -> str:
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 async def _sleep_until_utc(target_utc: datetime) -> None:

@@ -20,6 +20,43 @@ import {
 } from '../cronView.js';
 
 describe('cron time and history projection', () => {
+  it('builds interval and repeat payloads while allowing an omitted name', () => {
+    const form = createCronFormValues();
+    form.agent_id = 'main';
+    form.prompt = 'Check status';
+    form.schedule_type = 'interval';
+    form.interval_minutes = '120';
+    form.repeat = '3';
+
+    expect(buildCreateCronPayload(form)).toEqual({
+      agent_id: 'main',
+      prompt: 'Check status',
+      schedule_type: 'interval',
+      interval_seconds: 7200,
+      repeat: 3,
+    });
+  });
+
+  it('projects interval cadence and remaining runs into the edit form', () => {
+    const job = {
+      id: 'job-interval',
+      agent_id: 'main',
+      name: 'Status check',
+      prompt: 'Check status',
+      schedule_type: 'interval',
+      interval_seconds: 10800,
+      remaining_runs: 2,
+      status: 'active',
+    };
+
+    const [normalized] = visibleCronJobs([job]);
+    const form = createCronFormValues(job);
+
+    expect(normalized.schedule_description).toBe('every 3h');
+    expect(form.interval_minutes).toBe('180');
+    expect(form.repeat).toBe('2');
+  });
+
   it('shows persisted instants in the server timezone in list and form', () => {
     const job = {
       id: 'job-once',

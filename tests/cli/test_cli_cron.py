@@ -207,12 +207,13 @@ def test_cron_list_formats_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         "cron jobs:",
         (
             "- name=Morning news id=job-1 agent=assistant status=active "
-            "schedule=cron[0 9 * * *] "
+            "schedule=cron[0 9 * * *] remaining_runs=unlimited "
             "next_fire_at=2026-06-12T07:00:00+00:00 last_outcome=- prompt=Check the news"
         ),
         (
             "- name=One-time audit id=job-2 agent=coder status=paused "
-            "schedule=once[2026-07-01T09:00:00+00:00] next_fire_at=- last_outcome=- "
+            "schedule=once[2026-07-01T09:00:00+00:00] remaining_runs=1 "
+            "next_fire_at=- last_outcome=- "
             "prompt=" + "A" * 57 + "..."
         ),
     ]
@@ -242,7 +243,7 @@ def test_cron_update_rejects_empty_changes(tmp_path: Path) -> None:
         ok=False,
         message=(
             "no cron fields provided; use one of: --agent, --name, --prompt, --cron, "
-            "--at, --session, --status"
+            "--every, --at, --repeat, --session, --status"
         ),
         instance=instance,
     )

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING
 
 from core.automation.cron import CronJobNotFoundError, CronJobValidationError, CronServiceError
 from core.projects import format_agent_address, parse_agent_address
@@ -12,8 +12,6 @@ from core.tools.tools import (
     ToolContext,
     ToolDisplay,
     ToolRegistry,
-    extract_tool_operation,
-    operation_envelope_schema,
     tool_failure,
     tool_success,
 )
@@ -22,41 +20,19 @@ from core.utils.logging import get_logger
 if TYPE_CHECKING:
     from core.automation.cron import CronJob, CronService
 
-CronScheduleType = Literal["cron", "once"]
-
 CRON_TOOL_NAME = "cron"
 CRON_TOOL_DESCRIPTION = (
-    "Create and manage named persisted schedules that start Runs. Set request.operation to "
-    "create, list, update, delete, enable, or disable. New "
-    "jobs are enabled immediately, use the server timezone, and start a fresh Session on "
-    "every fire. Use list to obtain job ids; disable pauses a job without deleting it."
+    "Create and manage persisted schedules that start Runs. Set action to create, list, "
+    "update, delete, enable, or disable. New jobs are enabled immediately, use the server "
+    "timezone, and start a fresh Session on every fire. Use list to obtain job ids; disable "
+    "pauses a job without deleting it."
 )
 
 CRON_ACTIONS = frozenset(("create", "list", "update", "delete", "enable", "disable"))
-CRON_SCHEDULE_TYPES = frozenset(("cron", "once"))
 
-_CREATE_ARGUMENTS = frozenset(
-    {
-        "target",
-        "name",
-        "prompt",
-        "schedule_type",
-        "cron_expression",
-        "run_at",
-    }
-)
+_CREATE_ARGUMENTS = frozenset({"target", "name", "prompt", "schedule", "repeat"})
 _LIST_ARGUMENTS: frozenset[str] = frozenset()
-_UPDATE_ARGUMENTS = frozenset(
-    {
-        "id",
-        "target",
-        "name",
-        "prompt",
-        "schedule_type",
-        "cron_expression",
-        "run_at",
-    }
-)
+_UPDATE_ARGUMENTS = frozenset({"id", "target", "name", "prompt", "schedule", "repeat"})
 _ID_ONLY_ARGUMENTS = frozenset({"id"})
 _ACTION_ARGUMENTS: dict[str, frozenset[str]] = {
     "create": _CREATE_ARGUMENTS,
@@ -68,23 +44,28 @@ _ACTION_ARGUMENTS: dict[str, frozenset[str]] = {
 }
 _ACTION_RECOMMENDATIONS = {
     "create": (
-        'For a recurring job use {"request":{"operation":"create","name":"<job name>",'
-        '"prompt":"<instruction>",'
-        '"schedule_type":"cron","cron_expression":"0 9 * * *"}}. For a one-time job use '
-        '{"request":{"operation":"create","name":"<job name>","prompt":"<instruction>",'
-        '"schedule_type":"once",'
-        '"run_at":"2026-07-25T09:00:00+02:00"}}'
+        'Use {"action":"create","prompt":"<instruction>","schedule":"every 2h"} for an '
+        'interval, {"action":"create","prompt":"<instruction>","schedule":"0 9 * * *"} '
+        'for cron, or an ISO timestamp / "in 30m" for one fire'
     ),
-    "list": 'Use {"request":{"operation":"list"}}',
+    "list": 'Use {"action":"list"}',
     "update": (
-        'Use {"request":{"operation":"update","id":"<job-id>","name":"<replacement name>"}}; '
-        "include only fields that should change"
+        'Use {"action":"update","id":"<job-id>","schedule":"every 4h"}; include only fields '
+        "that should change"
     ),
-    "delete": 'Use {"request":{"operation":"delete","id":"<job-id>"}}',
-    "enable": 'Use {"request":{"operation":"enable","id":"<job-id>"}}',
-    "disable": 'Use {"request":{"operation":"disable","id":"<job-id>"}}',
+    "delete": 'Use {"action":"delete","id":"<job-id>"}',
+    "enable": 'Use {"action":"enable","id":"<job-id>"}',
+    "disable": 'Use {"action":"disable","id":"<job-id>"}',
 }
 
+_CRON_ACTION_PARAMETER: JsonObject = {
+    "type": "string",
+    "enum": sorted(CRON_ACTIONS),
+    "description": (
+        "Operation to perform. create requires prompt and schedule; update/delete/enable/"
+        "disable require id; update also requires at least one changed field."
+    ),
+}
 _CRON_ID_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
@@ -100,120 +81,52 @@ _CRON_TARGET_PARAMETER: JsonObject = {
 _CRON_NAME_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
-    "description": "Human-readable job name. It does not need to be unique.",
+    "description": (
+        "Optional human-readable job name for create or update. If omitted on create, a stable "
+        "name is derived from the first useful prompt line."
+    ),
 }
 _CRON_PROMPT_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
     "description": "Self-contained instruction because every fire starts a fresh Session.",
 }
-_CRON_SCHEDULE_TYPE_PARAMETER: JsonObject = {
-    "type": "string",
-    "enum": sorted(CRON_SCHEDULE_TYPES),
-    "description": "cron for a recurring schedule; once for one fire.",
-}
-_CRON_EXPRESSION_PARAMETER: JsonObject = {
+_CRON_SCHEDULE_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
     "description": (
-        "Recurring five-field schedule: minute hour day-of-month month day-of-week. "
-        "Seconds are unsupported; minimum cadence is one minute."
+        "Schedule for create or update: ISO 8601 timestamp, 'in <duration>', "
+        "'every <duration>', or exactly five cron fields. Durations use a positive whole "
+        "number plus m, h, or d. Bare durations, fuzzy dates, and six-field cron are invalid."
     ),
 }
-_CRON_RUN_AT_PARAMETER: JsonObject = {
-    "type": "string",
-    "minLength": 1,
+_CRON_REPEAT_PARAMETER: JsonObject = {
+    "type": "integer",
+    "minimum": 1,
     "description": (
-        "One-time ISO 8601 date-time. A value without an offset uses the server timezone."
+        "Optional maximum number of future fires, including the first. Omit for unlimited "
+        "recurring schedules. One-time schedules allow only 1."
     ),
 }
 
-
-def _cron_operation(
-    description: str,
-    properties: JsonObject,
-    *,
-    required: tuple[str, ...] = (),
-) -> JsonObject:
-    return {
-        "type": "object",
-        "description": description,
-        "properties": properties,
-        "required": list(required),
-        "additionalProperties": False,
-    }
-
-
-CRON_TOOL_PARAMETERS: JsonObject = operation_envelope_schema(
-    {
-        "create": {
-            "type": "object",
-            "oneOf": [
-                _cron_operation(
-                    "Create and immediately enable one recurring schedule.",
-                    {
-                        "target": _CRON_TARGET_PARAMETER,
-                        "name": _CRON_NAME_PARAMETER,
-                        "prompt": _CRON_PROMPT_PARAMETER,
-                        "schedule_type": {"type": "string", "enum": ["cron"]},
-                        "cron_expression": _CRON_EXPRESSION_PARAMETER,
-                    },
-                    required=("name", "prompt", "schedule_type", "cron_expression"),
-                ),
-                _cron_operation(
-                    "Create and immediately enable one one-time schedule.",
-                    {
-                        "target": _CRON_TARGET_PARAMETER,
-                        "name": _CRON_NAME_PARAMETER,
-                        "prompt": _CRON_PROMPT_PARAMETER,
-                        "schedule_type": {"type": "string", "enum": ["once"]},
-                        "run_at": _CRON_RUN_AT_PARAMETER,
-                    },
-                    required=("name", "prompt", "schedule_type", "run_at"),
-                ),
-            ],
-        },
-        "list": _cron_operation(
-            "List current jobs and obtain ids for later operations.",
-            {},
-        ),
-        "update": {
-            **_cron_operation(
-                "Update an existing job. Include only fields that should change.",
-                {
-                    "id": _CRON_ID_PARAMETER,
-                    "target": _CRON_TARGET_PARAMETER,
-                    "name": _CRON_NAME_PARAMETER,
-                    "prompt": _CRON_PROMPT_PARAMETER,
-                    "schedule_type": _CRON_SCHEDULE_TYPE_PARAMETER,
-                    "cron_expression": _CRON_EXPRESSION_PARAMETER,
-                    "run_at": _CRON_RUN_AT_PARAMETER,
-                },
-                required=("id",),
-            ),
-            "minProperties": 2,
-        },
-        "delete": _cron_operation(
-            "Delete an existing job.",
-            {"id": _CRON_ID_PARAMETER},
-            required=("id",),
-        ),
-        "enable": _cron_operation(
-            "Enable a paused job.",
-            {"id": _CRON_ID_PARAMETER},
-            required=("id",),
-        ),
-        "disable": _cron_operation(
-            "Pause a job without deleting it.",
-            {"id": _CRON_ID_PARAMETER},
-            required=("id",),
-        ),
+CRON_TOOL_PARAMETERS: JsonObject = {
+    "type": "object",
+    "description": (
+        "Flat action interface. Only action is globally required; the handler validates the "
+        "fields required by the selected action."
+    ),
+    "properties": {
+        "action": _CRON_ACTION_PARAMETER,
+        "id": _CRON_ID_PARAMETER,
+        "target": _CRON_TARGET_PARAMETER,
+        "name": _CRON_NAME_PARAMETER,
+        "prompt": _CRON_PROMPT_PARAMETER,
+        "schedule": _CRON_SCHEDULE_PARAMETER,
+        "repeat": _CRON_REPEAT_PARAMETER,
     },
-    description=(
-        "Set request.operation to exactly one supported operation and include only that "
-        "operation's fields."
-    ),
-)
+    "required": ["action"],
+    "additionalProperties": False,
+}
 
 _LOGGER = get_logger("tools.cron")
 
@@ -239,10 +152,17 @@ def _handle_cron_tool(
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
-    operation = _extract_operation(arguments)
-    if isinstance(operation, str):
-        return tool_failure("invalid_arguments", operation, retryable=False)
-    action, operation_arguments = operation
+    raw_action = arguments.get("action")
+    if not isinstance(raw_action, str) or raw_action not in CRON_ACTIONS:
+        options = ", ".join(sorted(CRON_ACTIONS))
+        return tool_failure(
+            "invalid_arguments",
+            f"action must be one of: {options}. {_ACTION_RECOMMENDATIONS['list']}",
+            retryable=False,
+        )
+    action = raw_action
+    operation_arguments = dict(arguments)
+    operation_arguments.pop("action", None)
 
     unknown_arguments = sorted(set(operation_arguments) - _ACTION_ARGUMENTS[action])
     if unknown_arguments:
@@ -278,7 +198,7 @@ def _handle_cron_tool(
     except CronJobNotFoundError as error:
         return tool_failure(
             "job_not_found",
-            f'{error}. Use {{"list":{{}}}} to get current job ids',
+            f'{error}. Use {{"action":"list"}} to get current job ids',
             retryable=False,
         )
     except CronJobValidationError as error:
@@ -304,34 +224,24 @@ def _handle_create(
         agent_id, project_id = context.agent_id, context.project_id
     else:
         agent_id, project_id = parse_agent_address(target)
-    name = required_string(arguments.get("name"), field_name="name")
+    name = optional_string(arguments.get("name"), field_name="name")
     prompt = required_string(arguments.get("prompt"), field_name="prompt")
-    schedule_type = _required_enum(
-        arguments.get("schedule_type"),
-        field_name="schedule_type",
-        allowed=CRON_SCHEDULE_TYPES,
-    )
-
-    cron_expression = optional_string(
-        arguments.get("cron_expression"), field_name="cron_expression"
-    )
-    run_at = optional_string(arguments.get("run_at"), field_name="run_at")
-    if schedule_type == "cron":
-        if cron_expression is None:
-            raise ValueError("cron_expression is required when schedule_type is 'cron'")
-        run_at = None
-    else:
-        if run_at is None:
-            raise ValueError("run_at is required when schedule_type is 'once'")
-        cron_expression = None
+    schedule = required_string(arguments.get("schedule"), field_name="schedule")
+    parsed_schedule = cron_service.parse_schedule(schedule)
+    repeat = _optional_positive_integer(arguments.get("repeat"), field_name="repeat")
+    if parsed_schedule.schedule_type == "once" and repeat not in {None, 1}:
+        raise ValueError("repeat must be 1 for a one-time schedule")
 
     job = cron_service.create_job(
         agent_id=agent_id,
         name=name,
         prompt=prompt,
-        schedule_type=cast(CronScheduleType, schedule_type),
-        cron_expression=cron_expression,
-        run_at=run_at,
+        schedule_type=parsed_schedule.schedule_type,
+        cron_expression=parsed_schedule.cron_expression,
+        interval_seconds=parsed_schedule.interval_seconds,
+        interval_anchor_at=parsed_schedule.interval_anchor_at,
+        run_at=parsed_schedule.run_at,
+        remaining_runs=repeat,
         session_id=None,
         project_id=project_id,
     )
@@ -345,7 +255,7 @@ def _handle_list(cron_service: CronService) -> JsonObject:
 
 def _handle_update(cron_service: CronService, arguments: JsonObject) -> JsonObject:
     job_id = required_string(arguments.get("id"), field_name="id")
-    updates: dict[str, str | None] = {}
+    updates: dict[str, str | int | None] = {}
 
     if "target" in arguments:
         target = required_string(
@@ -359,18 +269,20 @@ def _handle_update(cron_service: CronService, arguments: JsonObject) -> JsonObje
         updates["name"] = required_string(arguments.get("name"), field_name="name")
     if "prompt" in arguments:
         updates["prompt"] = required_string(arguments.get("prompt"), field_name="prompt")
-    if "schedule_type" in arguments:
-        updates["schedule_type"] = _required_enum(
-            arguments.get("schedule_type"),
-            field_name="schedule_type",
-            allowed=CRON_SCHEDULE_TYPES,
-        )
-    if "cron_expression" in arguments:
-        updates["cron_expression"] = required_string(
-            arguments.get("cron_expression"), field_name="cron_expression"
-        )
-    if "run_at" in arguments:
-        updates["run_at"] = required_string(arguments.get("run_at"), field_name="run_at")
+    parsed_schedule = None
+    if "schedule" in arguments:
+        schedule = required_string(arguments.get("schedule"), field_name="schedule")
+        parsed_schedule = cron_service.parse_schedule(schedule)
+        updates.update(parsed_schedule.as_job_fields())
+    if "repeat" in arguments:
+        repeat = _optional_positive_integer(arguments.get("repeat"), field_name="repeat")
+        if repeat is None:
+            raise ValueError("repeat must be a positive integer")
+        if parsed_schedule is not None and parsed_schedule.schedule_type == "once" and repeat != 1:
+            raise ValueError("repeat must be 1 for a one-time schedule")
+        updates["remaining_runs"] = repeat
+    elif parsed_schedule is not None:
+        updates["remaining_runs"] = 1 if parsed_schedule.schedule_type == "once" else None
     if not updates:
         raise ValueError("update requires at least one field to change")
 
@@ -399,16 +311,9 @@ def _handle_disable(cron_service: CronService, arguments: JsonObject) -> JsonObj
 def _job_payload(cron_service: CronService, job: CronJob) -> JsonObject:
     payload = dict(job.to_dict())
     payload["target"] = format_agent_address(job.agent_id, job.project_id)
+    payload["schedule"] = cron_service.format_schedule(job)
     payload["next_fire_at"] = cron_service.next_fire_at(job)
     return payload
-
-
-def _extract_operation(arguments: JsonObject) -> tuple[str, JsonObject] | str:
-    """Extract the canonical request discriminator with actionable recovery text."""
-    try:
-        return extract_tool_operation(arguments, sorted(CRON_ACTIONS))
-    except ValueError as error:
-        return f"{error}. {_ACTION_RECOMMENDATIONS['list']}"
 
 
 def _with_action_recommendation(action: str, message: str) -> str:
@@ -417,22 +322,22 @@ def _with_action_recommendation(action: str, message: str) -> str:
 
 
 def _cron_display_summary(arguments: JsonObject) -> str:
-    operation = _extract_operation(arguments)
-    if isinstance(operation, str):
+    action = arguments.get("action")
+    if not isinstance(action, str) or action not in CRON_ACTIONS:
         return ""
-    action, operation_arguments = operation
     parts = [action]
-    for field_name in ("name", "id", "target", "schedule_type"):
-        value = operation_arguments.get(field_name)
+    for field_name in ("name", "id", "target", "schedule"):
+        value = arguments.get(field_name)
         if isinstance(value, str) and value.strip():
             parts.append(value.strip())
     return " · ".join(parts)
 
 
-def _required_enum(value: object, *, field_name: str, allowed: frozenset[str]) -> str:
-    if not isinstance(value, str) or value not in allowed:
-        options = ", ".join(sorted(allowed))
-        raise ValueError(f"{field_name} must be one of: {options}")
+def _optional_positive_integer(value: object, *, field_name: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{field_name} must be a positive integer")
     return value
 
 

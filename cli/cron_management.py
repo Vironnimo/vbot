@@ -15,7 +15,9 @@ CRON_UPDATE_FLAGS = (
     "--name",
     "--prompt",
     "--cron",
+    "--every",
     "--at",
+    "--repeat",
     "--session",
     "--status",
 )
@@ -125,6 +127,11 @@ def _format_job_row(job: object) -> str:
     agent_id = _string_or_default(job.get("target"), _string_or_default(job.get("agent_id"), "?"))
     status = _string_or_default(job.get("status"), "?")
     schedule = _format_schedule(job)
+    raw_remaining_runs = job.get("remaining_runs")
+    if isinstance(raw_remaining_runs, int):
+        remaining_runs = str(raw_remaining_runs)
+    else:
+        remaining_runs = "1" if job.get("schedule_type") == "once" else "unlimited"
     next_fire_at = _string_or_default(job.get("next_fire_at"), "-")
     last_outcome = _string_or_default(job.get("last_outcome"), "-")
     prompt = _prompt_preview(job.get("prompt"))
@@ -134,6 +141,7 @@ def _format_job_row(job: object) -> str:
         f" agent={agent_id}"
         f" status={status}"
         f" schedule={schedule}"
+        f" remaining_runs={remaining_runs}"
         f" next_fire_at={next_fire_at}"
         f" last_outcome={last_outcome}"
         f" prompt={prompt}"
@@ -152,6 +160,8 @@ def _format_schedule(job: Mapping[str, Any]) -> str:
     schedule_type = job.get("schedule_type")
     if schedule_type == "cron":
         return f"cron[{_string_or_default(job.get('cron_expression'), '?')}]"
+    if schedule_type == "interval":
+        return f"interval[{_string_or_default(job.get('schedule'), '?')}]"
     if schedule_type == "once":
         return f"once[{_string_or_default(job.get('run_at'), '?')}]"
     return "?"
