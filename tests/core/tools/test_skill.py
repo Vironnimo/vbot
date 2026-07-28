@@ -47,9 +47,11 @@ def test_skill_tool_result_carries_full_content(tmp_path: Path) -> None:
     content = cast(str, data["content"])
     assert content.startswith('<skill_content name="debugging">')
     assert f"Skill directory: {skill_directory}" in content
-    assert "Read a listed resource with the skill tool" in content
-    assert "- scripts/run.py" in content
+    assert "Scripts are listed with absolute paths for direct bash execution." in content
+    assert f"- {skill_directory}/scripts/run.py" in content
+    assert "- scripts/run.py" not in content
     assert "- references/guide.md" in content
+    assert "- assets/checklist.txt" in content
     assert "Investigate failures methodically." in content
     assert "frontmatter" not in content
     assert registered == {"debugging": content}
@@ -208,6 +210,29 @@ def test_skill_tool_reads_relative_support_file_without_activation(tmp_path: Pat
         "content": "Read the evidence first.\n",
     }
     assert activations == []
+    assert str(_skill_directory(tmp_path)) not in str(result)
+
+
+def test_skill_tool_reads_script_source_by_relative_file_path(tmp_path: Path) -> None:
+    registry = SkillRegistry.load(_skills_dir(tmp_path))
+    tools = ToolRegistry()
+    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
+
+    result = asyncio.run(
+        async_dispatch(
+            tools,
+            _context(tmp_path),
+            {"name": "debugging", "file_path": "scripts/run.py"},
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["data"] == {
+        "name": "debugging",
+        "status": "file_loaded",
+        "file_path": "scripts/run.py",
+        "content": "print('debugging')\n",
+    }
     assert str(_skill_directory(tmp_path)) not in str(result)
 
 
@@ -386,8 +411,8 @@ Body.
     assert result["content"] == (
         '<skill_content name="bad&quot; name&gt;&lt;tag">\n'
         f"Skill directory: {directory}\n"
-        "Read a listed resource with the skill tool using this skill name and its "
-        "relative path.\n"
+        "Scripts are listed with absolute paths for direct bash execution. Read relative "
+        "references and assets with the skill tool using this skill name and file_path.\n"
         "Body.\n</skill_content>"
     )
 
@@ -429,9 +454,17 @@ def _skills_dir(tmp_path: Path) -> Path:
     skill_dir = tmp_path / "skills" / "debugging"
     (skill_dir / "scripts").mkdir(parents=True)
     (skill_dir / "references").mkdir()
-    (skill_dir / "scripts" / "run.py").write_text("", encoding="utf-8")
+    (skill_dir / "assets").mkdir()
+    (skill_dir / "scripts" / "run.py").write_text(
+        "print('debugging')\n",
+        encoding="utf-8",
+    )
     (skill_dir / "references" / "guide.md").write_text(
         "Read the evidence first.\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "assets" / "checklist.txt").write_text(
+        "Check everything.\n",
         encoding="utf-8",
     )
     (skill_dir / "SKILL.md").write_text(
