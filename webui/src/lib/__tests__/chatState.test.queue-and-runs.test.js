@@ -731,7 +731,14 @@ describe('chat state helpers', () => {
 
     const [assistantRun] = visibleTimelineItemsForRender(sessionState);
 
-    expect(sessionState.streamingRunEvents).toEqual([]);
+    expect(sessionState.streamingRunEvents).toEqual([
+      expect.objectContaining({
+        type: 'reasoning_delta',
+        payload: expect.objectContaining({
+          reasoning_delta: 'Inspect the evidence.',
+        }),
+      }),
+    ]);
     expect(assistantRun.status).toBe(CHAT_STATUS_CANCELLED);
     expect(assistantRun.reasoning).toEqual([
       expect.objectContaining({

@@ -63,12 +63,14 @@ export function assistantRunChildProgressKey(child) {
 }
 
 // Per-session memo of projected assistant_run items, keyed by run. A run
-// whose group contains a terminal event can no longer change: non-delta run
-// events are appended exactly once (appendRunEvent dedups by run_id +
-// sequence) and never mutated, and the in-place-mutating compressed streaming
-// deltas only exist for the active run. Reusing the terminal runs' projection
-// across the ≤33 ms streaming flushes keeps the per-flush rebuild cost bound
-// to the active run instead of growing with session age (handoff3 B10).
+// whose group contains a terminal event and no retained streaming delta can no
+// longer change: non-delta run events are appended exactly once
+// (appendRunEvent dedups by run_id + sequence) and never mutated. A terminal
+// Run may temporarily retain deltas while canonical output is still in flight,
+// so that group stays uncached until History or the next Run clears them.
+// Reusing every other terminal Run's projection across the ≤33 ms streaming
+// flushes keeps the per-flush rebuild cost bound to the active Run instead of
+// growing with Session age (handoff3 B10).
 const liveRunProjectionCachesBySession = new WeakMap();
 
 function liveRunProjectionCache(sessionState) {
@@ -728,7 +730,8 @@ function liveTimelineEntryItems(entry, projectionCache) {
 function projectedLiveAssistantRunItem(entry, projectionCache) {
   const cacheable =
     Boolean(projectionCache) &&
-    entry.events.some((event) => TERMINAL_RUN_EVENTS.has(event?.type));
+    entry.events.some((event) => TERMINAL_RUN_EVENTS.has(event?.type)) &&
+    !entry.events.some((event) => isStreamingDeltaEvent(event?.type));
   if (cacheable) {
     const cached = projectionCache.get(entry.runKey);
     if (cached && cached.eventCount === entry.events.length) {
@@ -744,6 +747,14 @@ function projectedLiveAssistantRunItem(entry, projectionCache) {
     });
   }
   return assistantRun;
+}
+
+function isStreamingDeltaEvent(eventType) {
+  return [
+    RUN_EVENT_REASONING_DELTA,
+    RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
+    RUN_EVENT_TOOL_CALL_DELTA,
+  ].includes(eventType);
 }
 
 function createStandaloneRunEventItem(event) {
