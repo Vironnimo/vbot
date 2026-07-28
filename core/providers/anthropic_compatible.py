@@ -74,7 +74,7 @@ from core.providers.reasoning import (
     resolve_reasoning_intent,
 )
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
-from core.providers.tool_schema import render_tool_definitions
+from core.providers.tool_schema import ToolSchemaProfile, render_tool_definitions
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 from core.utils.tokens import estimate_request_input_tokens
@@ -577,7 +577,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         _apply_anthropic_tools(
             payload,
             request_kwargs,
-            strict_capable=self._config.id == "anthropic",
+            profile=self._tool_schema_profile(),
         )
         reasoning_supported = self._model_reasoning_supported(model_id)
         # Resolve the output allowance once: it both bounds any thinking budget
@@ -649,6 +649,27 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
 
         del model_id
         return True
+
+    def _tool_schema_profile(self) -> ToolSchemaProfile:
+        """Return the verified Tool-schema profile for this Messages wire."""
+
+        return "anthropic_strict" if self._config.id == "anthropic" else "best_effort"
+
+    def _classify_http_status(
+        self,
+        status_code: int,
+        *,
+        detail: str,
+        response_headers: httpx.Headers,
+    ) -> None:
+        """Classify one response status, allowing concrete gateways to refine it."""
+
+        classify_http_status(
+            status_code,
+            extra_retryable=self._extra_retryable_statuses,
+            detail=detail,
+            response_headers=response_headers,
+        )
 
     def _apply_reasoning(
         self,
@@ -885,9 +906,8 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
                 raise wrap_network_error(exc) from exc
 
             detail = self._build_error_detail(response.status_code, response.text)
-            classify_http_status(
+            self._classify_http_status(
                 response.status_code,
-                extra_retryable=self._extra_retryable_statuses,
                 detail=detail,
                 response_headers=response.headers,
             )
@@ -961,9 +981,8 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
                 error_body = (await response.aread()).decode("utf-8", errors="replace")
                 await response.aclose()
                 detail = self._build_error_detail(response.status_code, error_body)
-                classify_http_status(
+                self._classify_http_status(
                     response.status_code,
-                    extra_retryable=self._extra_retryable_statuses,
                     detail=detail,
                     response_headers=response.headers,
                 )
@@ -1223,14 +1242,14 @@ def _apply_anthropic_tools(
     payload: dict[str, Any],
     kwargs: dict[str, Any],
     *,
-    strict_capable: bool,
+    profile: ToolSchemaProfile,
 ) -> None:
     tools = kwargs.pop("tools", None)
     if not tools:
         return
     rendered = render_tool_definitions(
         tools,
-        profile="anthropic_strict" if strict_capable else "best_effort",
+        profile=profile,
     )
     payload["tools"] = [
         {

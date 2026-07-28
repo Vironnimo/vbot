@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Mapping
 from typing import TYPE_CHECKING, Any, cast
 
+import httpx
+
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
 
@@ -14,6 +16,7 @@ from core.providers.anthropic_compatible import (
     ANTHROPIC_VERSION,
     AnthropicCompatibleAdapter,
 )
+from core.providers.errors import ProviderError
 from core.providers.openai_compatible import OpenAICompatibleAdapter, _to_openai_assistant_message
 from core.providers.providers import AuthConfig, ProviderConfig
 from core.providers.reasoning import (
@@ -23,6 +26,7 @@ from core.providers.reasoning import (
     normalize_thinking_effort,
 )
 from core.providers.token_getter import TokenGetter
+from core.providers.tool_schema import ToolSchemaProfile
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("providers.opencode_go")
@@ -47,12 +51,64 @@ MINIMUM_REASONING_EFFORT_METADATA_KEY = "minimum_reasoning_effort"
 # not mark is unknown: route it the SAFE default (OpenAI chat/completions) and
 # warn, so a newly added model is never silently misrouted onto the wrong wire.
 _DEFAULT_PROTOCOL = PROTOCOL_OPENAI
+_MESSAGES_TOOL_SCHEMA_PROFILE: ToolSchemaProfile = "anthropic_strict"
+
+# OpenCode returns account/subscription exhaustion through the same HTTP 429
+# status as transient throttling. These stable error identifiers and phrases
+# mean waiting cannot make the same request succeed; retrying only burns time
+# and repeats a non-idempotent generation request.
+_PERMANENT_RATE_LIMIT_MARKERS = (
+    "gousagelimiterror",
+    "freeusagelimiterror",
+    "monthly usage limit reached",
+    "monthly usage limit has been reached",
+    "available balance",
+    "insufficient_quota",
+    "insufficient balance",
+    "out of budget",
+    "quota exceeded",
+    "billing hard limit",
+    "billing limit reached",
+)
 
 # ``_model_protocol`` runs on every send/stream, so an unmarked model would re-log
 # its routing warning on each request and flood the log. Track which model ids have
 # already warned in this process and emit each once — "once per server runtime"
 # (a restart re-warns). Mirrors the skill-validation dedup in core/skills/skills.py.
 _warned_unmarked_models: set[str] = set()
+
+
+def _raise_if_permanent_rate_limit(status_code: int, detail: str) -> None:
+    if status_code != 429:
+        return
+    normalized_detail = detail.casefold()
+    if not any(marker in normalized_detail for marker in _PERMANENT_RATE_LIMIT_MARKERS):
+        return
+    raise ProviderError(
+        f"OpenCode Go subscription limit reached: {detail}",
+        retryable=False,
+    )
+
+
+class _OpenCodeGoMessagesAdapter(AnthropicCompatibleAdapter):
+    """OpenCode Go's live-verified Anthropic Messages wire profile."""
+
+    def _tool_schema_profile(self) -> ToolSchemaProfile:
+        return _MESSAGES_TOOL_SCHEMA_PROFILE
+
+    def _classify_http_status(
+        self,
+        status_code: int,
+        *,
+        detail: str,
+        response_headers: httpx.Headers,
+    ) -> None:
+        _raise_if_permanent_rate_limit(status_code, detail)
+        super()._classify_http_status(
+            status_code,
+            detail=detail,
+            response_headers=response_headers,
+        )
 
 
 class OpenCodeGoAdapter(OpenAICompatibleAdapter):
@@ -96,7 +152,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         # The inner adapter shares the same recorder, so the single context
         # set via set_debug_context() is seen by whichever client handles the
         # request (OpenAI chat/completions or the Anthropic messages path).
-        self._messages = AnthropicCompatibleAdapter(
+        self._messages = _OpenCodeGoMessagesAdapter(
             config,
             self._token_getter,
             base_url=base_url,
@@ -186,6 +242,20 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         if isinstance(reasoning, str) and reasoning:
             wire["reasoning_content"] = reasoning
         return wire
+
+    def _classify_http_status(
+        self,
+        status_code: int,
+        *,
+        detail: str,
+        response_headers: httpx.Headers,
+    ) -> None:
+        _raise_if_permanent_rate_limit(status_code, detail)
+        super()._classify_http_status(
+            status_code,
+            detail=detail,
+            response_headers=response_headers,
+        )
 
     def _build_payload(
         self,
