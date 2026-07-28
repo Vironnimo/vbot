@@ -314,6 +314,15 @@ async def test_continuation_reminder_is_single_and_provider_policy_neutral(
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     session = runtime.chat_sessions.create("coder", session_id="session-one")
     session.append(ChatMessage.user("Original work"))
+    interrupted = ChatMessage.assistant(
+        model="openai/gpt-5.2::api-key",
+        content="Partial answer",
+        reasoning="Readable plan",
+        reasoning_meta={"signature": "interrupted-signed-state"},
+        interrupted=True,
+        interruption_cause="provider",
+    )
+    session.append(interrupted)
     tracker = ContinuationTracker(
         session,
         run_id="run-one",
@@ -335,6 +344,15 @@ async def test_continuation_reminder_is_single_and_provider_policy_neutral(
     assert request_text.count("<continuation-checkpoint") == 1
     assert "Readable plan" in request_text
     assert "reasoning_meta" not in request_text
+    assistant_entries = [
+        message for message in adapter.requests[0]["messages"] if message["role"] == "assistant"
+    ]
+    assert len(assistant_entries) == 1
+    assert assistant_entries[0]["content"] == "Partial answer"
+    assert "reasoning" not in assistant_entries[0]
+    assert "reasoning_meta" not in assistant_entries[0]
+    assert interrupted.reasoning == "Readable plan"
+    assert interrupted.reasoning_meta == {"signature": "interrupted-signed-state"}
 
 
 @pytest.mark.asyncio

@@ -462,7 +462,7 @@ class BlockingStreamingStubAdapter(ClosingStubAdapter):
 
 
 class BlockingReasoningStreamingStubAdapter(ClosingStubAdapter):
-    """Stream only readable reasoning, then block until cancellation."""
+    """Stream readable and opaque reasoning, then block until cancellation."""
 
     def __init__(self) -> None:
         super().__init__([])
@@ -479,6 +479,10 @@ class BlockingReasoningStreamingStubAdapter(ClosingStubAdapter):
         self.stream_requests.append(
             {"messages": deepcopy(messages), "model_id": model_id, "kwargs": deepcopy(kwargs)}
         )
+        yield {
+            "type": "reasoning_meta",
+            "reasoning_meta": {"signature": "interrupted-signed-state"},
+        }
         yield {"type": "reasoning_delta", "text": "Thinking hard."}
         self.stream_started.set()
         await self.release.wait()
