@@ -14,14 +14,12 @@ from core.tools.tools import (
     ToolContext,
     ToolDisplay,
     ToolRegistry,
-    extract_tool_operation,
-    operation_envelope_schema,
     tool_failure,
     tool_success,
 )
 
 MEMORY_TOOL_DESCRIPTION = (
-    "List or edit pinned memory by setting request.operation to list, add, replace, or remove. "
+    "List or edit pinned memory by setting action to list, add, replace, or remove. "
     "USER.md "
     "('user' scope — who the user is: preferences, "
     "role, communication style) and MEMORY.md ('agent' scope — your own environment, "
@@ -50,74 +48,39 @@ _MEMORY_SCOPE_PARAMETER: JsonObject = {
 _MEMORY_CONTENT_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
-    "description": "Concise, durable entry content.",
+    "description": "Concise, durable entry content. Required for add and replace.",
 }
 _MEMORY_ENTRY_ID_PARAMETER: JsonObject = {
     "type": "integer",
     "minimum": 1,
-    "description": "1-based entry id returned by list.",
+    "description": "1-based entry id returned by list. Required for replace and remove.",
 }
 
-
-def _memory_operation(
-    description: str,
-    properties: JsonObject,
-    *,
-    required: tuple[str, ...],
-) -> JsonObject:
-    return {
-        "type": "object",
-        "description": description,
-        "properties": properties,
-        "required": list(required),
-        "additionalProperties": False,
-    }
-
-
-MEMORY_TOOL_PARAMETERS: JsonObject = operation_envelope_schema(
-    {
-        "list": _memory_operation(
-            "List current pinned entries and their 1-based ids.",
-            {"scope": _MEMORY_SCOPE_PARAMETER},
-            required=("scope",),
-        ),
-        "add": _memory_operation(
-            "Add one pinned entry.",
-            {
-                "scope": _MEMORY_SCOPE_PARAMETER,
-                "content": _MEMORY_CONTENT_PARAMETER,
-            },
-            required=("scope", "content"),
-        ),
-        "replace": _memory_operation(
-            "Replace one existing pinned entry. Call list first because ids can shift.",
-            {
-                "scope": _MEMORY_SCOPE_PARAMETER,
-                "entry_id": _MEMORY_ENTRY_ID_PARAMETER,
-                "content": _MEMORY_CONTENT_PARAMETER,
-            },
-            required=("scope", "entry_id", "content"),
-        ),
-        "remove": _memory_operation(
-            "Remove one existing pinned entry. Call list first because ids can shift.",
-            {
-                "scope": _MEMORY_SCOPE_PARAMETER,
-                "entry_id": _MEMORY_ENTRY_ID_PARAMETER,
-            },
-            required=("scope", "entry_id"),
-        ),
-    },
-    description=(
-        "Set request.operation to list, add, replace, or remove and include that operation's "
-        "arguments in the same request object."
+MEMORY_TOOL_PARAMETERS: JsonObject = {
+    "type": "object",
+    "description": (
+        "Flat action interface. The handler validates the fields required and allowed by "
+        "the selected action."
     ),
-)
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": list(MEMORY_ACTIONS),
+            "description": "List entries, add one, replace one, or remove one.",
+        },
+        "scope": _MEMORY_SCOPE_PARAMETER,
+        "content": _MEMORY_CONTENT_PARAMETER,
+        "entry_id": _MEMORY_ENTRY_ID_PARAMETER,
+    },
+    "required": ["action", "scope"],
+    "additionalProperties": False,
+}
 
-_MEMORY_ACTION_ARGUMENTS = {
-    "list": frozenset({"scope"}),
-    "add": frozenset({"scope", "content"}),
-    "replace": frozenset({"scope", "entry_id", "content"}),
-    "remove": frozenset({"scope", "entry_id"}),
+_MEMORY_ACTION_FIELDS = {
+    "list": frozenset({"action", "scope"}),
+    "add": frozenset({"action", "scope", "content"}),
+    "replace": frozenset({"action", "scope", "entry_id", "content"}),
+    "remove": frozenset({"action", "scope", "entry_id"}),
 }
 
 # Actions that mutate a scope. Only these feed the thrash guard: a failed mutation
@@ -186,19 +149,21 @@ def memory_handler(
     ``tracker`` is the per-run thrash guard the runtime handler supplies; when it is
     absent (direct callers, tests) the guard is simply inert and behavior is unchanged.
     """
-    try:
-        action, operation_arguments = extract_tool_operation(arguments, MEMORY_ACTIONS)
-    except ValueError as error:
-        return tool_failure("invalid_arguments", str(error))
+    action = arguments.get("action")
+    if not isinstance(action, str) or action not in MEMORY_ACTIONS:
+        return tool_failure(
+            "invalid_arguments",
+            f"action must be one of: {', '.join(MEMORY_ACTIONS)}",
+        )
 
-    unknown_arguments = set(operation_arguments) - _MEMORY_ACTION_ARGUMENTS[action]
+    unknown_arguments = set(arguments) - _MEMORY_ACTION_FIELDS[action]
     if unknown_arguments:
         names = ", ".join(sorted(unknown_arguments))
         return tool_failure("invalid_arguments", f"Unknown {action} argument(s): {names}")
 
     try:
         scope = _required_enum(
-            operation_arguments.get("scope"),
+            arguments.get("scope"),
             field_name="scope",
             values=MEMORY_SCOPES,
         )
@@ -209,7 +174,7 @@ def memory_handler(
     try:
         data = _dispatch_memory_action(
             context,
-            operation_arguments,
+            arguments,
             memory_service,
             action,
             scope,
@@ -356,15 +321,14 @@ def register_memory_tool(registry: ToolRegistry, memory_service: MemoryService) 
 
 
 def _memory_display_summary(arguments: JsonObject) -> str:
-    try:
-        action, operation_arguments = extract_tool_operation(arguments, MEMORY_ACTIONS)
-    except ValueError:
+    action = arguments.get("action")
+    if not isinstance(action, str) or action not in MEMORY_ACTIONS:
         return ""
     parts = [action]
-    scope = operation_arguments.get("scope")
+    scope = arguments.get("scope")
     if isinstance(scope, str) and scope:
         parts.append(scope)
-    entry_id = operation_arguments.get("entry_id")
+    entry_id = arguments.get("entry_id")
     if isinstance(entry_id, int) and not isinstance(entry_id, bool):
         parts.append(str(entry_id))
     return " · ".join(parts)

@@ -17,8 +17,6 @@ from core.tools.tools import (
     ToolContext,
     ToolDisplay,
     ToolRegistry,
-    extract_tool_operation,
-    operation_envelope_schema,
     tool_failure,
     tool_success,
 )
@@ -30,8 +28,8 @@ HISTORY_TOOL_NAME = "history"
 HISTORY_TOOL_DESCRIPTION = (
     "Verify original records from this Session after Compaction. Use overview to inspect "
     "checkpoint sections, search for exact text, read a section chronologically, or around "
-    "to recover complete records near a known message id. Set request.operation to the intended "
-    "History operation. "
+    "to recover complete records near a known message id. Set action to the intended History "
+    "operation. "
     "The Tool is available only after this Session has a Compaction checkpoint."
 )
 HISTORY_ACTIONS = ("overview", "search", "read", "around")
@@ -74,104 +72,61 @@ _HISTORY_LIMIT_PARAMETER: JsonObject = {
 _HISTORY_CURSOR_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
-    "description": "Opaque continuation returned by the same operation.",
+    "description": "Opaque continuation returned by the same action.",
 }
 
-
-def _history_operation(
-    description: str,
-    properties: JsonObject,
-    *,
-    required: tuple[str, ...] = (),
-) -> JsonObject:
-    normal_schema: JsonObject = {
-        "type": "object",
-        "properties": properties,
-        "required": list(required),
-        "additionalProperties": False,
-    }
-    cursor_schema: JsonObject = {
-        "type": "object",
-        "properties": {"cursor": _HISTORY_CURSOR_PARAMETER},
-        "required": ["cursor"],
-        "additionalProperties": False,
-    }
-    return {
-        "type": "object",
-        "description": description + " Continue a previous page with cursor by itself.",
-        "oneOf": [normal_schema, cursor_schema],
-    }
-
-
-HISTORY_TOOL_PARAMETERS: JsonObject = operation_envelope_schema(
-    {
-        "overview": _history_operation(
-            "Inspect available Compaction checkpoints.",
-            {"limit": _HISTORY_LIMIT_PARAMETER},
-        ),
-        "search": _history_operation(
-            "Search exact text in earlier canonical records.",
-            {
-                "query": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "Non-blank text to find.",
-                },
-                "checkpoint": _HISTORY_CHECKPOINT_PARAMETER,
-                "roles": _HISTORY_ROLES_PARAMETER,
-                "match": {
-                    "type": "string",
-                    "enum": list(HISTORY_MATCH_MODES),
-                    "description": "Text matching mode; default all_terms.",
-                },
-                "limit": _HISTORY_LIMIT_PARAMETER,
-            },
-            required=("query",),
-        ),
-        "read": _history_operation(
-            "Read canonical records chronologically from one checkpoint or all earlier history.",
-            {
-                "checkpoint": _HISTORY_CHECKPOINT_PARAMETER,
-                "roles": _HISTORY_ROLES_PARAMETER,
-                "direction": {
-                    "type": "string",
-                    "enum": list(HISTORY_DIRECTIONS),
-                    "description": "Read from the start or end; default start.",
-                },
-                "limit": _HISTORY_LIMIT_PARAMETER,
-            },
-        ),
-        "around": _history_operation(
-            "Read complete canonical records around one known message id.",
-            {
-                "message_id": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "Canonical Message id to use as the anchor.",
-                },
-                "checkpoint": _HISTORY_CHECKPOINT_PARAMETER,
-                "roles": _HISTORY_ROLES_PARAMETER,
-                "before": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 100,
-                    "description": "Additional records before the anchor; default 2.",
-                },
-                "after": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 100,
-                    "description": "Additional records after the anchor; default 2.",
-                },
-            },
-            required=("message_id",),
-        ),
-    },
-    description=(
-        "Set request.operation to overview, search, read, or around and include that operation's "
-        "arguments in the same request object."
+HISTORY_TOOL_PARAMETERS: JsonObject = {
+    "type": "object",
+    "description": (
+        "Flat action interface. Continue a previous page with the same action and cursor "
+        "only; the handler validates action-specific fields."
     ),
-)
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": list(HISTORY_ACTIONS),
+            "description": "History action to perform.",
+        },
+        "cursor": _HISTORY_CURSOR_PARAMETER,
+        "query": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Non-blank text to find for search.",
+        },
+        "message_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Canonical Message id to use as the around anchor.",
+        },
+        "checkpoint": _HISTORY_CHECKPOINT_PARAMETER,
+        "roles": _HISTORY_ROLES_PARAMETER,
+        "match": {
+            "type": "string",
+            "enum": list(HISTORY_MATCH_MODES),
+            "description": "Search text matching mode; default all_terms.",
+        },
+        "direction": {
+            "type": "string",
+            "enum": list(HISTORY_DIRECTIONS),
+            "description": "Read from the start or end; default start.",
+        },
+        "limit": _HISTORY_LIMIT_PARAMETER,
+        "before": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Additional records before an around anchor; default 2.",
+        },
+        "after": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Additional records after an around anchor; default 2.",
+        },
+    },
+    "required": ["action"],
+    "additionalProperties": False,
+}
 
 _ACTION_FIELDS = {
     "overview": frozenset({"action", "limit", "cursor"}),
@@ -290,11 +245,17 @@ def make_history_handler(sessions: ChatSessionManager):
 
     def history_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         started = time.perf_counter()
+        raw_action = arguments.get("action")
+        if not isinstance(raw_action, str) or raw_action not in HISTORY_ACTIONS:
+            return tool_failure(
+                "invalid_arguments",
+                f"action must be one of: {', '.join(HISTORY_ACTIONS)}",
+            )
+        action = raw_action
         try:
-            action, operation_arguments = extract_tool_operation(arguments, HISTORY_ACTIONS)
-        except ValueError as error:
-            return tool_failure("invalid_arguments", str(error))
-        normalized_arguments = {"action": action, **operation_arguments}
+            _validate_history_action_arguments(arguments, action)
+        except _HistoryError as error:
+            return tool_failure(error.code, str(error))
         checkpoint: int | None = None
         direction = ""
         try:
@@ -314,13 +275,13 @@ def make_history_handler(sessions: ChatSessionManager):
                     "History is unavailable until this Session has a successful Compaction.",
                 )
 
-            cursor_payload = _cursor_payload(normalized_arguments, context.session_id)
+            cursor_payload = _cursor_payload(arguments, context.session_id)
             snapshot_id = cursor_payload.get("snapshot_id") if cursor_payload is not None else None
             snapshot = _build_snapshot(messages, snapshot_id=snapshot_id)
             request = (
                 _request_from_cursor(cursor_payload, snapshot, context.session_id)
                 if cursor_payload is not None
-                else _request_from_arguments(normalized_arguments, snapshot)
+                else _request_from_arguments(arguments, snapshot)
             )
             action = request.action
             checkpoint = request.checkpoint
@@ -511,6 +472,33 @@ def _request_from_arguments(arguments: JsonObject, snapshot: _Snapshot) -> _Requ
         after=after,
         message_id=message_id,
     )
+
+
+def _validate_history_action_arguments(arguments: JsonObject, action: str) -> None:
+    unsupported = sorted(set(arguments) - _ACTION_FIELDS[action])
+    if unsupported:
+        raise _HistoryError(
+            "invalid_arguments",
+            f"Unsupported arguments for {action}: {', '.join(unsupported)}",
+        )
+    if "cursor" in arguments:
+        cursor = arguments.get("cursor")
+        if not isinstance(cursor, str) or not cursor.strip():
+            raise _HistoryError("invalid_arguments", "cursor must be a non-blank string")
+        if set(arguments) != {"action", "cursor"}:
+            raise _HistoryError(
+                "invalid_arguments",
+                "A cursor continuation accepts only action and cursor.",
+            )
+        return
+    if action == "search":
+        query = arguments.get("query")
+        if not isinstance(query, str) or not query.strip():
+            raise _HistoryError("invalid_arguments", "search requires a non-blank query")
+    if action == "around":
+        message_id = arguments.get("message_id")
+        if not isinstance(message_id, str) or not message_id.strip():
+            raise _HistoryError("invalid_arguments", "around requires a non-blank message_id")
 
 
 def _request_from_cursor(
@@ -1118,17 +1106,16 @@ def _serialized_result_bytes(data: JsonObject) -> int:
 
 
 def _history_display_summary(arguments: JsonObject) -> str:
-    try:
-        action, operation_arguments = extract_tool_operation(arguments, HISTORY_ACTIONS)
-    except ValueError:
+    action = arguments.get("action")
+    if not isinstance(action, str) or action not in HISTORY_ACTIONS:
         return ""
     parts = [action]
-    checkpoint = operation_arguments.get("checkpoint")
+    checkpoint = arguments.get("checkpoint")
     if isinstance(checkpoint, int) and not isinstance(checkpoint, bool):
         parts.append(f"checkpoint {checkpoint}")
     elif action != "overview":
         parts.append("all earlier history")
-    direction = operation_arguments.get("direction")
+    direction = arguments.get("direction")
     if isinstance(direction, str) and direction:
         parts.append(direction)
     return " · ".join(parts)

@@ -49,26 +49,6 @@ _OPERATION_CONTRACTS: tuple[
         {"send": ("channel_id",)},
     ),
     (
-        "history",
-        HISTORY_TOOL_PARAMETERS,
-        {
-            "overview": (),
-            "search": ("query",),
-            "read": (),
-            "around": ("message_id",),
-        },
-    ),
-    (
-        "memory",
-        MEMORY_TOOL_PARAMETERS,
-        {
-            "list": ("scope",),
-            "add": ("scope", "content"),
-            "replace": ("scope", "entry_id", "content"),
-            "remove": ("scope", "entry_id"),
-        },
-    ),
-    (
         "process",
         PROCESS_TOOL_PARAMETERS,
         {
@@ -118,7 +98,9 @@ _DIRECT_TOOL_SCHEMAS: tuple[tuple[str, JsonObject], ...] = (
     ("edit", EDIT_TOOL_PARAMETERS),
     ("glob", GLOB_TOOL_PARAMETERS),
     ("grep", GREP_TOOL_PARAMETERS),
+    ("history", HISTORY_TOOL_PARAMETERS),
     ("image_generation", IMAGE_GENERATION_TOOL_PARAMETERS),
+    ("memory", MEMORY_TOOL_PARAMETERS),
     ("project", PROJECT_TOOL_PARAMETERS),
     ("read", READ_TOOL_PARAMETERS),
     ("skill", SKILL_TOOL_PARAMETERS),
@@ -132,7 +114,6 @@ _DIRECT_TOOL_SCHEMAS: tuple[tuple[str, JsonObject], ...] = (
 
 _OPENAI_STRICT_SHIPPED_TOOLS = {
     "analyze_image",
-    "memory",
     "project",
     "status",
     "text_to_speech",
