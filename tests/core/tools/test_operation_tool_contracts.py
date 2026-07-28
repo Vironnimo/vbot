@@ -72,15 +72,6 @@ _OPERATION_CONTRACTS: tuple[
         },
     ),
     (
-        "status",
-        STATUS_TOOL_PARAMETERS,
-        {
-            "current": (),
-            "session": ("session_id",),
-            "agent_session": ("agent_id", "session_id"),
-        },
-    ),
-    (
         "subagent",
         SUBAGENT_TOOL_PARAMETERS,
         {
@@ -105,6 +96,7 @@ _DIRECT_TOOL_SCHEMAS: tuple[tuple[str, JsonObject], ...] = (
     ("read", READ_TOOL_PARAMETERS),
     ("skill", SKILL_TOOL_PARAMETERS),
     ("skill_manage", SKILL_MANAGE_TOOL_PARAMETERS),
+    ("status", STATUS_TOOL_PARAMETERS),
     ("subagent_result", SUBAGENT_RESULT_TOOL_PARAMETERS),
     ("text_to_speech", TEXT_TO_SPEECH_TOOL_PARAMETERS),
     ("web_fetch", WEB_FETCH_TOOL_PARAMETERS),
@@ -115,7 +107,6 @@ _DIRECT_TOOL_SCHEMAS: tuple[tuple[str, JsonObject], ...] = (
 _OPENAI_STRICT_SHIPPED_TOOLS = {
     "analyze_image",
     "project",
-    "status",
     "text_to_speech",
     "write",
 }
