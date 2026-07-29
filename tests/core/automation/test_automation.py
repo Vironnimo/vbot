@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, Mock
@@ -10,8 +12,8 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from core.automation import TriggerService
-from core.chat import MessageSender, ReplySurface
-from core.runs import ActiveRunError, Run
+from core.chat import ChatSessionManager, MessageSender, ReplySurface
+from core.runs import ActiveRunError, ChatRunManager, Run
 
 pytestmark = pytest.mark.asyncio
 
@@ -561,3 +563,291 @@ async def test_compact_session_forwards_project_id_to_command_chat_loop() -> Non
     chat_loop.compact_session.assert_awaited_once_with(
         "coder", "session-one", None, project_id="proj"
     )
+
+
+class _CompletionChatLoop:
+    def __init__(self, run_manager: ChatRunManager) -> None:
+        self._run_manager = run_manager
+        self.messages: list[str] = []
+
+    async def start_run(
+        self,
+        agent_id: str,
+        content: str,
+        *,
+        session_id: str,
+        internal: bool,
+        project_id: str | None,
+        input_persisted_hook: Callable[[], None],
+    ) -> Run:
+        assert internal is True
+
+        async def executor(_run: Run) -> str:
+            self.messages.append(content)
+            input_persisted_hook()
+            return content
+
+        return await self._run_manager.start(
+            agent_id=agent_id,
+            session_id=session_id,
+            executor=executor,
+            project_id=project_id,
+        )
+
+
+async def test_completion_delivery_coalesces_every_result_ready_before_run_end(
+    tmp_path: Path,
+) -> None:
+    run_manager = ChatRunManager()
+    active_release = asyncio.Event()
+
+    async def active_executor(_run: Run) -> str:
+        await active_release.wait()
+        return "parent complete"
+
+    parent_run = await run_manager.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=active_executor,
+        project_id=None,
+    )
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="session-one")
+    completion_loop = _CompletionChatLoop(run_manager)
+    trigger_service = TriggerService(
+        cast(Any, completion_loop),
+        run_manager,
+        cast(Any, Mock()),
+        trigger_chat_loop=cast(Any, completion_loop),
+        sessions=sessions,
+    )
+
+    first = trigger_service.submit_completion(
+        "coder",
+        "session-one",
+        notice_id="bash:one",
+        origin_run_id=parent_run.id,
+        body="### Bash process — completed\nfirst",
+    )
+    second = trigger_service.submit_completion(
+        "coder",
+        "session-one",
+        notice_id="subagent:one",
+        origin_run_id=parent_run.id,
+        body="### Sub-Agent worker — completed\nsecond",
+    )
+    await asyncio.sleep(0)
+    assert completion_loop.messages == []
+
+    active_release.set()
+    await parent_run.wait()
+    await asyncio.wait_for(asyncio.gather(first, second), timeout=1)
+
+    assert len(completion_loop.messages) == 1
+    message = completion_loop.messages[0]
+    assert message.startswith(
+        "Automatic completion delivery — this is not a new user request. Do not restart or "
+        "repeat work merely because this report arrived. Re-evaluate the original user goal "
+        "and current system state before taking further action.\n\nResults:"
+    )
+    assert "first" in message
+    assert "second" in message
+
+
+async def test_completion_finishing_after_boundary_uses_later_delivery(tmp_path: Path) -> None:
+    run_manager = ChatRunManager()
+    active_release = asyncio.Event()
+
+    async def active_executor(_run: Run) -> str:
+        await active_release.wait()
+        return "parent complete"
+
+    parent_run = await run_manager.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=active_executor,
+        project_id=None,
+    )
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="session-one")
+    completion_loop = _CompletionChatLoop(run_manager)
+    trigger_service = TriggerService(
+        cast(Any, completion_loop),
+        run_manager,
+        cast(Any, Mock()),
+        trigger_chat_loop=cast(Any, completion_loop),
+        sessions=sessions,
+    )
+
+    ready = trigger_service.submit_completion(
+        "coder",
+        "session-one",
+        notice_id="bash:ready",
+        origin_run_id=parent_run.id,
+        body="ready at boundary",
+    )
+    active_release.set()
+    await parent_run.wait()
+
+    later = trigger_service.submit_completion(
+        "coder",
+        "session-one",
+        notice_id="bash:later",
+        origin_run_id=parent_run.id,
+        body="finished later",
+    )
+    await asyncio.wait_for(asyncio.gather(ready, later), timeout=1)
+
+    assert len(completion_loop.messages) == 2
+    assert "ready at boundary" in completion_loop.messages[0]
+    assert "finished later" not in completion_loop.messages[0]
+    assert "finished later" in completion_loop.messages[1]
+
+
+async def test_cancelled_pending_notice_does_not_start_empty_follow_up(
+    tmp_path: Path,
+) -> None:
+    run_manager = ChatRunManager()
+    active_release = asyncio.Event()
+
+    async def active_executor(_run: Run) -> str:
+        await active_release.wait()
+        return "parent complete"
+
+    parent_run = await run_manager.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=active_executor,
+        project_id=None,
+    )
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="session-one")
+    completion_loop = _CompletionChatLoop(run_manager)
+    trigger_service = TriggerService(
+        cast(Any, completion_loop),
+        run_manager,
+        cast(Any, Mock()),
+        trigger_chat_loop=cast(Any, completion_loop),
+        sessions=sessions,
+    )
+
+    delivery = trigger_service.submit_completion(
+        "coder",
+        "session-one",
+        notice_id="bash:manually-fetched",
+        origin_run_id=parent_run.id,
+        body="already delivered manually",
+    )
+    assert trigger_service.cancel_completion(
+        "coder",
+        "session-one",
+        notice_id="bash:manually-fetched",
+    )
+    assert delivery.cancelled()
+
+    active_release.set()
+    await parent_run.wait()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert completion_loop.messages == []
+
+
+async def test_user_cancel_persists_pending_completion_without_new_run(tmp_path: Path) -> None:
+    run_manager = ChatRunManager()
+    active_release = asyncio.Event()
+
+    async def active_executor(_run: Run) -> str:
+        await active_release.wait()
+        return "unused"
+
+    parent_run = await run_manager.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=active_executor,
+        project_id=None,
+    )
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="session-one")
+    completion_loop = _CompletionChatLoop(run_manager)
+    trigger_service = TriggerService(
+        cast(Any, completion_loop),
+        run_manager,
+        cast(Any, Mock()),
+        trigger_chat_loop=cast(Any, completion_loop),
+        sessions=sessions,
+    )
+    pending = trigger_service.submit_completion(
+        "coder",
+        "session-one",
+        notice_id="bash:cancelled-parent",
+        origin_run_id=parent_run.id,
+        body="completed before cancellation",
+    )
+
+    await run_manager.cancel(parent_run.id, reason="user")
+    await asyncio.wait_for(pending, timeout=1)
+
+    assert completion_loop.messages == []
+    notes = [
+        message.content
+        for message in sessions.get("coder", "session-one").load()
+        if message.role == "note" and isinstance(message.content, str)
+    ]
+    assert any("completed before cancellation" in note for note in notes)
+
+    late = trigger_service.submit_completion(
+        "coder",
+        "session-one",
+        notice_id="bash:late-cancelled-parent",
+        origin_run_id=parent_run.id,
+        body="completed after cancellation",
+    )
+    await asyncio.wait_for(late, timeout=1)
+    assert completion_loop.messages == []
+
+
+async def test_completion_from_already_cancelled_origin_does_not_start_run(
+    tmp_path: Path,
+) -> None:
+    run_manager = ChatRunManager()
+
+    async def active_executor(_run: Run) -> str:
+        await asyncio.Event().wait()
+        return "unused"
+
+    parent_run = await run_manager.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=active_executor,
+        project_id=None,
+    )
+    await run_manager.cancel(parent_run.id, reason="user")
+
+    sessions = ChatSessionManager(tmp_path)
+    sessions.create("coder", session_id="session-one")
+    completion_loop = _CompletionChatLoop(run_manager)
+    trigger_service = TriggerService(
+        cast(Any, completion_loop),
+        run_manager,
+        cast(Any, Mock()),
+        trigger_chat_loop=cast(Any, completion_loop),
+        sessions=sessions,
+    )
+
+    late = trigger_service.submit_completion(
+        "coder",
+        "session-one",
+        notice_id="bash:late-only",
+        origin_run_id=parent_run.id,
+        body="finished after cancellation",
+    )
+    await asyncio.wait_for(late, timeout=1)
+
+    assert completion_loop.messages == []
+    notes = [
+        message.content
+        for message in sessions.get("coder", "session-one").load()
+        if message.role == "note" and isinstance(message.content, str)
+    ]
+    assert any("finished after cancellation" in note for note in notes)

@@ -140,20 +140,62 @@ class RecordingTriggerService:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, str | None, bool]] = []
         self.error: BaseException | None = None
+        self.defer_input_persisted = False
+        self.deliveries: dict[str, asyncio.Future[None]] = {}
+        self.persist_callbacks: dict[str, Any] = {}
+        self.cancelled_notice_ids: list[str] = []
 
-    async def trigger_run(
+    def submit_completion(
         self,
         agent_id: str,
-        message: str,
-        session_id: str | None = None,
+        session_id: str,
         *,
-        internal: bool = False,
+        notice_id: str,
+        origin_run_id: str,
+        body: str,
         project_id: str | None = None,
-    ) -> Run:
+        on_persisted: Any | None = None,
+    ) -> asyncio.Future[None]:
+        del project_id
+        delivery: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self.deliveries[notice_id] = delivery
         if self.error is not None:
-            raise self.error
-        self.calls.append((agent_id, message, session_id, internal))
-        return Run(run_id="trigger-run", agent_id=agent_id, session_id=session_id or "new-session")
+            delivery.set_exception(self.error)
+            return delivery
+        assert origin_run_id
+        self.calls.append((agent_id, body, session_id, True))
+        if callable(on_persisted):
+
+            def persist() -> None:
+                on_persisted()
+                if not delivery.done():
+                    delivery.set_result(None)
+
+            if self.defer_input_persisted:
+                self.persist_callbacks[notice_id] = persist
+            else:
+                persist()
+        else:
+            delivery.set_result(None)
+        return delivery
+
+    def cancel_completion(
+        self,
+        _agent_id: str,
+        _session_id: str,
+        *,
+        notice_id: str,
+        project_id: str | None = None,
+    ) -> bool:
+        del project_id
+        self.cancelled_notice_ids.append(notice_id)
+        self.persist_callbacks.pop(notice_id, None)
+        delivery = self.deliveries.pop(notice_id, None)
+        if delivery is None:
+            return False
+        if not delivery.done():
+            delivery.cancel()
+        return True
 
 
 class FakeStorage:

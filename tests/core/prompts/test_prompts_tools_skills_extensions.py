@@ -382,7 +382,8 @@ def test_subagent_block_renders_only_with_tool_and_lists_additional_targets(
     assert "When starting a new Session, send a self-contained task" in prompt
     assert "A continuation message may rely on that Sub-Agent Session's existing history" in prompt
     assert "You are the top-level Agent." in prompt
-    assert "results are delivered automatically" in prompt
+    assert "vBot monitors it, so you do not need to keep the current Run open" in prompt
+    assert "At Run end, vBot combines every background result already finished" in prompt
     assert "You are a Sub-Agent." in nested_prompt
     assert "executes in the foreground" in nested_prompt
     assert "## Sub-Agents" not in manager.build_system_prompt(

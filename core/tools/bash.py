@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from core.tools.arguments import optional_bool, optional_number, optional_string
+from core.tools.arguments import optional_number, optional_string
 from core.tools.process_manager import (
     ProcessManager,
     ProcessSession,
@@ -56,16 +56,18 @@ def _shell_syntax_notes() -> str:
 
 
 BASH_TOOL_DESCRIPTION = (
-    "Run a shell command on the host system. Short commands complete in the foreground; "
-    "commands still running after yield_after seconds (default 30) are moved to the "
-    "background and return a session_id for the process tool plus a log_file path that "
-    "receives the output live. For a short, bounded command whose result blocks the next "
-    "step, set yield_after long enough for it to finish. Let long-running commands, or "
-    "commands that do not block other work, continue in the background; completion wakes "
-    "the Session automatically. Result output keeps only the newest "
+    "Run a shell command on the host system. Choose foreground for bounded commands whose "
+    "result is needed in this Run, auto when independent work can continue after a bounded "
+    "foreground wait, and background for long-lived commands such as servers. Auto waits "
+    "for yield_after seconds (default 30), then hands a still-running process to vBot; "
+    "background hands it off immediately. Handed-off processes return a session_id for the "
+    "process tool and are monitored automatically. Their terminal results are coalesced at "
+    "the Session's next Run boundary, so continue independent work or end the current Run; "
+    "do not poll merely to wait or start another copy. Result output keeps only the newest "
     f"{BASH_MODEL_OUTPUT_CAP_CHARS} characters; when truncated, the result names the log "
     "file holding the complete output — search it with grep/read." + _shell_syntax_notes()
 )
+BASH_EXECUTION_MODES = ("foreground", "auto", "background")
 BASH_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {
@@ -73,6 +75,15 @@ BASH_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "minLength": 1,
             "description": "Shell command to run.",
+        },
+        "mode": {
+            "type": "string",
+            "enum": list(BASH_EXECUTION_MODES),
+            "description": (
+                "Execution contract: foreground waits for completion or timeout and never "
+                "hands off; auto waits for yield_after and then hands off if still running; "
+                "background hands off immediately. Choose deliberately."
+            ),
         },
         "workdir": {
             "type": "string",
@@ -85,42 +96,31 @@ BASH_TOOL_PARAMETERS: JsonObject = {
             "type": "number",
             "minimum": 0,
             "description": (
-                "Seconds to wait for foreground completion before backgrounding "
-                "(default 30). This is independent of timeout; increase it only for a "
-                "bounded command whose result blocks the next step. Inside a sub-agent, "
-                "where backgrounding is unavailable, this caps foreground runtime before "
-                "the command is killed and defaults to 30 minutes; use timeout for a "
-                "precise cap."
+                "Only for auto mode: seconds to wait before handing a still-running command "
+                "to vBot (default 30). Independent of timeout. Inside a Sub-Agent, where "
+                "handoff is unavailable, this caps runtime before the command is killed and "
+                "defaults to 30 minutes."
             ),
             "default": 30,
-        },
-        "background": {
-            "type": "boolean",
-            "description": (
-                "When true, skip the foreground wait and return once the process starts "
-                "with status running, a process session_id, and, when available, a "
-                "log_file. The process continues in the background and wakes the Session "
-                "when it finishes."
-            ),
         },
         "timeout": {
             "type": "number",
             "exclusiveMinimum": 0,
             "description": (
-                "Seconds after which the process is killed. This does not extend yield_after."
+                "Seconds after which the process is killed. In auto mode this does not "
+                "extend yield_after."
             ),
         },
     },
-    "required": ["command"],
+    "required": ["command", "mode"],
     "additionalProperties": False,
 }
 
 DEFAULT_YIELD_AFTER_SECONDS = 30.0
-# Inside a sub-agent a foreground command cannot be backgrounded, so its yield_after
-# window doubles as the kill deadline. Default it generously there: a 30s hand-off
-# default would kill a normal pytest/build. An explicit yield_after or timeout still
-# overrides, and the sub-agent run timeout (subagent_timeout_minutes, default 60) is
-# the outer bound.
+# Inside a Sub-Agent auto mode cannot hand off, so its yield_after threshold
+# doubles as the kill deadline. Default it generously there: a 30s handoff
+# would kill a normal pytest/build. Explicit yield_after or timeout still wins,
+# and the Sub-Agent Run timeout is the outer bound.
 DEFAULT_SUBAGENT_YIELD_AFTER_SECONDS = 1800.0
 FOREGROUND_POLL_INTERVAL_SECONDS = 0.05
 SHELL_ENV_PROBE_TIMEOUT_SECONDS = 5.0
@@ -128,23 +128,22 @@ SHELL_ENV_PROBE_REAP_TIMEOUT_SECONDS = 1.0
 HARD_KILL_SIGNAL = getattr(signal, "SIGKILL", 9)
 USER_CANCELLED_FAILURE_CODE = "cancelled_by_user"
 USER_CANCELLED_FAILURE_MESSAGE = "Command aborted by the user"
+RUN_CANCELLED_FAILURE_CODE = "run_cancelled"
+RUN_CANCELLED_FAILURE_MESSAGE = "Command stopped because the owning Run was cancelled"
 BACKGROUND_USER_CANCELLED_MESSAGE = "Background process was aborted by the user."
 
-# Background-at-depth block: a sub-agent (nesting depth >= 1) runs in an ephemeral
-# session that nobody reads once it returns its single result, so a backgrounded
-# process there would fire its completion wake-up into a session no caller is
-# listening on — the result strands. When True, both explicit (``background: true``)
-# and automatic (a foreground command still running at the yield_after threshold)
-# backgrounding are blocked at depth >= 1: no process is left running, no completion
-# watcher is spawned, and the call fails with a bounded message. The top level
-# (depth 0) is unaffected.
+# Handoff-at-depth block: a Sub-Agent (nesting depth >= 1) runs in an ephemeral
+# Session that nobody reads once it returns its single result, so a handed-off
+# process there could not report back. Background mode is rejected before spawn;
+# auto mode kills and reports failure if it reaches yield_after. No process is
+# left running and no completion watcher is spawned. Top level is unaffected.
 # FLIP-BACK: set BLOCK_BACKGROUND_AT_DEPTH = False to allow background bash at depth.
 BLOCK_BACKGROUND_AT_DEPTH = True
 BACKGROUND_AT_DEPTH_FAILURE_CODE = "background_unavailable_in_subagent"
 BACKGROUND_AT_DEPTH_EXPLICIT_MESSAGE = (
-    "Background execution is not available inside a sub-agent: a sub-agent's session "
-    "ends with this run, so a background process could not report back. Run the command "
-    "in the foreground (it must finish within yield_after), or set a timeout to bound it."
+    "Background mode is not available inside a Sub-Agent: its Session ends with this Run, "
+    "so a handed-off process could not report back. Use foreground mode, or auto mode with "
+    "a sufficient yield_after and optional timeout."
 )
 
 _LOGGER = get_logger("tools.bash")
@@ -158,26 +157,26 @@ _user_cancelled_session_ids: set[str] = set()
 
 
 def _background_blocked_at_depth(context: ToolContext) -> bool:
-    """Return whether backgrounding is blocked for this call (sub-agent at depth)."""
+    """Return whether process handoff is blocked for this Sub-Agent call."""
     return BLOCK_BACKGROUND_AT_DEPTH and context.nesting_depth >= 1
 
 
 def _background_at_depth_timeout_message(yield_after: float) -> str:
-    """Build the failure message for a sub-agent command that outran yield_after."""
+    """Build the failure message for Sub-Agent auto mode reaching yield_after."""
     return (
-        f"Command did not finish within {yield_after:g}s, and background execution is not "
-        "available inside a sub-agent. Make sure the command terminates, or set a timeout "
-        "to bound it."
+        f"Auto mode reached yield_after after {yield_after:g}s, but process handoff is not "
+        "available inside a Sub-Agent. The process was stopped. Use foreground mode when "
+        "the next action needs this result, or choose a sufficient yield_after and timeout "
+        "for bounded independent work."
     )
 
 
 def _resolve_yield_after(context: ToolContext, explicit: float | None) -> float:
-    """Resolve the foreground window: an explicit value wins, else a per-context default.
+    """Resolve auto mode's inline wait: explicit wins, else a per-context default.
 
-    Inside a sub-agent the command cannot be backgrounded, so the window is the max
-    foreground runtime before a kill; default it generously there (the 30s top-level
-    hand-off default would kill a normal pytest/build). The top level keeps the short
-    background-hand-off default.
+    Inside a Sub-Agent the command cannot be handed off, so the window is the max
+    runtime before a kill; default it generously there. Top level keeps the short
+    handoff default.
     """
     if explicit is not None:
         return explicit
@@ -199,7 +198,8 @@ async def bash_handler(
 
     # A sub-agent cannot park a background process for a later run, so reject an
     # explicit background request before spawning anything (no process, no watcher).
-    if parsed["background"] and _background_blocked_at_depth(context):
+    mode = str(parsed["mode"])
+    if mode == "background" and _background_blocked_at_depth(context):
         return tool_failure(
             BACKGROUND_AT_DEPTH_FAILURE_CODE,
             BACKGROUND_AT_DEPTH_EXPLICIT_MESSAGE,
@@ -230,8 +230,14 @@ async def bash_handler(
         parsed.get("timeout"),
     )
 
-    if parsed["background"]:
-        result = await _background_result(process_manager, context, session_id)
+    if mode == "background":
+        result = await _background_result(
+            process_manager,
+            context,
+            session_id,
+            mode=mode,
+            handoff_after=None,
+        )
         _maybe_spawn_completion_watcher(
             process_manager,
             context,
@@ -241,27 +247,33 @@ async def bash_handler(
         )
         return result
 
-    yield_after = _resolve_yield_after(context, parsed["yield_after"])
+    yield_after = _resolve_yield_after(context, parsed["yield_after"]) if mode == "auto" else None
     result = await _run_foreground_phase(
         process_manager,
         context,
         session_id,
         yield_after,
+        mode=mode,
     )
 
-    if context.was_cancelled_by_user():
+    if context.is_cancelled() or context.was_cancelled_by_user():
         if timeout_task is not None:
             timeout_task.cancel()
-        return tool_failure(USER_CANCELLED_FAILURE_CODE, USER_CANCELLED_FAILURE_MESSAGE)
+        await process_manager.kill(session_id, context.agent_id)
+        if context.was_cancelled_by_user():
+            return tool_failure(USER_CANCELLED_FAILURE_CODE, USER_CANCELLED_FAILURE_MESSAGE)
+        return tool_failure(RUN_CANCELLED_FAILURE_CODE, RUN_CANCELLED_FAILURE_MESSAGE)
 
     if result["data"] is not None and result["data"].get("status") == "running":
-        # At depth the foreground command outran yield_after but a sub-agent cannot
-        # background it: kill the process and fail instead of spawning a watcher.
+        # At depth auto mode outran yield_after but a Sub-Agent cannot hand off
+        # the process: kill and fail instead of spawning a watcher.
         if _background_blocked_at_depth(context):
             if timeout_task is not None:
                 timeout_task.cancel()
             await process_manager.kill(session_id, context.agent_id)
             suffix = await _failure_output_suffix(process_manager, context, session_id)
+            if yield_after is None:
+                raise RuntimeError("only auto mode may reach the Sub-Agent handoff boundary")
             return tool_failure(
                 BACKGROUND_AT_DEPTH_FAILURE_CODE,
                 _background_at_depth_timeout_message(yield_after) + suffix,
@@ -334,6 +346,7 @@ async def _watch_background_process(
     process_session_id: str,
     agent_id: str,
     chat_session_id: str,
+    origin_run_id: str,
     command: str,
     trigger_service: Any,
     project_id: str | None = None,
@@ -370,31 +383,49 @@ async def _watch_background_process(
     output = log_result.get("output", "")
     if not isinstance(output, str):
         output = ""
-    # The wake-up message lands in the model's context like a tool result, so
+    # The automatic note lands in the model's context like a tool result, so
     # the same output cap and full-log pointer apply here.
     output = str(_shape_output_fields(session, output)["output"])
 
     user_cancelled = process_session_id in _user_cancelled_session_ids
 
     if user_cancelled:
-        message = f"{BACKGROUND_USER_CANCELLED_MESSAGE}\nCommand: {command}\nOutput:\n{output}"
+        body = (
+            "### Bash process — aborted by user\n"
+            f"{BACKGROUND_USER_CANCELLED_MESSAGE}\n"
+            f"Command: {command}\n"
+            "Output:\n"
+            f"{output}"
+        )
         _user_cancelled_session_ids.discard(process_session_id)
     else:
-        message = (
-            "Background process completed.\n"
+        body = (
+            f"### Bash process — {session.status}\n"
             f"Command: {command}\n"
             f"Exit code: {session.exit_code}\n"
             "Output:\n"
             f"{output}"
         )
 
-    await trigger_service.trigger_run(
+    notice_id = f"bash:{process_session_id}"
+    delivery = trigger_service.submit_completion(
         agent_id,
-        message,
-        session_id=chat_session_id,
-        internal=True,
+        chat_session_id,
+        notice_id=notice_id,
+        origin_run_id=origin_run_id,
+        body=body,
         project_id=project_id,
     )
+    try:
+        await delivery
+    except asyncio.CancelledError:
+        trigger_service.cancel_completion(
+            agent_id,
+            chat_session_id,
+            notice_id=notice_id,
+            project_id=project_id,
+        )
+        raise
 
 
 def _maybe_spawn_completion_watcher(
@@ -413,6 +444,7 @@ def _maybe_spawn_completion_watcher(
             process_session_id,
             context.agent_id,
             context.session_id,
+            context.run_id,
             command,
             trigger_service,
             project_id=context.project_id,
@@ -443,15 +475,15 @@ def _register_user_cancel_callback(
 ) -> None:
     """Register a cancel callback that kills the spawned process and tags the session.
 
-    The callback runs once when the runtime invokes it for a per-tool-call user
-    cancel. It marks the session id in the bash module's local set so the
-    background completion watcher can distinguish user-killed sessions from
-    natural completion and tool-enforced timeouts. The kill coroutine is
-    scheduled on the running event loop because the callback type is sync.
+    Every owning-Run cancellation kills the process. A user cancellation also
+    marks the process Session so any already-handed-off completion report can
+    use explicit user-abort wording. The kill coroutine is scheduled on the
+    running event loop because the callback type is synchronous.
     """
 
     def cancel_callback() -> None:
-        _user_cancelled_session_ids.add(session_id)
+        if context.was_cancelled_by_user():
+            _user_cancelled_session_ids.add(session_id)
         kill_coro = process_manager.kill(session_id, context.agent_id)
         try:
             loop = asyncio.get_running_loop()
@@ -473,9 +505,9 @@ def _register_user_cancel_callback(
 def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
     unknown_arguments = set(arguments) - {
         "command",
+        "mode",
         "workdir",
         "yield_after",
-        "background",
         "timeout",
     }
     if unknown_arguments:
@@ -486,11 +518,14 @@ def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
     if not isinstance(command, str) or not command:
         return "command must be a non-empty string"
 
+    mode = arguments.get("mode")
+    if not isinstance(mode, str) or mode not in BASH_EXECUTION_MODES:
+        return "mode must be one of: foreground, auto, background"
+    if mode != "auto" and "yield_after" in arguments:
+        return "yield_after is only valid when mode is auto"
+
     try:
         workdir = optional_string(arguments.get("workdir"), field_name="workdir")
-        background = optional_bool(
-            arguments.get("background"), field_name="background", default=False
-        )
         yield_after = optional_number(
             arguments.get("yield_after"),
             field_name="yield_after",
@@ -508,9 +543,9 @@ def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
 
     return {
         "command": command,
+        "mode": mode,
         "workdir": workdir,
         "yield_after": yield_after,
-        "background": background,
         "timeout": timeout,
     }
 
@@ -687,23 +722,47 @@ async def _run_foreground_phase(
     process_manager: ProcessManager,
     context: ToolContext,
     session_id: str,
-    yield_after: float,
+    yield_after: float | None,
+    *,
+    mode: str,
 ) -> JsonObject:
-    deadline = asyncio.get_running_loop().time() + yield_after
+    deadline = asyncio.get_running_loop().time() + yield_after if yield_after is not None else None
 
     while True:
         poll_result = await process_manager.poll(session_id, context.agent_id, timeout_ms=0)
         await _emit_output_chunks(context, session_id, poll_result)
 
         if poll_result["status"] != "running":
-            return await _completion_result(process_manager, context, session_id)
+            return await _completion_result(
+                process_manager,
+                context,
+                session_id,
+                mode=mode,
+            )
 
-        if context.is_cancelled() or asyncio.get_running_loop().time() >= deadline:
-            return await _background_result(process_manager, context, session_id)
+        if context.is_cancelled():
+            await process_manager.kill(session_id, context.agent_id)
+            return await _completion_result(
+                process_manager,
+                context,
+                session_id,
+                mode=mode,
+            )
+        if deadline is not None and asyncio.get_running_loop().time() >= deadline:
+            return await _background_result(
+                process_manager,
+                context,
+                session_id,
+                mode=mode,
+                handoff_after=yield_after,
+            )
 
-        sleep_seconds = min(
-            FOREGROUND_POLL_INTERVAL_SECONDS, deadline - asyncio.get_running_loop().time()
-        )
+        sleep_seconds = FOREGROUND_POLL_INTERVAL_SECONDS
+        if deadline is not None:
+            sleep_seconds = min(
+                sleep_seconds,
+                deadline - asyncio.get_running_loop().time(),
+            )
         if sleep_seconds > 0:
             await asyncio.sleep(sleep_seconds)
 
@@ -738,6 +797,9 @@ async def _background_result(
     process_manager: ProcessManager,
     context: ToolContext,
     session_id: str,
+    *,
+    mode: str,
+    handoff_after: float | None,
 ) -> JsonObject:
     process_manager.mark_backgrounded(session_id, context.agent_id)
     session = process_manager.get_session(session_id, context.agent_id)
@@ -747,13 +809,23 @@ async def _background_result(
         # A background process keeps writing after this result; always hand the
         # model the log path so it can grep progress without polling.
         fields["log_file"] = str(session.log_file)
-    return tool_success({"status": "running", "session_id": session_id, **fields})
+    result: JsonObject = {
+        "status": "running",
+        "session_id": session_id,
+        "mode": mode,
+        **fields,
+    }
+    result["delivery"] = "automatic"
+    result["handoff_note"] = _handoff_note(mode, handoff_after)
+    return tool_success(result)
 
 
 async def _completion_result(
     process_manager: ProcessManager,
     context: ToolContext,
     session_id: str,
+    *,
+    mode: str,
 ) -> JsonObject:
     session = process_manager.get_session(session_id, context.agent_id)
     output = await _combined_output(process_manager, context, session_id)
@@ -761,8 +833,26 @@ async def _completion_result(
         {
             "status": "completed",
             "exit_code": session.exit_code,
+            "mode": mode,
             **_shape_output_fields(session, output),
         }
+    )
+
+
+def _handoff_note(mode: str, handoff_after: float | None) -> str:
+    if mode == "auto" and handoff_after is not None:
+        transition = (
+            "The command is still running and has been handed off to vBot after "
+            f"{handoff_after:g} seconds."
+        )
+    else:
+        transition = "The command is still running and has been handed off to vBot immediately."
+    return (
+        f"{transition} vBot will monitor it and deliver its terminal result automatically "
+        "in one coalesced follow-up Run. You may continue work that does not depend on "
+        "this result, or finish the current Run now. Do not poll merely to wait, and do "
+        "not start another copy of the command. If your next action depends on the "
+        "result, inspect the process explicitly or use foreground mode next time."
     )
 
 

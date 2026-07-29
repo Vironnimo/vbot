@@ -76,8 +76,12 @@ SUBAGENT_ACTIVITY_NOTE_TEMPLATE = (
     "status or progress becomes relevant."
 )
 TOP_LEVEL_BACKGROUND_NOTE = (
-    "This Sub-Agent is running in the background. Continue independent work or end your "
-    "turn; its result will be delivered automatically. Do not poll."
+    "This Sub-Agent is running in the background and is monitored by vBot. You may continue "
+    "work that does not depend on its result, or finish the current Run now. Do not poll "
+    "merely to wait; request status only when your next action genuinely depends on the "
+    "result. When the current Run ends, vBot combines every background result already "
+    "finished into one automatic follow-up Run. Work still running at that boundary is "
+    "delivered later."
 )
 
 # Cascade policy switch: when True, a parent Run cancellation cascades to every
