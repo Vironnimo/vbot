@@ -5,7 +5,6 @@ from __future__ import annotations
 import html
 import re
 from collections.abc import Callable, Mapping
-from datetime import date
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -50,6 +49,7 @@ _SEARXNG_DOMAIN_WARNING = (
     "domain-filter completeness depends on the configured SearXNG engines; "
     "returned results are still restricted to applied_domains"
 )
+_SEARXNG_RECENCY_WARNING = "recency enforcement depends on the configured SearXNG engines"
 
 _BROWSER_HEADERS: dict[str, str] = {
     "User-Agent": (
@@ -64,35 +64,14 @@ _BROWSER_HEADERS: dict[str, str] = {
     "Pragma": "no-cache",
 }
 
-_BRAVE_FRESHNESS_MAP: dict[str, str] = {
-    "pd": "pd",
+_RECENCY_VALUES = ("day", "month", "year")
+_BRAVE_RECENCY_MAP: dict[str, str] = {
     "day": "pd",
-    "d": "pd",
-    "pw": "pw",
-    "week": "pw",
-    "w": "pw",
-    "pm": "pm",
     "month": "pm",
-    "m": "pm",
-    "py": "py",
     "year": "py",
-    "y": "py",
-}
-_SEARXNG_TIME_RANGE_MAP: dict[str, str] = {
-    "pd": "day",
-    "day": "day",
-    "d": "day",
-    "pm": "month",
-    "month": "month",
-    "m": "month",
-    "py": "year",
-    "year": "year",
-    "y": "year",
 }
 
-_ALLOWED_ARGUMENTS = frozenset(
-    {"query", "domains", "count", "page", "freshness", "date_after", "date_before"}
-)
+_ALLOWED_ARGUMENTS = frozenset({"query", "domains", "count", "page", "recency"})
 
 WEB_SEARCH_TOOL_NAME = "web_search"
 WEB_SEARCH_TOOL_DESCRIPTION = (
@@ -100,7 +79,7 @@ WEB_SEARCH_TOOL_DESCRIPTION = (
     "structured results with title, url, description, and page age where "
     "available. Descriptions are short snippets - use web_fetch on a result "
     "url to read the full page. Supports domain restriction (domains), "
-    "recency filtering (freshness or date bounds), and pagination (page). "
+    "a provider-neutral recency window (recency), and pagination (page). "
     "Search operators in query are passed through to the configured provider."
 )
 WEB_SEARCH_TOOL_PARAMETERS: JsonObject = {
@@ -141,26 +120,13 @@ WEB_SEARCH_TOOL_PARAMETERS: JsonObject = {
             "maximum": MAX_WEB_SEARCH_PAGE,
             "default": 1,
         },
-        "freshness": {
+        "recency": {
             "type": "string",
+            "enum": list(_RECENCY_VALUES),
             "description": (
-                "Optional recency filter. Supports day/week/month/year (or d/w/m/y, "
-                "pd/pw/pm/py) or YYYY-MM-DDtoYYYY-MM-DD. Ignored when both "
-                "date_after and date_before are set."
-            ),
-        },
-        "date_after": {
-            "type": "string",
-            "pattern": r"^\d{4}-\d{2}-\d{2}$",
-            "description": (
-                "Optional lower date bound (YYYY-MM-DD); set both bounds for an exact range."
-            ),
-        },
-        "date_before": {
-            "type": "string",
-            "pattern": r"^\d{4}-\d{2}-\d{2}$",
-            "description": (
-                "Optional upper date bound (YYYY-MM-DD); set both bounds for an exact range."
+                "Optional provider-neutral age window for results: day, month, or year. "
+                "The configured search provider determines page age. Omit for no recency "
+                "restriction."
             ),
         },
     },
@@ -273,114 +239,12 @@ def _clean_snippet(raw: Any) -> str:
     return html.unescape(_HTML_TAG_PATTERN.sub("", text)).strip()
 
 
-def _normalize_date(raw: Any, field_name: str) -> tuple[str, str | None]:
-    text = _normalize_text(raw)
-    if not text:
+def _normalize_recency(raw: Any) -> tuple[str, str | None]:
+    if raw is None:
         return "", None
-
-    try:
-        parsed = date.fromisoformat(text)
-    except ValueError:
-        return "", f"{field_name} must be in YYYY-MM-DD format"
-
-    return parsed.isoformat(), None
-
-
-def _parse_date_range_token(value: str) -> tuple[str, str] | None:
-    compact = value.strip().replace(" ", "")
-    if "to" not in compact:
-        return None
-
-    start_raw, end_raw = compact.split("to", 1)
-    start_raw = start_raw.strip()
-    end_raw = end_raw.strip()
-    if not start_raw or not end_raw:
-        return None
-
-    start_date, start_error = _normalize_date(start_raw, "freshness")
-    end_date, end_error = _normalize_date(end_raw, "freshness")
-    if start_error is not None or end_error is not None:
-        return None
-    if start_date > end_date:
-        return None
-    return start_date, end_date
-
-
-def _build_brave_filters(
-    freshness: str,
-    date_after: str,
-    date_before: str,
-) -> tuple[dict[str, str], list[str], str | None]:
-    warnings: list[str] = []
-    filters: dict[str, str] = {}
-
-    if date_after and date_before:
-        filters["freshness"] = f"{date_after}to{date_before}"
-        if freshness:
-            warnings.append("freshness ignored because date_after/date_before were provided")
-        return filters, warnings, None
-
-    if date_after or date_before:
-        warnings.append(
-            "brave applies date filters only when both date_after and date_before are set"
-        )
-
-    if not freshness:
-        return filters, warnings, None
-
-    mapped = _BRAVE_FRESHNESS_MAP.get(freshness)
-    if mapped is not None:
-        filters["freshness"] = mapped
-        return filters, warnings, None
-
-    parsed_range = _parse_date_range_token(freshness)
-    if parsed_range is not None:
-        start_date, end_date = parsed_range
-        filters["freshness"] = f"{start_date}to{end_date}"
-        return filters, warnings, None
-
-    return (
-        filters,
-        warnings,
-        "freshness must be one of day/week/month/year (or d/w/m/y, pd/pw/pm/py) "
-        "or YYYY-MM-DDtoYYYY-MM-DD",
-    )
-
-
-def _build_searxng_filters(
-    freshness: str,
-    date_after: str,
-    date_before: str,
-) -> tuple[dict[str, str], list[str], str | None]:
-    warnings: list[str] = []
-    filters: dict[str, str] = {}
-
-    if date_after or date_before:
-        warnings.append("searxng does not support exact date ranges; date filters ignored")
-
-    if not freshness:
-        return filters, warnings, None
-
-    mapped = _SEARXNG_TIME_RANGE_MAP.get(freshness)
-    if mapped is not None:
-        filters["time_range"] = mapped
-        return filters, warnings, None
-
-    if freshness in {"pw", "week", "w"}:
-        warnings.append("searxng does not support week time_range; freshness ignored")
-        return filters, warnings, None
-
-    parsed_range = _parse_date_range_token(freshness)
-    if parsed_range is not None:
-        warnings.append("searxng does not support exact date ranges; freshness ignored")
-        return filters, warnings, None
-
-    return (
-        filters,
-        warnings,
-        "freshness must be one of day/week/month/year (or d/w/m/y, pd/pw/pm/py) "
-        "or YYYY-MM-DDtoYYYY-MM-DD",
-    )
+    if not isinstance(raw, str) or raw not in _RECENCY_VALUES:
+        return "", f"recency must be one of: {', '.join(_RECENCY_VALUES)}"
+    return raw, None
 
 
 def _standardize_results(raw_results: Any) -> list[dict[str, Any]]:
@@ -475,14 +339,8 @@ async def _search_brave(
     domains: list[str],
     count: int,
     page: int,
-    freshness: str,
-    date_after: str,
-    date_before: str,
+    recency: str,
 ) -> tuple[dict[str, Any] | None, HttpRequestFailure | None]:
-    filters, warnings, filter_error = _build_brave_filters(freshness, date_after, date_before)
-    if filter_error is not None:
-        return None, HttpRequestFailure(filter_error)
-
     search_query = _build_search_query(query, domains)
 
     # text_decorations off: Brave otherwise wraps snippets in highlight markup.
@@ -490,7 +348,8 @@ async def _search_brave(
     if page > 1:
         # Brave paginates with a zero-based page offset in units of `count`.
         params["offset"] = page - 1
-    params.update(filters)
+    if recency:
+        params["freshness"] = _BRAVE_RECENCY_MAP[recency]
 
     async with httpx.AsyncClient(headers=_BROWSER_HEADERS, timeout=_REQUEST_TIMEOUT) as client:
         for attempt in range(MAX_RETRIES + 1):
@@ -560,10 +419,8 @@ async def _search_brave(
             }
             if domains:
                 normalized_payload["applied_domains"] = domains
-            if filters:
-                normalized_payload["filters"] = filters
-            if warnings:
-                normalized_payload["warnings"] = warnings
+            if recency:
+                normalized_payload["recency"] = recency
             if isinstance(payload, dict) and isinstance(payload.get("query"), dict):
                 more_results = payload.get("query", {}).get("more_results_available")
                 if isinstance(more_results, bool):
@@ -592,19 +449,13 @@ async def _search_searxng(
     domains: list[str],
     count: int,
     page: int,
-    freshness: str,
-    date_after: str,
-    date_before: str,
+    recency: str,
 ) -> tuple[dict[str, Any] | None, HttpRequestFailure | None]:
     endpoint, endpoint_error = _build_searxng_endpoint(base_url)
     if endpoint_error is not None:
         return None, HttpRequestFailure(endpoint_error)
     if endpoint is None:
         return None, HttpRequestFailure("SearXNG endpoint could not be built")
-
-    filters, warnings, filter_error = _build_searxng_filters(freshness, date_after, date_before)
-    if filter_error is not None:
-        return None, HttpRequestFailure(filter_error)
 
     search_query = _build_search_query(query, domains)
     params: dict[str, Any] = {
@@ -614,7 +465,8 @@ async def _search_searxng(
         "safesearch": 0,
         "categories": "general",
     }
-    params.update(filters)
+    if recency:
+        params["time_range"] = recency
 
     async with httpx.AsyncClient(headers=_BROWSER_HEADERS, timeout=_REQUEST_TIMEOUT) as client:
         for attempt in range(MAX_RETRIES + 1):
@@ -677,9 +529,13 @@ async def _search_searxng(
             }
             if domains:
                 normalized_payload["applied_domains"] = domains
+            if recency:
+                normalized_payload["recency"] = recency
+            warnings: list[str] = []
+            if domains:
                 warnings.append(_SEARXNG_DOMAIN_WARNING)
-            if filters:
-                normalized_payload["filters"] = filters
+            if recency:
+                warnings.append(_SEARXNG_RECENCY_WARNING)
             if warnings:
                 normalized_payload["warnings"] = warnings
             return normalized_payload, None
@@ -788,23 +644,9 @@ async def web_search_handler(
     except ToolArgumentError as error:
         return tool_failure("validation_error", str(error), retryable=False)
 
-    freshness = _normalize_text(arguments.get("freshness")).lower()
-    date_after, after_error = _normalize_date(arguments.get("date_after"), "date_after")
-    if after_error is not None:
-        return tool_failure("validation_error", after_error, retryable=False)
-
-    date_before, before_error = _normalize_date(arguments.get("date_before"), "date_before")
-    if before_error is not None:
-        return tool_failure("validation_error", before_error, retryable=False)
-
-    if date_after and date_before and date_after > date_before:
-        return tool_failure(
-            "validation_error", "date_after must be on or before date_before", retryable=False
-        )
-
-    _, _, filter_error = _build_brave_filters(freshness, date_after, date_before)
-    if filter_error is not None:
-        return tool_failure("validation_error", filter_error, retryable=False)
+    recency, recency_error = _normalize_recency(arguments.get("recency"))
+    if recency_error is not None:
+        return tool_failure("validation_error", recency_error, retryable=False)
 
     provider = settings["provider"]
     if provider == WEB_SEARCH_PROVIDER_SEARXNG:
@@ -814,9 +656,7 @@ async def web_search_handler(
             domains=domains,
             count=count,
             page=page,
-            freshness=freshness,
-            date_after=date_after,
-            date_before=date_before,
+            recency=recency,
         )
         return _search_result_envelope(payload, search_failure)
 
@@ -834,9 +674,7 @@ async def web_search_handler(
         domains=domains,
         count=count,
         page=page,
-        freshness=freshness,
-        date_after=date_after,
-        date_before=date_before,
+        recency=recency,
     )
     return _search_result_envelope(payload, search_failure)
 

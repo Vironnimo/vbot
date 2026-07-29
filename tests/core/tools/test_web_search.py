@@ -109,9 +109,7 @@ def test_register_web_search_tool_schema() -> None:
         "domains",
         "count",
         "page",
-        "freshness",
-        "date_after",
-        "date_before",
+        "recency",
     }
     domains_schema = properties["domains"]
     assert domains_schema["items"] == {
@@ -128,8 +126,8 @@ def test_register_web_search_tool_schema() -> None:
     page_schema = properties["page"]
     assert page_schema["minimum"] == 1
     assert page_schema["maximum"] == 10
-    assert properties["date_after"]["pattern"] == r"^\d{4}-\d{2}-\d{2}$"
-    assert properties["date_before"]["pattern"] == r"^\d{4}-\d{2}-\d{2}$"
+    assert properties["recency"]["enum"] == ["day", "month", "year"]
+    assert "provider-neutral age window" in properties["recency"]["description"]
 
 
 @pytest.mark.asyncio
@@ -177,49 +175,37 @@ async def test_web_search_handler_count_out_of_range(tmp_path: Path, count: int)
 
 
 @pytest.mark.asyncio
-async def test_web_search_handler_invalid_date_format(tmp_path: Path) -> None:
+@pytest.mark.parametrize("retired_field", ["freshness", "date_after", "date_before"])
+async def test_web_search_handler_rejects_retired_time_filters(
+    tmp_path: Path,
+    retired_field: str,
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
     result = await web_search_handler(
         make_context(workspace),
-        {"query": "vbot", "date_after": "not-a-date"},
+        {"query": "vbot", retired_field: "day"},
         _fake_credential_resolver,
     )
 
-    assert_failure_envelope(result, "validation_error")
+    error = assert_failure_envelope(result, "validation_error")
+    assert f"Unknown argument(s): {retired_field}" == error["message"]
 
 
 @pytest.mark.asyncio
-async def test_web_search_handler_date_range_inverted(tmp_path: Path) -> None:
+async def test_web_search_handler_invalid_recency(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
     result = await web_search_handler(
         make_context(workspace),
-        {
-            "query": "vbot",
-            "date_after": "2025-12-31",
-            "date_before": "2025-01-01",
-        },
+        {"query": "vbot", "recency": "week"},
         _fake_credential_resolver,
     )
 
-    assert_failure_envelope(result, "validation_error")
-
-
-@pytest.mark.asyncio
-async def test_web_search_handler_invalid_freshness(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    result = await web_search_handler(
-        make_context(workspace),
-        {"query": "vbot", "freshness": "unknown"},
-        _fake_credential_resolver,
-    )
-
-    assert_failure_envelope(result, "validation_error")
+    error = assert_failure_envelope(result, "validation_error")
+    assert error["message"] == "recency must be one of: day, month, year"
 
 
 @pytest.mark.asyncio
@@ -663,7 +649,15 @@ async def test_web_search_validation_error_signals_not_retryable(tmp_path: Path)
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_web_search_handler_brave_success_with_freshness(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("recency", "provider_value"),
+    [("day", "pd"), ("month", "pm"), ("year", "py")],
+)
+async def test_web_search_handler_brave_maps_canonical_recency(
+    tmp_path: Path,
+    recency: str,
+    provider_value: str,
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
@@ -673,45 +667,25 @@ async def test_web_search_handler_brave_success_with_freshness(tmp_path: Path) -
 
     result = await web_search_handler(
         make_context(workspace),
-        {"query": "vbot", "freshness": "week"},
+        {"query": "vbot", "recency": recency},
         _fake_credential_resolver,
     )
 
     data = assert_success_envelope(result)
     assert data["result_count"] == 0
+    assert data["recency"] == recency
+    assert "filters" not in data
     request = route.calls[0].request
-    assert request.url.params["freshness"] == "pw"
+    assert request.url.params["freshness"] == provider_value
 
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_web_search_handler_brave_success_with_date_range(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    route = respx.get(_BRAVE_ENDPOINT).mock(
-        return_value=httpx.Response(200, json={"web": {"results": []}})
-    )
-
-    result = await web_search_handler(
-        make_context(workspace),
-        {
-            "query": "vbot",
-            "date_after": "2025-01-01",
-            "date_before": "2025-12-31",
-        },
-        _fake_credential_resolver,
-    )
-
-    data = assert_success_envelope(result)
-    assert data["result_count"] == 0
-    request = route.calls[0].request
-    assert request.url.params["freshness"] == "2025-01-01to2025-12-31"
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_web_search_handler_searxng_success_without_api_key(tmp_path: Path) -> None:
+@pytest.mark.parametrize("recency", ["day", "month", "year"])
+async def test_web_search_handler_searxng_maps_canonical_recency_without_api_key(
+    tmp_path: Path,
+    recency: str,
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
@@ -737,7 +711,7 @@ async def test_web_search_handler_searxng_success_without_api_key(tmp_path: Path
 
     result = await web_search_handler(
         make_context(workspace),
-        {"query": "vbot", "count": 1, "freshness": "day"},
+        {"query": "vbot", "count": 1, "recency": recency},
         lambda key: "",
         lambda: {
             "provider": "searxng",
@@ -750,14 +724,16 @@ async def test_web_search_handler_searxng_success_without_api_key(tmp_path: Path
     assert data["query"] == "vbot"
     assert data["count_requested"] == 1
     assert data["result_count"] == 1
-    assert data["filters"] == {"time_range": "day"}
+    assert data["recency"] == recency
+    assert "filters" not in data
+    assert data["warnings"] == ["recency enforcement depends on the configured SearXNG engines"]
 
     request = route.calls[0].request
     assert request.url.params["q"] == "vbot"
     assert request.url.params["format"] == "json"
     assert request.url.params["categories"] == "general"
     assert request.url.params["safesearch"] == "0"
-    assert request.url.params["time_range"] == "day"
+    assert request.url.params["time_range"] == recency
 
     results = data["results"]
     assert isinstance(results, list)
