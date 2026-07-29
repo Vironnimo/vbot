@@ -74,6 +74,29 @@ def test_create_app_wires_runtime_services_into_state(tmp_path: Path) -> None:
     assert runtime.logger is not None
 
 
+def test_create_app_starts_when_a_once_fire_claim_is_invalid(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    seed_cron = CronService(cast(Any, SimpleNamespace()), data_dir)
+    once = seed_cron.create_job(
+        agent_id="main",
+        prompt="Once prompt",
+        schedule_type="once",
+        run_at="2099-01-01T00:00:00+00:00",
+    )
+    claim_path = seed_cron._once_fire_claim_path(once.id)
+    claim_path.parent.mkdir(parents=True, exist_ok=True)
+    claim_path.write_text("{", encoding="utf-8")
+    runtime = Runtime(Config(data_dir=data_dir))
+    app = create_app(runtime=runtime)
+
+    with TestClient(app) as client:
+        response = client.get("/health")
+        assert runtime.cron_service.list_jobs() == []
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
 def test_create_app_wires_runtime_owned_chat_runs_for_stub_runtime(tmp_path: Path) -> None:
     runtime = _StubServerRuntime(tmp_path)
     app = create_app(runtime=cast(Any, runtime))

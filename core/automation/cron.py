@@ -764,49 +764,56 @@ class CronService:
         needs_save = False
         once_claims_to_remove: list[str] = []
 
-        for job in self._jobs.values():
-            if job.status != "active":
-                continue
-            if job.schedule_type == "once":
-                claimed_at = self._read_once_fire_claimed_at(job.id)
-                if claimed_at is not None:
-                    _LOGGER.warning(
-                        "Marking claimed once job as completed (id=%s claimed_at=%s)",
-                        job.id,
-                        claimed_at,
-                    )
-                    job.status = "completed"
-                    job.last_fired_at = claimed_at
-                    job.last_outcome = "unknown"
-                    job.last_error = "vBot restarted after this once job was claimed"
-                    needs_save = True
-                    once_claims_to_remove.append(job.id)
+        try:
+            for job in self._jobs.values():
+                if job.status != "active":
                     continue
-            if job.remaining_runs == 0:
-                job.status = "completed"
-                if job.last_outcome is None:
-                    job.last_outcome = "unknown"
-                    job.last_error = "vBot restarted after the final Run was admitted"
-                needs_save = True
-                continue
-            if job.schedule_type == "once" and self._is_missed_once_job(job, reference_time):
-                _LOGGER.warning(
-                    "Marking missed once job as missed (id=%s run_at=%s)",
-                    job.id,
-                    job.run_at,
-                )
-                job.status = "missed"
-                job.last_outcome = "missed"
-                job.last_error = "Scheduled time passed while vBot was offline"
-                needs_save = True
-                continue
-            self._start_job_task(job)
+                if job.schedule_type == "once":
+                    claimed_at = self._read_once_fire_claimed_at(job.id)
+                    if claimed_at is not None:
+                        _LOGGER.warning(
+                            "Marking claimed once job as completed (id=%s claimed_at=%s)",
+                            job.id,
+                            claimed_at,
+                        )
+                        job.status = "completed"
+                        job.last_fired_at = claimed_at
+                        job.last_outcome = "unknown"
+                        job.last_error = "vBot restarted after this once job was claimed"
+                        needs_save = True
+                        once_claims_to_remove.append(job.id)
+                        continue
+                if job.remaining_runs == 0:
+                    job.status = "completed"
+                    if job.last_outcome is None:
+                        job.last_outcome = "unknown"
+                        job.last_error = "vBot restarted after the final Run was admitted"
+                    needs_save = True
+                    continue
+                if job.schedule_type == "once" and self._is_missed_once_job(job, reference_time):
+                    _LOGGER.warning(
+                        "Marking missed once job as missed (id=%s run_at=%s)",
+                        job.id,
+                        job.run_at,
+                    )
+                    job.status = "missed"
+                    job.last_outcome = "missed"
+                    job.last_error = "Scheduled time passed while vBot was offline"
+                    needs_save = True
+                    continue
 
-        if needs_save:
-            self._save_jobs()
-            self._notify_changed()
-            for job_id in once_claims_to_remove:
-                self._remove_once_fire_claim(job_id)
+            if needs_save:
+                self._save_jobs()
+                self._notify_changed()
+                for job_id in once_claims_to_remove:
+                    self._remove_once_fire_claim(job_id)
+        except CronStorageError as error:
+            self._degrade_invalid_storage(error)
+            return
+
+        for job in self._jobs.values():
+            if job.status == "active":
+                self._start_job_task(job)
 
     def stop(self) -> None:
         """Cancel all running cron tasks. Idempotent."""
@@ -1450,7 +1457,10 @@ class CronService:
         claimed_at = payload.get("claimed_at")
         if not isinstance(claimed_at, str):
             raise CronStorageError(f"Invalid once fire claim {claim_path}: claimed_at is required")
-        self._parse_utc_timestamp(claimed_at, field_name="claimed_at")
+        try:
+            self._parse_utc_timestamp(claimed_at, field_name="claimed_at")
+        except CronJobValidationError as error:
+            raise CronStorageError(f"Invalid once fire claim {claim_path}: {error}") from error
         return claimed_at
 
     def _remove_once_fire_claim(self, job_id: str) -> None:
