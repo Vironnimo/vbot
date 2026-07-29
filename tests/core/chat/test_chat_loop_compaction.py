@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any, cast
 
@@ -12,7 +13,12 @@ from core.chat import (
     ChatLoop,
     ChatMessage,
 )
-from core.chat.chat import _RequestState, _RunRequest
+from core.chat.chat import (
+    MAX_AUTO_COMPACTIONS_PER_RUN,
+    _RequestState,
+    _restore_in_run_tool_result_content,
+    _RunRequest,
+)
 from core.chat.continuation import (
     ContinuationTracker,
     inject_continuation_reminder,
@@ -20,6 +26,11 @@ from core.chat.continuation import (
     render_continuation_reminder,
 )
 from core.chat.messages import HISTORY_COMPACTION_GUIDANCE
+from core.compaction import (
+    MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
+    TOOL_RESULT_COMPACTED_FIELD,
+)
+from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.runs import (
     COMPACTION_COMPLETED_EVENT,
     Run,
@@ -297,6 +308,44 @@ async def test_compaction_maybe_auto_compact_skips_when_threshold_not_reached(
 
 
 @pytest.mark.asyncio
+async def test_compaction_uses_larger_request_estimate_than_stale_provider_usage(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([])
+    compaction_service = StubCompactionService(
+        should_auto=False,
+        estimated_tokens=95,
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        storage=StubStorage(
+            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 100}),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Hi"))
+    messages = await build_chat_loop(runtime)._build_request_messages(agent, session)
+    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+    await _maybe_auto_compact(
+        build_chat_loop(runtime, compaction_service=cast(Any, compaction_service)),
+        agent,
+        adapter,
+        "gpt-5.2",
+        session,
+        messages,
+        usage={"input_tokens": 20},
+        run=run,
+    )
+
+    assert compaction_service.should_auto_calls == [(95, 100, 0.8)]
+
+
+@pytest.mark.asyncio
 async def test_compaction_maybe_auto_compact_skips_without_new_compactable_context(
     tmp_path: Path,
 ) -> None:
@@ -341,7 +390,7 @@ async def test_compaction_maybe_auto_compact_skips_without_new_compactable_conte
 
     assert result == messages
     assert len(compaction_service.compactable_context_calls) == 1
-    assert compaction_service.should_auto_calls == []
+    assert compaction_service.should_auto_calls == [(90, 100, 0.8)]
     assert compaction_service.compact_calls == []
 
 
@@ -453,6 +502,10 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
     assert len(compaction_service.compact_calls) == 1
     assert compaction_service.compact_calls[0]["summary_model_id"] == "gpt-5.2"
     assert compaction_service.compact_calls[0]["summary_adapter"] is adapter
+    assert (
+        compaction_service.compact_calls[0]["minimum_reclaim_tokens"]
+        == MIN_AUTO_COMPACTION_RECLAIM_TOKENS
+    )
     assert [message["role"] for message in rebuilt] == ["system", "user", "user", "assistant"]
     assert rebuilt[1]["content"] == (
         "<system-reminder>\nCompacted tail context.\n\n"
@@ -467,6 +520,81 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
     assert compaction_event.payload["checkpoint"] == 1
     assert compaction_event.payload["checkpoint_id"] == checkpoint.id
     assert compaction_event.payload["history_available"] is True
+
+
+@pytest.mark.asyncio
+async def test_compaction_caps_automatic_checkpoints_per_run(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        storage=StubStorage(
+            {"auto": True, "threshold": 0.8, "tail_tokens": 15_000, "summary_model": None}
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 100}),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    tail_user = ChatMessage.user("Tail user")
+    tail_assistant = ChatMessage.assistant(model=agent.model, content="Tail assistant")
+    session.append(tail_user)
+    session.append(tail_assistant)
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="Compacted tail context.",
+        projection=[tail_user, tail_assistant],
+        compacted_token_count=42,
+    )
+    compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
+    loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
+    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+    context = loop._create_run_execution_context(
+        run,
+        _RunRequest(content="test"),
+        session=session,
+        prior_continuation=None,
+        continuation_reminder=None,
+        continuation_tracker=None,
+    )
+    context.request_state = await loop._build_request_state(agent, session)
+
+    for _ in range(MAX_AUTO_COMPACTIONS_PER_RUN + 1):
+        context.request_state = await loop._maybe_auto_compact_state(
+            context,
+            context.primary_target,
+            usage={"input_tokens": 90},
+        )
+
+    assert len(compaction_service.compact_calls) == MAX_AUTO_COMPACTIONS_PER_RUN
+    assert context.auto_compaction_attempts == MAX_AUTO_COMPACTIONS_PER_RUN
+    assert persisted_roles(session.load()).count("compaction_checkpoint") == (
+        MAX_AUTO_COMPACTIONS_PER_RUN
+    )
+
+
+def test_compaction_does_not_restore_rich_content_for_aged_tool_result() -> None:
+    call_id = "call-image"
+    aged_content = json.dumps(
+        {
+            TOOL_RESULT_COMPACTED_FIELD: True,
+            "tool": "read",
+            "original_chars": 50_000,
+            "outcome": {"ok": True},
+        }
+    )
+    rebuilt = [{"role": "tool", "tool_call_id": call_id, "content": aged_content}]
+    live = [
+        {
+            "role": "tool",
+            "tool_call_id": call_id,
+            "content": '{"ok":true}',
+            TOOL_RESULT_CONTENT_BLOCKS_FIELD: [{"type": "text", "text": "rich"}],
+        }
+    ]
+
+    restored = _restore_in_run_tool_result_content(rebuilt, live)
+
+    assert TOOL_RESULT_CONTENT_BLOCKS_FIELD not in restored[0]
 
 
 @pytest.mark.asyncio
