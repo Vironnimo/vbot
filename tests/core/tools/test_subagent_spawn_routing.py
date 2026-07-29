@@ -68,7 +68,10 @@ async def test_register_subagent_tools_registers_one_flat_public_tool() -> None:
         "Stable id returned by run. Required for status and cancel."
     )
     assert properties["content"]["description"] == (
-        "Self-contained task or message. Required for run."
+        "Instruction for action run. Without session_id, provide a self-contained task "
+        "with the goal, relevant context, scope, constraints, and expected result. With "
+        "session_id, provide a continuation message that may rely on that Sub-Agent "
+        "Session's existing history."
     )
     assert properties["agent_id"]["description"] == (
         "Target Agent id from the allowed values for run. Omit for the calling Agent "
@@ -79,8 +82,9 @@ async def test_register_subagent_tools_registers_one_flat_public_tool() -> None:
         "Session instead of creating one."
     )
     assert properties["model"]["description"] == (
-        "Run-local primary Model override in <provider>/<model-id> form. "
-        "Does not modify the target Agent or Session."
+        "Primary Model override for action run only, in <provider>/<model-id> form. "
+        "Applies only to the newly admitted Run and does not modify the target Agent "
+        "or Session."
     )
     assert properties["thinking_effort"]["enum"] == [
         "",
@@ -93,8 +97,8 @@ async def test_register_subagent_tools_registers_one_flat_public_tool() -> None:
         "xhigh",
     ]
     assert properties["thinking_effort"]["description"] == (
-        "Run-local thinking effort override. Omit to inherit the target Agent; "
-        "an empty string selects the Provider default."
+        "Thinking effort override for action run only. Omit to inherit the target Agent; "
+        "an empty string selects the Provider default. Applies only to the newly admitted Run."
     )
     assert "background" not in properties
     assert "run_id" not in properties

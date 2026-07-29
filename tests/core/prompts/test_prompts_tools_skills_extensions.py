@@ -379,6 +379,8 @@ def test_subagent_block_renders_only_with_tool_and_lists_additional_targets(
     assert "## Sub-Agents" in prompt
     assert "omit `agent_id`" in prompt
     assert "- `reviewer` — Reviewer — Reviews completed work." in prompt
+    assert "When starting a new Session, send a self-contained task" in prompt
+    assert "A continuation message may rely on that Sub-Agent Session's existing history" in prompt
     assert "You are the top-level Agent." in prompt
     assert "results are delivered automatically" in prompt
     assert "You are a Sub-Agent." in nested_prompt

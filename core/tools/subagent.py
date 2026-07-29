@@ -36,10 +36,11 @@ SUBAGENT_PROMPT_BLOCK_TEMPLATE = (
     "shown:\n\n"
     "{subagent_list}\n\n"
     "Use `subagent` for a bounded task that another Agent can perform independently. "
-    "Send a self-contained task containing the goal, relevant context, scope, "
-    "constraints, and expected result. When several Sub-Agents may edit shared "
-    "files, give them non-overlapping ownership; do not run conflicting edits in "
-    "parallel.\n\n"
+    "When starting a new Session, send a self-contained task containing the goal, "
+    "relevant context, scope, constraints, and expected result. A continuation message "
+    "may rely on that Sub-Agent Session's existing history; include the follow-up "
+    "instruction and any new context. When several Sub-Agents may edit shared files, "
+    "give them non-overlapping ownership; do not run conflicting edits in parallel.\n\n"
     "Project Agents may be listed with a qualified `agent@project` id. Use every "
     "Agent id exactly as listed above.\n\n"
     "{execution_guidance}\n\n"
@@ -83,7 +84,12 @@ _SUBAGENT_ID_PARAMETER: JsonObject = {
 _SUBAGENT_CONTENT_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
-    "description": "Self-contained task or message. Required for run.",
+    "description": (
+        "Instruction for action run. Without session_id, provide a self-contained task "
+        "with the goal, relevant context, scope, constraints, and expected result. With "
+        "session_id, provide a continuation message that may rely on that Sub-Agent "
+        "Session's existing history."
+    ),
 }
 _SUBAGENT_AGENT_ID_PARAMETER: JsonObject = {
     "type": "string",
@@ -97,16 +103,17 @@ _SUBAGENT_MODEL_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
     "description": (
-        "Run-local primary Model override in <provider>/<model-id> form. "
-        "Does not modify the target Agent or Session."
+        "Primary Model override for action run only, in <provider>/<model-id> form. "
+        "Applies only to the newly admitted Run and does not modify the target Agent "
+        "or Session."
     ),
 }
 _SUBAGENT_THINKING_PARAMETER: JsonObject = {
     "type": "string",
     "enum": sorted(ALLOWED_THINKING_EFFORTS),
     "description": (
-        "Run-local thinking effort override. Omit to inherit the target Agent; "
-        "an empty string selects the Provider default."
+        "Thinking effort override for action run only. Omit to inherit the target Agent; "
+        "an empty string selects the Provider default. Applies only to the newly admitted Run."
     ),
 }
 _SUBAGENT_SESSION_ID_PARAMETER: JsonObject = {
