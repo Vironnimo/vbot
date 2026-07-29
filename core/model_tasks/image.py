@@ -21,6 +21,7 @@ from core.model_tasks.image_types import (
 )
 from core.model_tasks.model_tasks import model_supports_task
 from core.model_tasks.task_execution import TaskBindingResolver
+from core.providers.errors import ProviderOutcomeUnknownError
 from core.providers.task_client import TaskClientRuntime
 from core.storage.layout import DataDirectoryLayout
 from core.utils.errors import TaskError, VBotError
@@ -70,6 +71,16 @@ class ImageUnsupportedTargetError(ImageError):
 
 class ImageExecutionError(ImageError):
     """Raised when a provider image task request fails."""
+
+
+class ImageOutcomeUnknownError(ImageExecutionError):
+    """Raised when image generation may have completed at the provider."""
+
+    code = ProviderOutcomeUnknownError.code
+
+    def __init__(self, message: str, *, operation_key: str) -> None:
+        self.operation_key = operation_key
+        super().__init__(message)
 
 
 class ImageInputError(ImageError):
@@ -163,6 +174,16 @@ class ImageService:
             return await provider_client.generate(request_prompt, options=merged_options)
         except ImageError:
             raise
+        except ProviderOutcomeUnknownError as exc:
+            _LOGGER.warning(
+                "Image generation failed for target=%s: %s",
+                target_ref.target,
+                exc,
+            )
+            raise ImageOutcomeUnknownError(
+                str(exc),
+                operation_key=exc.operation_key,
+            ) from exc
         except VBotError as exc:
             # ProviderError / NetworkError / ProviderAuthError / … are
             # expected provider failures, not crashes.

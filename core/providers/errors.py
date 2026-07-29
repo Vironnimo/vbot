@@ -62,6 +62,23 @@ class ProviderTimeoutError(ProviderError):
         super().__init__(message, retryable=True)
 
 
+class ProviderOutcomeUnknownError(ProviderError):
+    """A non-idempotent provider request may have completed.
+
+    Retrying is unsafe because the provider may already have produced and
+    billed the result even though vBot could not receive or parse it.
+    """
+
+    code = "provider_outcome_unknown"
+
+    def __init__(self, message: str, *, operation_key: str) -> None:
+        self.operation_key = operation_key
+        super().__init__(
+            f"{self.code} (operation_key={operation_key}): {message}",
+            retryable=False,
+        )
+
+
 class CatalogEntrySkipped(VBotError):  # noqa: N818
     """Signal that a model catalog entry should be skipped during discovery.
 

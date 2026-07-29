@@ -9,9 +9,19 @@ import httpx
 import pytest
 import respx
 
-from core.providers.errors import NetworkError, ProviderAuthError, ProviderError
+from core.providers.errors import (
+    NetworkError,
+    ProviderAuthError,
+    ProviderError,
+    ProviderOutcomeUnknownError,
+)
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
-from core.providers.task_client import ProviderTaskClient, classify_task_response
+from core.providers.task_client import (
+    NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
+    ProviderTaskClient,
+    TaskRequestRetryPolicy,
+    classify_task_response,
+)
 
 _PROVIDER_BASE_URL = "https://provider.example/api/v1"
 _CONNECTION_BASE_URL = "https://connection.example/api/v1"
@@ -312,6 +322,196 @@ async def test_post_and_parse_raises_network_error_when_all_attempts_fail() -> N
         pytest.raises(NetworkError),
     ):
         await client.post_and_parse("/things", timeout=5.0, parse=lambda response: None)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_non_idempotent_request_retries_failure_before_send() -> None:
+    route = respx.post(f"{_PROVIDER_BASE_URL}/things")
+    route.side_effect = [
+        httpx.ConnectTimeout("connection timed out"),
+        httpx.Response(200, json={"ok": True}),
+    ]
+    client = _make_client()
+
+    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        result = await client.post_and_parse(
+            "/things",
+            timeout=5.0,
+            parse=lambda response: response.json(),
+            retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
+        )
+
+    assert result == {"ok": True}
+    assert route.call_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_type",
+    [httpx.ReadTimeout, httpx.WriteError, httpx.RemoteProtocolError],
+)
+@respx.mock
+async def test_non_idempotent_request_does_not_retry_ambiguous_transport_failure(
+    error_type: type[httpx.TransportError],
+) -> None:
+    route = respx.post(f"{_PROVIDER_BASE_URL}/things").mock(
+        side_effect=error_type("ambiguous transport failure")
+    )
+    client = _make_client()
+
+    with pytest.raises(ProviderOutcomeUnknownError) as exc_info:
+        await client.post_and_parse(
+            "/things",
+            timeout=5.0,
+            parse=lambda response: response.json(),
+            retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
+        )
+
+    assert exc_info.value.retryable is False
+    assert exc_info.value.operation_key
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [502, 504])
+@respx.mock
+async def test_non_idempotent_request_does_not_retry_ambiguous_gateway_status(
+    status_code: int,
+) -> None:
+    route = respx.post(f"{_PROVIDER_BASE_URL}/things").mock(
+        return_value=httpx.Response(status_code, text="gateway failure")
+    )
+    client = _make_client()
+
+    with pytest.raises(ProviderOutcomeUnknownError) as exc_info:
+        await client.post_and_parse(
+            "/things",
+            timeout=5.0,
+            parse=lambda response: response.json(),
+            retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
+        )
+
+    assert f"HTTP {status_code}" in str(exc_info.value)
+    assert "idempotency-key" not in route.calls[0].request.headers
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_non_idempotent_request_retries_rate_limit() -> None:
+    route = respx.post(f"{_PROVIDER_BASE_URL}/things")
+    route.side_effect = [
+        httpx.Response(429, text="rate limited"),
+        httpx.Response(200, json={"ok": True}),
+    ]
+    client = _make_client()
+
+    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        result = await client.post_and_parse(
+            "/things",
+            timeout=5.0,
+            parse=lambda response: response.json(),
+            retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
+        )
+
+    assert result == {"ok": True}
+    assert route.call_count == 2
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_non_idempotent_request_only_retries_verified_status() -> None:
+    route = respx.post(f"{_PROVIDER_BASE_URL}/things")
+    route.side_effect = [
+        httpx.Response(503, text="not processed"),
+        httpx.Response(200, json={"ok": True}),
+    ]
+    client = _make_client()
+    policy = TaskRequestRetryPolicy(
+        replay_safe=False,
+        verified_safe_retry_status_codes=frozenset({503}),
+    )
+
+    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        result = await client.post_and_parse(
+            "/things",
+            timeout=5.0,
+            parse=lambda response: response.json(),
+            retry_policy=policy,
+        )
+
+    assert result == {"ok": True}
+    assert route.call_count == 2
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_non_idempotent_request_does_not_retry_unverified_503() -> None:
+    route = respx.post(f"{_PROVIDER_BASE_URL}/things").mock(
+        return_value=httpx.Response(503, text="ambiguous")
+    )
+    client = _make_client()
+
+    with pytest.raises(ProviderOutcomeUnknownError):
+        await client.post_and_parse(
+            "/things",
+            timeout=5.0,
+            parse=lambda response: response.json(),
+            retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
+        )
+
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_non_idempotent_request_does_not_retry_broken_success_response() -> None:
+    route = respx.post(f"{_PROVIDER_BASE_URL}/things").mock(
+        return_value=httpx.Response(200, json={"incomplete": True})
+    )
+    client = _make_client()
+
+    def _parse(_response: httpx.Response) -> None:
+        raise ProviderError("result is incomplete", retryable=True)
+
+    with pytest.raises(ProviderOutcomeUnknownError, match="could not confirm a usable result"):
+        await client.post_and_parse(
+            "/things",
+            timeout=5.0,
+            parse=_parse,
+            retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
+        )
+
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_idempotency_header_reuses_one_operation_key_across_retries() -> None:
+    route = respx.post(f"{_PROVIDER_BASE_URL}/things")
+    route.side_effect = [
+        httpx.Response(503, text="overloaded"),
+        httpx.Response(200, json={"ok": True}),
+    ]
+    client = _make_client()
+    policy = TaskRequestRetryPolicy(
+        replay_safe=False,
+        idempotency_header_name="Idempotency-Key",
+    )
+
+    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        result = await client.post_and_parse(
+            "/things",
+            timeout=5.0,
+            parse=lambda response: response.json(),
+            retry_policy=policy,
+        )
+
+    operation_keys = [call.request.headers["idempotency-key"] for call in route.calls]
+    assert result == {"ok": True}
+    assert len(set(operation_keys)) == 1
+    assert operation_keys[0]
 
 
 # ---------------------------------------------------------------------------

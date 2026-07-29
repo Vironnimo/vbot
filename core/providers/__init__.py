@@ -15,6 +15,7 @@ from core.providers.credentials import ProviderCredentialResolver
 from core.providers.errors import (
     ProviderAuthError,
     ProviderError,
+    ProviderOutcomeUnknownError,
     ProviderRateLimitError,
     ProviderStreamingUnsupportedError,
     ProviderTimeoutError,
@@ -73,6 +74,7 @@ __all__ = [
     "ProviderAuthError",
     "ProviderConfig",
     "ProviderError",
+    "ProviderOutcomeUnknownError",
     "ProviderRateLimitError",
     "ProviderRegistry",
     "ProviderStreamingUnsupportedError",

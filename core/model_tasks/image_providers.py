@@ -18,7 +18,9 @@ from core.providers.openai import (
 )
 from core.providers.openai_subscription_auth import extract_chatgpt_account_id
 from core.providers.task_client import (
+    NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
     ProviderTaskClient,
+    TaskRequestRetryPolicy,
     is_omittable_option,
     merge_extra_options,
 )
@@ -31,6 +33,10 @@ _DEFAULT_IMAGE_TIMEOUT = 120.0
 _OPENAI_CODEX_IMAGE_TIMEOUT = 300.0
 _OPENAI_CODEX_IMAGE_CARRIER_MODEL = "gpt-5.5"
 _OPENAI_CODEX_IMAGE_INSTRUCTIONS = "You are an image generation assistant."
+_OPENROUTER_IMAGE_RETRY_POLICY = TaskRequestRetryPolicy(
+    replay_safe=False,
+    verified_safe_retry_status_codes=frozenset({503}),
+)
 _LOGGER = get_logger("image.providers")
 
 # OpenRouter's unified image API top-level parameters. The wire layer only
@@ -165,6 +171,7 @@ class ProviderImageClient(ProviderTaskClient):
                 requested_output_format=requested_output_format,
             ),
             json=payload,
+            retry_policy=_OPENROUTER_IMAGE_RETRY_POLICY,
         )
 
     async def _edit_openai(
@@ -196,6 +203,7 @@ class ProviderImageClient(ProviderTaskClient):
             ),
             data=form,
             files=files,
+            retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
         )
 
     async def _generate_openai(
@@ -223,6 +231,7 @@ class ProviderImageClient(ProviderTaskClient):
                 requested_output_format=requested_output_format,
             ),
             json=payload,
+            retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
         )
 
     async def _generate_openai_codex_responses(
@@ -257,6 +266,7 @@ class ProviderImageClient(ProviderTaskClient):
             ),
             json=payload,
             headers=self._openai_codex_headers,
+            retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
         )
 
     async def _openai_codex_headers(self) -> dict[str, str]:

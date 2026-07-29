@@ -26,6 +26,7 @@ from core.model_tasks.image import (
     ImageError,
     ImageExecutionError,
     ImageInputError,
+    ImageOutcomeUnknownError,
     ImageService,
     ImageUnsupportedTargetError,
 )
@@ -63,6 +64,7 @@ from core.model_tasks.speech import (
     SpeechConfigurationError,
     SpeechError,
     SpeechExecutionError,
+    SpeechOutcomeUnknownError,
     SpeechService,
     SpeechUnsupportedTargetError,
 )
@@ -88,6 +90,7 @@ __all__ = [
     "ImageGenerationResult",
     "ImageUnderstandingResult",
     "ImageInputError",
+    "ImageOutcomeUnknownError",
     "ImageService",
     "ImageUnsupportedTargetError",
     "LocalSpeechError",
@@ -104,6 +107,7 @@ __all__ = [
     "SpeechConfigurationError",
     "SpeechError",
     "SpeechExecutionError",
+    "SpeechOutcomeUnknownError",
     "SpeechService",
     "SpeechSynthesisResult",
     "SpeechTranscriptionResult",

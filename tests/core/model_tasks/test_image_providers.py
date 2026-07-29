@@ -22,7 +22,11 @@ from core.model_tasks.image_providers import (
     _parse_openai_codex_image_response,
 )
 from core.model_tasks.image_types import ImageGenerationResult, ImageInput
-from core.providers.errors import ProviderAuthError, ProviderError
+from core.providers.errors import (
+    ProviderAuthError,
+    ProviderError,
+    ProviderOutcomeUnknownError,
+)
 from core.providers.openai import CODEX_EXTRA_HEADERS, CODEX_RESPONSES_MODE
 from core.providers.openai_subscription_auth import OPENAI_AUTH_CLAIM
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
@@ -392,18 +396,48 @@ async def test_openrouter_image_generate_media_type_from_entry_or_format() -> No
 @pytest.mark.asyncio
 @respx.mock
 async def test_openrouter_image_generate_rejects_empty_data() -> None:
-    """A 200 with no ``data`` entries is a malformed response and surfaces
-    as a retryable ``ProviderError``."""
+    """A malformed success is not replayed because generation may be billed."""
 
-    from core.providers.errors import ProviderError
-
-    respx.post(OPENROUTER_IMAGES_URL).mock(
+    route = respx.post(OPENROUTER_IMAGES_URL).mock(
         return_value=httpx.Response(200, json={"created": 1, "data": []})
     )
     client = _openrouter_image_client("black-forest-labs/flux.2-pro")
 
-    with pytest.raises(ProviderError, match="no data"):
+    with pytest.raises(ProviderOutcomeUnknownError, match="no data"):
         await client.generate("a cat", options={})
+
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openrouter_image_generate_retries_documented_503() -> None:
+    route = respx.post(OPENROUTER_IMAGES_URL)
+    route.side_effect = [
+        httpx.Response(503, text="no provider available"),
+        httpx.Response(200, json=_unified_image_response(b"img")),
+    ]
+    client = _openrouter_image_client("black-forest-labs/flux.2-pro")
+
+    with patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock):
+        result = await client.generate("a cat", options={})
+
+    assert result.images == (b"img",)
+    assert route.call_count == 2
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openrouter_image_generate_does_not_retry_ambiguous_502() -> None:
+    route = respx.post(OPENROUTER_IMAGES_URL).mock(
+        return_value=httpx.Response(502, text="invalid upstream response")
+    )
+    client = _openrouter_image_client("black-forest-labs/flux.2-pro")
+
+    with pytest.raises(ProviderOutcomeUnknownError, match="HTTP 502"):
+        await client.generate("a cat", options={})
+
+    assert route.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -1020,7 +1054,7 @@ async def test_openai_subscription_image_edit_posts_source_image() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_openai_subscription_image_generate_retries_missing_final_image() -> None:
+async def test_openai_subscription_image_does_not_retry_missing_final_image() -> None:
     route = respx.post(OPENAI_CODEX_RESPONSES_URL).mock(
         return_value=httpx.Response(
             200,
@@ -1030,14 +1064,11 @@ async def test_openai_subscription_image_generate_retries_missing_final_image() 
     )
     client = _openai_subscription_image_client("gpt-image-2")
 
-    with (
-        patch("core.utils.retry.asyncio.sleep", new_callable=AsyncMock),
-        pytest.raises(ProviderError, match="no final image") as exc_info,
-    ):
+    with pytest.raises(ProviderOutcomeUnknownError, match="no final image") as exc_info:
         await client.generate("a cat", options={})
 
-    assert exc_info.value.retryable is True
-    assert route.call_count == 4
+    assert exc_info.value.retryable is False
+    assert route.call_count == 1
 
 
 @pytest.mark.asyncio

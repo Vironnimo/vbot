@@ -13,6 +13,7 @@ from core.model_tasks.speech_types import SpeechSynthesisResult, SpeechTranscrip
 from core.providers.errors import ProviderError
 from core.providers.task_client import (
     EXTRA_OPTIONS_KEY,
+    NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
     ProviderTaskClient,
     is_omittable_option,
     merge_extra_options,
@@ -130,6 +131,11 @@ class ProviderSpeechClient(ProviderTaskClient):
         merge_extra_options(payload, options)
 
         def _parse(response: httpx.Response) -> SpeechSynthesisResult:
+            if not response.content:
+                raise ProviderError(
+                    "Speech synthesis response contains no audio",
+                    retryable=True,
+                )
             media_type = response.headers.get("content-type", "")
             if not media_type:
                 media_type = _media_type_for_format(response_format)
@@ -145,6 +151,7 @@ class ProviderSpeechClient(ProviderTaskClient):
             timeout=DEFAULT_SPEECH_TIMEOUT,
             parse=_parse,
             json=payload,
+            retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
         )
 
 
