@@ -57,6 +57,37 @@ describe('cron time and history projection', () => {
     expect(form.repeat).toBe('2');
   });
 
+  it('sends an explicit null when an update clears the repeat limit', () => {
+    const form = createCronFormValues({
+      id: 'job-recurring',
+      agent_id: 'main',
+      name: 'Status check',
+      prompt: 'Check status',
+      schedule_type: 'cron',
+      cron_expression: '0 9 * * *',
+      remaining_runs: 2,
+      status: 'active',
+    });
+    form.repeat = '';
+
+    expect(buildUpdateCronPayload(form).repeat).toBeNull();
+  });
+
+  it('sends the current finite repeat count from an unchanged edit form', () => {
+    const form = createCronFormValues({
+      id: 'job-recurring',
+      agent_id: 'main',
+      name: 'Status check',
+      prompt: 'Check status',
+      schedule_type: 'cron',
+      cron_expression: '0 9 * * *',
+      remaining_runs: 2,
+      status: 'active',
+    });
+
+    expect(buildUpdateCronPayload(form).repeat).toBe(2);
+  });
+
   it('shows persisted instants in the server timezone in list and form', () => {
     const job = {
       id: 'job-once',

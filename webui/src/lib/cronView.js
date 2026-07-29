@@ -233,9 +233,7 @@ export function buildUpdateCronPayload(formValues) {
     payload.run_at = resolveOnceRunAtValue(formValues);
   }
   const repeat = optionalPositiveInteger(formValues?.repeat);
-  if (repeat !== null) {
-    payload.repeat = repeat;
-  }
+  payload.repeat = repeat;
 
   return payload;
 }

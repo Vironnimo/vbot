@@ -191,6 +191,30 @@ async def test_cron_create_accepts_interval_repeat_and_omitted_name() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cron_create_rejects_null_repeat_for_once_schedule() -> None:
+    cron_service = Mock()
+    state = _state_with_cron_service(cron_service)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "cron.create",
+            "params": {
+                "agent_id": "main",
+                "prompt": "Run once",
+                "schedule_type": "once",
+                "run_at": "2026-08-01T09:00:00+00:00",
+                "repeat": None,
+            },
+        },
+    )
+
+    assert response["ok"] is False
+    assert "params.repeat cannot be null" in response["error"]["message"]
+    cron_service.create_job.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_cron_list_happy_path_includes_canonical_service_projection() -> None:
     job = SimpleNamespace(
         id="job-1",
@@ -293,6 +317,76 @@ async def test_cron_update_happy_path() -> None:
         prompt="Updated prompt",
         status="paused",
     )
+
+
+@pytest.mark.asyncio
+async def test_cron_update_schedule_without_repeat_preserves_current_count() -> None:
+    cron_service = Mock()
+    cron_service.update_job.return_value = _cron_job(cron_expression="0 10 * * *")
+    state = _state_with_cron_service(cron_service)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "cron.update",
+            "params": {
+                "id": "job-1",
+                "schedule_type": "cron",
+                "cron_expression": "0 10 * * *",
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    cron_service.update_job.assert_called_once_with(
+        "job-1",
+        schedule_type="cron",
+        cron_expression="0 10 * * *",
+    )
+
+
+@pytest.mark.asyncio
+async def test_cron_update_accepts_null_repeat_for_recurring_job() -> None:
+    cron_service = Mock()
+    cron_service.update_job.return_value = _cron_job(remaining_runs=None)
+    state = _state_with_cron_service(cron_service)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "cron.update",
+            "params": {
+                "id": "job-1",
+                "repeat": None,
+            },
+        },
+    )
+
+    assert response["ok"] is True
+    cron_service.update_job.assert_called_once_with("job-1", remaining_runs=None)
+
+
+@pytest.mark.asyncio
+async def test_cron_update_rejects_null_repeat_with_once_schedule() -> None:
+    cron_service = Mock()
+    state = _state_with_cron_service(cron_service)
+
+    response = await dispatch_rpc(
+        state,
+        {
+            "method": "cron.update",
+            "params": {
+                "id": "job-1",
+                "schedule_type": "once",
+                "run_at": "2026-08-01T09:00:00+00:00",
+                "repeat": None,
+            },
+        },
+    )
+
+    assert response["ok"] is False
+    assert "params.repeat cannot be null" in response["error"]["message"]
+    cron_service.update_job.assert_not_called()
 
 
 @pytest.mark.asyncio

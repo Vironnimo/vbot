@@ -105,6 +105,123 @@ def test_cron_no_op_update_does_not_log(tmp_path: Path, caplog: pytest.LogCaptur
     assert not [record for record in caplog.records if record.name == "vbot.automation.cron"]
 
 
+def test_schedule_update_preserves_remaining_runs_when_omitted(tmp_path: Path) -> None:
+    service, _trigger_service = make_service(tmp_path)
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Run three times",
+        schedule_type="cron",
+        cron_expression="0 9 * * *",
+        remaining_runs=3,
+    )
+
+    updated = service.update_job(
+        job.id,
+        schedule_type="interval",
+        interval_seconds=120,
+        interval_anchor_at=datetime.now(UTC).isoformat(),
+    )
+
+    assert updated.schedule_type == "interval"
+    assert updated.remaining_runs == 3
+
+
+def test_explicit_null_remaining_runs_makes_recurring_job_unlimited(tmp_path: Path) -> None:
+    service, _trigger_service = make_service(tmp_path)
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Run three times",
+        schedule_type="cron",
+        cron_expression="0 9 * * *",
+        remaining_runs=3,
+    )
+
+    updated = service.update_job(job.id, remaining_runs=None)
+
+    assert updated.remaining_runs is None
+
+
+@pytest.mark.parametrize("remaining_runs", [None, 2])
+def test_switch_to_once_requires_explicit_repeat_one_when_current_count_is_incompatible(
+    tmp_path: Path,
+    remaining_runs: int | None,
+) -> None:
+    service, _trigger_service = make_service(tmp_path)
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Switch schedule",
+        schedule_type="cron",
+        cron_expression="0 9 * * *",
+        remaining_runs=remaining_runs,
+    )
+
+    with pytest.raises(CronJobValidationError, match="requires repeat: 1"):
+        service.update_job(
+            job.id,
+            schedule_type="once",
+            run_at=(datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+        )
+
+    assert service.get_job(job.id).schedule_type == "cron"
+    assert service.get_job(job.id).remaining_runs == remaining_runs
+
+
+def test_switch_to_once_accepts_explicit_repeat_one(tmp_path: Path) -> None:
+    service, _trigger_service = make_service(tmp_path)
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Switch schedule",
+        schedule_type="cron",
+        cron_expression="0 9 * * *",
+        remaining_runs=4,
+    )
+
+    updated = service.update_job(
+        job.id,
+        schedule_type="once",
+        run_at=(datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+        remaining_runs=1,
+    )
+
+    assert updated.schedule_type == "once"
+    assert updated.remaining_runs == 1
+
+
+def test_switch_to_once_preserves_compatible_repeat_one_when_omitted(tmp_path: Path) -> None:
+    service, _trigger_service = make_service(tmp_path)
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Switch schedule",
+        schedule_type="cron",
+        cron_expression="0 9 * * *",
+        remaining_runs=1,
+    )
+
+    updated = service.update_job(
+        job.id,
+        schedule_type="once",
+        run_at=(datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+    )
+
+    assert updated.schedule_type == "once"
+    assert updated.remaining_runs == 1
+
+
+def test_once_update_rejects_explicit_null_repeat(tmp_path: Path) -> None:
+    service, _trigger_service = make_service(tmp_path)
+    job = service.create_job(
+        agent_id="agent-one",
+        prompt="Run once",
+        schedule_type="once",
+        run_at=(datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+    )
+
+    with pytest.raises(CronJobValidationError, match="cannot be null"):
+        service.update_job(job.id, remaining_runs=None)
+
+    assert service.get_job(job.id).remaining_runs == 1
+
+
 def test_jobs_json_is_created_on_demand(tmp_path: Path) -> None:
     # Arrange
     jobs_path = tmp_path / "cron" / "jobs.json"

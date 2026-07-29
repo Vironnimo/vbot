@@ -339,6 +339,7 @@ describe('CronView', () => {
       prompt: 'Prepare updated digest',
       schedule_type: 'cron',
       cron_expression: '0 6 * * *',
+      repeat: null,
       session_id: null,
     });
   });
@@ -381,6 +382,7 @@ describe('CronView', () => {
           schedule_type: 'once',
           cron_expression: null,
           run_at: storedRunAt,
+          remaining_runs: 1,
           session_id: 'session-preserve',
         }),
       ],
@@ -408,6 +410,7 @@ describe('CronView', () => {
       prompt: 'Updated once prompt',
       schedule_type: 'once',
       run_at: storedRunAt,
+      repeat: 1,
       session_id: 'session-preserve',
     });
   });
@@ -605,6 +608,7 @@ function cronJob(overrides = {}) {
     schedule_type: 'cron',
     cron_expression: '*/30 * * * *',
     run_at: null,
+    remaining_runs: null,
     session_id: null,
     status: 'active',
     last_fired_at: '2026-05-14T10:00:00+00:00',

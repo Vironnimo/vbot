@@ -78,6 +78,11 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
                 RPC_ERROR_INVALID_REQUEST,
                 "params.run_at is required when params.schedule_type is 'once'",
             )
+        if "repeat" in params and repeat is None:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                "params.repeat cannot be null when params.schedule_type is 'once'",
+            )
         cron_expression = None
         interval_seconds = None
 
@@ -167,8 +172,11 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
         updates["run_at"] = _required_string(params, "run_at")
     if "repeat" in params:
         repeat = _optional_positive_integer(params, "repeat")
-        if repeat is None:
-            raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.repeat must be a positive integer")
+        if updates.get("schedule_type") == "once" and repeat is None:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                "params.repeat cannot be null when params.schedule_type is 'once'",
+            )
         updates["remaining_runs"] = repeat
     if "session_id" in params:
         updates["session_id"] = _optional_string(params, "session_id")
@@ -181,9 +189,6 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
                 f"params.status must be one of: {options}",
             )
         updates["status"] = status
-    if "schedule_type" in params and "repeat" not in params:
-        updates["remaining_runs"] = 1 if updates["schedule_type"] == "once" else None
-
     if "agent_id" in updates:
         try:
             async with _agent_reference_lock(state):

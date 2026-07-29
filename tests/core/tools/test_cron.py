@@ -140,6 +140,9 @@ def test_schema_exposes_flat_action_contract() -> None:
         "Instruction for create or update. Required on create and must be self-contained "
         "because every fire starts a fresh Session. Omit on update to keep the existing prompt."
     )
+    assert properties["repeat"]["type"] == ["integer", "null"]
+    assert "omit repeat to keep the current count" in properties["repeat"]["description"]
+    assert "set it to null" in properties["repeat"]["description"]
 
 
 def test_nested_create_operation_is_rejected(tmp_path: Path) -> None:
@@ -292,6 +295,30 @@ def test_create_rejects_repeat_above_one_for_one_time_schedule(tmp_path: Path) -
     cron_service.create_job.assert_not_called()
 
 
+def test_create_rejects_null_repeat_for_one_time_schedule(tmp_path: Path) -> None:
+    cron_service = _cron_service_mock()
+    registry = ToolRegistry()
+    register_cron_tool(registry, cron_service)
+
+    result = asyncio.run(
+        _dispatch(
+            registry,
+            tmp_path,
+            {
+                "action": "create",
+                "prompt": "Run this later",
+                "schedule": "in 30m",
+                "repeat": None,
+            },
+        )
+    )
+
+    error = cast(dict[str, Any], result["error"])
+    assert error["code"] == "invalid_arguments"
+    assert "repeat cannot be null for a one-time schedule" in error["message"]
+    cron_service.create_job.assert_not_called()
+
+
 def test_list_action_returns_success_and_next_fire_at(tmp_path: Path) -> None:
     cron_service = _cron_service_mock()
     cron_service.list_jobs.return_value = [
@@ -371,6 +398,91 @@ def test_update_action_returns_success(tmp_path: Path) -> None:
         name="Updated task",
         prompt="Updated prompt",
     )
+
+
+def test_update_schedule_without_repeat_preserves_the_current_count(tmp_path: Path) -> None:
+    cron_service = _cron_service_mock()
+    cron_service.update_job.return_value = _make_job(
+        job_id="job-update",
+        schedule_type="interval",
+        cron_expression=None,
+        interval_seconds=7200,
+        interval_anchor_at="2026-05-14T12:00:00+00:00",
+        remaining_runs=3,
+    )
+    registry = ToolRegistry()
+    register_cron_tool(registry, cron_service)
+
+    result = asyncio.run(
+        _dispatch(
+            registry,
+            tmp_path,
+            {
+                "action": "update",
+                "id": "job-update",
+                "schedule": "every 2h",
+            },
+        )
+    )
+
+    assert result["ok"] is True
+    cron_service.update_job.assert_called_once_with(
+        "job-update",
+        schedule_type="interval",
+        cron_expression=None,
+        interval_seconds=7200,
+        interval_anchor_at="2026-05-14T12:00:00+00:00",
+        run_at=None,
+    )
+
+
+def test_update_null_repeat_makes_a_recurring_job_unlimited(tmp_path: Path) -> None:
+    cron_service = _cron_service_mock()
+    cron_service.update_job.return_value = _make_job(
+        job_id="job-update",
+        remaining_runs=None,
+    )
+    registry = ToolRegistry()
+    register_cron_tool(registry, cron_service)
+
+    result = asyncio.run(
+        _dispatch(
+            registry,
+            tmp_path,
+            {
+                "action": "update",
+                "id": "job-update",
+                "repeat": None,
+            },
+        )
+    )
+
+    assert result["ok"] is True
+    cron_service.update_job.assert_called_once_with("job-update", remaining_runs=None)
+
+
+def test_update_rejects_null_repeat_with_a_one_time_schedule(tmp_path: Path) -> None:
+    cron_service = _cron_service_mock()
+    registry = ToolRegistry()
+    register_cron_tool(registry, cron_service)
+
+    result = asyncio.run(
+        _dispatch(
+            registry,
+            tmp_path,
+            {
+                "action": "update",
+                "id": "job-update",
+                "schedule": "in 30m",
+                "repeat": None,
+            },
+        )
+    )
+
+    error = cast(dict[str, Any], result["error"])
+    assert error["code"] == "invalid_arguments"
+    assert "repeat cannot be null for a one-time schedule" in error["message"]
+    cron_service.update_job.assert_not_called()
 
 
 def test_delete_action_returns_success(tmp_path: Path) -> None:
