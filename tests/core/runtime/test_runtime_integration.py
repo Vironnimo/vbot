@@ -916,27 +916,23 @@ def test_runtime_reload_recall_backend_creates_vector_backend(
     try:
         assert isinstance(runtime.recall_backend, JsonlSessionRecallBackend)
         jsonl_tool = runtime.tools.get("session_search")
-        jsonl_search = next(
-            branch
-            for branch in jsonl_tool.parameters["properties"]["request"]["anyOf"]
-            if branch["properties"]["operation"]["enum"] == ["search"]
-        )["properties"]
-        assert "match" in jsonl_search
-        assert "order" in jsonl_search
+        jsonl_parameters = jsonl_tool.parameters
+        assert set(jsonl_parameters["properties"]) == {
+            "query",
+            "period",
+            "agent_id",
+            "session_id",
+            "limit",
+            "cursor",
+        }
+        assert runtime.tools.get("session_read").name == "session_read"
 
         _write_settings(config, {"recall": {"backend": "vector"}})
         runtime.reload_recall_backend()
         assert isinstance(runtime.recall_backend, VectorRecallBackend)
         vector_tool = runtime.tools.get("session_search")
-        vector_search = next(
-            branch
-            for branch in vector_tool.parameters["properties"]["request"]["anyOf"]
-            if branch["properties"]["operation"]["enum"] == ["search"]
-        )["properties"]
-        assert "match" not in vector_search
-        assert "literal_match" not in vector_search
-        assert "roles" not in vector_search
-        assert "order" not in vector_search
+        assert vector_tool.parameters == jsonl_parameters
+        assert runtime.tools.get("session_read").name == "session_read"
         assert "meaning" in vector_tool.description
     finally:
         runtime.stop()

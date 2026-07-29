@@ -104,6 +104,7 @@ from core.skills.skills import (
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
 from core.tools import (
+    SESSION_READ_TOOL_NAME,
     FileReadState,
     register_analyze_image_tool,
     register_bash_tool,
@@ -1420,7 +1421,7 @@ class Runtime:
         self._sync_channel_tool_registration()
 
     def reload_recall_backend(self) -> None:
-        """Reload session_search from the current persisted recall backend setting.
+        """Reload Session Recall tools from the current persisted backend setting.
 
         Rebuilds the registry from ``with_builtins()`` and re-applies extension
         recall backends, so a live backend switch can still resolve an
@@ -1432,6 +1433,7 @@ class Runtime:
         self._recall_backend = self._create_recall_backend(recall_registry)
         if self._tools is not None:
             self._tools.unregister("session_search")
+            self._tools.unregister(SESSION_READ_TOOL_NAME)
             register_session_search_tool(
                 self._tools,
                 self._recall_backend,

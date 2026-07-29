@@ -94,11 +94,16 @@ from core.tools.read import (
     register_read_tool,
 )
 from core.tools.session_search import (
+    SESSION_READ_TOOL_DESCRIPTION,
+    SESSION_READ_TOOL_NAME,
+    SESSION_READ_TOOL_PARAMETERS,
     SESSION_SEARCH_TOOL_DESCRIPTION,
     SESSION_SEARCH_TOOL_NAME,
     SESSION_SEARCH_TOOL_PARAMETERS,
+    make_session_read_handler,
     make_session_search_handler,
     register_session_search_tool,
+    session_read_handler,
     session_search_handler,
 )
 from core.tools.skill import (
@@ -236,6 +241,9 @@ __all__ = [
     "READ_TOOL_DESCRIPTION",
     "READ_TOOL_NAME",
     "READ_TOOL_PARAMETERS",
+    "SESSION_READ_TOOL_DESCRIPTION",
+    "SESSION_READ_TOOL_NAME",
+    "SESSION_READ_TOOL_PARAMETERS",
     "SESSION_SEARCH_TOOL_DESCRIPTION",
     "SESSION_SEARCH_TOOL_NAME",
     "SESSION_SEARCH_TOOL_PARAMETERS",
@@ -296,6 +304,7 @@ __all__ = [
     "make_text_to_speech_handler",
     "make_image_generation_handler",
     "make_read_handler",
+    "make_session_read_handler",
     "make_session_search_handler",
     "make_web_fetch_handler",
     "make_write_handler",
@@ -320,6 +329,7 @@ __all__ = [
     "register_web_search_tool",
     "register_write_tool",
     "memory_handler",
+    "session_read_handler",
     "session_search_handler",
     "stale_failure_text",
     "tool_failure",

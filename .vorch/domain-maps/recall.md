@@ -4,9 +4,9 @@ Recall is the backend-selected read model for discovering content in persisted c
 
 ## Overview
 
-`session_search` has one backend-independent navigation surface and one backend-native retrieval surface. The Tool itself owns `list`, `overview`, and exact canonical `read`; only `search` delegates to the configured Recall backend. This split prevents an index or ranking backend from becoming a second source of truth for Messages.
+Session Recall has two Agent-facing Tools in one deep module. `session_search` owns backend-independent Session listing plus backend-native query discovery; `session_read` retrieves exact canonical Message ranges only through `ChatSessionManager`. This split keeps discovery compact and prevents an index or ranking backend from becoming a second source of truth for Messages.
 
-The selected backend is fixed for a Tool registration. `Runtime.reload_recall_backend()` rebuilds the registry, resolves `settings.json` `recall.backend`, and re-registers `session_search` with the resolved backend name, capabilities, and canonical `ChatSessionManager`. An unknown selected name falls back to `jsonl_scan` and records that resolved name, so the description, schema, cursor identity, and behavior stay aligned.
+The selected backend is fixed for a Tool registration. `Runtime.reload_recall_backend()` rebuilds the registry, resolves `settings.json` `recall.backend`, and re-registers both Session Recall Tools with the resolved backend name and canonical `ChatSessionManager`. An unknown selected name falls back to `jsonl_scan` and records that resolved name, so the description, cursor identity, and behavior stay aligned.
 
 ## Terms
 
@@ -22,7 +22,7 @@ The cross-cutting Session and Tool terms live in `.vorch/GLOSSARY.md`.
 
 ## Search Contract
 
-- `RecallSearchCapabilities` declares the active backend's result unit, query guidance, optional literal-match argument, supported ordering, and whether role filtering is meaningful. `session_search` builds its provider schema and description from this object at registration time; unsupported controls are absent rather than accepted and ignored.
+- `RecallSearchCapabilities` declares the active backend's result unit, query guidance, internal literal-match support, supported ordering, and whether role filtering is meaningful. `session_search` uses it to select the backend's declared defaults and append accurate guidance; the public six-field schema remains stable across backends.
 - `RecallSearchRequest` is the normalized first-party query contract: agent/project scope, optional Session, query, time range, roles, literal match mode, backend-supported order, offset/limit, and optional source snapshot.
 - `RecallSearchHit` is one backend-ranked Message or Passage with canonical read references. Raw backend scores stay inside Recall and are not exposed by the Tool.
 - `RecallSearchPage` carries one deterministic ranking slice, result type, ranking label, source snapshot, continuation state, candidate-Session count, and optional explicit degradation.
@@ -33,7 +33,7 @@ The cross-cutting Session and Tool terms live in `.vorch/GLOSSARY.md`.
 
 `core/recall/passages.py` is the shared owner for first-party Passage construction.
 
-- Eligible text comes from the default conversation roles (`user`, `assistant`, `error`, `compaction_checkpoint`). Tool results, ordinary notes, skill-context notes, and persisted `session_search` results are not Passage input.
+- Eligible text comes from the default conversation roles (`user`, `assistant`, `error`, `compaction_checkpoint`). Tool results, ordinary notes, skill-context notes, and persisted `session_search`/`session_read` results are not Passage input.
 - Message search text is used without whitespace rewriting or a per-Message character cap. Passages are 1,500-character source windows with 200-character overlap; a long Message therefore becomes multiple Passages instead of being truncated.
 - Each Passage records its exact text, stable `passage_id`, start/end Message IDs, start/end timestamps and roles, and offsets within the boundary Messages. The ID derives from the policy version and canonical boundaries; fusion keys it together with `session_id` because forked Sessions may share Message IDs.
 - A search excerpt is presentation only. The Tool fits source-faithful excerpts adaptively to its whole-result byte budget and returns a canonical `read_ref`; it does not store excerpt text as canonical history.
@@ -43,15 +43,15 @@ The cross-cutting Session and Tool terms live in `.vorch/GLOSSARY.md`.
 ### `jsonl_scan`
 
 - Scans canonical Sessions on demand and returns every eligible matching Message, including multiple Messages from one Session.
-- Matching is case-insensitive literal substring matching. `telegram` therefore matches `Telegraminstallation`. `all_terms`, `any_term`, and `phrase` control literal matching.
-- Results are globally ordered by canonical Message time, newest or oldest, with deterministic Session/message tie-breakers. There is no hidden per-Session grouping.
+- Matching is case-insensitive literal substring matching. `telegram` therefore matches `Telegraminstallation`; the Agent-facing Tool uses `all_terms`.
+- Results are globally ordered by canonical Message time, newest first, with deterministic Session/message tie-breakers. Other match/order modes remain available only to internal compatibility callers.
 - Search, list, and reads use source file metadata snapshots; a continuation fails as stale when canonical source changes.
 
 ### `sqlite_fts`
 
 - Maintains a disposable FTS5 trigram index at `<data_dir>/recall/session_index.sqlite`; schema version 4 drops and lazily rebuilds incompatible indexes.
-- Message search has the same case-insensitive substring semantics as JSONL, but defaults to BM25 relevance. Explicit newest/oldest ordering remains available. Queries shorter than the trigram minimum use an in-memory substring relevance scan (or chronological JSONL scan for explicit time order), so short literals are not lost.
-- Candidate rows are filtered by scope, Session, role, and time before limiting, then revalidated and hydrated from canonical JSONL. Persisted `session_search` results and skill-context notes are excluded before candidate limiting.
+- Message search has the same case-insensitive substring semantics as JSONL and uses BM25 relevance through the Agent-facing Tool. Queries shorter than the trigram minimum use an in-memory substring relevance scan, so short literals are not lost.
+- Candidate rows are filtered by scope, Session, default conversation roles, and time before limiting, then revalidated and hydrated from canonical JSONL. Persisted Session Recall Tool results and skill-context notes are excluded before candidate limiting.
 - A separate Passage FTS table, built from the shared Passage policy, is the literal arm used by Hybrid. Normal queries use Passage BM25; short queries use source-derived substring relevance.
 - Cleanup reconciles indexed Session ids against the complete canonical agent/project scope, never the request-filtered candidate set; a Session-filtered search therefore cannot evict unrelated Sessions from the shared index.
 - Index failure triggers one delete-and-rebuild attempt, then a canonical scan fallback for Message search. The index is never authoritative.
@@ -72,7 +72,7 @@ The cross-cutting Session and Tool terms live in `.vorch/GLOSSARY.md`.
 
 - Runs Passage FTS and Vector search concurrently and fuses their independent rankings with Reciprocal Rank Fusion (`k = 60`). A Passage may be marked `literal`, `semantic`, or both; multiple Passages from one Session remain eligible.
 - Candidate depth starts above the requested page and grows until the requested prefix cannot be displaced under the unseen RRF score bound, or both arms are exhausted. This preserves true rank fusion without a fixed over-fetch guess.
-- Hybrid exposes only relevance order. `literal_match` controls its FTS arm; it does not claim that literal matching changes semantic retrieval.
+- Hybrid exposes relevance order. Its Agent-facing literal arm uses the default `all_terms` behavior; internal compatibility requests may still choose another literal mode, which never changes semantic retrieval.
 - If one arm is unavailable, the other arm remains usable and the page is explicitly marked degraded with the reason. If both arms fail, search returns `hybrid_unavailable`.
 - Hybrid cursors snapshot both arm sources. A canonical source change or backend change invalidates continuation rather than silently mixing rankings.
 
@@ -85,8 +85,8 @@ The cross-cutting Session and Tool terms live in `.vorch/GLOSSARY.md`.
 
 ## Constraints & Gotchas
 
-- Do not add universal fields or ordering controls merely to make backend payloads look alike. Backend capabilities must describe real behavior, and Tool registration must omit unsupported controls.
-- Do not return exact Message text through search as a second read API. Search returns adaptive discovery excerpts and read references; `read` returns canonical Message records without per-Message truncation.
+- Do not expose backend tuning merely to make backend payloads look alike. Backend capabilities must describe real behavior while the public Tool keeps one compact, backend-stable schema and uses declared defaults.
+- Do not return exact Message text through search as a second read API. Search returns adaptive discovery excerpts and `session_read` references; `session_read` returns canonical Message records without per-Message truncation.
 - Do not deduplicate Passage results by Session. Passage-level multiplicity is part of Vector and Hybrid semantics.
 - Do not move structural Vector filters after KNN. Post-filtering a global top-K can produce false empty pages even when eligible Passages exist.
 - Do not fuse raw FTS scores with vector distances; they are incomparable. Hybrid combines ranks via RRF.

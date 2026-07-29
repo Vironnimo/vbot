@@ -70,6 +70,33 @@ def test_provider_tool_definitions_omit_memory_when_agent_memory_is_off(
     assert "memory" not in [definition["name"] for definition in definitions]
 
 
+def test_provider_tool_definitions_derive_session_read_from_session_search(
+    workspace: Path,
+    tmp_path: Path,
+) -> None:
+    registry = ToolRegistry()
+    for name in ("session_search", "session_read"):
+        registry.register(
+            name=name,
+            description=f"{name} description",
+            parameters={"type": "object", "additionalProperties": False},
+            handler=lambda _context, _arguments: tool_success({}),
+        )
+    manager = _manager(tmp_path, tools=registry)
+    agent = _agent(
+        workspace,
+        allowed_tools=["session_search"],
+        memory_prompt_mode=MEMORY_PROMPT_MODE_OFF,
+    )
+
+    definitions = manager.provider_tool_definitions(agent)
+
+    assert [definition["name"] for definition in definitions] == [
+        "session_read",
+        "session_search",
+    ]
+
+
 def test_provider_tool_definitions_keep_subagent_tools_for_self_only(
     workspace: Path, tmp_path: Path
 ) -> None:

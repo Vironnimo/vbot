@@ -554,8 +554,10 @@ class TestToolRegistryAllowlistFiltering:
 
 
 class TestAgentToolAvailability:
-    def test_sanitizes_configured_memory_tool(self) -> None:
-        assert sanitize_configured_allowed_tools(["read_file", "memory"]) == ["read_file"]
+    def test_sanitizes_runtime_derived_tools(self) -> None:
+        assert sanitize_configured_allowed_tools(["read_file", "memory", "session_read"]) == [
+            "read_file"
+        ]
 
     def test_memory_mode_adds_memory_to_explicit_allowlist(self) -> None:
         allowed_tools = effective_agent_allowed_tools(

@@ -1209,6 +1209,7 @@ def test_runtime_loads_phase_two_services(runtime: Runtime) -> None:
         "process",
         "project",
         "read",
+        "session_read",
         "session_search",
         "skill",
         "skill_manage",

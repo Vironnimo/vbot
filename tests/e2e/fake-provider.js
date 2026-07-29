@@ -441,7 +441,6 @@ function plannedToolResponse(prompt, results, offeredTools) {
       return {
         calls: [
           toolCall("session_search", {
-            action: "search",
             query: "stored sapphire beacon 7319",
             limit: 10,
           }),

@@ -16,6 +16,7 @@ Do not expose `request.operation`, an operation-key object such as `{"create": {
 
 - Keep the parameter set minimal and Agent-relevant. Do not expose implementation details such as internal source paths, executable flags, storage layout, working directories, or cache controls unless choosing them is part of the user's requested behavior.
 - Represent one concept once. Prefer one normalized field over several overlapping schedule, selector, or mode fields; do not preserve aliases in the canonical Tool contract.
+- When two Tool names separate discovery from exact retrieval but share the same authority and lifecycle, keep one configurable capability and derive the reader as a companion. A search result should return the reader's directly callable argument shape so the Agent does not translate identifiers or depend on both toggles being configured independently.
 - Make a field optional only when omission has a real default, an unambiguous derived fallback, or selects the current target. State that behavior in the field or Tool description.
 - Put fields required for every call in the schema's root `required` list. For a flat multi-action Tool, describe action-specific requirements on the relevant fields and enforce required and forbidden fields in the handler.
 - Reject fields that are valid globally but inapplicable to the selected action. A typo or stale field must fail with `invalid_arguments`, not be ignored.
@@ -26,7 +27,7 @@ Do not expose `request.operation`, an operation-key object such as `{"create": {
 
 - The canonical input is a root JSON object with `additionalProperties: false`.
 - The schema owns field names, JSON types, enums, global requirements, ranges, lengths, and structurally simple dependencies. The handler owns action-specific field sets, cross-field meaning, authorization, existence, state transitions, and other semantic checks.
-- Prefer a small flat schema plus precise handler errors over branch-heavy `oneOf`/`anyOf` trees used only to encode actions. Unions remain appropriate for genuine value-shape alternatives within one behavior.
+- Prefer a small flat schema plus precise handler errors over branch-heavy `oneOf`/`anyOf` trees used only to encode actions. Unions remain appropriate for genuine value-shape alternatives within one behavior and for a cursor-only continuation that must reject every initial-call field.
 - Do not coerce strings into numbers or booleans, accept aliases, or silently normalize retired public shapes. Runtime validation and handler validation must agree on the canonical types.
 - Provider `strict` eligibility is a consequence, not the design goal. Do not force irrelevant optional fields to be required-and-null merely to retain an OpenAI `strict: true` marker; review and pin the intentional profile decision in provider-schema tests.
 

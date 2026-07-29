@@ -1,29 +1,36 @@
-# Session Search Tool
+# Session Recall Tools
 
-Discovers persisted Sessions through backend-native search and retrieves exact canonical Messages through explicit read references.
+Discovers persisted Sessions through backend-native search and retrieves exact canonical Messages through a separate read-only Tool.
 
 ## Interfaces
 
-- Tool name: `session_search`; registration receives the selected Recall backend, canonical `ChatSessionManager`, and resolved backend name.
-- Input is exactly one closed root `request` object whose required `operation` is `list`, `overview`, `search`, or `read`. Every branch exposes and structurally requires only its operation-specific fields; a continuation uses the same discriminator with only its opaque `cursor`. Public calls accept no retired flat shape.
-- `list` returns recent Session summaries and paginates with `limit` (default 10, maximum 100).
-- `overview` requires `session_id` and returns metadata, total Message and per-role counts, and first/last canonical Message references. It does not return Message excerpts.
-- `search` requires a non-blank query and delegates only retrieval/ranking to the configured backend. Common scope, optional Session, time bounds, limit, and cursor controls remain stable; literal matching, role filtering, and ordering appear in the schema only when the active backend declares them.
-- `read` requires `session_id` plus either one `message_id` or an inclusive `start_message_id`/`end_message_id` range. `before`/`after` add canonical neighboring Messages (default 0, maximum 100).
-- Date-only `since` and `until` are inclusive UTC boundaries; date-only `until` covers the full day. Agent defaults to `ToolContext.agent_id`; project scope always comes from `ToolContext.project_id`.
+- `core/tools/session_search.py` owns both Tools and their shared cursor/result machinery. `session_search` receives the selected Recall backend plus canonical `ChatSessionManager`; `session_read` uses only canonical `ChatSessionManager`.
+- `session_search` has one closed flat schema with exactly `query`, `period`, `agent_id`, `session_id`, `limit`, and `cursor`. Omitting `query` lists recent Sessions; providing it performs backend-native search. `agent_id` defaults to the current Agent, `session_id` narrows the target, and `limit` defaults to 10 with a maximum of 100.
+- `period` is one inclusive ISO-8601 `start/end` interval. Either endpoint may be open; a date-only start begins at 00:00 UTC and a date-only end covers the complete UTC day. Listing selects Sessions containing at least one default-role conversation Message in the interval; query search applies the same bounds inside Recall.
+- `session_read` has one closed flat schema with exactly `session_id`, `agent_id`, `start_message_id`, `end_message_id`, and `cursor`. A new read requires `session_id`; omitted boundaries read the whole Session, one omitted boundary leaves that side open, and two boundaries select an inclusive canonical range.
+- Both Tools accept an opaque `cursor` by itself for continuation. Retired `request.operation`, `action`, operation-key objects, public backend match/order/role controls, split time bounds, single `message_id`, and neighbor-count arguments are rejected.
+- Search uses each backend's declared default ranking and matching behavior. Backend capabilities still describe the real internal search contract and append backend-specific guidance to the stable public Tool description, but never change the six-field provider schema.
 
 ## Result Contract
 
-- Every success is a normal Tool envelope. Action data includes `action`, `has_more`, and `formatted_bytes`; paginated pages include `next_cursor`.
-- Search data identifies the resolved backend, result unit (`message`, `passage`, or `backend_defined`), and ranking. Items have a global rank, canonical identifiers, one source-faithful adaptive `excerpt`, and one `read_ref`. Passage results also carry `passage_id`, end timestamp, and literal/semantic source membership when available.
-- Search items do not repeat content in `content`, context windows, bookends, or backend scores. The whole result is capped at 50 KiB; excerpts expand as far as the page budget permits rather than using a fixed per-hit character cap.
-- Read returns complete `ChatMessage.to_dict()` records. It has no per-Message truncation. When one serialized Message cannot fit in the 50 KiB result, it returns consecutive `record_json` segments with source offsets and a cursor; concatenating all segments reconstructs the exact canonical JSON record.
-- List, read, and first-party search cursors bind action, normalized arguments, project, source snapshot, and (for search) resolved backend. A changed source or backend returns `stale_cursor`.
-- An extension backend without the typed first-party search capability is wrapped as one `backend_defined` result and has no claimed first-party match/order semantics.
+- Every success is a normal Tool envelope with `items`, `has_more`, and `formatted_bytes`; paginated pages add `next_cursor`. Results carry no public `action`.
+- Session-list items contain Agent/Session identity, creation/activity timestamps, and title. A period-filtered item also carries a directly callable `read_ref` spanning the matching conversation blocks, so fuzzy requests such as “what did we discuss last weekend?” can list by time and immediately read only the relevant range. Search data identifies the resolved backend, result unit (`message`, `passage`, or `backend_defined`), ranking, and candidate-Session count.
+- Every first-party search item has a global rank, canonical identifiers, one source-faithful adaptive `excerpt`, and a directly callable `session_read` `read_ref` containing `agent_id`, `session_id`, `start_message_id`, and `end_message_id`. The backend's Message or Passage boundaries seed the reference, then canonical Session data expands both ends from the nearest preceding User Message through the last Message before the next User Message so a multi-Message answer is read as one conversation block.
+- Search items do not repeat exact content in a second field. The whole result is capped at 50 KiB; excerpts expand as far as the page budget permits rather than using a fixed per-hit character cap.
+- `session_read` returns Session metadata/counts/boundary references plus complete `ChatMessage.to_dict()` records. When one serialized Message cannot fit in the 50 KiB result, consecutive `record_json` segments and cursors reconstruct the exact canonical JSON record without loss.
+- List, read, and first-party search cursors bind the internal operation, normalized arguments, Project, source snapshot, and search backend where applicable. A cursor is accepted only by its owning Tool; changed canonical source or backend returns `stale_cursor`.
+- Cursor version 2 intentionally invalidates cursors issued by the retired combined Tool contract so old read arguments cannot be replayed with new whole-Session semantics.
+- An extension backend without the typed first-party search capability is wrapped as one `backend_defined` result and has no claimed first-party ranking semantics.
+
+## Availability
+
+- `session_search` is the single persisted/configurable capability. Runtime availability derives `session_read` whenever `session_search` is allowed, so existing allowlists gain the companion automatically and a search result never advertises an unavailable reader.
+- `session_read` is not independently Project-configurable and is removed from persisted Agent allowlists. Wildcard allowlists expose both registered Tools.
 
 ## Constraints & Gotchas
 
-- Exact content belongs to `read`, not `search`; agents should follow `read_ref` when wording or the full Message matters.
+- Exact content belongs to `session_read`, not `session_search`; agents should pass a returned `read_ref` directly when wording or the complete conversation block matters.
 - Search is not implicitly Session-grouped. JSONL/FTS may return many Messages from one Session, and Vector/Hybrid may return many Passages from one Session.
-- No-match pages are successful empty results. Invalid action fields, missing canonical references, stale cursors, and backend capability failures are failure envelopes with stable codes.
+- Persisted results from both Session Recall Tools are derived artifacts and are excluded from JSONL matching, Passage construction, FTS indexing, and Vector indexing to prevent recall feedback loops.
+- No-match pages are successful empty results. Invalid fields, missing canonical references, cross-Tool cursors, stale cursors, and backend failures are failure envelopes with stable codes.
 - Search excerpts preserve source whitespace and Unicode. Their truncation flags and source offsets describe presentation loss only; canonical storage is untouched.
