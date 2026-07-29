@@ -59,8 +59,11 @@ SUBAGENT_PROMPT_BLOCK_TEMPLATE = (
 NO_ADDITIONAL_SUBAGENTS_TEXT = "**No additional Agents are available.**"
 TOP_LEVEL_EXECUTION_GUIDANCE = (
     "You are the top-level Agent. Every `run` action starts in the background and "
-    "returns immediately. Continue independent work or end your turn; results are "
-    "delivered automatically when the batch finishes. Do not poll."
+    "returns immediately; vBot monitors it, so you do not need to keep the current Run open. "
+    "Continue work that does not depend on the result, or finish the current Run now. Do not "
+    "poll merely to wait; request status only when your next action genuinely depends on the "
+    "result. At Run end, vBot combines every background result already finished into one "
+    "automatic follow-up Run. Work still running at that boundary is delivered later."
 )
 NESTED_EXECUTION_GUIDANCE = (
     "You are a Sub-Agent. Every `run` action executes in the foreground and the Tool "

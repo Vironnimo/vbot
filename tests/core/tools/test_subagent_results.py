@@ -344,6 +344,7 @@ async def test_subagent_result_fetch_marks_only_requested_run_for_reused_session
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
     trigger_service = RecordingTriggerService()
+    trigger_service.defer_input_persisted = True
     tracker = SubAgentBatchTracker(trigger_service)
     context = make_context(tool_name=SUBAGENT_TOOL_NAME)
     parent_key = (context.agent_id, context.session_id, context.run_id)
@@ -376,6 +377,7 @@ async def test_subagent_result_fetch_marks_only_requested_run_for_reused_session
     )
     batch = tracker._batches[parent_key]  # noqa: SLF001 - test checks fetched disambiguation.
     fetched_after_old_fetch = {work_id: entry.fetched for work_id, entry in batch.entries.items()}
+    trigger_service.defer_input_persisted = False
     tracker.on_sub_agent_complete(parent_key, "run-new", {"result": "new answer"})
     for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
         await asyncio.sleep(0)
@@ -383,12 +385,14 @@ async def test_subagent_result_fetch_marks_only_requested_run_for_reused_session
     # Assert
     assert result["ok"] is True
     assert fetched_after_old_fetch == {"sub_old": True, "sub_new": False}
-    assert len(trigger_service.calls) == 1
+    assert len(trigger_service.calls) == 2
+    assert trigger_service.cancelled_notice_ids == ["subagent:parent-run:sub_old"]
     assert (
-        "### worker (id sub_new, session shared-session) — completed" in trigger_service.calls[0][1]
+        "### Sub-Agent worker (id sub_new, session shared-session) — completed"
+        in trigger_service.calls[1][1]
     )
-    assert "new answer" in trigger_service.calls[0][1]
-    assert "old answer" not in trigger_service.calls[0][1]
+    assert "new answer" in trigger_service.calls[1][1]
+    assert "old answer" not in trigger_service.calls[1][1]
     assert parent_key not in tracker._batches  # noqa: SLF001 - noted batch is pruned.
 
 

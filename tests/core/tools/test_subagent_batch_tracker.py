@@ -44,7 +44,7 @@ async def test_batch_tracker_reports_open_identity_parent_and_child_references()
     assert tracker.references_identity_agent("missing") is False
 
 
-async def test_batch_tracker_triggers_once_when_all_sub_agents_complete() -> None:
+async def test_batch_tracker_submits_each_ready_result_once() -> None:
     # Arrange
     trigger_service = RecordingTriggerService()
     tracker = SubAgentBatchTracker(trigger_service)
@@ -61,16 +61,16 @@ async def test_batch_tracker_triggers_once_when_all_sub_agents_complete() -> Non
     await asyncio.sleep(0)
 
     # Assert
-    assert len(trigger_service.calls) == 1
-    agent_id, message, session_id, internal = trigger_service.calls[0]
-    assert agent_id == "parent"
-    assert session_id == "parent-session"
-    assert internal is True
-    assert "Sub-agent batch complete." in message
-    assert "### worker (id run-one, session session-one) — completed" in message
-    assert "First result" in message
-    assert "### worker (id run-two, session session-two) — completed" in message
-    assert "Second result" in message
+    assert len(trigger_service.calls) == 2
+    first_agent_id, first_message, first_session_id, first_internal = trigger_service.calls[0]
+    assert first_agent_id == "parent"
+    assert first_session_id == "parent-session"
+    assert first_internal is True
+    assert "### Sub-Agent worker (id run-one, session session-one) — completed" in first_message
+    assert "First result" in first_message
+    _agent_id, second_message, _session_id, _internal = trigger_service.calls[1]
+    assert "### Sub-Agent worker (id run-two, session session-two) — completed" in second_message
+    assert "Second result" in second_message
 
 
 async def test_batch_tracker_delivers_complete_result_without_truncation() -> None:
@@ -111,7 +111,7 @@ async def test_batch_tracker_surfaces_failure_note() -> None:
     # Assert
     assert len(trigger_service.calls) == 1
     _agent_id, message, _session_id, _internal = trigger_service.calls[0]
-    assert "### worker (id run-one, session session-one) — failed" in message
+    assert "### Sub-Agent worker (id run-one, session session-one) — failed" in message
     assert "boom" in message
 
 
@@ -151,7 +151,7 @@ async def test_batch_tracker_logs_trigger_failures(monkeypatch: pytest.MonkeyPat
 
     # Assert
     assert log_calls
-    assert "Sub-agent batch completion trigger failed" in log_calls[0][1]
+    assert "Sub-Agent completion delivery failed" in log_calls[0][1]
     assert str(log_calls[0][2]) == "trigger failed"
 
 

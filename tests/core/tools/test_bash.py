@@ -14,7 +14,6 @@ import pytest
 import pytest_asyncio
 
 import core.tools.bash as bash_module
-from core.runs import ChatRunManager, Run
 from core.storage import TemporaryFileManager
 from core.tools.bash import (
     BASH_TOOL_DESCRIPTION,
@@ -96,6 +95,12 @@ async def kill_background(manager: ProcessManager, result: dict[str, Any]) -> No
     await manager.kill(session_id, AGENT_ID)
 
 
+def delivered_future() -> asyncio.Future[None]:
+    future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+    future.set_result(None)
+    return future
+
+
 @pytest.mark.asyncio
 async def test_short_command_completes_and_streams_stdout(
     manager: ProcessManager,
@@ -110,7 +115,11 @@ async def test_short_command_completes_and_streams_stdout(
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
     context = make_context(tmp_path, emit_hook=emit_hook)
 
-    result = await bash_handler(context, {"command": "print('hello')"}, manager)
+    result = await bash_handler(
+        context,
+        {"command": "print('hello')", "mode": "foreground"},
+        manager,
+    )
 
     assert result["ok"] is True
     assert result["data"]["status"] == "completed"
@@ -132,7 +141,7 @@ async def test_short_command_completes_and_streams_stdout(
 
 
 @pytest.mark.asyncio
-async def test_background_flag_returns_running_session(
+async def test_background_mode_returns_running_session_with_clear_handoff(
     manager: ProcessManager,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -142,12 +151,23 @@ async def test_background_flag_returns_running_session(
 
     result = await bash_handler(
         context,
-        {"command": "import time; time.sleep(30)", "background": True},
+        {"command": "import time; time.sleep(30)", "mode": "background"},
         manager,
     )
 
     assert result["ok"] is True
     assert result["data"]["status"] == "running"
+    assert result["data"]["mode"] == "background"
+    assert result["data"]["delivery"] == "automatic"
+    assert (
+        result["data"]["handoff_note"]
+        == "The command is still running and has been handed off to vBot immediately. "
+        "vBot will monitor it and deliver its terminal result automatically in one "
+        "coalesced follow-up Run. You may continue work that does not depend on this "
+        "result, or finish the current Run now. Do not poll merely to wait, and do not "
+        "start another copy of the command. If your next action depends on the result, "
+        "inspect the process explicitly or use foreground mode next time."
+    )
     assert isinstance(result["data"]["session_id"], str)
 
     await kill_background(manager, result)
@@ -163,31 +183,34 @@ async def test_background_trigger_fires_when_trigger_service_provided(
     trigger_called = asyncio.Event()
 
     class MockTriggerService:
-        async def trigger_run(
+        def submit_completion(
             self,
             agent_id: str,
-            message: str,
-            *,
             session_id: str,
-            internal: bool,
+            *,
+            notice_id: str,
+            origin_run_id: str,
+            body: str,
             project_id: str | None = None,
-        ) -> None:
+        ) -> asyncio.Future[None]:
             calls.append(
                 {
                     "agent_id": agent_id,
-                    "message": message,
                     "session_id": session_id,
-                    "internal": internal,
+                    "notice_id": notice_id,
+                    "origin_run_id": origin_run_id,
+                    "body": body,
                 }
             )
             trigger_called.set()
+            return delivered_future()
 
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
     context = make_context(tmp_path)
 
     result = await bash_handler(
         context,
-        {"command": "import sys; sys.exit(0)", "background": True},
+        {"command": "import sys; sys.exit(0)", "mode": "background"},
         manager,
         trigger_service=MockTriggerService(),
     )
@@ -199,7 +222,7 @@ async def test_background_trigger_fires_when_trigger_service_provided(
     assert len(calls) == 1
     assert calls[0]["agent_id"] == AGENT_ID
     assert calls[0]["session_id"] == context.session_id
-    assert calls[0]["internal"] is True
+    assert calls[0]["origin_run_id"] == context.run_id
 
 
 @pytest.mark.asyncio
@@ -219,7 +242,7 @@ async def test_background_trigger_not_spawned_when_trigger_service_is_none(
 
     result = await bash_handler(
         context,
-        {"command": "import time; time.sleep(30)", "background": True},
+        {"command": "import time; time.sleep(30)", "mode": "background"},
         manager,
     )
 
@@ -242,24 +265,27 @@ async def test_yield_after_expiry_triggers_background_completion_when_trigger_se
     trigger_called = asyncio.Event()
 
     class MockTriggerService:
-        async def trigger_run(
+        def submit_completion(
             self,
             agent_id: str,
-            message: str,
-            *,
             session_id: str,
-            internal: bool,
+            *,
+            notice_id: str,
+            origin_run_id: str,
+            body: str,
             project_id: str | None = None,
-        ) -> None:
+        ) -> asyncio.Future[None]:
             calls.append(
                 {
                     "agent_id": agent_id,
-                    "message": message,
                     "session_id": session_id,
-                    "internal": internal,
+                    "notice_id": notice_id,
+                    "origin_run_id": origin_run_id,
+                    "body": body,
                 }
             )
             trigger_called.set()
+            return delivered_future()
 
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
     context = make_context(tmp_path)
@@ -268,6 +294,7 @@ async def test_yield_after_expiry_triggers_background_completion_when_trigger_se
         context,
         {
             "command": "import time; print('yield-marker'); time.sleep(0.2)",
+            "mode": "auto",
             "yield_after": 0.01,
         },
         manager,
@@ -281,8 +308,8 @@ async def test_yield_after_expiry_triggers_background_completion_when_trigger_se
     assert len(calls) == 1
     assert calls[0]["agent_id"] == AGENT_ID
     assert calls[0]["session_id"] == context.session_id
-    assert calls[0]["internal"] is True
-    assert "yield-marker" in calls[0]["message"]
+    assert calls[0]["origin_run_id"] == context.run_id
+    assert "yield-marker" in calls[0]["body"]
 
 
 @pytest.mark.asyncio
@@ -295,19 +322,22 @@ async def test_background_trigger_message_contains_command_exit_code_and_output(
     trigger_called = asyncio.Event()
 
     class MockTriggerService:
-        async def trigger_run(
+        def submit_completion(
             self,
             _agent_id: str,
-            message: str,
-            *,
             session_id: str,
-            internal: bool,
+            *,
+            notice_id: str,
+            origin_run_id: str,
+            body: str,
             project_id: str | None = None,
-        ) -> None:
-            messages.append(message)
+        ) -> asyncio.Future[None]:
+            messages.append(body)
             assert session_id
-            assert internal is True
+            assert notice_id.startswith("bash:")
+            assert origin_run_id == context.run_id
             trigger_called.set()
+            return delivered_future()
 
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
     context = make_context(tmp_path)
@@ -315,7 +345,7 @@ async def test_background_trigger_message_contains_command_exit_code_and_output(
 
     result = await bash_handler(
         context,
-        {"command": command, "background": True},
+        {"command": command, "mode": "background"},
         manager,
         trigger_service=MockTriggerService(),
     )
@@ -341,26 +371,30 @@ async def test_background_completion_trigger_carries_project_id(
     trigger_called = asyncio.Event()
 
     class MockTriggerService:
-        async def trigger_run(
+        def submit_completion(
             self,
             _agent_id: str,
-            _message: str,
-            *,
             session_id: str,
-            internal: bool,
+            *,
+            notice_id: str,
+            origin_run_id: str,
+            body: str,
             project_id: str | None = None,
-        ) -> None:
+        ) -> asyncio.Future[None]:
             assert session_id
-            assert internal is True
+            assert notice_id.startswith("bash:")
+            assert origin_run_id == context.run_id
+            assert body
             captured.append(project_id)
             trigger_called.set()
+            return delivered_future()
 
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
     context = make_context(tmp_path, project_id="acme")
 
     result = await bash_handler(
         context,
-        {"command": "import sys; sys.exit(0)", "background": True},
+        {"command": "import sys; sys.exit(0)", "mode": "background"},
         manager,
         trigger_service=MockTriggerService(),
     )
@@ -380,25 +414,32 @@ async def test_background_watcher_does_not_consume_process_poll_output(
     trigger_called = asyncio.Event()
 
     class MockTriggerService:
-        async def trigger_run(
+        def submit_completion(
             self,
             _agent_id: str,
-            _message: str,
-            *,
             session_id: str,
-            internal: bool,
+            *,
+            notice_id: str,
+            origin_run_id: str,
+            body: str,
             project_id: str | None = None,
-        ) -> None:
+        ) -> asyncio.Future[None]:
             assert session_id
-            assert internal is True
+            assert notice_id.startswith("bash:")
+            assert origin_run_id == context.run_id
+            assert body
             trigger_called.set()
+            return delivered_future()
 
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
     context = make_context(tmp_path)
 
     result = await bash_handler(
         context,
-        {"command": "import time; print('poll-marker'); time.sleep(0.05)", "background": True},
+        {
+            "command": "import time; print('poll-marker'); time.sleep(0.05)",
+            "mode": "background",
+        },
         manager,
         trigger_service=MockTriggerService(),
     )
@@ -424,65 +465,64 @@ async def test_terminal_process_status_cancels_already_pending_completion_delive
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    run_manager = ChatRunManager()
-    active_release = asyncio.Event()
-    trigger_queued = asyncio.Event()
-    completion_run_executed = asyncio.Event()
-
-    async def active_executor(_run: Run) -> str:
-        await active_release.wait()
-        return "active"
-
-    async def completion_executor(_run: Run) -> str:
-        completion_run_executed.set()
-        return "completion"
-
-    active_run = await run_manager.start(
-        agent_id=AGENT_ID,
-        session_id="session-a",
-        executor=active_executor,
-        project_id=None,
-    )
+    completion_submitted = asyncio.Event()
+    completion_cancelled = asyncio.Event()
 
     class PendingTriggerService:
-        async def trigger_run(
+        def __init__(self) -> None:
+            self.delivery: asyncio.Future[None] | None = None
+
+        def submit_completion(
             self,
             agent_id: str,
-            _message: str,
-            *,
             session_id: str,
-            internal: bool,
+            *,
+            notice_id: str,
+            origin_run_id: str,
+            body: str,
             project_id: str | None = None,
-        ) -> Run:
+        ) -> asyncio.Future[None]:
             assert agent_id == AGENT_ID
             assert session_id == "session-a"
-            assert internal is True
             assert project_id is None
-            queued = await run_manager.enqueue(
-                agent_id=agent_id,
-                session_id=session_id,
-                executor=completion_executor,
-                display_content="background completion",
-                internal=True,
-                project_id=project_id,
-            )
-            trigger_queued.set()
-            return await queued.future
+            assert notice_id.startswith("bash:")
+            assert origin_run_id == RUN_ID
+            assert body
+            self.delivery = asyncio.get_running_loop().create_future()
+            completion_submitted.set()
+            return self.delivery
 
+        def cancel_completion(
+            self,
+            agent_id: str,
+            session_id: str,
+            *,
+            notice_id: str,
+            project_id: str | None = None,
+        ) -> bool:
+            assert agent_id == AGENT_ID
+            assert session_id == "session-a"
+            assert notice_id.startswith("bash:")
+            assert project_id is None
+            if self.delivery is not None and not self.delivery.done():
+                self.delivery.cancel()
+            completion_cancelled.set()
+            return True
+
+    trigger_service = PendingTriggerService()
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
     bash_context = make_context(tmp_path)
     bash_result = await bash_handler(
         bash_context,
-        {"command": "print('done')", "background": True},
+        {"command": "print('done')", "mode": "background"},
         manager,
-        trigger_service=PendingTriggerService(),
+        trigger_service=trigger_service,
     )
     bash_data = bash_result["data"]
     assert isinstance(bash_data, dict)
     process_session_id = bash_data["session_id"]
     assert isinstance(process_session_id, str)
-    await asyncio.wait_for(trigger_queued.wait(), timeout=2)
-    assert len(run_manager.list_queued(AGENT_ID, "session-a", project_id=None)) == 1
+    await asyncio.wait_for(completion_submitted.wait(), timeout=2)
 
     persisted_callbacks: list[Callable[[], None]] = []
     process_context = ToolContext(
@@ -518,12 +558,7 @@ async def test_terminal_process_status_cancels_already_pending_completion_delive
     await asyncio.gather(notification_task, return_exceptions=True)
     await asyncio.sleep(0)
     assert notification_task.cancelled() is True
-    assert run_manager.list_queued(AGENT_ID, "session-a", project_id=None) == []
-
-    active_release.set()
-    assert await active_run.wait() == "active"
-    await asyncio.sleep(0)
-    assert completion_run_executed.is_set() is False
+    assert completion_cancelled.is_set() is True
 
 
 @pytest.mark.asyncio
@@ -537,14 +572,103 @@ async def test_yield_after_expiry_backgrounds_running_process(
 
     result = await bash_handler(
         context,
-        {"command": "import time; time.sleep(30)", "yield_after": 0.01},
+        {
+            "command": "import time; time.sleep(30)",
+            "mode": "auto",
+            "yield_after": 0.01,
+        },
         manager,
     )
 
     assert result["ok"] is True
     assert result["data"]["status"] == "running"
+    assert result["data"]["mode"] == "auto"
+    assert "handed off to vBot after 0.01 seconds" in result["data"]["handoff_note"]
 
     await kill_background(manager, result)
+
+
+def test_auto_handoff_note_uses_agent_facing_contract() -> None:
+    assert (
+        bash_module._handoff_note("auto", 30)
+        == "The command is still running and has been handed off to vBot after 30 seconds. "
+        "vBot will monitor it and deliver its terminal result automatically in one "
+        "coalesced follow-up Run. You may continue work that does not depend on this "
+        "result, or finish the current Run now. Do not poll merely to wait, and do not "
+        "start another copy of the command. If your next action depends on the result, "
+        "inspect the process explicitly or use foreground mode next time."
+    )
+
+
+@pytest.mark.asyncio
+async def test_foreground_mode_never_hands_off(
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    watcher_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    monkeypatch.setattr(
+        bash_module,
+        "_maybe_spawn_completion_watcher",
+        lambda *args, **kwargs: watcher_calls.append((args, kwargs)),
+    )
+    context = make_context(tmp_path)
+
+    result = await bash_handler(
+        context,
+        {
+            "command": "import time; time.sleep(0.05); print('finished-inline')",
+            "mode": "foreground",
+        },
+        manager,
+    )
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "completed"
+    assert result["data"]["mode"] == "foreground"
+    assert "finished-inline" in result["data"]["output"]
+    assert watcher_calls == []
+
+
+@pytest.mark.asyncio
+async def test_yield_after_is_rejected_outside_auto_mode(
+    manager: ProcessManager,
+    tmp_path: Path,
+) -> None:
+    context = make_context(tmp_path)
+
+    result = await bash_handler(
+        context,
+        {
+            "command": "print('never runs')",
+            "mode": "foreground",
+            "yield_after": 1,
+        },
+        manager,
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
+    assert result["error"]["message"] == "yield_after is only valid when mode is auto"
+
+
+@pytest.mark.asyncio
+async def test_execution_mode_is_required(
+    manager: ProcessManager,
+    tmp_path: Path,
+) -> None:
+    context = make_context(tmp_path)
+
+    result = await bash_handler(
+        context,
+        {"command": "print('never runs')"},
+        manager,
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
+    assert result["error"]["message"] == "mode must be one of: foreground, auto, background"
 
 
 @pytest.mark.asyncio
@@ -561,8 +685,9 @@ async def test_explicit_background_at_depth_is_rejected_without_spawning(
         watcher_calls.append((args, kwargs))
 
     class RecordingTriggerService:
-        async def trigger_run(self, *_args: Any, **_kwargs: Any) -> None:
+        def submit_completion(self, *_args: Any, **_kwargs: Any) -> asyncio.Future[None]:
             trigger_calls.append("called")
+            return delivered_future()
 
     monkeypatch.setattr(bash_module, "_maybe_spawn_completion_watcher", record_watcher)
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
@@ -570,7 +695,7 @@ async def test_explicit_background_at_depth_is_rejected_without_spawning(
 
     result = await bash_handler(
         context,
-        {"command": "import time; time.sleep(30)", "background": True},
+        {"command": "import time; time.sleep(30)", "mode": "background"},
         manager,
         trigger_service=RecordingTriggerService(),
     )
@@ -588,7 +713,7 @@ async def test_automatic_background_at_depth_kills_process_and_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """At depth a foreground command that outruns yield_after is killed, not backgrounded."""
+    """At depth auto mode is killed at yield_after instead of being handed off."""
     watcher_calls: list[Any] = []
     kill_calls: list[tuple[str, str]] = []
 
@@ -608,13 +733,17 @@ async def test_automatic_background_at_depth_kills_process_and_fails(
 
     result = await bash_handler(
         context,
-        {"command": "import time; time.sleep(30)", "yield_after": 0.01},
+        {
+            "command": "import time; time.sleep(30)",
+            "mode": "auto",
+            "yield_after": 0.01,
+        },
         manager,
     )
 
     assert result["ok"] is False
     assert result["error"]["code"] == bash_module.BACKGROUND_AT_DEPTH_FAILURE_CODE
-    assert "did not finish" in result["error"]["message"]
+    assert "Auto mode reached yield_after" in result["error"]["message"]
     assert watcher_calls == []
     assert kill_calls, "the still-running process should have been killed"
 
@@ -637,7 +766,7 @@ async def test_fast_foreground_command_at_depth_succeeds(
 
     result = await bash_handler(
         context,
-        {"command": "print('quick')"},
+        {"command": "print('quick')", "mode": "foreground"},
         manager,
     )
 
@@ -657,25 +786,29 @@ async def test_background_at_top_level_is_not_blocked(
     trigger_called = asyncio.Event()
 
     class MockTriggerService:
-        async def trigger_run(
+        def submit_completion(
             self,
             _agent_id: str,
-            _message: str,
-            *,
             session_id: str,
-            internal: bool,
+            *,
+            notice_id: str,
+            origin_run_id: str,
+            body: str,
             project_id: str | None = None,
-        ) -> None:
+        ) -> asyncio.Future[None]:
             assert session_id
-            assert internal is True
+            assert notice_id.startswith("bash:")
+            assert origin_run_id == context.run_id
+            assert body
             trigger_called.set()
+            return delivered_future()
 
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
     context = make_context(tmp_path, nesting_depth=0)
 
     result = await bash_handler(
         context,
-        {"command": "import sys; sys.exit(0)", "background": True},
+        {"command": "import sys; sys.exit(0)", "mode": "background"},
         manager,
         trigger_service=MockTriggerService(),
     )
@@ -696,7 +829,10 @@ async def test_non_zero_exit_code_is_successful_tool_result(
 
     result = await bash_handler(
         context,
-        {"command": "import sys; print('bad', file=sys.stderr); raise SystemExit(7)"},
+        {
+            "command": "import sys; print('bad', file=sys.stderr); raise SystemExit(7)",
+            "mode": "foreground",
+        },
         manager,
     )
 
@@ -715,7 +851,11 @@ async def test_spawn_failure_returns_failure_envelope(
     monkeypatch.setattr(bash_module, "_shell_argv", lambda command: ["missing-vbot-shell"])
     context = make_context(tmp_path)
 
-    result = await bash_handler(context, {"command": "ignored"}, manager)
+    result = await bash_handler(
+        context,
+        {"command": "ignored", "mode": "foreground"},
+        manager,
+    )
 
     assert result["ok"] is False
     assert result["error"]["code"] == "process_spawn_failed"
@@ -786,7 +926,10 @@ async def test_bash_runs_in_cwd_when_no_workdir_argument(
 
     result = await bash_handler(
         context,
-        {"command": "open('marker.txt', 'w').write('here')"},
+        {
+            "command": "open('marker.txt', 'w').write('here')",
+            "mode": "foreground",
+        },
         manager,
     )
 
@@ -806,7 +949,11 @@ async def test_env_argument_is_rejected(
 
     result = await bash_handler(
         context,
-        {"command": "echo ignored", "env": {"SAFE_VALUE": "unsupported"}},
+        {
+            "command": "echo ignored",
+            "mode": "foreground",
+            "env": {"SAFE_VALUE": "unsupported"},
+        },
         manager,
     )
 
@@ -824,7 +971,11 @@ async def test_workdir_defaults_to_workspace(
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
     context = make_context(tmp_path)
 
-    result = await bash_handler(context, {"command": "import os; print(os.getcwd())"}, manager)
+    result = await bash_handler(
+        context,
+        {"command": "import os; print(os.getcwd())", "mode": "foreground"},
+        manager,
+    )
 
     assert result["ok"] is True
     assert result["data"]["output"].strip() == str(tmp_path)
@@ -841,7 +992,12 @@ async def test_timeout_kills_process(
 
     result = await bash_handler(
         context,
-        {"command": "import time; time.sleep(30)", "timeout": 0.01, "yield_after": 1},
+        {
+            "command": "import time; time.sleep(30)",
+            "mode": "auto",
+            "timeout": 0.01,
+            "yield_after": 1,
+        },
         manager,
     )
 
@@ -860,7 +1016,12 @@ async def test_timeout_remains_active_after_foreground_yields_to_background(
 
     result = await bash_handler(
         context,
-        {"command": "import time; time.sleep(30)", "timeout": 0.1, "yield_after": 0.01},
+        {
+            "command": "import time; time.sleep(30)",
+            "mode": "auto",
+            "timeout": 0.1,
+            "yield_after": 0.01,
+        },
         manager,
     )
 
@@ -899,7 +1060,12 @@ async def test_natural_completion_at_deadline_not_reported_as_timeout(
 
     result = await bash_handler(
         context,
-        {"command": "print('done')", "timeout": 0.01, "yield_after": 1},
+        {
+            "command": "print('done')",
+            "mode": "auto",
+            "timeout": 0.01,
+            "yield_after": 1,
+        },
         manager,
     )
 
@@ -920,7 +1086,10 @@ async def test_large_foreground_stdout_is_bounded_and_truncated(
 
         result = await bash_handler(
             context,
-            {"command": "import sys; sys.stdout.write('a' * 64); sys.stdout.flush()"},
+            {
+                "command": "import sys; sys.stdout.write('a' * 64); sys.stdout.flush()",
+                "mode": "foreground",
+            },
             manager,
         )
 
@@ -934,25 +1103,34 @@ async def test_large_foreground_stdout_is_bounded_and_truncated(
 
 
 @pytest.mark.asyncio
-async def test_cancellation_exits_foreground_without_waiting_for_poll_interval(
+async def test_run_cancellation_stops_auto_mode_without_handoff(
     manager: ProcessManager,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    watcher_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
     monkeypatch.setattr(bash_module, "FOREGROUND_POLL_INTERVAL_SECONDS", 10.0)
+    monkeypatch.setattr(
+        bash_module,
+        "_maybe_spawn_completion_watcher",
+        lambda *args, **kwargs: watcher_calls.append((args, kwargs)),
+    )
     context = make_context(tmp_path, cancellation_hook=lambda: True)
 
     result = await bash_handler(
         context,
-        {"command": "import time; time.sleep(30)", "yield_after": 30},
+        {
+            "command": "import time; time.sleep(30)",
+            "mode": "auto",
+            "yield_after": 30,
+        },
         manager,
     )
 
-    assert result["ok"] is True
-    assert result["data"]["status"] == "running"
-
-    await kill_background(manager, result)
+    assert result["ok"] is False
+    assert result["error"]["code"] == bash_module.RUN_CANCELLED_FAILURE_CODE
+    assert watcher_calls == []
 
 
 def test_shell_detection_uses_native_shell(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -983,7 +1161,10 @@ async def test_windows_unknown_pipeline_command_exits_non_interactively(
     result = await asyncio.wait_for(
         bash_handler(
             context,
-            {"command": "Get-ChildItem . | __vbot_missing_pipeline_command__"},
+            {
+                "command": "Get-ChildItem . | __vbot_missing_pipeline_command__",
+                "mode": "foreground",
+            },
             manager,
         ),
         timeout=5,
@@ -1067,12 +1248,14 @@ def test_register_bash_tool() -> None:
     assert tool.parameters == BASH_TOOL_PARAMETERS
     assert tool.parameters["additionalProperties"] is False
     assert "env" not in tool.parameters["properties"]
-    assert "For a short, bounded command whose result blocks the next step" in tool.description
+    assert "Choose foreground for bounded commands whose result is needed" in tool.description
     assert "read the file's tail to check progress" not in tool.description
     properties = tool.parameters["properties"]
-    assert "independent of timeout" in properties["yield_after"]["description"]
-    assert "skip the foreground wait" in properties["background"]["description"]
+    assert tool.parameters["required"] == ["command", "mode"]
+    assert properties["mode"]["enum"] == ["foreground", "auto", "background"]
+    assert "Only for auto mode" in properties["yield_after"]["description"]
     assert "does not extend yield_after" in properties["timeout"]["description"]
+    assert "coalesced at the Session's next Run boundary" in tool.description
     assert tool.parallel_safe is True
 
 
@@ -1112,8 +1295,16 @@ async def test_two_bash_calls_can_run_concurrently_by_default(
 
     results = await executor.execute_many(
         [
-            ToolCall(id="download-1", name="bash", arguments={"command": "download-one"}),
-            ToolCall(id="download-2", name="bash", arguments={"command": "download-two"}),
+            ToolCall(
+                id="download-1",
+                name="bash",
+                arguments={"command": "download-one", "mode": "foreground"},
+            ),
+            ToolCall(
+                id="download-2",
+                name="bash",
+                arguments={"command": "download-two", "mode": "foreground"},
+            ),
         ],
         ToolExecutionConfig(
             agent_id=AGENT_ID,
@@ -1179,7 +1370,7 @@ async def test_user_cancel_during_foreground_returns_cancelled_by_user_envelope(
 
     result = await bash_handler(
         context,
-        {"command": "import time; time.sleep(30)"},
+        {"command": "import time; time.sleep(30)", "mode": "foreground"},
         manager,
     )
 
@@ -1221,7 +1412,7 @@ async def test_foreground_completion_unaffected_when_user_cancel_check_is_false(
 
     result = await bash_handler(
         context,
-        {"command": "import sys; print('keep-going')"},
+        {"command": "import sys; print('keep-going')", "mode": "foreground"},
         manager,
     )
 
@@ -1246,26 +1437,29 @@ async def test_background_watcher_reports_aborted_by_user_when_session_is_user_c
     monkeypatch.setattr(bash_module, "_user_cancelled_session_ids", cancelled_sessions)
 
     class MockTriggerService:
-        async def trigger_run(
+        def submit_completion(
             self,
             _agent_id: str,
-            message: str,
-            *,
             session_id: str,
-            internal: bool,
+            *,
+            notice_id: str,
+            origin_run_id: str,
+            body: str,
             project_id: str | None = None,
-        ) -> None:
+        ) -> asyncio.Future[None]:
             assert session_id
-            assert internal is True
-            messages.append(message)
+            assert notice_id.startswith("bash:")
+            assert origin_run_id == context.run_id
+            messages.append(body)
             trigger_called.set()
+            return delivered_future()
 
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
     context = make_context(tmp_path)
 
     result = await bash_handler(
         context,
-        {"command": "import time; time.sleep(30)", "background": True},
+        {"command": "import time; time.sleep(30)", "mode": "background"},
         manager,
         trigger_service=MockTriggerService(),
     )
@@ -1292,31 +1486,34 @@ async def test_background_watcher_reports_aborted_by_user_when_session_is_user_c
 
 
 @pytest.mark.asyncio
-async def test_background_watcher_keeps_completion_wording_for_natural_exit(
+async def test_background_watcher_reports_natural_completion_status(
     manager: ProcessManager,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Natural completion keeps the original 'Background process completed' wording."""
+    """Natural completion identifies the terminal Bash process status."""
     messages: list[str] = []
     trigger_called = asyncio.Event()
     cancelled_sessions: set[str] = set()
     monkeypatch.setattr(bash_module, "_user_cancelled_session_ids", cancelled_sessions)
 
     class MockTriggerService:
-        async def trigger_run(
+        def submit_completion(
             self,
             _agent_id: str,
-            message: str,
-            *,
             session_id: str,
-            internal: bool,
+            *,
+            notice_id: str,
+            origin_run_id: str,
+            body: str,
             project_id: str | None = None,
-        ) -> None:
+        ) -> asyncio.Future[None]:
             assert session_id
-            assert internal is True
-            messages.append(message)
+            assert notice_id.startswith("bash:")
+            assert origin_run_id == context.run_id
+            messages.append(body)
             trigger_called.set()
+            return delivered_future()
 
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
     context = make_context(tmp_path)
@@ -1324,7 +1521,7 @@ async def test_background_watcher_keeps_completion_wording_for_natural_exit(
     command = "import sys; print('done'); sys.exit(0)"
     result = await bash_handler(
         context,
-        {"command": command, "background": True},
+        {"command": command, "mode": "background"},
         manager,
         trigger_service=MockTriggerService(),
     )
@@ -1336,7 +1533,7 @@ async def test_background_watcher_keeps_completion_wording_for_natural_exit(
 
     assert len(messages) == 1
     message = messages[0]
-    assert "Background process completed." in message
+    assert "### Bash process — completed" in message
     assert "aborted by the user" not in message
     assert "Exit code: 0" in message
     assert "done" in message
@@ -1354,25 +1551,29 @@ async def test_background_watcher_discards_user_cancelled_session_id_after_consu
     monkeypatch.setattr(bash_module, "_user_cancelled_session_ids", cancelled_sessions)
 
     class MockTriggerService:
-        async def trigger_run(
+        def submit_completion(
             self,
             _agent_id: str,
-            _message: str,
-            *,
             session_id: str,
-            internal: bool,
+            *,
+            notice_id: str,
+            origin_run_id: str,
+            body: str,
             project_id: str | None = None,
-        ) -> None:
+        ) -> asyncio.Future[None]:
             assert session_id
-            assert internal is True
+            assert notice_id.startswith("bash:")
+            assert origin_run_id == context.run_id
+            assert body
             trigger_called.set()
+            return delivered_future()
 
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
     context = make_context(tmp_path)
 
     result = await bash_handler(
         context,
-        {"command": "import time; time.sleep(30)", "background": True},
+        {"command": "import time; time.sleep(30)", "mode": "background"},
         manager,
         trigger_service=MockTriggerService(),
     )
@@ -1466,7 +1667,10 @@ async def test_output_cap_keeps_tail_and_names_log_file(
 
         result = await bash_handler(
             context,
-            {"command": "print('a' * 200 + 'END-MARKER')"},
+            {
+                "command": "print('a' * 200 + 'END-MARKER')",
+                "mode": "foreground",
+            },
             spool_manager,
         )
 
@@ -1494,7 +1698,11 @@ async def test_small_output_is_not_truncated_and_names_no_log_file(
         monkeypatch.setattr(bash_module, "_shell_argv", python_command)
         context = make_context(tmp_path)
 
-        result = await bash_handler(context, {"command": "print('tiny')"}, spool_manager)
+        result = await bash_handler(
+            context,
+            {"command": "print('tiny')", "mode": "foreground"},
+            spool_manager,
+        )
 
         assert result["ok"] is True
         data = result["data"]
@@ -1517,7 +1725,7 @@ async def test_background_result_always_names_log_file(
 
         result = await bash_handler(
             context,
-            {"command": "import time; time.sleep(30)", "background": True},
+            {"command": "import time; time.sleep(30)", "mode": "background"},
             spool_manager,
         )
 
@@ -1545,6 +1753,7 @@ async def test_timeout_failure_carries_output_tail_and_log_pointer(
             context,
             {
                 "command": ("print('diag-marker', flush=True); import time; time.sleep(30)"),
+                "mode": "auto",
                 "timeout": 1.5,
                 "yield_after": 10,
             },
@@ -1574,6 +1783,7 @@ async def test_subagent_kill_failure_carries_output_tail(
             context,
             {
                 "command": ("print('diag-marker', flush=True); import time; time.sleep(30)"),
+                "mode": "auto",
                 "yield_after": 1.5,
             },
             spool_manager,
@@ -1582,7 +1792,8 @@ async def test_subagent_kill_failure_carries_output_tail(
         assert result["ok"] is False
         assert result["error"]["code"] == bash_module.BACKGROUND_AT_DEPTH_FAILURE_CODE
         message = result["error"]["message"]
-        assert "did not finish" in message
+        assert "Auto mode reached yield_after" in message
+        assert "process handoff is not available inside a Sub-Agent" in message
         assert "diag-marker" in message
     finally:
         await spool_manager.aclose()

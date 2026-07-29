@@ -19,25 +19,55 @@ class RecordingTriggerService:
         self.error: BaseException | None = None
         self.defer_input_persisted = False
         self.input_persisted_hooks: list[object] = []
+        self.deliveries: dict[str, asyncio.Future[None]] = {}
 
-    async def trigger_run(
+    def submit_completion(
         self,
         agent_id: str,
-        message: str,
-        session_id: str | None = None,
+        session_id: str,
         *,
-        internal: bool = False,
+        notice_id: str,
+        origin_run_id: str,
+        body: str,
         project_id: str | None = None,
-        input_persisted_hook: object | None = None,
-    ) -> object:
+        on_persisted: object | None = None,
+    ) -> asyncio.Future[None]:
+        delivery: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self.deliveries[notice_id] = delivery
         if self.error is not None:
-            raise self.error
-        self.calls.append((agent_id, message, session_id, internal, project_id))
-        if callable(input_persisted_hook):
-            self.input_persisted_hooks.append(input_persisted_hook)
+            delivery.set_exception(self.error)
+            return delivery
+        self.calls.append((agent_id, body, session_id, True, project_id))
+        assert origin_run_id
+        if callable(on_persisted):
+
+            def persist() -> None:
+                on_persisted()
+                if not delivery.done():
+                    delivery.set_result(None)
+
+            self.input_persisted_hooks.append(persist)
             if not self.defer_input_persisted:
-                input_persisted_hook()
-        return object()
+                persist()
+        elif not delivery.done():
+            delivery.set_result(None)
+        return delivery
+
+    def cancel_completion(
+        self,
+        _agent_id: str,
+        _session_id: str,
+        *,
+        notice_id: str,
+        project_id: str | None = None,
+    ) -> bool:
+        del project_id
+        delivery = self.deliveries.pop(notice_id, None)
+        if delivery is None:
+            return False
+        if not delivery.done():
+            delivery.cancel()
+        return True
 
 
 def _completed_entry(result: dict[str, object]) -> _SubAgentEntry:
@@ -134,7 +164,7 @@ async def test_batch_completion_message_marks_user_cancelled_entry_in_note() -> 
     # Assert
     assert len(trigger_service.calls) == 1
     message = trigger_service.calls[0][1]
-    assert "### worker (id run-one, session session-one) — cancelled by user" in message
+    assert "### Sub-Agent worker (id run-one, session session-one) — cancelled by user" in message
     assert "Cancelled by the user" in message
 
 
@@ -174,11 +204,11 @@ async def test_batch_completion_message_keeps_generic_cancellation_wording() -> 
     # Assert
     assert len(trigger_service.calls) == 1
     message = trigger_service.calls[0][1]
-    assert "### worker (id run-one, session session-one) — cancelled" in message
+    assert "### Sub-Agent worker (id run-one, session session-one) — cancelled" in message
     assert "cancelled by user" not in message
 
 
-async def test_batch_is_pruned_after_completion_note_for_unfetched_entries() -> None:
+async def test_batch_is_pruned_after_each_completion_is_persisted() -> None:
     # Arrange: a non-blocking batch whose entries are never fetched via
     # an explicit status fetch (the standard flow embeds the
     # results and forbids re-fetching). Regression test for handoff3 B4.
@@ -193,10 +223,10 @@ async def test_batch_is_pruned_after_completion_note_for_unfetched_entries() -> 
     tracker.on_sub_agent_complete(parent_key, "run-two", {"result": "second output"})
     await asyncio.sleep(0)
 
-    # Assert: the note was sent and the batch no longer leaks in memory.
-    assert len(trigger_service.calls) == 1
+    # Assert: each result entered shared Run-boundary delivery and the tracker no longer leaks.
+    assert len(trigger_service.calls) == 2
     assert "first output" in trigger_service.calls[0][1]
-    assert "second output" in trigger_service.calls[0][1]
+    assert "second output" in trigger_service.calls[1][1]
     assert parent_key not in tracker._batches  # noqa: SLF001 - leak regression check.
 
 
@@ -295,6 +325,7 @@ async def test_batch_with_fetched_entries_prunes_without_second_note() -> None:
     # Arrange: one entry already fetched via status, one not. The note
     # must only embed the unfetched entry, and the batch is dropped afterwards.
     trigger_service = RecordingTriggerService()
+    trigger_service.defer_input_persisted = True
     tracker = SubAgentBatchTracker(trigger_service)
     parent_key = ("parent", "parent-session", "parent-run")
     tracker.register(parent_key, "worker", "session-one", "run-one")
@@ -303,33 +334,33 @@ async def test_batch_with_fetched_entries_prunes_without_second_note() -> None:
     tracker.mark_fetched(parent_key, "session-one", "run-one")
 
     # Act
+    trigger_service.defer_input_persisted = False
     tracker.on_sub_agent_complete(parent_key, "run-two", {"result": "second output"})
     await asyncio.sleep(0)
 
     # Assert
-    assert len(trigger_service.calls) == 1
-    assert "first output" not in trigger_service.calls[0][1]
-    assert "second output" in trigger_service.calls[0][1]
+    assert len(trigger_service.calls) == 2
+    assert "first output" in trigger_service.calls[0][1]
+    assert "second output" in trigger_service.calls[1][1]
     assert parent_key not in tracker._batches  # noqa: SLF001 - leak regression check.
 
 
-async def test_remove_queued_fires_completion_when_siblings_already_finished() -> None:
-    # Arrange: sibling B completes first (no note yet — queued A still open), then
-    # queued A's item is removed (chat.queue_remove). The removal is the last event
-    # that can complete the batch, so it must deliver B's result and drop the batch.
+async def test_remove_queued_prunes_after_completed_sibling_was_delivered() -> None:
+    # Arrange: sibling B enters shared completion delivery immediately even while
+    # queued A remains open.
     trigger_service = RecordingTriggerService()
     tracker = SubAgentBatchTracker(trigger_service)
     parent_key = ("parent", "parent-session", "parent-run")
     tracker.register(parent_key, "worker", "session-b", "run-b")
     tracker.register_queued(parent_key, "worker", "session-a", "queue-item-a")
     tracker.on_sub_agent_complete(parent_key, "run-b", {"result": "b output"})
-    assert trigger_service.calls == []
+    assert len(trigger_service.calls) == 1
 
     # Act
     tracker.remove_queued(parent_key, "queue-item-a")
     await asyncio.sleep(0)
 
-    # Assert: the promised automatic delivery fired and nothing leaks.
+    # Assert: removing the last open entry drops the already-delivered batch.
     assert len(trigger_service.calls) == 1
     assert "b output" in trigger_service.calls[0][1]
     assert parent_key not in tracker._batches  # noqa: SLF001 - leak regression check.
@@ -349,7 +380,7 @@ async def test_remove_queued_stays_silent_while_siblings_still_run() -> None:
     tracker.on_sub_agent_complete(parent_key, "run-b", {"result": "b output"})
     await asyncio.sleep(0)
 
-    # Assert
+    # Assert: B's completion enters shared delivery exactly once.
     assert len(trigger_service.calls) == 1
     assert "b output" in trigger_service.calls[0][1]
     assert parent_key not in tracker._batches  # noqa: SLF001 - leak regression check.

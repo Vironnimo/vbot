@@ -688,6 +688,7 @@ class Runtime:
             self._chat_run_manager,
             self,
             trigger_chat_loop=self._streaming_chat_loop,
+            sessions=self._chat_sessions,
         )
         self._command_dispatcher = CommandDispatcher(
             self._chat_run_manager,

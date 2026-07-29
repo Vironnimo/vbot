@@ -1,8 +1,8 @@
-"""In-memory completion tracking for spawned sub-agent batches.
+"""In-memory completion tracking for spawned Sub-Agent batches.
 
 ``SubAgentBatchTracker`` is the state machine behind :class:`SubAgentCoordinator`
 (in ``subagents.py``). It records reserved slots, queued and live sub-agent runs per
-parent run, and fires the batch-completion trigger once every entry finishes.
+Parent Run, and submits each ready result to shared Run-boundary delivery.
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ class _SubAgentEntry:
     complete: bool = False
     fetched: bool = False
     result: JsonObject | None = None
+    completion_notice_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.work_id:
@@ -43,9 +44,8 @@ class _SubAgentEntry:
 class _SubAgentBatch:
     entries: dict[str, _SubAgentEntry]
     reserved_count: int = 0
-    notification_sent: bool = False
-    # The parent run's project, captured when the batch is first created. The
-    # batch-completion trigger continues the parent under this project so a
+    # The Parent Run's project, captured when the batch is first created. The
+    # completion delivery continues the Parent under this project so a
     # project (config) agent resolves on its Team instead of falling through to
     # the identity path. ``None`` keeps the identity/global layout.
     project_id: str | None = None
@@ -87,8 +87,8 @@ class SubAgentBatchTracker:
     ) -> bool:
         """Reserve one sub-agent slot before async session/run work begins.
 
-        The first reservation for a parent run records that run's ``project_id``
-        on the batch, so the later batch-completion trigger continues the parent
+        The first reservation for a Parent Run records that Run's ``project_id``
+        on the batch, so later completion delivery continues the Parent
         under the same project (``None`` keeps the identity layout).
         """
         batch = self._batches.get(parent_key)
@@ -185,14 +185,7 @@ class SubAgentBatchTracker:
         return True
 
     def remove_queued(self, parent_key: ParentKey, queue_item_id: str) -> None:
-        """Remove a queued sub-agent entry that will never start.
-
-        Removal can be the event that completes the batch: when every remaining
-        sibling has already finished, the promised automatic completion delivery
-        must fire now — no later "child finished" event is left to re-evaluate
-        it, so skipping the check would strand the notification and leak the
-        finished batch for the process lifetime.
-        """
+        """Remove a queued Sub-Agent entry that will never start."""
         batch = self._batches.get(parent_key)
         if batch is None:
             return
@@ -207,11 +200,15 @@ class SubAgentBatchTracker:
         if work_id is None or batch.entries.pop(work_id, None) is None:
             return
         self._prune_if_empty(parent_key, batch)
-        self._notify_or_prune_if_complete(parent_key, batch)
+        self._prune_if_finished(parent_key, batch)
 
     def discard_parent(self, parent_key: ParentKey) -> None:
         """Discard all in-memory tracking for a parent run."""
-        self._batches.pop(parent_key, None)
+        batch = self._batches.pop(parent_key, None)
+        if batch is None:
+            return
+        for entry in batch.entries.values():
+            self._cancel_completion_notice(parent_key, batch, entry)
 
     def queued_entry_for_session(
         self,
@@ -240,7 +237,7 @@ class SubAgentBatchTracker:
         sub_run_id: str,
         result_dict: JsonObject,
     ) -> None:
-        """Mark one sub-agent complete and notify the parent when the batch is done."""
+        """Mark one Sub-Agent complete and submit it for Run-boundary delivery."""
         batch = self._batches.get(parent_key)
         if batch is None:
             return
@@ -248,91 +245,85 @@ class SubAgentBatchTracker:
             (candidate for candidate in batch.entries.values() if candidate.run_id == sub_run_id),
             None,
         )
-        if entry is None:
+        if entry is None or entry.complete:
             return
 
         entry.complete = True
         entry.result = dict(result_dict)
-        self._notify_or_prune_if_complete(parent_key, batch)
-
-    def _notify_or_prune_if_complete(self, parent_key: ParentKey, batch: _SubAgentBatch) -> None:
-        """Fire the one batch-completion trigger when the batch just became complete.
-
-        Shared by ``on_sub_agent_complete`` and ``remove_queued`` — every event
-        that can turn "some entries still open" into "all complete" must run this
-        same check, or the promised automatic delivery is lost.
-        """
-        if batch.notification_sent or not self._all_complete(batch):
+        if entry.fetched:
             self._prune_if_finished(parent_key, batch)
             return
 
-        batch.notification_sent = True
-        pending_entries = [
-            candidate for candidate in batch.entries.values() if not candidate.fetched
-        ]
-        if not pending_entries:
-            self._prune_if_finished(parent_key, batch)
-            return
-
-        message = _batch_completion_message(pending_entries)
-
-        async def deliver_to_parent() -> Any:
-            if self._sessions is None:
-                return await self._trigger_service.trigger_run(
-                    parent_key[0],
-                    message,
-                    session_id=parent_key[1],
-                    internal=True,
-                    project_id=batch.project_id,
-                )
-            return await self._trigger_service.trigger_run(
-                parent_key[0],
-                message,
-                session_id=parent_key[1],
-                internal=True,
-                project_id=batch.project_id,
-                input_persisted_hook=lambda: self._acknowledge_delivered_entries(pending_entries),
-            )
-
-        task = asyncio.create_task(deliver_to_parent())
-        task.add_done_callback(
-            lambda completed: _log_background_task_result(
+        notice_id = f"subagent:{parent_key[2]}:{entry.work_id}"
+        entry.completion_notice_id = notice_id
+        delivery = self._trigger_service.submit_completion(
+            parent_key[0],
+            parent_key[1],
+            notice_id=notice_id,
+            origin_run_id=parent_key[2],
+            body=_entry_completion_message(entry),
+            project_id=batch.project_id,
+            on_persisted=lambda: self._acknowledge_delivered_entry(
+                parent_key,
+                entry.work_id,
+                entry,
+            ),
+        )
+        delivery.add_done_callback(
+            lambda completed: self._on_completion_delivery_done(
+                parent_key,
+                entry.work_id,
+                entry,
                 completed,
-                "Sub-agent batch completion trigger failed for "
-                f"agent={parent_key[0]} session={parent_key[1]} run={parent_key[2]}",
+                "Sub-Agent completion delivery failed for "
+                f"agent={parent_key[0]} session={parent_key[1]} "
+                f"run={parent_key[2]} work={entry.work_id}",
             )
         )
-        # The completion note embeds every pending entry's full result and the
-        # Automatic delivery is terminal for these public work handles, so no
-        # later status fetch is needed to mark them. Without this the batch
-        # (including each child's complete final output string) leaks for the
-        # lifetime of the server process.
-        for pending_entry in pending_entries:
-            pending_entry.fetched = True
-        self._prune_if_finished(parent_key, batch)
 
-    def _acknowledge_delivered_entries(self, entries: list[_SubAgentEntry]) -> None:
-        """Mark exact child Runs read after their completion note is persisted."""
-        if self._sessions is None:
+    def _on_completion_delivery_done(
+        self,
+        parent_key: ParentKey,
+        work_id: str,
+        delivered_entry: _SubAgentEntry,
+        delivery: asyncio.Future[None],
+        failure_message: str,
+    ) -> None:
+        if not delivery.cancelled() and delivery.exception() is not None:
+            batch = self._batches.get(parent_key)
+            if batch is not None and batch.entries.get(work_id) is delivered_entry:
+                delivered_entry.completion_notice_id = None
+        _log_background_task_result(delivery, failure_message)
+
+    def _acknowledge_delivered_entry(
+        self,
+        parent_key: ParentKey,
+        work_id: str,
+        delivered_entry: _SubAgentEntry,
+    ) -> None:
+        """Mark one exact child result fetched after its Parent note is persisted."""
+        batch = self._batches.get(parent_key)
+        if batch is None or batch.entries.get(work_id) is not delivered_entry:
             return
-        for entry in entries:
-            if entry.run_id is None:
-                continue
+        delivered_entry.fetched = True
+        delivered_entry.completion_notice_id = None
+        if self._sessions is not None and delivered_entry.run_id is not None:
             try:
                 self._sessions.mark_terminal_run_read(
-                    entry.agent_id,
-                    entry.session_id,
-                    entry.run_id,
-                    entry.project_id,
+                    delivered_entry.agent_id,
+                    delivered_entry.session_id,
+                    delivered_entry.run_id,
+                    delivered_entry.project_id,
                 )
             except Exception:
                 _LOGGER.warning(
                     "Failed to acknowledge delivered sub-agent result (agent=%s session=%s run=%s)",
-                    entry.agent_id,
-                    entry.session_id,
-                    entry.run_id,
+                    delivered_entry.agent_id,
+                    delivered_entry.session_id,
+                    delivered_entry.run_id,
                     exc_info=True,
                 )
+        self._prune_if_finished(parent_key, batch)
 
     def mark_fetched(
         self,
@@ -370,8 +361,26 @@ class SubAgentBatchTracker:
             or not _entry_matches_target(entry, sub_agent_id, project_id)
         ):
             return
+        self._cancel_completion_notice(parent_key, batch, entry)
         entry.fetched = True
         self._prune_if_finished(parent_key, batch)
+
+    def _cancel_completion_notice(
+        self,
+        parent_key: ParentKey,
+        batch: _SubAgentBatch,
+        entry: _SubAgentEntry,
+    ) -> None:
+        notice_id = entry.completion_notice_id
+        if notice_id is None:
+            return
+        self._trigger_service.cancel_completion(
+            parent_key[0],
+            parent_key[1],
+            notice_id=notice_id,
+            project_id=batch.project_id,
+        )
+        entry.completion_notice_id = None
 
     def run_id_for_session(
         self,
@@ -462,14 +471,6 @@ class SubAgentBatchTracker:
         return False
 
     @staticmethod
-    def _all_complete(batch: _SubAgentBatch) -> bool:
-        return (
-            batch.reserved_count == 0
-            and bool(batch.entries)
-            and all(entry.complete for entry in batch.entries.values())
-        )
-
-    @staticmethod
     def _spawn_count(batch: _SubAgentBatch) -> int:
         return len(batch.entries) + batch.reserved_count
 
@@ -486,10 +487,13 @@ class SubAgentBatchTracker:
             self._batches.pop(parent_key, None)
 
 
-def _log_background_task_result(task: asyncio.Task[Any], message: str) -> None:
-    if task.cancelled():
+def _log_background_task_result(
+    delivery: asyncio.Future[Any],
+    message: str,
+) -> None:
+    if delivery.cancelled():
         return
-    error = task.exception()
+    error = delivery.exception()
     if error is None:
         return
     _LOGGER.error(
@@ -500,23 +504,16 @@ def _log_background_task_result(task: asyncio.Task[Any], message: str) -> None:
     )
 
 
-def _batch_completion_message(entries: list[_SubAgentEntry]) -> str:
-    lines = [
-        "Sub-agent batch complete. Each sub-agent's full output is below — "
-        "the results were delivered automatically, so do not request their status again.",
-        "",
-        "Results:",
-    ]
-    for entry in entries:
-        lines.append("")
-        address = format_agent_address(entry.agent_id, entry.project_id)
-        lines.append(
-            f"### {address} (id {entry.work_id}, session {entry.session_id}) — "
-            f"{_entry_status(entry)}"
-        )
-        if entry.activity_file is not None:
-            lines.append(f"Activity file: {entry.activity_file}")
-        lines.append(_entry_result_text(entry))
+def _entry_completion_message(entry: _SubAgentEntry) -> str:
+    lines: list[str] = []
+    address = format_agent_address(entry.agent_id, entry.project_id)
+    lines.append(
+        f"### Sub-Agent {address} (id {entry.work_id}, session {entry.session_id}) — "
+        f"{_entry_status(entry)}"
+    )
+    if entry.activity_file is not None:
+        lines.append(f"Activity file: {entry.activity_file}")
+    lines.append(_entry_result_text(entry))
     return "\n".join(lines)
 
 
