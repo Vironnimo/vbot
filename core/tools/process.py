@@ -25,9 +25,10 @@ PROCESS_TOOL_NAME = "process"
 PROCESS_TOOL_DESCRIPTION = (
     "Inspect or control your own background Process Sessions created by the `bash` Tool. "
     "Use the session_id returned when a bash call continues in the background; this Tool "
-    "cannot access arbitrary operating-system processes. Completion is delivered "
-    "automatically, so use status only for an immediate snapshot, input to send stdin, "
-    "and kill to stop a Process Session."
+    "cannot access arbitrary operating-system processes. Bash output is only a capped "
+    "snapshot; when log_file is present, it receives the complete combined stdout/stderr "
+    "stream live through exit. Completion is delivered automatically, so use status only "
+    "for an immediate snapshot, input to send stdin, and kill to stop a Process Session."
 )
 PROCESS_ACTIONS = ("status", "input", "kill")
 PROCESS_STATUS_OUTPUT_CAP_CHARS = 30_000

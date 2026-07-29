@@ -17,7 +17,7 @@ Lets an Agent inspect and control only its own background Process Sessions creat
 - `status` without `session_id` lists the Agent's tracked Process Sessions. `status` with `session_id` returns an immediate, non-blocking, non-consuming snapshot with lifecycle timestamps, `waiting_for_input`, a newest-output tail capped at 30,000 characters, truncation state, and `log_file`.
 - `input` requires `session_id` and `text`, appends a newline by default, and may close stdin with `eof: true`. `newline: false` sends the text exactly; an empty call that neither appends a newline nor closes stdin is rejected.
 - `kill` requires `session_id` and stops that Process Session.
-- The Tool description tells the Agent to use the `session_id` returned by a handed-off `bash` call, explicitly excludes arbitrary operating-system processes, and explains that normal completion is delivered automatically.
+- The Tool description tells the Agent to use the `session_id` returned by a handed-off `bash` call, explicitly excludes arbitrary operating-system processes, explains that Bash `output` is only a capped snapshot while `log_file` receives the complete combined stdout/stderr stream live through exit, and says that normal completion is delivered automatically.
 - Display: the summary builder renders the flat `action` plus `session_id` when present.
 - `ProcessManager.spawn(scope_key, agent_id, argv, *, env, cwd) -> str`
 - `subprocess_creation_flags(*, new_process_group=False, platform_name=os.name) -> int` is the shared child-process launch policy for core Tools: zero on non-Windows; `CREATE_NO_WINDOW` on Windows, optionally combined with `CREATE_NEW_PROCESS_GROUP`.

@@ -588,6 +588,76 @@ async def test_yield_after_expiry_backgrounds_running_process(
     await kill_background(manager, result)
 
 
+@pytest.mark.asyncio
+async def test_auto_handoff_includes_capped_output_and_usable_process_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spool_manager = make_spool_manager(tmp_path)
+    try:
+        monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+        monkeypatch.setattr(bash_module, "BASH_MODEL_OUTPUT_CAP_CHARS", 50)
+        context = make_context(tmp_path)
+
+        result = await bash_handler(
+            context,
+            {
+                "command": (
+                    "print('x' * 200 + 'HANDOFF-END', flush=True); import time; time.sleep(30)"
+                ),
+                "mode": "auto",
+                "yield_after": 0.5,
+            },
+            spool_manager,
+        )
+
+        assert result["ok"] is True
+        data = result["data"]
+        assert data["status"] == "running"
+        assert data["mode"] == "auto"
+        assert data["delivery"] == "automatic"
+        assert data["process_note"] == bash_module.BASH_HANDOFF_PROCESS_NOTE
+        assert "Use session_id with the process Tool" in data["process_note"]
+        assert "complete combined stdout/stderr stream live" in data["process_note"]
+        process_session_id = data["session_id"]
+        assert isinstance(process_session_id, str) and process_session_id
+        assert data["truncated"] is True
+        assert data["output"].replace("\r\n", "\n").endswith("HANDOFF-END\n")
+        assert "[earlier output truncated" in data["output"]
+        log_file = Path(data["log_file"])
+        assert log_file.exists()
+        assert "x" * 200 + "HANDOFF-END" in log_file.read_text(encoding="utf-8")
+
+        process_context = ToolContext(
+            agent_id=AGENT_ID,
+            session_id=context.session_id,
+            run_id=RUN_ID,
+            tool_call_id="call-process",
+            tool_name=PROCESS_TOOL_NAME,
+            tool_call_index=1,
+            workspace=tmp_path,
+            vbot_root=tmp_path,
+            data_root=tmp_path,
+        )
+        process_result = await make_process_handler(spool_manager)(
+            process_context,
+            {
+                "action": "status",
+                "session_id": process_session_id,
+            },
+        )
+
+        assert process_result["ok"] is True
+        assert process_result["data"]["session_id"] == process_session_id
+        assert process_result["data"]["status"] == "running"
+    finally:
+        sessions = spool_manager.list_sessions(AGENT_ID)
+        for session in sessions:
+            if session.status == "running":
+                await spool_manager.kill(session.session_id, AGENT_ID)
+        await spool_manager.aclose()
+
+
 def test_auto_handoff_note_uses_agent_facing_contract() -> None:
     assert (
         bash_module._handoff_note("auto", 30)
@@ -1256,6 +1326,7 @@ def test_register_bash_tool() -> None:
     assert "Only for auto mode" in properties["yield_after"]["description"]
     assert "does not extend yield_after" in properties["timeout"]["description"]
     assert "coalesced at the Session's next Run boundary" in tool.description
+    assert "complete combined stdout/stderr stream live through exit" in tool.description
     assert tool.parallel_safe is True
 
 

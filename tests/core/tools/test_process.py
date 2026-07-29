@@ -106,9 +106,10 @@ def test_schema_exposes_small_flat_action_contract() -> None:
     assert PROCESS_TOOL_DESCRIPTION == (
         "Inspect or control your own background Process Sessions created by the `bash` Tool. "
         "Use the session_id returned when a bash call continues in the background; this Tool "
-        "cannot access arbitrary operating-system processes. Completion is delivered "
-        "automatically, so use status only for an immediate snapshot, input to send stdin, "
-        "and kill to stop a Process Session."
+        "cannot access arbitrary operating-system processes. Bash output is only a capped "
+        "snapshot; when log_file is present, it receives the complete combined stdout/stderr "
+        "stream live through exit. Completion is delivered automatically, so use status only "
+        "for an immediate snapshot, input to send stdin, and kill to stop a Process Session."
     )
     assert PROCESS_TOOL_PARAMETERS["type"] == "object"
     assert PROCESS_TOOL_PARAMETERS["required"] == ["action"]
