@@ -231,8 +231,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _add_target_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--host", default=DEFAULT_HOST)
+def _add_target_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    default_host: str | None = DEFAULT_HOST,
+) -> None:
+    parser.add_argument("--host", default=default_host)
     parser.add_argument("--port", type=int)
     parser.add_argument("--data-dir")
 
@@ -1751,7 +1755,7 @@ def _add_update_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
         help=AREA_HELP["update"],
         description=f"{AREA_HELP['update']}. Example: vbot update",
     )
-    _add_target_arguments(update_parser)
+    _add_target_arguments(update_parser, default_host=None)
     local_changes = update_parser.add_mutually_exclusive_group()
     local_changes.add_argument(
         "--discard",

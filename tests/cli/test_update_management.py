@@ -123,6 +123,9 @@ def _write_state(
     python_executable: str | None = None,
     dependency_digest: str | None = None,
     webui_revision: str | None = None,
+    server_host: str | None = None,
+    server_port: int | None = None,
+    server_data_directory: str | None = None,
 ) -> None:
     if groups is None:
         if shape == "desktop-client":
@@ -146,6 +149,9 @@ def _write_state(
                 else dependency_digest
             ),
             webui_revision=None if shape == "desktop-client" else webui_revision,
+            server_host=server_host,
+            server_port=server_port,
+            server_data_directory=server_data_directory,
         ),
     )
 
@@ -226,6 +232,129 @@ def test_dev_track_up_to_date_restarts(tmp_path: Path) -> None:
     assert "already up to date" in result.message
     assert "server: restarted" in result.message
     assert events == ["stop", "start"]
+
+
+def test_update_restarts_the_installer_recorded_server_target(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    recorded_data_dir = tmp_path / "custom-data"
+    _write_state(
+        tmp_path,
+        server_host="0.0.0.0",
+        server_port=9123,
+        server_data_directory=str(recorded_data_dir),
+    )
+
+    def handler(command: list[str]) -> CommandRun:
+        if command[:2] == ["git", "symbolic-ref"]:
+            return _ok("main")
+        if command[:2] == ["git", "status"]:
+            return _ok("")
+        return _ok("samesha") if command[:2] == ["git", "rev-parse"] else _ok("")
+
+    resolved_targets: list[dict[str, object]] = []
+
+    def resolve(**target: object) -> ServerInstance:
+        resolved_targets.append(target)
+        assert isinstance(target["host"], str)
+        assert isinstance(target["port"], int)
+        data_dir = Path(str(target["data_dir"]))
+        return ServerInstance(
+            host=target["host"],
+            port=target["port"],
+            data_dir=data_dir,
+            url=f"http://{target['host']}:{target['port']}",
+            log_path=data_dir / "logs" / "today.log",
+        )
+
+    restarted_targets: list[ServerInstance] = []
+
+    def stop(instance: ServerInstance) -> CommandResult:
+        restarted_targets.append(instance)
+        return CommandResult(ok=True, message="stopped", instance=instance)
+
+    def start(instance: ServerInstance) -> CommandResult:
+        restarted_targets.append(instance)
+        return CommandResult(ok=True, message="started", instance=instance)
+
+    result = run_update(
+        _instance(),
+        runner=ScriptedRunner(handler),
+        root=tmp_path,
+        resolve=resolve,
+        stop=stop,
+        start=start,
+    )
+
+    assert result.ok, result.message
+    assert resolved_targets == [
+        {
+            "host": "0.0.0.0",
+            "port": 9123,
+            "data_dir": str(recorded_data_dir),
+        }
+    ]
+    assert [(target.host, target.port, target.data_dir) for target in restarted_targets] == [
+        ("0.0.0.0", 9123, recorded_data_dir),
+        ("0.0.0.0", 9123, recorded_data_dir),
+    ]
+
+
+def test_update_explicit_target_fields_override_the_installation_manifest(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".git").mkdir()
+    _write_state(
+        tmp_path,
+        server_host="0.0.0.0",
+        server_port=9123,
+        server_data_directory=str(tmp_path / "recorded-data"),
+    )
+
+    def handler(command: list[str]) -> CommandRun:
+        if command[:2] == ["git", "symbolic-ref"]:
+            return _ok("main")
+        if command[:2] == ["git", "status"]:
+            return _ok("")
+        return _ok("samesha") if command[:2] == ["git", "rev-parse"] else _ok("")
+
+    explicit_data_dir = tmp_path / "explicit-data"
+    resolved_targets: list[dict[str, object]] = []
+
+    def resolve(**target: object) -> ServerInstance:
+        resolved_targets.append(target)
+        assert isinstance(target["host"], str)
+        assert isinstance(target["port"], int)
+        data_dir = Path(str(target["data_dir"]))
+        return ServerInstance(
+            host=target["host"],
+            port=target["port"],
+            data_dir=data_dir,
+            url=f"http://{target['host']}:{target['port']}",
+            log_path=data_dir / "logs" / "today.log",
+        )
+
+    result = run_update(
+        _instance(),
+        runner=ScriptedRunner(handler),
+        root=tmp_path,
+        resolve=resolve,
+        host="127.0.0.2",
+        port=9456,
+        data_dir=explicit_data_dir,
+        restart=False,
+    )
+
+    assert result.ok, result.message
+    assert resolved_targets == [
+        {
+            "host": "127.0.0.2",
+            "port": 9456,
+            "data_dir": explicit_data_dir,
+        }
+    ]
+    assert result.instance.host == "127.0.0.2"
+    assert result.instance.port == 9456
+    assert result.instance.data_dir == explicit_data_dir
 
 
 def test_dev_track_reinstalls_deps_and_rebuilds_webui(tmp_path: Path) -> None:
@@ -411,6 +540,7 @@ def test_parse_args_update_flags() -> None:
     args = parse_args(["update", "--discard"])
 
     assert args.area == "update"
+    assert args.host is None
     assert args.discard is True
     assert args.stash is False
     assert args.no_restart is False
@@ -433,28 +563,48 @@ def test_dispatch_update_passes_flags_through() -> None:
         stop: Callable[..., CommandResult],
         start: Callable[..., CommandResult],
         service_name: str,
+        resolve: Callable[..., ServerInstance],
+        host: str | None,
+        port: int | None,
+        data_dir: str | None,
     ) -> CommandResult:
-        captured.update(discard=discard, stash=stash, restart=restart, service_name=service_name)
+        captured.update(
+            discard=discard,
+            stash=stash,
+            restart=restart,
+            service_name=service_name,
+            resolve=resolve,
+            host=host,
+            port=port,
+            data_dir=data_dir,
+        )
         return CommandResult(ok=True, message="done", instance=instance)
 
     def noop(instance: ServerInstance) -> CommandResult:
         return CommandResult(ok=True, message="ok", instance=instance)
 
+    def resolve_target(**_target: object) -> ServerInstance:
+        return _instance()
+
     args = parse_args(["update", "--stash", "--no-restart"])
     result = dispatch_update_command(
         args,
-        resolve=lambda **_kwargs: _instance(),
+        resolve=resolve_target,
         stop=noop,
         start=noop,
         run_update_fn=fake_run_update,
     )
 
     assert result.ok
+    assert captured.pop("resolve") is resolve_target
     assert captured == {
         "discard": False,
         "stash": True,
         "restart": False,
         "service_name": "vbot",
+        "host": None,
+        "port": None,
+        "data_dir": None,
     }
 
 
