@@ -5,6 +5,7 @@ from __future__ import annotations
 from .subagent_test_support import (
     BACKGROUND_TASK_SETTLE_TICKS,
     SUBAGENT_TOOL_NAME,
+    Any,
     ChatMessage,
     FakeRunManager,
     Path,
@@ -343,10 +344,15 @@ async def test_subagent_result_fetch_marks_only_requested_run_for_reused_session
     # Arrange
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
+    runtime.chat_sessions.create("worker", session_id="shared-session")
     trigger_service = RecordingTriggerService()
     trigger_service.defer_input_persisted = True
     tracker = SubAgentBatchTracker(trigger_service)
-    context = make_context(tool_name=SUBAGENT_TOOL_NAME)
+    persisted_callbacks: list[Any] = []
+    context = make_context(
+        tool_name=SUBAGENT_TOOL_NAME,
+        result_persisted_hook=persisted_callbacks.append,
+    )
     parent_key = (context.agent_id, context.session_id, context.run_id)
     tracker.register(
         parent_key,
@@ -375,6 +381,11 @@ async def test_subagent_result_fetch_marks_only_requested_run_for_reused_session
         runtime=runtime,
         batch_tracker=tracker,
     )
+    fetched_before_parent_persistence = {
+        work_id: entry.fetched
+        for work_id, entry in tracker._batches[parent_key].entries.items()  # noqa: SLF001 - persistence-boundary regression check.
+    }
+    persisted_callbacks[0]()
     batch = tracker._batches[parent_key]  # noqa: SLF001 - test checks fetched disambiguation.
     fetched_after_old_fetch = {work_id: entry.fetched for work_id, entry in batch.entries.items()}
     trigger_service.defer_input_persisted = False
@@ -384,6 +395,7 @@ async def test_subagent_result_fetch_marks_only_requested_run_for_reused_session
 
     # Assert
     assert result["ok"] is True
+    assert fetched_before_parent_persistence == {"sub_old": False, "sub_new": False}
     assert fetched_after_old_fetch == {"sub_old": True, "sub_new": False}
     assert len(trigger_service.calls) == 2
     assert trigger_service.cancelled_notice_ids == ["subagent:parent-run:sub_old"]

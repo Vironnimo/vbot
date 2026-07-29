@@ -202,14 +202,6 @@ class SubAgentBatchTracker:
         self._prune_if_empty(parent_key, batch)
         self._prune_if_finished(parent_key, batch)
 
-    def discard_parent(self, parent_key: ParentKey) -> None:
-        """Discard all in-memory tracking for a parent run."""
-        batch = self._batches.pop(parent_key, None)
-        if batch is None:
-            return
-        for entry in batch.entries.values():
-            self._cancel_completion_notice(parent_key, batch, entry)
-
     def queued_entry_for_session(
         self,
         parent_key: ParentKey,

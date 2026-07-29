@@ -417,8 +417,13 @@ async def test_subagent_tool_foreground_waits_for_full_result(tmp_path: Path) ->
     manager.next_result = assistant
     runtime = make_runtime(tmp_path, manager)
     trigger_service = RecordingTriggerService()
+    trigger_service.defer_input_persisted = True
     tracker = SubAgentBatchTracker(trigger_service)
-    context = make_context(nesting_depth=1)
+    persisted_callbacks: list[Any] = []
+    context = make_context(
+        nesting_depth=1,
+        result_persisted_hook=persisted_callbacks.append,
+    )
 
     # Act
     result = await _handle_subagent(
@@ -440,7 +445,13 @@ async def test_subagent_tool_foreground_waits_for_full_result(tmp_path: Path) ->
     )
     for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
         await asyncio.sleep(0)
-    assert trigger_service.calls == []
+    assert len(trigger_service.calls) == 1
+    assert tracker.spawn_count((context.agent_id, context.session_id, context.run_id)) == 1
+
+    persisted_callbacks[0]()
+
+    assert trigger_service.cancelled_notice_ids == [f"subagent:parent-run:{result['data']['id']}"]
+    assert tracker.spawn_count((context.agent_id, context.session_id, context.run_id)) == 0
 
 
 async def test_subagent_tool_foreground_timeout_completes_tracker(
@@ -450,8 +461,14 @@ async def test_subagent_tool_foreground_timeout_completes_tracker(
     # Arrange
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager, {"subagent_timeout_minutes": 1})
-    tracker = SubAgentBatchTracker(RecordingTriggerService())
-    context = make_context(nesting_depth=1)
+    trigger_service = RecordingTriggerService()
+    trigger_service.defer_input_persisted = True
+    tracker = SubAgentBatchTracker(trigger_service)
+    persisted_callbacks: list[Any] = []
+    context = make_context(
+        nesting_depth=1,
+        result_persisted_hook=persisted_callbacks.append,
+    )
 
     async def raise_timeout(_awaitable: Any, *, timeout: float | None = None) -> Any:
         _awaitable.close()
@@ -471,11 +488,15 @@ async def test_subagent_tool_foreground_timeout_completes_tracker(
     assert result["ok"] is False
     assert result["error"]["code"] == "subagent_timeout"
     assert manager.started[0][3].cancel_requested is True
-    assert tracker.spawn_count((context.agent_id, context.session_id, context.run_id)) == 0
-    trigger_service = tracker._trigger_service  # noqa: SLF001 - test observes tracker outcome.
     for _ in range(BACKGROUND_TASK_SETTLE_TICKS):
         await asyncio.sleep(0)
-    assert trigger_service.calls == []
+    assert len(trigger_service.calls) == 1
+    assert tracker.spawn_count((context.agent_id, context.session_id, context.run_id)) == 1
+
+    persisted_callbacks[0]()
+
+    assert len(trigger_service.cancelled_notice_ids) == 1
+    assert tracker.spawn_count((context.agent_id, context.session_id, context.run_id)) == 0
 
 
 async def test_wait_for_subagent_result_converts_normal_failures_to_result_dict() -> None:
