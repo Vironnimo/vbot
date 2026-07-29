@@ -44,11 +44,6 @@ _OPERATION_CONTRACTS: tuple[
     ...,
 ] = (
     (
-        "channel_send",
-        CHANNEL_SEND_TOOL_PARAMETERS,
-        {"send": ("channel_id",)},
-    ),
-    (
         "process",
         PROCESS_TOOL_PARAMETERS,
         {
@@ -76,6 +71,7 @@ _OPERATION_CONTRACTS: tuple[
 _DIRECT_TOOL_SCHEMAS: tuple[tuple[str, JsonObject], ...] = (
     ("analyze_image", ANALYZE_IMAGE_TOOL_PARAMETERS),
     ("bash", BASH_TOOL_PARAMETERS),
+    ("channel_send", CHANNEL_SEND_TOOL_PARAMETERS),
     ("cron", CRON_TOOL_PARAMETERS),
     ("edit", EDIT_TOOL_PARAMETERS),
     ("glob", GLOB_TOOL_PARAMETERS),

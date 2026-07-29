@@ -23,13 +23,12 @@ _TEST_MAX_ATTACHMENT_SIZE_BYTES = 20_971_520
 def test_channel_send_agent_guidance_requires_tool_for_channel_files() -> None:
     assert CHANNEL_SEND_TOOL_DESCRIPTION == (
         "Send a proactive message or any file through a configured channel. Always use "
-        "this tool for channel file delivery, including replies. Put the complete request "
-        "inside request with operation set to send."
+        "this tool for channel file delivery, including replies."
     )
-    send = CHANNEL_SEND_TOOL_PARAMETERS["properties"]["request"]["anyOf"][0]
-    assert send["required"] == ["operation", "channel_id"]
-    assert send["properties"]["operation"] == {"type": "string", "enum": ["send"]}
-    properties = send["properties"]
+    assert CHANNEL_SEND_TOOL_PARAMETERS["required"] == ["channel_id"]
+    assert "request" not in CHANNEL_SEND_TOOL_PARAMETERS["properties"]
+    assert "action" not in CHANNEL_SEND_TOOL_PARAMETERS["properties"]
+    properties = CHANNEL_SEND_TOOL_PARAMETERS["properties"]
     assert isinstance(properties, dict)
     file_paths = properties["file_paths"]
     assert isinstance(file_paths, dict)
@@ -95,21 +94,10 @@ async def dispatch(
     workspace: Path,
     arguments: dict[str, object],
 ) -> dict[str, object]:
-    if set(arguments) == {"request"}:
-        canonical = arguments
-    elif set(arguments) == {"send"} and isinstance(arguments["send"], dict):
-        canonical = {
-            "request": {
-                "operation": "send",
-                **arguments["send"],
-            }
-        }
-    else:
-        canonical = {"request": {"operation": "send", **arguments}}
     try:
         return await registry.dispatch(
             make_context(workspace),
-            canonical,
+            arguments,
             [CHANNEL_SEND_TOOL_NAME],
         )
     except ValueError as error:
@@ -173,7 +161,53 @@ def test_channel_send_happy_path_with_explicit_platform_target(tmp_path: Path) -
     channel_service.list_channels.assert_called_once_with()
 
 
-def test_channel_send_accepts_canonical_send_operation(tmp_path: Path) -> None:
+def test_channel_send_rejects_retired_envelope_shapes(tmp_path: Path) -> None:
+    channel_service = Mock()
+    channel_service.send = AsyncMock()
+    channel_service.list_channels.return_value = [make_channel_config()]
+    chat_sessions = make_chat_sessions()
+    registry = ToolRegistry()
+    register_channel_send_tool(
+        registry,
+        channel_service,
+        chat_sessions,
+        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
+    )
+
+    retired_shapes: tuple[dict[str, object], ...] = (
+        {
+            "request": {
+                "operation": "send",
+                "channel_id": "tg-assistant",
+                "message": "Task finished",
+                "platform_target": "12345",
+            }
+        },
+        {
+            "send": {
+                "channel_id": "tg-assistant",
+                "message": "Task finished",
+                "platform_target": "12345",
+            }
+        },
+    )
+    for retired_arguments in retired_shapes:
+        result = asyncio.run(
+            dispatch(
+                registry,
+                tmp_path,
+                retired_arguments,
+            )
+        )
+        assert result["ok"] is False
+        error = result["error"]
+        assert isinstance(error, dict)
+        assert error["code"] == "invalid_arguments"
+
+    channel_service.send.assert_not_awaited()
+
+
+def test_channel_send_accepts_flat_arguments(tmp_path: Path) -> None:
     channel_service = Mock()
     channel_service.send = AsyncMock()
     channel_service.list_channels.return_value = [make_channel_config()]
@@ -191,11 +225,9 @@ def test_channel_send_accepts_canonical_send_operation(tmp_path: Path) -> None:
             registry,
             tmp_path,
             {
-                "send": {
-                    "channel_id": "tg-assistant",
-                    "message": "Task finished",
-                    "platform_target": "12345",
-                }
+                "channel_id": "tg-assistant",
+                "message": "Task finished",
+                "platform_target": "12345",
             },
         )
     )
@@ -311,13 +343,10 @@ def test_project_channel_send_keeps_legacy_unbound_run_button_behavior(tmp_path:
         registry.dispatch(
             make_context(tmp_path, project_id="project-1"),
             {
-                "request": {
-                    "operation": "send",
-                    "channel_id": "tg-assistant",
-                    "message": "Project approval",
-                    "platform_target": "12345",
-                    "buttons": [[{"label": "Approve", "data": "run:approve"}]],
-                }
+                "channel_id": "tg-assistant",
+                "message": "Project approval",
+                "platform_target": "12345",
+                "buttons": [[{"label": "Approve", "data": "run:approve"}]],
             },
             [CHANNEL_SEND_TOOL_NAME],
         )
@@ -819,12 +848,9 @@ def test_channel_send_relative_file_path_resolves_from_cwd(tmp_path: Path) -> No
         registry.dispatch(
             make_context(workspace, cwd=repo),
             {
-                "request": {
-                    "operation": "send",
-                    "channel_id": "tg-assistant",
-                    "platform_target": "12345",
-                    "file_paths": ["note.txt"],
-                }
+                "channel_id": "tg-assistant",
+                "platform_target": "12345",
+                "file_paths": ["note.txt"],
             },
             [CHANNEL_SEND_TOOL_NAME],
         )

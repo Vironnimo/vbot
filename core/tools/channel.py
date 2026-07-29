@@ -19,8 +19,6 @@ from core.tools.tools import (
     ToolContext,
     ToolDisplay,
     ToolRegistry,
-    extract_tool_operation,
-    operation_envelope_schema,
     tool_failure,
     tool_success,
 )
@@ -35,8 +33,7 @@ _LOGGER = get_logger("tools.channel")
 CHANNEL_SEND_TOOL_NAME = "channel_send"
 CHANNEL_SEND_TOOL_DESCRIPTION = (
     "Send a proactive message or any file through a configured channel. Always use "
-    "this tool for channel file delivery, including replies. Put the complete request "
-    "inside request with operation set to send."
+    "this tool for channel file delivery, including replies."
 )
 _REQUIRED_CHANNEL_SEND_ARGUMENTS = frozenset(("channel_id",))
 _OPTIONAL_CHANNEL_SEND_ARGUMENTS = frozenset(
@@ -127,25 +124,12 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
     "not": {"required": ["buttons", "file_paths"]},
     "additionalProperties": False,
 }
-CHANNEL_SEND_TOOL_PARAMETERS = operation_envelope_schema(
-    {"send": CHANNEL_SEND_TOOL_PARAMETERS},
-    description="Set request.operation to send and provide the complete request fields.",
-)
-
-
-def _normalize_channel_send_call(arguments: JsonObject) -> JsonObject:
-    _, operation_arguments = extract_tool_operation(arguments, ("send",))
-    return operation_arguments
 
 
 def _channel_send_display_summary(arguments: JsonObject) -> str:
-    try:
-        operation_arguments = _normalize_channel_send_call(arguments)
-    except ValueError:
-        return ""
     parts: list[str] = []
     for field_name in ("channel_id", "message"):
-        value = operation_arguments.get(field_name)
+        value = arguments.get(field_name)
         if isinstance(value, str) and value.strip():
             parts.append(value.strip())
     return " · ".join(parts)
@@ -191,10 +175,6 @@ async def _handle_channel_send_tool(
     *,
     max_attachment_size_bytes: int,
 ) -> JsonObject:
-    try:
-        arguments = _normalize_channel_send_call(arguments)
-    except ValueError as error:
-        return tool_failure("invalid_arguments", str(error))
     unknown_arguments = sorted(set(arguments) - _CHANNEL_SEND_ALLOWED_ARGUMENTS)
     if unknown_arguments:
         names = ", ".join(unknown_arguments)
