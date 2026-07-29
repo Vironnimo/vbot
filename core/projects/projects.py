@@ -94,6 +94,7 @@ PROJECT_DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = (
 _PROJECT_TOOL_NON_CONFIGURABLE_REASONS: dict[str, str] = {
     "memory": "controlled_by_agent_memory_mode",
     "project": "requires_identity_agent",
+    "session_read": "granted_with_session_search",
     "skill_manage": "requires_identity_agent_workspace",
 }
 

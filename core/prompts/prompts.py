@@ -53,6 +53,7 @@ from core.tools.availability import (
     SKILL_MANAGE_TOOL_NAME,
     agent_tool_settings,
     apply_agent_target_tool_visibility,
+    expand_companion_tools,
     memory_tool_enabled,
     subagent_allowed_agents,
 )
@@ -1601,7 +1602,7 @@ class SystemPromptManager:
         session_tool_grants: Sequence[str] = (),
     ) -> list[JsonObject]:
         definitions = self._tool_registry.provider_definitions(
-            agent.allowed_tools,
+            expand_companion_tools(agent.allowed_tools),
             session_grants=session_tool_grants,
         )
         definitions = self._apply_memory_tool_visibility(
@@ -1633,7 +1634,7 @@ class SystemPromptManager:
                 session_grants=session_tool_grants,
             )
         definitions = self._tool_registry.prompt_definitions(
-            agent.allowed_tools,
+            expand_companion_tools(agent.allowed_tools),
             session_grants=session_tool_grants,
         )
         definitions = self._apply_memory_tool_visibility(

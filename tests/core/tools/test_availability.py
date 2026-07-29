@@ -6,6 +6,7 @@ from core.tools.availability import (
     PROJECT_TOOL_NAME,
     apply_agent_target_tool_visibility,
     effective_agent_allowed_tools,
+    expand_companion_tools,
     subagent_allowed_agents,
 )
 from core.tools.subagent import SUBAGENT_TOOL_PARAMETERS
@@ -138,6 +139,29 @@ def test_project_tool_is_available_only_with_identity_workspace() -> None:
     assert identity_allowed == ["project", "read"]
     assert config_wildcard == ["read"]
     assert config_explicit == []
+
+
+def test_session_read_is_derived_only_from_session_search() -> None:
+    registered = ["read", "session_read", "session_search"]
+
+    assert expand_companion_tools(["read", "session_search"]) == [
+        "read",
+        "session_search",
+        "session_read",
+    ]
+    assert effective_agent_allowed_tools(
+        ["session_search"],
+        "off",
+        registered_tool_names=registered,
+    ) == ["session_search", "session_read"]
+    assert (
+        effective_agent_allowed_tools(
+            ["session_read"],
+            "off",
+            registered_tool_names=registered,
+        )
+        == []
+    )
 
 
 def test_nested_subagent_tool_settings_expose_explicit_targets() -> None:

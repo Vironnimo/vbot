@@ -11,6 +11,8 @@ from core.memory import MEMORY_PROMPT_MODE_OFF, MemoryPromptMode
 MEMORY_TOOL_NAME = "memory"
 SKILL_MANAGE_TOOL_NAME = "skill_manage"
 PROJECT_TOOL_NAME = "project"
+SESSION_SEARCH_TOOL_NAME = "session_search"
+SESSION_READ_TOOL_NAME = "session_read"
 SUBAGENT_TOOL_NAMES: frozenset[str] = frozenset({"subagent"})
 SUBAGENT_TOOL_SETTINGS_KEY = "subagent"
 SUBAGENT_ALLOWED_AGENTS_KEY = "allowed_agents"
@@ -29,8 +31,25 @@ def memory_tool_enabled(memory_prompt_mode: MemoryPromptMode) -> bool:
 
 
 def sanitize_configured_allowed_tools(allowed_tools: Sequence[str]) -> list[str]:
-    """Return persisted/configurable tools without runtime-derived memory access."""
-    return [tool_name for tool_name in allowed_tools if tool_name != MEMORY_TOOL_NAME]
+    """Return persisted/configurable tools without runtime-derived companions."""
+    return [
+        tool_name
+        for tool_name in allowed_tools
+        if tool_name not in {MEMORY_TOOL_NAME, SESSION_READ_TOOL_NAME}
+    ]
+
+
+def expand_companion_tools(allowed_tools: Sequence[str] | None) -> list[str] | None:
+    """Derive companion Tools from their one persisted/configurable capability."""
+    if allowed_tools is None:
+        return None
+    configured = [tool_name for tool_name in allowed_tools if tool_name != SESSION_READ_TOOL_NAME]
+    expanded: list[str] = []
+    for tool_name in configured:
+        expanded.append(tool_name)
+        if tool_name == SESSION_SEARCH_TOOL_NAME:
+            expanded.append(SESSION_READ_TOOL_NAME)
+    return list(dict.fromkeys(expanded))
 
 
 def effective_agent_allowed_tools(
@@ -62,11 +81,14 @@ def effective_agent_allowed_tools(
             return None
         return sorted(set(_without(registered_tool_names, excluded)) | set(grants))
 
-    configured_tools = [
-        tool_name
-        for tool_name in sanitize_configured_allowed_tools(allowed_tools)
-        if tool_name not in excluded
-    ]
+    configured_tools = expand_companion_tools(
+        [
+            tool_name
+            for tool_name in sanitize_configured_allowed_tools(allowed_tools)
+            if tool_name not in excluded
+        ]
+    )
+    assert configured_tools is not None
     if "*" in configured_tools:
         effective = configured_tools if not excluded else _without(registered_tool_names, excluded)
         if "*" in effective:
@@ -164,6 +186,7 @@ __all__ = [
     "agent_tool_settings",
     "apply_agent_target_tool_visibility",
     "effective_agent_allowed_tools",
+    "expand_companion_tools",
     "memory_tool_enabled",
     "sanitize_configured_allowed_tools",
     "subagent_allowed_agents",

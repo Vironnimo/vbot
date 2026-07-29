@@ -66,14 +66,14 @@ SESSION_RECALL_LITERAL_SEARCH_GUIDANCE = (
     "paraphrases will not match."
 )
 
-# Name of the built-in recall tool whose results are persisted into sessions
+# Names of the built-in recall tools whose results are persisted into sessions
 # as ``role="tool"`` messages. Indexing or returning those results creates a
 # feedback loop where every search matches its own prior output, so they are
 # excluded from recall (the JSONL scan, context/bookends, and the semantic
-# index). This duplicates ``core.tools.session_search.SESSION_SEARCH_TOOL_NAME``
+# index). This duplicates the Tool names from ``core.tools.session_search``
 # because recall is a lower layer than tools and cannot import it without an
 # import cycle; a test in ``test_session_search`` asserts the two stay in sync.
-RECALL_TOOL_RESULT_NAME = "session_search"
+RECALL_TOOL_RESULT_NAMES = frozenset({"session_search", "session_read"})
 
 _WHITESPACE_PATTERN = re.compile(r"\s+")
 
@@ -422,7 +422,7 @@ def message_index_by_id(messages: list[Any], message_id: str) -> int | None:
 
 
 def is_recall_artifact_message(message: Any) -> bool:
-    """True for a persisted ``session_search`` result — the recall tool's own output.
+    """True for a persisted Session Recall Tool result.
 
     Such a message is derived recall output, not conversation content. Indexing
     or returning it makes a search match its own prior results, so it is
@@ -431,7 +431,7 @@ def is_recall_artifact_message(message: Any) -> bool:
 
     return (
         getattr(message, "role", "") == "tool"
-        and getattr(message, "name", None) == RECALL_TOOL_RESULT_NAME
+        and getattr(message, "name", None) in RECALL_TOOL_RESULT_NAMES
     )
 
 

@@ -26,7 +26,10 @@ from core.tools.memory import MEMORY_TOOL_PARAMETERS
 from core.tools.process import PROCESS_TOOL_PARAMETERS
 from core.tools.project import PROJECT_TOOL_PARAMETERS
 from core.tools.read import READ_TOOL_PARAMETERS
-from core.tools.session_search import SESSION_SEARCH_TOOL_PARAMETERS
+from core.tools.session_search import (
+    SESSION_READ_TOOL_PARAMETERS,
+    SESSION_SEARCH_TOOL_PARAMETERS,
+)
 from core.tools.skill import SKILL_TOOL_PARAMETERS
 from core.tools.skill_manage import SKILL_MANAGE_TOOL_PARAMETERS
 from core.tools.speech import TEXT_TO_SPEECH_TOOL_PARAMETERS
@@ -56,16 +59,6 @@ _OPERATION_CONTRACTS: tuple[
             "clear": ("session_id",),
         },
     ),
-    (
-        "session_search",
-        SESSION_SEARCH_TOOL_PARAMETERS,
-        {
-            "list": (),
-            "overview": ("session_id",),
-            "search": ("query",),
-            "read": ("session_id",),
-        },
-    ),
 )
 
 _DIRECT_TOOL_SCHEMAS: tuple[tuple[str, JsonObject], ...] = (
@@ -81,6 +74,8 @@ _DIRECT_TOOL_SCHEMAS: tuple[tuple[str, JsonObject], ...] = (
     ("memory", MEMORY_TOOL_PARAMETERS),
     ("project", PROJECT_TOOL_PARAMETERS),
     ("read", READ_TOOL_PARAMETERS),
+    ("session_read", SESSION_READ_TOOL_PARAMETERS),
+    ("session_search", SESSION_SEARCH_TOOL_PARAMETERS),
     ("skill", SKILL_TOOL_PARAMETERS),
     ("skill_manage", SKILL_MANAGE_TOOL_PARAMETERS),
     ("status", STATUS_TOOL_PARAMETERS),
