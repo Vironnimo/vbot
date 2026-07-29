@@ -21,7 +21,6 @@ from core.tools.process_manager import (
     ProcessManager,
     SessionInputClosedError,
     SessionNotFoundError,
-    SessionStillRunningError,
     subprocess_creation_flags,
 )
 
@@ -332,7 +331,7 @@ async def test_poll_timeout_returns_empty_when_no_output_arrives(manager: Proces
 
 
 @pytest.mark.asyncio
-async def test_write_submit_kill_clear_and_list_sessions(manager: ProcessManager) -> None:
+async def test_send_input_kill_and_list_sessions(manager: ProcessManager) -> None:
     script = "import sys; line = sys.stdin.readline(); print('got:' + line.strip())"
     session_id = await manager.spawn(
         SCOPE_A,
@@ -342,21 +341,26 @@ async def test_write_submit_kill_clear_and_list_sessions(manager: ProcessManager
         cwd=None,
     )
 
-    await manager.write(session_id, AGENT_A, "value")
-    await manager.submit(session_id, AGENT_A)
+    await manager.send_input(
+        session_id,
+        AGENT_A,
+        "value",
+        newline=True,
+        eof=False,
+    )
     result = await poll_until_terminal(manager, session_id)
 
     assert result["status"] == "completed"
     assert "got:value" in as_text(result["stdout"])
     assert [session.session_id for session in manager.list_sessions(AGENT_A)] == [session_id]
 
-    await manager.clear(session_id, AGENT_A)
+    await manager.kill(session_id, AGENT_A)
 
-    assert manager.list_sessions(AGENT_A) == []
+    assert [session.session_id for session in manager.list_sessions(AGENT_A)] == [session_id]
 
 
 @pytest.mark.asyncio
-async def test_write_with_eof_closes_stdin(manager: ProcessManager) -> None:
+async def test_send_input_with_eof_closes_stdin(manager: ProcessManager) -> None:
     script = "import sys; data = sys.stdin.read(); print('read:' + data)"
     session_id = await manager.spawn(
         SCOPE_A,
@@ -366,7 +370,13 @@ async def test_write_with_eof_closes_stdin(manager: ProcessManager) -> None:
         cwd=None,
     )
 
-    await manager.write(session_id, AGENT_A, "payload", eof=True)
+    await manager.send_input(
+        session_id,
+        AGENT_A,
+        "payload",
+        newline=False,
+        eof=True,
+    )
     result = await poll_until_terminal(manager, session_id)
 
     assert result["status"] == "completed"
@@ -374,7 +384,7 @@ async def test_write_with_eof_closes_stdin(manager: ProcessManager) -> None:
 
 
 @pytest.mark.asyncio
-async def test_write_translates_raced_stdin_close_to_input_closed_error(
+async def test_send_input_translates_raced_stdin_close_to_input_closed_error(
     manager: ProcessManager,
 ) -> None:
     session_id = await manager.spawn(
@@ -394,33 +404,13 @@ async def test_write_translates_raced_stdin_close_to_input_closed_error(
     session.proc.stdin.drain = raise_connection_reset  # type: ignore[method-assign]
 
     with pytest.raises(SessionInputClosedError, match=session_id):
-        await manager.write(session_id, AGENT_A, "value")
-    assert session.stdin_open is False
-
-    await manager.kill(session_id, AGENT_A)
-
-
-@pytest.mark.asyncio
-async def test_submit_translates_raced_stdin_close_to_input_closed_error(
-    manager: ProcessManager,
-) -> None:
-    session_id = await manager.spawn(
-        SCOPE_A,
-        AGENT_A,
-        [sys.executable, "-c", "import sys; sys.stdin.readline()"],
-        env=None,
-        cwd=None,
-    )
-    session = manager.get_session(session_id, AGENT_A)
-    assert session.proc.stdin is not None
-
-    async def raise_broken_pipe() -> None:
-        raise BrokenPipeError("peer closed")
-
-    session.proc.stdin.drain = raise_broken_pipe  # type: ignore[method-assign]
-
-    with pytest.raises(SessionInputClosedError, match=session_id):
-        await manager.submit(session_id, AGENT_A)
+        await manager.send_input(
+            session_id,
+            AGENT_A,
+            "value",
+            newline=False,
+            eof=False,
+        )
     assert session.stdin_open is False
 
     await manager.kill(session_id, AGENT_A)
@@ -543,7 +533,7 @@ async def test_kill_logs_warning_when_taskkill_fails(
 
 
 @pytest.mark.asyncio
-async def test_kill_stops_process_and_clear_removes_it(manager: ProcessManager) -> None:
+async def test_kill_stops_process(manager: ProcessManager) -> None:
     session_id = await manager.spawn(
         SCOPE_A,
         AGENT_A,
@@ -554,27 +544,9 @@ async def test_kill_stops_process_and_clear_removes_it(manager: ProcessManager) 
 
     await manager.kill(session_id, AGENT_A)
     result = await manager.poll(session_id, AGENT_A, timeout_ms=5000)
-    await manager.clear(session_id, AGENT_A)
 
     assert result["status"] == "killed"
-    with pytest.raises(SessionNotFoundError):
-        manager.get_session(session_id, AGENT_A)
-
-
-@pytest.mark.asyncio
-async def test_clear_running_session_raises(manager: ProcessManager) -> None:
-    session_id = await manager.spawn(
-        SCOPE_A,
-        AGENT_A,
-        [sys.executable, "-c", "import time; time.sleep(30)"],
-        env=None,
-        cwd=None,
-    )
-
-    with pytest.raises(SessionStillRunningError):
-        await manager.clear(session_id, AGENT_A)
-
-    await manager.kill(session_id, AGENT_A)
+    assert manager.get_session(session_id, AGENT_A).status == "killed"
 
 
 @pytest.mark.asyncio
@@ -592,13 +564,17 @@ async def test_agent_isolation_for_session_access_methods(manager: ProcessManage
     with pytest.raises(SessionNotFoundError):
         await manager.log(session_id, AGENT_B)
     with pytest.raises(SessionNotFoundError):
-        await manager.write(session_id, AGENT_B, "data")
+        await manager.snapshot(session_id, AGENT_B)
     with pytest.raises(SessionNotFoundError):
-        await manager.submit(session_id, AGENT_B)
+        await manager.send_input(
+            session_id,
+            AGENT_B,
+            "data",
+            newline=True,
+            eof=False,
+        )
     with pytest.raises(SessionNotFoundError):
         await manager.kill(session_id, AGENT_B)
-    with pytest.raises(SessionNotFoundError):
-        await manager.clear(session_id, AGENT_B)
 
     assert manager.list_sessions(AGENT_B) == []
     assert [session.session_id for session in manager.list_sessions(AGENT_A)] == [session_id]
