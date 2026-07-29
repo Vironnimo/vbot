@@ -60,6 +60,10 @@ async def test_register_subagent_tools_registers_one_flat_public_tool() -> None:
     assert subagent.parameters["additionalProperties"] is False
     properties = subagent.parameters["properties"]
     assert properties["action"]["enum"] == ["run", "status", "cancel"]
+    assert properties["action"]["description"] == (
+        "run starts new work or continues a Sub-Agent Session, status returns a "
+        "non-blocking snapshot for an id, and cancel stops the exact owned work for an id."
+    )
     assert properties["id"]["description"] == (
         "Stable id returned by run. Required for status and cancel."
     )

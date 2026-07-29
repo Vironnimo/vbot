@@ -27,10 +27,11 @@ SUBAGENT_PROMPT_BLOCK_TEMPLATE = (
     "calling Agent or one of the additional Agents listed below. You remain "
     "responsible for deciding what to delegate, integrating the results, and "
     "verifying the final outcome.\n\n"
-    'Use `action: "run"` to admit work. Omit `session_id` to create a separate '
-    "Session; omit `agent_id` there to use the calling Agent, which is always available "
-    "and is not repeated in the list below. To continue a prior Sub-Agent Session, "
-    "repeat both its exact `agent_id` and `session_id`.\n\n"
+    'Use `action: "run"` to start work in a new Session or continue an existing '
+    "Sub-Agent Session. Omit `session_id` to create a separate Session; omit `agent_id` "
+    "there to use the calling Agent, which is always available and is not repeated in "
+    "the list below. To continue a prior Sub-Agent Session, repeat both its exact "
+    "`agent_id` and `session_id`.\n\n"
     "The following additional Agents are available. Use each Agent id exactly as "
     "shown:\n\n"
     "{subagent_list}\n\n"
@@ -47,7 +48,7 @@ SUBAGENT_PROMPT_BLOCK_TEMPLATE = (
     "Optional `model` and `thinking_effort` values override only the newly admitted "
     "Sub-Agent Run. They do not modify the target Agent or Session, persist into a "
     "later continuation, or pass to nested Sub-Agents.\n\n"
-    "Each admitted run action returns one stable `id`. Use only that `id` with "
+    "Each run action returns one stable `id`. Use only that `id` with "
     '`action: "status"` or `action: "cancel"`; queued and running state are internal '
     "and never change the handle. Status is a non-blocking snapshot. Cancellation waits "
     "until that exact owned work is cancelled and cannot target another Parent Session's "
@@ -70,8 +71,8 @@ _SUBAGENT_ACTION_PARAMETER: JsonObject = {
     "type": "string",
     "enum": ["run", "status", "cancel"],
     "description": (
-        "run admits new work, status returns a non-blocking snapshot for an id, and "
-        "cancel stops the exact owned work for an id."
+        "run starts new work or continues a Sub-Agent Session, status returns a "
+        "non-blocking snapshot for an id, and cancel stops the exact owned work for an id."
     ),
 }
 _SUBAGENT_ID_PARAMETER: JsonObject = {
