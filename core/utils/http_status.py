@@ -1,16 +1,17 @@
-"""Canonical policy for which HTTP status codes are worth retrying.
+"""Canonical default policy for which HTTP status codes are worth retrying.
 
 Single source of truth shared by the provider adapters and the HTTP-calling
 tools, so "retryable" means the same thing everywhere instead of drifting per
-call site. Decided once, here:
+call site. This policy applies to replay-safe requests and to callers whose
+contract accepts the repeat risk. Billed, non-idempotent task generation adds a
+stricter endpoint policy in ``core.providers.task_client`` because gateway
+failures can arrive after the provider has started the operation.
 
-- **429 / 502 / 503 — always retryable (any method).** The server explicitly
-  refused or could not serve the request, so it was not acted on; re-issuing is
-  safe regardless of HTTP method.
-- **504 (Gateway Timeout) — always retryable.** A timeout at the gateway is
-  transient. The origin *may* have begun processing, but for the requests vBot
-  makes (LLM completions, web fetches, Home Assistant calls) re-issuing is
-  acceptable.
+- **429 / 502 / 503 — retryable by the default policy.** These usually mean the
+  server refused or could not serve the request.
+- **504 (Gateway Timeout) — retryable by the default policy.** The origin *may*
+  have begun processing, so non-idempotent task generation must not inherit
+  this decision without a stronger endpoint guarantee.
 - **500 (Internal Server Error) — retryable only for idempotent requests**
   (GET/HEAD). On a non-idempotent POST the origin may have already applied the
   request, and a 500 is often deterministic, so retrying risks duplicate work
@@ -31,7 +32,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 
-# Retryable regardless of HTTP method — the request was demonstrably not acted on.
+# Retryable under the shared default; stricter callers may suppress ambiguous replays.
 RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 502, 503, 504})
 
 # Additionally retryable only for idempotent requests (safe to repeat).

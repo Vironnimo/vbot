@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.model_tasks import ImageInputError
+from core.model_tasks import ImageInputError, ImageOutcomeUnknownError
 from core.tools import ToolContractError
 from core.tools.image import (
     ANALYZE_IMAGE_TOOL_DESCRIPTION,
@@ -106,6 +106,25 @@ async def test_image_generation_tool_rejects_blank_knobs(tmp_path: Path) -> None
         )
 
     assert service.received_call_options is None
+
+
+@pytest.mark.asyncio
+async def test_image_generation_tool_exposes_unknown_provider_outcome(tmp_path: Path) -> None:
+    service = _ImageService(
+        tmp_path / "unused.png",
+        generation_error=ImageOutcomeUnknownError(
+            "provider_outcome_unknown (operation_key=image-op): request may have completed",
+            operation_key="image-op",
+        ),
+    )
+    registry = ToolRegistry()
+    register_image_generation_tool(registry, service)
+
+    result = await registry.dispatch(_make_context(tmp_path), {"prompt": "a red fox"})
+
+    assert result["error"]["code"] == "provider_outcome_unknown"
+    assert result["error"]["retryable"] is False
+    assert "operation_key=image-op" in result["error"]["message"]
 
 
 @pytest.mark.asyncio
@@ -265,9 +284,11 @@ class _ImageService:
         self,
         file_path: Path,
         *,
+        generation_error: Exception | None = None,
         analysis_error: Exception | None = None,
     ) -> None:
         self._file_path = file_path
+        self._generation_error = generation_error
         self._analysis_error = analysis_error
         self.received_prompt: str | None = None
         self.received_call_options: dict[str, object] | None = None
@@ -285,6 +306,8 @@ class _ImageService:
         self.received_prompt = prompt
         self.received_call_options = call_options
         self.received_source_paths = source_paths
+        if self._generation_error is not None:
+            raise self._generation_error
         return (
             SimpleNamespace(
                 file_path=self._file_path,

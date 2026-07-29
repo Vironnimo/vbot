@@ -16,6 +16,7 @@ from core.model_tasks import (
     ImageConfigurationError,
     ImageExecutionError,
     ImageInputError,
+    ImageOutcomeUnknownError,
     ImageService,
     ImageUnsupportedTargetError,
     TaskModelError,
@@ -25,7 +26,7 @@ from core.model_tasks.image import (
     split_image_call_options,
 )
 from core.model_tasks.image_types import ImageGenerationResult
-from core.providers.errors import ProviderError
+from core.providers.errors import ProviderError, ProviderOutcomeUnknownError
 from core.storage.layout import DataDirectoryLayout
 
 
@@ -94,6 +95,31 @@ async def test_generate_logs_provider_error_at_warning_without_traceback(
     assert relevant, "expected a log record for the failed image generation"
     assert all(r.levelno == logging.WARNING for r in relevant)
     assert all(r.exc_info is None for r in relevant)
+
+
+@pytest.mark.asyncio
+async def test_generate_preserves_unknown_provider_outcome(
+    tmp_path: Path,
+    caplog: Any,
+) -> None:
+    service = ImageService(_ProviderModelTasks(), cast(Any, object()), tmp_path)
+    failing_client = _FailingProviderImageClient(
+        ProviderOutcomeUnknownError("request may have completed", operation_key="image-op")
+    )
+
+    with (
+        patch(
+            "core.model_tasks.image.ProviderImageClient.from_runtime",
+            return_value=failing_client,
+        ),
+        caplog.at_level(logging.WARNING, logger="vbot.image"),
+        pytest.raises(ImageOutcomeUnknownError) as exc_info,
+    ):
+        await service.generate("a cat")
+
+    assert exc_info.value.code == "provider_outcome_unknown"
+    assert exc_info.value.operation_key == "image-op"
+    assert "provider_outcome_unknown" in caplog.text
 
 
 # ---------------------------------------------------------------------------

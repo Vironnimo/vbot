@@ -15,11 +15,18 @@ Task-specific execution lives in the per-task wire clients in
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any, Protocol, Self, TypeVar
+from uuid import uuid4
 
 import httpx
 
 from core.providers._http_shared import classify_http_status, wrap_network_error
+from core.providers.errors import (
+    ProviderError,
+    ProviderOutcomeUnknownError,
+    ProviderRateLimitError,
+)
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
 from core.utils.retry import retry_async
 
@@ -32,6 +39,34 @@ HeaderBuilder = Callable[[], Awaitable[dict[str, str]]]
 # clients, so an option vBot does not surface stays usable without a code
 # change. Owned here because all task wire clients share the semantics.
 EXTRA_OPTIONS_KEY = "extra_options"
+
+
+@dataclass(frozen=True)
+class TaskRequestRetryPolicy:
+    """Retry contract for one task-provider endpoint.
+
+    ``replay_safe`` covers intrinsically idempotent requests. A verified
+    provider idempotency header also makes ambiguous retries safe; one logical
+    operation key is generated outside the retry loop and reused on every
+    attempt. ``verified_safe_retry_status_codes`` covers statuses whose endpoint
+    contract proves that the operation was not processed.
+    """
+
+    replay_safe: bool = True
+    verified_safe_retry_status_codes: frozenset[int] = frozenset()
+    idempotency_header_name: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.idempotency_header_name is not None and not self.idempotency_header_name.strip():
+            raise ValueError("idempotency_header_name must be non-empty when provided")
+
+    @property
+    def can_replay_after_ambiguous_failure(self) -> bool:
+        return self.replay_safe or self.idempotency_header_name is not None
+
+
+DEFAULT_TASK_REQUEST_RETRY_POLICY = TaskRequestRetryPolicy()
+NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY = TaskRequestRetryPolicy(replay_safe=False)
 
 
 def is_omittable_option(value: Any) -> bool:
@@ -159,38 +194,60 @@ class ProviderTaskClient:
         data: dict[str, str] | None = None,
         files: Any | None = None,
         headers: HeaderBuilder | None = None,
+        retry_policy: TaskRequestRetryPolicy = DEFAULT_TASK_REQUEST_RETRY_POLICY,
     ) -> ParsedResultT:
         """POST to *endpoint*, classify the status, and parse the response.
 
         The whole cycle — request, status classification, and the
         *parse* callback — runs inside :func:`retry_async`, so parse
         failures raised as retryable ``ProviderError``s are retried the
-        same way transient network/HTTP errors are.
+        same way transient network/HTTP errors are when the endpoint is replay
+        safe. Non-idempotent endpoints suppress ambiguous retries unless their
+        policy declares an explicit safe status or verified idempotency header.
         """
+
+        operation_key = uuid4().hex
 
         async def _do_request() -> ParsedResultT:
             async with httpx.AsyncClient(
                 base_url=self._base_url,
                 timeout=timeout,
             ) as client:
+                request_headers = dict(await (headers or self._headers)())
+                if retry_policy.idempotency_header_name is not None:
+                    request_headers[retry_policy.idempotency_header_name] = operation_key
                 try:
                     response = await client.post(
                         endpoint,
                         json=json,
                         data=data,
                         files=files,
-                        headers=await (headers or self._headers)(),
+                        headers=request_headers,
                     )
                 except httpx.TransportError as exc:
-                    # Classify every transport failure (timeout, read/write,
-                    # protocol, proxy, connect) the way the chat adapters do, so
-                    # a flaky read is retried instead of escaping unwrapped.
-                    raise wrap_network_error(exc) from exc
-                classify_task_response(
+                    raise _task_transport_error(
+                        exc,
+                        retry_policy=retry_policy,
+                        operation_key=operation_key,
+                    ) from exc
+                _classify_task_response_for_retry_policy(
                     response,
+                    retry_policy=retry_policy,
+                    operation_key=operation_key,
                     extra_retryable_status_codes=self.EXTRA_RETRYABLE_STATUS_CODES,
                 )
-                return parse(response)
+                try:
+                    return parse(response)
+                except ProviderOutcomeUnknownError:
+                    raise
+                except (ProviderError, ValueError) as exc:
+                    if retry_policy.can_replay_after_ambiguous_failure:
+                        raise
+                    raise _outcome_unknown(
+                        operation_key,
+                        f"the provider returned HTTP {response.status_code}, but vBot could not "
+                        f"confirm a usable result: {exc}",
+                    ) from exc
 
         return await retry_async(_do_request)
 
@@ -210,6 +267,63 @@ class ProviderTaskClient:
 
     async def _headers(self) -> dict[str, str]:
         return self._headers_from_credential(await self._credential_value())
+
+
+def _task_transport_error(
+    error: httpx.TransportError,
+    *,
+    retry_policy: TaskRequestRetryPolicy,
+    operation_key: str,
+) -> Exception:
+    """Classify a transport failure without replaying an ambiguous operation."""
+
+    if retry_policy.can_replay_after_ambiguous_failure:
+        return wrap_network_error(error)
+    if isinstance(error, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)):
+        return wrap_network_error(error)
+    if isinstance(error, (httpx.LocalProtocolError, httpx.UnsupportedProtocol)):
+        return ProviderError(f"Provider request could not be sent: {error}", retryable=False)
+    return _outcome_unknown(
+        operation_key,
+        f"the provider connection failed after the request may have been sent: {error}",
+    )
+
+
+def _classify_task_response_for_retry_policy(
+    response: httpx.Response,
+    *,
+    retry_policy: TaskRequestRetryPolicy,
+    operation_key: str,
+    extra_retryable_status_codes: frozenset[int],
+) -> None:
+    verified_status_codes = retry_policy.verified_safe_retry_status_codes
+    try:
+        classify_task_response(
+            response,
+            extra_retryable_status_codes=extra_retryable_status_codes | verified_status_codes,
+        )
+    except ProviderRateLimitError:
+        # 429 is an explicit refusal rather than an ambiguous execution result.
+        raise
+    except ProviderError as exc:
+        if retry_policy.can_replay_after_ambiguous_failure:
+            raise
+        if response.status_code in verified_status_codes:
+            raise
+        if response.status_code >= 500 or exc.retryable:
+            raise _outcome_unknown(
+                operation_key,
+                f"the provider returned an ambiguous HTTP {response.status_code} response: {exc}",
+            ) from exc
+        raise
+
+
+def _outcome_unknown(operation_key: str, message: str) -> ProviderOutcomeUnknownError:
+    return ProviderOutcomeUnknownError(
+        f"{message}. Automatic retry was suppressed because repeating the request could "
+        "duplicate a completed or billed result",
+        operation_key=operation_key,
+    )
 
 
 def classify_task_response(

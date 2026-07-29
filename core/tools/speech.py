@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.model_tasks import SpeechError
+from core.model_tasks import SpeechError, SpeechOutcomeUnknownError
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -51,6 +51,8 @@ def make_text_to_speech_handler(speech_service: Any):
 
         try:
             artifact = await speech_service.synthesize_artifact(text)
+        except SpeechOutcomeUnknownError as exc:
+            return tool_failure(exc.code, str(exc), retryable=False)
         except SpeechError as exc:
             return tool_failure("speech_error", str(exc))
 

@@ -19,6 +19,7 @@ from core.model_tasks.speech_local import LocalSpeechError, LocalSpeechExecutor
 from core.model_tasks.speech_providers import ProviderSpeechClient
 from core.model_tasks.speech_types import SpeechSynthesisResult, SpeechTranscriptionResult
 from core.model_tasks.task_execution import TaskBindingResolver
+from core.providers.errors import ProviderOutcomeUnknownError
 from core.providers.task_client import TaskClientRuntime
 from core.storage.layout import DataDirectoryLayout
 from core.utils.errors import TaskError, VBotError
@@ -42,6 +43,16 @@ class SpeechUnsupportedTargetError(SpeechError):
 
 class SpeechExecutionError(SpeechError):
     """Raised when a provider speech request fails."""
+
+
+class SpeechOutcomeUnknownError(SpeechExecutionError):
+    """Raised when speech synthesis may have completed at the provider."""
+
+    code = ProviderOutcomeUnknownError.code
+
+    def __init__(self, message: str, *, operation_key: str) -> None:
+        self.operation_key = operation_key
+        super().__init__(message)
 
 
 @dataclass(frozen=True)
@@ -190,6 +201,16 @@ class SpeechService:
             return await provider_client.synthesize(normalized_text, options=options)
         except SpeechError:
             raise
+        except ProviderOutcomeUnknownError as exc:
+            _LOGGER.warning(
+                "Speech synthesis failed for target=%s: %s",
+                target_ref.target,
+                exc,
+            )
+            raise SpeechOutcomeUnknownError(
+                str(exc),
+                operation_key=exc.operation_key,
+            ) from exc
         except VBotError as exc:
             # ProviderError / NetworkError / ProviderAuthError / … are
             # expected provider failures, not crashes.

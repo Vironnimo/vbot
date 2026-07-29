@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from core.model_tasks import ImageError
+from core.model_tasks import ImageError, ImageOutcomeUnknownError
 from core.tools.arguments import optional_string
 from core.tools.tools import (
     JsonObject,
@@ -247,6 +247,8 @@ def make_image_generation_handler(image_service: Any):
                 call_options=call_options,
                 source_paths=source_paths,
             )
+        except ImageOutcomeUnknownError as exc:
+            return tool_failure(exc.code, str(exc), retryable=False)
         except ImageError as exc:
             return tool_failure("image_error", str(exc))
 

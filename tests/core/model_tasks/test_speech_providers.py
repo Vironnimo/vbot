@@ -9,6 +9,7 @@ import pytest
 import respx
 
 from core.model_tasks.speech_providers import ProviderSpeechClient, audio_format_from
+from core.providers.errors import ProviderOutcomeUnknownError
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 
@@ -73,6 +74,34 @@ async def test_openrouter_tts_returns_audio_bytes() -> None:
     assert result.audio == b"audio"
     assert result.media_type == "audio/mpeg"
     assert result.generation_id == "gen_1"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openrouter_tts_does_not_retry_ambiguous_502() -> None:
+    route = respx.post("https://openrouter.ai/api/v1/audio/speech").mock(
+        return_value=httpx.Response(502, text="invalid upstream response")
+    )
+    client = _openrouter_client("openai/gpt-4o-mini-tts")
+
+    with pytest.raises(ProviderOutcomeUnknownError, match="HTTP 502"):
+        await client.synthesize("hello", options={"voice": "alloy"})
+
+    assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_openrouter_tts_does_not_retry_empty_success_response() -> None:
+    route = respx.post("https://openrouter.ai/api/v1/audio/speech").mock(
+        return_value=httpx.Response(200, content=b"")
+    )
+    client = _openrouter_client("openai/gpt-4o-mini-tts")
+
+    with pytest.raises(ProviderOutcomeUnknownError, match="contains no audio"):
+        await client.synthesize("hello", options={"voice": "alloy"})
+
+    assert route.call_count == 1
 
 
 @pytest.mark.asyncio

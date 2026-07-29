@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from core.model_tasks import SpeechOutcomeUnknownError
 from core.tools import ToolContractError
 from core.tools.speech import TEXT_TO_SPEECH_TOOL_NAME, register_text_to_speech_tool
 from core.tools.tools import ToolContext, ToolRegistry
@@ -61,6 +62,36 @@ async def test_text_to_speech_tool_rejects_unknown_arguments(tmp_path: Path) -> 
         await registry.dispatch(context, {"text": "hello", "unexpected": True})
 
 
+@pytest.mark.asyncio
+async def test_text_to_speech_tool_exposes_unknown_provider_outcome(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    service = _SpeechService(
+        tmp_path / "unused.mp3",
+        error=SpeechOutcomeUnknownError(
+            "provider_outcome_unknown (operation_key=speech-op): request may have completed",
+            operation_key="speech-op",
+        ),
+    )
+    register_text_to_speech_tool(registry, service)
+    context = ToolContext(
+        agent_id="agent",
+        session_id="session",
+        run_id="run",
+        tool_call_id="tool-call",
+        tool_name=TEXT_TO_SPEECH_TOOL_NAME,
+        tool_call_index=0,
+        workspace=tmp_path,
+        vbot_root=tmp_path,
+        data_root=tmp_path,
+    )
+
+    result = await registry.dispatch(context, {"text": "hello"})
+
+    assert result["error"]["code"] == "provider_outcome_unknown"
+    assert result["error"]["retryable"] is False
+    assert "operation_key=speech-op" in result["error"]["message"]
+
+
 _ARTIFACT_PAYLOAD = {
     "id": "artifact-1",
     "kind": "speech",
@@ -72,10 +103,13 @@ _ARTIFACT_PAYLOAD = {
 
 
 class _SpeechService:
-    def __init__(self, file_path: Path) -> None:
+    def __init__(self, file_path: Path, *, error: Exception | None = None) -> None:
         self._file_path = file_path
+        self._error = error
 
     async def synthesize_artifact(self, _text: str) -> object:
+        if self._error is not None:
+            raise self._error
         return SimpleNamespace(
             file_path=self._file_path,
             to_dict=lambda: dict(_ARTIFACT_PAYLOAD),
