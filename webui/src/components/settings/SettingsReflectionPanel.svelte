@@ -176,6 +176,7 @@
       }),
       successKey: 'settings.reflection.saveSuccess',
       successFallback: 'Reflection settings updated.',
+      getDraftSnapshot: () => reflectionSettings,
       applyResult: (next) => (reflectionSettings = getReflectionSettings(next)),
     });
   }
