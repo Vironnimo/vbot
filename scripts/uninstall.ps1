@@ -90,6 +90,21 @@ function Test-InstallOwnsDesktopShortcut {
     return Test-Path -LiteralPath $legacyDesktopLauncher -PathType Leaf
 }
 
+function Test-InstallIsDesktopClient {
+    if (-not (Test-Path -LiteralPath $InstallManifest -PathType Leaf)) {
+        return $false
+    }
+    try {
+        $state = Get-Content -Raw -LiteralPath $InstallManifest | ConvertFrom-Json
+        $shapeProperty = $state.PSObject.Properties["install_shape"]
+        return $null -ne $shapeProperty -and $shapeProperty.Value -eq "desktop-client"
+    }
+    catch {
+        Write-Warning "The installation manifest is invalid; retaining the mandatory server-stop guard: $($_.Exception.Message)"
+        return $false
+    }
+}
+
 function Resolve-PythonCommand {
     $python = Get-Command python -ErrorAction SilentlyContinue
     if ($null -ne $python) {
@@ -380,9 +395,14 @@ function Invoke-ManagedUninstall {
         Write-Step "Removing managed install at $ProjectRoot"
     }
 
-    # The server owns files inside the environment on Windows. Stopping it is a
-    # mandatory precondition: never report success for a partially removed app.
-    Stop-VbotServer
+    # A Desktop Client owns no local server. Server installs must still stop
+    # before files inside their active environment are removed.
+    if ((Test-InstallIsDesktopClient) -and -not $RemoveData) {
+        Write-Host "Desktop Client owns no local vBot server; no server was stopped."
+    }
+    else {
+        Stop-VbotServer
+    }
 
     if (Test-RunningOnWindows) {
         try {
@@ -449,7 +469,12 @@ function Invoke-ManagedUninstall {
 
 function Invoke-ManualUninstall {
     $removeDesktopShortcut = Test-InstallOwnsDesktopShortcut
-    Stop-VbotServer
+    if ((Test-InstallIsDesktopClient) -and -not $RemoveData) {
+        Write-Host "Desktop Client owns no local vBot server; no server was stopped."
+    }
+    else {
+        Stop-VbotServer
+    }
     Write-Step "Uninstalling pip package: $PackageName"
     $python = Resolve-UninstallPython
     Invoke-External $python @("-m", "pip", "uninstall", "-y", $PackageName)
@@ -481,6 +506,19 @@ function Invoke-ManualUninstall {
         Write-Host "Data directories such as ~\.vbot were not modified."
     }
     Write-Host "Source files, webui/node_modules, and webui/dist were not removed."
+}
+
+if ((Test-InstallIsDesktopClient) -and $RemoveData) {
+    $hasCompleteExplicitTarget = (
+        $PSBoundParameters.ContainsKey("DataDirectory") -and
+        $PSBoundParameters.ContainsKey("ServerHost") -and
+        $PSBoundParameters.ContainsKey("ServerPort") -and
+        -not [string]::IsNullOrWhiteSpace($ServerHost) -and
+        $ServerPort -ge 1 -and $ServerPort -le 65535
+    )
+    if (-not $hasCompleteExplicitTarget) {
+        throw "Desktop Client data removal requires -ServerHost, -ServerPort, and -DataDirectory together."
+    }
 }
 
 if ((Test-Path $RootMarker) -or (Test-Path $LegacyRootMarker)) {

@@ -5,7 +5,12 @@ from __future__ import annotations
 import base64
 from pathlib import Path
 
-from cli.install_state import INSTALL_STATE_SCHEMA_VERSION, InstallState, write_install_state
+from cli.install_state import (
+    DESKTOP_CLIENT_SHAPE,
+    INSTALL_STATE_SCHEMA_VERSION,
+    InstallState,
+    write_install_state,
+)
 from cli.server_management import CommandResult, HealthProbeResult, ServerInstance
 from cli.uninstall_management import (
     CommandRun,
@@ -40,6 +45,22 @@ def _instance(tmp_path: Path) -> ServerInstance:
         data_dir=data_dir,
         url="http://127.0.0.1:8420",
         log_path=resolve_daily_log_path(data_dir),
+    )
+
+
+def _write_desktop_client_state(root: Path, tmp_path: Path) -> None:
+    write_install_state(
+        root,
+        InstallState(
+            schema_version=INSTALL_STATE_SCHEMA_VERSION,
+            install_shape=DESKTOP_CLIENT_SHAPE,
+            dependency_groups=("cli", "desktop"),
+            python_executable=str(tmp_path / "python"),
+            source_track="release",
+            applied_revision="abc123",
+            dependency_digest="digest",
+            webui_revision=None,
+        ),
     )
 
 
@@ -488,6 +509,118 @@ def test_uninstall_defaults_to_recorded_installation_target(tmp_path: Path) -> N
 
     assert result.ok
     assert resolved == [{"host": "0.0.0.0", "port": 9000, "data_dir": str(recorded_data)}]
+
+
+def test_desktop_client_application_scopes_never_target_default_server(tmp_path: Path) -> None:
+    root = _install_root(tmp_path)
+    _write_desktop_client_state(root, tmp_path)
+    lifecycle_calls: list[str] = []
+    launches: list[dict[str, object]] = []
+
+    def unexpected_resolve(**_kwargs: object) -> ServerInstance:
+        lifecycle_calls.append("resolve")
+        raise AssertionError("Desktop Client must not resolve a default server")
+
+    def unexpected_probe(_instance: ServerInstance) -> HealthProbeResult:
+        lifecycle_calls.append("probe")
+        raise AssertionError("Desktop Client must not probe a default server")
+
+    def launcher(**kwargs: object) -> UninstallResult:
+        launches.append(kwargs)
+        return UninstallResult(ok=True, message="launched")
+
+    for mode in (UninstallMode.APP_ONLY, UninstallMode.ALL):
+        result = run_uninstall(
+            mode=mode,
+            assume_yes=True,
+            root=root,
+            resolve=unexpected_resolve,
+            probe=unexpected_probe,
+            stop=lambda _instance: _record_command(lifecycle_calls, "stop", _instance),
+            systemd_managed=lambda _name: False,
+            launcher=launcher,
+            working_directory=tmp_path,
+            home_directory=tmp_path,
+        )
+        assert result.ok
+
+    assert lifecycle_calls == []
+    assert len(launches) == 2
+    for launch in launches:
+        assert launch["remove_data"] is False
+        assert launch["data_directory"] is None
+        assert launch["server_host"] is None
+        assert launch["server_port"] is None
+
+
+def test_desktop_client_data_only_requires_complete_explicit_target(tmp_path: Path) -> None:
+    root = _install_root(tmp_path)
+    _write_desktop_client_state(root, tmp_path)
+    resolved: list[dict[str, object]] = []
+    launched = False
+
+    def resolve(**kwargs: object) -> ServerInstance:
+        resolved.append(kwargs)
+        return _instance(tmp_path)
+
+    def launcher(**_kwargs: object) -> UninstallResult:
+        nonlocal launched
+        launched = True
+        return UninstallResult(ok=True, message="launched")
+
+    missing = run_uninstall(
+        mode=UninstallMode.DATA_ONLY,
+        assume_yes=True,
+        root=root,
+        resolve=resolve,
+        launcher=launcher,
+    )
+    partial = run_uninstall(
+        mode=UninstallMode.DATA_ONLY,
+        assume_yes=True,
+        root=root,
+        host="127.0.0.1",
+        resolve=resolve,
+        launcher=launcher,
+    )
+
+    assert not missing.ok
+    assert "owns no server data" in missing.message
+    assert not partial.ok
+    assert "--host, --port, and --data-dir together" in partial.message
+    assert resolved == []
+    assert not launched
+
+
+def test_desktop_client_data_only_accepts_complete_explicit_target(tmp_path: Path) -> None:
+    root = _install_root(tmp_path)
+    _write_desktop_client_state(root, tmp_path)
+    instance = _instance(tmp_path)
+    resolved: list[dict[str, object]] = []
+    calls: list[str] = []
+
+    def resolve(**kwargs: object) -> ServerInstance:
+        resolved.append(kwargs)
+        return instance
+
+    result = run_uninstall(
+        mode=UninstallMode.DATA_ONLY,
+        assume_yes=True,
+        root=root,
+        host=instance.host,
+        port=instance.port,
+        data_dir=instance.data_dir,
+        resolve=resolve,
+        probe=lambda _instance: HealthProbeResult(reachable=False, is_vbot=False),
+        systemd_managed=lambda _name: False,
+        remove_directory=lambda path: calls.append(f"remove:{path}"),
+    )
+
+    assert result.ok
+    assert resolved == [
+        {"host": instance.host, "port": instance.port, "data_dir": instance.data_dir}
+    ]
+    assert calls == [f"remove:{instance.data_dir}"]
 
 
 def test_interactive_cancel_makes_no_changes(tmp_path: Path) -> None:

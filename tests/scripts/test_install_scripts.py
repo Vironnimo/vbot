@@ -317,6 +317,25 @@ def test_application_uninstaller_treats_server_stop_as_mandatory(script_name: st
         assert "if ($RemoveData)" not in stop_body
 
 
+@pytest.mark.parametrize("script_name", ["uninstall.sh", "uninstall.ps1"])
+def test_desktop_client_uninstaller_skips_unowned_server_stop(script_name: str) -> None:
+    script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+
+    assert "desktop-client" in script
+    assert "owns no local vBot server; no server was stopped" in script
+    if script_name.endswith(".sh"):
+        assert "install_is_desktop_client()" in script
+        assert 'if install_is_desktop_client && [ "$REMOVE_DATA" -eq 0 ]; then' in script
+        assert "validate_desktop_client_data_target" in script
+        assert "DATA_DIR_EXPLICIT" in script
+    else:
+        assert "function Test-InstallIsDesktopClient" in script
+        assert "if ((Test-InstallIsDesktopClient) -and -not $RemoveData)" in script
+        assert '$PSBoundParameters.ContainsKey("DataDirectory")' in script
+        assert '$PSBoundParameters.ContainsKey("ServerHost")' in script
+        assert '$PSBoundParameters.ContainsKey("ServerPort")' in script
+
+
 def test_linux_managed_uninstaller_preserves_app_when_server_stop_fails(
     tmp_path: Path,
 ) -> None:
@@ -360,6 +379,70 @@ def test_linux_managed_uninstaller_preserves_app_when_server_stop_fails(
     assert result.returncode != 0
     assert "no files were removed" in result.stderr
     assert install_root.is_dir()
+
+
+def test_linux_desktop_client_uninstall_does_not_call_default_server(
+    tmp_path: Path,
+) -> None:
+    if os.name != "posix":
+        pytest.skip("POSIX launcher integration requires a POSIX host")
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is unavailable")
+
+    install_root = tmp_path / "install"
+    scripts_dir = install_root / "scripts"
+    scripts_dir.mkdir(parents=True)
+    shutil.copy2(PROJECT_ROOT / "scripts" / "uninstall.sh", scripts_dir / "uninstall.sh")
+    (install_root / ".vbot-install-root").write_text("managed\n", encoding="utf-8")
+    vbot_path = install_root / ".venv" / "bin" / "vbot"
+    vbot_path.parent.mkdir(parents=True)
+    stop_log = tmp_path / "unexpected-server-stop.txt"
+    vbot_path.write_text(
+        f"#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" > {shlex.quote(str(stop_log))}\n",
+        encoding="utf-8",
+    )
+    vbot_path.chmod(0o755)
+    (install_root / ".vbot-install.json").write_text(
+        json.dumps(
+            {
+                "install_shape": "desktop-client",
+                "python_executable": sys.executable,
+            }
+        ),
+        encoding="utf-8",
+    )
+    home = tmp_path / "home"
+    home.mkdir()
+    default_data = home / ".vbot"
+    default_data.mkdir()
+    (default_data / "must-survive").write_text("data\n", encoding="utf-8")
+    environment = {**os.environ, "HOME": str(home)}
+
+    unsafe_data_removal = subprocess.run(
+        [bash, str(scripts_dir / "uninstall.sh"), "--remove-data"],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    result = subprocess.run(
+        [bash, str(scripts_dir / "uninstall.sh")],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert unsafe_data_removal.returncode != 0
+    assert "requires --host, --port, and --data-dir together" in unsafe_data_removal.stderr
+    assert default_data.is_dir()
+    assert result.returncode == 0, result.stderr
+    assert "owns no local vBot server" in result.stdout
+    assert not stop_log.exists()
+    assert not install_root.exists()
 
 
 def test_linux_uninstaller_resolves_vbot_from_recorded_python_environment(
