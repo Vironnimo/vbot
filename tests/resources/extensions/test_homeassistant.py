@@ -269,6 +269,10 @@ def test_provider_schemas_reject_unknowns_and_describe_string_formats() -> None:
     assert call_properties["domain"]["pattern"]
     assert call_properties["service"]["pattern"]
     assert call_properties["data"]["type"] == "object"
+    assert call_properties["data"]["description"] == (
+        "Optional service-specific data fields (e.g. brightness, temperature). "
+        "Do not include entity_id; use the top-level entity_id parameter."
+    )
 
 
 # ---------------------------------------------------------------------------
