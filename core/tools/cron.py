@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from core.automation.cron import CronJobNotFoundError, CronJobValidationError, CronServiceError
 from core.projects import format_agent_address, parse_agent_address
 from core.tools.arguments import optional_string, required_string
+from core.tools.contracts import action_schema
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -58,14 +59,6 @@ _ACTION_RECOMMENDATIONS = {
     "disable": 'Use {"action":"disable","id":"<job-id>"}',
 }
 
-_CRON_ACTION_PARAMETER: JsonObject = {
-    "type": "string",
-    "enum": sorted(CRON_ACTIONS),
-    "description": (
-        "Action to perform. create requires prompt and schedule; update/delete/enable/"
-        "disable require id; update also requires at least one changed field."
-    ),
-}
 _CRON_ID_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
@@ -116,24 +109,67 @@ _CRON_REPEAT_PARAMETER: JsonObject = {
     ),
 }
 
-CRON_TOOL_PARAMETERS: JsonObject = {
-    "type": "object",
-    "description": (
-        "Flat action interface. Only action is globally required; the handler validates the "
-        "fields required by the selected action."
-    ),
-    "properties": {
-        "action": _CRON_ACTION_PARAMETER,
-        "id": _CRON_ID_PARAMETER,
-        "target": _CRON_TARGET_PARAMETER,
-        "name": _CRON_NAME_PARAMETER,
-        "prompt": _CRON_PROMPT_PARAMETER,
-        "schedule": _CRON_SCHEDULE_PARAMETER,
-        "repeat": _CRON_REPEAT_PARAMETER,
+CRON_TOOL_PARAMETERS: JsonObject = action_schema(
+    {
+        "create": {
+            "type": "object",
+            "description": "Create and immediately enable one persisted schedule.",
+            "properties": {
+                "target": _CRON_TARGET_PARAMETER,
+                "name": _CRON_NAME_PARAMETER,
+                "prompt": _CRON_PROMPT_PARAMETER,
+                "schedule": _CRON_SCHEDULE_PARAMETER,
+                "repeat": _CRON_REPEAT_PARAMETER,
+            },
+            "required": ["prompt", "schedule"],
+        },
+        "list": {
+            "type": "object",
+            "description": "List all persisted schedules and their current ids and state.",
+            "properties": {},
+            "required": [],
+        },
+        "update": {
+            "type": "object",
+            "description": (
+                "Update one schedule. Include id and at least one field that should change."
+            ),
+            "properties": {
+                "id": _CRON_ID_PARAMETER,
+                "target": _CRON_TARGET_PARAMETER,
+                "name": _CRON_NAME_PARAMETER,
+                "prompt": _CRON_PROMPT_PARAMETER,
+                "schedule": _CRON_SCHEDULE_PARAMETER,
+                "repeat": _CRON_REPEAT_PARAMETER,
+            },
+            "required": ["id"],
+            "minProperties": 3,
+        },
+        "delete": {
+            "type": "object",
+            "description": "Delete one persisted schedule.",
+            "properties": {"id": _CRON_ID_PARAMETER},
+            "required": ["id"],
+        },
+        "enable": {
+            "type": "object",
+            "description": "Enable one persisted schedule.",
+            "properties": {"id": _CRON_ID_PARAMETER},
+            "required": ["id"],
+        },
+        "disable": {
+            "type": "object",
+            "description": "Pause one persisted schedule without deleting it.",
+            "properties": {"id": _CRON_ID_PARAMETER},
+            "required": ["id"],
+        },
     },
-    "required": ["action"],
-    "additionalProperties": False,
-}
+    description=(
+        "Flat action interface. Each action exposes only its valid arguments and "
+        "structurally requires every field it needs."
+    ),
+    action_description=("Create, list, update, delete, enable, or disable a persisted schedule."),
+)
 
 _LOGGER = get_logger("tools.cron")
 

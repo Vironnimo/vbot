@@ -91,12 +91,21 @@ def test_explicit_agent_targets_narrow_flat_subagent_run_target() -> None:
         allowed_agents=["worker"],
     )
 
-    properties = definitions[0]["parameters"]["properties"]
+    branches = definitions[0]["parameters"]["oneOf"]
+    run_branch = next(
+        branch for branch in branches if branch["properties"]["action"]["enum"] == ["run"]
+    )
+    properties = run_branch["properties"]
     assert properties["agent_id"]["enum"] == [
         "orchestrator",
         "worker",
     ]
-    assert "enum" not in SUBAGENT_TOOL_PARAMETERS["properties"]["agent_id"]
+    source_run_branch = next(
+        branch
+        for branch in SUBAGENT_TOOL_PARAMETERS["oneOf"]
+        if branch["properties"]["action"]["enum"] == ["run"]
+    )
+    assert "enum" not in source_run_branch["properties"]["agent_id"]
 
 
 def test_empty_additional_targets_do_not_remove_subagent_tools_from_dispatch() -> None:

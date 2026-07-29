@@ -112,14 +112,28 @@ def test_schema_exposes_small_flat_action_contract() -> None:
         "for an immediate snapshot, input to send stdin, and kill to stop a Process Session."
     )
     assert PROCESS_TOOL_PARAMETERS["type"] == "object"
-    assert PROCESS_TOOL_PARAMETERS["required"] == ["action"]
-    assert PROCESS_TOOL_PARAMETERS["additionalProperties"] is False
-    properties = cast(dict[str, Any], PROCESS_TOOL_PARAMETERS["properties"])
-    assert set(properties) == {"action", "session_id", "text", "newline", "eof"}
-    assert properties["action"]["enum"] == list(PROCESS_ACTIONS)
-    assert "returned by the bash Tool" in properties["session_id"]["description"]
-    assert properties["newline"]["default"] is True
-    assert properties["eof"]["default"] is False
+    branches = {
+        branch["properties"]["action"]["enum"][0]: branch
+        for branch in PROCESS_TOOL_PARAMETERS["oneOf"]
+    }
+    assert set(branches) == set(PROCESS_ACTIONS)
+    assert set(branches["status"]["properties"]) == {"action", "session_id"}
+    assert branches["status"]["required"] == ["action"]
+    assert set(branches["input"]["properties"]) == {
+        "action",
+        "session_id",
+        "text",
+        "newline",
+        "eof",
+    }
+    assert branches["input"]["required"] == ["action", "session_id", "text"]
+    assert set(branches["kill"]["properties"]) == {"action", "session_id"}
+    assert branches["kill"]["required"] == ["action", "session_id"]
+    assert all(branch["additionalProperties"] is False for branch in branches.values())
+    input_properties = cast(dict[str, Any], branches["input"]["properties"])
+    assert "returned by the bash Tool" in input_properties["session_id"]["description"]
+    assert input_properties["newline"]["default"] is True
+    assert input_properties["eof"]["default"] is False
 
 
 @pytest.mark.asyncio

@@ -73,27 +73,43 @@ def test_registration_is_session_scoped_and_schema_is_closed(tmp_path: Path) -> 
 
     tool = registry.get(HISTORY_TOOL_NAME)
     assert tool.session_scoped is True
-    assert tool.parameters["additionalProperties"] is False
-    assert tool.parameters["required"] == ["action"]
-    assert tool.parameters["properties"]["action"]["enum"] == [
-        "overview",
-        "search",
-        "read",
-        "around",
-    ]
-    assert set(tool.parameters["properties"]) == {
+    branches = {
+        branch["properties"]["action"]["enum"][0]: branch for branch in tool.parameters["oneOf"]
+    }
+    assert set(branches) == {"overview", "search", "read", "around"}
+    assert set(branches["overview"]["properties"]) == {"action", "limit", "cursor"}
+    assert set(branches["search"]["properties"]) == {
         "action",
-        "cursor",
         "query",
-        "message_id",
         "checkpoint",
         "roles",
         "match",
+        "limit",
+        "cursor",
+    }
+    assert set(branches["read"]["properties"]) == {
+        "action",
+        "checkpoint",
+        "roles",
         "direction",
         "limit",
+        "cursor",
+    }
+    assert set(branches["around"]["properties"]) == {
+        "action",
+        "message_id",
+        "checkpoint",
+        "roles",
         "before",
         "after",
+        "cursor",
     }
+    assert all(branch["required"] == ["action"] for branch in branches.values())
+    assert all(branch["additionalProperties"] is False for branch in branches.values())
+    assert branches["search"]["if"] == {"required": ["cursor"]}
+    assert branches["search"]["else"] == {"required": ["query"]}
+    assert branches["around"]["else"] == {"required": ["message_id"]}
+    assert "else" not in branches["read"]
     assert tool.description == (
         "Recover original records from this Session after Compaction. Use overview to inspect "
         "available checkpoint sections, search to find matching records, read to retrieve "
@@ -104,43 +120,10 @@ def test_registration_is_session_scoped_and_schema_is_closed(tmp_path: Path) -> 
         "Choose one History action, or continue a previous page with only that same action "
         "and its cursor."
     )
-    descriptions = {
-        name: parameter["description"] for name, parameter in tool.parameters["properties"].items()
-    }
-    assert descriptions == {
-        "action": (
-            "overview lists available Compaction checkpoint sections; search finds matching "
-            "records and requires query; read returns canonical records chronologically; around "
-            "returns complete records near a known message_id and requires it."
-        ),
-        "cursor": (
-            "Continuation returned by the same action. When set, send only action and cursor."
-        ),
-        "query": "Non-blank text to find. Required only for search.",
-        "message_id": "Canonical Message id to use as the anchor. Required only for around.",
-        "checkpoint": (
-            "For search, read, and around. 1-based Compaction checkpoint section to restrict "
-            "results to; omit to include all earlier history."
-        ),
-        "roles": (
-            "For search, read, and around. Message roles to include; defaults to user, "
-            "assistant, and error."
-        ),
-        "match": (
-            "For search only. all_terms requires every query term, any_term requires at least "
-            "one, and phrase requires the complete normalized phrase. Default all_terms."
-        ),
-        "direction": (
-            "For read only. start returns oldest records first; end returns newest records "
-            "first. Default start."
-        ),
-        "limit": (
-            "Maximum items in this page. For overview and search the default is 10; for read "
-            "the default is 20."
-        ),
-        "before": ("For around only. Additional included records before the anchor; default 2."),
-        "after": "For around only. Additional included records after the anchor; default 2.",
-    }
+    assert branches["search"]["properties"]["query"]["description"] == "Non-blank text to find."
+    assert branches["around"]["properties"]["message_id"]["description"] == (
+        "Canonical Message id to use as the anchor."
+    )
     display = registry.display_for_call(
         HISTORY_TOOL_NAME,
         {
