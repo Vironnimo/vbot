@@ -51,6 +51,9 @@ def build_chat_loop(runtime: Any, **kwargs: Any) -> ChatLoop:
             provider_id, connection_id
         ),
         resolve_skills=lambda project_id, agent_id: runtime.skills_for(project_id, agent_id),
+        refresh_skills=lambda project_id, agent_id: runtime.refresh_skills_for(
+            project_id, agent_id
+        ),
         get_local_context_windows=lambda: runtime.local_context_windows(),
         task_model_available=lambda task_type: bool(
             getattr(runtime, "task_model_available", lambda _task_type: False)(task_type)
@@ -687,6 +690,7 @@ class StubRuntime:
         # (project_id, agent_id) a run resolves skills against — e.g. that a rooted
         # identity run resolves against its home project, not ``None``.
         self.skills_for_calls: list[tuple[str | None, str | None]] = []
+        self.refresh_skills_for_calls: list[tuple[str | None, str | None]] = []
         # Project-owned Skills exposed by explicit Project Context loading.
         self.project_own_skills_result: list[Any] = []
         self.available_task_models = set(available_task_models or set())
@@ -707,6 +711,10 @@ class StubRuntime:
         # assert the effective project/agent a run resolves skills against.
         self.skills_for_calls.append((project_id, agent_id))
         return self.skills
+
+    def refresh_skills_for(self, project_id: str | None = None, agent_id: str | None = None) -> Any:
+        self.refresh_skills_for_calls.append((project_id, agent_id))
+        return self.skills_for(project_id, agent_id)
 
     def project_skill_names(self, _project_id: str | None = None) -> frozenset[str]:
         return frozenset()

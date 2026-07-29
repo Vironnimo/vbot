@@ -62,7 +62,7 @@ Each domain has a **domain map** in `.vorch/domain-maps/`, named after its modul
 | `.vorch/domain-maps/subagents.md` | `core/subagents/` | Sub-agent coordinator, in-memory batch tracking, parent-child run linkage |
 | `.vorch/domain-maps/tools.md` | `core/tools/` | Tool domain overview and index to tool-specific maps |
 | `.vorch/domain-maps/storage.md` | `core/storage/` | Data-directory setup, temporary-file lifecycle, settings/prompt persistence |
-| `.vorch/domain-maps/skills.md` | `core/skills/` | Skill loading/validation, agent/project/global/bundled scopes, the validated authoring write core + write-scope boundary, origin-grouped session-pinned catalog |
+| `.vorch/domain-maps/skills.md` | `core/skills/` | Skill loading/validation, agent/project/global/bundled scopes, the validated authoring write core + write-scope boundary, origin-grouped Prompt-Epoch Catalog |
 | `.vorch/domain-maps/automation.md` | `core/automation/` | Programmatic run triggering and in-memory queue semantics |
 | `.vorch/domain-maps/channels.md` | `core/channels/` | Channel configs, adapter lifecycle, shared conversation engine, metadata, outbound send; index to channel-specific maps |
 | `.vorch/domain-maps/server.md` | `server/` | Transport/RPC boundary, public invariants, source routing, and event-reference index |

@@ -312,15 +312,14 @@ class SkillPromptRegistry(Protocol):
 
 @dataclass(frozen=True)
 class PinnedSkillCatalog:
-    """A session-pinned snapshot of an agent's skill catalog text.
+    """A prompt-epoch snapshot of an Agent's Skill catalog text.
 
-    Captured on a session's first build and reused for the session's lifetime so a
-    skill written mid-session never changes the session's system prompt, keeping the
-    provider prompt cache intact. ``catalog_text`` is the rendered
-    ``<available_skills>`` block. Skill *activation* and ``/``-``$`` triggers stay
-    live (they resolve the current registry), so a newly written skill is loadable at
-    once even though the catalog text is frozen. The ``skill`` tool itself is always
-    offered (and ``skill_manage`` to identity agents), so tool presence is not pinned.
+    Captured on a Session's first build and reused until successful Compaction, when
+    Chat rescans Skill sources and replaces it. This keeps the prompt prefix stable
+    between Compactions while allowing the new Context epoch to advertise additions,
+    removals, and metadata changes. ``catalog_text`` is the rendered
+    ``<available_skills>`` block. Skill activation and ``/``-``$`` triggers remain
+    live against the current registry; Tool presence is not pinned.
     """
 
     catalog_text: str
@@ -1003,14 +1002,13 @@ class SystemPromptManager:
         collapses). ``project_context`` carries Project identity, Workspace, and
         auto-load files for the live ``core:working_project`` render (``None`` off a
         Project → collapses). ``working_project_context`` is the already-rendered,
-        session-pinned replacement used only by Rooted Identity Agents; when set it
+        prompt-epoch replacement used only by Rooted Identity Agents; when set it
         wins over ``project_context`` so Working Project files are not read again.
         ``skill_registry`` overrides the registry the skills block is filtered
         against — a project run passes its project-scoped registry; ``None`` uses the
         configured global one (identity runs, unchanged). ``skill_catalog`` is a
-        session-pinned snapshot: when present the skills block renders its frozen text
-        instead of re-filtering the registry, so a mid-session skill write never
-        shifts the prompt prefix.
+        prompt-epoch snapshot: when present the skills block renders its frozen text
+        instead of re-filtering the registry. Chat replaces it after Compaction.
 
         ``agent_project_id`` is the Agent's addressing scope for contributed blocks.
         It stays separate from ``project_context`` because a Rooted Identity Agent
@@ -1377,7 +1375,7 @@ class SystemPromptManager:
     ) -> str:
         """Render a Project's Skills in its explicit Tool-result context section.
 
-        The Session-pinned System Prompt catalog remains unchanged. The explicit
+        The current prompt-epoch System Prompt catalog remains unchanged. The explicit
         Project Context names each Skill and tells the Identity Agent to activate it
         through the ordinary ``skill`` Tool, whose Run-local resolver follows the
         latest successful Project Tool Result. Returns ``""`` when the Project has
@@ -1437,9 +1435,8 @@ class SystemPromptManager:
     ) -> PinnedSkillCatalog:
         """Render an agent's current skill catalog snapshot (the ``<available_skills>`` text).
 
-        The chat loop pins this per session on the first build and reuses it for the
-        session's lifetime, so a later skill write does not shift the session's
-        prompt. ``None`` uses the configured global registry.
+        Chat pins this on the first build of a Session or Context epoch and reuses it
+        until successful Compaction. ``None`` uses the configured global registry.
         """
         registry = self._resolve_skill_registry(skill_registry)
         skills = registry.filter_allowed(agent.allowed_skills)
@@ -1486,7 +1483,7 @@ class SystemPromptManager:
         ``USER.md``/``MEMORY.md`` ``<file>`` contents per the agent's memory mode
         (the embedded data half of the ``memory:guidance`` block — the file reading
         itself lives in the memory domain's :func:`read_memory_files`). When a
-        session-pinned ``skill_catalog`` is given, ``skill_list`` returns its frozen
+        prompt-epoch ``skill_catalog`` is given, ``skill_list`` returns its frozen
         text instead of re-filtering the live registry.
         """
         active_skill_registry = self._resolve_skill_registry(skill_registry)

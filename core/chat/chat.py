@@ -211,12 +211,12 @@ MAX_TOOL_ITERATIONS = 1000
 MAX_IDENTICAL_FAILED_TOOL_CALLS = 8
 MAX_AUTO_COMPACTIONS_PER_RUN = 3
 
-# Session-pinned skill catalog snapshot (the rendered ``<available_skills>`` text),
-# stored in session metadata so a mid-session skill write never shifts the session's
-# system prompt (the prompt-cache invariant).
+# Prompt-epoch Skill catalog snapshot (the rendered ``<available_skills>`` text),
+# stored in Session metadata so ordinary Runs reuse one stable prefix. A successful
+# Compaction rescans Skill sources and replaces this snapshot.
 PINNED_SKILL_CATALOG_META_KEY = "pinned_skill_catalog"
-# Rooted Identity Agent Working Project Context, rendered once from the selected
-# Project's identity and auto-load files and then reused verbatim for the Session.
+# Rooted Identity Agent Working Project Context, rendered from the selected Project's
+# identity and auto-load files and reused verbatim until the next Compaction.
 PINNED_WORKING_PROJECT_CONTEXT_META_KEY = "pinned_working_project_context"
 
 
@@ -379,6 +379,7 @@ class ChatLoopDependencies:
     get_system_prompts: Callable[[], SystemPromptManager]
     get_adapter: Callable[[str, str], ProviderAdapter]
     resolve_skills: Callable[[str | None, str | None], SkillRegistry]
+    refresh_skills: Callable[[str | None, str | None], SkillRegistry]
     get_local_context_windows: Callable[[], Mapping[str, Any]]
     task_model_available: Callable[[str], bool]
 
@@ -420,6 +421,7 @@ class _RunExecutionContext:
     request: _RunRequest
     session: ChatSession
     agent: Any
+    agent_body: str
     primary_target: _ModelTarget
     project_id: str | None
     project_cwd: Path | None
@@ -433,6 +435,17 @@ class _RunExecutionContext:
     continuation_reminder: str | None
     request_state: _RequestState | None = None
     auto_compaction_attempts: int = 0
+
+
+@dataclass(frozen=True)
+class _CompactionPromptRefresh:
+    """Fresh prompt-only inputs prepared after one persisted Compaction checkpoint."""
+
+    agent_body: str
+    project_prompt_context: ProjectPromptContext | None
+    working_project_context: str | None
+    skill_registry: SkillRegistry
+    skill_catalog: PinnedSkillCatalog
 
 
 # Skill names the session has already surfaced to the model: the pinned catalog at
@@ -942,7 +955,7 @@ class ChatLoop:
         adapter: Any | None = None
         summary_adapter: Any | None = None
         try:
-            self._resolve_project_cwd(working_project_id)
+            project_cwd = self._resolve_project_cwd(working_project_id)
             provider_id, connection_id = _resolve_agent_connection(self._dependencies, agent)
             adapter = self._dependencies.get_adapter(provider_id, connection_id)
             _model_provider_id, model_id = _split_agent_model(agent.model)
@@ -1018,6 +1031,23 @@ class ChatLoop:
             )
             checkpoint = finalize_checkpoint_history_guidance(checkpoint, ordinal=ordinal)
             session.append(checkpoint)
+            try:
+                self._refresh_prompt_context_after_compaction(
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    agent=agent,
+                    project_id=project_id,
+                    working_project_id=working_project_id,
+                    project_cwd=project_cwd,
+                    activation_skill_project_id=skill_project_id,
+                )
+            except Exception:
+                _LOGGER.warning(
+                    "Prompt context refresh failed after manual Compaction (agent=%s session=%s)",
+                    agent_id,
+                    session_id,
+                    exc_info=True,
+                )
         except Exception as exc:
             return f"Compaction failed: {exc}"
         finally:
@@ -1179,6 +1209,7 @@ class ChatLoop:
             request=request,
             session=session,
             agent=agent,
+            agent_body=runtime_agent_body(agent),
             primary_target=target,
             project_id=project_id,
             project_cwd=project_cwd,
@@ -1206,7 +1237,7 @@ class ChatLoop:
 
         The Project Tool Result remains the sole persisted context carrier. This
         updates only the Run-local Skill resolver used by activation and Tool
-        dispatch; the Session-pinned Skill catalog and therefore the System Prompt
+        dispatch; the current prompt-epoch Skill catalog and therefore the System Prompt
         remain unchanged.
         """
         try:
@@ -1356,7 +1387,7 @@ class ChatLoop:
                 reasoning_scope_model=target.model_reference,
                 input_modalities=target.input_modalities,
                 wire_media_types=target.wire_media_types,
-                agent_body=runtime_agent_body(agent),
+                agent_body=context.agent_body,
                 project_context=context.project_prompt_context,
                 working_project_context=context.working_project_context,
                 agent_project_id=context.project_id,
@@ -1420,7 +1451,7 @@ class ChatLoop:
                             reasoning_scope_model=fallback_target.model_reference,
                             input_modalities=fallback_target.input_modalities,
                             wire_media_types=fallback_target.wire_media_types,
-                            agent_body=runtime_agent_body(agent),
+                            agent_body=context.agent_body,
                             project_context=context.project_prompt_context,
                             working_project_context=context.working_project_context,
                             agent_project_id=context.project_id,
@@ -1615,16 +1646,14 @@ class ChatLoop:
         skill_registry: SkillRegistry,
         project_id: str | None,
     ) -> PinnedSkillCatalog:
-        """Return the session's pinned skill catalog, snapshotting it on first build.
+        """Return the current prompt epoch's Skill catalog, snapshotting on first build.
 
-        The catalog text and the skill-tool-presence gate are fixed for the
-        session's lifetime (persisted in session metadata under the session's own
-        ``project_id`` anchor), so a skill written mid-session leaves the session's
-        system prompt and tool list byte-identical and the provider prompt cache
-        stays intact. Skill activation and ``/``-``$`` triggers still resolve the
-        live registry, so a newly written skill is loadable immediately even though
-        the catalog is frozen. A new session pins a fresh snapshot, so it sees the
-        new skill.
+        The catalog text is stable between successful Compactions (persisted in
+        Session metadata under the Session's own ``project_id`` anchor), so an
+        ordinary mid-epoch Skill write leaves the System Prompt prefix unchanged.
+        Skill activation and ``/``-``$`` triggers still resolve the live registry.
+        A successful Compaction rescans every Skill source and replaces the snapshot;
+        a new Session starts with a fresh snapshot too.
         """
         metadata = self._dependencies.sessions.get_metadata(agent_id, session_id, project_id)
         pinned = metadata.get(PINNED_SKILL_CATALOG_META_KEY)
@@ -1645,11 +1674,12 @@ class ChatLoop:
         project_context: ProjectPromptContext | None,
         project_id: str | None,
     ) -> str | None:
-        """Return one Rooted Identity Agent Working Project Context per Session.
+        """Return the Rooted Identity Agent Working Project Context for this prompt epoch.
 
         This snapshot governs only the automatic Working Project block. The rest
         of the System Prompt keeps its existing live assembly behavior, and the
-        explicit ``project`` Tool remains an ordinary Tool-result path.
+        explicit ``project`` Tool remains an ordinary Tool-result path. A successful
+        Compaction replaces the snapshot from the current Project and auto-load files.
         """
         if project_id is not None:
             return None
@@ -1672,6 +1702,95 @@ class ChatLoop:
         self._dependencies.sessions.set_metadata(agent_id, session_id, metadata, project_id)
         return snapshot
 
+    def _refresh_prompt_context_after_compaction(
+        self,
+        *,
+        agent_id: str,
+        session_id: str,
+        agent: Any,
+        project_id: str | None,
+        working_project_id: str | None,
+        project_cwd: Path | None,
+        activation_skill_project_id: str | None,
+    ) -> _CompactionPromptRefresh:
+        """Prepare and persist the next prompt epoch after a checkpoint.
+
+        Only prompt inputs are refreshed. The admitted Run keeps its resolved Agent,
+        Model target, Tool policy, Project identity, and cwd; a freshly resolved
+        Config Agent contributes only its prompt body.
+        """
+        prompt_project = resolve_prompt_project(self._dependencies.projects, working_project_id)
+        project_prompt_context = (
+            ProjectPromptContext.from_project(
+                prompt_project.project_id,
+                prompt_project.display_name,
+                project_cwd if project_cwd is not None else prompt_project.cwd,
+                prompt_project.auto_load,
+            )
+            if prompt_project is not None
+            else None
+        )
+        prompt_skill_project_id, prompt_identity_agent_id = resolve_skill_scope(
+            project_id,
+            prompt_project,
+            agent_id,
+        )
+        prompt_skill_registry = self._dependencies.refresh_skills(
+            prompt_skill_project_id,
+            prompt_identity_agent_id,
+        )
+        activation_identity_agent_id = agent_id if project_id is None else None
+        if (
+            activation_skill_project_id == prompt_skill_project_id
+            and activation_identity_agent_id == prompt_identity_agent_id
+        ):
+            activation_skill_registry = prompt_skill_registry
+        else:
+            activation_skill_registry = self._dependencies.resolve_skills(
+                activation_skill_project_id,
+                activation_identity_agent_id,
+            )
+
+        system_prompts = self._dependencies.get_system_prompts()
+        skill_catalog = system_prompts.render_skill_catalog(agent, prompt_skill_registry)
+        working_project_context: str | None = None
+        read_paths: list[Path] = []
+        if project_id is None and project_prompt_context is not None:
+            working_project_context = system_prompts.render_working_project_context(
+                project_prompt_context,
+                on_read=read_paths.append,
+            )
+
+        refreshed_agent = self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
+        metadata = self._dependencies.sessions.get_metadata(agent_id, session_id, project_id)
+        metadata[PINNED_SKILL_CATALOG_META_KEY] = {"catalog_text": skill_catalog.catalog_text}
+        available_skill_names = self._available_skill_names(agent, prompt_skill_registry)
+        if available_skill_names is not None:
+            metadata[SEEN_SKILLS_META_KEY] = available_skill_names
+        if working_project_context is None:
+            metadata.pop(PINNED_WORKING_PROJECT_CONTEXT_META_KEY, None)
+        else:
+            metadata[PINNED_WORKING_PROJECT_CONTEXT_META_KEY] = {"text": working_project_context}
+        self._stamp_prompt_files_read(session_id, read_paths)
+        self._dependencies.sessions.set_metadata(agent_id, session_id, metadata, project_id)
+        return _CompactionPromptRefresh(
+            agent_body=runtime_agent_body(refreshed_agent),
+            project_prompt_context=project_prompt_context,
+            working_project_context=working_project_context,
+            skill_registry=activation_skill_registry,
+            skill_catalog=skill_catalog,
+        )
+
+    @staticmethod
+    def _available_skill_names(agent: Any, skill_registry: SkillRegistry) -> list[str] | None:
+        """Return the currently advertised Skill names, or ``None`` for a degraded registry."""
+        filter_allowed = getattr(skill_registry, "filter_allowed", None)
+        if not callable(filter_allowed):
+            return None
+        allowed_skills = getattr(agent, "allowed_skills", None)
+        allowed = ["*"] if allowed_skills is None else allowed_skills
+        return sorted(str(skill.name) for skill in filter_allowed(allowed))
+
     def _announce_newly_available_skills(
         self,
         agent_id: str,
@@ -1681,30 +1800,33 @@ class ChatLoop:
         skill_registry: SkillRegistry,
         project_id: str | None,
     ) -> None:
-        """Tell the model about skills that became available to it since this session began.
+        """Tell the model about Skills that became available during this prompt epoch.
 
-        The session's ``<available_skills>`` prompt block is pinned for prompt-cache
-        stability, so a skill authored or activated mid-session never appears in the
-        prompt. This appends a one-time ``<system-reminder>`` note at the conversation
-        tail for any newly available+allowed skill, leaving the cached prompt prefix
-        untouched. Additions only — a skill that becomes unavailable is not announced.
-        The first run seeds the baseline (the skills already in the pinned catalog)
-        without announcing them. The diff runs against the registry already resolved for
-        this run, so it is a small in-memory set comparison, not a fresh scan.
+        The Session's ``<available_skills>`` block stays pinned between Compactions,
+        so a Skill that becomes available mid-epoch does not change the prompt. This
+        appends a one-time ``<system-reminder>`` note for each newly available+allowed
+        Skill, leaving the cached prefix untouched. Additions only — a Skill that
+        becomes unavailable is not announced. The first Run and every successful
+        Compaction seed the baseline from the catalog without announcing it. The diff
+        uses the registry already resolved for this Run, so it is an in-memory set
+        comparison rather than another scan.
         """
         # Minimal/degraded skill registries (e.g. some test doubles) may not expose
         # ``filter_allowed``; the announcement is an optional enhancement, so skip it
         # cleanly rather than break the run — the real ``SkillRegistry`` always has it.
-        filter_allowed = getattr(skill_registry, "filter_allowed", None)
-        if not callable(filter_allowed):
+        available_names = self._available_skill_names(agent, skill_registry)
+        if available_names is None:
             return
         allowed_skills = getattr(agent, "allowed_skills", None)
         allowed = ["*"] if allowed_skills is None else allowed_skills
-        available = {skill.name: skill.description for skill in filter_allowed(allowed)}
+        available = {
+            str(skill.name): str(skill.description)
+            for skill in skill_registry.filter_allowed(allowed)
+        }
         metadata = self._dependencies.sessions.get_metadata(agent_id, session_id, project_id)
         seen = metadata.get(SEEN_SKILLS_META_KEY)
         if not isinstance(seen, list):
-            metadata[SEEN_SKILLS_META_KEY] = sorted(available)
+            metadata[SEEN_SKILLS_META_KEY] = available_names
             self._dependencies.sessions.set_metadata(agent_id, session_id, metadata, project_id)
             return
         new_names = sorted(set(available) - set(seen))
@@ -1787,8 +1909,8 @@ class ChatLoop:
         # prompt; for an unrooted identity session it is empty. The
         # config-agent body is inserted verbatim (never re-expanded) by the builder.
         # ``skill_registry`` scopes the skills block to the project pool (``None`` =
-        # the global registry); ``skill_catalog`` is the session-pinned snapshot the
-        # skills block renders from, so a mid-session skill write never shifts it.
+        # the global registry); ``skill_catalog`` is the current prompt-epoch snapshot
+        # the skills block renders from, so only Compaction replaces it.
         session_messages = session.load()
         session_tool_grants = (HISTORY_TOOL_NAME,) if history_available(session_messages) else ()
         system_prompts = self._dependencies.get_system_prompts()
@@ -2383,6 +2505,31 @@ class ChatLoop:
         )
         checkpoint = finalize_checkpoint_history_guidance(checkpoint, ordinal=ordinal)
         session.append(checkpoint)
+        try:
+            prompt_refresh = self._refresh_prompt_context_after_compaction(
+                agent_id=run.agent_id,
+                session_id=run.session_id,
+                agent=agent,
+                project_id=run.project_id,
+                working_project_id=run.working_project_id,
+                project_cwd=context.project_cwd,
+                activation_skill_project_id=context.skill_project_id,
+            )
+        except Exception:
+            _LOGGER.warning(
+                "Prompt context refresh failed after automatic Compaction "
+                "(run=%s agent=%s session=%s)",
+                run.id,
+                run.agent_id,
+                run.session_id,
+                exc_info=True,
+            )
+        else:
+            context.agent_body = prompt_refresh.agent_body
+            context.project_prompt_context = prompt_refresh.project_prompt_context
+            context.working_project_context = prompt_refresh.working_project_context
+            context.skill_registry = prompt_refresh.skill_registry
+            context.skill_catalog = prompt_refresh.skill_catalog
         context.auto_compaction_attempts += 1
         if context.continuation_tracker is not None:
             context.continuation_tracker.record_compaction_boundary()
@@ -2396,12 +2543,6 @@ class ChatLoop:
                 "history_available": True,
             },
         )
-        # Identity runs only, exactly like the run-start resolution: a config
-        # agent's slug must not resolve a same-named identity agent's private home.
-        compaction_skill_registry = self._dependencies.resolve_skills(
-            context.skill_project_id,
-            run.agent_id if run.project_id is None else None,
-        )
         rebuilt_state = await self._build_request_state(
             agent,
             session,
@@ -2409,13 +2550,11 @@ class ChatLoop:
             reasoning_scope_model=target.model_reference,
             input_modalities=target.input_modalities,
             wire_media_types=target.wire_media_types,
-            agent_body=runtime_agent_body(agent),
+            agent_body=context.agent_body,
             project_context=context.project_prompt_context,
             working_project_context=context.working_project_context,
             agent_project_id=context.project_id,
-            skill_registry=compaction_skill_registry,
-            # Reuse the session's pinned snapshot so the rebuilt prompt's catalog is
-            # byte-identical across the compaction checkpoint.
+            skill_registry=context.skill_registry,
             skill_catalog=context.skill_catalog,
         )
         rebuilt_messages = rebuilt_state.messages

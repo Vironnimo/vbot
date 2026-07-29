@@ -1107,6 +1107,28 @@ def test_reload_skills_drops_project_skill_cache(config: Config, tmp_path: Path)
     assert runtime.skills_for(project.project_id) is not first
 
 
+def test_refresh_skills_for_rescans_project_and_global_sources(
+    config: Config, tmp_path: Path
+) -> None:
+    logging.getLogger("vbot").handlers = []
+    runtime = Runtime(config)
+    runtime.start()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _write_project_skill(repo, "alpha", "Alpha.")
+    project = runtime.projects.create("p", "P", repo)
+    first = runtime.skills_for(project.project_id)
+    _write_project_skill(repo, "beta", "Beta.")
+    _write_test_skill(runtime.global_skills_dir, "global-new", "New global Skill.")
+
+    refreshed = runtime.refresh_skills_for(project.project_id)
+
+    assert refreshed is not first
+    assert {skill.name for skill in refreshed.list_all()}.issuperset(
+        {"alpha", "beta", "global-new"}
+    )
+
+
 def test_agent_skills_dir_path(config: Config) -> None:
     logging.getLogger("vbot").handlers = []
     runtime = Runtime(config)
