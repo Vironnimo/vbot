@@ -157,6 +157,7 @@
       buildPayload: () => buildWebSearchSettingsPayload(webSearchSettings),
       successKey: 'settings.webSearch.saveSuccess',
       successFallback: 'Web search settings updated.',
+      getDraftSnapshot: () => webSearchSettings,
       applyResult: (next) => (webSearchSettings = getWebSearchSettings(next)),
     });
   }

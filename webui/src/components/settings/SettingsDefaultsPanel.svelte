@@ -340,6 +340,7 @@
       buildPayload: () => buildAgentDefaultsPayload(agentDefaults),
       successKey: 'settings.defaults.saveSuccess',
       successFallback: 'Agent defaults updated.',
+      getDraftSnapshot: () => agentDefaults,
       applyResult: (next) =>
         (agentDefaults = normalizeAgentDefaultsFormValues(next)),
     });

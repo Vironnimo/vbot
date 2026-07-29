@@ -119,6 +119,7 @@
       buildPayload: () => buildRecallSettingsPayload(recallSettings),
       successKey: 'settings.recall.saveSuccess',
       successFallback: 'Recall backend updated.',
+      getDraftSnapshot: () => recallSettings,
       applyResult: (next) => (recallSettings = getRecallSettings(next)),
     });
   }

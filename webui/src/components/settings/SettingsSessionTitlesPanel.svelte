@@ -170,6 +170,7 @@
       buildPayload: () => buildSessionTitleSettingsPayload(formValues),
       successKey: 'settings.sessionTitles.saveSuccess',
       successFallback: 'Session title settings updated.',
+      getDraftSnapshot: () => formValues,
       applyResult: (next) => (formValues = normalizeSessionTitleSettings(next)),
     });
   }

@@ -20,6 +20,7 @@ import { t } from './i18n.js';
  * @param {string} params.successKey - i18n key for the success toast title.
  * @param {string} params.successFallback - English fallback for the success title.
  * @param {(next: object) => void} [params.applyResult] - Optional: re-seed local state.
+ * @param {() => unknown} [params.getDraftSnapshot] - Optional: reads the current local draft.
  */
 export async function runSettingsSave({
   buildPayload,
@@ -30,14 +31,25 @@ export async function runSettingsSave({
   successKey,
   successFallback,
   applyResult,
+  getDraftSnapshot,
 }) {
   setSaving(true);
   onError('');
 
   try {
-    const nextSettings = await updateSettings(buildPayload());
+    const payload = buildPayload();
+    const readDraftSnapshot = getDraftSnapshot ?? buildPayload;
+    const submittedDraftSnapshot = applyResult
+      ? JSON.stringify(readDraftSnapshot())
+      : null;
+    const nextSettings = await updateSettings(payload);
+    const draftIsCurrent =
+      !applyResult ||
+      JSON.stringify(readDraftSnapshot()) === submittedDraftSnapshot;
     onCommit(nextSettings);
-    applyResult?.(nextSettings);
+    if (draftIsCurrent) {
+      applyResult?.(nextSettings);
+    }
     onToast({ title: t(successKey, successFallback), variant: 'success' });
     return true;
   } catch (error) {
