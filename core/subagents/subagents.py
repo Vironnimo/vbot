@@ -434,8 +434,8 @@ async def _handle_subagent(
                 parent_key=parent_key,
             )
 
+        _track_subagent_completion(batch_tracker, parent_key, sub_run, activity_file)
         if background:
-            _track_subagent_completion(batch_tracker, parent_key, sub_run, activity_file)
             return tool_success(
                 _with_activity_note(
                     _with_target_project(
@@ -470,12 +470,15 @@ async def _handle_subagent(
                 message=timeout_message,
                 activity_file=activity_file,
             )
-            batch_tracker.mark_fetched(
+            _register_result_acknowledgement_after_parent_persistence(
+                context,
+                runtime,
+                batch_tracker,
                 parent_key,
+                target_agent_id,
                 session.id,
                 sub_run.id,
-                sub_agent_id=target_agent_id,
-                project_id=target_project_id,
+                target_project_id,
             )
             batch_tracker.on_sub_agent_complete(parent_key, sub_run.id, result)
             return tool_failure(
@@ -483,22 +486,17 @@ async def _handle_subagent(
                 f"Sub-agent run timed out after {settings['subagent_timeout_minutes']} minutes",
             )
 
-        batch_tracker.mark_fetched(
-            parent_key,
-            session.id,
-            sub_run.id,
-            sub_agent_id=target_agent_id,
-            project_id=target_project_id,
-        )
-        batch_tracker.on_sub_agent_complete(parent_key, sub_run.id, result)
-        _register_result_read_after_parent_persistence(
+        _register_result_acknowledgement_after_parent_persistence(
             context,
             runtime,
+            batch_tracker,
+            parent_key,
             target_agent_id,
             session.id,
             sub_run.id,
             target_project_id,
         )
+        batch_tracker.on_sub_agent_complete(parent_key, sub_run.id, result)
         public_result = _public_subagent_result(
             work_id,
             target_agent_id,
@@ -774,16 +772,11 @@ async def _handle_subagent_status(
                 result = session_result
 
     if terminal_result:
-        batch_tracker.mark_fetched(
-            parent_key,
-            entry.session_id,
-            entry.run_id,
-            sub_agent_id=entry.agent_id,
-            project_id=entry.project_id,
-        )
-        _register_result_read_after_parent_persistence(
+        _register_result_acknowledgement_after_parent_persistence(
             context,
             runtime,
+            batch_tracker,
+            parent_key,
             entry.agent_id,
             entry.session_id,
             entry.run_id,
@@ -800,19 +793,28 @@ async def _handle_subagent_status(
     )
 
 
-def _register_result_read_after_parent_persistence(
+def _register_result_acknowledgement_after_parent_persistence(
     context: ToolContext,
     runtime: RuntimeServices,
+    batch_tracker: SubAgentBatchTracker,
+    parent_key: ParentKey,
     agent_id: str,
     session_id: str,
     run_id: str | None,
     project_id: str | None,
 ) -> None:
-    """Acknowledge one child only after its result is durable in the parent."""
+    """Acknowledge one exact result only after it is durable in the Parent."""
     if not run_id:
         return
 
     def acknowledge() -> None:
+        batch_tracker.mark_fetched(
+            parent_key,
+            session_id,
+            run_id,
+            sub_agent_id=agent_id,
+            project_id=project_id,
+        )
         runtime.chat_sessions.mark_terminal_run_read(
             agent_id,
             session_id,
@@ -1437,8 +1439,6 @@ def _cancel_subagent_child(
     parent_reason: str | None = None,
 ) -> None:
     if sub_run is not None:
-        if batch_tracker is not None and parent_key is not None:
-            batch_tracker.discard_parent(parent_key)
         sub_run.request_cancel(reason=parent_reason)
         return
     if queued_item is None or queued_agent_id is None or queued_session_id is None:
@@ -1457,8 +1457,6 @@ def _cancel_subagent_child(
         started_run = cast(Run, queued_item.future.result())
     except (asyncio.CancelledError, Exception):
         return
-    if batch_tracker is not None and parent_key is not None:
-        batch_tracker.discard_parent(parent_key)
     started_run.request_cancel(reason=parent_reason)
 
 

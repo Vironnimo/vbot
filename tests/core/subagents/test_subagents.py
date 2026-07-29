@@ -97,12 +97,13 @@ def make_context(
     )
 
 
-async def test_foreground_result_acknowledges_child_only_after_parent_persistence(
+async def test_foreground_result_keeps_handle_and_child_unread_until_parent_persistence(
     tmp_path: Path,
 ) -> None:
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
-    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    trigger_service = RecordingTriggerService()
+    tracker = SubAgentBatchTracker(trigger_service)
     persisted_callbacks: list[Any] = []
     context = make_context(
         nesting_depth=1,
@@ -130,6 +131,7 @@ async def test_foreground_result_acknowledges_child_only_after_parent_persistenc
     assert len(persisted_callbacks) == 1
     child_session_id = result["data"]["session_id"]
     child_run_id = manager.started[0]["run"].id
+    work_id = result["data"]["id"]
     runtime.chat_sessions.record_terminal_run(
         "worker",
         child_session_id,
@@ -137,19 +139,26 @@ async def test_foreground_result_acknowledges_child_only_after_parent_persistenc
         "completed",
         "2026-07-22T10:00:00+00:00",
     )
+    manager.parent_run.request_cancel(reason="user")
+    await asyncio.sleep(0)
+    assert tracker.owned_entry("parent", "parent-session", None, work_id) is not None
+    assert f"subagent:parent-run:{work_id}" in trigger_service.completion_deliveries
     assert runtime.chat_sessions.list_with_metadata("worker")[0]["has_unread_completion"] is True
 
     persisted_callbacks[0]()
 
+    assert tracker.owned_entry("parent", "parent-session", None, work_id) is None
+    assert f"subagent:parent-run:{work_id}" not in trigger_service.completion_deliveries
     assert runtime.chat_sessions.list_with_metadata("worker")[0]["has_unread_completion"] is False
 
 
-async def test_result_lookup_acknowledges_persisted_child_run_only_after_parent_persistence(
+async def test_status_result_keeps_handle_and_child_unread_until_parent_persistence(
     tmp_path: Path,
 ) -> None:
     manager = FakeRunManager()
     runtime = make_runtime(tmp_path, manager)
-    tracker = SubAgentBatchTracker(RecordingTriggerService())
+    trigger_service = RecordingTriggerService()
+    tracker = SubAgentBatchTracker(trigger_service)
     child = runtime.chat_sessions.create("worker", session_id="child-session")
     child.append(ChatMessage.assistant(model="openai/gpt-5.2", content="child output"))
     child.append(
@@ -191,14 +200,27 @@ async def test_result_lookup_acknowledges_persisted_child_run_only_after_parent_
     assert result["data"]["id"] == "sub_child"
     assert "run_id" not in result["data"]
     assert len(persisted_callbacks) == 1
+    tracker.on_sub_agent_complete(
+        (context.agent_id, context.session_id, context.run_id),
+        "child-run",
+        {"status": "completed", "result": "child output"},
+    )
+    manager.parent_run.request_cancel(reason="user")
+    assert tracker.owned_entry("parent", "parent-session", None, "sub_child") is not None
+    assert "subagent:parent-run:sub_child" in trigger_service.completion_deliveries
     assert runtime.chat_sessions.list_with_metadata("worker")[0]["has_unread_completion"] is True
 
     persisted_callbacks[0]()
 
+    assert tracker.owned_entry("parent", "parent-session", None, "sub_child") is None
+    assert "subagent:parent-run:sub_child" not in trigger_service.completion_deliveries
     assert runtime.chat_sessions.list_with_metadata("worker")[0]["has_unread_completion"] is False
 
 
 class RecordingTriggerService:
+    def __init__(self) -> None:
+        self.completion_deliveries: dict[str, asyncio.Future[None]] = {}
+
     async def trigger_run(
         self,
         agent_id: str,
@@ -209,6 +231,38 @@ class RecordingTriggerService:
         project_id: str | None = None,
     ) -> Run:
         return Run(run_id="trigger-run", agent_id=agent_id, session_id=session_id or "new")
+
+    def submit_completion(
+        self,
+        agent_id: str,
+        session_id: str,
+        *,
+        notice_id: str,
+        origin_run_id: str,
+        body: str,
+        project_id: str | None = None,
+        on_persisted: Any | None = None,
+    ) -> asyncio.Future[None]:
+        del agent_id, session_id, origin_run_id, body, project_id, on_persisted
+        delivery: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self.completion_deliveries[notice_id] = delivery
+        return delivery
+
+    def cancel_completion(
+        self,
+        agent_id: str,
+        session_id: str,
+        *,
+        notice_id: str,
+        project_id: str | None = None,
+    ) -> bool:
+        del agent_id, session_id, project_id
+        delivery = self.completion_deliveries.pop(notice_id, None)
+        if delivery is None:
+            return False
+        if not delivery.done():
+            delivery.cancel()
+        return True
 
 
 class FakeStorage:

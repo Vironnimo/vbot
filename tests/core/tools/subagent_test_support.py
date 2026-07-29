@@ -119,6 +119,7 @@ def make_context(
     nesting_depth: int = 0,
     emit_hook: Any | None = None,
     project_id: str | None = None,
+    result_persisted_hook: Any | None = None,
 ) -> ToolContext:
     return ToolContext(
         agent_id=agent_id,
@@ -131,6 +132,7 @@ def make_context(
         vbot_root=Path("app"),
         data_root=Path("data"),
         emit_hook=emit_hook,
+        result_persisted_hook=result_persisted_hook,
         nesting_depth=nesting_depth,
         project_id=project_id,
     )
