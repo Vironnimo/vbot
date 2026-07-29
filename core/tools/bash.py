@@ -37,6 +37,11 @@ BASH_MODEL_OUTPUT_CAP_CHARS = 30_000
 # Failure messages (timeout, sub-agent kill) carry a shorter tail: enough to
 # diagnose, small enough not to bloat an error envelope.
 FAILURE_OUTPUT_TAIL_CHARS = 10_000
+BASH_HANDOFF_PROCESS_NOTE = (
+    "Use session_id with the process Tool for status, input, or kill. output is the newest "
+    "capped snapshot collected before handoff. When present, log_file receives the complete "
+    "combined stdout/stderr stream live from command start through exit."
+)
 
 
 def _shell_syntax_notes() -> str:
@@ -61,11 +66,12 @@ BASH_TOOL_DESCRIPTION = (
     "foreground wait, and background for long-lived commands such as servers. Auto waits "
     "for yield_after seconds (default 30), then hands a still-running process to vBot; "
     "background hands it off immediately. Handed-off processes return a session_id for the "
-    "process tool and are monitored automatically. Their terminal results are coalesced at "
-    "the Session's next Run boundary, so continue independent work or end the current Run; "
-    "do not poll merely to wait or start another copy. Result output keeps only the newest "
-    f"{BASH_MODEL_OUTPUT_CAP_CHARS} characters; when truncated, the result names the log "
-    "file holding the complete output — search it with grep/read." + _shell_syntax_notes()
+    "process Tool and are monitored automatically. When available, log_file receives their "
+    "complete combined stdout/stderr stream live through exit. Their terminal results are "
+    "coalesced at the Session's next Run boundary, so continue independent work or end the "
+    "current Run; do not poll merely to wait or start another copy. Result output keeps only "
+    f"the newest {BASH_MODEL_OUTPUT_CAP_CHARS} characters; when truncated, search/read "
+    "log_file for the complete output." + _shell_syntax_notes()
 )
 BASH_EXECUTION_MODES = ("foreground", "auto", "background")
 BASH_TOOL_PARAMETERS: JsonObject = {
@@ -817,6 +823,7 @@ async def _background_result(
     }
     result["delivery"] = "automatic"
     result["handoff_note"] = _handoff_note(mode, handoff_after)
+    result["process_note"] = BASH_HANDOFF_PROCESS_NOTE
     return tool_success(result)
 
 
@@ -932,6 +939,7 @@ async def _combined_output(
 
 __all__ = [
     "BASH_MODEL_OUTPUT_CAP_CHARS",
+    "BASH_HANDOFF_PROCESS_NOTE",
     "BASH_TOOL_DESCRIPTION",
     "BASH_TOOL_NAME",
     "BASH_TOOL_PARAMETERS",
