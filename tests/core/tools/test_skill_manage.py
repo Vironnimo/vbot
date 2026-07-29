@@ -108,12 +108,13 @@ def test_provider_schema_is_flat_and_hermes_shaped(tmp_path: Path) -> None:
     harness = _Harness(tmp_path)
     definitions = harness.tools.provider_definitions([SKILL_MANAGE_TOOL_NAME])
     parameters = cast(dict[str, Any], definitions[0]["parameters"])
+    properties = parameters["properties"]
 
     assert parameters == SKILL_MANAGE_TOOL_PARAMETERS
     assert parameters["type"] == "object"
     assert parameters["required"] == ["action", "name"]
     assert parameters["additionalProperties"] is False
-    assert set(parameters["properties"]) == {
+    assert set(properties) == {
         "action",
         "name",
         "scope",
@@ -124,7 +125,7 @@ def test_provider_schema_is_flat_and_hermes_shaped(tmp_path: Path) -> None:
         "new_string",
         "replace_all",
     }
-    assert parameters["properties"]["action"]["enum"] == [
+    assert properties["action"]["enum"] == [
         "create",
         "edit",
         "patch",
@@ -132,6 +133,20 @@ def test_provider_schema_is_flat_and_hermes_shaped(tmp_path: Path) -> None:
         "remove_file",
         "delete",
     ]
+    assert properties["action"]["description"] == (
+        "Action to perform. create makes a new Skill and edit replaces an existing SKILL.md; "
+        "both require content. patch replaces exact text and requires old_string and "
+        "new_string; file_path defaults to SKILL.md and replace_all defaults to false. "
+        "write_file requires file_path and file_content. remove_file requires file_path. "
+        "delete removes the entire Skill and needs no action-specific field."
+    )
+    assert "Required for every action" in properties["name"]["description"]
+    assert "Required for create and edit" in properties["content"]["description"]
+    assert "Required for write_file and remove_file" in properties["file_path"]["description"]
+    assert "Required only for write_file" in properties["file_content"]["description"]
+    assert "Required only for patch" in properties["old_string"]["description"]
+    assert "Required only for patch" in properties["new_string"]["description"]
+    assert "For patch only" in properties["replace_all"]["description"]
     assert "draft_id" not in str(parameters)
     assert "source_path" not in str(parameters)
     assert "executable" not in str(parameters)

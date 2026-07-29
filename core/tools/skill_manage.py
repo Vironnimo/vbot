@@ -70,7 +70,14 @@ SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = {
         "action": {
             "type": "string",
             "enum": list(_ACTIONS),
-            "description": "The Skill mutation to perform.",
+            "description": (
+                "Action to perform. create makes a new Skill and edit replaces an existing "
+                "SKILL.md; both require content. patch replaces exact text and requires "
+                "old_string and new_string; file_path defaults to SKILL.md and replace_all "
+                "defaults to false. write_file requires file_path and file_content. "
+                "remove_file requires file_path. delete removes the entire Skill and needs "
+                "no action-specific field."
+            ),
         },
         "name": {
             "type": "string",
@@ -78,8 +85,9 @@ SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = {
             "maxLength": MAX_SKILL_NAME_LENGTH,
             "pattern": f"^{SKILL_NAME_CHARSET_FRAGMENT}$",
             "description": (
-                "Skill directory and front-matter name. It must start with a letter "
-                "or digit and otherwise use only letters, digits, '-' or '_'."
+                "Skill directory and front-matter name. Required for every action. It must "
+                "start with a letter or digit and otherwise use only letters, digits, '-' "
+                "or '_'."
             ),
         },
         "scope": {
@@ -87,40 +95,49 @@ SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = {
             "enum": list(_SCOPES),
             "default": _OWN_SCOPE,
             "description": (
-                "Writable Skill home. Omit for your private home. Use 'global' only "
-                "when the user explicitly requested a shared Skill."
+                "Writable Skill home for any action. Omit for your private home. Use 'global' "
+                "only when the user explicitly requested a shared Skill."
             ),
         },
         "content": {
             "type": "string",
-            "description": "Complete SKILL.md content for create or edit.",
+            "description": (
+                "Complete SKILL.md content. Required for create and edit; invalid for every "
+                "other action."
+            ),
         },
         "file_path": {
             "type": "string",
             "minLength": 1,
             "pattern": r"^(SKILL\.md|(?:scripts|references|assets)/.+)$",
             "description": (
-                "Skill-relative file path. patch defaults to SKILL.md; write_file "
-                "and remove_file require a path below scripts/, references/, or assets/."
+                "Skill-relative path. Optional for patch and defaults to SKILL.md. Required "
+                "for write_file and remove_file, where it must be below scripts/, references/, "
+                "or assets/. Invalid for create, edit, and delete."
             ),
         },
         "file_content": {
             "type": "string",
-            "description": "Complete UTF-8 text for write_file.",
+            "description": (
+                "Complete UTF-8 support-file text. Required only for write_file; may be empty."
+            ),
         },
         "old_string": {
             "type": "string",
             "minLength": 1,
-            "description": "Exact text to replace with patch.",
+            "description": "Exact non-empty text to replace. Required only for patch.",
         },
         "new_string": {
             "type": "string",
-            "description": "Replacement text for patch; may be empty.",
+            "description": "Replacement text. Required only for patch; may be empty.",
         },
         "replace_all": {
             "type": "boolean",
             "default": False,
-            "description": ("Replace every match. Omit or set false to require exactly one match."),
+            "description": (
+                "For patch only. Set true to replace every match; omit or set false to require "
+                "exactly one match."
+            ),
         },
     },
     "required": ["action", "name"],
