@@ -834,6 +834,20 @@ function appendLiveRunEvent(assistantRun, event) {
     return;
   }
 
+  if (event.type === 'compaction_completed') {
+    const message = event.payload?.message;
+    assistantRun.items.push({
+      id: `compaction-${message?.id ?? event.sequence ?? assistantRun.items.length}`,
+      type: 'compaction_separator',
+      sequence: event.sequence ?? assistantRun.items.length,
+      timestamp: message?.timestamp ?? event.timestamp,
+      message,
+      events: [event],
+    });
+    syncAssistantRunCollections(assistantRun);
+    return;
+  }
+
   if (event.type === RUN_EVENT_PROVIDER_HEARTBEAT) {
     assistantRun.providerHeartbeat = {
       idleSeconds: Number.isFinite(event.payload?.idle_seconds)
@@ -1442,6 +1456,7 @@ function isAssistantRunEvent(event) {
     'tool_call_result',
     'subagent_session_started',
     'subagent_status_changed',
+    'compaction_completed',
     RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
     'assistant_output',
     'run_completed',

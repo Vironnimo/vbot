@@ -274,6 +274,13 @@ async def test_auto_compaction_preserves_reasoning_for_all_current_run_turns(
         def estimate_messages_tokens(self, _messages: list[JsonObject]) -> int:
             return 90
 
+        def has_new_compactable_context(
+            self,
+            _messages: list[ChatMessage],
+            _settings: Any,
+        ) -> bool:
+            return True
+
         def should_auto_compact(
             self,
             _input_tokens: int,

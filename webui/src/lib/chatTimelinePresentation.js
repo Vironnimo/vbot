@@ -285,6 +285,9 @@ export const visibleRunChildren = (assistantRun) =>
     if (child.type === 'tool_call') {
       return shouldRenderToolCall(child);
     }
+    if (child.type === 'compaction_separator') {
+      return true;
+    }
     return Boolean(child.content);
   });
 

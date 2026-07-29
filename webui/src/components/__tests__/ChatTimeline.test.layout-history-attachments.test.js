@@ -106,6 +106,77 @@ describe('ChatTimeline', () => {
     expect(document.querySelector('.date-sep:not(.compaction-sep)')).toBeNull();
   });
 
+  it('renders a live Compaction divider between its surrounding Run output', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-live-compaction',
+    );
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-compaction',
+      sequence: 1,
+      payload: {
+        message: {
+          id: 'assistant-before',
+          role: 'assistant',
+          content: 'Before checkpoint',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'compaction_completed',
+      run_id: 'run-compaction',
+      sequence: 2,
+      payload: {
+        message: {
+          id: 'checkpoint-live',
+          role: 'compaction_checkpoint',
+          timestamp: '2026-07-29T17:55:25Z',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'assistant_output',
+      run_id: 'run-compaction',
+      sequence: 3,
+      payload: {
+        message: {
+          id: 'assistant-after',
+          role: 'assistant',
+          content: 'After checkpoint',
+        },
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const divider = document.querySelector('.run-compaction-sep');
+    const outputs = Array.from(document.querySelectorAll('.msg-markdown'));
+    const before = outputs.find((element) =>
+      element.textContent.includes('Before checkpoint'),
+    );
+    const after = outputs.find((element) =>
+      element.textContent.includes('After checkpoint'),
+    );
+
+    expect(divider?.textContent.trim()).toBe('Context compacted');
+    expect(
+      before.compareDocumentPosition(divider) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      divider.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it('groups multi-day history with Today for the current day', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-05-11T12:00:00'));

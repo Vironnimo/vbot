@@ -241,6 +241,38 @@ class CompactionService:
             resolved,
         )
 
+    def has_new_compactable_context(
+        self,
+        messages: list[ChatMessage],
+        settings: CompactionSettings,
+    ) -> bool:
+        """Return whether automatic Compaction can release additional Context.
+
+        Summary+Tail retains complete user turns. Once a checkpoint has been
+        written inside a still-running turn, later Assistant/Tool steps remain
+        in that same retained tail. Re-summarizing only the checkpoint's own
+        leading summary cannot reduce the growing turn, so automatic retries
+        must wait until a later turn boundary makes retained Context eligible.
+        Manual Compaction deliberately bypasses this preflight.
+        """
+
+        strategy = self._strategies.get(settings.strategy)
+        if strategy is None:
+            raise CompactionError(f"Unknown compaction strategy: {settings.strategy}")
+        if strategy.id != STRATEGY_SUMMARY_TAIL:
+            return True
+
+        effective = _effective_compaction_messages(messages)
+        if not effective:
+            return False
+        try:
+            boundary_id = find_tail_boundary(effective, settings.tail_tokens)
+        except CompactionError:
+            return False
+        boundary_index = _find_boundary_index(effective, boundary_id)
+        compactable_prefix = effective[:boundary_index]
+        return any(not _is_compaction_summary_note(message) for message in compactable_prefix)
+
     async def compact(
         self,
         messages: list[ChatMessage],
@@ -314,6 +346,14 @@ class CompactionService:
     def estimate_messages_tokens(self, messages: list[dict]) -> int:
         estimated_tokens, _ = estimate_request_input_tokens(messages)
         return estimated_tokens
+
+
+def _is_compaction_summary_note(message: ChatMessage) -> bool:
+    return (
+        message.role == "note"
+        and isinstance(message.content, str)
+        and message.content.startswith(COMPACTION_SUMMARY_NOTE_PREFIX)
+    )
 
 
 def _plan_model_target(

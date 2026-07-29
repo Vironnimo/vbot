@@ -2271,6 +2271,13 @@ class ChatLoop:
         if settings.strategy == "continuation" and continuation_request_messages is None:
             return current_state
 
+        session_messages = session.load()
+        if not self._compaction_service.has_new_compactable_context(
+            session_messages,
+            settings,
+        ):
+            return current_state
+
         context_window = self._resolve_context_window(agent)
         if context_window is None:
             return current_state
@@ -2320,7 +2327,7 @@ class ChatLoop:
         close_summary_adapter = summary_adapter is not target.adapter
         try:
             checkpoint = await self._compaction_service.compact(
-                session.load(),
+                session_messages,
                 agent=agent,
                 summary_adapter=summary_adapter,
                 summary_model_id=summary_model_id,
