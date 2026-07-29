@@ -30,11 +30,24 @@ def test_channel_send_agent_guidance_requires_tool_for_channel_files() -> None:
     assert "action" not in CHANNEL_SEND_TOOL_PARAMETERS["properties"]
     properties = CHANNEL_SEND_TOOL_PARAMETERS["properties"]
     assert isinstance(properties, dict)
+    assert properties["platform_target"]["description"] == (
+        "Platform-specific destination id, such as a chat or channel id. Omit to use this "
+        "Session's last Reply Target for channel_id; if none matches, use the Channel's sole "
+        "configured allowed chat. Required when neither fallback is available."
+    )
     file_paths = properties["file_paths"]
     assert isinstance(file_paths, dict)
     assert file_paths["description"] == (
         "File paths to deliver through the channel. Use for every channel file delivery, "
         "including replies. Relative paths resolve from the working directory."
+    )
+    buttons = properties["buttons"]
+    assert isinstance(buttons, dict)
+    button_properties = buttons["items"]["items"]["properties"]
+    assert button_properties["label"]["description"] == ("User-visible text shown on the button.")
+    assert button_properties["data"]["description"] == (
+        "Callback payload sent when the user selects the button. Use '<prefix>:<payload>'; "
+        "max 64 UTF-8 bytes."
     )
 
 

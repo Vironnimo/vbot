@@ -64,8 +64,10 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Platform-specific target id (e.g. a chat or channel id). Omit to "
-                "send to wherever this session last replied."
+                "Platform-specific destination id, such as a chat or channel id. Omit to "
+                "use this Session's last Reply Target for channel_id; if none matches, use "
+                "the Channel's sole configured allowed chat. Required when neither fallback "
+                "is available."
             ),
         },
         "thread_id": {
@@ -100,8 +102,19 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
                 "items": {
                     "type": "object",
                     "properties": {
-                        "label": {"type": "string", "minLength": 1},
-                        "data": {"type": "string", "minLength": 1},
+                        "label": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "User-visible text shown on the button.",
+                        },
+                        "data": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": (
+                                "Callback payload sent when the user selects the button. "
+                                "Use '<prefix>:<payload>'; max 64 UTF-8 bytes."
+                            ),
+                        },
                     },
                     "required": ["label", "data"],
                     "additionalProperties": False,
