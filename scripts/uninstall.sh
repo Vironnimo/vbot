@@ -18,6 +18,7 @@ REMOVE_AUTOSTART=0
 SERVICE_NAME="vbot"
 REMOVE_DATA=0
 DATA_DIR="${HOME}/.vbot"
+DATA_DIR_EXPLICIT=0
 SERVER_HOST=""
 SERVER_PORT=0
 
@@ -115,7 +116,7 @@ while [ $# -gt 0 ]; do
         --remove-autostart) REMOVE_AUTOSTART=1; shift ;;
         --service-name) SERVICE_NAME="$2"; shift 2 ;;
         --remove-data) REMOVE_DATA=1; shift ;;
-        --data-dir) DATA_DIR="$2"; shift 2 ;;
+        --data-dir) DATA_DIR="$2"; DATA_DIR_EXPLICIT=1; shift 2 ;;
         --host) SERVER_HOST="$2"; shift 2 ;;
         --port) SERVER_PORT="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
@@ -203,6 +204,37 @@ PY
     [ -x "${PROJECT_ROOT}/.venv/bin/vbot-desktop" ]
 }
 
+install_is_desktop_client() {
+    if [ ! -f "$INSTALL_MANIFEST" ]; then
+        return 1
+    fi
+    local parser=""
+    parser="$(resolve_manifest_python 2>/dev/null || true)"
+    if [ -z "$parser" ] || [ ! -x "$parser" ]; then
+        if command -v python3 >/dev/null 2>&1; then
+            parser="$(command -v python3)"
+        elif command -v python >/dev/null 2>&1; then
+            parser="$(command -v python)"
+        else
+            return 1
+        fi
+    fi
+    "$parser" - "$INSTALL_MANIFEST" <<'PY' 2>/dev/null
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as manifest_file:
+    shape = json.load(manifest_file).get("install_shape")
+raise SystemExit(0 if shape == "desktop-client" else 1)
+PY
+}
+
+validate_desktop_client_data_target() {
+    if install_is_desktop_client && [ "$REMOVE_DATA" -eq 1 ] && { [ "$DATA_DIR_EXPLICIT" -eq 0 ] || [ -z "$SERVER_HOST" ] || [ "$SERVER_PORT" -eq 0 ]; }; then
+        fail "Desktop Client data removal requires --host, --port, and --data-dir together."
+    fi
+}
+
 resolve_vbot_path() {
     local recorded_python=""
     if [ -f "$INSTALL_MANIFEST" ]; then
@@ -286,9 +318,13 @@ managed_cleanup() {
         remove_desktop=1
     fi
 
-    # Removing an active environment is unsafe. The stop is mandatory and runs
+    # A Desktop Client owns no local server. Server installs must still stop
     # before any launcher, unit, package, or application file is removed.
-    stop_vbot_server
+    if install_is_desktop_client && [ "$REMOVE_DATA" -eq 0 ]; then
+        echo "Desktop Client owns no local vBot server; no server was stopped."
+    else
+        stop_vbot_server
+    fi
 
     if [ -f "$UNIT_FILE" ] || [ -L "$UNIT_WANTS_LINK" ]; then
         step "Removing systemd user unit '${SERVICE_NAME}'"
@@ -361,7 +397,11 @@ manual_uninstall() {
         remove_desktop=1
     fi
 
-    stop_vbot_server
+    if install_is_desktop_client && [ "$REMOVE_DATA" -eq 0 ]; then
+        echo "Desktop Client owns no local vBot server; no server was stopped."
+    else
+        stop_vbot_server
+    fi
     if command -v python3 >/dev/null 2>&1; then
         PYTHON="python3"
     elif command -v python >/dev/null 2>&1; then
@@ -415,6 +455,7 @@ manual_uninstall() {
     echo "Source files, webui/node_modules, and webui/dist were not removed."
 }
 
+validate_desktop_client_data_target
 if [ -f "$ROOT_MARKER" ] || [ -f "$LEGACY_ROOT_MARKER" ]; then
     managed_root_uninstall
 elif [ -f "$VENV_MARKER" ]; then

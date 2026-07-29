@@ -21,7 +21,7 @@ from enum import Enum
 from pathlib import Path
 
 from cli.autostart_management import DEFAULT_TASK_NAME
-from cli.install_state import InstallStateError, read_install_state
+from cli.install_state import DESKTOP_CLIENT_SHAPE, InstallStateError, read_install_state
 from cli.server_management import (
     DEFAULT_SERVICE_NAME,
     CommandResult,
@@ -66,6 +66,14 @@ class CommandRun:
     returncode: int
     stdout: str
     stderr: str
+
+
+@dataclass(frozen=True)
+class _UninstallTarget:
+    """Resolved server target plus whether this installation owns that server."""
+
+    instance: ServerInstance | None
+    owns_server: bool
 
 
 Runner = Callable[[list[str], Path], CommandRun]
@@ -314,7 +322,7 @@ def run_uninstall(
     effective_interactive = sys.stdin.isatty() if interactive is None else interactive
 
     try:
-        instance = _resolve_uninstall_instance(
+        target = _resolve_uninstall_target(
             install_root,
             host=host,
             port=port,
@@ -330,35 +338,49 @@ def run_uninstall(
             return _fail(
                 "uninstall: choose --app-only, --data-only, or --all when stdin is not interactive"
             )
-        selection = _choose_mode(instance.data_dir, input_fn=input_fn, output_fn=output_fn)
+        selection = _choose_mode(
+            target.instance.data_dir if target.instance is not None else None,
+            input_fn=input_fn,
+            output_fn=output_fn,
+        )
         if isinstance(selection, UninstallResult):
             return selection
         selected = selection
 
-    data_safety_error = _data_safety_error(
-        instance.data_dir,
-        install_root=install_root,
-        current_directory=current_directory,
-        home_directory=home,
-    )
-    if selected in {UninstallMode.DATA_ONLY, UninstallMode.ALL} and data_safety_error:
-        return _fail(f"uninstall: refusing to delete the data directory: {data_safety_error}")
-    if (
-        selected is UninstallMode.APP_ONLY
-        and _removes_install_root(install_root)
-        and instance.data_dir.is_relative_to(install_root)
-    ):
-        return _fail(
-            "uninstall: the data directory is inside the managed installation and cannot be "
-            "preserved; move it first or choose --all"
+    instance = target.instance
+    if instance is None:
+        if selected is UninstallMode.DATA_ONLY:
+            return _fail(
+                "uninstall: this Desktop Client owns no server data; provide --host, --port, "
+                "and --data-dir together to select a server target explicitly"
+            )
+        selected = UninstallMode.APP_ONLY
+    else:
+        data_safety_error = _data_safety_error(
+            instance.data_dir,
+            install_root=install_root,
+            current_directory=current_directory,
+            home_directory=home,
         )
+        if selected in {UninstallMode.DATA_ONLY, UninstallMode.ALL} and data_safety_error:
+            return _fail(f"uninstall: refusing to delete the data directory: {data_safety_error}")
+        if (
+            selected is UninstallMode.APP_ONLY
+            and target.owns_server
+            and _removes_install_root(install_root)
+            and instance.data_dir.is_relative_to(install_root)
+        ):
+            return _fail(
+                "uninstall: the data directory is inside the managed installation and cannot be "
+                "preserved; move it first or choose --all"
+            )
 
     if not assume_yes:
         if not effective_interactive:
             return _fail("uninstall: confirmation requires an interactive terminal or --yes")
         confirmation = _confirm_mode(
             selected,
-            instance.data_dir,
+            instance.data_dir if instance is not None else None,
             input_fn=input_fn,
             output_fn=output_fn,
         )
@@ -366,6 +388,8 @@ def run_uninstall(
             return confirmation
 
     if selected is UninstallMode.DATA_ONLY:
+        if instance is None:
+            raise AssertionError("data-only uninstall requires a resolved server target")
         return reset_data_directory(
             instance,
             service_name=service_name,
@@ -378,25 +402,30 @@ def run_uninstall(
             remove_directory=remove_directory or _remove_data_directory,
         )
 
-    stop_error = _stop_application_server(
-        instance,
-        install_root=install_root,
-        service_name=service_name,
-        probe=probe,
-        stop=stop,
-        systemd_managed=systemd_managed,
-        stop_systemd=stop_systemd,
-    )
-    if stop_error is not None:
-        return stop_error
+    remove_data = selected is UninstallMode.ALL
+    if instance is not None and (target.owns_server or remove_data):
+        stop_error = _stop_application_server(
+            instance,
+            install_root=install_root,
+            service_name=service_name,
+            probe=probe,
+            stop=stop,
+            systemd_managed=systemd_managed,
+            stop_systemd=stop_systemd,
+        )
+        if stop_error is not None:
+            return stop_error
 
+    launch_target = (
+        instance if instance is not None and (target.owns_server or remove_data) else None
+    )
     return launcher(
         task_name=task_name,
         service_name=service_name,
-        remove_data=selected is UninstallMode.ALL,
-        data_directory=instance.data_dir,
-        server_host=instance.host,
-        server_port=instance.port,
+        remove_data=remove_data,
+        data_directory=launch_target.data_dir if launch_target is not None else None,
+        server_host=launch_target.host if launch_target is not None else None,
+        server_port=launch_target.port if launch_target is not None else None,
         platform=platform,
         root=install_root,
         working_directory=current_directory,
@@ -492,30 +521,55 @@ def reset_data_directory(
     )
 
 
-def _resolve_uninstall_instance(
+def _resolve_uninstall_target(
     root: Path,
     *,
     host: str | None,
     port: int | None,
     data_dir: str | Path | None,
     resolve: ResolveInstance,
-) -> ServerInstance:
+) -> _UninstallTarget:
     state = read_install_state(root)
-    return resolve(
+    owns_server = state is None or state.install_shape != DESKTOP_CLIENT_SHAPE
+    explicit_target = (host is not None, port is not None, data_dir is not None)
+    if not owns_server:
+        if not any(explicit_target):
+            return _UninstallTarget(instance=None, owns_server=False)
+        if not all(explicit_target):
+            raise ValueError(
+                "Desktop Client server targeting requires --host, --port, and --data-dir together"
+            )
+    instance = resolve(
         host=host or (state.server_host if state else None) or DEFAULT_HOST,
         port=port if port is not None else (state.server_port if state else None),
         data_dir=(
             data_dir if data_dir is not None else (state.server_data_directory if state else None)
         ),
     )
+    return _UninstallTarget(instance=instance, owns_server=owns_server)
 
 
 def _choose_mode(
-    data_directory: Path,
+    data_directory: Path | None,
     *,
     input_fn: Input,
     output_fn: Output,
 ) -> UninstallMode | UninstallResult:
+    if data_directory is None:
+        output_fn("This Desktop Client owns no local server or server data directory.")
+        output_fn("  1) Application only")
+        output_fn("  2) Cancel")
+        while True:
+            try:
+                answer = input_fn("Selection [2]: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                return _cancelled()
+            if answer in {"", "2", "q", "quit", "cancel"}:
+                return _cancelled()
+            if answer == "1":
+                return UninstallMode.APP_ONLY
+            output_fn("Enter 1 or 2.")
+
     output_fn("What do you want to remove?")
     output_fn(f"  1) Application only (keep data at {data_directory})")
     output_fn(f"  2) Data only (reset {data_directory}, keep the application)")
@@ -541,7 +595,7 @@ def _choose_mode(
 
 def _confirm_mode(
     mode: UninstallMode,
-    data_directory: Path,
+    data_directory: Path | None,
     *,
     input_fn: Input,
     output_fn: Output,
@@ -550,6 +604,8 @@ def _confirm_mode(
         prompt = "Remove the vBot application and keep its data? Type YES to continue: "
         expected = "YES"
     else:
+        if data_directory is None:
+            raise AssertionError("data removal confirmation requires a resolved data directory")
         output_fn("WARNING: This permanently deletes settings, credentials, Agents, and Sessions.")
         output_fn(f"Data directory: {data_directory}")
         prompt = "Type DELETE to continue: "
