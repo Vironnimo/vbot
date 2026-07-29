@@ -796,6 +796,42 @@ def test_start_completes_claimed_once_job_without_refiring(
     assert not restarted_service._once_fire_claim_path(job.id).exists()
 
 
+def test_start_degrades_cron_when_once_fire_claim_is_invalid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    service, _trigger_service = make_service(tmp_path)
+    recurring = service.create_job(
+        agent_id="agent-one",
+        prompt="Recurring prompt",
+        schedule_type="cron",
+        cron_expression="* * * * *",
+    )
+    once = service.create_job(
+        agent_id="agent-one",
+        prompt="Once prompt",
+        schedule_type="once",
+        run_at=(datetime.now(UTC) + timedelta(minutes=15)).isoformat(),
+    )
+    claim_path = service._once_fire_claim_path(once.id)
+    claim_path.parent.mkdir(parents=True, exist_ok=True)
+    claim_path.write_text("{", encoding="utf-8")
+    restarted_service, _restarted_trigger_service = make_service(tmp_path)
+    start_job_task = Mock()
+    monkeypatch.setattr(restarted_service, "_start_job_task", start_job_task)
+
+    with caplog.at_level(logging.ERROR, logger="vbot.automation.cron"):
+        restarted_service.start()
+
+    assert restarted_service.list_jobs() == []
+    with pytest.raises(CronStorageError, match="Invalid once fire claim"):
+        restarted_service.update_job(recurring.id, prompt="Must not overwrite")
+    start_job_task.assert_not_called()
+    assert "Cron storage is invalid; scheduling is disabled" in caplog.text
+    assert claim_path.read_text(encoding="utf-8") == "{"
+
+
 @pytest.mark.asyncio
 async def test_run_cron_job_fires_and_updates_last_fired_at(
     tmp_path: Path,
