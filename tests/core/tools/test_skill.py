@@ -13,7 +13,7 @@ from core.tools import (
     register_skill_tool,
     tool_failure,
 )
-from core.tools.skill import load_skill_content
+from core.tools.skill import SKILL_TOOL_DESCRIPTION, SKILL_TOOL_PARAMETERS, load_skill_content
 
 
 def _fixed_registry(
@@ -25,6 +25,16 @@ def _fixed_registry(
 
 def _no_refresh() -> None:
     """Refresh callback for tests whose registry never changes on a rescan."""
+
+
+def test_skill_tool_describes_activation_and_file_path_contract() -> None:
+    properties = cast(dict[str, Any], SKILL_TOOL_PARAMETERS["properties"])
+
+    assert "scripts as absolute paths for direct execution" in SKILL_TOOL_DESCRIPTION
+    assert properties["name"]["description"] == (
+        "Skill name. With file_path, selects the Skill whose file to read; without "
+        "file_path, activates that Skill. Omit both fields to list available Skills."
+    )
 
 
 def test_skill_tool_result_carries_full_content(tmp_path: Path) -> None:

@@ -75,7 +75,8 @@ _CRON_TARGET_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
     "description": (
-        "Agent address: agent or agent@project. Create defaults to the current Agent and Project."
+        "Target Agent address for create or update: agent or agent@project. Omit on create "
+        "to use the current Agent and Project; omit on update to keep the existing target."
     ),
 }
 _CRON_NAME_PARAMETER: JsonObject = {
@@ -89,7 +90,10 @@ _CRON_NAME_PARAMETER: JsonObject = {
 _CRON_PROMPT_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
-    "description": "Self-contained instruction because every fire starts a fresh Session.",
+    "description": (
+        "Instruction for create or update. Required on create and must be self-contained "
+        "because every fire starts a fresh Session. Omit on update to keep the existing prompt."
+    ),
 }
 _CRON_SCHEDULE_PARAMETER: JsonObject = {
     "type": "string",

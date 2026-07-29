@@ -132,6 +132,14 @@ def test_schema_exposes_flat_action_contract() -> None:
         "enable",
         "disable",
     }
+    assert properties["target"]["description"] == (
+        "Target Agent address for create or update: agent or agent@project. Omit on create "
+        "to use the current Agent and Project; omit on update to keep the existing target."
+    )
+    assert properties["prompt"]["description"] == (
+        "Instruction for create or update. Required on create and must be self-contained "
+        "because every fire starts a fresh Session. Omit on update to keep the existing prompt."
+    )
 
 
 def test_nested_create_operation_is_rejected(tmp_path: Path) -> None:

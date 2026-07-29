@@ -41,9 +41,10 @@ SkillRefresh = Callable[[], None]
 
 SKILL_TOOL_NAME = "skill"
 SKILL_TOOL_DESCRIPTION = (
-    "List available skills, activate one by name, or read one of its files by "
-    "skill-relative path. Call with no arguments to list; with name to activate "
-    "SKILL.md; or with name and file_path to read that UTF-8 file."
+    "List available Skills, activate one by name, or read one UTF-8 file by "
+    "Skill-relative path. Call with no arguments to list; with name to activate "
+    "SKILL.md; or with name and file_path to read a file. Activation lists references "
+    "and assets as Skill-relative paths and scripts as absolute paths for direct execution."
 )
 SKILL_STATUS_LOADED = "loaded"
 SKILL_STATUS_ALREADY_ACTIVE = "already_active"
@@ -62,8 +63,8 @@ SKILL_TOOL_PARAMETERS: JsonObject = {
         "name": {
             "type": "string",
             "description": (
-                "Name of the skill to activate. Omit to list the currently available "
-                "skills instead of activating one."
+                "Skill name. With file_path, selects the Skill whose file to read; without "
+                "file_path, activates that Skill. Omit both fields to list available Skills."
             ),
         },
         "file_path": {
