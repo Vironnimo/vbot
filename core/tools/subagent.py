@@ -6,6 +6,7 @@ from typing import Any
 
 from core.settings import ALLOWED_THINKING_EFFORTS
 from core.subagents import SubAgentCoordinator, SubAgentPromptTarget
+from core.tools.contracts import action_schema
 from core.tools.tools import (
     JsonObject,
     ToolDisplay,
@@ -71,14 +72,6 @@ NESTED_EXECUTION_GUIDANCE = (
     "run concurrently."
 )
 
-_SUBAGENT_ACTION_PARAMETER: JsonObject = {
-    "type": "string",
-    "enum": ["run", "status", "cancel"],
-    "description": (
-        "run starts new work or continues a Sub-Agent Session, status returns a "
-        "non-blocking snapshot for an id, and cancel stops the exact owned work for an id."
-    ),
-}
 _SUBAGENT_ID_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
@@ -129,20 +122,47 @@ _SUBAGENT_SESSION_ID_PARAMETER: JsonObject = {
 }
 
 
-SUBAGENT_TOOL_PARAMETERS: JsonObject = {
-    "type": "object",
-    "properties": {
-        "action": _SUBAGENT_ACTION_PARAMETER,
-        "id": _SUBAGENT_ID_PARAMETER,
-        "content": _SUBAGENT_CONTENT_PARAMETER,
-        "agent_id": _SUBAGENT_AGENT_ID_PARAMETER,
-        "session_id": _SUBAGENT_SESSION_ID_PARAMETER,
-        "model": _SUBAGENT_MODEL_PARAMETER,
-        "thinking_effort": _SUBAGENT_THINKING_PARAMETER,
+SUBAGENT_TOOL_PARAMETERS: JsonObject = action_schema(
+    {
+        "run": {
+            "type": "object",
+            "description": (
+                "Start work in a new Sub-Agent Session, or continue an existing Session "
+                "when both agent_id and session_id are present."
+            ),
+            "properties": {
+                "content": _SUBAGENT_CONTENT_PARAMETER,
+                "agent_id": _SUBAGENT_AGENT_ID_PARAMETER,
+                "session_id": _SUBAGENT_SESSION_ID_PARAMETER,
+                "model": _SUBAGENT_MODEL_PARAMETER,
+                "thinking_effort": _SUBAGENT_THINKING_PARAMETER,
+            },
+            "required": ["content"],
+            "if": {"required": ["session_id"]},
+            "then": {"required": ["agent_id"]},
+        },
+        "status": {
+            "type": "object",
+            "description": "Return a non-blocking snapshot of one owned Sub-Agent work item.",
+            "properties": {"id": _SUBAGENT_ID_PARAMETER},
+            "required": ["id"],
+        },
+        "cancel": {
+            "type": "object",
+            "description": "Cancel one exact owned Sub-Agent work item.",
+            "properties": {"id": _SUBAGENT_ID_PARAMETER},
+            "required": ["id"],
+        },
     },
-    "required": ["action"],
-    "additionalProperties": False,
-}
+    description=(
+        "Flat action interface. Each action exposes only its valid arguments and "
+        "structurally requires every field it needs."
+    ),
+    action_description=(
+        "run starts new work or continues a Sub-Agent Session, status returns a "
+        "non-blocking snapshot for an id, and cancel stops the exact owned work for an id."
+    ),
+)
 
 
 def register_subagent_tools(

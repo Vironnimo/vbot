@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from core.tools.arguments import optional_bool, optional_string, required_string
+from core.tools.contracts import action_schema
 from core.tools.process_manager import (
     ProcessManager,
     ProcessSession,
@@ -39,56 +40,81 @@ _PROCESS_ACTION_ARGUMENTS = {
     "kill": frozenset({"action", "session_id"}),
 }
 
-PROCESS_TOOL_PARAMETERS: JsonObject = {
-    "type": "object",
-    "description": (
-        "Use status without session_id to list your tracked background Process Sessions, "
-        "or provide session_id to inspect one. input and kill always require session_id."
-    ),
-    "properties": {
-        "action": {
-            "type": "string",
-            "enum": list(PROCESS_ACTIONS),
+PROCESS_TOOL_PARAMETERS: JsonObject = action_schema(
+    {
+        "status": {
+            "type": "object",
             "description": (
-                "status lists or inspects Process Sessions without waiting, input sends "
-                "stdin to a running Process Session, and kill stops one."
+                "List tracked background Process Sessions without session_id, or inspect "
+                "one immediately by session_id."
             ),
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": (
+                        "Process Session id returned by the bash Tool. Omit to list all "
+                        "currently tracked Process Sessions."
+                    ),
+                },
+            },
+            "required": [],
         },
-        "session_id": {
-            "type": "string",
-            "minLength": 1,
-            "description": (
-                "Process Session id returned by the bash Tool. Omit only with status to list "
-                "all of your currently tracked Process Sessions."
-            ),
+        "input": {
+            "type": "object",
+            "description": "Send stdin to one running Process Session.",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Process Session id returned by the bash Tool.",
+                },
+                "text": {
+                    "type": "string",
+                    "description": (
+                        "UTF-8 text to send. It may be empty to send only a newline or EOF."
+                    ),
+                },
+                "newline": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": (
+                        "Append the platform line ending after text; default true. Set false "
+                        "for raw text or when closing stdin without sending a line."
+                    ),
+                },
+                "eof": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "Close stdin after sending text and the optional newline; default false."
+                    ),
+                },
+            },
+            "required": ["session_id", "text"],
         },
-        "text": {
-            "type": "string",
-            "description": (
-                "UTF-8 text to send with input. Required for input and may be empty to send "
-                "only a newline or EOF."
-            ),
-        },
-        "newline": {
-            "type": "boolean",
-            "default": True,
-            "description": (
-                "For input only. Append the platform line ending after text; default true. "
-                "Set false for raw text or when closing stdin without sending a line."
-            ),
-        },
-        "eof": {
-            "type": "boolean",
-            "default": False,
-            "description": (
-                "For input only. Close stdin after sending text and the optional newline; "
-                "default false."
-            ),
+        "kill": {
+            "type": "object",
+            "description": "Stop one Process Session.",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Process Session id returned by the bash Tool.",
+                },
+            },
+            "required": ["session_id"],
         },
     },
-    "required": ["action"],
-    "additionalProperties": False,
-}
+    description=(
+        "Use status without session_id to list tracked background Process Sessions, "
+        "or provide session_id to inspect one. input and kill require session_id."
+    ),
+    action_description=(
+        "status lists or inspects Process Sessions without waiting, input sends stdin "
+        "to a running Process Session, and kill stops one."
+    ),
+)
 
 
 def make_process_handler(process_manager: ProcessManager):

@@ -13,7 +13,7 @@ Lets an Agent inspect and control only its own background Process Sessions creat
 
 - Tool name: `process`
 - Registration: `register_process_tool(registry, process_manager)`
-- Schema: one closed flat object with required `action` (`status`, `input`, or `kill`) and optional sibling fields `session_id`, `text`, `newline`, and `eof`. The handler rejects fields that do not apply to the selected action.
+- Schema: one flat discriminated union with a closed branch for required `action` `status`, `input`, or `kill`. `status` exposes only optional `session_id`; `input` requires `session_id` + `text` and alone exposes `newline` / `eof`; `kill` requires only `session_id`. The handler retains action-field checks as defense in depth.
 - `status` without `session_id` lists the Agent's tracked Process Sessions. `status` with `session_id` returns an immediate, non-blocking, non-consuming snapshot with lifecycle timestamps, `waiting_for_input`, a newest-output tail capped at 30,000 characters, truncation state, and `log_file`.
 - `input` requires `session_id` and `text`, appends a newline by default, and may close stdin with `eof: true`. `newline: false` sends the text exactly; an empty call that neither appends a newline nor closes stdin is rejected.
 - `kill` requires `session_id` and stops that Process Session.

@@ -6,7 +6,7 @@ Manages persisted time-based automation jobs through `CronService`.
 
 - Tool name: `cron`
 - Registration: `register_cron_tool(registry, cron_service)`
-- Schema: one closed flat object with `action` as the only globally required property. The optional properties are `id`, `target`, `name`, `prompt`, `schedule`, and `repeat`; the handler applies action-specific requirements because provider schema sanitization cannot preserve root-level conditional branches reliably.
+- Schema: one flat discriminated union with a closed branch per required `action`. Each branch advertises only its valid fields and structurally requires them: `create` requires `prompt` + `schedule`; `update` requires `id` plus at least one changed field; delete/enable/disable require `id`; list contains only `action`. The handler retains the same validation as defense in depth.
 - Actions: `create`, `list`, `update`, `delete`, `enable`, and `disable`. `create` requires `prompt` + `schedule`; `update` requires `id` + at least one changed field; delete/enable/disable require `id`; list needs only `action`.
 - Display: the summary leads with `action`, followed by available `name`, `id`, target, and schedule values.
 

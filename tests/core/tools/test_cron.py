@@ -120,11 +120,11 @@ def _cron_service_mock() -> Mock:
 
 def test_schema_exposes_flat_action_contract() -> None:
     assert CRON_TOOL_PARAMETERS["type"] == "object"
-    assert CRON_TOOL_PARAMETERS["required"] == ["action"]
-    assert CRON_TOOL_PARAMETERS["additionalProperties"] is False
-    properties = cast(dict[str, Any], CRON_TOOL_PARAMETERS["properties"])
-    assert set(properties) == {"action", "id", "target", "name", "prompt", "schedule", "repeat"}
-    assert set(properties["action"]["enum"]) == {
+    branches = {
+        branch["properties"]["action"]["enum"][0]: branch
+        for branch in CRON_TOOL_PARAMETERS["oneOf"]
+    }
+    assert set(branches) == {
         "create",
         "list",
         "update",
@@ -132,17 +132,44 @@ def test_schema_exposes_flat_action_contract() -> None:
         "enable",
         "disable",
     }
-    assert properties["target"]["description"] == (
+    assert set(branches["create"]["properties"]) == {
+        "action",
+        "target",
+        "name",
+        "prompt",
+        "schedule",
+        "repeat",
+    }
+    assert branches["create"]["required"] == ["action", "prompt", "schedule"]
+    assert set(branches["list"]["properties"]) == {"action"}
+    assert branches["list"]["required"] == ["action"]
+    assert set(branches["update"]["properties"]) == {
+        "action",
+        "id",
+        "target",
+        "name",
+        "prompt",
+        "schedule",
+        "repeat",
+    }
+    assert branches["update"]["required"] == ["action", "id"]
+    assert branches["update"]["minProperties"] == 3
+    for action in ("delete", "enable", "disable"):
+        assert set(branches[action]["properties"]) == {"action", "id"}
+        assert branches[action]["required"] == ["action", "id"]
+    assert all(branch["additionalProperties"] is False for branch in branches.values())
+    create_properties = cast(dict[str, Any], branches["create"]["properties"])
+    assert create_properties["target"]["description"] == (
         "Target Agent address for create or update: agent or agent@project. Omit on create "
         "to use the current Agent and Project; omit on update to keep the existing target."
     )
-    assert properties["prompt"]["description"] == (
+    assert create_properties["prompt"]["description"] == (
         "Instruction for create or update. Required on create and must be self-contained "
         "because every fire starts a fresh Session. Omit on update to keep the existing prompt."
     )
-    assert properties["repeat"]["type"] == ["integer", "null"]
-    assert "omit repeat to keep the current count" in properties["repeat"]["description"]
-    assert "set it to null" in properties["repeat"]["description"]
+    assert create_properties["repeat"]["type"] == ["integer", "null"]
+    assert "omit repeat to keep the current count" in create_properties["repeat"]["description"]
+    assert "set it to null" in create_properties["repeat"]["description"]
 
 
 def test_nested_create_operation_is_rejected(tmp_path: Path) -> None:
@@ -563,7 +590,7 @@ def test_invalid_operation_returns_contract_failure(tmp_path: Path) -> None:
     error = cast(dict[str, Any], result["error"])
     assert error["code"] == "invalid_arguments"
     assert error["retryable"] is False
-    assert "[enum]" in error["message"]
+    assert "[oneOf]" in error["message"]
 
 
 def test_multiple_top_level_operation_objects_are_rejected(tmp_path: Path) -> None:
@@ -582,7 +609,7 @@ def test_multiple_top_level_operation_objects_are_rejected(tmp_path: Path) -> No
     error = cast(dict[str, Any], result["error"])
     assert error["code"] == "invalid_arguments"
     assert error["retryable"] is False
-    assert "'action' is a required property" in error["message"]
+    assert "Additional properties" in error["message"]
 
 
 def test_update_requires_a_change_beyond_id(tmp_path: Path) -> None:
@@ -601,7 +628,7 @@ def test_update_requires_a_change_beyond_id(tmp_path: Path) -> None:
     error = cast(dict[str, Any], result["error"])
     assert error["code"] == "invalid_arguments"
     assert error["retryable"] is False
-    assert "at least one field to change" in error["message"]
+    assert "[minProperties]" in error["message"]
     cron_service.update_job.assert_not_called()
 
 
@@ -666,7 +693,7 @@ def test_stringified_operation_payload_is_rejected(tmp_path: Path) -> None:
 
     error = cast(dict[str, Any], result["error"])
     assert error["code"] == "invalid_arguments"
-    assert "'action' is a required property" in error["message"]
+    assert "Additional properties" in error["message"]
     cron_service.list_jobs.assert_not_called()
 
 

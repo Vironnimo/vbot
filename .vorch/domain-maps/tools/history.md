@@ -8,7 +8,7 @@ Session-scoped, lossless access to canonical messages hidden by Compaction.
 
 ## Interface
 
-- Input is one closed flat object whose required `action` is `overview`, `search`, `read`, or `around`. The handler requires a query for `search`, supports deterministic `all_terms`, `any_term`, or `phrase` matching, pages `read` sections from the start or end, and requires an anchored `message_id` for `around`. A continuation uses the same action with only its opaque `cursor`; retired nested `request.operation` and operation-key shapes are rejected.
+- Input is one flat discriminated union with a closed branch for required `action` `overview`, `search`, `read`, or `around`. Each branch advertises only its action's fields; `search` structurally requires `query`, `around` structurally requires `message_id`, and every continuation structurally permits only the same `action` plus its opaque `cursor`. The handler retains the same checks as defense in depth. Retired nested `request.operation` and operation-key shapes are rejected.
 - Default roles are `user`, `assistant`, and `error`. Callers may opt into other supported canonical roles, including Tool messages and checkpoints; `run_summary` annotations are not content records.
 - The first call freezes a snapshot at the latest checkpoint present at that moment. Results are divided into fixed checkpoint sections, so later Session appends cannot shift an existing cursor's view.
 - Success data carries the action, frozen snapshot/checkpoint identity, selected roles, section records, truncation state, and an opaque continuation cursor when more content remains. Search snippets are deterministic and at most 320 characters including ellipses.

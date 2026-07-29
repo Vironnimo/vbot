@@ -778,7 +778,6 @@ class TestSendRequestFormat:
                 "name": HISTORY_TOOL_NAME,
                 "description": HISTORY_TOOL_DESCRIPTION,
                 "input_schema": rendered["parameters"],
-                "strict": True,
             }
         ]
 

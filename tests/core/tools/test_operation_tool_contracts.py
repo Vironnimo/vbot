@@ -9,6 +9,7 @@ import pytest
 from core.providers.tool_schema import render_tool_definitions, render_tool_schema
 from core.tools.bash import BASH_TOOL_PARAMETERS
 from core.tools.channel import CHANNEL_SEND_TOOL_PARAMETERS
+from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.cron import CRON_TOOL_PARAMETERS
 from core.tools.edit import EDIT_TOOL_PARAMETERS
 from core.tools.glob import GLOB_TOOL_PARAMETERS
@@ -71,9 +72,67 @@ _OPENAI_STRICT_SHIPPED_TOOLS = {
 }
 
 _ACTION_COMPLETE_SCHEMAS = (
+    ("cron", CRON_TOOL_PARAMETERS),
+    ("history", HISTORY_TOOL_PARAMETERS),
     ("memory", MEMORY_TOOL_PARAMETERS),
+    ("process", PROCESS_TOOL_PARAMETERS),
     ("skill", SKILL_TOOL_PARAMETERS),
     ("skill_manage", SKILL_MANAGE_TOOL_PARAMETERS),
+    ("subagent", SUBAGENT_TOOL_PARAMETERS),
+)
+
+_ACTION_INAPPLICABLE_CALLS = (
+    ("cron", CRON_TOOL_PARAMETERS, {"action": "list", "id": "job"}, "id"),
+    ("history", HISTORY_TOOL_PARAMETERS, {"action": "overview", "query": "text"}, "query"),
+    (
+        "memory",
+        MEMORY_TOOL_PARAMETERS,
+        {"action": "add", "scope": "user", "content": "fact", "entry_id": 1},
+        "entry_id",
+    ),
+    ("process", PROCESS_TOOL_PARAMETERS, {"action": "status", "text": "hello"}, "text"),
+    (
+        "skill",
+        SKILL_TOOL_PARAMETERS,
+        {"file_path": "references/guide.md"},
+        "file_path",
+    ),
+    (
+        "skill_manage",
+        SKILL_MANAGE_TOOL_PARAMETERS,
+        {"action": "delete", "name": "demo", "content": "text"},
+        "content",
+    ),
+    (
+        "subagent",
+        SUBAGENT_TOOL_PARAMETERS,
+        {"action": "status", "content": "work"},
+        "content",
+    ),
+)
+
+_ACTION_MISSING_REQUIRED_CALLS = (
+    ("cron", CRON_TOOL_PARAMETERS, {"action": "update", "id": "job"}, "minProperties"),
+    ("history", HISTORY_TOOL_PARAMETERS, {"action": "search"}, "query"),
+    (
+        "memory",
+        MEMORY_TOOL_PARAMETERS,
+        {"action": "add", "scope": "user"},
+        "content",
+    ),
+    ("process", PROCESS_TOOL_PARAMETERS, {"action": "input", "session_id": "proc"}, "text"),
+    (
+        "skill_manage",
+        SKILL_MANAGE_TOOL_PARAMETERS,
+        {"action": "create", "name": "demo"},
+        "content",
+    ),
+    (
+        "subagent",
+        SUBAGENT_TOOL_PARAMETERS,
+        {"action": "run", "content": "continue", "session_id": "session"},
+        "agent_id",
+    ),
 )
 
 
@@ -117,6 +176,40 @@ def test_action_complete_schema_reaches_provider_unchanged(
 
     assert rendered[0]["parameters"] == schema
     assert "strict" not in rendered[0]
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "schema", "arguments", "field_name"),
+    _ACTION_INAPPLICABLE_CALLS,
+    ids=[contract[0] for contract in _ACTION_INAPPLICABLE_CALLS],
+)
+def test_action_complete_schema_rejects_action_inapplicable_fields(
+    tool_name: str,
+    schema: JsonObject,
+    arguments: JsonObject,
+    field_name: str,
+) -> None:
+    contract = compile_tool_contract(name=tool_name, input_schema=schema)
+
+    with pytest.raises(ToolContractError, match=field_name):
+        contract.validate_arguments(arguments)
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "schema", "arguments", "requirement"),
+    _ACTION_MISSING_REQUIRED_CALLS,
+    ids=[contract[0] for contract in _ACTION_MISSING_REQUIRED_CALLS],
+)
+def test_action_complete_schema_enforces_action_requirements(
+    tool_name: str,
+    schema: JsonObject,
+    arguments: JsonObject,
+    requirement: str,
+) -> None:
+    contract = compile_tool_contract(name=tool_name, input_schema=schema)
+
+    with pytest.raises(ToolContractError, match=requirement):
+        contract.validate_arguments(arguments)
 
 
 @pytest.mark.parametrize(
