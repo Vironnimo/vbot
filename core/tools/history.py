@@ -26,11 +26,10 @@ _LOGGER = get_logger("tools.history")
 
 HISTORY_TOOL_NAME = "history"
 HISTORY_TOOL_DESCRIPTION = (
-    "Verify original records from this Session after Compaction. Use overview to inspect "
-    "checkpoint sections, search for exact text, read a section chronologically, or around "
-    "to recover complete records near a known message id. Set action to the intended History "
-    "operation. "
-    "The Tool is available only after this Session has a Compaction checkpoint."
+    "Recover original records from this Session after Compaction. Use overview to inspect "
+    "available checkpoint sections, search to find matching records, read to retrieve "
+    "canonical records chronologically, or around to retrieve complete records near a known "
+    "message id. This Tool is available only after the Session has a Compaction checkpoint."
 )
 HISTORY_ACTIONS = ("overview", "search", "read", "around")
 HISTORY_SUPPORTED_ROLES = (
@@ -54,74 +53,101 @@ HISTORY_CURSOR_VERSION = 1
 _HISTORY_CHECKPOINT_PARAMETER: JsonObject = {
     "type": "integer",
     "minimum": 1,
-    "description": "1-based Compaction checkpoint ordinal; omit for all earlier history.",
+    "description": (
+        "For search, read, and around. 1-based Compaction checkpoint section to restrict "
+        "results to; omit to include all earlier history."
+    ),
 }
 _HISTORY_ROLES_PARAMETER: JsonObject = {
     "type": "array",
     "items": {"type": "string", "enum": list(HISTORY_SUPPORTED_ROLES)},
     "minItems": 1,
     "uniqueItems": True,
-    "description": "Message roles to include.",
+    "description": (
+        "For search, read, and around. Message roles to include; defaults to user, "
+        "assistant, and error."
+    ),
 }
 _HISTORY_LIMIT_PARAMETER: JsonObject = {
     "type": "integer",
     "minimum": 1,
     "maximum": 100,
-    "description": "Maximum records in this page.",
+    "description": (
+        "Maximum items in this page. For overview and search the default is 10; "
+        "for read the default is 20."
+    ),
 }
 _HISTORY_CURSOR_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
-    "description": "Opaque continuation returned by the same action.",
+    "description": (
+        "Continuation returned by the same action. When set, send only action and cursor."
+    ),
 }
 
 HISTORY_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "description": (
-        "Flat action interface. Continue a previous page with the same action and cursor "
-        "only; the handler validates action-specific fields."
+        "Choose one History action, or continue a previous page with only that same action "
+        "and its cursor."
     ),
     "properties": {
         "action": {
             "type": "string",
             "enum": list(HISTORY_ACTIONS),
-            "description": "History action to perform.",
+            "description": (
+                "overview lists available Compaction checkpoint sections; search finds "
+                "matching records and requires query; read returns canonical records "
+                "chronologically; around returns complete records near a known message_id "
+                "and requires it."
+            ),
         },
         "cursor": _HISTORY_CURSOR_PARAMETER,
         "query": {
             "type": "string",
             "minLength": 1,
-            "description": "Non-blank text to find for search.",
+            "description": "Non-blank text to find. Required only for search.",
         },
         "message_id": {
             "type": "string",
             "minLength": 1,
-            "description": "Canonical Message id to use as the around anchor.",
+            "description": "Canonical Message id to use as the anchor. Required only for around.",
         },
         "checkpoint": _HISTORY_CHECKPOINT_PARAMETER,
         "roles": _HISTORY_ROLES_PARAMETER,
         "match": {
             "type": "string",
             "enum": list(HISTORY_MATCH_MODES),
-            "description": "Search text matching mode; default all_terms.",
+            "description": (
+                "For search only. all_terms requires every query term, any_term requires "
+                "at least one, and phrase requires the complete normalized phrase. "
+                "Default all_terms."
+            ),
         },
         "direction": {
             "type": "string",
             "enum": list(HISTORY_DIRECTIONS),
-            "description": "Read from the start or end; default start.",
+            "description": (
+                "For read only. start returns oldest records first; end returns newest "
+                "records first. Default start."
+            ),
         },
         "limit": _HISTORY_LIMIT_PARAMETER,
         "before": {
             "type": "integer",
             "minimum": 0,
             "maximum": 100,
-            "description": "Additional records before an around anchor; default 2.",
+            "description": (
+                "For around only. Additional included records before the anchor; default 2."
+            ),
         },
         "after": {
             "type": "integer",
             "minimum": 0,
             "maximum": 100,
-            "description": "Additional records after an around anchor; default 2.",
+            "description": (
+                "For around only. Additional included records after the anchor; default 2."
+            ),
         },
     },
     "required": ["action"],

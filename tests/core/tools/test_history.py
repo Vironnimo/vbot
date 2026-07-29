@@ -94,6 +94,53 @@ def test_registration_is_session_scoped_and_schema_is_closed(tmp_path: Path) -> 
         "before",
         "after",
     }
+    assert tool.description == (
+        "Recover original records from this Session after Compaction. Use overview to inspect "
+        "available checkpoint sections, search to find matching records, read to retrieve "
+        "canonical records chronologically, or around to retrieve complete records near a known "
+        "message id. This Tool is available only after the Session has a Compaction checkpoint."
+    )
+    assert tool.parameters["description"] == (
+        "Choose one History action, or continue a previous page with only that same action "
+        "and its cursor."
+    )
+    descriptions = {
+        name: parameter["description"] for name, parameter in tool.parameters["properties"].items()
+    }
+    assert descriptions == {
+        "action": (
+            "overview lists available Compaction checkpoint sections; search finds matching "
+            "records and requires query; read returns canonical records chronologically; around "
+            "returns complete records near a known message_id and requires it."
+        ),
+        "cursor": (
+            "Continuation returned by the same action. When set, send only action and cursor."
+        ),
+        "query": "Non-blank text to find. Required only for search.",
+        "message_id": "Canonical Message id to use as the anchor. Required only for around.",
+        "checkpoint": (
+            "For search, read, and around. 1-based Compaction checkpoint section to restrict "
+            "results to; omit to include all earlier history."
+        ),
+        "roles": (
+            "For search, read, and around. Message roles to include; defaults to user, "
+            "assistant, and error."
+        ),
+        "match": (
+            "For search only. all_terms requires every query term, any_term requires at least "
+            "one, and phrase requires the complete normalized phrase. Default all_terms."
+        ),
+        "direction": (
+            "For read only. start returns oldest records first; end returns newest records "
+            "first. Default start."
+        ),
+        "limit": (
+            "Maximum items in this page. For overview and search the default is 10; for read "
+            "the default is 20."
+        ),
+        "before": ("For around only. Additional included records before the anchor; default 2."),
+        "after": "For around only. Additional included records after the anchor; default 2.",
+    }
     display = registry.display_for_call(
         HISTORY_TOOL_NAME,
         {
