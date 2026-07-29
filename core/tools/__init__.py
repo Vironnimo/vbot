@@ -12,7 +12,12 @@ from core.tools.bash import (
     bash_handler,
     register_bash_tool,
 )
-from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
+from core.tools.contracts import (
+    ToolContract,
+    ToolContractError,
+    action_schema,
+    compile_tool_contract,
+)
 from core.tools.edit import (
     EDIT_TOOL_DESCRIPTION,
     EDIT_TOOL_NAME,
@@ -287,6 +292,7 @@ __all__ = [
     "WRITE_TOOL_NAME",
     "WRITE_TOOL_PARAMETERS",
     "bash_handler",
+    "action_schema",
     "edit_handler",
     "glob_handler",
     "grep_handler",

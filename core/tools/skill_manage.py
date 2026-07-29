@@ -21,6 +21,7 @@ from core.tools.arguments import (
     required_string,
 )
 from core.tools.availability import SKILL_MANAGE_TOOL_NAME
+from core.tools.contracts import action_schema
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -64,85 +65,131 @@ _ACTION_FIELDS: dict[str, frozenset[str]] = {
     "delete": frozenset({"action", "name", "scope"}),
 }
 
-SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = {
-    "type": "object",
-    "properties": {
-        "action": {
-            "type": "string",
-            "enum": list(_ACTIONS),
+_NAME_PARAMETER: JsonObject = {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": MAX_SKILL_NAME_LENGTH,
+    "pattern": f"^{SKILL_NAME_CHARSET_FRAGMENT}$",
+    "description": (
+        "Skill directory and front-matter name. It must start with a letter or digit "
+        "and otherwise use only letters, digits, '-' or '_'."
+    ),
+}
+_SCOPE_PARAMETER: JsonObject = {
+    "type": "string",
+    "enum": list(_SCOPES),
+    "default": _OWN_SCOPE,
+    "description": (
+        "Writable Skill home. Omit for your private home. Use 'global' only when "
+        "the user explicitly requested a shared Skill."
+    ),
+}
+_CONTENT_PARAMETER: JsonObject = {
+    "type": "string",
+    "description": "Complete SKILL.md content.",
+}
+_FILE_PATH_PARAMETER: JsonObject = {
+    "type": "string",
+    "minLength": 1,
+    "pattern": r"^(SKILL\.md|(?:scripts|references|assets)/.+)$",
+    "description": "Skill-relative package path.",
+}
+_FILE_CONTENT_PARAMETER: JsonObject = {
+    "type": "string",
+    "description": "Complete UTF-8 support-file text; may be empty.",
+}
+_OLD_STRING_PARAMETER: JsonObject = {
+    "type": "string",
+    "minLength": 1,
+    "description": "Exact non-empty text to replace.",
+}
+_NEW_STRING_PARAMETER: JsonObject = {
+    "type": "string",
+    "description": "Replacement text; may be empty.",
+}
+_REPLACE_ALL_PARAMETER: JsonObject = {
+    "type": "boolean",
+    "default": False,
+    "description": (
+        "Set true to replace every match; omit or set false to require exactly one match."
+    ),
+}
+
+SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = action_schema(
+    {
+        "create": {
+            "type": "object",
+            "description": "Create one Skill from complete SKILL.md content.",
+            "properties": {
+                "name": _NAME_PARAMETER,
+                "scope": _SCOPE_PARAMETER,
+                "content": _CONTENT_PARAMETER,
+            },
+            "required": ["name", "content"],
+        },
+        "edit": {
+            "type": "object",
+            "description": "Replace one Skill's complete SKILL.md content.",
+            "properties": {
+                "name": _NAME_PARAMETER,
+                "scope": _SCOPE_PARAMETER,
+                "content": _CONTENT_PARAMETER,
+            },
+            "required": ["name", "content"],
+        },
+        "patch": {
+            "type": "object",
             "description": (
-                "Action to perform. create makes a new Skill and edit replaces an existing "
-                "SKILL.md; both require content. patch replaces exact text and requires "
-                "old_string and new_string; file_path defaults to SKILL.md and replace_all "
-                "defaults to false. write_file requires file_path and file_content. "
-                "remove_file requires file_path. delete removes the entire Skill and needs "
-                "no action-specific field."
+                "Replace exact text in SKILL.md or one support file. file_path defaults "
+                "to SKILL.md and replace_all defaults to false."
             ),
+            "properties": {
+                "name": _NAME_PARAMETER,
+                "scope": _SCOPE_PARAMETER,
+                "file_path": _FILE_PATH_PARAMETER,
+                "old_string": _OLD_STRING_PARAMETER,
+                "new_string": _NEW_STRING_PARAMETER,
+                "replace_all": _REPLACE_ALL_PARAMETER,
+            },
+            "required": ["name", "old_string", "new_string"],
         },
-        "name": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": MAX_SKILL_NAME_LENGTH,
-            "pattern": f"^{SKILL_NAME_CHARSET_FRAGMENT}$",
-            "description": (
-                "Skill directory and front-matter name. Required for every action. It must "
-                "start with a letter or digit and otherwise use only letters, digits, '-' "
-                "or '_'."
-            ),
+        "write_file": {
+            "type": "object",
+            "description": "Write one complete UTF-8 support file.",
+            "properties": {
+                "name": _NAME_PARAMETER,
+                "scope": _SCOPE_PARAMETER,
+                "file_path": _FILE_PATH_PARAMETER,
+                "file_content": _FILE_CONTENT_PARAMETER,
+            },
+            "required": ["name", "file_path", "file_content"],
         },
-        "scope": {
-            "type": "string",
-            "enum": list(_SCOPES),
-            "default": _OWN_SCOPE,
-            "description": (
-                "Writable Skill home for any action. Omit for your private home. Use 'global' "
-                "only when the user explicitly requested a shared Skill."
-            ),
+        "remove_file": {
+            "type": "object",
+            "description": "Remove one support file.",
+            "properties": {
+                "name": _NAME_PARAMETER,
+                "scope": _SCOPE_PARAMETER,
+                "file_path": _FILE_PATH_PARAMETER,
+            },
+            "required": ["name", "file_path"],
         },
-        "content": {
-            "type": "string",
-            "description": (
-                "Complete SKILL.md content. Required for create and edit; invalid for every "
-                "other action."
-            ),
-        },
-        "file_path": {
-            "type": "string",
-            "minLength": 1,
-            "pattern": r"^(SKILL\.md|(?:scripts|references|assets)/.+)$",
-            "description": (
-                "Skill-relative path. Optional for patch and defaults to SKILL.md. Required "
-                "for write_file and remove_file, where it must be below scripts/, references/, "
-                "or assets/. Invalid for create, edit, and delete."
-            ),
-        },
-        "file_content": {
-            "type": "string",
-            "description": (
-                "Complete UTF-8 support-file text. Required only for write_file; may be empty."
-            ),
-        },
-        "old_string": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Exact non-empty text to replace. Required only for patch.",
-        },
-        "new_string": {
-            "type": "string",
-            "description": "Replacement text. Required only for patch; may be empty.",
-        },
-        "replace_all": {
-            "type": "boolean",
-            "default": False,
-            "description": (
-                "For patch only. Set true to replace every match; omit or set false to require "
-                "exactly one match."
-            ),
+        "delete": {
+            "type": "object",
+            "description": "Delete one complete Skill.",
+            "properties": {
+                "name": _NAME_PARAMETER,
+                "scope": _SCOPE_PARAMETER,
+            },
+            "required": ["name"],
         },
     },
-    "required": ["action", "name"],
-    "additionalProperties": False,
-}
+    description=(
+        "Flat action interface. Each action exposes only its valid arguments and "
+        "structurally requires every field it needs."
+    ),
+    action_description="Skill mutation action to perform.",
+)
 
 
 def make_skill_manage_handler(

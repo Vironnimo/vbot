@@ -70,6 +70,12 @@ _OPENAI_STRICT_SHIPPED_TOOLS = {
     "write",
 }
 
+_ACTION_COMPLETE_SCHEMAS = (
+    ("memory", MEMORY_TOOL_PARAMETERS),
+    ("skill", SKILL_TOOL_PARAMETERS),
+    ("skill_manage", SKILL_MANAGE_TOOL_PARAMETERS),
+)
+
 
 def test_shipped_tool_profile_eligibility_snapshot_is_explicit() -> None:
     schemas = list(_DIRECT_TOOL_SCHEMAS)
@@ -95,6 +101,26 @@ def test_shipped_tool_profile_eligibility_snapshot_is_explicit() -> None:
 
 @pytest.mark.parametrize(
     ("tool_name", "schema"),
+    _ACTION_COMPLETE_SCHEMAS,
+    ids=[contract[0] for contract in _ACTION_COMPLETE_SCHEMAS],
+)
+@pytest.mark.parametrize("profile", ("openai_strict", "anthropic_strict", "best_effort"))
+def test_action_complete_schema_reaches_provider_unchanged(
+    tool_name: str,
+    schema: JsonObject,
+    profile: str,
+) -> None:
+    rendered = render_tool_definitions(
+        [{"name": tool_name, "description": f"Call {tool_name}.", "parameters": schema}],
+        profile=profile,  # type: ignore[arg-type]
+    )
+
+    assert rendered[0]["parameters"] == schema
+    assert "strict" not in rendered[0]
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "schema"),
     _DIRECT_TOOL_SCHEMAS,
     ids=[contract[0] for contract in _DIRECT_TOOL_SCHEMAS],
 )
@@ -103,5 +129,9 @@ def test_direct_tool_schema_is_strict_and_declares_required_properties(
     schema: JsonObject,
 ) -> None:
     assert schema["type"] == "object", tool_name
-    assert schema["additionalProperties"] is False, tool_name
-    assert set(schema.get("required", ())) <= set(schema["properties"]), tool_name
+    variants = schema.get("oneOf", [schema]) if "properties" not in schema else [schema]
+    assert isinstance(variants, list) and variants, tool_name
+    for variant in variants:
+        assert variant["type"] == "object", tool_name
+        assert variant["additionalProperties"] is False, tool_name
+        assert set(variant.get("required", ())) <= set(variant["properties"]), tool_name

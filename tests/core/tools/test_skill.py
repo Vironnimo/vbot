@@ -5,10 +5,13 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
+
 from core.skills.skills import SkillRegistry
 from core.tools import (
     SKILL_TOOL_NAME,
     ToolContext,
+    ToolContractError,
     ToolRegistry,
     register_skill_tool,
     tool_failure,
@@ -28,13 +31,20 @@ def _no_refresh() -> None:
 
 
 def test_skill_tool_describes_activation_and_file_path_contract() -> None:
-    properties = cast(dict[str, Any], SKILL_TOOL_PARAMETERS["properties"])
+    branches = cast(list[dict[str, Any]], SKILL_TOOL_PARAMETERS["oneOf"])
 
     assert "scripts as absolute paths for direct execution" in SKILL_TOOL_DESCRIPTION
-    assert properties["name"]["description"] == (
-        "Skill name. With file_path, selects the Skill whose file to read; without "
-        "file_path, activates that Skill. Omit both fields to list available Skills."
-    )
+    assert [set(branch["properties"]) for branch in branches] == [
+        set(),
+        {"name"},
+        {"name", "file_path"},
+    ]
+    assert [branch["required"] for branch in branches] == [
+        [],
+        ["name"],
+        ["name", "file_path"],
+    ]
+    assert all(branch["additionalProperties"] is False for branch in branches)
 
 
 def test_skill_tool_result_carries_full_content(tmp_path: Path) -> None:
@@ -254,18 +264,17 @@ def test_skill_tool_file_path_requires_name(tmp_path: Path) -> None:
         _no_refresh,
     )
 
-    result = asyncio.run(
-        async_dispatch(
-            tools,
-            _context(tmp_path),
-            {"file_path": "references/guide.md"},
+    with pytest.raises(
+        ToolContractError,
+        match=r"Additional properties.*file_path",
+    ):
+        asyncio.run(
+            async_dispatch(
+                tools,
+                _context(tmp_path),
+                {"file_path": "references/guide.md"},
+            )
         )
-    )
-
-    assert result == tool_failure(
-        "invalid_arguments",
-        "file_path requires a non-empty skill name",
-    )
 
 
 def test_skill_tool_rejects_missing_relative_file(tmp_path: Path) -> None:

@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,6 +19,54 @@ _TOOL_NAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
 
 class ToolContractError(ValueError):
     """A Tool definition or invocation violates its canonical contract."""
+
+
+def action_schema(
+    actions: Mapping[str, JsonObject],
+    *,
+    description: str,
+    action_description: str = "Action to perform.",
+) -> JsonObject:
+    """Build a flat union whose action selects one closed argument object."""
+    if not actions:
+        raise ToolContractError("Action schema requires at least one action")
+
+    branches: list[JsonObject] = []
+    for action, raw_branch in actions.items():
+        if not isinstance(action, str) or not action:
+            raise ToolContractError("Action schema names must be non-empty strings")
+        if not isinstance(raw_branch, dict) or raw_branch.get("type") != "object":
+            raise ToolContractError(f"Action schema branch {action!r} must have type object")
+
+        branch = copy.deepcopy(raw_branch)
+        properties = branch.get("properties")
+        if not isinstance(properties, dict):
+            raise ToolContractError(f"Action schema branch {action!r} properties must be an object")
+        if "action" in properties:
+            raise ToolContractError(
+                f"Action schema branch {action!r} must not declare the action property"
+            )
+        required = branch.get("required", [])
+        if not isinstance(required, list):
+            raise ToolContractError(f"Action schema branch {action!r} required must be an array")
+
+        branch["properties"] = {
+            "action": {
+                "type": "string",
+                "enum": [action],
+                "description": action_description,
+            },
+            **properties,
+        }
+        branch["required"] = ["action", *required]
+        branch["additionalProperties"] = False
+        branches.append(branch)
+
+    return {
+        "type": "object",
+        "description": description,
+        "oneOf": branches,
+    }
 
 
 @dataclass(frozen=True)
@@ -306,5 +355,6 @@ def _format_path(path: Any) -> str:
 __all__ = [
     "ToolContract",
     "ToolContractError",
+    "action_schema",
     "compile_tool_contract",
 ]

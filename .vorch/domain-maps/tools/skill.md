@@ -6,7 +6,7 @@ Tool that lists allowed Skills, activates their instructions for the current Ses
 
 - Tool name: `skill`
 - Registration: `register_skill_tool(registry, resolve_registry, refresh_skills)` — `resolve_registry` maps `(skill_project_id, agent_id)` to the registry a call activates against; `refresh_skills` rescans skills from disk (wired to `Runtime.reload_skills`, invoked once on a name miss).
-- Schema: optional `name` and optional `file_path`; no `name` means list mode, `name` alone means activation, and `name` plus `file_path` means file-read mode. `file_path` accepts `SKILL.md` or a relative path below `scripts/`, `references/`, or `assets/` and is invalid without a non-empty `name`; `additionalProperties: false`.
+- Schema: a flat `oneOf` union with three closed modes: no properties lists, required `name` alone activates, and required `name` plus required `file_path` reads. `file_path` accepts `SKILL.md` or a relative path below `scripts/`, `references/`, or `assets/`; it is not advertised or accepted without `name`.
 - Display: summary fields `name`, `file_path`.
 - `ToolContext.activate_skill(name, content) -> bool | None` — dedup-only session hook (`ChatSession.register_skill_activation`): `True` fresh, `False` already active, `None` no hook (treated as fresh). Nothing is persisted through the hook — the tool result itself is the durable carrier.
 
