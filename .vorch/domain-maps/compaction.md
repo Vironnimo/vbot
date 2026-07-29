@@ -18,6 +18,7 @@ Core cross-cutting terms (Session, Agent, Model, Tool) live in `.vorch/GLOSSARY.
 ## Interfaces
 
 - `CompactionService.should_auto_compact(...)` selects the configured Trigger from the registry and evaluates it against current input tokens and the resolved Context window.
+- `CompactionService.has_new_compactable_context(...)` preflights automatic Strategy usefulness. Summary+Tail returns false when its compactable prefix contains only the latest checkpoint summary, because the retained user turn has not advanced far enough for another checkpoint to release Context; manual Compaction bypasses this preflight.
 - `CompactionStrategy.plan(context, settings) -> CompactionPlan` is the extension seam for programmed Strategies. A Strategy receives the current effective canonical messages, an optional exact provider-request snapshot, previous cumulative count, manual instruction, and prompt-fragment storage; it performs no Model I/O itself.
 - `CompactionService.compact(...) -> ChatMessage` selects the Strategy, executes at most one planned Model request, assembles the Projection, validates complete Tool cycles, and returns the checkpoint.
 - `SummarizationStrategy` chooses a complete user-turn tail, renders older effective Context into the `compaction.md` instruction with raw Tool results and Skill bodies replaced by placeholders, calls the configured Summary Model once, and projects the response followed by the verbatim tail.
@@ -39,6 +40,7 @@ The chat loop resolves a Policy at every compaction decision, in this order: Ses
 ## Invariants & Gotchas
 
 - Automatic compaction is enabled/disabled by Policy. Manual `/compact` still executes the selected Strategy but refuses while a Run is active.
+- Automatic Summary+Tail never re-summarizes only its previous summary while the same retained user turn keeps growing. It waits until a later tail boundary makes additional canonical Context compactable; this prevents one long Tool-heavy Run from entering a per-step Compaction loop.
 - A Strategy cannot split or orphan an assistant Tool-call cycle in its retained Projection. Summary+Tail boundaries begin on user messages.
 - Continuation runs only when the chat loop can provide a completed active request snapshot. At a mid-tool safe point it waits until the final assistant boundary rather than synthesizing a different prefix.
 - Compaction is a hard boundary for cross-Run Provider reasoning. A mid-Run rebuild may restore the live Tool cycle's opaque state by message id, but that restoration is request-local and is not written back into the checkpoint Projection.

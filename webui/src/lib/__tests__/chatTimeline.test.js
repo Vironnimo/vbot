@@ -270,6 +270,93 @@ describe('Provider heartbeat projection', () => {
   });
 });
 
+describe('live compaction timeline projection', () => {
+  it('keeps each checkpoint between the Tool steps surrounding its Run event', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-live-compaction',
+    );
+    loadHistory(sessionState, [
+      { id: 'old-user', role: 'user', content: 'Earlier turn' },
+      { id: 'old-assistant', role: 'assistant', content: 'Earlier answer' },
+    ]);
+    startRun(sessionState, {
+      run_id: 'run-compaction',
+      sse_url: '/api/runs/run-compaction/events',
+      status: CHAT_STATUS_RUNNING,
+    });
+    appendRunEvent(sessionState, {
+      type: 'user_message_persisted',
+      run_id: 'run-compaction',
+      sequence: 1,
+      payload: {
+        message: {
+          id: 'current-user',
+          role: 'user',
+          content: 'Keep working',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-compaction',
+      sequence: 2,
+      payload: {
+        tool_call: { id: 'call-read', index: 0, name: 'read', arguments: {} },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_result',
+      run_id: 'run-compaction',
+      sequence: 3,
+      payload: {
+        tool_call: { id: 'call-read', index: 0, name: 'read' },
+        result: { ok: true },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'compaction_completed',
+      run_id: 'run-compaction',
+      sequence: 4,
+      timestamp: '2026-07-29T17:55:25Z',
+      payload: {
+        message: {
+          id: 'checkpoint-1',
+          role: 'compaction_checkpoint',
+          timestamp: '2026-07-29T17:55:25Z',
+        },
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_started',
+      run_id: 'run-compaction',
+      sequence: 5,
+      payload: {
+        tool_call: { id: 'call-edit', index: 0, name: 'edit', arguments: {} },
+      },
+    });
+
+    const items = visibleTimelineItemsForRender(sessionState);
+    const liveRun = items.find(
+      (item) =>
+        item.type === 'assistant_run' && item.runId === 'run-compaction',
+    );
+
+    expect(liveRun.items.map((child) => child.type)).toEqual([
+      'tool_call',
+      'compaction_separator',
+      'tool_call',
+    ]);
+    expect(liveRun.items[1].message.id).toBe('checkpoint-1');
+    expect(
+      sessionState.messages.some(
+        (message) => message.role === 'compaction_checkpoint',
+      ),
+    ).toBe(false);
+  });
+});
+
 describe('interrupted assistant turn projection', () => {
   function assistantOutputChild(sessionState, runId) {
     const run = visibleTimelineItemsForRender(sessionState).find(

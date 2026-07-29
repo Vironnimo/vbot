@@ -3,7 +3,6 @@ import { createBoundedKeySet } from './clientCaches.js';
 import { t } from './i18n.js';
 import {
   TERMINAL_RUN_EVENTS,
-  appendCompactionCheckpoint,
   appendRunEvent,
   ensureSessionState,
   formatAgentAddress,
@@ -245,9 +244,6 @@ export function createChatRunStream({
       event.type === 'subagent_status_changed'
     ) {
       trackSubAgentRunStatus(event);
-    }
-    if (event.type === 'compaction_completed' && event.payload?.message) {
-      appendCompactionCheckpoint(sessionState, event.payload.message);
     }
     if (
       event.type === 'run_started' &&

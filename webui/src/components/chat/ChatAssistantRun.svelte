@@ -501,6 +501,10 @@
             model: child.to_model,
           })}
         </Banner>
+      {:else if child.type === 'compaction_separator'}
+        <div class="date-sep compaction-sep run-compaction-sep">
+          {t('chat.compacted', 'Context compacted')}
+        </div>
       {/if}
     {/each}
   </div>

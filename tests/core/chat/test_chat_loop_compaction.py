@@ -297,6 +297,55 @@ async def test_compaction_maybe_auto_compact_skips_when_threshold_not_reached(
 
 
 @pytest.mark.asyncio
+async def test_compaction_maybe_auto_compact_skips_without_new_compactable_context(
+    tmp_path: Path,
+) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    adapter = StubAdapter([])
+    compaction_service = StubCompactionService(
+        should_auto=True,
+        has_compactable_context=False,
+    )
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=adapter,
+        storage=StubStorage(
+            {
+                "auto": True,
+                "threshold": 0.8,
+                "tail_tokens": 15_000,
+                "summary_model": None,
+            }
+        ),
+        models=StubModels({("openai", "gpt-5.2"): 100}),
+    )
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Keep working in this same turn"))
+    messages = await build_chat_loop(runtime)._build_request_messages(agent, session)
+    run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+    result = await _maybe_auto_compact(
+        build_chat_loop(
+            runtime,
+            compaction_service=cast(Any, compaction_service),
+        ),
+        agent,
+        adapter,
+        "gpt-5.2",
+        session,
+        messages,
+        usage={"input_tokens": 90},
+        run=run,
+    )
+
+    assert result == messages
+    assert len(compaction_service.compactable_context_calls) == 1
+    assert compaction_service.should_auto_calls == []
+    assert compaction_service.compact_calls == []
+
+
+@pytest.mark.asyncio
 async def test_compaction_resolves_floor_for_null_window_model(tmp_path: Path) -> None:
     # A model with no context window (None) must still drive auto-compaction:
     # the read-side default chain resolves the global floor so should_auto_compact
@@ -428,6 +477,13 @@ async def test_final_assistant_compaction_activates_history_on_next_run(tmp_path
 
         def estimate_messages_tokens(self, _messages: list[JsonObject]) -> int:
             return 90
+
+        def has_new_compactable_context(
+            self,
+            _messages: list[ChatMessage],
+            _settings: Any,
+        ) -> bool:
+            return True
 
         def should_auto_compact(
             self,

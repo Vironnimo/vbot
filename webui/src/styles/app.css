@@ -1902,6 +1902,11 @@ textarea::placeholder {
   color: var(--accent);
 }
 
+.run-compaction-sep {
+  margin: 14px 0;
+  padding: 0;
+}
+
 .msg {
   display: flex;
   flex-direction: column;

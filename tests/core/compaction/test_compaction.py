@@ -163,6 +163,60 @@ async def test_next_compaction_consumes_previous_projection_not_hidden_history()
     assert "PRIOR" in rendered
 
 
+def test_summary_tail_auto_compaction_waits_when_only_prior_summary_is_eligible() -> None:
+    current_user = user("u1", "One long-running user turn")
+    carrier = message(
+        "a1",
+        "assistant",
+        "",
+        model="openai/gpt-5",
+        tool_calls=[{"id": "call-1", "name": "read", "arguments": {"path": "one"}}],
+    )
+    result = message(
+        "t1",
+        "tool",
+        "result one",
+        tool_call_id="call-1",
+        name="read",
+    )
+    prior = checkpoint([current_user, carrier, result])
+    next_carrier = message(
+        "a2",
+        "assistant",
+        "",
+        model="openai/gpt-5",
+        tool_calls=[{"id": "call-2", "name": "edit", "arguments": {"path": "one"}}],
+    )
+    next_result = message(
+        "t2",
+        "tool",
+        "result two",
+        tool_call_id="call-2",
+        name="edit",
+    )
+
+    can_compact = CompactionService().has_new_compactable_context(
+        [current_user, carrier, result, prior, next_carrier, next_result],
+        CompactionSettings(tail_tokens=1),
+    )
+
+    assert can_compact is False
+
+
+def test_summary_tail_auto_compaction_resumes_when_retained_turn_becomes_eligible() -> None:
+    retained_user = user("u1", "Previously retained turn")
+    retained_assistant = assistant("a1", "Previously retained answer")
+    prior = checkpoint([retained_user, retained_assistant])
+    next_user = user("u2", "A new turn that advances the tail boundary")
+
+    can_compact = CompactionService().has_new_compactable_context(
+        [retained_user, retained_assistant, prior, next_user],
+        CompactionSettings(tail_tokens=1),
+    )
+
+    assert can_compact is True
+
+
 @pytest.mark.asyncio
 async def test_summary_prompt_omits_raw_tool_result_content() -> None:
     adapter = StubAdapter()

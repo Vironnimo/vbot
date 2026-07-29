@@ -826,17 +826,28 @@ class StubCompactionService:
         self,
         *,
         should_auto: bool,
+        has_compactable_context: bool = True,
         estimated_tokens: int = 0,
         checkpoint: ChatMessage | None = None,
         compact_error: Exception | None = None,
     ) -> None:
         self._should_auto = should_auto
+        self._has_compactable_context = has_compactable_context
         self._estimated_tokens = estimated_tokens
         self._checkpoint = checkpoint
         self._compact_error = compact_error
+        self.compactable_context_calls: list[tuple[list[str], Any]] = []
         self.should_auto_calls: list[tuple[int, int, float]] = []
         self.estimate_calls: list[list[JsonObject]] = []
         self.compact_calls: list[JsonObject] = []
+
+    def has_new_compactable_context(
+        self,
+        messages: list[ChatMessage],
+        settings: Any,
+    ) -> bool:
+        self.compactable_context_calls.append((persisted_roles(messages), settings))
+        return self._has_compactable_context
 
     def should_auto_compact(
         self,

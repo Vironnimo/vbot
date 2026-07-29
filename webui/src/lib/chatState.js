@@ -1062,21 +1062,6 @@ function beginRunFromEvent(sessionState, event) {
   sessionState.seenStreamingEventKeys = new Set();
 }
 
-export function appendCompactionCheckpoint(sessionState, message) {
-  if (!message || message.role !== 'compaction_checkpoint') {
-    return;
-  }
-
-  if (
-    message.id &&
-    sessionState.messages.some((existing) => existing?.id === message.id)
-  ) {
-    return;
-  }
-
-  sessionState.messages = [...sessionState.messages, message];
-}
-
 export function finishRun(sessionState, event) {
   const type = event?.type;
   const status = event?.payload?.status;
