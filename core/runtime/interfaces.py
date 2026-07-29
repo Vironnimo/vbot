@@ -186,6 +186,12 @@ class RuntimeServices(Protocol):
         """
         ...
 
+    def refresh_skills_for(
+        self, project_id: str | None, identity_agent_id: str | None = None
+    ) -> SkillRegistry:
+        """Rescan Skill sources and return a fresh scoped registry."""
+        ...
+
     def project_skill_names(self, project_id: str | None) -> frozenset[str]:
         """Return the names of a project's own scanned skills (empty for ``None``)."""
         ...

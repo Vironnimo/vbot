@@ -664,6 +664,7 @@ class Runtime:
             get_system_prompts=lambda: self.system_prompts,
             get_adapter=self.get_adapter,
             resolve_skills=self.skills_for,
+            refresh_skills=self.refresh_skills_for,
             get_local_context_windows=self.local_context_windows,
             task_model_available=self._model_tasks.binding_is_usable,
         )
@@ -1223,6 +1224,19 @@ class Runtime:
         if project_id is None:
             return self.skills
         return self._project_skill_bundle(project_id).registry
+
+    def refresh_skills_for(
+        self, project_id: str | None, identity_agent_id: str | None = None
+    ) -> SkillRegistry:
+        """Rescan every Skill source, then resolve one fresh scoped registry.
+
+        Compaction uses this as an explicit prompt-refresh boundary. The global reload
+        also invalidates Project- and Agent-scoped caches, so the returned registry
+        reflects bundled, global, extension, Project, and private Skill changes from
+        one coherent scan generation.
+        """
+        self.reload_skills()
+        return self.skills_for(project_id, identity_agent_id)
 
     def project_own_skills(self, project_id: str) -> list[SkillMetadata]:
         """Return a Project's own skills for explicit Project Context loading.
