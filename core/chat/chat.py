@@ -209,6 +209,7 @@ _LOGGER = get_logger("chat")
 
 MAX_TOOL_ITERATIONS = 1000
 MAX_IDENTICAL_FAILED_TOOL_CALLS = 8
+MAX_AUTO_COMPACTIONS_PER_RUN = 3
 
 # Session-pinned skill catalog snapshot (the rendered ``<available_skills>`` text),
 # stored in session metadata so a mid-session skill write never shifts the session's
@@ -431,6 +432,7 @@ class _RunExecutionContext:
     continuation_tracker: ContinuationTracker | None
     continuation_reminder: str | None
     request_state: _RequestState | None = None
+    auto_compaction_attempts: int = 0
 
 
 # Skill names the session has already surfaced to the model: the pinned catalog at
@@ -619,6 +621,8 @@ def _restore_in_run_tool_result_content(
 ) -> list[JsonObject]:
     """Restore request-only rich Tool Results after in-Run Compaction."""
 
+    from core.compaction import is_compacted_tool_result_content
+
     rich_content_by_call_id = {
         message["tool_call_id"]: message[TOOL_RESULT_CONTENT_BLOCKS_FIELD]
         for message in live_messages
@@ -632,6 +636,7 @@ def _restore_in_run_tool_result_content(
             message.get("role") == "tool"
             and isinstance(tool_call_id, str)
             and tool_call_id in rich_content_by_call_id
+            and not is_compacted_tool_result_content(message.get("content"))
         ):
             message[TOOL_RESULT_CONTENT_BLOCKS_FIELD] = rich_content_by_call_id[tool_call_id]
     return rebuilt_messages
@@ -2173,7 +2178,7 @@ class ChatLoop:
                 compacted_state = await self._maybe_auto_compact_state(
                     context,
                     target,
-                    usage=None,
+                    usage=assistant_message.usage,
                 )
                 context.request_state = compacted_state
                 state = compacted_state
@@ -2270,27 +2275,36 @@ class ChatLoop:
             return current_state
         if settings.strategy == "continuation" and continuation_request_messages is None:
             return current_state
-
-        session_messages = session.load()
-        if not self._compaction_service.has_new_compactable_context(
-            session_messages,
-            settings,
-        ):
+        if context.auto_compaction_attempts >= MAX_AUTO_COMPACTIONS_PER_RUN:
+            _LOGGER.info(
+                "Auto-compaction skipped after Run attempt cap (run=%s session=%s attempts=%d)",
+                run.id,
+                run.session_id,
+                context.auto_compaction_attempts,
+            )
             return current_state
 
+        from core.compaction import (
+            MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
+            CompactionInsufficientReclaimError,
+        )
+
+        session_messages = session.load()
         context_window = self._resolve_context_window(agent)
         if context_window is None:
             return current_state
 
+        estimated_input_tokens = self._compaction_service.estimate_messages_tokens(messages)
         if isinstance(usage, dict):
             input_tokens_raw = usage.get("input_tokens")
-            input_tokens = (
+            measured_input_tokens = (
                 input_tokens_raw
                 if isinstance(input_tokens_raw, int) and not isinstance(input_tokens_raw, bool)
                 else 0
             )
+            input_tokens = max(measured_input_tokens, estimated_input_tokens)
         else:
-            input_tokens = self._compaction_service.estimate_messages_tokens(messages)
+            input_tokens = estimated_input_tokens
 
         if settings.trigger == "context_ratio":
             should_compact = self._compaction_service.should_auto_compact(
@@ -2306,6 +2320,11 @@ class ChatLoop:
                 settings=settings,
             )
         if not should_compact:
+            return current_state
+        if not self._compaction_service.has_new_compactable_context(
+            session_messages,
+            settings,
+        ):
             return current_state
 
         _LOGGER.info(
@@ -2337,7 +2356,17 @@ class ChatLoop:
                 active_adapter=target.adapter,
                 active_model_id=target.model_id,
                 active_tools=tools,
+                minimum_reclaim_tokens=MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
             )
+        except CompactionInsufficientReclaimError as exc:
+            _LOGGER.info(
+                "Auto-compaction skipped because projected reclaim was too small "
+                "(run=%s session=%s reason=%s)",
+                run.id,
+                run.session_id,
+                exc,
+            )
+            return current_state
         except Exception:
             _LOGGER.warning("Compaction failed; continuing without compaction", exc_info=True)
             return current_state
@@ -2354,6 +2383,7 @@ class ChatLoop:
         )
         checkpoint = finalize_checkpoint_history_guidance(checkpoint, ordinal=ordinal)
         session.append(checkpoint)
+        context.auto_compaction_attempts += 1
         if context.continuation_tracker is not None:
             context.continuation_tracker.record_compaction_boundary()
         persisted_ordinal = checkpoint_ordinal(session.load(), checkpoint.id)

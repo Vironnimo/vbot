@@ -873,6 +873,7 @@ class StubCompactionService:
         storage: Any,
         settings: Any,
         instruction: str | None = None,
+        minimum_reclaim_tokens: int = 0,
         **kwargs: Any,
     ) -> ChatMessage:
         self.compact_calls.append(
@@ -884,6 +885,7 @@ class StubCompactionService:
                 "storage": storage,
                 "summary_model": getattr(settings, "summary_model", None),
                 "instruction": instruction,
+                "minimum_reclaim_tokens": minimum_reclaim_tokens,
             }
         )
         if self._compact_error is not None:
