@@ -419,7 +419,7 @@ async def test_background_watcher_does_not_consume_process_poll_output(
 
 
 @pytest.mark.asyncio
-async def test_terminal_process_poll_cancels_already_pending_completion_delivery(
+async def test_terminal_process_status_cancels_already_pending_completion_delivery(
     manager: ProcessManager,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -500,10 +500,8 @@ async def test_terminal_process_poll_cancels_already_pending_completion_delivery
     process_result = await make_process_handler(manager)(
         process_context,
         {
-            "request": {
-                "operation": "poll",
-                "session_id": process_session_id,
-            }
+            "action": "status",
+            "session_id": process_session_id,
         },
     )
 

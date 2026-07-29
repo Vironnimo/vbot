@@ -221,7 +221,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
       };
     }
     if (resultsFor(results, "process").length === 0) {
-      return { calls: [toolCall("process", { action: "list" })] };
+      return { calls: [toolCall("process", { action: "status" })] };
     }
     return { text: "Runtime tools completed." };
   }

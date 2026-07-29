@@ -1,143 +1,97 @@
-"""Built-in process tool for managing background process sessions."""
+"""Agent-facing control for background Process Sessions created by the bash Tool."""
 
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
-from core.tools.arguments import optional_bool, optional_int, required_string
+from core.tools.arguments import optional_bool, optional_string, required_string
 from core.tools.process_manager import (
     ProcessManager,
+    ProcessSession,
     SessionInputClosedError,
     SessionNotFoundError,
-    SessionStillRunningError,
 )
 from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
     ToolRegistry,
-    extract_tool_operation,
-    operation_envelope_schema,
     tool_failure,
     tool_success,
 )
 
 PROCESS_TOOL_NAME = "process"
 PROCESS_TOOL_DESCRIPTION = (
-    "Manage background process sessions started by shell-backed tools. Use it for "
-    "immediate progress or control; a terminal poll or successful kill suppresses a "
-    "pending automatic completion. Supports listing, polling, reading logs, writing "
-    "stdin, submitting a line, killing, and clearing finished sessions. Set request.operation "
-    "to list, poll, log, write, submit, kill, or clear."
+    "Inspect or control your own background Process Sessions created by the `bash` Tool. "
+    "Use the session_id returned when a bash call continues in the background; this Tool "
+    "cannot access arbitrary operating-system processes. Completion is delivered "
+    "automatically, so use status only for an immediate snapshot, input to send stdin, "
+    "and kill to stop a Process Session."
 )
-PROCESS_ACTIONS = {"list", "poll", "log", "write", "submit", "kill", "clear"}
+PROCESS_ACTIONS = ("status", "input", "kill")
+PROCESS_STATUS_OUTPUT_CAP_CHARS = 30_000
+
 _PROCESS_ACTION_ARGUMENTS = {
-    "list": frozenset(),
-    "poll": frozenset({"session_id", "timeout_ms"}),
-    "log": frozenset({"session_id", "offset", "limit"}),
-    "write": frozenset({"session_id", "data", "eof"}),
-    "submit": frozenset({"session_id"}),
-    "kill": frozenset({"session_id"}),
-    "clear": frozenset({"session_id"}),
-}
-MAX_POLL_TIMEOUT_MS = 30_000
-DEFAULT_LOG_LIMIT = 200
-
-_PROCESS_SESSION_ID_PARAMETER: JsonObject = {
-    "type": "string",
-    "minLength": 1,
-    "description": "Process session id returned by bash.",
+    "status": frozenset({"action", "session_id"}),
+    "input": frozenset({"action", "session_id", "text", "newline", "eof"}),
+    "kill": frozenset({"action", "session_id"}),
 }
 
-
-def _process_operation(
-    description: str,
-    properties: JsonObject,
-    *,
-    required: tuple[str, ...] = (),
-) -> JsonObject:
-    return {
-        "type": "object",
-        "description": description,
-        "properties": properties,
-        "required": list(required),
-        "additionalProperties": False,
-    }
-
-
-PROCESS_TOOL_PARAMETERS: JsonObject = operation_envelope_schema(
-    {
-        "list": _process_operation("List all owned process sessions.", {}),
-        "poll": _process_operation(
-            "Wait briefly for new output or return the current process status.",
-            {
-                "session_id": _PROCESS_SESSION_ID_PARAMETER,
-                "timeout_ms": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": MAX_POLL_TIMEOUT_MS,
-                    "description": "Wait timeout in milliseconds; default 0, maximum 30000.",
-                },
-            },
-            required=("session_id",),
-        ),
-        "log": _process_operation(
-            "Read a window of process output lines.",
-            {
-                "session_id": _PROCESS_SESSION_ID_PARAMETER,
-                "offset": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "description": "Zero-based log line offset; default 0.",
-                },
-                "limit": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "description": "Maximum log lines to return; default 200.",
-                },
-            },
-            required=("session_id",),
-        ),
-        "write": _process_operation(
-            "Write UTF-8 text to process stdin without appending a newline.",
-            {
-                "session_id": _PROCESS_SESSION_ID_PARAMETER,
-                "data": {
-                    "type": "string",
-                    "description": "Text to write. May be empty when only closing stdin.",
-                },
-                "eof": {
-                    "type": "boolean",
-                    "description": "Close stdin after writing data.",
-                },
-            },
-            required=("session_id", "data"),
-        ),
-        "submit": _process_operation(
-            "Submit the current stdin line by sending the platform line ending.",
-            {"session_id": _PROCESS_SESSION_ID_PARAMETER},
-            required=("session_id",),
-        ),
-        "kill": _process_operation(
-            "Terminate a running process.",
-            {"session_id": _PROCESS_SESSION_ID_PARAMETER},
-            required=("session_id",),
-        ),
-        "clear": _process_operation(
-            "Remove a finished process session.",
-            {"session_id": _PROCESS_SESSION_ID_PARAMETER},
-            required=("session_id",),
-        ),
-    },
-    description=(
-        "Set request.operation to list, poll, log, write, submit, kill, or clear and include "
-        "that operation's arguments in the same request object."
+PROCESS_TOOL_PARAMETERS: JsonObject = {
+    "type": "object",
+    "description": (
+        "Use status without session_id to list your tracked background Process Sessions, "
+        "or provide session_id to inspect one. input and kill always require session_id."
     ),
-)
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": list(PROCESS_ACTIONS),
+            "description": (
+                "status lists or inspects Process Sessions without waiting, input sends "
+                "stdin to a running Process Session, and kill stops one."
+            ),
+        },
+        "session_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Process Session id returned by the bash Tool. Omit only with status to list "
+                "all of your currently tracked Process Sessions."
+            ),
+        },
+        "text": {
+            "type": "string",
+            "description": (
+                "UTF-8 text to send with input. Required for input and may be empty to send "
+                "only a newline or EOF."
+            ),
+        },
+        "newline": {
+            "type": "boolean",
+            "default": True,
+            "description": (
+                "For input only. Append the platform line ending after text; default true. "
+                "Set false for raw text or when closing stdin without sending a line."
+            ),
+        },
+        "eof": {
+            "type": "boolean",
+            "default": False,
+            "description": (
+                "For input only. Close stdin after sending text and the optional newline; "
+                "default false."
+            ),
+        },
+    },
+    "required": ["action"],
+    "additionalProperties": False,
+}
 
 
 def make_process_handler(process_manager: ProcessManager):
-    """Create a process tool handler bound to a ProcessManager instance."""
+    """Create a process Tool handler bound to a ProcessManager instance."""
 
     async def process_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         return await _handle_process_tool(process_manager, context, arguments)
@@ -150,135 +104,99 @@ async def _handle_process_tool(
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
-    try:
-        action, operation_arguments = extract_tool_operation(
-            arguments,
-            sorted(PROCESS_ACTIONS),
-        )
-    except ValueError as error:
-        return tool_failure("invalid_arguments", str(error))
-
-    unknown_arguments = set(operation_arguments) - _PROCESS_ACTION_ARGUMENTS[action]
-    if unknown_arguments:
-        names = ", ".join(sorted(unknown_arguments))
+    action = arguments.get("action")
+    if not isinstance(action, str) or action not in PROCESS_ACTIONS:
         return tool_failure(
             "invalid_arguments",
-            f"Unknown {action} argument(s): {names}",
+            f"action must be one of: {', '.join(PROCESS_ACTIONS)}",
+            retryable=False,
+        )
+
+    unsupported_arguments = sorted(set(arguments) - _PROCESS_ACTION_ARGUMENTS[action])
+    if unsupported_arguments:
+        return tool_failure(
+            "invalid_arguments",
+            f"Action '{action}' does not accept: {', '.join(unsupported_arguments)}",
+            retryable=False,
         )
 
     try:
-        if action == "list":
-            return _handle_list(process_manager, context)
-        if action == "poll":
-            return await _handle_poll(process_manager, context, operation_arguments)
-        if action == "log":
-            return await _handle_log(process_manager, context, operation_arguments)
-        if action == "write":
-            return await _handle_write(process_manager, context, operation_arguments)
-        if action == "submit":
-            return await _handle_submit(process_manager, context, operation_arguments)
-        if action == "kill":
-            return await _handle_kill(process_manager, context, operation_arguments)
-        return await _handle_clear(process_manager, context, operation_arguments)
+        if action == "status":
+            return await _handle_status(process_manager, context, arguments)
+        if action == "input":
+            return await _handle_input(process_manager, context, arguments)
+        return await _handle_kill(process_manager, context, arguments)
     except SessionNotFoundError:
-        return tool_failure("session_not_found", "Process session not found")
-    except SessionStillRunningError:
-        return tool_failure("session_still_running", "Process session is still running")
+        return tool_failure(
+            "session_not_found",
+            "Process Session not found",
+            retryable=False,
+        )
     except SessionInputClosedError as error:
-        return tool_failure("session_input_closed", str(error))
+        return tool_failure(
+            "session_input_closed",
+            str(error),
+            retryable=False,
+        )
     except ValueError as error:
-        return tool_failure("invalid_arguments", str(error))
+        return tool_failure(
+            "invalid_arguments",
+            str(error),
+            retryable=False,
+        )
 
 
-def _handle_list(process_manager: ProcessManager, context: ToolContext) -> JsonObject:
-    sessions = [
-        {
-            "session_id": session.session_id,
-            "status": session.status,
-            "exit_code": session.exit_code,
-            "started_at": _format_timestamp(session.started_at),
-            "finished_at": _format_timestamp(session.finished_at),
-            "log_file": str(session.log_file) if session.log_file is not None else None,
-        }
-        for session in process_manager.list_sessions(context.agent_id)
-    ]
-    return tool_success({"sessions": sessions})
-
-
-async def _handle_poll(
+async def _handle_status(
     process_manager: ProcessManager,
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
-    session_id = _required_session_id(arguments)
-    timeout_ms = optional_int(
-        arguments.get("timeout_ms"),
-        field_name="timeout_ms",
-        default=0,
-        minimum=0,
-    )
-    if timeout_ms > MAX_POLL_TIMEOUT_MS:
-        timeout_ms = MAX_POLL_TIMEOUT_MS
+    session_id = optional_string(arguments.get("session_id"), field_name="session_id")
+    if session_id is None:
+        return tool_success(
+            {
+                "sessions": [
+                    _session_summary(session)
+                    for session in process_manager.list_sessions(context.agent_id)
+                ]
+            }
+        )
 
-    result = await process_manager.poll(session_id, context.agent_id, timeout_ms=timeout_ms)
-    if result["status"] != "running":
+    snapshot = await process_manager.snapshot(session_id, context.agent_id)
+    if snapshot["status"] != "running":
         _acknowledge_completion_after_persistence(process_manager, context, session_id)
-    return tool_success(
-        {
-            "session_id": result["session_id"],
-            "status": result["status"],
-            "output": result["output"],
-            "waiting_for_input": result["waiting_for_input"],
-        }
-    )
+    return tool_success(_status_snapshot_data(snapshot))
 
 
-async def _handle_log(
+async def _handle_input(
     process_manager: ProcessManager,
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
-    session_id = _required_session_id(arguments)
-    offset = optional_int(arguments.get("offset"), field_name="offset", default=0, minimum=0)
-    limit = optional_int(
-        arguments.get("limit"),
-        field_name="limit",
-        default=DEFAULT_LOG_LIMIT,
-        minimum=0,
-    )
-    result = await process_manager.log(session_id, context.agent_id, offset=offset, limit=limit)
-    return tool_success(
-        {
-            "session_id": result["session_id"],
-            "output": result["output"],
-            "total_lines": result["total_lines"],
-        }
-    )
-
-
-async def _handle_write(
-    process_manager: ProcessManager,
-    context: ToolContext,
-    arguments: JsonObject,
-) -> JsonObject:
-    session_id = _required_session_id(arguments)
-    data = arguments.get("data")
-    if not isinstance(data, str):
-        raise ValueError("data must be a string")
+    session_id = required_string(arguments.get("session_id"), field_name="session_id")
+    text = arguments.get("text")
+    if not isinstance(text, str):
+        raise ValueError("text must be a string")
+    newline = optional_bool(arguments.get("newline"), field_name="newline", default=True)
     eof = optional_bool(arguments.get("eof"), field_name="eof", default=False)
+    if not text and not newline and not eof:
+        raise ValueError("input must send text, append a newline, or close stdin with eof")
 
-    await process_manager.write(session_id, context.agent_id, data, eof=eof)
-    return tool_success({"session_id": session_id, "written": len(data)})
-
-
-async def _handle_submit(
-    process_manager: ProcessManager,
-    context: ToolContext,
-    arguments: JsonObject,
-) -> JsonObject:
-    session_id = _required_session_id(arguments)
-    await process_manager.submit(session_id, context.agent_id)
-    return tool_success({"session_id": session_id})
+    await process_manager.send_input(
+        session_id,
+        context.agent_id,
+        text,
+        newline=newline,
+        eof=eof,
+    )
+    return tool_success(
+        {
+            "session_id": session_id,
+            "characters_sent": len(text),
+            "newline": newline,
+            "eof": eof,
+        }
+    )
 
 
 async def _handle_kill(
@@ -286,24 +204,45 @@ async def _handle_kill(
     context: ToolContext,
     arguments: JsonObject,
 ) -> JsonObject:
-    session_id = _required_session_id(arguments)
+    session_id = required_string(arguments.get("session_id"), field_name="session_id")
     await process_manager.kill(session_id, context.agent_id)
+    snapshot = await process_manager.snapshot(session_id, context.agent_id)
     _acknowledge_completion_after_persistence(process_manager, context, session_id)
-    return tool_success({"session_id": session_id})
+    return tool_success({"session_id": session_id, "status": snapshot["status"]})
 
 
-async def _handle_clear(
-    process_manager: ProcessManager,
-    context: ToolContext,
-    arguments: JsonObject,
-) -> JsonObject:
-    session_id = _required_session_id(arguments)
-    await process_manager.clear(session_id, context.agent_id)
-    return tool_success({"session_id": session_id})
+def _session_summary(session: ProcessSession) -> JsonObject:
+    return {
+        "session_id": session.session_id,
+        "status": session.status,
+        "exit_code": session.exit_code,
+        "started_at": _format_timestamp(session.started_at),
+        "finished_at": _format_timestamp(session.finished_at),
+        "log_file": str(session.log_file) if session.log_file is not None else None,
+    }
 
 
-def _required_session_id(arguments: JsonObject) -> str:
-    return required_string(arguments.get("session_id"), field_name="session_id")
+def _status_snapshot_data(snapshot: JsonObject) -> JsonObject:
+    raw_output = snapshot.get("output")
+    output = raw_output if isinstance(raw_output, str) else ""
+    capped = len(output) > PROCESS_STATUS_OUTPUT_CAP_CHARS
+    if capped:
+        output = output[-PROCESS_STATUS_OUTPUT_CAP_CHARS:]
+    truncated = bool(snapshot.get("truncated")) or capped
+
+    raw_log_file = snapshot.get("log_file")
+    log_file = str(raw_log_file) if isinstance(raw_log_file, Path) else None
+    return {
+        "session_id": snapshot["session_id"],
+        "status": snapshot["status"],
+        "exit_code": snapshot["exit_code"],
+        "started_at": _format_timestamp(snapshot.get("started_at")),
+        "finished_at": _format_timestamp(snapshot.get("finished_at")),
+        "waiting_for_input": snapshot["waiting_for_input"],
+        "output_tail": output,
+        "output_truncated": truncated,
+        "log_file": log_file,
+    }
 
 
 def _acknowledge_completion_after_persistence(
@@ -311,20 +250,20 @@ def _acknowledge_completion_after_persistence(
     context: ToolContext,
     session_id: str,
 ) -> None:
-    """Suppress automatic delivery only after this manual result is durable."""
+    """Suppress automatic delivery only after this manual terminal result is durable."""
     context.after_result_persisted(
         lambda: process_manager.acknowledge_completion(session_id, context.agent_id)
     )
 
 
-def _format_timestamp(value: datetime | None) -> str | None:
-    if value is None:
+def _format_timestamp(value: object) -> str | None:
+    if not isinstance(value, datetime):
         return None
     return value.isoformat()
 
 
 def register_process_tool(registry: ToolRegistry, process_manager: ProcessManager) -> None:
-    """Register the process tool with a vBot tool registry."""
+    """Register Agent-facing control for background bash Process Sessions."""
     registry.register(
         PROCESS_TOOL_NAME,
         PROCESS_TOOL_DESCRIPTION,
@@ -336,18 +275,16 @@ def register_process_tool(registry: ToolRegistry, process_manager: ProcessManage
 
 
 def _process_display_summary(arguments: JsonObject) -> str:
-    try:
-        action, operation_arguments = extract_tool_operation(arguments, sorted(PROCESS_ACTIONS))
-    except ValueError:
+    action = arguments.get("action")
+    if not isinstance(action, str) or action not in PROCESS_ACTIONS:
         return ""
-    session_id = operation_arguments.get("session_id")
+    session_id = arguments.get("session_id")
     return f"{action} · {session_id}" if isinstance(session_id, str) and session_id else action
 
 
 __all__ = [
-    "DEFAULT_LOG_LIMIT",
-    "MAX_POLL_TIMEOUT_MS",
     "PROCESS_ACTIONS",
+    "PROCESS_STATUS_OUTPUT_CAP_CHARS",
     "PROCESS_TOOL_DESCRIPTION",
     "PROCESS_TOOL_NAME",
     "PROCESS_TOOL_PARAMETERS",

@@ -147,7 +147,16 @@ describe('chatTimelinePresentation', () => {
     expect(summary).toBe('final/path.md');
   });
 
-  it('keeps canonical request operations visible after history reload', () => {
+  it('summarizes the current flat process action contract', () => {
+    const summary = toolArgumentSummary({
+      name: 'process',
+      arguments: { action: 'status', session_id: 'process-1' },
+    });
+
+    expect(summary).toBe('status · process-1');
+  });
+
+  it('keeps legacy process request operations visible after history reload', () => {
     const summary = toolArgumentSummary({
       name: 'process',
       arguments: { request: { operation: 'list' } },

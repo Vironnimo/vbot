@@ -57,6 +57,6 @@ Do not expose `request.operation`, an operation-key object such as `{"create": {
 8. Test the exact public schema, every valid action or target form, missing conditional requirements, forbidden action fields, unknown fields, retired shapes, stable success data, and expected failures.
 9. Update the owning Tool map, this domain map when the convention changes, and any prompt or user-facing documentation that teaches the call shape.
 
-## Current Migration Rule
+## Retired Shapes
 
-`operation_envelope_schema` and `extract_tool_operation` exist only for Tools that have not yet been redesigned. Their presence proves current implementation, not desired architecture. Migrate one Tool as a complete contract change with its tests and documentation; remove the shared helpers only after their final caller is gone.
+The shared `operation_envelope_schema` and `extract_tool_operation` compatibility helpers were removed after the final nested Tool migrated. Do not reintroduce them or accept `request.operation`; preserve any required rendering of historical persisted calls in the WebUI without widening current dispatch.

@@ -1193,6 +1193,15 @@ function humanReadableToolLabel(toolName, argumentsValue) {
     return subAgentToolLabel(toolName, args) ?? '';
   }
 
+  if (toolName === 'process') {
+    const action = trimmedString(args.action);
+    if (action) {
+      return [action, trimmedString(args.session_id)]
+        .filter(Boolean)
+        .join(' · ');
+    }
+  }
+
   const displayArgs = TOOL_DISPLAY_ARGS[toolName];
   if (displayArgs) {
     for (const key of displayArgs) {

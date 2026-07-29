@@ -325,32 +325,44 @@ class ProcessManager:
                 "truncated": session.truncated,
             }
 
-    async def write(
+    async def snapshot(self, session_id: str, agent_id: str) -> dict[str, object]:
+        """Return one non-consuming snapshot of a tracked Process Session."""
+        session = self._session_for_agent(session_id, agent_id)
+        async with session.lock:
+            return {
+                "session_id": session.session_id,
+                "status": session.status,
+                "exit_code": session.exit_code,
+                "started_at": session.started_at,
+                "finished_at": session.finished_at,
+                "output": _decode(bytes(session.combined_buffer)),
+                "truncated": session.truncated,
+                "waiting_for_input": _is_waiting_for_input(session),
+                "log_file": session.log_file,
+            }
+
+    async def send_input(
         self,
         session_id: str,
         agent_id: str,
-        data: str,
-        eof: bool = False,
+        text: str,
+        *,
+        newline: bool,
+        eof: bool,
     ) -> None:
-        """Write UTF-8 text to process stdin and optionally close it."""
+        """Send UTF-8 text, an optional line ending, and optional EOF to stdin."""
         session = self._session_for_agent(session_id, agent_id)
         stdin = session.proc.stdin
         if stdin is None or not session.stdin_open:
             raise SessionInputClosedError(f"Process stdin is closed: {session_id}")
 
-        if data:
-            await self._write_stdin(session, stdin, data.encode("utf-8"))
+        payload = text.encode("utf-8")
+        if newline:
+            payload += SUBMIT_BYTES
+        if payload:
+            await self._write_stdin(session, stdin, payload)
         if eof:
             await self._close_stdin(session)
-
-    async def submit(self, session_id: str, agent_id: str) -> None:
-        """Submit the current stdin line with the platform line ending."""
-        session = self._session_for_agent(session_id, agent_id)
-        stdin = session.proc.stdin
-        if stdin is None or not session.stdin_open:
-            raise SessionInputClosedError(f"Process stdin is closed: {session_id}")
-
-        await self._write_stdin(session, stdin, SUBMIT_BYTES)
 
     @staticmethod
     async def _write_stdin(
@@ -379,14 +391,6 @@ class ProcessManager:
         """Terminate a session with SIGKILL / platform equivalent."""
         session = self._session_for_agent(session_id, agent_id)
         await self._kill_session(session)
-
-    async def clear(self, session_id: str, agent_id: str) -> None:
-        """Remove a finished session from memory."""
-        session = self._session_for_agent(session_id, agent_id)
-        if session.status == "running":
-            raise SessionStillRunningError(f"Process session is still running: {session_id}")
-
-        self._sessions.pop(session_id, None)
 
     def mark_backgrounded(self, session_id: str, agent_id: str) -> None:
         """Stop accumulating foreground-only stdout/stderr line buffers."""
