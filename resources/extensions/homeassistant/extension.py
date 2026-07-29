@@ -152,7 +152,10 @@ HA_CALL_SERVICE_PARAMETERS: JsonObject = {
         },
         "data": {
             "type": "object",
-            "description": "Optional service data parameters (e.g. brightness, temperature).",
+            "description": (
+                "Optional service-specific data fields (e.g. brightness, temperature). "
+                "Do not include entity_id; use the top-level entity_id parameter."
+            ),
         },
     },
     "required": ["domain", "service"],
