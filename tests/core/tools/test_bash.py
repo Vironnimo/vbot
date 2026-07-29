@@ -24,7 +24,7 @@ from core.tools.bash import (
     register_bash_tool,
 )
 from core.tools.process import PROCESS_TOOL_NAME, make_process_handler
-from core.tools.process_manager import ProcessManager
+from core.tools.process_manager import ProcessManager, subprocess_creation_flags
 from core.tools.tools import (
     ToolCall,
     ToolContext,
@@ -1259,6 +1259,52 @@ def test_shell_env_probe_requests_windowless_process_group(
 
     assert bash_module._probe_creationflags() == 123
     assert calls == [True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["foreground", "auto", "background"])
+async def test_all_modes_use_managed_windowless_process_group_spawn(
+    mode: str,
+    manager: ProcessManager,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[bool, int]] = []
+
+    def creation_flags(
+        *,
+        new_process_group: bool = False,
+        platform_name: str = os.name,
+    ) -> int:
+        flags = subprocess_creation_flags(
+            new_process_group=new_process_group,
+            platform_name=platform_name,
+        )
+        calls.append((new_process_group, flags))
+        return flags
+
+    monkeypatch.setattr(
+        "core.tools.process_manager.subprocess_creation_flags",
+        creation_flags,
+    )
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    arguments: dict[str, Any] = {
+        "command": ("print('done')" if mode == "foreground" else "import time; time.sleep(30)"),
+        "mode": mode,
+    }
+    if mode == "auto":
+        arguments["yield_after"] = 0.01
+
+    result: dict[str, Any] | None = None
+    try:
+        result = await bash_handler(make_context(tmp_path), arguments, manager)
+
+        expected_flags = subprocess_creation_flags(new_process_group=True)
+        assert result["ok"] is True
+        assert calls == [(True, expected_flags)]
+    finally:
+        if result is not None and result["ok"] is True and result["data"]["status"] == "running":
+            await kill_background(manager, result)
 
 
 @pytest.mark.asyncio

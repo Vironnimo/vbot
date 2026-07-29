@@ -713,6 +713,36 @@ def test_windows_process_tree_kill_falls_back_when_taskkill_times_out(
     assert fallback_kills == 1
 
 
+def test_windows_process_tree_kill_runs_taskkill_windowless(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fallback_kills = 0
+    run_kwargs: dict[str, Any] = {}
+
+    class FakeProcess:
+        pid = 12345
+
+        def kill(self) -> None:
+            nonlocal fallback_kills
+            fallback_kills += 1
+
+    def successful_taskkill(
+        args: list[str],
+        **kwargs: Any,
+    ) -> subprocess.CompletedProcess[bytes]:
+        run_kwargs.update(kwargs)
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr("core.tools.process_manager.os.name", "nt")
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr("core.tools.process_manager.subprocess.run", successful_taskkill)
+
+    ProcessManager._kill_process_tree(FakeProcess())  # type: ignore[arg-type]
+
+    assert run_kwargs["creationflags"] == 0x08000000
+    assert fallback_kills == 0
+
+
 @pytest.mark.asyncio
 async def test_log_file_holds_complete_output_beyond_buffer_cap(tmp_path: Path) -> None:
     # The in-memory buffer keeps only the newest bytes; the spool file must
