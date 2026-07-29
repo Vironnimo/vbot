@@ -62,7 +62,7 @@ _CRON_ACTION_PARAMETER: JsonObject = {
     "type": "string",
     "enum": sorted(CRON_ACTIONS),
     "description": (
-        "Operation to perform. create requires prompt and schedule; update/delete/enable/"
+        "Action to perform. create requires prompt and schedule; update/delete/enable/"
         "disable require id; update also requires at least one changed field."
     ),
 }
@@ -101,15 +101,18 @@ _CRON_SCHEDULE_PARAMETER: JsonObject = {
     "description": (
         "Schedule for create or update: ISO 8601 timestamp, 'in <duration>', "
         "'every <duration>', or exactly five cron fields. Durations use a positive whole "
-        "number plus m, h, or d. Bare durations, fuzzy dates, and six-field cron are invalid."
+        "number plus m, h, or d. Bare durations, fuzzy dates, and six-field cron are invalid. "
+        "Omit on update to keep the existing schedule."
     ),
 }
 _CRON_REPEAT_PARAMETER: JsonObject = {
-    "type": "integer",
+    "type": ["integer", "null"],
     "minimum": 1,
     "description": (
-        "Optional maximum number of future fires, including the first. Omit for unlimited "
-        "recurring schedules. One-time schedules allow only 1."
+        "Number of future fires, including the next one. A positive integer sets the count. "
+        "On update, omit repeat to keep the current count or set it to null to make a recurring "
+        "job unlimited. On create, omit it for an unlimited recurring job. One-time schedules "
+        "accept only 1 and never null."
     ),
 }
 
@@ -233,8 +236,11 @@ def _handle_create(
     schedule = required_string(arguments.get("schedule"), field_name="schedule")
     parsed_schedule = cron_service.parse_schedule(schedule)
     repeat = _optional_positive_integer(arguments.get("repeat"), field_name="repeat")
-    if parsed_schedule.schedule_type == "once" and repeat not in {None, 1}:
-        raise ValueError("repeat must be 1 for a one-time schedule")
+    if parsed_schedule.schedule_type == "once":
+        if "repeat" in arguments and repeat is None:
+            raise ValueError("repeat cannot be null for a one-time schedule; omit it or use 1")
+        if repeat not in {None, 1}:
+            raise ValueError("repeat must be 1 for a one-time schedule")
 
     job = cron_service.create_job(
         agent_id=agent_id,
@@ -280,13 +286,12 @@ def _handle_update(cron_service: CronService, arguments: JsonObject) -> JsonObje
         updates.update(parsed_schedule.as_job_fields())
     if "repeat" in arguments:
         repeat = _optional_positive_integer(arguments.get("repeat"), field_name="repeat")
-        if repeat is None:
-            raise ValueError("repeat must be a positive integer")
-        if parsed_schedule is not None and parsed_schedule.schedule_type == "once" and repeat != 1:
-            raise ValueError("repeat must be 1 for a one-time schedule")
+        if parsed_schedule is not None and parsed_schedule.schedule_type == "once":
+            if repeat is None:
+                raise ValueError("repeat cannot be null for a one-time schedule; use 1")
+            if repeat != 1:
+                raise ValueError("repeat must be 1 for a one-time schedule")
         updates["remaining_runs"] = repeat
-    elif parsed_schedule is not None:
-        updates["remaining_runs"] = 1 if parsed_schedule.schedule_type == "once" else None
     if not updates:
         raise ValueError("update requires at least one field to change")
 

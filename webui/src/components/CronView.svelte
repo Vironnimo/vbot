@@ -432,7 +432,7 @@
     const repeat = formValues.repeat.trim();
     const repeatValue = Number(repeat);
     const hasValidRepeat =
-      repeat.length === 0 ||
+      (repeat.length === 0 && (isCreating || !isOnceSchedule)) ||
       (Number.isInteger(repeatValue) &&
         repeatValue > 0 &&
         (!isOnceSchedule || repeatValue === 1));

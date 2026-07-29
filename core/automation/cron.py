@@ -648,8 +648,17 @@ class CronService:
 
         for field_name, field_value in fields.items():
             setattr(candidate, field_name, field_value)
-        if "schedule_type" in fields and "remaining_runs" not in fields:
-            candidate.remaining_runs = 1 if candidate.schedule_type == "once" else None
+        if candidate.schedule_type == "once":
+            if "remaining_runs" in fields and candidate.remaining_runs is None:
+                raise CronJobValidationError(
+                    "repeat cannot be null for a one-time schedule; use repeat: 1"
+                )
+            if (
+                "schedule_type" in fields
+                and "remaining_runs" not in fields
+                and job.remaining_runs != 1
+            ):
+                raise CronJobValidationError("Changing to a one-time schedule requires repeat: 1")
         if (
             candidate.schedule_type == "interval"
             and "interval_anchor_at" not in fields
