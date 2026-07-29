@@ -57,29 +57,51 @@ SKILL_PATH_RESOLUTION_NOTE = (
     "Scripts are listed with absolute paths for direct bash execution. Read relative "
     "references and assets with the skill tool using this skill name and file_path."
 )
+_SKILL_NAME_PARAMETER: JsonObject = {
+    "type": "string",
+    "description": "Skill name to activate or read.",
+}
+_SKILL_FILE_PATH_PARAMETER: JsonObject = {
+    "type": "string",
+    "minLength": 1,
+    "pattern": r"^(SKILL\.md|(?:scripts|references|assets)/.+)$",
+    "description": (
+        "Path relative to the named Skill, such as 'references/api.md'. "
+        "Returns that UTF-8 file instead of activating the Skill."
+    ),
+}
 SKILL_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
-    "properties": {
-        "name": {
-            "type": "string",
-            "description": (
-                "Skill name. With file_path, selects the Skill whose file to read; without "
-                "file_path, activates that Skill. Omit both fields to list available Skills."
-            ),
+    "description": (
+        "Choose exactly one mode: no arguments lists Skills, name activates a Skill, "
+        "and name with file_path reads one package file without activation."
+    ),
+    "oneOf": [
+        {
+            "type": "object",
+            "description": "List available Skills.",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
         },
-        "file_path": {
-            "type": "string",
-            "minLength": 1,
-            "pattern": r"^(SKILL\.md|(?:scripts|references|assets)/.+)$",
-            "description": (
-                "Optional path relative to the named skill, such as "
-                "'references/api.md'. When present, return that UTF-8 file instead "
-                "of activating the skill."
-            ),
+        {
+            "type": "object",
+            "description": "Activate one Skill and load its SKILL.md instructions.",
+            "properties": {"name": _SKILL_NAME_PARAMETER},
+            "required": ["name"],
+            "additionalProperties": False,
         },
-    },
-    "required": [],
-    "additionalProperties": False,
+        {
+            "type": "object",
+            "description": "Read one UTF-8 file from a Skill package without activating it.",
+            "properties": {
+                "name": _SKILL_NAME_PARAMETER,
+                "file_path": _SKILL_FILE_PATH_PARAMETER,
+            },
+            "required": ["name", "file_path"],
+            "additionalProperties": False,
+        },
+    ],
 }
 
 

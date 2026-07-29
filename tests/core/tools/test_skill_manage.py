@@ -108,45 +108,60 @@ def test_provider_schema_is_flat_and_hermes_shaped(tmp_path: Path) -> None:
     harness = _Harness(tmp_path)
     definitions = harness.tools.provider_definitions([SKILL_MANAGE_TOOL_NAME])
     parameters = cast(dict[str, Any], definitions[0]["parameters"])
-    properties = parameters["properties"]
+    branches = {branch["properties"]["action"]["enum"][0]: branch for branch in parameters["oneOf"]}
 
     assert parameters == SKILL_MANAGE_TOOL_PARAMETERS
     assert parameters["type"] == "object"
-    assert parameters["required"] == ["action", "name"]
-    assert parameters["additionalProperties"] is False
-    assert set(properties) == {
-        "action",
-        "name",
-        "scope",
-        "content",
-        "file_path",
-        "file_content",
-        "old_string",
-        "new_string",
-        "replace_all",
-    }
-    assert properties["action"]["enum"] == [
+    assert set(branches) == {
         "create",
         "edit",
         "patch",
         "write_file",
         "remove_file",
         "delete",
+    }
+    assert set(branches["create"]["properties"]) == {"action", "name", "scope", "content"}
+    assert branches["create"]["required"] == ["action", "name", "content"]
+    assert set(branches["edit"]["properties"]) == {"action", "name", "scope", "content"}
+    assert branches["edit"]["required"] == ["action", "name", "content"]
+    assert set(branches["patch"]["properties"]) == {
+        "action",
+        "name",
+        "scope",
+        "file_path",
+        "old_string",
+        "new_string",
+        "replace_all",
+    }
+    assert branches["patch"]["required"] == [
+        "action",
+        "name",
+        "old_string",
+        "new_string",
     ]
-    assert properties["action"]["description"] == (
-        "Action to perform. create makes a new Skill and edit replaces an existing SKILL.md; "
-        "both require content. patch replaces exact text and requires old_string and "
-        "new_string; file_path defaults to SKILL.md and replace_all defaults to false. "
-        "write_file requires file_path and file_content. remove_file requires file_path. "
-        "delete removes the entire Skill and needs no action-specific field."
-    )
-    assert "Required for every action" in properties["name"]["description"]
-    assert "Required for create and edit" in properties["content"]["description"]
-    assert "Required for write_file and remove_file" in properties["file_path"]["description"]
-    assert "Required only for write_file" in properties["file_content"]["description"]
-    assert "Required only for patch" in properties["old_string"]["description"]
-    assert "Required only for patch" in properties["new_string"]["description"]
-    assert "For patch only" in properties["replace_all"]["description"]
+    assert set(branches["write_file"]["properties"]) == {
+        "action",
+        "name",
+        "scope",
+        "file_path",
+        "file_content",
+    }
+    assert branches["write_file"]["required"] == [
+        "action",
+        "name",
+        "file_path",
+        "file_content",
+    ]
+    assert set(branches["remove_file"]["properties"]) == {
+        "action",
+        "name",
+        "scope",
+        "file_path",
+    }
+    assert branches["remove_file"]["required"] == ["action", "name", "file_path"]
+    assert set(branches["delete"]["properties"]) == {"action", "name", "scope"}
+    assert branches["delete"]["required"] == ["action", "name"]
+    assert all(branch["additionalProperties"] is False for branch in branches.values())
     assert "draft_id" not in str(parameters)
     assert "source_path" not in str(parameters)
     assert "executable" not in str(parameters)
@@ -193,7 +208,7 @@ def test_create_requires_content(tmp_path: Path) -> None:
 
     assert result == tool_failure(
         "invalid_arguments",
-        "content must be a string",
+        "arguments: 'content' is a required property [required]",
         retryable=False,
     )
     assert not harness.home("main").exists()
@@ -355,7 +370,8 @@ def test_action_rejects_fields_from_another_action(tmp_path: Path) -> None:
 
     assert result == tool_failure(
         "invalid_arguments",
-        "Unknown delete argument(s): content",
+        "arguments: Additional properties are not allowed ('content' was unexpected) "
+        "[additionalProperties]",
         retryable=False,
     )
 
@@ -415,4 +431,4 @@ def test_removed_draft_action_is_rejected(tmp_path: Path) -> None:
     result = harness.run({"action": "begin", "name": "demo"})
 
     assert result["ok"] is False
-    assert "[enum]" in cast(dict[str, Any], result["error"])["message"]
+    assert "[oneOf]" in cast(dict[str, Any], result["error"])["message"]

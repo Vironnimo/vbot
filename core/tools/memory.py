@@ -9,6 +9,7 @@ from collections import OrderedDict
 from core.memory import MemoryEntry, MemoryError, MemoryScope, MemoryService
 from core.tools.arguments import required_int
 from core.tools.availability import MEMORY_TOOL_NAME
+from core.tools.contracts import action_schema
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -56,25 +57,53 @@ _MEMORY_ENTRY_ID_PARAMETER: JsonObject = {
     "description": "1-based entry id returned by list. Required for replace and remove.",
 }
 
-MEMORY_TOOL_PARAMETERS: JsonObject = {
-    "type": "object",
-    "description": (
-        "Flat action interface. The handler validates the fields required and allowed by "
-        "the selected action."
-    ),
-    "properties": {
-        "action": {
-            "type": "string",
-            "enum": list(MEMORY_ACTIONS),
-            "description": "List entries, add one, replace one, or remove one.",
+MEMORY_TOOL_PARAMETERS: JsonObject = action_schema(
+    {
+        "list": {
+            "type": "object",
+            "description": "List current pinned entries and their 1-based ids.",
+            "properties": {"scope": _MEMORY_SCOPE_PARAMETER},
+            "required": ["scope"],
         },
-        "scope": _MEMORY_SCOPE_PARAMETER,
-        "content": _MEMORY_CONTENT_PARAMETER,
-        "entry_id": _MEMORY_ENTRY_ID_PARAMETER,
+        "add": {
+            "type": "object",
+            "description": "Add one pinned entry.",
+            "properties": {
+                "scope": _MEMORY_SCOPE_PARAMETER,
+                "content": _MEMORY_CONTENT_PARAMETER,
+            },
+            "required": ["scope", "content"],
+        },
+        "replace": {
+            "type": "object",
+            "description": (
+                "Replace one existing pinned entry. Call list first because ids can shift."
+            ),
+            "properties": {
+                "scope": _MEMORY_SCOPE_PARAMETER,
+                "entry_id": _MEMORY_ENTRY_ID_PARAMETER,
+                "content": _MEMORY_CONTENT_PARAMETER,
+            },
+            "required": ["scope", "entry_id", "content"],
+        },
+        "remove": {
+            "type": "object",
+            "description": (
+                "Remove one existing pinned entry. Call list first because ids can shift."
+            ),
+            "properties": {
+                "scope": _MEMORY_SCOPE_PARAMETER,
+                "entry_id": _MEMORY_ENTRY_ID_PARAMETER,
+            },
+            "required": ["scope", "entry_id"],
+        },
     },
-    "required": ["action", "scope"],
-    "additionalProperties": False,
-}
+    description=(
+        "Flat action interface. Each action exposes only its valid arguments and "
+        "structurally requires every field it needs."
+    ),
+    action_description="Memory action to perform.",
+)
 
 _MEMORY_ACTION_FIELDS = {
     "list": frozenset({"action", "scope"}),

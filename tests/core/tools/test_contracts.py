@@ -12,6 +12,7 @@ from core.tools import (
     ToolContext,
     ToolContractError,
     ToolRegistry,
+    action_schema,
     compile_tool_contract,
     tool_success,
 )
@@ -43,6 +44,41 @@ def _input_schema() -> JsonObject:
         "required": ["count"],
         "additionalProperties": False,
     }
+
+
+def test_action_schema_builds_closed_required_branches_without_field_leakage() -> None:
+    schema = action_schema(
+        {
+            "add": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string"},
+                },
+                "required": ["content"],
+            },
+            "remove": {
+                "type": "object",
+                "properties": {
+                    "entry_id": {"type": "integer"},
+                },
+                "required": ["entry_id"],
+            },
+        },
+        description="Choose an action.",
+    )
+
+    contract = compile_tool_contract(name="sample", input_schema=schema)
+    branches = {branch["properties"]["action"]["enum"][0]: branch for branch in schema["oneOf"]}
+
+    assert set(branches["add"]["properties"]) == {"action", "content"}
+    assert branches["add"]["required"] == ["action", "content"]
+    assert set(branches["remove"]["properties"]) == {"action", "entry_id"}
+    assert branches["remove"]["required"] == ["action", "entry_id"]
+    assert all(branch["additionalProperties"] is False for branch in branches.values())
+    contract.validate_arguments({"action": "add", "content": "fact"})
+    contract.validate_arguments({"action": "remove", "entry_id": 1})
+    with pytest.raises(ToolContractError, match="entry_id"):
+        contract.validate_arguments({"action": "add", "content": "fact", "entry_id": 1})
 
 
 def test_compile_rejects_open_fixed_object() -> None:
