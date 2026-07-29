@@ -59,6 +59,7 @@ _WINDOWS_POWERSHELL = "powershell.exe"
 _DESKTOP_INSTALL_SHAPES = frozenset({SERVER_DESKTOP_SHAPE, DESKTOP_CLIENT_SHAPE})
 
 Restart = Callable[[ServerInstance], CommandResult]
+ResolveInstance = Callable[..., ServerInstance]
 UNKNOWN_VBOT_VERSION = "unknown"
 
 
@@ -124,6 +125,10 @@ def run_update(
     latest_release: ReleaseLookup | None = None,
     service_name: str = DEFAULT_SERVICE_NAME,
     platform_name: str | None = None,
+    resolve: ResolveInstance | None = None,
+    host: str | None = None,
+    port: int | None = None,
+    data_dir: str | Path | None = None,
 ) -> CommandResult:
     """Advance the installed checkout and optionally restart the server."""
 
@@ -152,6 +157,18 @@ def run_update(
             inferred_state = True
     except (InstallStateError, OSError) as exc:
         return _fail(instance, f"update: installation manifest is not usable: {exc}")
+
+    try:
+        instance = _resolve_update_instance(
+            instance,
+            state,
+            resolve=resolve,
+            host=host,
+            port=port,
+            data_dir=data_dir,
+        )
+    except (OSError, ValueError) as exc:
+        return _fail(instance, f"update: server target is not usable: {exc}")
 
     desktop_guard = _guard_windows_desktop_not_running(
         state,
@@ -316,6 +333,44 @@ def run_update(
         start=start,
         service_name=service_name,
         install_shape=state.install_shape,
+    )
+
+
+def _resolve_update_instance(
+    current: ServerInstance,
+    state: InstallState,
+    *,
+    resolve: ResolveInstance | None,
+    host: str | None,
+    port: int | None,
+    data_dir: str | Path | None,
+) -> ServerInstance:
+    """Apply explicit target fields over the Installer-recorded server target."""
+
+    if resolve is None:
+        return current
+    return resolve(
+        host=(
+            host
+            if host is not None
+            else state.server_host
+            if state.server_host is not None
+            else current.host
+        ),
+        port=(
+            port
+            if port is not None
+            else state.server_port
+            if state.server_port is not None
+            else current.port
+        ),
+        data_dir=(
+            data_dir
+            if data_dir is not None
+            else state.server_data_directory
+            if state.server_data_directory is not None
+            else current.data_dir
+        ),
     )
 
 

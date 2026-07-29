@@ -105,6 +105,7 @@ from cli.provider_management import (
     provider_usage,
 )
 from cli.server_management import (
+    DEFAULT_HOST,
     DEFAULT_SERVICE_NAME,
     CommandResult,
     ServerInstance,
@@ -1416,7 +1417,11 @@ def dispatch_update_command(
 ) -> CommandResult:
     """Run the local self-update against the resolved server target."""
 
-    instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
+    instance = resolve(
+        host=args.host if args.host is not None else DEFAULT_HOST,
+        port=args.port,
+        data_dir=args.data_dir,
+    )
     return run_update_fn(
         instance,
         discard=args.discard,
@@ -1425,6 +1430,10 @@ def dispatch_update_command(
         stop=stop,
         start=start,
         service_name=getattr(args, "service_name", None) or DEFAULT_SERVICE_NAME,
+        resolve=resolve,
+        host=args.host,
+        port=args.port,
+        data_dir=args.data_dir,
     )
 
 
