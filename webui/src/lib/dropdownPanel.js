@@ -44,17 +44,24 @@ export function portal(node, target = document.body) {
  * Compute fixed-position coordinates for a panel anchored to `triggerElement`.
  * Flips above the trigger when there is little room below, and clamps within
  * the viewport. `reservedHeight` accounts for non-scrolling chrome (e.g. a
- * search header) when sizing the scroll area.
+ * search header) when sizing the scroll area. Callers may supply a wider
+ * `panelWidth` and align its end edge to a compact trigger.
  *
  * @returns {{ placement: 'top' | 'bottom', left: number, width: number,
  *             verticalRule: string, optionsMaxHeight: number }}
  */
 export function computePanelPosition(
   triggerElement,
-  { reservedHeight = 0, contentHeight = null } = {},
+  {
+    reservedHeight = 0,
+    contentHeight = null,
+    panelWidth = null,
+    horizontalAlign = 'start',
+  } = {},
 ) {
   const rect = triggerElement.getBoundingClientRect();
-  const width = rect.width;
+  const viewportWidth = Math.max(0, window.innerWidth - EDGE_PADDING * 2);
+  const width = Math.min(panelWidth ?? rect.width, viewportWidth);
 
   const availableBelow =
     window.innerHeight - rect.bottom - OFFSET - EDGE_PADDING;
@@ -77,8 +84,11 @@ export function computePanelPosition(
     Math.min(available - reservedHeight, MAX_HEIGHT),
   );
 
+  const triggerRight = rect.right ?? rect.left + rect.width;
+  const preferredLeft =
+    horizontalAlign === 'end' ? triggerRight - width : rect.left;
   const left = Math.min(
-    Math.max(EDGE_PADDING, rect.left),
+    Math.max(EDGE_PADDING, preferredLeft),
     Math.max(EDGE_PADDING, window.innerWidth - width - EDGE_PADDING),
   );
 

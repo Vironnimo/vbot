@@ -73,4 +73,17 @@ describe('computePanelPosition', () => {
       computePanelPosition(trigger, { contentHeight: 300 }).placement,
     ).toBe('top');
   });
+
+  it('right-aligns a wider floating menu with its trigger', () => {
+    const result = computePanelPosition(
+      triggerAt({ top: 100, bottom: 124, left: 300, width: 24 }),
+      {
+        panelWidth: 160,
+        horizontalAlign: 'end',
+      },
+    );
+
+    expect(result.width).toBe(160);
+    expect(result.left).toBe(164);
+  });
 });
