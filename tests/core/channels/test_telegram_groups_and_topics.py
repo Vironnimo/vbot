@@ -212,6 +212,35 @@ async def test_group_message_with_bot_mention_triggers_run(
 
 
 @pytest.mark.asyncio
+async def test_group_message_with_visible_bot_name_triggers_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "ch-tg-assistant--10001"
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="ok")
+    )
+    adapter, _chat_sessions, _trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[-10001],
+        trigger_run=trigger_mock,
+        bot_username="MyBot",
+        bot_display_name="Helpful Bot",
+        bot_id=999,
+    )
+
+    await adapter._handle_inbound_message(
+        make_group_update(text="helpful   bot, are you there?"),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, -10001)
+
+    trigger_mock.assert_awaited_once()
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
 async def test_group_reply_to_bot_message_triggers_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -240,7 +269,7 @@ async def test_group_reply_to_bot_message_triggers_run(
 
 
 @pytest.mark.asyncio
-async def test_mentions_bot_checks_caption_too(
+async def test_mentions_bot_checks_username_name_and_caption(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -249,11 +278,16 @@ async def test_mentions_bot_checks_caption_too(
         monkeypatch,
         allowed_chat_ids=[-10001],
         bot_username="MyBot",
+        bot_display_name="Helpful Bot",
         bot_id=999,
     )
 
     assert adapter._mentions_bot(SimpleNamespace(text=None, caption="@MyBot look at this"))
     assert not adapter._mentions_bot(SimpleNamespace(text=None, caption="@MyBotty look"))
+    assert adapter._mentions_bot(SimpleNamespace(text="Hey HELPFUL BOT!", caption=None))
+    assert adapter._mentions_bot(SimpleNamespace(text=None, caption="Helpful   Bot, see this"))
+    assert not adapter._mentions_bot(SimpleNamespace(text="Unhelpful Bot", caption=None))
+    assert not adapter._mentions_bot(SimpleNamespace(text="Helpful Botany", caption=None))
     assert not adapter._mentions_bot(SimpleNamespace(text=None, caption=None))
     await adapter.stop()
 

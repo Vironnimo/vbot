@@ -243,6 +243,7 @@ def make_adapter(
     owner_user_ids: list[str] | None = None,
     observe_unaddressed: bool = False,
     bot_username: str | None = None,
+    bot_display_name: str | None = None,
     bot_id: int | None = None,
     trigger_run: AsyncMock | None = None,
     compact_session: AsyncMock | None = None,
@@ -297,8 +298,14 @@ def make_adapter(
         command_dispatcher=cast(Any, resolved_command_dispatcher),
         chat_migration_persister=chat_migration_persister,
     )
-    if bot_username is not None or bot_id is not None:
-        adapter._set_bot_identity(SimpleNamespace(id=bot_id, username=bot_username))
+    if bot_username is not None or bot_display_name is not None or bot_id is not None:
+        adapter._set_bot_identity(
+            SimpleNamespace(
+                id=bot_id,
+                username=bot_username,
+                full_name=bot_display_name,
+            )
+        )
 
     bot = SimpleNamespace(
         send_message=AsyncMock(),

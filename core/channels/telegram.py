@@ -131,7 +131,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         self._denied_chat_log = DeniedChatLog()
         self._bot_id: int | None = None
         self._bot_username: str | None = None
-        self._bot_mention_pattern: re.Pattern[str] | None = None
+        self._bot_address_patterns: tuple[re.Pattern[str], ...] = ()
         self._album_buffers: dict[str, list[Any]] = {}
         self._album_conversations: dict[str, ConversationFacts] = {}
         self._album_companion_texts: dict[str, str] = {}
@@ -153,8 +153,8 @@ class TelegramChannelAdapter(ChannelAdapter):
         self._stop_event.clear()
 
         await application.initialize()
-        # The bot's own identity feeds the addressing facts (@mention detection,
-        # reply-to-bot checks, /cmd@botname suffix parsing) for group gating.
+        # The bot's own identity feeds the addressing facts (@mention and visible-name
+        # detection, reply-to-bot checks, /cmd@botname suffix parsing) for group gating.
         bot_user = await application.bot.get_me()
         self._set_bot_identity(bot_user)
         await application.bot.delete_webhook(drop_pending_updates=False)
@@ -980,7 +980,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         existing_messages = self._album_buffers.get(album_id)
         if existing_messages is not None:
             existing_messages.append(message)
-            # An @mention or reply-to-bot on any album item addresses the whole album.
+            # A username/name address or reply-to-bot on any item addresses the whole album.
             buffered_conversation = self._album_conversations[album_id]
             self._album_conversations[album_id] = replace(
                 buffered_conversation,
@@ -1174,27 +1174,31 @@ class TelegramChannelAdapter(ChannelAdapter):
         bot_id = getattr(bot_user, "id", None)
         self._bot_id = bot_id if _is_integer(bot_id) else None
 
+        address_patterns: list[re.Pattern[str]] = []
         username = getattr(bot_user, "username", None)
         if isinstance(username, str) and username.strip():
             self._bot_username = username.strip()
-            self._bot_mention_pattern = re.compile(
-                rf"@{re.escape(self._bot_username)}\b", re.IGNORECASE
+            address_patterns.append(
+                re.compile(rf"@{re.escape(self._bot_username)}(?!\w)", re.IGNORECASE)
             )
         else:
             self._bot_username = None
-            self._bot_mention_pattern = None
+
+        display_name = _telegram_bot_display_name(bot_user)
+        if display_name is not None:
+            address_patterns.append(_compile_display_name_pattern(display_name))
+        self._bot_address_patterns = tuple(address_patterns)
 
     def _mentions_bot(self, message: Any) -> bool:
-        # Word-boundary regex over text and caption instead of entity offsets: Telegram
-        # entity offsets are UTF-16 code units, and the regex catches the same practical
-        # @botusername mentions without that conversion.
-        pattern = self._bot_mention_pattern
-        if pattern is None:
-            return False
+        # Regex over text and caption instead of entity offsets: Telegram entity offsets
+        # are UTF-16 code units. Runtime-derived patterns cover both @username and the
+        # visible bot name without mutating persisted mention_patterns configuration.
         for attribute_name in ("text", "caption"):
             value = getattr(message, attribute_name, None)
-            if isinstance(value, str) and pattern.search(value):
-                return True
+            if isinstance(value, str):
+                for pattern in self._bot_address_patterns:
+                    if pattern.search(value):
+                        return True
         return False
 
     def _is_reply_to_bot(self, message: Any) -> bool:
@@ -1508,6 +1512,36 @@ def _user_display_name(user: Any) -> str | None:
     if isinstance(username, str) and username.strip():
         return username.strip()
     return None
+
+
+def _telegram_bot_display_name(bot_user: Any) -> str | None:
+    """Return the human-visible Telegram name without falling back to @username."""
+    full_name = getattr(bot_user, "full_name", None)
+    if isinstance(full_name, str) and full_name.strip():
+        return full_name.strip()
+
+    name_parts = [
+        value.strip()
+        for value in (
+            getattr(bot_user, "first_name", None),
+            getattr(bot_user, "last_name", None),
+        )
+        if isinstance(value, str) and value.strip()
+    ]
+    return " ".join(name_parts) or None
+
+
+def _compile_display_name_pattern(display_name: str) -> re.Pattern[str]:
+    """Compile an exact, whitespace-tolerant display-name address pattern."""
+    name_parts = re.split(r"\s+", display_name.strip())
+    escaped_name = r"\s+".join(re.escape(part) for part in name_parts)
+    prefix = r"(?<!\w)" if _is_word_character(name_parts[0][0]) else ""
+    suffix = r"(?!\w)" if _is_word_character(name_parts[-1][-1]) else ""
+    return re.compile(f"{prefix}{escaped_name}{suffix}", re.IGNORECASE)
+
+
+def _is_word_character(value: str) -> bool:
+    return re.fullmatch(r"\w", value) is not None
 
 
 def _render_structured_message(message: Any) -> str | None:
