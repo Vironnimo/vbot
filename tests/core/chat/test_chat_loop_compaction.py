@@ -14,7 +14,6 @@ from core.chat import (
     ChatMessage,
 )
 from core.chat.chat import (
-    MAX_AUTO_COMPACTIONS_PER_RUN,
     PINNED_SKILL_CATALOG_META_KEY,
     PINNED_WORKING_PROJECT_CONTEXT_META_KEY,
     SEEN_SKILLS_META_KEY,
@@ -526,7 +525,9 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
 
 
 @pytest.mark.asyncio
-async def test_compaction_caps_automatic_checkpoints_per_run(tmp_path: Path) -> None:
+async def test_compaction_allows_repeated_automatic_checkpoints_in_one_run(
+    tmp_path: Path,
+) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
     adapter = StubAdapter([])
     runtime: Any = StubRuntime(
@@ -561,18 +562,16 @@ async def test_compaction_caps_automatic_checkpoints_per_run(tmp_path: Path) -> 
     )
     context.request_state = await loop._build_request_state(agent, session)
 
-    for _ in range(MAX_AUTO_COMPACTIONS_PER_RUN + 1):
+    requested_compactions = 5
+    for _ in range(requested_compactions):
         context.request_state = await loop._maybe_auto_compact_state(
             context,
             context.primary_target,
             usage={"input_tokens": 90},
         )
 
-    assert len(compaction_service.compact_calls) == MAX_AUTO_COMPACTIONS_PER_RUN
-    assert context.auto_compaction_attempts == MAX_AUTO_COMPACTIONS_PER_RUN
-    assert persisted_roles(session.load()).count("compaction_checkpoint") == (
-        MAX_AUTO_COMPACTIONS_PER_RUN
-    )
+    assert len(compaction_service.compact_calls) == requested_compactions
+    assert persisted_roles(session.load()).count("compaction_checkpoint") == requested_compactions
 
 
 def test_compaction_does_not_restore_rich_content_for_aged_tool_result() -> None:
