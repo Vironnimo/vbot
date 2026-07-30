@@ -2,9 +2,12 @@ import MarkdownIt from 'markdown-it';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  reasoningMarkdownSource,
   renderMarkdown,
   renderMarkdownDocument,
   renderMarkdownStreaming,
+  renderReasoningMarkdown,
+  renderReasoningMarkdownStreaming,
 } from '../markdown.js';
 
 describe('renderMarkdown()', () => {
@@ -161,5 +164,37 @@ describe('renderMarkdown()', () => {
     const html = renderMarkdown('# After eviction');
 
     expect(html).toContain('<h1>After eviction</h1>');
+  });
+});
+
+describe('reasoning Markdown', () => {
+  it('separates adjacent bold reasoning blocks while preserving their emphasis', () => {
+    const source = '**Designing the component****Planning the tests**';
+
+    expect(reasoningMarkdownSource(source)).toBe(
+      '**Designing the component**\n**Planning the tests**',
+    );
+
+    for (const html of [
+      renderReasoningMarkdown(source),
+      renderReasoningMarkdownStreaming(source),
+    ]) {
+      expect(html).toContain('<strong>Designing the component</strong>');
+      expect(html).toContain('<br>');
+      expect(html).toContain('<strong>Planning the tests</strong>');
+      expect(html).not.toContain('componentPlanning');
+    }
+  });
+
+  it('leaves adjacent bold markers untouched outside reasoning', () => {
+    const html = renderMarkdown('**First****Second**');
+
+    expect(html).not.toContain('<br>');
+  });
+
+  it('does not reinterpret longer asterisk runs as reasoning boundaries', () => {
+    expect(reasoningMarkdownSource('Before ****** after')).toBe(
+      'Before ****** after',
+    );
   });
 });
