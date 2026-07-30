@@ -973,9 +973,11 @@ def test_detection_loop_recovers_single_microphone_read_error(
     assert not worker._running.is_set()
 
 
-def test_detection_loop_warns_when_running_microphone_disconnects(
+def test_detection_loop_recovers_when_running_microphone_reconnects(
     fake_bridge: FakeBridge,
+    monkeypatch,
 ) -> None:
+    from desktop.wakeword import worker as worker_module
     from desktop.wakeword.worker import WakewordWorker
 
     worker = WakewordWorker(
@@ -984,24 +986,48 @@ def test_detection_loop_warns_when_running_microphone_disconnects(
         server_url="http://127.0.0.1:8420",
     )
     open_attempts = 0
+    refresh_calls = 0
+    reconnect_waits: list[float] = []
 
     def open_stream() -> None:
         nonlocal open_attempts
         open_attempts += 1
-        if open_attempts > 1:
+        if open_attempts == 1:
+            worker._stream = FailingReadStream([])
+            return
+        if open_attempts == 2:
             raise RuntimeError("microphone disconnected")
-        worker._stream = FailingReadStream([])
+        worker._stream = FakeSounddeviceStream(
+            [_make_silence_chunk()],
+            on_read=worker._running.clear,
+        )
+
+    def refresh_microphone_devices() -> bool:
+        nonlocal refresh_calls
+        refresh_calls += 1
+        return True
+
+    def wait_for_reconnect(_running, duration_seconds: float) -> None:
+        reconnect_waits.append(duration_seconds)
 
     worker._open_stream = open_stream  # type: ignore[method-assign]
     worker._read_config = lambda: {"target_agent_id": "main"}  # type: ignore[method-assign]
     worker._target_agent_available = lambda _agent_id: True  # type: ignore[assignment,method-assign]
+    monkeypatch.setattr(worker_module, "_sleep_while_running", wait_for_reconnect)
+    monkeypatch.setattr(worker_module, "refresh_microphone_devices", refresh_microphone_devices)
     worker._running.set()
 
     worker._run()
 
-    assert fake_bridge.states == ["listening", "microphone_disconnected"]
-    assert fake_bridge.errors == [None, "microphone_read_failed"]
-    assert fake_bridge.active_microphone is None
+    assert open_attempts == 3
+    assert refresh_calls == 1
+    assert reconnect_waits == [30.0]
+    assert fake_bridge.states == [
+        "listening",
+        "microphone_disconnected",
+        "listening",
+    ]
+    assert fake_bridge.errors == [None, "microphone_read_failed", None]
     assert "error" not in fake_bridge.states
     assert not worker._running.is_set()
 

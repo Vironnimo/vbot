@@ -46,6 +46,7 @@ _DETECTION_PRE_ROLL_CHUNKS = int(_DETECTION_PRE_ROLL_SECONDS / (_FRAME_SIZE_SAMP
 _MAX_RECORDING_SECONDS = 15.0
 _MAX_RECORDING_FRAMES = int(_MAX_RECORDING_SECONDS / (_VAD_FRAME_DURATION_MS / 1000))
 _MAX_CONSECUTIVE_MIC_READ_ERRORS = 3
+_MICROPHONE_RECONNECT_INTERVAL_SECONDS = 30.0
 _POST_DETECTION_LISTENING_HOLD_SECONDS = 1.0
 _INTERRUPTIBLE_SLEEP_SLICE_SECONDS = 0.05
 
@@ -323,13 +324,19 @@ class WakewordWorker:
                     logger.warning("Microphone read error", exc_info=True)
                     consecutive_read_errors += 1
                     if consecutive_read_errors >= _MAX_CONSECUTIVE_MIC_READ_ERRORS:
-                        self._disconnect_microphone("microphone_read_failed")
-                        break
+                        if not self._recover_microphone("microphone_read_failed"):
+                            break
+                        consecutive_read_errors = 0
+                        detection_pre_roll.clear()
+                        continue
                     if self._restart_stream():
                         self._bridge.publish_state("listening")
                         continue
-                    self._disconnect_microphone("microphone_read_failed")
-                    break
+                    if not self._recover_microphone("microphone_read_failed"):
+                        break
+                    consecutive_read_errors = 0
+                    detection_pre_roll.clear()
+                    continue
 
                 consecutive_read_errors = 0
                 detection_pre_roll.append(captured_frame)
@@ -359,8 +366,9 @@ class WakewordWorker:
                     self._prepare_next_listen(outcome)
                     if not self._running.is_set():
                         break
-                    if not self._restart_stream():
-                        self._disconnect_microphone("microphone_unavailable")
+                    if not self._restart_stream() and not self._recover_microphone(
+                        "microphone_unavailable"
+                    ):
                         break
         finally:
             self._close_stream()
@@ -518,12 +526,32 @@ class WakewordWorker:
         self._running.clear()
         self._bridge.publish_state("error", error_code)
 
-    def _disconnect_microphone(self, reason_code: str) -> None:
-        """Pause Voice without treating an expected runtime device loss as fatal."""
+    def _recover_microphone(self, reason_code: str) -> bool:
+        """Wait for a disconnected runtime microphone and reopen it when available."""
         logger.warning("Wakeword microphone disconnected (reason=%s)", reason_code)
-        self._running.clear()
+        self._close_stream()
         self._bridge.publish_runtime_details(active_microphone=None)
         self._bridge.publish_state("microphone_disconnected", reason_code)
+        while self._running.is_set():
+            _sleep_while_running(
+                self._running,
+                _MICROPHONE_RECONNECT_INTERVAL_SECONDS,
+            )
+            if not self._running.is_set():
+                return False
+            refresh_microphone_devices()
+            try:
+                self._open_stream()
+            except Exception:
+                logger.debug("Microphone is still unavailable", exc_info=True)
+                continue
+            if not self._running.is_set():
+                self._close_stream()
+                return False
+            logger.info("Wakeword microphone reconnected")
+            self._bridge.publish_state("listening")
+            return True
+        return False
 
     # -- Audio recording -----------------------------------------------------
 
