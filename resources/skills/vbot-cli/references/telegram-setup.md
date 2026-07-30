@@ -69,9 +69,9 @@ Notes:
 
 ## 5. Groups and privacy mode
 
-BotFather bots have **privacy mode on** by default: in groups the bot only receives @mentions, replies to its own messages, and `/commands`. That matches vBot's default group gating (`response_mode: "mention"`), so for a normal "answer when addressed" group bot no BotFather change is needed.
+BotFather bots have **privacy mode on** by default: in groups the bot only receives @mentions, replies to its own messages, and `/commands`. Those addressing forms work with vBot's default group gating (`response_mode: "mention"`), but the visible Telegram name is a plain message and requires privacy mode to be disabled.
 
-Disable privacy mode only when the bot must see every group message — required for `observe_unaddressed: true` (passive context capture) and for wake-word `mention_patterns` to match plain messages:
+Disable privacy mode when the bot must see plain group messages — required for visible-name addressing, `observe_unaddressed: true` (passive context capture), and wake-word `mention_patterns`:
 
 1. Send `/setprivacy` to BotFather, select the bot, choose `Disable`.
 2. Remove the bot from the group and re-add it (Telegram applies the change only on re-join).
@@ -82,5 +82,5 @@ Group gating fields (`response_mode`, `mention_patterns`, `owner_user_ids`, `obs
 
 - **Bot does not react at all in a direct chat** → chat not on the allowlist. Check `vbot channel status` for the denied entry and allow it.
 - **Channel `failed=yes`** → read the `failure_reason`; use `channel set-token <id> --stdin` when the token is missing, invalid, or revoked, then check `channel status` again.
-- **Bot ignores plain group messages** → expected in `mention` mode; address it with @username or a reply. If a wake word or passive observation is configured and still nothing arrives, privacy mode is still on (step 5).
+- **Bot ignores its visible name or other plain group messages** → privacy mode is still on (step 5), or the text did not match a configured wake word. @username and replies remain available with privacy mode on.
 - **Group commands ignored** → group slash commands require the sender to be in `owner_user_ids`; an empty list means nobody may use them.

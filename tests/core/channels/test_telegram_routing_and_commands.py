@@ -53,7 +53,7 @@ def test_conversation_facts_classifies_kind_by_chat_id_sign(
     adapter._config = make_config(allowed_chat_ids=[chat_id])
     adapter._bot_id = None
     adapter._bot_username = None
-    adapter._bot_mention_pattern = None
+    adapter._bot_address_patterns = ()
 
     conversation = adapter._conversation_facts(make_update(chat_id=chat_id, user_id=50, text="hi"))
 
@@ -76,7 +76,7 @@ def test_conversation_facts_display_name_chain(user: SimpleNamespace, expected: 
     adapter._config = make_config(allowed_chat_ids=[12345])
     adapter._bot_id = None
     adapter._bot_username = None
-    adapter._bot_mention_pattern = None
+    adapter._bot_address_patterns = ()
     update = SimpleNamespace(
         effective_chat=SimpleNamespace(id=12345),
         effective_user=user,
