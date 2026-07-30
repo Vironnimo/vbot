@@ -80,7 +80,11 @@ BASH_TOOL_DESCRIPTION = (
     "coalesced at the Session's next Run boundary, so continue independent work or end the "
     "current Run; do not poll merely to wait or start another copy. Result output keeps only "
     f"the newest {BASH_MODEL_OUTPUT_CAP_CHARS} characters; when truncated, search/read "
-    "log_file for the complete output." + _shell_syntax_notes()
+    "log_file for the complete output. Do not manually detach or daemonize a long-lived "
+    "command inside foreground using Start-Process, start, nohup, shell &, or similar "
+    "constructs; that bypasses vBot's process ownership. Use background when it is known to "
+    "be long-lived, or auto when it should be observed first and handed off if still running."
+    + _shell_syntax_notes()
 )
 BASH_SUBAGENT_TOOL_DESCRIPTION = (
     "Run a shell command inside this Sub-Agent without process handoff. Choose foreground "
@@ -90,7 +94,10 @@ BASH_SUBAGENT_TOOL_DESCRIPTION = (
     "instead of handing it off. timeout is an independent hard kill deadline and never "
     "extends yield_after. Result output keeps only "
     f"the newest {BASH_MODEL_OUTPUT_CAP_CHARS} characters; when truncated, search/read "
-    "log_file for the complete output." + _shell_syntax_notes()
+    "log_file for the complete output. Do not manually detach or daemonize a command using "
+    "Start-Process, start, nohup, shell &, or similar constructs; process handoff is "
+    "unavailable here and every command must remain under vBot's process ownership."
+    + _shell_syntax_notes()
 )
 BASH_EXECUTION_MODES = ("foreground", "auto", "background")
 _BASH_COMMAND_PARAMETER: JsonObject = {

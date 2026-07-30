@@ -1366,6 +1366,15 @@ def test_register_bash_tool() -> None:
     assert tool.description == BASH_TOOL_DESCRIPTION
     assert tool.parameters == BASH_TOOL_PARAMETERS
     assert "Choose foreground for bounded commands whose result is needed" in tool.description
+    assert (
+        "Do not manually detach or daemonize a long-lived command inside foreground"
+        in tool.description
+    )
+    assert "that bypasses vBot's process ownership" in tool.description
+    assert (
+        "Use background when it is known to be long-lived, or auto when it should be observed"
+        in tool.description
+    )
     assert "read the file's tail to check progress" not in tool.description
     branches = {
         branch["properties"]["mode"]["enum"][0]: branch for branch in tool.parameters["oneOf"]
@@ -1427,6 +1436,10 @@ def test_subagent_projection_exposes_only_non_handoff_bash_modes() -> None:
 
     assert bash_definition["description"] == BASH_SUBAGENT_TOOL_DESCRIPTION
     assert bash_definition["parameters"] == BASH_SUBAGENT_TOOL_PARAMETERS
+    assert "Do not manually detach or daemonize a command" in bash_definition["description"]
+    assert (
+        "every command must remain under vBot's process ownership" in bash_definition["description"]
+    )
     assert set(branches) == {"foreground", "auto"}
     assert branches["auto"]["properties"]["yield_after"]["default"] == 1800
     assert "process handoff is unavailable" in branches["auto"]["properties"]["mode"]["description"]
