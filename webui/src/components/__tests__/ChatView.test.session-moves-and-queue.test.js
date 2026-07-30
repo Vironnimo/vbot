@@ -746,7 +746,7 @@ describe('ChatView', () => {
     expect(subscribeRunEventsMock).toHaveBeenCalledTimes(1);
   });
 
-  it('reloads history after a /compact that carries an instruction', async () => {
+  it('streams /compact through the same live checkpoint lifecycle as auto-compaction', async () => {
     const streamCalls = [];
     rpcMock.mockImplementation(
       createChatRpcMock({
@@ -763,9 +763,23 @@ describe('ChatView', () => {
           streamCalls.push(content);
           if (content === '/compact focus on the auth work') {
             return {
-              command_handled: true,
-              reply: 'Context compacted.',
-              output: 'toast',
+              run_id: 'run-manual-compaction',
+              sse_url: '/api/runs/run-manual-compaction/events',
+              status: 'running',
+              events: [
+                {
+                  type: 'run_started',
+                  run_id: 'run-manual-compaction',
+                  sequence: 1,
+                  payload: { status: 'running' },
+                },
+                {
+                  type: 'compaction_started',
+                  run_id: 'run-manual-compaction',
+                  sequence: 2,
+                  payload: {},
+                },
+              ],
             };
           }
           throw new Error(`Unexpected stream content: ${content}`);
@@ -781,9 +795,8 @@ describe('ChatView', () => {
       100,
     );
 
-    // The reload is what surfaces the new compaction separator. The argument
-    // form must trigger it just like the bare `/compact` does — regression
-    // guard for `isCompactCommand` matching only the leading token.
+    // Manual Compaction is a real Run. It must render from the same lifecycle
+    // events as Auto-Compaction without a History-reload special case.
     const historyReloadCount = () =>
       rpcMock.mock.calls.filter(
         ([method, params]) =>
@@ -796,14 +809,70 @@ describe('ChatView', () => {
     await waitForCondition(
       () =>
         document.body
-          .querySelector('.chat-view__command-toast')
-          ?.textContent?.trim() === 'Context compacted.',
+          .querySelector('.compaction-sep--running')
+          ?.textContent?.trim() === 'Compacting current conversation…',
       100,
     );
-    await waitForCondition(() => historyReloadCount() > reloadsBefore, 100);
 
     expect(streamCalls).toEqual(['/compact focus on the auth work']);
-    expect(historyReloadCount()).toBeGreaterThan(reloadsBefore);
+    expect(historyReloadCount()).toBe(reloadsBefore);
+    expect(subscribeRunEventsMock).toHaveBeenCalledWith(
+      '/api/runs/run-manual-compaction/events',
+      expect.any(Object),
+      { afterSequence: 0 },
+    );
+
+    const handlers = subscribeRunEventsMock.mock.calls[0][1];
+    const checkpointMessage = {
+      id: 'checkpoint-manual',
+      role: 'compaction_checkpoint',
+      content: 'Exact manual compaction context',
+      usage: {
+        context_tokens_before: 69_030,
+        context_tokens_after: 26_835,
+      },
+    };
+    handlers.onEvent({
+      data: {
+        type: 'compaction_completed',
+        run_id: 'run-manual-compaction',
+        sequence: 3,
+        payload: {
+          message: checkpointMessage,
+          checkpoint: 1,
+          checkpoint_id: 'checkpoint-manual',
+          context_tokens_before: 69_030,
+          context_tokens_after: 26_835,
+        },
+      },
+    });
+    handlers.onEvent({
+      data: {
+        type: 'run_completed',
+        run_id: 'run-manual-compaction',
+        sequence: 4,
+        payload: { status: 'completed' },
+      },
+    });
+
+    await waitForCondition(
+      () =>
+        document.body
+          .querySelector('.run-compaction-sep')
+          ?.textContent?.includes('69,030 → ~26,835'),
+      100,
+    );
+
+    expect(document.body.querySelector('.compaction-sep--running')).toBeNull();
+    const disclosure = document.body.querySelector(
+      '.compaction-disclosure--in-run',
+    );
+    expect(disclosure).toBeTruthy();
+    disclosure.open = true;
+    flushSync();
+    expect(
+      disclosure.querySelector('.compaction-detail__text').textContent,
+    ).toBe('Exact manual compaction context');
   });
 
   it('queues non-command messages while a run is active', async () => {

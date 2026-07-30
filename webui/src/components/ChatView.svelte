@@ -1810,17 +1810,6 @@
     setSessionActionError(message);
   };
 
-  // Reload history for whichever session is active, keyed by its stored
-  // `agentId` (a bare id for an identity session, the `agent@projekt` address
-  // for a project-agent session) — both go to `chat.history` as the address it
-  // parses, so one path serves both.
-  const reloadActiveSessionHistory = async (sessionState) => {
-    if (!sessionState?.agentId || !sessionState?.sessionId) {
-      return;
-    }
-    await loadHistoryForSession(sessionState.agentId, sessionState.sessionId);
-  };
-
   const sendStream = async (agent, sessionState, content, options = {}) => {
     const outcome = await chatController.sendMessage(
       sessionState,
@@ -1845,9 +1834,6 @@
       appendTransientCard(outcome.reply);
     } else if (outcome.kind === 'toast') {
       showChatToast(outcome.reply);
-      if (outcome.reloadHistory) {
-        await reloadActiveSessionHistory(sessionState);
-      }
     } else if (outcome.kind === 'started') {
       submittedTurnScrollRunId = outcome.runId;
       submittedTurnScrollKey += 1;

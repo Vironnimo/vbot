@@ -362,7 +362,6 @@ export function createChatController({
         return {
           kind: 'toast',
           reply: run.reply,
-          reloadHistory: isCompactCommand(content),
         };
       }
       if (run?.queued === true) {
@@ -638,17 +637,6 @@ export function normalizeBuiltInCommandName(value) {
     return '';
   }
   return value.trim().replace(/^\/+/, '').toLowerCase();
-}
-
-function isCompactCommand(content) {
-  if (typeof content !== 'string') {
-    return false;
-  }
-  const trimmed = content.trim();
-  if (!trimmed.startsWith('/')) {
-    return false;
-  }
-  return normalizeBuiltInCommandName(trimmed.split(/\s+/)[0]) === 'compact';
 }
 
 function commandSwitchFromResponse(response) {

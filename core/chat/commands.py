@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from core.chat.content_blocks import ContentBlock, TextBlock
+from core.chat.errors import CompactionUnavailableError
 from core.chat.messages import ChatMessage, ReplySurface
 from core.chat.usage import aggregate_session_usage
 from core.projects import (
@@ -26,7 +27,13 @@ from core.providers.reasoning import (
     REASONING_INTENT_ON,
     resolve_reasoning_intent,
 )
-from core.runs import ChatRunManager, Run, RunAdmissionBlockedError, RunNotFoundError
+from core.runs import (
+    ActiveRunError,
+    ChatRunManager,
+    Run,
+    RunAdmissionBlockedError,
+    RunNotFoundError,
+)
 from core.sessions import SESSION_MOVE_STRIP_META_KEYS
 from core.skills.skill_validator import SKILL_NAME_TRIGGER_PATTERN
 from core.utils.logging import get_logger
@@ -55,7 +62,7 @@ CommandCatalogResult = Literal["notice", "detail", "state_change"]
 CommandExecutionMode = Literal["immediate", "serialized"]
 CommandFeedbackKind = Literal["notice", "detail"]
 CommandNavigationKind = Literal["continue_in_session", "offer_session"]
-CommandRunRole = Literal["follow_up"]
+CommandRunRole = Literal["primary", "follow_up"]
 CommandSurfaceKind = Literal["webui", "channel"]
 
 _LOGGER = get_logger("chat.commands")
@@ -793,11 +800,13 @@ class CommandDispatcher:
             raise TypeError("CommandOutcome.navigation must be valid CommandNavigation")
         if not isinstance(result.runs, tuple) or any(
             not isinstance(command_run, CommandRun)
-            or command_run.role != "follow_up"
+            or command_run.role not in {"primary", "follow_up"}
             or not isinstance(command_run.run, Run)
             for command_run in result.runs
         ):
-            raise TypeError("CommandOutcome.runs must contain valid follow-up CommandRun values")
+            raise TypeError("CommandOutcome.runs must contain valid CommandRun values")
+        if sum(command_run.role == "primary" for command_run in result.runs) > 1:
+            raise TypeError("CommandOutcome may contain at most one primary CommandRun")
         if not isinstance(result.resource_changes, tuple) or any(
             not isinstance(change, CommandResourceChange)
             or not isinstance(change.kind, str)
@@ -841,13 +850,24 @@ class CommandDispatcher:
         self, context: CommandExecutionContext, argument: str | None
     ) -> CommandOutcome:
         trigger_service = _require_dependency(self._trigger_service, "TriggerService")
-        reply = await trigger_service.compact_session(
-            context.agent_id,
-            context.session_id,
-            argument,
-            project_id=context.project_id,
+        try:
+            run = await trigger_service.start_compaction_run(
+                context.agent_id,
+                context.session_id,
+                argument,
+                project_id=context.project_id,
+            )
+        except CompactionUnavailableError:
+            return self._notice("compact", "Compaction is not available.")
+        except ActiveRunError:
+            return self._notice(
+                "compact",
+                "Cannot compact while a run is active for this session.",
+            )
+        return CommandOutcome(
+            command="compact",
+            runs=(CommandRun(role="primary", run=run),),
         )
-        return self._notice("compact", reply)
 
     async def _execute_handoff(
         self, context: CommandExecutionContext, argument: str | None

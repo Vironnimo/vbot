@@ -565,6 +565,31 @@ async def test_compact_session_forwards_project_id_to_command_chat_loop() -> Non
     )
 
 
+async def test_start_compaction_run_delegates_to_command_chat_loop() -> None:
+    run = object()
+    chat_loop = SimpleNamespace(start_compaction_run=AsyncMock(return_value=run))
+    trigger_service = TriggerService(
+        cast(Any, chat_loop),
+        cast(Any, Mock()),
+        cast(Any, Mock()),
+    )
+
+    result = await trigger_service.start_compaction_run(
+        "coder",
+        "session-one",
+        "keep the API design",
+        project_id="proj",
+    )
+
+    chat_loop.start_compaction_run.assert_awaited_once_with(
+        "coder",
+        "session-one",
+        "keep the API design",
+        project_id="proj",
+    )
+    assert result is run
+
+
 class _CompletionChatLoop:
     def __init__(self, run_manager: ChatRunManager) -> None:
         self._run_manager = run_manager

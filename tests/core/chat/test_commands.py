@@ -907,6 +907,39 @@ def test_dispatch_compact_without_instruction_returns_action_without_argument() 
     assert (result.name, result.argument) == ("compact", None)
 
 
+@pytest.mark.asyncio
+async def test_execute_compact_exposes_the_compaction_run_as_primary() -> None:
+    run = Run(run_id="run-compact", agent_id="coder", session_id="session-one")
+
+    class Trigger:
+        async def start_compaction_run(
+            self,
+            agent_id: str,
+            session_id: str,
+            instruction: str | None,
+            *,
+            project_id: str | None,
+        ) -> Run:
+            assert (agent_id, session_id, instruction, project_id) == (
+                "coder",
+                "session-one",
+                "keep the API design",
+                "project-one",
+            )
+            return run
+
+    result = await _execute(
+        CommandDispatcher(ChatRunManager(), trigger_service=Trigger()),
+        "/compact keep the API design",
+        project_id="project-one",
+    )
+
+    assert result.feedback is None
+    assert len(result.runs) == 1
+    assert result.runs[0].role == "primary"
+    assert result.runs[0].run is run
+
+
 def test_dispatch_no_argument_command_with_trailing_text_is_not_a_command() -> None:
     dispatcher = CommandDispatcher(ChatRunManager())
 

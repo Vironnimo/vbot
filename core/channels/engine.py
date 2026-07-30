@@ -43,6 +43,7 @@ from core.chat.errors import ChatSessionError
 from core.chat.messages import MessageSender, ReplySurface
 from core.runs import (
     ASSISTANT_OUTPUT_EVENT,
+    COMPACTION_COMPLETED_EVENT,
     RUN_CANCELLED_EVENT,
     RUN_COMPLETED_EVENT,
     RUN_FAILED_EVENT,
@@ -902,6 +903,7 @@ class ChannelConversationEngine:
 
     async def _relay_run_events(self, run: Run, reply_plan: ReplyPlanFacts) -> None:
         assistant_text: str | None = None
+        compaction_completed = False
         reply: str | None = None
 
         async with self._transport.activity_indicator(
@@ -914,8 +916,16 @@ class ChannelConversationEngine:
                         assistant_text = extracted
                     continue
 
+                if event.type == COMPACTION_COMPLETED_EVENT:
+                    compaction_completed = True
+                    continue
+
                 if event.type == RUN_COMPLETED_EVENT:
-                    reply = assistant_text or _EMPTY_ASSISTANT_REPLY
+                    reply = (
+                        assistant_text
+                        or ("Context compacted." if compaction_completed else None)
+                        or _EMPTY_ASSISTANT_REPLY
+                    )
                     break
 
                 if event.type == RUN_FAILED_EVENT:

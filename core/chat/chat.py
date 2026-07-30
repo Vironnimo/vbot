@@ -22,7 +22,12 @@ from core.chat.continuation import (
     recover_continuation,
     render_continuation_reminder,
 )
-from core.chat.errors import ChatError, ChatSessionError, ToolIterationLimitError
+from core.chat.errors import (
+    ChatError,
+    ChatSessionError,
+    CompactionUnavailableError,
+    ToolIterationLimitError,
+)
 from core.chat.events import (
     _close_adapter,
     _emit_assistant_events,
@@ -174,6 +179,7 @@ from core.runs import (
     PROVIDER_HEARTBEAT_EVENT,
     STREAM_ATTEMPT_RESTARTED_EVENT,
     USER_MESSAGE_EVENT,
+    ActiveRunError,
     QueuedRunItem,
     Run,
     RunExecutor,
@@ -918,6 +924,38 @@ class ChatLoop:
             _display_content_preview(content),
         )
 
+    async def start_compaction_run(
+        self,
+        agent_id: str,
+        session_id: str,
+        instruction: str | None = None,
+        *,
+        project_id: str | None = None,
+    ) -> Run:
+        """Start manual Compaction as the Session's active observable Run."""
+        compaction_service = self._compaction_service
+        if compaction_service is None:
+            raise CompactionUnavailableError("Compaction is not available.")
+
+        agent = self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
+        working_project_id = resolve_working_project_id(project_id, agent)
+        session = self._get_session(
+            agent_id, session_id, create_missing=False, project_id=project_id
+        )
+        return await self._dependencies.run_manager.start(
+            agent_id=agent_id,
+            session_id=session.id,
+            executor=lambda run: self._execute_manual_compaction(
+                run,
+                agent,
+                session,
+                compaction_service,
+                instruction=instruction,
+            ),
+            project_id=project_id,
+            working_project_id=working_project_id,
+        )
+
     async def compact_session(
         self,
         agent_id: str,
@@ -926,116 +964,137 @@ class ChatLoop:
         *,
         project_id: str | None = None,
     ) -> str:
-        """Manually compact a session and return a user-facing command reply.
-
-        Refuses while a run is active for the session. On success one
-        compaction checkpoint is appended to the session; failures inside
-        the compaction itself are converted into a reply string instead of
-        raising, matching the `/compact` command contract. ``instruction`` is the
-        optional free-text argument from `/compact <instruction>` and is woven
-        into the summarization prompt. ``project_id`` scopes the agent and session
-        to a project anchor (``None`` = the identity agent and its session).
-        """
-        if self._compaction_service is None:
+        """Run manual Compaction to completion for synchronous accessors."""
+        try:
+            run = await self.start_compaction_run(
+                agent_id,
+                session_id,
+                instruction,
+                project_id=project_id,
+            )
+        except CompactionUnavailableError:
             return "Compaction is not available."
-
-        manager = self._dependencies.run_manager
-        if (
-            manager.active_run(agent_id=agent_id, session_id=session_id, project_id=project_id)
-            is not None
-        ):
+        except ActiveRunError:
             return "Cannot compact while a run is active for this session."
 
-        # Resolve the agent and load the session in the caller's scope: a project
-        # chat compacts its project session and the project agent, an identity chat
-        # (``project_id=None``) the identity session — both through the one
-        # resolver/session seam.
-        agent = self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
-        working_project_id = resolve_working_project_id(project_id, agent)
-        session = self._get_session(
-            agent_id, session_id, create_missing=False, project_id=project_id
-        )
-        messages = session.load()
-        settings = self._load_compaction_settings(
-            agent, agent_id=agent_id, session_id=session_id, project_id=project_id
-        )
+        try:
+            await run.wait()
+        except Exception as exc:
+            return f"Compaction failed: {exc}"
+        return "Context compacted."
 
+    async def _execute_manual_compaction(
+        self,
+        run: Run,
+        agent: Any,
+        session: ChatSession,
+        compaction_service: CompactionService,
+        *,
+        instruction: str | None,
+    ) -> ChatMessage:
+        """Execute one manual Compaction inside its canonical Run lifecycle."""
+        run.emit(COMPACTION_STARTED_EVENT, {})
         adapter: Any | None = None
         summary_adapter: Any | None = None
         try:
-            project_cwd = self._resolve_project_cwd(working_project_id)
-            provider_id, connection_id = _resolve_agent_connection(self._dependencies, agent)
-            adapter = self._dependencies.get_adapter(provider_id, connection_id)
-            _model_provider_id, model_id = _split_agent_model(agent.model)
-            summary_adapter, summary_model_id = self._resolve_summary_adapter(
+            messages = session.load()
+            settings = self._load_compaction_settings(
                 agent,
-                adapter,
-                model_id,
-                settings,
+                agent_id=run.agent_id,
+                session_id=run.session_id,
+                project_id=run.project_id,
             )
-            prompt_project = resolve_prompt_project(self._dependencies.projects, working_project_id)
-            prompt_context = (
-                ProjectPromptContext.from_project(
-                    prompt_project.project_id,
-                    prompt_project.display_name,
-                    prompt_project.cwd,
-                    prompt_project.auto_load,
+            try:
+                project_cwd = self._resolve_project_cwd(run.working_project_id)
+                provider_id, connection_id = _resolve_agent_connection(self._dependencies, agent)
+                adapter = self._dependencies.get_adapter(provider_id, connection_id)
+                _model_provider_id, model_id = _split_agent_model(agent.model)
+                summary_adapter, summary_model_id = self._resolve_summary_adapter(
+                    agent,
+                    adapter,
+                    model_id,
+                    settings,
                 )
-                if prompt_project is not None
-                else None
-            )
-            working_project_context = self._pinned_working_project_context(
-                agent_id,
-                session_id,
-                prompt_project,
-                prompt_context,
-                project_id,
-            )
-            skill_project_id, identity_agent_id = resolve_skill_scope(
-                project_id, prompt_project, agent_id
-            )
-            skill_registry = self._dependencies.resolve_skills(skill_project_id, identity_agent_id)
-            request_state = await self._build_request_state(
-                agent,
-                session,
-                replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
-                reasoning_scope_model=_resolved_model_reference(
-                    self._dependencies,
-                    provider_id,
-                    connection_id,
-                    model_id,
-                ),
-                input_modalities=_model_input_modalities_for_target(
-                    self._dependencies,
-                    provider_id,
-                    model_id,
-                ),
-                wire_media_types=_resolve_wire_media_support(adapter, model_id),
-                agent_body=runtime_agent_body(agent),
-                project_context=prompt_context,
-                working_project_context=working_project_context,
-                agent_project_id=project_id,
-                skill_registry=skill_registry,
-                skill_catalog=self._pinned_skill_catalog(
-                    agent_id, session_id, agent, skill_registry, project_id
-                ),
-            )
-            checkpoint = await self._compaction_service.compact(
-                messages,
-                agent=agent,
-                summary_adapter=summary_adapter,
-                summary_model_id=summary_model_id,
-                storage=self._dependencies.storage,
-                settings=settings,
-                instruction=instruction,
-                request_messages=request_state.messages,
-                active_adapter=adapter,
-                active_model_id=model_id,
-                active_tools=request_state.tools,
-                context_tokens_before=self._compaction_service.estimate_messages_tokens(
+                prompt_project = resolve_prompt_project(
+                    self._dependencies.projects,
+                    run.working_project_id,
+                )
+                prompt_context = (
+                    ProjectPromptContext.from_project(
+                        prompt_project.project_id,
+                        prompt_project.display_name,
+                        prompt_project.cwd,
+                        prompt_project.auto_load,
+                    )
+                    if prompt_project is not None
+                    else None
+                )
+                working_project_context = self._pinned_working_project_context(
+                    run.agent_id,
+                    run.session_id,
+                    prompt_project,
+                    prompt_context,
+                    run.project_id,
+                )
+                skill_project_id, identity_agent_id = resolve_skill_scope(
+                    run.project_id, prompt_project, run.agent_id
+                )
+                skill_registry = self._dependencies.resolve_skills(
+                    skill_project_id,
+                    identity_agent_id,
+                )
+                request_state = await self._build_request_state(
+                    agent,
+                    session,
+                    replay_policy=_resolve_reasoning_replay_policy(adapter, model_id),
+                    reasoning_scope_model=_resolved_model_reference(
+                        self._dependencies,
+                        provider_id,
+                        connection_id,
+                        model_id,
+                    ),
+                    input_modalities=_model_input_modalities_for_target(
+                        self._dependencies,
+                        provider_id,
+                        model_id,
+                    ),
+                    wire_media_types=_resolve_wire_media_support(adapter, model_id),
+                    agent_body=runtime_agent_body(agent),
+                    project_context=prompt_context,
+                    working_project_context=working_project_context,
+                    agent_project_id=run.project_id,
+                    skill_registry=skill_registry,
+                    skill_catalog=self._pinned_skill_catalog(
+                        run.agent_id,
+                        run.session_id,
+                        agent,
+                        skill_registry,
+                        run.project_id,
+                    ),
+                )
+                context_tokens_before = compaction_service.estimate_messages_tokens(
                     request_state.messages
-                ),
-            )
+                )
+                checkpoint = await compaction_service.compact(
+                    messages,
+                    agent=agent,
+                    summary_adapter=summary_adapter,
+                    summary_model_id=summary_model_id,
+                    storage=self._dependencies.storage,
+                    settings=settings,
+                    instruction=instruction,
+                    request_messages=request_state.messages,
+                    active_adapter=adapter,
+                    active_model_id=model_id,
+                    active_tools=request_state.tools,
+                    context_tokens_before=context_tokens_before,
+                )
+            finally:
+                if adapter is not None:
+                    await _close_adapter(adapter)
+                if summary_adapter is not None and summary_adapter is not adapter:
+                    await _close_adapter(summary_adapter)
+
             ordinal = (
                 len([message for message in messages if message.role == "compaction_checkpoint"])
                 + 1
@@ -1044,30 +1103,30 @@ class ChatLoop:
             session.append(checkpoint)
             try:
                 self._refresh_prompt_context_after_compaction(
-                    agent_id=agent_id,
-                    session_id=session_id,
+                    agent_id=run.agent_id,
+                    session_id=run.session_id,
                     agent=agent,
-                    project_id=project_id,
-                    working_project_id=working_project_id,
+                    project_id=run.project_id,
+                    working_project_id=run.working_project_id,
                     project_cwd=project_cwd,
                     activation_skill_project_id=skill_project_id,
                 )
             except Exception:
                 _LOGGER.warning(
                     "Prompt context refresh failed after manual Compaction (agent=%s session=%s)",
-                    agent_id,
-                    session_id,
+                    run.agent_id,
+                    run.session_id,
                     exc_info=True,
                 )
-        except Exception as exc:
-            return f"Compaction failed: {exc}"
-        finally:
-            if adapter is not None:
-                await _close_adapter(adapter)
-            if summary_adapter is not None and summary_adapter is not adapter:
-                await _close_adapter(summary_adapter)
-
-        return "Context compacted."
+            self._emit_compaction_completed(run, session, checkpoint)
+            run.terminal_payload_extras["session_usage"] = aggregate_session_usage(session.load())
+            return checkpoint
+        except asyncio.CancelledError:
+            run.emit(COMPACTION_ABORTED_EVENT, {"reason": "cancelled"})
+            raise
+        except Exception:
+            run.emit(COMPACTION_ABORTED_EVENT, {"reason": "failed"})
+            raise
 
     async def _start_run(
         self,
@@ -2562,19 +2621,7 @@ class ChatLoop:
             context.working_project_context = prompt_refresh.working_project_context
             context.skill_registry = prompt_refresh.skill_registry
             context.skill_catalog = prompt_refresh.skill_catalog
-        persisted_ordinal = checkpoint_ordinal(session.load(), checkpoint.id)
-        checkpoint_usage = checkpoint.usage or {}
-        run.emit(
-            COMPACTION_COMPLETED_EVENT,
-            {
-                "message": checkpoint.to_dict(),
-                "checkpoint": persisted_ordinal,
-                "checkpoint_id": checkpoint.id,
-                "history_available": True,
-                "context_tokens_before": checkpoint_usage.get("context_tokens_before"),
-                "context_tokens_after": checkpoint_usage.get("context_tokens_after"),
-            },
-        )
+        self._emit_compaction_completed(run, session, checkpoint)
         rebuilt_state = await self._build_request_state(
             agent,
             session,
@@ -2617,6 +2664,26 @@ class ChatLoop:
             rebuilt_state.allowed_tool_names,
             rebuilt_state.session_tool_grants,
             rebuilt_state.tool_contracts,
+        )
+
+    @staticmethod
+    def _emit_compaction_completed(
+        run: Run,
+        session: ChatSession,
+        checkpoint: ChatMessage,
+    ) -> None:
+        """Publish the one completed-checkpoint payload used by every trigger."""
+        checkpoint_usage = checkpoint.usage or {}
+        run.emit(
+            COMPACTION_COMPLETED_EVENT,
+            {
+                "message": checkpoint.to_dict(),
+                "checkpoint": checkpoint_ordinal(session.load(), checkpoint.id),
+                "checkpoint_id": checkpoint.id,
+                "history_available": True,
+                "context_tokens_before": checkpoint_usage.get("context_tokens_before"),
+                "context_tokens_after": checkpoint_usage.get("context_tokens_after"),
+            },
         )
 
     def _load_compaction_settings(

@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from core.chat.errors import ChatError as ChatError
     from core.chat.errors import ChatMessageValidationError as ChatMessageValidationError
     from core.chat.errors import ChatSessionError as ChatSessionError
+    from core.chat.errors import CompactionUnavailableError as CompactionUnavailableError
     from core.chat.errors import ToolIterationLimitError as ToolIterationLimitError
     from core.chat.usage import aggregate_session_usage as aggregate_session_usage
     from core.sessions import ChatSession as ChatSession
@@ -52,6 +53,7 @@ _EXPORT_MODULES = {
     "ChatSession": "core.sessions",
     "ChatSessionError": "core.chat.errors",
     "ChatSessionManager": "core.sessions",
+    "CompactionUnavailableError": "core.chat.errors",
     "CommandDispatcher": "core.chat.commands",
     "CommandExecutionContext": "core.chat.commands",
     "CommandFeedback": "core.chat.commands",

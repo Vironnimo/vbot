@@ -7,6 +7,7 @@ from core.chat import (
     CommandFeedback,
     ExtensionCommandContext,
 )
+from core.runs import COMPACTION_COMPLETED_EVENT
 
 from .engine_test_support import (
     CHANNEL_REPLY_SURFACE,
@@ -122,6 +123,33 @@ async def test_extension_command_relays_follow_up_run(tmp_path: Path) -> None:
     await drain(engine, 12345)
 
     assert transport.sent_texts == ["Workflow started.", "Workflow result."]
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_primary_compaction_run_relays_completed_feedback(tmp_path: Path) -> None:
+    compaction_run = Run(
+        run_id="run-compact",
+        agent_id="assistant",
+        session_id=SESSION_ID,
+    )
+    compaction_run.emit(COMPACTION_COMPLETED_EVENT, {})
+    compaction_run.mark_completed("ok")
+    dispatcher = make_command_dispatcher(
+        result=CommandOutcome(
+            command="compact",
+            runs=(CommandRun(role="primary", run=compaction_run),),
+        ),
+    )
+    engine, _sessions, _trigger_mock, transport = make_engine(
+        tmp_path,
+        command_dispatcher=dispatcher,
+    )
+
+    await engine.handle_inbound_text(make_conversation(), "/compact")
+    await drain(engine, 12345)
+
+    assert transport.sent_texts == ["Context compacted."]
     await engine.stop()
 
 
