@@ -216,6 +216,34 @@ function makeReport(overrides = {}) {
         },
       ],
     },
+    compactions: {
+      total_compactions: 5,
+      sessions_with_compactions: 2,
+      average_per_compacted_session: 2.5,
+      p50_per_compacted_session: 2,
+      p95_per_compacted_session: 3,
+      max_per_session: 3,
+      by_strategy: [
+        { strategy: 'summary_tail', compactions: 4 },
+        { strategy: 'continuation', compactions: 1 },
+      ],
+      reclaim: {
+        observations: 4,
+        total_tokens: 220000,
+        average_tokens: 55000,
+        p50_tokens: 50000,
+        p95_tokens: 70000,
+      },
+      top_sessions: [
+        {
+          agent_id: 'main',
+          session_id: 'compacted-session',
+          compactions: 3,
+          estimated_reclaimed_tokens: 150000,
+          last_compaction: '2026-06-13T08:45:00+00:00',
+        },
+      ],
+    },
     errors: {
       total_errors: 1,
       by_kind: [{ key: 'rate_limit', count: 1 }],
@@ -656,6 +684,32 @@ describe('StatisticsView', () => {
     expect(document.body.textContent).toContain(
       'These are persisted Run errors',
     );
+  });
+
+  it('renders checkpoint-derived compaction statistics', async () => {
+    rpcMock.mockResolvedValue(makeReport());
+
+    mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForCondition(() =>
+      document.body.textContent.includes('Per agent'),
+    );
+
+    const compactionsTab = [
+      ...document.querySelectorAll('.tab-list__tab'),
+    ].find((button) => button.textContent.trim() === 'Compactions');
+    compactionsTab.click();
+    flushSync();
+
+    const text = document.body.textContent;
+    expect(text).toContain('Compacted Sessions');
+    expect(text).toContain('Estimated context reclaimed');
+    expect(text).toContain('220,000');
+    expect(text).toContain('By Strategy');
+    expect(text).toContain('summary_tail');
+    expect(text).toContain('Most compacted Sessions');
+    expect(text).toContain('compacted-session');
+    expect(text).toContain('150,000');
+    expect(text).toContain('Fork-copied history is excluded');
   });
 
   it('renders the tools sub-view without exposing arguments', async () => {

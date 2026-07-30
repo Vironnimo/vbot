@@ -339,6 +339,59 @@ def test_statistics_runs_formats_agent_messages_and_model_steps(
     assert "average model steps per run: 3.50" in result.message
 
 
+def test_statistics_compactions_formats_checkpoint_activity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    captured: dict[str, Any] = {}
+    result_payload = {
+        "window": {"since": None, "until": None},
+        "compactions": {
+            "total_compactions": 5,
+            "sessions_with_compactions": 2,
+            "average_per_compacted_session": 2.5,
+            "p50_per_compacted_session": 2,
+            "p95_per_compacted_session": 3,
+            "max_per_session": 3,
+            "by_strategy": [
+                {"strategy": "summary_tail", "compactions": 4},
+                {"strategy": "continuation", "compactions": 1},
+            ],
+            "reclaim": {
+                "observations": 4,
+                "total_tokens": 220000,
+                "average_tokens": 55000,
+                "p50_tokens": 50000,
+                "p95_tokens": 70000,
+            },
+            "top_sessions": [
+                {
+                    "agent_id": "main",
+                    "session_id": "session-1",
+                    "compactions": 3,
+                    "estimated_reclaimed_tokens": 150000,
+                    "last_compaction": "2026-06-13T08:45:00+00:00",
+                }
+            ],
+        },
+    }
+    monkeypatch.setattr(
+        statistics_management.httpx,
+        "post",
+        _fake_post_returning(result_payload, captured),
+    )
+
+    result = statistics_management.statistics_report(instance, "compactions")
+
+    assert result.ok is True
+    assert "total compactions: 5" in result.message
+    assert "average=2.50 p50=2.00 p95=3.00 max=3" in result.message
+    assert "total=220000" in result.message
+    assert "summary_tail: 4" in result.message
+    assert "main session-1: compactions=3" in result.message
+
+
 def test_statistics_report_surfaces_rpc_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

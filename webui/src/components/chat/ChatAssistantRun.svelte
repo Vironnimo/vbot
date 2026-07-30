@@ -6,7 +6,6 @@
   import {
     avatarForItem,
     compactToolValue,
-    compactionSeparatorLabel,
     formatTime,
     isRowCancellable,
     isRunChildWorking,
@@ -38,6 +37,7 @@
     visibleRunChildren,
   } from '$lib/chatTimelinePresentation.js';
 
+  import ChatCompactionSeparator from './ChatCompactionSeparator.svelte';
   import MarkdownContent from './MarkdownContent.svelte';
 
   let {
@@ -503,14 +503,7 @@
           })}
         </Banner>
       {:else if child.type === 'compaction_separator'}
-        <div
-          class="date-sep compaction-sep run-compaction-sep"
-          class:compaction-sep--running={child.status === 'running'}
-          role="status"
-          aria-busy={child.status === 'running'}
-        >
-          {compactionSeparatorLabel(child)}
-        </div>
+        <ChatCompactionSeparator item={child} inRun />
       {/if}
     {/each}
   </div>

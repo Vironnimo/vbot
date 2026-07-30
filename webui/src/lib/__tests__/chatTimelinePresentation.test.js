@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   compactToolValue,
+  compactionSummaryText,
   errorMessagePresentation,
   isRowCancellable,
   isRunChildWorking,
@@ -916,6 +917,20 @@ describe('errorMessagePresentation', () => {
     };
 
     expect(labelForEvent(event)).toBe('YOU');
+  });
+});
+
+describe('compactionSummaryText', () => {
+  it('returns the checkpoint content byte-for-byte without trimming or formatting', () => {
+    const summary = '\n# Heading\n\n<tag> & *literal*\n';
+
+    expect(
+      compactionSummaryText({
+        message: { role: 'compaction_checkpoint', content: summary },
+      }),
+    ).toBe(summary);
+    expect(compactionSummaryText({ message: { content: null } })).toBe('');
+    expect(compactionSummaryText(null)).toBe('');
   });
 });
 

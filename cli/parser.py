@@ -29,7 +29,15 @@ CHANNEL_PLATFORMS = tuple(sorted(ALLOWED_CHANNEL_PLATFORMS))
 CHANNEL_DM_SCOPES = tuple(sorted(ALLOWED_CHANNEL_DM_SCOPES))
 CHANNEL_RESPONSE_MODES = tuple(sorted(ALLOWED_CHANNEL_RESPONSE_MODES))
 CRON_STATUSES = ("active", "paused")
-STATISTICS_SECTIONS = ("overview", "usage", "runs", "errors", "tools", "skills")
+STATISTICS_SECTIONS = (
+    "overview",
+    "usage",
+    "runs",
+    "compactions",
+    "errors",
+    "tools",
+    "skills",
+)
 TASK_TYPES = tuple(sorted(SUPPORTED_TASK_TYPES))
 AREA_HELP = {
     "server": "Start, stop, restart, and inspect the local server",
@@ -150,6 +158,7 @@ STATISTICS_HELP = {
     "overview": "Show the overview section: agents, sessions, runs, and message totals",
     "usage": "Show the usage section: token totals and per-provider/model breakdowns",
     "runs": "Show the runs section: counts, status rates, and durations",
+    "compactions": "Show checkpoint counts, reclaimed context, Strategies, and top Sessions",
     "errors": "Show the errors section: totals and breakdowns by kind, provider, and agent",
     "tools": "Show the tools section: call counts and per-tool success rates",
     "skills": "Show Skill offers, activations, and evidence-backed offer conversion",

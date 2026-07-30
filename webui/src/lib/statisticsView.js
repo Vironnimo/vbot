@@ -10,6 +10,7 @@ export const STATISTICS_SUB_VIEWS = Object.freeze([
   'overview',
   'usage',
   'runs',
+  'compactions',
   'tools',
   'skills',
   'limits',

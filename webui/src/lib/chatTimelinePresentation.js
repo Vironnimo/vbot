@@ -1011,6 +1011,9 @@ export const compactionSeparatorLabel = (item) => {
   return t('chat.compacted', 'Context compacted');
 };
 
+export const compactionSummaryText = (item) =>
+  typeof item?.message?.content === 'string' ? item.message.content : '';
+
 function parseTakeoverContent(content) {
   const parsed = parseJsonValue(content);
   if (!isPlainObject(parsed)) {
