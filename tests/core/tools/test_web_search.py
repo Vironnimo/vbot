@@ -212,6 +212,8 @@ async def test_web_search_handler_invalid_recency(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "domains",
     [
+        "",
+        "example.com",
         [],
         {"domain": "example.com"},
         ["https://example.com"],
@@ -383,7 +385,7 @@ async def test_web_search_handler_specific_subdomain_narrows_scope(tmp_path: Pat
 
     result = await web_search_handler(
         make_context(workspace),
-        {"query": "vbot", "domains": "www.example.com"},
+        {"query": "vbot", "domains": ["www.example.com"]},
         _fake_credential_resolver,
     )
 

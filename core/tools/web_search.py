@@ -162,20 +162,19 @@ def _canonicalize_domain(raw: str) -> tuple[str | None, str | None]:
 
 
 def _normalize_domains(raw: Any) -> tuple[list[str], str | None]:
-    if raw is None or (isinstance(raw, str) and not raw.strip()):
+    if raw is None:
         return [], None
 
-    raw_domains = [raw] if isinstance(raw, str) else raw
-    if not isinstance(raw_domains, list):
+    if not isinstance(raw, list):
         return [], "domains must be an array of domain strings"
-    if not raw_domains:
+    if not raw:
         return [], "domains must contain at least one domain when provided"
-    if len(raw_domains) > _MAX_DOMAIN_FILTERS:
+    if len(raw) > _MAX_DOMAIN_FILTERS:
         return [], f"domains must contain at most {_MAX_DOMAIN_FILTERS} domains"
 
     normalized: list[str] = []
     seen: set[str] = set()
-    for index, raw_domain in enumerate(raw_domains):
+    for index, raw_domain in enumerate(raw):
         if not isinstance(raw_domain, str):
             return [], f"domains[{index}] must be a string"
         domain, error = _canonicalize_domain(raw_domain)
