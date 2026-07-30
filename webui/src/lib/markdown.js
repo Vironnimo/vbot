@@ -147,9 +147,15 @@ export function renderMarkdown(src, options) {
 // strip them before rendering. A partial `<!--` mid-stream simply stays until
 // its `-->` arrives and the pair is removed.
 const HTML_COMMENT_PATTERN = /<!--[\s\S]*?-->/g;
+// Responses reasoning summaries can arrive as adjacent bold Markdown blocks.
+// Keep both emphasis pairs while making their semantic boundary visible.
+const ADJACENT_BOLD_REASONING_BLOCKS_PATTERN = /(?<!\*)\*{4}(?!\*)/g;
 
 export function reasoningMarkdownSource(src) {
-  return typeof src === 'string' ? src.replace(HTML_COMMENT_PATTERN, '') : '';
+  if (typeof src !== 'string') return '';
+  return src
+    .replace(HTML_COMMENT_PATTERN, '')
+    .replace(ADJACENT_BOLD_REASONING_BLOCKS_PATTERN, '**\n**');
 }
 
 export function renderReasoningMarkdownDocument(src, options) {
