@@ -62,6 +62,8 @@ MessageRole = Literal[
 ]
 InputOrigin = Literal["speech_transcription"]
 ReplySurfaceKind = Literal["webui", "channel"]
+ConversationKind = Literal["direct", "group"]
+GroupRole = Literal["admin", "member"]
 JsonObject = dict[str, Any]
 
 TIMESTAMP_SUFFIX = "+00:00"
@@ -162,10 +164,11 @@ class MessageSender:
 
     id: str
     display_name: str
+    role: GroupRole = "member"
 
     def to_dict(self) -> JsonObject:
         """Return a JSON-serializable sender dictionary."""
-        return {"id": self.id, "display_name": self.display_name}
+        return {"id": self.id, "display_name": self.display_name, "role": self.role}
 
     @classmethod
     def from_dict(cls, data: JsonObject) -> MessageSender:
@@ -176,7 +179,10 @@ class MessageSender:
         display_name = data.get("display_name")
         if not isinstance(display_name, str) or not display_name:
             raise ChatMessageValidationError("sender display_name must be a non-empty string")
-        return cls(id=sender_id, display_name=display_name)
+        role = data.get("role", "member")
+        if role not in ("admin", "member"):
+            raise ChatMessageValidationError("sender role must be admin or member")
+        return cls(id=sender_id, display_name=display_name, role=cast(GroupRole, role))
 
 
 @dataclass(frozen=True)
@@ -187,12 +193,18 @@ class ReplySurface:
     platform: str | None = None
     platform_display_name: str | None = None
     channel_id: str | None = None
+    conversation_kind: ConversationKind | None = None
 
     def __post_init__(self) -> None:
         if self.kind == "webui":
             if any(
                 value is not None
-                for value in (self.platform, self.platform_display_name, self.channel_id)
+                for value in (
+                    self.platform,
+                    self.platform_display_name,
+                    self.channel_id,
+                    self.conversation_kind,
+                )
             ):
                 raise ChatError("WebUI reply surfaces cannot include Channel fields")
             return
@@ -200,6 +212,8 @@ class ReplySurface:
             raise ChatError(f"unsupported reply surface kind: {self.kind}")
         if not self.platform or not self.platform_display_name or not self.channel_id:
             raise ChatError("channel reply surface fields must be non-empty")
+        if self.conversation_kind not in ("direct", "group"):
+            raise ChatError("channel reply surface conversation_kind must be direct or group")
 
     @classmethod
     def webui(cls) -> ReplySurface:
@@ -213,6 +227,7 @@ class ReplySurface:
         platform: str,
         platform_display_name: str,
         channel_id: str,
+        conversation_kind: ConversationKind = "direct",
     ) -> ReplySurface:
         """Return one configured Channel reply surface."""
         return cls(
@@ -220,6 +235,7 @@ class ReplySurface:
             platform=platform,
             platform_display_name=platform_display_name,
             channel_id=channel_id,
+            conversation_kind=conversation_kind,
         )
 
     @property
@@ -227,7 +243,12 @@ class ReplySurface:
         """Return the stable identity used to detect reply-surface switches."""
         if self.kind == "webui":
             return (self.kind,)
-        return (self.kind, cast(str, self.platform), cast(str, self.channel_id))
+        return (
+            self.kind,
+            cast(str, self.platform),
+            cast(str, self.channel_id),
+            cast(str, self.conversation_kind),
+        )
 
     def to_note_content(self) -> str:
         """Encode this surface as one tagged append-only Session note."""
@@ -238,6 +259,7 @@ class ReplySurface:
                     "platform": self.platform,
                     "platform_display_name": self.platform_display_name,
                     "channel_id": self.channel_id,
+                    "conversation_kind": self.conversation_kind,
                 }
             )
         return REPLY_SURFACE_NOTE_PREFIX + json.dumps(
@@ -248,8 +270,14 @@ class ReplySurface:
         """Render the exact model-facing reminder for this destination."""
         if self.kind == "webui":
             return WEBUI_REPLY_SURFACE_REMINDER
+        conversation_kind = cast(ConversationKind, self.conversation_kind)
+        opening = (
+            f"The current conversation is a group chat on {self.platform_display_name}."
+            if conversation_kind == "group"
+            else f"The current conversation is a direct message on {self.platform_display_name}."
+        )
         return (
-            "Your reply to the following request will be delivered via "
+            f"{opening} Your reply to the following request will be delivered via "
             f"{self.platform_display_name} using channel `{self.channel_id}`. "
             "Return normal reply text; vBot delivers it automatically. To deliver any file, "
             "always call `channel_send` and include every file path in `file_paths`."
@@ -690,21 +718,25 @@ def reply_surface_from_note(message: ChatMessage) -> ReplySurface | None:
     platform = payload.get("platform")
     platform_display_name = payload.get("platform_display_name")
     channel_id = payload.get("channel_id")
+    conversation_kind = payload.get("conversation_kind", "direct")
     if not isinstance(platform, str) or not platform:
         return None
     if not isinstance(platform_display_name, str) or not platform_display_name:
         return None
     if not isinstance(channel_id, str) or not channel_id:
         return None
+    if conversation_kind not in ("direct", "group"):
+        return None
     return ReplySurface.channel(
         platform=platform,
         platform_display_name=platform_display_name,
         channel_id=channel_id,
+        conversation_kind=cast(ConversationKind, conversation_kind),
     )
 
 
 def should_append_reply_surface_note(messages: list[ChatMessage], incoming: ReplySurface) -> bool:
-    """Return whether an interactive Run needs a fresh direct surface reminder."""
+    """Return whether an interactive Run needs a fresh surface reminder."""
     latest_surface: ReplySurface | None = None
     latest_surface_index = -1
     latest_checkpoint_index = -1
@@ -855,7 +887,7 @@ def _apply_sender_attribution(data: JsonObject, sender: MessageSender) -> None:
 def _sender_attribution_tag(sender: MessageSender) -> str:
     display_name = _sanitize_sender_tag_part(sender.display_name)
     sender_id = _sanitize_sender_tag_part(sender.id)
-    return f"[{display_name}|{sender_id}]"
+    return f"[{display_name}|{sender_id}|{sender.role}]"
 
 
 def _sanitize_sender_tag_part(value: str) -> str:

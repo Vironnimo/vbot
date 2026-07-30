@@ -15,7 +15,7 @@ import contextlib
 import re
 import time
 from collections import OrderedDict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, Protocol
@@ -23,6 +23,7 @@ from uuid import uuid4
 
 from core.attachments import AttachmentTooLargeError, AttachmentTypeNotAllowedError
 from core.channels.adapter import (
+    ChannelAccessRegistry,
     ConversationFacts,
     MessageFacts,
     ReplyPlanFacts,
@@ -40,7 +41,7 @@ from core.chat.commands import (
 )
 from core.chat.content_blocks import ContentBlock, TextBlock
 from core.chat.errors import ChatSessionError
-from core.chat.messages import MessageSender, ReplySurface
+from core.chat.messages import GroupRole, MessageSender, ReplySurface
 from core.runs import (
     ASSISTANT_OUTPUT_EVENT,
     COMPACTION_COMPLETED_EVENT,
@@ -69,6 +70,11 @@ _UNSUPPORTED_FILE_REPLY = "Sorry, this file type isn't supported yet."
 _FILE_TOO_LARGE_REPLY = "Sorry, this file is too large to process."
 _MEDIA_FAILED_REPLY = "Sorry, I couldn't process the attached file. Please try again."
 _BUSY_REPLY = "I'm busy with earlier messages. Please try again shortly."
+_MEMBER_TOOL_NAMES = ("web_search", "web_fetch")
+_MEMBER_TOOL_DENIAL = (
+    "Tool access denied: the current sender is a group member. "
+    "Group members may use only web_search and web_fetch."
+)
 _SENDER_TAG_UNSAFE_CHARACTERS = str.maketrans("", "", "[]|\r\n")
 
 CHANNEL_WAITING_WORK_LIMIT = 8
@@ -190,6 +196,7 @@ class ChannelConversationEngine:
         *,
         command_dispatcher: CommandDispatcher,
         run_button_binding_registry: RunButtonBindingRegistry | None = None,
+        access_registry: ChannelAccessRegistry | None = None,
     ) -> None:
         self._config = config
         self._trigger_service = trigger_service
@@ -197,7 +204,7 @@ class ChannelConversationEngine:
         self._transport = transport
         self._command_dispatcher = command_dispatcher
         self._run_button_binding_registry = run_button_binding_registry
-        self._owner_user_ids = frozenset(config.owner_user_ids)
+        self._access_registry = access_registry
         # Config validation guarantees the patterns compile.
         self._mention_patterns = tuple(
             re.compile(pattern, re.IGNORECASE) for pattern in config.mention_patterns
@@ -218,6 +225,7 @@ class ChannelConversationEngine:
         message_text: str,
     ) -> None:
         """Gate one inbound text and execute or enqueue a prepared command/message."""
+        conversation = self._snapshot_group_sender(conversation)
         prepared_command = self._command_dispatcher.prepare(message_text)
         if prepared_command is not None:
             # Commands are inherently addressed; group commands are gated by sender
@@ -225,7 +233,7 @@ class ChannelConversationEngine:
             # availability projection and every command side effect.
             if conversation.kind == "group" and not self._command_sender_authorized(conversation):
                 _LOGGER.info(
-                    "Channel command denied for non-owner (channel=%s chat=%s user=%s)",
+                    "Channel command denied for member (channel=%s chat=%s user=%s)",
                     self._config.id,
                     conversation.chat_id,
                     conversation.user_id,
@@ -233,7 +241,7 @@ class ChannelConversationEngine:
                 return
             reply_plan = self._reply_plan_for(conversation)
             unavailable = self._command_dispatcher.unavailability(
-                prepared_command, self._reply_surface()
+                prepared_command, self._reply_surface(conversation.kind)
             )
             if unavailable is not None:
                 await self._send_command_unavailability(reply_plan, unavailable)
@@ -294,6 +302,7 @@ class ChannelConversationEngine:
         companion_text: str | None = None,
     ) -> None:
         """Gate, route, and enqueue inbound media (one message or a buffered album)."""
+        conversation = self._snapshot_group_sender(conversation)
         normalized_companion = companion_text.strip() if companion_text is not None else None
         if normalized_companion == "":
             normalized_companion = None
@@ -348,6 +357,7 @@ class ChannelConversationEngine:
         Discord uses this for bounded history backfill before an addressed group
         message. Passive live observation still flows through ``handle_inbound_text``.
         """
+        conversation = self._snapshot_group_sender(conversation)
         self._enqueue_observed_message(
             conversation,
             _format_observed_message(conversation, message_text),
@@ -360,6 +370,7 @@ class ChannelConversationEngine:
         persisted as a kernel-internal note (never a visible user message), the model
         acts on it, and its reply is relayed like any other channel answer.
         """
+        conversation = self._snapshot_group_sender(conversation)
         if self._enqueue_chat_work(
             conversation.chat_id,
             _QueuedInternalPrompt(conversation=conversation, prompt=prompt),
@@ -380,9 +391,10 @@ class ChannelConversationEngine:
         FIFO as following messages. Legacy unbound ``run:<payload>`` buttons keep
         routing to the Channel's current active Session.
         """
+        conversation = self._snapshot_group_sender(conversation)
         if not self._command_sender_authorized(conversation):
             _LOGGER.info(
-                "Run-triggering tap denied for non-owner (channel=%s chat=%s user=%s)",
+                "Run-triggering tap denied for member (channel=%s chat=%s user=%s)",
                 self._config.id,
                 conversation.chat_id,
                 conversation.user_id,
@@ -511,13 +523,11 @@ class ChannelConversationEngine:
         return False
 
     def _command_sender_authorized(self, conversation: ConversationFacts) -> bool:
-        # DM commands are always authorized: the chat allowlist already identifies the
-        # sender, and commands act on that sender's own session. Owner gating protects
-        # the shared group session; an empty owner list denies all group commands
-        # (consistent with allowed_chat_ids deny-all semantics).
+        # DM commands retain their existing behavior. Group Commands use the same
+        # immutable ingress role snapshot as messages and reserved Run buttons.
         if conversation.kind != "group":
             return True
-        return conversation.user_id in self._owner_user_ids
+        return conversation.sender_role == "admin"
 
     def _sender_for(self, conversation: ConversationFacts) -> MessageSender | None:
         # Sender identity is group-only in v1; DM turns stay unattributed.
@@ -526,7 +536,59 @@ class ChannelConversationEngine:
         return MessageSender(
             id=conversation.user_id,
             display_name=conversation.user_display_name or conversation.user_id,
+            role=conversation.sender_role or "member",
         )
+
+    def _snapshot_group_sender(self, conversation: ConversationFacts) -> ConversationFacts:
+        """Persist and freeze one group sender's role at Channel ingress."""
+        if conversation.kind != "group" or conversation.sender_role is not None:
+            return conversation
+        access_scope_id = conversation.access_scope_id or conversation.chat_id
+        registry = self._access_registry
+        role: GroupRole = (
+            registry.snapshot_participant_role(
+                self._config.id,
+                access_scope_id,
+                conversation.user_id,
+                conversation.user_display_name or conversation.user_id,
+            )
+            if registry is not None
+            else "member"
+        )
+        return replace(
+            conversation,
+            access_scope_id=access_scope_id,
+            sender_role=role,
+        )
+
+    def _tool_access_for(
+        self,
+        conversation: ConversationFacts,
+    ) -> tuple[Sequence[str] | None, Callable[[str], str | None] | None]:
+        """Return the admission ceiling and live pre-dispatch denial resolver."""
+        if conversation.kind != "group":
+            return None, None
+        admitted_role = conversation.sender_role or "member"
+        access_scope_id = conversation.access_scope_id or conversation.chat_id
+        user_id = conversation.user_id
+        registry = self._access_registry
+
+        def denial_resolver(tool_name: str) -> str | None:
+            if tool_name in _MEMBER_TOOL_NAMES:
+                return None
+            current_role = (
+                registry.role_for(self._config.id, access_scope_id, user_id)
+                if registry is not None
+                else admitted_role
+            )
+            if admitted_role != "admin" or current_role != "admin":
+                return _MEMBER_TOOL_DENIAL
+            return None
+
+        restriction: Sequence[str] | None = (
+            _MEMBER_TOOL_NAMES if admitted_role == "member" else None
+        )
+        return restriction, denial_resolver
 
     # -- Session routing / metadata ---------------------------------------------------
 
@@ -592,6 +654,7 @@ class ChannelConversationEngine:
             channel_id=self._config.id,
             chat_id=new_chat_id,
             user_id=new_chat_id,
+            access_scope_id=new_chat_id,
             kind="group",
         )
         self._update_session_metadata(
@@ -647,6 +710,7 @@ class ChannelConversationEngine:
                 "source_channel_id": self._config.id,
                 "platform": conversation.platform,
                 "platform_conv_id": conversation.chat_id,
+                "conversation_kind": conversation.kind,
                 "last_reply_target": last_reply_target,
             }
         )
@@ -760,6 +824,7 @@ class ChannelConversationEngine:
                 route,
                 reply_plan,
                 queued.prompt,
+                conversation=queued.conversation,
                 internal=True,
                 waiting_work_admission=queued.admission,
             )
@@ -788,6 +853,7 @@ class ChannelConversationEngine:
             route,
             reply_plan,
             queued.message.content,
+            conversation=queued.conversation,
             sender=self._sender_for(queued.conversation),
             waiting_work_admission=queued.admission,
         )
@@ -823,6 +889,7 @@ class ChannelConversationEngine:
             route,
             reply_plan,
             content_blocks,
+            conversation=queued.conversation,
             sender=self._sender_for(queued.conversation),
             waiting_work_admission=queued.admission,
         )
@@ -835,6 +902,7 @@ class ChannelConversationEngine:
         reply_plan: ReplyPlanFacts,
         content: str | list[ContentBlock],
         *,
+        conversation: ConversationFacts,
         sender: MessageSender | None = None,
         internal: bool = False,
         waiting_work_admission: WaitingWorkAdmission | None = None,
@@ -847,6 +915,13 @@ class ChannelConversationEngine:
             route.session_id,
             " internal" if internal else "",
         )
+        tool_restriction, tool_denial_resolver = self._tool_access_for(conversation)
+        tool_access_kwargs: dict[str, Any] = {}
+        if tool_restriction is not None:
+            tool_access_kwargs["tool_restriction"] = tool_restriction
+        if tool_denial_resolver is not None:
+            tool_access_kwargs["tool_denial_resolver"] = tool_denial_resolver
+        reply_surface = self._reply_surface(conversation.kind)
         try:
             # An internal run persists the content as a kernel note instead of a
             # visible user message; it never carries a sender.
@@ -857,7 +932,8 @@ class ChannelConversationEngine:
                         content,
                         route.session_id,
                         internal=True,
-                        reply_surface=self._reply_surface(),
+                        reply_surface=reply_surface,
+                        **tool_access_kwargs,
                     )
                 else:
                     run = await self._trigger_service.trigger_run(
@@ -865,7 +941,8 @@ class ChannelConversationEngine:
                         content,
                         route.session_id,
                         internal=True,
-                        reply_surface=self._reply_surface(),
+                        reply_surface=reply_surface,
+                        **tool_access_kwargs,
                         waiting_work_admission=waiting_work_admission,
                     )
             else:
@@ -875,7 +952,8 @@ class ChannelConversationEngine:
                         content,
                         route.session_id,
                         sender=sender,
-                        reply_surface=self._reply_surface(),
+                        reply_surface=reply_surface,
+                        **tool_access_kwargs,
                     )
                 else:
                     run = await self._trigger_service.trigger_run(
@@ -883,7 +961,8 @@ class ChannelConversationEngine:
                         content,
                         route.session_id,
                         sender=sender,
-                        reply_surface=self._reply_surface(),
+                        reply_surface=reply_surface,
+                        **tool_access_kwargs,
                         waiting_work_admission=waiting_work_admission,
                     )
         except Exception as error:
@@ -1007,7 +1086,7 @@ class ChannelConversationEngine:
             agent_id=route.agent_id,
             session_id=route.session_id,
             project_id=None,
-            reply_surface=self._reply_surface(),
+            reply_surface=self._reply_surface(conversation.kind),
             preferred_new_session_id=preferred_session_id,
         )
         try:
@@ -1067,11 +1146,12 @@ class ChannelConversationEngine:
         candidate = f"{anchor}-{uuid4().hex}"
         return candidate if SESSION_ID_PATTERN.fullmatch(candidate) else uuid4().hex
 
-    def _reply_surface(self) -> ReplySurface:
+    def _reply_surface(self, conversation_kind: Literal["direct", "group"]) -> ReplySurface:
         return ReplySurface.channel(
             platform=self._config.platform,
             platform_display_name=self._transport.platform_display_name,
             channel_id=self._config.id,
+            conversation_kind=conversation_kind,
         )
 
     def _set_active_session_pointer(self, agent_id: str, anchor: str, new_session_id: str) -> None:
@@ -1156,7 +1236,8 @@ class ChannelConversationEngine:
 def _format_observed_message(conversation: ConversationFacts, text: str) -> str:
     display_name = _sanitize_sender_tag_part(conversation.user_display_name or conversation.user_id)
     sender_id = _sanitize_sender_tag_part(conversation.user_id)
-    return f"{CHANNEL_MESSAGE_NOTE_PREFIX}{display_name} ({sender_id}): {text}"
+    role = conversation.sender_role or "member"
+    return f"{CHANNEL_MESSAGE_NOTE_PREFIX}[{display_name}|{sender_id}|{role}]: {text}"
 
 
 def _format_interaction_note(conversation: ConversationFacts, event: InteractionEvent) -> str:
@@ -1173,7 +1254,12 @@ def _format_interaction_note(conversation: ConversationFacts, event: Interaction
         f'Tapped button: "{_tapped_button_label(event)}" ({event.data})',
     ]
     if conversation.kind == "group":
-        lines.append(f"Tapped by: {conversation.user_display_name or conversation.user_id}")
+        lines.append(
+            "Tapped by: "
+            f"[{_sanitize_sender_tag_part(conversation.user_display_name or conversation.user_id)}"
+            f"|{_sanitize_sender_tag_part(conversation.user_id)}"
+            f"|{conversation.sender_role or 'member'}]"
+        )
     lines.append("Current buttons on the message (top to bottom, left to right):")
     lines.extend(f'- "{button.label}" ({button.data})' for row in event.buttons for button in row)
     lines.append("Act on the current button state, then confirm in this chat.")

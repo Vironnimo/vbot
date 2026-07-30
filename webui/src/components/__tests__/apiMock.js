@@ -77,6 +77,21 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
       call('provider.routing_options', params),
     listChannels: () => call('channel.list'),
     getChannelStatus: (id) => call('channel.status', { id }),
+    getChannelAccess: (id) => call('channel.access.get', { id }),
+    setChannelIdentity: (id, userId) =>
+      call('channel.identity.set', { id, user_id: userId }),
+    grantChannelAdmin: (id, accessScopeId, userId) =>
+      call('channel.admin.grant', {
+        id,
+        access_scope_id: accessScopeId,
+        user_id: userId,
+      }),
+    revokeChannelAdmin: (id, accessScopeId, userId) =>
+      call('channel.admin.revoke', {
+        id,
+        access_scope_id: accessScopeId,
+        user_id: userId,
+      }),
     createChannel: (params) => call('channel.create', params),
     updateChannel: (params) => call('channel.update', params),
     enableChannel: (id) => call('channel.enable', { id }),

@@ -90,6 +90,99 @@ describe('SettingsView', () => {
     ).toBe(true);
   });
 
+  it('shows durable group participants and updates identity and roles', async () => {
+    rpcMock.mockImplementation(
+      createSettingsRpcMock({
+        channels: [channelConfig('tg-assistant')],
+        channelAccess: {
+          'tg-assistant': {
+            channel_id: 'tg-assistant',
+            self_user_id: null,
+            groups: [
+              {
+                access_scope_id: '-100',
+                admin_user_ids: [],
+                participants: [
+                  {
+                    user_id: '50',
+                    display_name: 'Alice',
+                    last_seen_at: '2026-07-30T10:00:00+00:00',
+                    role: 'member',
+                  },
+                  {
+                    user_id: '51',
+                    display_name: 'Bob',
+                    last_seen_at: '2026-07-30T10:01:00+00:00',
+                    role: 'member',
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    mountedComponent = mount(SettingsView, { target: document.body });
+    flushSync();
+    await openChannelsPanel();
+
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some(
+        (call) =>
+          call[0] === 'channel.access.get' && call[1]?.id === 'tg-assistant',
+      ),
+    );
+    expect(document.body.textContent).toContain('Alice');
+    expect(document.body.textContent).toContain('Group');
+    expect(document.body.textContent).toContain('ID -100');
+    expect(document.body.textContent).toContain('Alice');
+    expect(document.body.textContent).toContain('ID 50');
+    expect(document.body.textContent).toContain('Bob');
+    expect(
+      rpcMock.mock.calls.some(
+        (call) =>
+          call[0] === 'channel.access.get' && call[1]?.id === 'tg-assistant',
+      ),
+    ).toBe(true);
+
+    buttonByAriaLabel('Use Alice as own identity').click();
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some(
+        (call) =>
+          call[0] === 'channel.identity.set' &&
+          call[1]?.id === 'tg-assistant' &&
+          call[1]?.user_id === '50',
+      ),
+    );
+    await waitForCondition(() => document.body.textContent.includes('Me'));
+    expect(buttonByAriaLabel('Use Alice as own identity').disabled).toBe(true);
+    expect(buttonByAriaLabel('Make Alice a member').disabled).toBe(true);
+
+    buttonByAriaLabel('Make Bob an admin').click();
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some(
+        (call) =>
+          call[0] === 'channel.admin.grant' &&
+          call[1]?.access_scope_id === '-100' &&
+          call[1]?.user_id === '51',
+      ),
+    );
+    await waitForCondition(
+      () => buttonByAriaLabel('Make Bob a member') !== null,
+    );
+
+    buttonByAriaLabel('Make Bob a member').click();
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some(
+        (call) =>
+          call[0] === 'channel.admin.revoke' &&
+          call[1]?.access_scope_id === '-100' &&
+          call[1]?.user_id === '51',
+      ),
+    );
+  });
+
   it('reloads an external channel change after an open form closes', async () => {
     const props = reactiveProps({ channelsRefreshToken: 0 });
     rpcMock.mockImplementation(

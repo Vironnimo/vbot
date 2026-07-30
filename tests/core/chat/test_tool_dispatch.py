@@ -96,6 +96,7 @@ async def _dispatch_tool_calls(
     base_allowed_tools: Sequence[str] | None = None,
     session_tool_grants: tuple[str, ...] = (),
     tool_contracts: Mapping[str, ToolContract] | None = None,
+    tool_denial_resolver: Callable[[str], str | None] | None = None,
 ) -> tuple[list[Any], list[JsonObject]]:
     """Adapt runtime-shaped fixtures to the production Run-local context."""
     return await _dispatch_resolved_tool_calls(
@@ -115,6 +116,7 @@ async def _dispatch_tool_calls(
             base_allowed_tools=base_allowed_tools,
             session_tool_grants=session_tool_grants,
             tool_contracts=tool_contracts or {},
+            tool_denial_resolver=tool_denial_resolver,
         ),
         tool_calls,
     )
@@ -595,6 +597,71 @@ class TestExtensionDecisionWiring:
 
         assert max_active_tools == 2
         assert max_active_hooks == 1
+
+    @pytest.mark.asyncio
+    async def test_runtime_denial_precedes_handlers_and_extension_hooks(
+        self, tmp_path: Path
+    ) -> None:
+        handler_calls: list[str] = []
+        hook_calls: list[str] = []
+        denial = (
+            "Tool access denied: the current sender is a group member. "
+            "Group members may use only web_search and web_fetch."
+        )
+
+        def handler(context: ToolContext, _arguments: JsonObject) -> JsonObject:
+            handler_calls.append(context.tool_call_id)
+            return tool_success({"ran": True})
+
+        def hook(_context: HookContext, **_payload: Any) -> None:
+            hook_calls.append("called")
+
+        tools = ToolRegistry()
+        tools.register(
+            "guarded",
+            "Guarded tool.",
+            {"type": "object"},
+            handler,
+            parallel_safe=True,
+        )
+        runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+        registry = ExtensionRegistry()
+        registry.install_handler("observer", "tool_call", hook)
+        registry.install_handler("observer", "tool_result", hook)
+        runtime.extensions = registry
+        session = _build_session(tmp_path)
+        run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+
+        messages, _ = await _dispatch_tool_calls(
+            runtime,
+            agent,
+            [
+                ToolCall(id="call-1", name="guarded", arguments={}),
+                ToolCall(id="call-2", name="guarded", arguments={}),
+            ],
+            session,
+            run,
+            nesting_depth=0,
+            tool_denial_resolver=lambda _tool_name: denial,
+        )
+
+        assert handler_calls == []
+        assert hook_calls == []
+        assert [_decode_tool_result(message.content) for message in messages] == [
+            {
+                "ok": False,
+                "error": {"code": "tool_not_allowed", "message": denial},
+                "data": None,
+                "artifacts": [],
+            },
+            {
+                "ok": False,
+                "error": {"code": "tool_not_allowed", "message": denial},
+                "data": None,
+                "artifacts": [],
+            },
+        ]
+        assert "Do not retry" not in denial
 
     @pytest.mark.asyncio
     async def test_denied_tool_call_yields_error_envelope_and_never_executes(

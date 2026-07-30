@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, TypeGuard
 
 from core.attachments import AttachmentStore
 from core.channels.adapter import (
+    ChannelAccessRegistry,
     ChannelAdapter,
     ConversationFacts,
     DeniedChatFacts,
@@ -98,6 +99,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             Callable[[InteractionEvent, InteractionResponder], Awaitable[bool]] | None
         ) = None,
         run_button_binding_registry: RunButtonBindingRegistry | None = None,
+        access_registry: ChannelAccessRegistry | None = None,
     ) -> None:
         self._config = config
         self._attachment_store = attachment_store
@@ -116,6 +118,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             self,
             command_dispatcher=command_dispatcher,
             run_button_binding_registry=run_button_binding_registry,
+            access_registry=access_registry,
         )
 
         token = credential_resolver(config.token_env_var)
@@ -963,6 +966,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             channel_id=self._config.id,
             chat_id=str(chat_id),
             user_id=str(chat_id),
+            access_scope_id=str(chat_id) if chat_id < 0 else None,
             thread_id=None,
             kind="group" if chat_id < 0 else "direct",
         )
@@ -1161,6 +1165,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             channel_id=self._config.id,
             chat_id=str(chat_id),
             user_id=str(user_id),
+            access_scope_id=str(chat_id) if chat_id < 0 else None,
             thread_id=thread_id,
             # Telegram group chats are identified by negative chat ids.
             kind="group" if chat_id < 0 else "direct",

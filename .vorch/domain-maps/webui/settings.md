@@ -30,7 +30,7 @@ Settings-style panels register their pending local draft and save lifecycle with
 - Reload, enable/disable, and configuration changes are separate operations. Live capability ownership remains in the Extensions domain even when the panel displays its result.
 - Skill and Tool selectors use the shared catalog/chip behavior and explicit scope. Creating or editing Skill content uses the Skill API; selecting an allowed Skill or Tool for an Agent or Project only changes that owner's policy.
 - Agent editors preserve inheritance versus explicit override. System Prompt block editing, preview, reset, and layout changes use their dedicated backend contracts rather than treating the composed prompt as one editable blob.
-- Channel forms keep platform, DM scope, allowed chat ids, enabled state, and runtime status distinct. A saved channel is not necessarily enabled or currently running.
+- Channel forms keep platform, DM scope, allowed chat ids, enabled state, and runtime status distinct. A saved channel is not necessarily enabled or currently running. Each Channel card also loads the independent durable access projection: groups show stable scope ids and seen participant name/id/role rows; `This is me` selects the Channel-own identity, and role actions call additive grant/revoke RPCs then reload saved state. The own identity is visibly `Me`, remains admin, and cannot be demoted from the UI.
 
 ## Onboarding and appearance
 

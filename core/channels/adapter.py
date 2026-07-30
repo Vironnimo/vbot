@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from core.chat.content_blocks import ContentBlock, FileBlock, MediaBlock
+from core.chat.messages import GroupRole
 from core.extensions import InteractionButton
 
 if TYPE_CHECKING:
@@ -60,6 +61,25 @@ class RunButtonBindingRegistry(Protocol):
     def restore_run_button_binding(self, channel_id: str, binding_id: str) -> None: ...
 
 
+class ChannelAccessRegistry(Protocol):
+    """Live, platform-neutral group access seam used by the Channel engine."""
+
+    def snapshot_participant_role(
+        self,
+        channel_id: str,
+        access_scope_id: str,
+        user_id: str,
+        display_name: str,
+    ) -> GroupRole: ...
+
+    def role_for(
+        self,
+        channel_id: str,
+        access_scope_id: str,
+        user_id: str,
+    ) -> GroupRole: ...
+
+
 def bound_run_callback_data(binding_id: str, button_index: int) -> str:
     """Return the private callback value for one origin-bound ``run:*`` button."""
     return f"{BOUND_RUN_CALLBACK_PREFIX}{binding_id}:{button_index}"
@@ -84,6 +104,11 @@ class ConversationFacts:
     channel_id: str
     chat_id: str
     user_id: str
+    # Stable group authorization scope supplied by the adapter. Telegram topics
+    # use their parent chat id; Discord threads use their parent channel id.
+    access_scope_id: str | None = None
+    # Immutable role snapshot added by the engine when the event enters its Queue.
+    sender_role: GroupRole | None = None
     thread_id: str | None = None
     # The adapter classifies the conversation; the engine derives session ids from it.
     # A group conversation routes to a shared session keyed by chat id, ignoring dm_scope.

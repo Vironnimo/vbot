@@ -20,7 +20,6 @@ CHANNEL_UPDATE_FLAGS = (
     "--enabled",
     "--response-mode",
     "--mention-pattern",
-    "--owner-user",
     "--observe-unaddressed",
 )
 
@@ -35,7 +34,6 @@ def channel_add(
     allowed_chat_ids: Sequence[str],
     response_mode: str = "mention",
     mention_patterns: Sequence[str] = (),
-    owner_user_ids: Sequence[str] = (),
     observe_unaddressed: bool = False,
     token: str | None = None,
 ) -> CommandResult:
@@ -66,8 +64,6 @@ def channel_add(
         params["response_mode"] = response_mode
     if mention_patterns:
         params["mention_patterns"] = list(mention_patterns)
-    if owner_user_ids:
-        params["owner_user_ids"] = list(owner_user_ids)
     if observe_unaddressed:
         params["observe_unaddressed"] = True
     payload = _rpc_call(instance, "channel.create", params)
@@ -202,6 +198,149 @@ def channel_set_token(
     )
 
 
+def channel_identity(
+    instance: ServerInstance,
+    channel_id: str,
+    user_id: str | None = None,
+) -> CommandResult:
+    """Show or set the Channel account's own stable platform user id."""
+    method = "channel.identity.set" if user_id is not None else "channel.access.get"
+    params: dict[str, object] = {"id": channel_id}
+    if user_id is not None:
+        params["user_id"] = user_id
+    payload = _rpc_call(instance, method, params)
+    if not payload.ok:
+        return payload.to_command_result()
+    return CommandResult(
+        ok=True,
+        message=_format_channel_identity(payload.data, channel_id),
+        instance=instance,
+    )
+
+
+def channel_access(
+    instance: ServerInstance,
+    channel_id: str,
+    access_scope_id: str,
+) -> CommandResult:
+    """List the saved participants and roles for one group."""
+    payload = _rpc_call(instance, "channel.access.get", {"id": channel_id})
+    if not payload.ok:
+        return payload.to_command_result()
+    return CommandResult(
+        ok=True,
+        message=_format_group_access(payload.data, channel_id, access_scope_id),
+        instance=instance,
+    )
+
+
+def channel_grant_admin(
+    instance: ServerInstance,
+    channel_id: str,
+    access_scope_id: str,
+    user_id: str,
+) -> CommandResult:
+    """Add one group admin and print the resulting saved group state."""
+    return _mutate_channel_admin(
+        instance,
+        "channel.admin.grant",
+        channel_id,
+        access_scope_id,
+        user_id,
+    )
+
+
+def channel_revoke_admin(
+    instance: ServerInstance,
+    channel_id: str,
+    access_scope_id: str,
+    user_id: str,
+) -> CommandResult:
+    """Remove one additional group admin and print the resulting saved group state."""
+    return _mutate_channel_admin(
+        instance,
+        "channel.admin.revoke",
+        channel_id,
+        access_scope_id,
+        user_id,
+    )
+
+
+def _mutate_channel_admin(
+    instance: ServerInstance,
+    method: str,
+    channel_id: str,
+    access_scope_id: str,
+    user_id: str,
+) -> CommandResult:
+    payload = _rpc_call(
+        instance,
+        method,
+        {
+            "id": channel_id,
+            "access_scope_id": access_scope_id,
+            "user_id": user_id,
+        },
+    )
+    if not payload.ok:
+        return payload.to_command_result()
+    return CommandResult(
+        ok=True,
+        message=_format_group_access(payload.data, channel_id, access_scope_id),
+        instance=instance,
+    )
+
+
+def _format_channel_identity(value: Mapping[str, Any], fallback_id: str) -> str:
+    channel_id = _string_or_default(value.get("channel_id"), fallback_id)
+    self_user_id = value.get("self_user_id")
+    rendered_identity = (
+        self_user_id if isinstance(self_user_id, str) and self_user_id else "not set"
+    )
+    return f"channel={channel_id} self_user_id={rendered_identity}"
+
+
+def _format_group_access(
+    value: Mapping[str, Any],
+    fallback_id: str,
+    access_scope_id: str,
+) -> str:
+    channel_id = _string_or_default(value.get("channel_id"), fallback_id)
+    groups = value.get("groups")
+    group = (
+        next(
+            (
+                item
+                for item in groups
+                if isinstance(item, Mapping) and item.get("access_scope_id") == access_scope_id
+            ),
+            None,
+        )
+        if isinstance(groups, list)
+        else None
+    )
+    if group is None:
+        return f"channel={channel_id} group={access_scope_id}\nadmins=-\nparticipants: none"
+    admin_ids = _format_allowed_chat_ids(group.get("admin_user_ids"))
+    lines = [
+        f"channel={channel_id} group={access_scope_id}",
+        f"admins={admin_ids}",
+        "participants:",
+    ]
+    participants = group.get("participants")
+    if not isinstance(participants, list) or not participants:
+        lines[-1] = "participants: none"
+        return "\n".join(lines)
+    for participant in participants:
+        if not isinstance(participant, Mapping):
+            continue
+        user_id = _string_or_default(participant.get("user_id"), "?")
+        display_name = _string_or_default(participant.get("display_name"), user_id)
+        role = _string_or_default(participant.get("role"), "member")
+        lines.append(f"- user_id={user_id} name={display_name} role={role}")
+    return "\n".join(lines)
+
+
 def _format_denied_chats(channel_id: str, value: object) -> list[str]:
     if not isinstance(value, list) or not value:
         return []
@@ -266,8 +405,6 @@ def _format_channel_row(channel: object) -> str:
         line = (
             f"{line} mention_patterns={_format_allowed_chat_ids(channel.get('mention_patterns'))}"
         )
-    if "owner_user_ids" in channel:
-        line = f"{line} owner_user_ids={_format_allowed_chat_ids(channel.get('owner_user_ids'))}"
     if "observe_unaddressed" in channel:
         line = f"{line} observe_unaddressed={_bool_text(channel.get('observe_unaddressed'))}"
     return line

@@ -105,6 +105,10 @@ CHANNEL_HELP = {
     "disable": "Disable a channel listener",
     "status": "Show one channel listener status",
     "set-token": "Set or rotate a channel bot token from stdin",
+    "identity": "Show or set the Channel account's own platform identity",
+    "access": "List participants and roles for one group",
+    "grant-admin": "Grant one user admin access in one group",
+    "revoke-admin": "Revoke one user's additional admin access in one group",
 }
 PROMPT_HELP = {
     "list": "List System Prompt blocks",
@@ -898,6 +902,57 @@ def _add_channel_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         )
         command_parser.add_argument("id", metavar="<channel-id>", help=f"Channel id to {command}")
 
+    identity_parser = _add_command_parser(
+        channel_subparsers,
+        "identity",
+        CHANNEL_HELP["identity"],
+        example="channel identity tg-main --user 12345",
+    )
+    identity_parser.add_argument("id", metavar="<channel-id>", help="Channel config id")
+    identity_parser.add_argument(
+        "--user",
+        metavar="<user-id>",
+        help="Set this previously seen platform user as the Channel account's own identity",
+    )
+
+    access_parser = _add_command_parser(
+        channel_subparsers,
+        "access",
+        CHANNEL_HELP["access"],
+        example="channel access tg-main --group -100123",
+    )
+    access_parser.add_argument("id", metavar="<channel-id>", help="Channel config id")
+    access_parser.add_argument(
+        "--group",
+        required=True,
+        dest="access_scope_id",
+        metavar="<group-id>",
+        help="Group access-scope id",
+    )
+
+    for command in ("grant-admin", "revoke-admin"):
+        admin_parser = _add_command_parser(
+            channel_subparsers,
+            command,
+            CHANNEL_HELP[command],
+            example=f"channel {command} tg-main --group -100123 --user 12345",
+        )
+        admin_parser.add_argument("id", metavar="<channel-id>", help="Channel config id")
+        admin_parser.add_argument(
+            "--group",
+            required=True,
+            dest="access_scope_id",
+            metavar="<group-id>",
+            help="Group access-scope id",
+        )
+        admin_parser.add_argument(
+            "--user",
+            required=True,
+            dest="user_id",
+            metavar="<user-id>",
+            help="Stable platform user id",
+        )
+
 
 def _add_channel_policy_arguments(
     parser: argparse.ArgumentParser, *, include_defaults: bool
@@ -915,14 +970,6 @@ def _add_channel_policy_arguments(
         default=[] if include_defaults else None,
         metavar="<pattern>",
         help="Replace explicit mention patterns",
-    )
-    parser.add_argument(
-        "--owner-user",
-        dest="owner_user_ids",
-        nargs="*",
-        default=[] if include_defaults else None,
-        metavar="<user-id>",
-        help="Replace platform user ids treated as the owner",
     )
     parser.add_argument(
         "--observe-unaddressed",

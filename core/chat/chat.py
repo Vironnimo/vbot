@@ -409,6 +409,7 @@ class _RunRequest:
     sender: MessageSender | None = None
     reply_surface: ReplySurface | None = None
     tool_restriction: tuple[str, ...] | None = None
+    tool_denial_resolver: Callable[[str], str | None] | None = None
     input_persisted_hook: Callable[[], None] | None = None
     agent_overrides: AgentRunOverrides | None = None
 
@@ -782,6 +783,7 @@ class ChatLoop:
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
         tool_restriction: Sequence[str] | None = None,
+        tool_denial_resolver: Callable[[str], str | None] | None = None,
         input_persisted_hook: Callable[[], None] | None = None,
         contributes_to_agent_activity: bool = True,
     ) -> Run:
@@ -807,6 +809,7 @@ class ChatLoop:
             reply_surface=reply_surface,
             project_id=project_id,
             tool_restriction=tool_restriction,
+            tool_denial_resolver=tool_denial_resolver,
             input_persisted_hook=input_persisted_hook,
             contributes_to_agent_activity=contributes_to_agent_activity,
         )
@@ -822,6 +825,7 @@ class ChatLoop:
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
         tool_restriction: Sequence[str] | None = None,
+        tool_denial_resolver: Callable[[str], str | None] | None = None,
         input_persisted_hook: Callable[[], None] | None = None,
         contributes_to_agent_activity: bool = True,
     ) -> Run:
@@ -843,6 +847,7 @@ class ChatLoop:
             reply_surface=reply_surface,
             project_id=project_id,
             tool_restriction=tool_restriction,
+            tool_denial_resolver=tool_denial_resolver,
             input_persisted_hook=input_persisted_hook,
             contributes_to_agent_activity=contributes_to_agent_activity,
         )
@@ -858,6 +863,8 @@ class ChatLoop:
         sender: MessageSender | None = None,
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
+        tool_restriction: Sequence[str] | None = None,
+        tool_denial_resolver: Callable[[str], str | None] | None = None,
         waiting_work_admission: WaitingWorkAdmission | None = None,
         input_persisted_hook: Callable[[], None] | None = None,
         contributes_to_agent_activity: bool = True,
@@ -881,6 +888,8 @@ class ChatLoop:
             input_origin=input_origin,
             sender=sender,
             reply_surface=reply_surface,
+            tool_restriction=(tuple(tool_restriction) if tool_restriction is not None else None),
+            tool_denial_resolver=tool_denial_resolver,
             input_persisted_hook=input_persisted_hook,
         )
         return await manager.enqueue(
@@ -1141,6 +1150,7 @@ class ChatLoop:
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
         tool_restriction: Sequence[str] | None = None,
+        tool_denial_resolver: Callable[[str], str | None] | None = None,
         input_persisted_hook: Callable[[], None] | None = None,
         contributes_to_agent_activity: bool = True,
     ) -> Run:
@@ -1159,6 +1169,7 @@ class ChatLoop:
             sender=sender,
             reply_surface=reply_surface,
             tool_restriction=(tuple(tool_restriction) if tool_restriction is not None else None),
+            tool_denial_resolver=tool_denial_resolver,
             input_persisted_hook=input_persisted_hook,
         )
         return await manager.start(
@@ -2307,6 +2318,7 @@ class ChatLoop:
                         project_id=project_id,
                         skill_project_id=context.skill_project_id,
                         tool_restriction=context.request.tool_restriction,
+                        tool_denial_resolver=context.request.tool_denial_resolver,
                         base_allowed_tools=state.allowed_tool_names,
                         session_tool_grants=state.session_tool_grants,
                         tool_contracts=state.tool_contracts,

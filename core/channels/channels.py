@@ -25,6 +25,7 @@ from core.channels.adapter import (
     RunButtonClaim,
     bound_run_callback_data,
 )
+from core.chat.messages import GroupRole
 from core.config_validation import (
     JsonConfigValidationError,
     JsonDiagnostic,
@@ -53,6 +54,8 @@ if TYPE_CHECKING:
 _LOGGER = get_logger("channels")
 
 _CHANNEL_CONFIG_FILENAME = "channel.json"
+_CHANNEL_ACCESS_FILENAME = "access.json"
+_CHANNEL_ACCESS_VERSION = 1
 _RUN_BUTTON_BINDINGS_FILENAME = "run-button-bindings.json"
 _RUN_BUTTON_BINDINGS_VERSION = 1
 _DEFAULT_DM_SCOPE = "per_conversation"
@@ -80,11 +83,10 @@ _MUTABLE_FIELDS = frozenset(
         "enabled",
         "response_mode",
         "mention_patterns",
-        "owner_user_ids",
         "observe_unaddressed",
     )
 )
-_CHANNEL_CONFIG_FIELDS = _MUTABLE_FIELDS | {"id"}
+_CHANNEL_CONFIG_FIELDS = _MUTABLE_FIELDS | {"id", "owner_user_ids"}
 
 
 class ChannelError(VBotError):
@@ -212,7 +214,8 @@ class ChannelConfig:
     enabled: bool = True
     response_mode: str = _DEFAULT_RESPONSE_MODE
     mention_patterns: list[str] = field(default_factory=list)
-    owner_user_ids: list[str] = field(default_factory=list)
+    # Legacy read-only migration input. New configs never persist or mutate this field.
+    owner_user_ids: list[str] = field(default_factory=list, repr=False)
     observe_unaddressed: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -227,7 +230,6 @@ class ChannelConfig:
             "enabled": self.enabled,
             "response_mode": self.response_mode,
             "mention_patterns": list(self.mention_patterns),
-            "owner_user_ids": list(self.owner_user_ids),
             "observe_unaddressed": self.observe_unaddressed,
         }
 
@@ -337,6 +339,7 @@ class ChannelStorage:
         self._data_root = Path(data_root).expanduser()
         self._channels_dir = self._data_root / "channels"
         self._run_button_bindings_lock = threading.RLock()
+        self._access_lock = threading.RLock()
 
     def load_all(self) -> list[ChannelConfig]:
         """Load all valid persisted channel configs in stable id-order.
@@ -356,7 +359,7 @@ class ChannelStorage:
             if not config_path.is_file():
                 continue
             try:
-                configs.append(self._read_config(config_path))
+                configs.append(self._migrate_legacy_owner_ids(self._read_config(config_path)))
             except ChannelError as error:
                 _LOGGER.warning("Skipping invalid channel config %s: %s", config_path, error)
 
@@ -397,7 +400,154 @@ class ChannelStorage:
         config_path = self._channel_dir(normalized_id) / _CHANNEL_CONFIG_FILENAME
         if not config_path.is_file():
             raise ChannelNotFoundError(f"Channel not found: {normalized_id}")
-        return self._read_config(config_path)
+        return self._migrate_legacy_owner_ids(self._read_config(config_path))
+
+    def access_state(self, channel_id: str) -> JsonObject:
+        """Return the saved own identity and per-group participant/admin state."""
+        normalized_id = _normalize_channel_id(channel_id)
+        self.get(normalized_id)
+        with self._access_lock:
+            state = self._load_access_state(normalized_id)
+            return self._public_access_state(normalized_id, state)
+
+    def snapshot_participant_role(
+        self,
+        channel_id: str,
+        access_scope_id: str,
+        user_id: str,
+        display_name: str,
+    ) -> GroupRole:
+        """Persist one seen participant and return its role in the same lock."""
+        normalized_id = _normalize_channel_id(channel_id)
+        scope_id = _normalize_platform_access_id(access_scope_id, "access_scope_id")
+        normalized_user_id = _normalize_platform_access_id(user_id, "user_id")
+        normalized_display_name = (
+            display_name.strip() if isinstance(display_name, str) else normalized_user_id
+        )
+        if not normalized_display_name:
+            normalized_display_name = normalized_user_id
+        with self._access_lock:
+            state = self._load_access_state(normalized_id)
+            group = self._access_group(state, scope_id)
+            participants = cast(dict[str, JsonObject], group["participants"])
+            participants[normalized_user_id] = {
+                "display_name": normalized_display_name,
+                "last_seen_at": datetime.now(UTC).isoformat(),
+            }
+            role = self._role_from_state(state, group, normalized_user_id)
+            self._write_access_state(normalized_id, state)
+            return role
+
+    def role_for(
+        self,
+        channel_id: str,
+        access_scope_id: str,
+        user_id: str,
+    ) -> GroupRole:
+        """Resolve the current role without changing participant history."""
+        normalized_id = _normalize_channel_id(channel_id)
+        scope_id = _normalize_platform_access_id(access_scope_id, "access_scope_id")
+        normalized_user_id = _normalize_platform_access_id(user_id, "user_id")
+        with self._access_lock:
+            state = self._load_access_state(normalized_id)
+            group = self._access_group(state, scope_id)
+            return self._role_from_state(state, group, normalized_user_id)
+
+    def set_self_user_id(self, channel_id: str, user_id: str) -> JsonObject:
+        """Set the Channel account's own identity from its durable participants."""
+        normalized_id = _normalize_channel_id(channel_id)
+        normalized_user_id = _normalize_platform_access_id(user_id, "user_id")
+        self.get(normalized_id)
+        with self._access_lock:
+            state = self._load_access_state(normalized_id)
+            groups = cast(dict[str, JsonObject], state["groups"])
+            seen = any(
+                normalized_user_id in cast(dict[str, JsonObject], group.get("participants", {}))
+                for group in groups.values()
+            )
+            if not seen:
+                raise ChannelConfigError(
+                    f"Channel participant has not been seen: {normalized_user_id}"
+                )
+            state["self_user_id"] = normalized_user_id
+            self._write_access_state(normalized_id, state)
+            return self._public_access_state(normalized_id, state)
+
+    def grant_group_admin(
+        self,
+        channel_id: str,
+        access_scope_id: str,
+        user_id: str,
+    ) -> JsonObject:
+        """Add one user to one group's additional admin set, idempotently."""
+        normalized_id = _normalize_channel_id(channel_id)
+        scope_id = _normalize_platform_access_id(access_scope_id, "access_scope_id")
+        normalized_user_id = _normalize_platform_access_id(user_id, "user_id")
+        self.get(normalized_id)
+        with self._access_lock:
+            state = self._load_access_state(normalized_id)
+            group = self._access_group(state, scope_id)
+            admins = cast(list[str], group["admin_user_ids"])
+            if normalized_user_id not in admins:
+                admins.append(normalized_user_id)
+                admins.sort()
+                self._write_access_state(normalized_id, state)
+            return self._public_access_state(normalized_id, state)
+
+    def revoke_group_admin(
+        self,
+        channel_id: str,
+        access_scope_id: str,
+        user_id: str,
+    ) -> JsonObject:
+        """Remove one additional admin; the configured own identity stays admin."""
+        normalized_id = _normalize_channel_id(channel_id)
+        scope_id = _normalize_platform_access_id(access_scope_id, "access_scope_id")
+        normalized_user_id = _normalize_platform_access_id(user_id, "user_id")
+        self.get(normalized_id)
+        with self._access_lock:
+            state = self._load_access_state(normalized_id)
+            group = self._access_group(state, scope_id)
+            admins = cast(list[str], group["admin_user_ids"])
+            if normalized_user_id in admins:
+                admins.remove(normalized_user_id)
+                self._write_access_state(normalized_id, state)
+            return self._public_access_state(normalized_id, state)
+
+    def migrate_group_access(
+        self,
+        channel_id: str,
+        old_access_scope_id: str,
+        new_access_scope_id: str,
+    ) -> None:
+        """Merge and move durable group access state after a platform migration."""
+        normalized_id = _normalize_channel_id(channel_id)
+        old_scope_id = _normalize_platform_access_id(old_access_scope_id, "old_access_scope_id")
+        new_scope_id = _normalize_platform_access_id(new_access_scope_id, "new_access_scope_id")
+        if old_scope_id == new_scope_id:
+            return
+        with self._access_lock:
+            state = self._load_access_state(normalized_id)
+            groups = cast(dict[str, JsonObject], state["groups"])
+            old_group = groups.pop(old_scope_id, None)
+            if old_group is None:
+                return
+            new_group = self._access_group(state, new_scope_id)
+            new_admins = cast(list[str], new_group["admin_user_ids"])
+            for user_id in cast(list[str], old_group.get("admin_user_ids", [])):
+                if user_id not in new_admins:
+                    new_admins.append(user_id)
+            new_admins.sort()
+            new_participants = cast(dict[str, JsonObject], new_group["participants"])
+            for user_id, participant in cast(
+                dict[str, JsonObject], old_group.get("participants", {})
+            ).items():
+                current = new_participants.get(user_id)
+                if current is None or str(participant.get("last_seen_at", "")) > str(
+                    current.get("last_seen_at", "")
+                ):
+                    new_participants[user_id] = dict(participant)
+            self._write_access_state(normalized_id, state)
 
     def save_run_button_binding(self, channel_id: str, binding: RunButtonBinding) -> None:
         """Persist one pending origin binding before its Telegram message is sent."""
@@ -452,6 +602,149 @@ class ChannelStorage:
 
     def _channel_dir(self, channel_id: str) -> Path:
         return self._channels_dir / channel_id
+
+    def _migrate_legacy_owner_ids(self, config: ChannelConfig) -> ChannelConfig:
+        if not config.owner_user_ids:
+            return config
+        with self._access_lock:
+            state = self._load_access_state(config.id)
+            changed = False
+            for access_scope_id in config.allowed_chat_ids:
+                group = self._access_group(state, access_scope_id)
+                admins = cast(list[str], group["admin_user_ids"])
+                for user_id in config.owner_user_ids:
+                    if user_id not in admins:
+                        admins.append(user_id)
+                        changed = True
+                admins.sort()
+            if changed:
+                self._write_access_state(config.id, state)
+            migrated = replace(config, owner_user_ids=[])
+            self.save(migrated)
+            return migrated
+
+    def _load_access_state(self, channel_id: str) -> JsonObject:
+        path = self._channel_dir(channel_id) / _CHANNEL_ACCESS_FILENAME
+        if not path.is_file():
+            return {
+                "version": _CHANNEL_ACCESS_VERSION,
+                "self_user_id": None,
+                "groups": {},
+            }
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or payload.get("version") != _CHANNEL_ACCESS_VERSION:
+                raise ValueError("unsupported access-store version")
+            self_user_id = payload.get("self_user_id")
+            if self_user_id is not None and (not isinstance(self_user_id, str) or not self_user_id):
+                raise ValueError("self_user_id must be a non-empty string or null")
+            raw_groups = payload.get("groups")
+            if not isinstance(raw_groups, dict):
+                raise ValueError("groups must be an object")
+            groups: dict[str, JsonObject] = {}
+            for scope_id, raw_group in raw_groups.items():
+                if not isinstance(scope_id, str) or not scope_id or not isinstance(raw_group, dict):
+                    raise ValueError("group entries must be keyed objects")
+                raw_admins = raw_group.get("admin_user_ids", [])
+                raw_participants = raw_group.get("participants", {})
+                if not isinstance(raw_admins, list) or not all(
+                    isinstance(user_id, str) and user_id for user_id in raw_admins
+                ):
+                    raise ValueError("admin_user_ids must be a list of non-empty strings")
+                if not isinstance(raw_participants, dict):
+                    raise ValueError("participants must be an object")
+                participants: dict[str, JsonObject] = {}
+                for user_id, raw_participant in raw_participants.items():
+                    if (
+                        not isinstance(user_id, str)
+                        or not user_id
+                        or not isinstance(raw_participant, dict)
+                    ):
+                        raise ValueError("participant entries must be keyed objects")
+                    display_name = raw_participant.get("display_name")
+                    last_seen_at = raw_participant.get("last_seen_at")
+                    if not isinstance(display_name, str) or not display_name:
+                        raise ValueError("participant display_name must be non-empty")
+                    if not isinstance(last_seen_at, str) or not last_seen_at:
+                        raise ValueError("participant last_seen_at must be non-empty")
+                    participants[user_id] = {
+                        "display_name": display_name,
+                        "last_seen_at": last_seen_at,
+                    }
+                groups[scope_id] = {
+                    "admin_user_ids": sorted(set(raw_admins)),
+                    "participants": participants,
+                }
+            return {
+                "version": _CHANNEL_ACCESS_VERSION,
+                "self_user_id": self_user_id,
+                "groups": groups,
+            }
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError, TypeError) as error:
+            raise ChannelError(
+                f"Cannot read Channel access state for {channel_id}: {error}"
+            ) from error
+
+    def _write_access_state(self, channel_id: str, state: JsonObject) -> None:
+        path = self._channel_dir(channel_id) / _CHANNEL_ACCESS_FILENAME
+        try:
+            atomic_write_text(
+                path,
+                json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            )
+        except OSError as error:
+            raise ChannelError(
+                f"Cannot write Channel access state for {channel_id}: {error}"
+            ) from error
+
+    @staticmethod
+    def _access_group(state: JsonObject, access_scope_id: str) -> JsonObject:
+        groups = cast(dict[str, JsonObject], state["groups"])
+        group = groups.get(access_scope_id)
+        if group is None:
+            group = {"admin_user_ids": [], "participants": {}}
+            groups[access_scope_id] = group
+        return group
+
+    @staticmethod
+    def _role_from_state(
+        state: JsonObject,
+        group: JsonObject,
+        user_id: str,
+    ) -> GroupRole:
+        if user_id == state.get("self_user_id"):
+            return "admin"
+        return "admin" if user_id in cast(list[str], group["admin_user_ids"]) else "member"
+
+    def _public_access_state(self, channel_id: str, state: JsonObject) -> JsonObject:
+        self_user_id = cast(str | None, state.get("self_user_id"))
+        groups_payload: list[JsonObject] = []
+        for access_scope_id, group in sorted(cast(dict[str, JsonObject], state["groups"]).items()):
+            participants = cast(dict[str, JsonObject], group["participants"])
+            participant_payload = [
+                {
+                    "user_id": user_id,
+                    "display_name": participant["display_name"],
+                    "last_seen_at": participant["last_seen_at"],
+                    "role": self._role_from_state(state, group, user_id),
+                }
+                for user_id, participant in sorted(participants.items())
+            ]
+            admin_ids = set(cast(list[str], group["admin_user_ids"]))
+            if self_user_id is not None:
+                admin_ids.add(self_user_id)
+            groups_payload.append(
+                {
+                    "access_scope_id": access_scope_id,
+                    "admin_user_ids": sorted(admin_ids),
+                    "participants": participant_payload,
+                }
+            )
+        return {
+            "channel_id": channel_id,
+            "self_user_id": self_user_id,
+            "groups": groups_payload,
+        }
 
     def _load_run_button_bindings(self, channel_id: str) -> dict[str, RunButtonBinding]:
         path = self._channel_dir(channel_id) / _RUN_BUTTON_BINDINGS_FILENAME
@@ -816,6 +1109,32 @@ class ChannelService:
         """Return all persisted channels, enabled and disabled."""
         return self._storage.load_all()
 
+    def channel_access(self, channel_id: str) -> JsonObject:
+        """Return one Channel's durable identity and per-group access state."""
+        return self._storage.access_state(channel_id)
+
+    def set_channel_self_user_id(self, channel_id: str, user_id: str) -> JsonObject:
+        """Set and return one Channel account's own platform identity."""
+        return self._storage.set_self_user_id(channel_id, user_id)
+
+    def grant_channel_group_admin(
+        self,
+        channel_id: str,
+        access_scope_id: str,
+        user_id: str,
+    ) -> JsonObject:
+        """Grant one user admin access in one group and return saved state."""
+        return self._storage.grant_group_admin(channel_id, access_scope_id, user_id)
+
+    def revoke_channel_group_admin(
+        self,
+        channel_id: str,
+        access_scope_id: str,
+        user_id: str,
+    ) -> JsonObject:
+        """Revoke one additional group admin and return saved state."""
+        return self._storage.revoke_group_admin(channel_id, access_scope_id, user_id)
+
     def create_channel(self, config: ChannelConfig) -> None:
         """Validate and persist one channel config, then start it when enabled."""
         if not isinstance(config, ChannelConfig):
@@ -917,6 +1236,7 @@ class ChannelService:
         """
         normalized_id = _normalize_channel_id(channel_id)
         config = self._storage.get(normalized_id)
+        self._storage.migrate_group_access(normalized_id, old_chat_id, new_chat_id)
         if old_chat_id not in config.allowed_chat_ids:
             return
 
@@ -1001,6 +1321,7 @@ class ChannelService:
                 self._credential_resolver,
                 attachment_store=self._attachment_store,
                 command_dispatcher=self._command_dispatcher,
+                access_registry=self._storage,
             )
 
         if config.platform == "telegram":
@@ -1016,6 +1337,7 @@ class ChannelService:
                 chat_migration_persister=partial(self.record_chat_id_migration, config.id),
                 interaction_dispatcher=self._interaction_dispatcher,
                 run_button_binding_registry=self._storage,
+                access_registry=self._storage,
             )
 
         raise ChannelConfigError(f"Unsupported channel platform: {config.platform}")
@@ -1455,6 +1777,12 @@ def _normalize_channel_id(channel_id: str) -> str:
             "channel_id must contain only letters, numbers, underscore, and hyphen"
         )
     return normalized
+
+
+def _normalize_platform_access_id(value: str, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ChannelConfigError(f"{field_name} must be a non-empty string")
+    return value.strip()
 
 
 def managed_channel_token_env_var(channel_id: str) -> str:

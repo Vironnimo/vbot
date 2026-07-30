@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from core.attachments import AttachmentStore
 from core.channels.adapter import (
+    ChannelAccessRegistry,
     ChannelAdapter,
     ConversationFacts,
     DeniedChatFacts,
@@ -52,6 +53,7 @@ class DiscordChannelAdapter(ChannelAdapter):
         attachment_store: AttachmentStore | None = None,
         *,
         command_dispatcher: CommandDispatcher,
+        access_registry: ChannelAccessRegistry | None = None,
     ) -> None:
         self._config = config
         self._attachment_store = attachment_store
@@ -62,6 +64,7 @@ class DiscordChannelAdapter(ChannelAdapter):
             chat_sessions,
             self,
             command_dispatcher=command_dispatcher,
+            access_registry=access_registry,
         )
 
         token = credential_resolver(config.token_env_var)
@@ -330,6 +333,7 @@ class DiscordChannelAdapter(ChannelAdapter):
             channel_id=self._config.id,
             chat_id=chat_id,
             user_id=user_id,
+            access_scope_id=parent_id or chat_id if guild is not None else None,
             thread_id=chat_id if parent_id is not None else None,
             kind="direct" if guild is None else "group",
             user_display_name=_user_display_name(author),
@@ -357,6 +361,7 @@ class DiscordChannelAdapter(ChannelAdapter):
             channel_id=self._config.id,
             chat_id=chat_id,
             user_id=user_id,
+            access_scope_id=parent_id or chat_id if guild is not None else None,
             thread_id=chat_id if parent_id is not None else None,
             kind="direct" if guild is None else "group",
         )
@@ -591,6 +596,7 @@ class DiscordChannelAdapter(ChannelAdapter):
             channel_id=conversation.channel_id,
             chat_id=conversation.chat_id,
             user_id=conversation.user_id,
+            access_scope_id=conversation.access_scope_id,
             thread_id=conversation.thread_id,
             kind=conversation.kind,
             user_display_name=conversation.user_display_name,

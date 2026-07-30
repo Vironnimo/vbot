@@ -445,12 +445,13 @@ async def test_start_run_persists_sender_and_renders_request_attribution(
     assert persisted_roles(messages) == ["user", "assistant"]
     assert messages[0].sender == sender
     assert messages[0].content == "Hi"
-    assert request_messages[1]["content"] == "[Alice|50]: Hi"
+    assert request_messages[1]["content"] == "[Alice|50|member]: Hi"
     assert all("sender" not in message for message in request_messages)
     persisted_event = next(event for event in run.events if event.type == "user_message_persisted")
     assert persisted_event.payload["message"]["sender"] == {
         "id": "50",
         "display_name": "Alice",
+        "role": "member",
     }
 
 

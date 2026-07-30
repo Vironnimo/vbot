@@ -587,6 +587,11 @@ vbot channel add tg-main --platform telegram --agent assistant --token-env TELEG
 vbot channel list
 vbot channel status tg-main
 vbot channel update tg-main --allow 123456789
+vbot channel identity tg-main
+vbot channel identity tg-main --user 123456789
+vbot channel access tg-main --group -100123456789
+vbot channel grant-admin tg-main --group -100123456789 --user 987654321
+vbot channel revoke-admin tg-main --group -100123456789 --user 987654321
 vbot channel enable tg-main
 vbot channel disable tg-main
 vbot channel remove tg-main
@@ -594,11 +599,11 @@ vbot channel remove tg-main
 
 An empty allowlist means deny all inbound chats, not allow everyone. To discover an id safely, message the bot once and inspect `vbot channel status <channel-id>` or Settings; each active adapter keeps the 20 most recent denied chats in memory. Allowing a chat restarts the adapter and clears that observation list. The allowlist gates inbound traffic only; an Agent using `channel_send` with an explicit platform target can send to any chat the bot account can reach.
 
-Group behavior is configurable from the CLI with `--response-mode mention|all`, list-replacing `--mention-pattern` and `--owner-user` flags, and `--observe-unaddressed true|false`. Channel create/update/enable/disable output returns the saved config; `channel status` separately reports listener health and denied chats.
+Group behavior is configurable from the CLI with `--response-mode mention|all`, list-replacing `--mention-pattern`, and `--observe-unaddressed true|false`. `channel identity` shows or sets the Channel account's own identity from previously seen participants; that identity is an admin in every group and cannot be demoted. `channel access` lists durable participants and roles for one group. `grant-admin` and `revoke-admin` are additive, idempotent one-user actions scoped to that group. Channel create/update/enable/disable output returns the saved config; `channel status` separately reports listener health and denied chats.
 
 Direct-message Session routing is controlled by `dm_scope`: `per_conversation` is the default, while `main`, `per_peer`, and `per_account_channel_peer` provide broader or narrower sharing. Group chats always use a shared conversation anchor. `/new` advances that anchor to a new active Session without changing the Agent-wide current Session used by WebUI and Desktop.
 
-Groups respond only when addressed by default: a platform mention, a reply to the bot, or a configured case-insensitive mention regex. Telegram also derives an exact case-insensitive wake name from the bot's current visible Telegram name at Channel start; BotFather privacy mode must be disabled for Telegram to deliver these plain name-addressed group messages. `response_mode: all` responds to every allowed group message. With `observe_unaddressed` enabled, otherwise-unaddressed group messages become untrusted background notes without starting a Run. Group Built-in Commands and reserved `run:` button taps are limited to `owner_user_ids`; an empty owner list authorizes nobody in a group. DMs remain governed by the chat allowlist.
+Groups respond only when addressed by default: a platform mention, a reply to the bot, or a configured case-insensitive mention regex. Telegram also derives an exact case-insensitive wake name from the bot's current visible Telegram name at Channel start; BotFather privacy mode must be disabled for Telegram to deliver these plain name-addressed group messages. `response_mode: all` responds to every allowed group message. With `observe_unaddressed` enabled, otherwise-unaddressed group messages become untrusted background notes without starting a Run. Every seen group participant is assigned `admin` or `member` by stable platform user id: admins retain the Agent's full Tool access, while members may authorize only `web_search` and `web_fetch`. Group Built-in Commands and reserved `run:` button taps require `admin`. Role enforcement is dispatch-only, so grants/revokes do not alter the System Prompt or provider Tool definitions; a grant affects new ingress only, while a revoke applies before the next Tool call of an active admin Run. DMs remain governed by the chat allowlist.
 
 Both adapters ingest supported media and files, preserve Channel Session context, show activity, and reply to the triggering group message. Telegram supports outbound inline buttons and deterministic Extension tap handlers; Discord rejects button payloads. A reserved `run:<payload>` Telegram button wakes the Agent with the complete keyboard state instead of invoking an Extension handler.
 
@@ -668,7 +673,7 @@ Installed commands use `vbot`. From a source checkout, `python cli/main.py` expo
 | Agents | `agent list`, `agent show`, `agent create`, `agent update`, `agent rename`, `agent delete` |
 | Projects | `project add`, `project list`, `project show`, `project set`, `project set-override`, `project clear-override`, `project rm` |
 | Sessions | `session list`, `session create`, `session fork`, `session rename`, `session set-compaction-policy`, `session delete`, `session link-channel` |
-| Channels | `channel add`, `channel list`, `channel update`, `channel enable`, `channel disable`, `channel status`, `channel remove` |
+| Channels | `channel add`, `channel list`, `channel update`, `channel enable`, `channel disable`, `channel status`, `channel identity`, `channel access`, `channel grant-admin`, `channel revoke-admin`, `channel remove` |
 | Tools and Skills | `tool list`, `skill list`, `skill read`, `skill create`, `skill update`, `skill delete`, `skill write-file`, `skill remove-file` |
 | System Prompt | `prompt list`, `prompt update`, `prompt reset`, `prompt create`, `prompt remove`, `prompt set-layout`, `prompt reset-layout`, `prompt preview` |
 | Providers | `provider list`, `provider status`, `provider usage`, `provider custom-list`, `provider custom-save`, `provider custom-delete`, `provider set-key`, `provider unset-key`, `provider enable`, `provider disable`, `provider connect`, `provider disconnect`, `provider connect-status` |

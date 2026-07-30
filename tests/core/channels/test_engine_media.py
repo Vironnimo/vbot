@@ -17,6 +17,7 @@ from .engine_test_support import (
     Path,
     SimpleNamespace,
     TextBlock,
+    assert_member_trigger,
     command_outcome,
     drain,
     engine_module,
@@ -172,12 +173,12 @@ async def test_media_path_carries_group_sender(tmp_path: Path) -> None:
     await engine.handle_inbound_media(conversation, ("photo",))
     await drain(engine, 12345)
 
-    trigger_mock.assert_awaited_once_with(
+    assert_member_trigger(
+        trigger_mock,
         "assistant",
         [block],
         SESSION_ID,
         sender=MessageSender(id="50", display_name="Alice"),
-        reply_surface=CHANNEL_REPLY_SURFACE,
     )
     await engine.stop()
 
@@ -225,8 +226,8 @@ async def test_group_unaddressed_media_is_observed_without_download(tmp_path: Pa
         if message.role == "note"
     ]
     assert notes[-2:] == [
-        "[channel-message] Alice (50): [media] look",
-        "[channel-message] Alice (50): [media message]",
+        "[channel-message] [Alice|50|member]: [media] look",
+        "[channel-message] [Alice|50|member]: [media message]",
     ]
     media_builder.assert_not_awaited()
     trigger_mock.assert_not_awaited()

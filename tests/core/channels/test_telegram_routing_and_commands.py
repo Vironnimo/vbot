@@ -29,9 +29,12 @@ from core.chat.commands import (
 from core.chat.content_blocks import MediaBlock
 from core.runs import Run
 from core.sessions import ChatSessionManager
-from tests.core.channels.engine_test_support import make_new_only_dispatcher
+from tests.core.channels.engine_test_support import (
+    assert_member_trigger,
+    make_new_only_dispatcher,
+)
 from tests.core.channels.telegram_test_support import (
-    CHANNEL_REPLY_SURFACE,
+    CHANNEL_GROUP_REPLY_SURFACE,
     drain_chat_queue,
     make_adapter,
     make_command_dispatcher,
@@ -115,12 +118,13 @@ async def test_negative_chat_id_routes_to_shared_group_session(
 
     # Group chats ignore dm_scope and share one session keyed by the chat id.
     assert chat_sessions.exists("assistant", session_id)
-    trigger_mock.assert_awaited_once_with(
+    assert_member_trigger(
+        trigger_mock,
         "assistant",
         "hello",
         session_id,
         sender=MessageSender(id="50", display_name="50"),
-        reply_surface=CHANNEL_REPLY_SURFACE,
+        reply_surface=CHANNEL_GROUP_REPLY_SURFACE,
     )
     await adapter.stop()
 

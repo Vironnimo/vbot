@@ -26,10 +26,13 @@ from core.extensions import InteractionButton
 from core.runs import ASSISTANT_OUTPUT_EVENT, Run, WaitingWorkAdmission
 from core.sessions import ChatSessionManager
 
+from .engine_test_support import MemoryChannelAccessRegistry, assert_member_trigger
+
 CHANNEL_REPLY_SURFACE = ReplySurface.channel(
     platform="discord",
     platform_display_name="Discord",
     channel_id="dc-assistant",
+    conversation_kind="group",
 )
 
 
@@ -131,7 +134,6 @@ class FakeAttachment:
 def make_config(
     *,
     allowed_chat_ids: list[int | str] | None = None,
-    owner_user_ids: list[int | str] | None = None,
     response_mode: str = "mention",
     observe_unaddressed: bool = False,
 ) -> ChannelConfig:
@@ -141,7 +143,6 @@ def make_config(
         agent_id="assistant",
         dm_scope="per_conversation",
         allowed_chat_ids=cast(Any, list(allowed_chat_ids or [])),
-        owner_user_ids=cast(Any, list(owner_user_ids or [])),
         token_env_var="DISCORD_BOT_TOKEN_DC_ASSISTANT",
         enabled=True,
         response_mode=response_mode,
@@ -202,7 +203,7 @@ def make_adapter(
     *,
     target: FakeChannel,
     allowed_chat_ids: list[int | str] | None = None,
-    owner_user_ids: list[int | str] | None = None,
+    admin_user_ids: list[int | str] | None = None,
     response_mode: str = "mention",
     observe_unaddressed: bool = False,
     trigger_run: AsyncMock | None = None,
@@ -227,7 +228,6 @@ def make_adapter(
     adapter = DiscordChannelAdapter(
         make_config(
             allowed_chat_ids=allowed_chat_ids,
-            owner_user_ids=owner_user_ids,
             response_mode=response_mode,
             observe_unaddressed=observe_unaddressed,
         ),
@@ -236,6 +236,9 @@ def make_adapter(
         lambda _key: "test-token",
         attachment_store=attachment_store,
         command_dispatcher=cast(Any, command_dispatcher or make_command_dispatcher()),
+        access_registry=MemoryChannelAccessRegistry(
+            [str(user_id) for user_id in admin_user_ids or []]
+        ),
     )
     client = FakeClient([target])
     adapter._client = client
@@ -258,6 +261,27 @@ def test_channel_config_normalizes_discord_snowflakes_to_strings() -> None:
 
     assert config.allowed_chat_ids == ["123456789012345678"]
     assert config.to_dict()["allowed_chat_ids"] == ["123456789012345678"]
+
+
+@pytest.mark.asyncio
+async def test_thread_uses_parent_discord_channel_as_access_scope(tmp_path: Path) -> None:
+    guild = SimpleNamespace(id=1)
+    thread = FakeChannel(101, guild=guild, parent_id=100)
+    adapter, _chat_sessions, _trigger, _client = make_adapter(
+        tmp_path,
+        target=thread,
+        allowed_chat_ids=[100],
+    )
+
+    conversation = adapter._conversation_facts(
+        make_message(thread, message_id=201, author_id=50, content="hello")
+    )
+
+    assert conversation is not None
+    assert conversation.chat_id == "101"
+    assert conversation.thread_id == "101"
+    assert conversation.access_scope_id == "100"
+    await adapter.stop()
 
 
 def test_constructor_requires_token(tmp_path: Path) -> None:
@@ -355,7 +379,8 @@ async def test_group_mention_triggers_shared_run_with_sender(tmp_path: Path) -> 
     await drain_chat_queue(adapter, 100)
 
     assert chat_sessions.exists("assistant", session_id)
-    trigger_mock.assert_awaited_once_with(
+    assert_member_trigger(
+        trigger_mock,
         "assistant",
         "hello <@999>",
         session_id,
@@ -389,7 +414,7 @@ async def test_agent_command_reports_exact_discord_unavailability(
         tmp_path,
         target=channel,
         allowed_chat_ids=[100],
-        owner_user_ids=[50],
+        admin_user_ids=[50],
         command_dispatcher=dispatcher,
     )
 
@@ -541,8 +566,12 @@ async def test_mention_backfills_history_since_last_bot_reply_in_order(
         *,
         sender: MessageSender | None,
         reply_surface: ReplySurface,
+        tool_restriction: tuple[str, ...],
+        tool_denial_resolver: Any,
     ) -> Run:
         assert reply_surface == CHANNEL_REPLY_SURFACE
+        assert tool_restriction == ("web_search", "web_fetch")
+        assert callable(tool_denial_resolver)
         observed_at_trigger.extend(
             message.content
             for message in chat_sessions.get("assistant", session_id).load()
@@ -586,8 +615,8 @@ async def test_mention_backfills_history_since_last_bot_reply_in_order(
     await drain_chat_queue(adapter, 100)
 
     assert observed_at_trigger[-2:] == [
-        "[channel-message] Alice (50): first context",
-        "[channel-message] Bob (51): second context",
+        "[channel-message] [Alice|50|member]: first context",
+        "[channel-message] [Bob|51|member]: second context",
     ]
     assert all("too old" not in note for note in observed_at_trigger)
     assert channel.history_calls[0]["limit"] == 50
@@ -644,7 +673,8 @@ async def test_passive_observation_disables_history_backfill(tmp_path: Path) -> 
 
     notes = chat_sessions.get("assistant", "ch-dc-assistant-100").load()
     assert any(
-        message.content == "[channel-message] Alice (50): background context" for message in notes
+        message.content == "[channel-message] [Alice|50|member]: background context"
+        for message in notes
     )
     assert channel.history_calls == []
     trigger_mock.assert_not_awaited()

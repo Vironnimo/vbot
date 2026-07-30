@@ -17,6 +17,7 @@ import pytest
 import core.channels.engine as engine_module
 from core.attachments import AttachmentTooLargeError, AttachmentTypeNotAllowedError
 from core.channels.adapter import (
+    ChannelAccessRegistry,
     ConversationFacts,
     MessageFacts,
     ReplyPlanFacts,
@@ -35,6 +36,7 @@ from core.chat.commands import (
     PreparedCommand,
 )
 from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
+from core.chat.messages import GroupRole
 from core.extensions.interactions import InteractionButton, InteractionEvent
 from core.runs import ASSISTANT_OUTPUT_EVENT, ChatRunManager, Run, WaitingWorkAdmission
 from core.sessions import ChatSessionManager
@@ -45,6 +47,35 @@ CHANNEL_REPLY_SURFACE = ReplySurface.channel(
     platform_display_name="Telegram",
     channel_id="tg-assistant",
 )
+CHANNEL_GROUP_REPLY_SURFACE = ReplySurface.channel(
+    platform="telegram",
+    platform_display_name="Telegram",
+    channel_id="tg-assistant",
+    conversation_kind="group",
+)
+
+
+class MemoryChannelAccessRegistry(ChannelAccessRegistry):
+    """Small live access registry for adapter/engine unit tests."""
+
+    def __init__(self, admin_user_ids: list[str] | None = None) -> None:
+        self.admin_user_ids = set(admin_user_ids or [])
+        self.participants: dict[str, dict[str, str]] = {}
+
+    def snapshot_participant_role(
+        self,
+        channel_id: str,
+        access_scope_id: str,
+        user_id: str,
+        display_name: str,
+    ) -> GroupRole:
+        del channel_id
+        self.participants.setdefault(access_scope_id, {})[user_id] = display_name
+        return self.role_for("", access_scope_id, user_id)
+
+    def role_for(self, channel_id: str, access_scope_id: str, user_id: str) -> GroupRole:
+        del channel_id, access_scope_id
+        return "admin" if user_id in self.admin_user_ids else "member"
 
 
 class FakeTransport:
@@ -102,7 +133,6 @@ def make_config(
     dm_scope: str = "per_conversation",
     response_mode: str = "mention",
     mention_patterns: list[str] | None = None,
-    owner_user_ids: list[str] | None = None,
     observe_unaddressed: bool = False,
 ) -> ChannelConfig:
     return ChannelConfig(
@@ -115,7 +145,6 @@ def make_config(
         enabled=True,
         response_mode=response_mode,
         mention_patterns=list(mention_patterns or []),
-        owner_user_ids=list(owner_user_ids or []),
         observe_unaddressed=observe_unaddressed,
     )
 
@@ -136,6 +165,7 @@ def make_conversation(
         channel_id="tg-assistant",
         chat_id=str(chat_id),
         user_id=str(user_id),
+        access_scope_id=str(chat_id) if kind == "group" else None,
         thread_id=thread_id,
         kind=cast(Any, kind),
         user_display_name=user_display_name,
@@ -254,7 +284,7 @@ def make_engine(
     dm_scope: str = "per_conversation",
     response_mode: str = "mention",
     mention_patterns: list[str] | None = None,
-    owner_user_ids: list[str] | None = None,
+    admin_user_ids: list[str] | None = None,
     observe_unaddressed: bool = False,
     trigger_run: AsyncMock | None = None,
     compact_session: AsyncMock | None = None,
@@ -263,6 +293,7 @@ def make_engine(
     transport: FakeTransport | None = None,
     waiting_work_manager: ChatRunManager | None = None,
     run_button_binding_registry: RunButtonBindingRegistry | None = None,
+    access_registry: ChannelAccessRegistry | None = None,
 ) -> tuple[ChannelConversationEngine, ChatSessionManager, AsyncMock, FakeTransport]:
     chat_sessions = ChatSessionManager(tmp_path)
     trigger_mock = trigger_run or AsyncMock()
@@ -307,7 +338,6 @@ def make_engine(
             dm_scope=dm_scope,
             response_mode=response_mode,
             mention_patterns=mention_patterns,
-            owner_user_ids=owner_user_ids,
             observe_unaddressed=observe_unaddressed,
         ),
         cast(Any, trigger_service),
@@ -315,6 +345,11 @@ def make_engine(
         cast(Any, resolved_transport),
         command_dispatcher=cast(Any, resolved_dispatcher),
         run_button_binding_registry=run_button_binding_registry,
+        access_registry=access_registry
+        or cast(
+            ChannelAccessRegistry,
+            MemoryChannelAccessRegistry(list(admin_user_ids or [])),
+        ),
     )
     return engine, chat_sessions, trigger_mock, resolved_transport
 
@@ -326,6 +361,27 @@ async def drain(engine: ChannelConversationEngine, platform_target: int) -> None
         return
     # Generous timeout: xdist load can delay the worker task noticeably.
     await asyncio.wait_for(queue.join(), timeout=5)
+
+
+def assert_member_trigger(
+    trigger_mock: AsyncMock,
+    *args: Any,
+    sender: MessageSender,
+    reply_surface: ReplySurface = CHANNEL_GROUP_REPLY_SURFACE,
+) -> Callable[[str], str | None]:
+    """Assert the stable member Run inputs and return its live denial resolver."""
+    assert trigger_mock.await_count == 1
+    awaited_args = trigger_mock.await_args
+    assert awaited_args is not None
+    assert awaited_args.args == args
+    kwargs = dict(awaited_args.kwargs)
+    assert kwargs.pop("sender") == sender
+    assert kwargs.pop("reply_surface") == reply_surface
+    assert kwargs.pop("tool_restriction") == ("web_search", "web_fetch")
+    resolver = kwargs.pop("tool_denial_resolver")
+    assert callable(resolver)
+    assert kwargs == {}
+    return cast(Callable[[str], str | None], resolver)
 
 
 __all__ = [
@@ -372,6 +428,8 @@ __all__ = [
     "ChatSessionManager",
     "SESSION_ID",
     "CHANNEL_REPLY_SURFACE",
+    "CHANNEL_GROUP_REPLY_SURFACE",
+    "MemoryChannelAccessRegistry",
     "FakeTransport",
     "make_config",
     "make_conversation",
@@ -384,4 +442,5 @@ __all__ = [
     "make_cancelled_run",
     "make_engine",
     "drain",
+    "assert_member_trigger",
 ]

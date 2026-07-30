@@ -364,6 +364,22 @@ export function createSettingsRpcMock(options = {}) {
       ];
     }),
   );
+  const accessSource =
+    options.channelAccess !== null && typeof options.channelAccess === 'object'
+      ? options.channelAccess
+      : {};
+  const channelAccess = new Map(
+    channels.map((channel) => [
+      channel.id,
+      deepClone(
+        accessSource[channel.id] ?? {
+          channel_id: channel.id,
+          self_user_id: null,
+          groups: [],
+        },
+      ),
+    ]),
+  );
   const taskModelTargets = Array.isArray(options.taskModelTargets)
     ? options.taskModelTargets.map((target) => ({ ...target }))
     : [];
@@ -452,6 +468,66 @@ export function createSettingsRpcMock(options = {}) {
       };
     }
 
+    if (method === 'channel.access.get') {
+      const access = channelAccess.get(params.id);
+      if (!access) {
+        throw new Error(`Unknown channel access id: ${params.id}`);
+      }
+      return deepClone(access);
+    }
+
+    if (method === 'channel.identity.set') {
+      const access = channelAccess.get(params.id);
+      if (!access) {
+        throw new Error(`Unknown channel access id: ${params.id}`);
+      }
+      access.self_user_id = params.user_id;
+      for (const group of access.groups) {
+        if (!group.admin_user_ids.includes(params.user_id)) {
+          group.admin_user_ids.push(params.user_id);
+          group.admin_user_ids.sort();
+        }
+        for (const participant of group.participants) {
+          if (participant.user_id === params.user_id) {
+            participant.role = 'admin';
+          }
+        }
+      }
+      return deepClone(access);
+    }
+
+    if (method === 'channel.admin.grant' || method === 'channel.admin.revoke') {
+      const access = channelAccess.get(params.id);
+      if (!access) {
+        throw new Error(`Unknown channel access id: ${params.id}`);
+      }
+      const group = access.groups.find(
+        (item) => item.access_scope_id === params.access_scope_id,
+      );
+      if (!group) {
+        throw new Error(
+          `Unknown channel access group: ${params.access_scope_id}`,
+        );
+      }
+      const granting = method === 'channel.admin.grant';
+      const adminIds = new Set(group.admin_user_ids);
+      if (granting) {
+        adminIds.add(params.user_id);
+      } else if (params.user_id !== access.self_user_id) {
+        adminIds.delete(params.user_id);
+      }
+      group.admin_user_ids = [...adminIds].sort();
+      for (const participant of group.participants) {
+        if (participant.user_id === params.user_id) {
+          participant.role =
+            granting || params.user_id === access.self_user_id
+              ? 'admin'
+              : 'member';
+        }
+      }
+      return deepClone(access);
+    }
+
     if (method === 'channel.create') {
       const channel = channelConfig(params.id, {
         platform: params.platform,
@@ -467,6 +543,11 @@ export function createSettingsRpcMock(options = {}) {
         id: channel.id,
         enabled: channel.enabled,
         running: false,
+      });
+      channelAccess.set(channel.id, {
+        channel_id: channel.id,
+        self_user_id: null,
+        groups: [],
       });
       return { id: channel.id };
     }
@@ -523,6 +604,7 @@ export function createSettingsRpcMock(options = {}) {
 
       channels.splice(index, 1);
       channelStatuses.delete(params.id);
+      channelAccess.delete(params.id);
       return { ok: true };
     }
 

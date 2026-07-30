@@ -195,7 +195,7 @@ def test_format_interaction_note_lists_tapped_button_and_full_keyboard() -> None
     assert '- "⬜ Bread" (chk:bread)' in note
     assert '- "Fertig ✅" (run:done)' in note
     # Group taps name the tapper so the agent knows who acted on the shared session.
-    assert "Tapped by: Alice" in note
+    assert "Tapped by: [Alice|50|member]" in note
 
 
 def test_format_interaction_note_omits_tapper_in_dm() -> None:
@@ -233,7 +233,7 @@ async def test_interaction_tap_enqueues_internal_run_with_state(tmp_path: Path) 
 async def test_group_owner_interaction_tap_enqueues(tmp_path: Path) -> None:
     trigger_mock = AsyncMock(return_value=make_completed_run(output_text="synced"))
     engine, _sessions, _trigger, _transport = make_engine(
-        tmp_path, owner_user_ids=["50"], trigger_run=trigger_mock
+        tmp_path, admin_user_ids=["50"], trigger_run=trigger_mock
     )
 
     outcome = await engine.trigger_interaction_reply(
@@ -247,12 +247,12 @@ async def test_group_owner_interaction_tap_enqueues(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_group_non_owner_interaction_tap_is_dropped(
+async def test_group_member_interaction_tap_is_dropped(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     trigger_mock = AsyncMock(return_value=make_completed_run(output_text="synced"))
     engine, _sessions, _trigger, _transport = make_engine(
-        tmp_path, owner_user_ids=["50"], trigger_run=trigger_mock
+        tmp_path, admin_user_ids=["50"], trigger_run=trigger_mock
     )
 
     caplog.set_level(logging.INFO, logger="vbot.channels.engine")
@@ -263,7 +263,7 @@ async def test_group_non_owner_interaction_tap_is_dropped(
 
     assert outcome == "denied"
     trigger_mock.assert_not_awaited()
-    assert any("denied for non-owner" in record.getMessage() for record in caplog.records)
+    assert any("denied for member" in record.getMessage() for record in caplog.records)
     await engine.stop()
 
 
