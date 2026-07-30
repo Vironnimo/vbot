@@ -215,7 +215,6 @@ _LOGGER = get_logger("chat")
 
 MAX_TOOL_ITERATIONS = 1000
 MAX_IDENTICAL_FAILED_TOOL_CALLS = 8
-MAX_AUTO_COMPACTIONS_PER_RUN = 3
 
 # Prompt-epoch Skill catalog snapshot (the rendered ``<available_skills>`` text),
 # stored in Session metadata so ordinary Runs reuse one stable prefix. A successful
@@ -441,7 +440,6 @@ class _RunExecutionContext:
     continuation_tracker: ContinuationTracker | None
     continuation_reminder: str | None
     request_state: _RequestState | None = None
-    auto_compaction_attempts: int = 0
 
 
 @dataclass(frozen=True)
@@ -2411,15 +2409,6 @@ class ChatLoop:
             return current_state
         if settings.strategy == "continuation" and continuation_request_messages is None:
             return current_state
-        if context.auto_compaction_attempts >= MAX_AUTO_COMPACTIONS_PER_RUN:
-            _LOGGER.info(
-                "Auto-compaction skipped after Run attempt cap (run=%s session=%s attempts=%d)",
-                run.id,
-                run.session_id,
-                context.auto_compaction_attempts,
-            )
-            return current_state
-
         from core.compaction import (
             MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
             CompactionInsufficientReclaimError,
@@ -2544,7 +2533,6 @@ class ChatLoop:
             context.working_project_context = prompt_refresh.working_project_context
             context.skill_registry = prompt_refresh.skill_registry
             context.skill_catalog = prompt_refresh.skill_catalog
-        context.auto_compaction_attempts += 1
         if context.continuation_tracker is not None:
             context.continuation_tracker.record_compaction_boundary()
         persisted_ordinal = checkpoint_ordinal(session.load(), checkpoint.id)
