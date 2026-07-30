@@ -183,7 +183,12 @@ from core.sessions import (
     project_tool_context_id,
     skill_activation_contents,
 )
-from core.tools import ANALYZE_IMAGE_TOOL_NAME, HISTORY_TOOL_NAME, ToolNotFoundError
+from core.tools import (
+    ANALYZE_IMAGE_TOOL_NAME,
+    HISTORY_TOOL_NAME,
+    ToolNotFoundError,
+    project_bash_tool_definitions,
+)
 from core.utils.errors import ConfigError, ProviderError, VBotError
 from core.utils.logging import get_logger
 
@@ -2028,6 +2033,7 @@ class ChatLoop:
     ) -> list[JsonObject]:
         """Apply effective Model-route gates to route-dependent Tools."""
 
+        tools = project_bash_tool_definitions(tools, nesting_depth=self._nesting_depth)
         if not any(definition.get("name") == ANALYZE_IMAGE_TOOL_NAME for definition in tools):
             return tools
         route_can_view_images = "image" in input_modalities and any(

@@ -14,6 +14,7 @@ from core.tools import (
     ToolRegistry,
     action_schema,
     compile_tool_contract,
+    discriminated_union_schema,
     tool_success,
 )
 
@@ -79,6 +80,41 @@ def test_action_schema_builds_closed_required_branches_without_field_leakage() -
     contract.validate_arguments({"action": "remove", "entry_id": 1})
     with pytest.raises(ToolContractError, match="entry_id"):
         contract.validate_arguments({"action": "add", "content": "fact", "entry_id": 1})
+
+
+def test_discriminated_union_schema_supports_non_action_discriminators() -> None:
+    schema = discriminated_union_schema(
+        "mode",
+        {
+            "foreground": {
+                "type": "object",
+                "properties": {"command": {"type": "string"}},
+                "required": ["command"],
+            },
+            "auto": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string"},
+                    "yield_after": {"type": "number"},
+                },
+                "required": ["command"],
+            },
+        },
+        description="Choose an execution mode.",
+        discriminator_description="Execution mode.",
+    )
+
+    contract = compile_tool_contract(name="sample", input_schema=schema)
+    branches = {branch["properties"]["mode"]["enum"][0]: branch for branch in schema["oneOf"]}
+
+    assert set(branches["foreground"]["properties"]) == {"mode", "command"}
+    assert branches["foreground"]["required"] == ["mode", "command"]
+    assert set(branches["auto"]["properties"]) == {"mode", "command", "yield_after"}
+    assert branches["auto"]["required"] == ["mode", "command"]
+    contract.validate_arguments({"mode": "foreground", "command": "echo ok"})
+    contract.validate_arguments({"mode": "auto", "command": "echo ok", "yield_after": 30})
+    with pytest.raises(ToolContractError, match="yield_after"):
+        contract.validate_arguments({"mode": "foreground", "command": "echo ok", "yield_after": 30})
 
 
 def test_compile_rejects_open_fixed_object() -> None:

@@ -28,6 +28,11 @@ from core.runs import (
 )
 from core.tools import (
     ANALYZE_IMAGE_TOOL_NAME,
+    BASH_SUBAGENT_TOOL_DESCRIPTION,
+    BASH_SUBAGENT_TOOL_PARAMETERS,
+    BASH_TOOL_DESCRIPTION,
+    BASH_TOOL_NAME,
+    BASH_TOOL_PARAMETERS,
     HISTORY_TOOL_NAME,
     ToolContext,
     ToolDisplay,
@@ -67,6 +72,46 @@ def _analyze_image_registry() -> ToolRegistry:
 def _request_tool_names(adapter: StubAdapter) -> set[str]:
     tools = adapter.requests[0]["kwargs"]["tools"]
     return {str(definition["name"]) for definition in tools}
+
+
+@pytest.mark.asyncio
+async def test_nested_run_receives_non_handoff_bash_definition(tmp_path: Path) -> None:
+    agent = StubAgent(
+        id="coder",
+        model="openai/gpt-5.2",
+        allowed_tools=[BASH_TOOL_NAME],
+    )
+    adapter = StubAdapter(
+        [
+            {"content": "top-level done", "tool_calls": None},
+            {"content": "nested done", "tool_calls": None},
+        ]
+    )
+    tools = ToolRegistry()
+    tools.register(
+        BASH_TOOL_NAME,
+        BASH_TOOL_DESCRIPTION,
+        BASH_TOOL_PARAMETERS,
+        lambda _context, _arguments: tool_success({"status": "completed"}),
+    )
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+    parent = build_chat_loop(runtime)
+
+    await parent.send("coder", "Top-level", session_id="top-level")
+    await parent.child_loop(nesting_depth=1).send("coder", "Nested", session_id="nested")
+
+    top_level_definition = adapter.requests[0]["kwargs"]["tools"][0]
+    nested_definition = adapter.requests[1]["kwargs"]["tools"][0]
+    assert top_level_definition == {
+        "name": BASH_TOOL_NAME,
+        "description": BASH_TOOL_DESCRIPTION,
+        "parameters": BASH_TOOL_PARAMETERS,
+    }
+    assert nested_definition == {
+        "name": BASH_TOOL_NAME,
+        "description": BASH_SUBAGENT_TOOL_DESCRIPTION,
+        "parameters": BASH_SUBAGENT_TOOL_PARAMETERS,
+    }
 
 
 @pytest.mark.asyncio

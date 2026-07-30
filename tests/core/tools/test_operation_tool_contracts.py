@@ -71,7 +71,8 @@ _OPENAI_STRICT_SHIPPED_TOOLS = {
     "write",
 }
 
-_ACTION_COMPLETE_SCHEMAS = (
+_BRANCH_COMPLETE_SCHEMAS = (
+    ("bash", BASH_TOOL_PARAMETERS),
     ("cron", CRON_TOOL_PARAMETERS),
     ("history", HISTORY_TOOL_PARAMETERS),
     ("memory", MEMORY_TOOL_PARAMETERS),
@@ -81,7 +82,13 @@ _ACTION_COMPLETE_SCHEMAS = (
     ("subagent", SUBAGENT_TOOL_PARAMETERS),
 )
 
-_ACTION_INAPPLICABLE_CALLS = (
+_BRANCH_INAPPLICABLE_CALLS = (
+    (
+        "bash",
+        BASH_TOOL_PARAMETERS,
+        {"mode": "foreground", "command": "echo ok", "yield_after": 30},
+        "yield_after",
+    ),
     ("cron", CRON_TOOL_PARAMETERS, {"action": "list", "id": "job"}, "id"),
     ("history", HISTORY_TOOL_PARAMETERS, {"action": "overview", "query": "text"}, "query"),
     (
@@ -111,7 +118,8 @@ _ACTION_INAPPLICABLE_CALLS = (
     ),
 )
 
-_ACTION_MISSING_REQUIRED_CALLS = (
+_BRANCH_MISSING_REQUIRED_CALLS = (
+    ("bash", BASH_TOOL_PARAMETERS, {"mode": "auto"}, "command"),
     ("cron", CRON_TOOL_PARAMETERS, {"action": "update", "id": "job"}, "minProperties"),
     ("history", HISTORY_TOOL_PARAMETERS, {"action": "search"}, "query"),
     (
@@ -160,11 +168,11 @@ def test_shipped_tool_profile_eligibility_snapshot_is_explicit() -> None:
 
 @pytest.mark.parametrize(
     ("tool_name", "schema"),
-    _ACTION_COMPLETE_SCHEMAS,
-    ids=[contract[0] for contract in _ACTION_COMPLETE_SCHEMAS],
+    _BRANCH_COMPLETE_SCHEMAS,
+    ids=[contract[0] for contract in _BRANCH_COMPLETE_SCHEMAS],
 )
 @pytest.mark.parametrize("profile", ("openai_strict", "anthropic_strict", "best_effort"))
-def test_action_complete_schema_reaches_provider_unchanged(
+def test_branch_complete_schema_reaches_provider_unchanged(
     tool_name: str,
     schema: JsonObject,
     profile: str,
@@ -180,10 +188,10 @@ def test_action_complete_schema_reaches_provider_unchanged(
 
 @pytest.mark.parametrize(
     ("tool_name", "schema", "arguments", "field_name"),
-    _ACTION_INAPPLICABLE_CALLS,
-    ids=[contract[0] for contract in _ACTION_INAPPLICABLE_CALLS],
+    _BRANCH_INAPPLICABLE_CALLS,
+    ids=[contract[0] for contract in _BRANCH_INAPPLICABLE_CALLS],
 )
-def test_action_complete_schema_rejects_action_inapplicable_fields(
+def test_branch_complete_schema_rejects_inapplicable_fields(
     tool_name: str,
     schema: JsonObject,
     arguments: JsonObject,
@@ -197,10 +205,10 @@ def test_action_complete_schema_rejects_action_inapplicable_fields(
 
 @pytest.mark.parametrize(
     ("tool_name", "schema", "arguments", "requirement"),
-    _ACTION_MISSING_REQUIRED_CALLS,
-    ids=[contract[0] for contract in _ACTION_MISSING_REQUIRED_CALLS],
+    _BRANCH_MISSING_REQUIRED_CALLS,
+    ids=[contract[0] for contract in _BRANCH_MISSING_REQUIRED_CALLS],
 )
-def test_action_complete_schema_enforces_action_requirements(
+def test_branch_complete_schema_enforces_variant_requirements(
     tool_name: str,
     schema: JsonObject,
     arguments: JsonObject,

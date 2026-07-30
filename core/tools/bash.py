@@ -8,10 +8,12 @@ import os
 import signal
 import subprocess
 import sys
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 from core.tools.arguments import optional_number, optional_string
+from core.tools.contracts import discriminated_union_schema
 from core.tools.process_manager import (
     ProcessManager,
     ProcessSession,
@@ -42,6 +44,12 @@ BASH_HANDOFF_PROCESS_NOTE = (
     "capped snapshot collected before handoff. When present, log_file receives the complete "
     "combined stdout/stderr stream live from command start through exit."
 )
+DEFAULT_YIELD_AFTER_SECONDS = 30.0
+# Inside a Sub-Agent auto mode cannot hand off, so its yield_after threshold
+# doubles as the kill deadline. Default it generously there: a 30s handoff
+# would kill a normal pytest/build. Explicit yield_after or timeout still wins,
+# and the Sub-Agent Run timeout is the outer bound.
+DEFAULT_SUBAGENT_YIELD_AFTER_SECONDS = 1800.0
 
 
 def _shell_syntax_notes() -> str:
@@ -64,7 +72,8 @@ BASH_TOOL_DESCRIPTION = (
     "Run a shell command on the host system. Choose foreground for bounded commands whose "
     "result is needed in this Run, auto when independent work can continue after a bounded "
     "foreground wait, and background for long-lived commands such as servers. Auto waits "
-    "for yield_after seconds (default 30), then hands a still-running process to vBot; "
+    f"for yield_after seconds (default {DEFAULT_YIELD_AFTER_SECONDS:g}), then hands a "
+    "still-running process to vBot; "
     "background hands it off immediately. Handed-off processes return a session_id for the "
     "process Tool and are monitored automatically. When available, log_file receives their "
     "complete combined stdout/stderr stream live through exit. Their terminal results are "
@@ -73,61 +82,115 @@ BASH_TOOL_DESCRIPTION = (
     f"the newest {BASH_MODEL_OUTPUT_CAP_CHARS} characters; when truncated, search/read "
     "log_file for the complete output." + _shell_syntax_notes()
 )
+BASH_SUBAGENT_TOOL_DESCRIPTION = (
+    "Run a shell command inside this Sub-Agent without process handoff. Choose foreground "
+    "to wait until the command exits, times out, or the Run is cancelled. Choose auto only "
+    "for bounded work: it waits for yield_after seconds "
+    f"(default {DEFAULT_SUBAGENT_YIELD_AFTER_SECONDS:g}) and kills a still-running command "
+    "instead of handing it off. timeout is an independent hard kill deadline and never "
+    "extends yield_after. Result output keeps only "
+    f"the newest {BASH_MODEL_OUTPUT_CAP_CHARS} characters; when truncated, search/read "
+    "log_file for the complete output." + _shell_syntax_notes()
+)
 BASH_EXECUTION_MODES = ("foreground", "auto", "background")
-BASH_TOOL_PARAMETERS: JsonObject = {
-    "type": "object",
-    "properties": {
-        "command": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Shell command to run.",
-        },
-        "mode": {
-            "type": "string",
-            "enum": list(BASH_EXECUTION_MODES),
-            "description": (
-                "Execution contract: foreground waits for completion or timeout and never "
-                "hands off; auto waits for yield_after and then hands off if still running; "
-                "background hands off immediately. Choose deliberately."
-            ),
-        },
-        "workdir": {
-            "type": "string",
-            "description": (
-                "Directory to run the command in (default: the working directory; "
-                "a relative value resolves from it)."
-            ),
-        },
-        "yield_after": {
-            "type": "number",
-            "minimum": 0,
-            "description": (
-                "Only for auto mode: seconds to wait before handing a still-running command "
-                "to vBot (default 30). Independent of timeout. Inside a Sub-Agent, where "
-                "handoff is unavailable, this caps runtime before the command is killed and "
-                "defaults to 30 minutes."
-            ),
-            "default": 30,
-        },
-        "timeout": {
-            "type": "number",
-            "exclusiveMinimum": 0,
-            "description": (
-                "Seconds after which the process is killed. In auto mode this does not "
-                "extend yield_after."
-            ),
-        },
-    },
-    "required": ["command", "mode"],
-    "additionalProperties": False,
+_BASH_COMMAND_PARAMETER: JsonObject = {
+    "type": "string",
+    "minLength": 1,
+    "description": "Shell command to run.",
+}
+_BASH_WORKDIR_PARAMETER: JsonObject = {
+    "type": "string",
+    "description": (
+        "Directory to run the command in (default: the working directory; "
+        "a relative value resolves from it)."
+    ),
+}
+_BASH_TIMEOUT_PARAMETER: JsonObject = {
+    "type": "number",
+    "exclusiveMinimum": 0,
+    "description": (
+        "Seconds after which the process is killed. In auto mode this does not extend yield_after."
+    ),
 }
 
-DEFAULT_YIELD_AFTER_SECONDS = 30.0
-# Inside a Sub-Agent auto mode cannot hand off, so its yield_after threshold
-# doubles as the kill deadline. Default it generously there: a 30s handoff
-# would kill a normal pytest/build. Explicit yield_after or timeout still wins,
-# and the Sub-Agent Run timeout is the outer bound.
-DEFAULT_SUBAGENT_YIELD_AFTER_SECONDS = 1800.0
+
+def _bash_tool_parameters(*, subagent: bool) -> JsonObject:
+    yield_after_default = (
+        DEFAULT_SUBAGENT_YIELD_AFTER_SECONDS if subagent else DEFAULT_YIELD_AFTER_SECONDS
+    )
+    yield_after_effect = (
+        "the command is killed because process handoff is unavailable"
+        if subagent
+        else "a still-running command is handed to vBot"
+    )
+    variants: dict[str, JsonObject] = {
+        "foreground": {
+            "type": "object",
+            "description": (
+                "Wait until the command exits, reaches timeout, or the Run is cancelled. "
+                "Never hand off the process."
+            ),
+            "properties": {
+                "command": _BASH_COMMAND_PARAMETER,
+                "workdir": _BASH_WORKDIR_PARAMETER,
+                "timeout": _BASH_TIMEOUT_PARAMETER,
+            },
+            "required": ["command"],
+        },
+        "auto": {
+            "type": "object",
+            "description": (
+                f"Wait up to yield_after seconds; then {yield_after_effect} if it is still running."
+            ),
+            "properties": {
+                "command": _BASH_COMMAND_PARAMETER,
+                "workdir": _BASH_WORKDIR_PARAMETER,
+                "yield_after": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": (
+                        f"Seconds to wait before {yield_after_effect}; "
+                        f"default {yield_after_default:g}. Independent of timeout."
+                    ),
+                    "default": yield_after_default,
+                },
+                "timeout": _BASH_TIMEOUT_PARAMETER,
+            },
+            "required": ["command"],
+        },
+    }
+    mode_description = (
+        "foreground waits for completion and auto kills at the yield_after boundary; "
+        "process handoff is unavailable in this Sub-Agent."
+        if subagent
+        else "foreground waits for completion, auto waits before handing off, and "
+        "background hands off immediately."
+    )
+    if not subagent:
+        variants["background"] = {
+            "type": "object",
+            "description": "Hand off the command immediately for long-lived work.",
+            "properties": {
+                "command": _BASH_COMMAND_PARAMETER,
+                "workdir": _BASH_WORKDIR_PARAMETER,
+                "timeout": _BASH_TIMEOUT_PARAMETER,
+            },
+            "required": ["command"],
+        }
+    return discriminated_union_schema(
+        "mode",
+        variants,
+        description=(
+            "Choose one execution mode. Each mode exposes only the arguments valid for "
+            "that execution contract."
+        ),
+        discriminator_description=mode_description,
+    )
+
+
+BASH_TOOL_PARAMETERS = _bash_tool_parameters(subagent=False)
+BASH_SUBAGENT_TOOL_PARAMETERS = _bash_tool_parameters(subagent=True)
+
 FOREGROUND_POLL_INTERVAL_SECONDS = 0.05
 SHELL_ENV_PROBE_TIMEOUT_SECONDS = 5.0
 SHELL_ENV_PROBE_REAP_TIMEOUT_SECONDS = 1.0
@@ -160,6 +223,27 @@ _cached_shell_env: dict[str, str] | None = None
 # completion watcher reads this set to distinguish user-killed sessions from
 # natural completion and tool-enforced timeouts.
 _user_cancelled_session_ids: set[str] = set()
+
+
+def project_bash_tool_definitions(
+    definitions: list[JsonObject],
+    *,
+    nesting_depth: int,
+) -> list[JsonObject]:
+    """Narrow Bash's Provider definition to the execution modes valid at this depth."""
+    if nesting_depth < 1 or not BLOCK_BACKGROUND_AT_DEPTH:
+        return definitions
+
+    projected: list[JsonObject] = []
+    for definition in definitions:
+        if definition.get("name") != BASH_TOOL_NAME:
+            projected.append(definition)
+            continue
+        narrowed = deepcopy(definition)
+        narrowed["description"] = BASH_SUBAGENT_TOOL_DESCRIPTION
+        narrowed["parameters"] = deepcopy(BASH_SUBAGENT_TOOL_PARAMETERS)
+        projected.append(narrowed)
+    return projected
 
 
 def _background_blocked_at_depth(context: ToolContext) -> bool:
@@ -940,10 +1024,13 @@ async def _combined_output(
 __all__ = [
     "BASH_MODEL_OUTPUT_CAP_CHARS",
     "BASH_HANDOFF_PROCESS_NOTE",
+    "BASH_SUBAGENT_TOOL_DESCRIPTION",
+    "BASH_SUBAGENT_TOOL_PARAMETERS",
     "BASH_TOOL_DESCRIPTION",
     "BASH_TOOL_NAME",
     "BASH_TOOL_PARAMETERS",
     "FAILURE_OUTPUT_TAIL_CHARS",
     "bash_handler",
+    "project_bash_tool_definitions",
     "register_bash_tool",
 ]

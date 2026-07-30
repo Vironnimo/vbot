@@ -6,10 +6,13 @@ from core.tools.availability import (
     sanitize_configured_allowed_tools,
 )
 from core.tools.bash import (
+    BASH_SUBAGENT_TOOL_DESCRIPTION,
+    BASH_SUBAGENT_TOOL_PARAMETERS,
     BASH_TOOL_DESCRIPTION,
     BASH_TOOL_NAME,
     BASH_TOOL_PARAMETERS,
     bash_handler,
+    project_bash_tool_definitions,
     register_bash_tool,
 )
 from core.tools.contracts import (
@@ -17,6 +20,7 @@ from core.tools.contracts import (
     ToolContractError,
     action_schema,
     compile_tool_contract,
+    discriminated_union_schema,
 )
 from core.tools.edit import (
     EDIT_TOOL_DESCRIPTION,
@@ -201,6 +205,8 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [
+    "BASH_SUBAGENT_TOOL_DESCRIPTION",
+    "BASH_SUBAGENT_TOOL_PARAMETERS",
     "BASH_TOOL_DESCRIPTION",
     "BASH_TOOL_NAME",
     "BASH_TOOL_PARAMETERS",
@@ -293,6 +299,7 @@ __all__ = [
     "WRITE_TOOL_PARAMETERS",
     "bash_handler",
     "action_schema",
+    "discriminated_union_schema",
     "edit_handler",
     "glob_handler",
     "grep_handler",
@@ -334,6 +341,7 @@ __all__ = [
     "register_web_fetch_tool",
     "register_web_search_tool",
     "register_write_tool",
+    "project_bash_tool_definitions",
     "memory_handler",
     "session_read_handler",
     "session_search_handler",
