@@ -21,44 +21,52 @@ class ToolContractError(ValueError):
     """A Tool definition or invocation violates its canonical contract."""
 
 
-def action_schema(
-    actions: Mapping[str, JsonObject],
+def discriminated_union_schema(
+    discriminator: str,
+    variants: Mapping[str, JsonObject],
     *,
     description: str,
-    action_description: str = "Action to perform.",
+    discriminator_description: str,
 ) -> JsonObject:
-    """Build a flat union whose action selects one closed argument object."""
-    if not actions:
-        raise ToolContractError("Action schema requires at least one action")
+    """Build a flat union whose discriminator selects one closed argument object."""
+    if not isinstance(discriminator, str) or not discriminator:
+        raise ToolContractError("Discriminated union property must be a non-empty string")
+    if not variants:
+        raise ToolContractError("Discriminated union requires at least one variant")
 
     branches: list[JsonObject] = []
-    for action, raw_branch in actions.items():
-        if not isinstance(action, str) or not action:
-            raise ToolContractError("Action schema names must be non-empty strings")
+    for variant, raw_branch in variants.items():
+        if not isinstance(variant, str) or not variant:
+            raise ToolContractError("Discriminated union variant names must be non-empty strings")
         if not isinstance(raw_branch, dict) or raw_branch.get("type") != "object":
-            raise ToolContractError(f"Action schema branch {action!r} must have type object")
+            raise ToolContractError(f"Discriminated union branch {variant!r} must have type object")
 
         branch = copy.deepcopy(raw_branch)
         properties = branch.get("properties")
         if not isinstance(properties, dict):
-            raise ToolContractError(f"Action schema branch {action!r} properties must be an object")
-        if "action" in properties:
             raise ToolContractError(
-                f"Action schema branch {action!r} must not declare the action property"
+                f"Discriminated union branch {variant!r} properties must be an object"
+            )
+        if discriminator in properties:
+            raise ToolContractError(
+                f"Discriminated union branch {variant!r} must not declare "
+                f"the {discriminator} property"
             )
         required = branch.get("required", [])
         if not isinstance(required, list):
-            raise ToolContractError(f"Action schema branch {action!r} required must be an array")
+            raise ToolContractError(
+                f"Discriminated union branch {variant!r} required must be an array"
+            )
 
         branch["properties"] = {
-            "action": {
+            discriminator: {
                 "type": "string",
-                "enum": [action],
-                "description": action_description,
+                "enum": [variant],
+                "description": discriminator_description,
             },
             **properties,
         }
-        branch["required"] = ["action", *required]
+        branch["required"] = [discriminator, *required]
         branch["additionalProperties"] = False
         branches.append(branch)
 
@@ -67,6 +75,21 @@ def action_schema(
         "description": description,
         "oneOf": branches,
     }
+
+
+def action_schema(
+    actions: Mapping[str, JsonObject],
+    *,
+    description: str,
+    action_description: str = "Action to perform.",
+) -> JsonObject:
+    """Build a flat union whose action selects one closed argument object."""
+    return discriminated_union_schema(
+        "action",
+        actions,
+        description=description,
+        discriminator_description=action_description,
+    )
 
 
 @dataclass(frozen=True)

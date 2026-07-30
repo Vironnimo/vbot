@@ -6,7 +6,7 @@ Canonical provider-agnostic conversation representation and Agentic Loop executi
 
 Chat owns canonical messages, provider-request shaping, Skill/Tool turn orchestration, and the loop that advances one admitted Run through Model and Tool steps. Run lifecycle, cancellation state, and Queue coordination live in `core/runs/`; Session persistence lives in `core/sessions/`; Compaction policy and checkpoint construction live in `core/compaction/`; Provider wire translation lives in `core/providers/`. Chat uses those public APIs and must not absorb their storage or lifecycle internals.
 
-A Session is the persisted conversation container; a Run is one active execution inside it. Chat is the execution seam between them: it loads canonical Session history, resolves the Agent/Model/Tools, builds provider-ready context, persists canonical results, and emits provider-agnostic Run events.
+A Session is the persisted conversation container; a Run is one active execution inside it. Chat is the execution seam between them: it loads canonical Session history, resolves the Agent/Model/Tools, builds provider-ready context, persists canonical results, and emits provider-agnostic Run events. Its request-time Tool-definition projection applies route capabilities to `analyze_image` and Run nesting depth to `bash`; the Tool domain owns the Bash projection and canonical schemas.
 
 ## Data Model
 

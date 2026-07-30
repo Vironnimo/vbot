@@ -16,11 +16,14 @@ import pytest_asyncio
 import core.tools.bash as bash_module
 from core.storage import TemporaryFileManager
 from core.tools.bash import (
+    BASH_SUBAGENT_TOOL_DESCRIPTION,
+    BASH_SUBAGENT_TOOL_PARAMETERS,
     BASH_TOOL_DESCRIPTION,
     BASH_TOOL_PARAMETERS,
     _resolve_workdir,
     _resolve_yield_after,
     bash_handler,
+    project_bash_tool_definitions,
     register_bash_tool,
 )
 from core.tools.process import PROCESS_TOOL_NAME, make_process_handler
@@ -1362,18 +1365,74 @@ def test_register_bash_tool() -> None:
     tool = registry.get("bash")
     assert tool.description == BASH_TOOL_DESCRIPTION
     assert tool.parameters == BASH_TOOL_PARAMETERS
-    assert tool.parameters["additionalProperties"] is False
-    assert "env" not in tool.parameters["properties"]
     assert "Choose foreground for bounded commands whose result is needed" in tool.description
     assert "read the file's tail to check progress" not in tool.description
-    properties = tool.parameters["properties"]
-    assert tool.parameters["required"] == ["command", "mode"]
-    assert properties["mode"]["enum"] == ["foreground", "auto", "background"]
-    assert "Only for auto mode" in properties["yield_after"]["description"]
-    assert "does not extend yield_after" in properties["timeout"]["description"]
+    branches = {
+        branch["properties"]["mode"]["enum"][0]: branch for branch in tool.parameters["oneOf"]
+    }
+    assert set(branches) == {"foreground", "auto", "background"}
+    assert set(branches["foreground"]["properties"]) == {
+        "mode",
+        "command",
+        "workdir",
+        "timeout",
+    }
+    assert set(branches["auto"]["properties"]) == {
+        "mode",
+        "command",
+        "workdir",
+        "yield_after",
+        "timeout",
+    }
+    assert set(branches["background"]["properties"]) == {
+        "mode",
+        "command",
+        "workdir",
+        "timeout",
+    }
+    assert all(branch["required"] == ["mode", "command"] for branch in branches.values())
+    assert all(branch["additionalProperties"] is False for branch in branches.values())
+    assert "env" not in {
+        property_name for branch in branches.values() for property_name in branch["properties"]
+    }
+    assert branches["auto"]["properties"]["yield_after"]["default"] == 30
+    assert "does not extend yield_after" in branches["auto"]["properties"]["timeout"]["description"]
     assert "coalesced at the Session's next Run boundary" in tool.description
     assert "complete combined stdout/stderr stream live through exit" in tool.description
     assert tool.parallel_safe is True
+
+
+def test_subagent_projection_exposes_only_non_handoff_bash_modes() -> None:
+    definitions = [
+        {
+            "name": "bash",
+            "description": BASH_TOOL_DESCRIPTION,
+            "parameters": BASH_TOOL_PARAMETERS,
+        },
+        {
+            "name": "read",
+            "description": "Read a file.",
+            "parameters": {"type": "object"},
+        },
+    ]
+
+    assert project_bash_tool_definitions(definitions, nesting_depth=0) is definitions
+
+    projected = project_bash_tool_definitions(definitions, nesting_depth=1)
+    bash_definition = projected[0]
+    branches = {
+        branch["properties"]["mode"]["enum"][0]: branch
+        for branch in bash_definition["parameters"]["oneOf"]
+    }
+
+    assert bash_definition["description"] == BASH_SUBAGENT_TOOL_DESCRIPTION
+    assert bash_definition["parameters"] == BASH_SUBAGENT_TOOL_PARAMETERS
+    assert set(branches) == {"foreground", "auto"}
+    assert branches["auto"]["properties"]["yield_after"]["default"] == 1800
+    assert "process handoff is unavailable" in branches["auto"]["properties"]["mode"]["description"]
+    assert projected[1] is definitions[1]
+    assert definitions[0]["description"] == BASH_TOOL_DESCRIPTION
+    assert definitions[0]["parameters"] == BASH_TOOL_PARAMETERS
 
 
 @pytest.mark.asyncio
