@@ -112,6 +112,23 @@ class ImageService:
             error=ImageConfigurationError,
         )
 
+    def generation_supports_source_images(self) -> bool:
+        """Return the configured generation Model's stable image-input capability."""
+        try:
+            binding = self._resolver.binding_for(TASK_IMAGE_GENERATION)
+            target_ref = self._resolver.parse_target(binding.target)
+        except ImageConfigurationError:
+            return False
+        if target_ref.kind == "local":
+            return False
+        model = self._model_tasks.model_for_target(target_ref)
+        input_modalities = getattr(
+            getattr(model, "capabilities", None),
+            "input_modalities",
+            (),
+        )
+        return "image" in input_modalities
+
     async def generate(
         self,
         prompt: str,

@@ -16,6 +16,7 @@ from core.chat import ChatMessage, ChatSession
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.content_blocks import MediaBlock
 from core.model_tasks import SpeechExecutionError
+from core.tools import ToolRegistry
 from core.tools.file_state import FileReadState
 from core.tools.read import render_text_file
 from tests.core.chat.chat_loop_support import build_chat_loop
@@ -85,6 +86,7 @@ class _StubRuntime:
         self.system_prompts = _StubPrompts()
         self.models = _StubModels()
         self.file_read_state = FileReadState()
+        self.tools = ToolRegistry()
 
 
 class _StubAgent:

@@ -110,6 +110,7 @@ class StubTools:
         *,
         include_internal: bool = False,
         session_grants: Sequence[str] = (),
+        profile_context: Any | None = None,
     ) -> list[JsonObject]:
         return [{"name": "read", "description": "Read a file"}]
 
@@ -119,6 +120,7 @@ class StubTools:
         *,
         include_internal: bool = False,
         session_grants: Sequence[str] = (),
+        profile_context: Any | None = None,
     ) -> list[JsonObject]:
         return [{"name": "read", "description": "Read a file", "parameters": {"type": "object"}}]
 
