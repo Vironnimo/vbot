@@ -52,13 +52,36 @@ _STATUS_AGENT_ID_PARAMETER: JsonObject = {
 STATUS_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "description": (
-        "Omit both fields for the current Session. agent_id is valid only together with session_id."
+        "Choose one targeting mode: no arguments for the current Session, session_id for "
+        "another Session owned by the current Agent, or session_id with agent_id for an "
+        "exact Agent/Session pair."
     ),
-    "properties": {
-        "session_id": _STATUS_SESSION_ID_PARAMETER,
-        "agent_id": _STATUS_AGENT_ID_PARAMETER,
-    },
-    "additionalProperties": False,
+    "oneOf": [
+        {
+            "type": "object",
+            "description": "Inspect the current Agent's current Session.",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "description": "Inspect another Session owned by the current Agent.",
+            "properties": {"session_id": _STATUS_SESSION_ID_PARAMETER},
+            "required": ["session_id"],
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "description": "Inspect one exact Agent/Session pair.",
+            "properties": {
+                "session_id": _STATUS_SESSION_ID_PARAMETER,
+                "agent_id": _STATUS_AGENT_ID_PARAMETER,
+            },
+            "required": ["session_id", "agent_id"],
+            "additionalProperties": False,
+        },
+    ],
 }
 
 

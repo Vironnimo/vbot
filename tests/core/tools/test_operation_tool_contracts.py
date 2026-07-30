@@ -74,11 +74,13 @@ _OPENAI_STRICT_SHIPPED_TOOLS = {
 _BRANCH_COMPLETE_SCHEMAS = (
     ("bash", BASH_TOOL_PARAMETERS),
     ("cron", CRON_TOOL_PARAMETERS),
+    ("grep", GREP_TOOL_PARAMETERS),
     ("history", HISTORY_TOOL_PARAMETERS),
     ("memory", MEMORY_TOOL_PARAMETERS),
     ("process", PROCESS_TOOL_PARAMETERS),
     ("skill", SKILL_TOOL_PARAMETERS),
     ("skill_manage", SKILL_MANAGE_TOOL_PARAMETERS),
+    ("status", STATUS_TOOL_PARAMETERS),
     ("subagent", SUBAGENT_TOOL_PARAMETERS),
 )
 
@@ -90,6 +92,12 @@ _BRANCH_INAPPLICABLE_CALLS = (
         "yield_after",
     ),
     ("cron", CRON_TOOL_PARAMETERS, {"action": "list", "id": "job"}, "id"),
+    (
+        "grep",
+        GREP_TOOL_PARAMETERS,
+        {"pattern": "text", "output_mode": "count", "context": 2},
+        "context",
+    ),
     ("history", HISTORY_TOOL_PARAMETERS, {"action": "overview", "query": "text"}, "query"),
     (
         "memory",
@@ -110,6 +118,7 @@ _BRANCH_INAPPLICABLE_CALLS = (
         {"action": "delete", "name": "demo", "content": "text"},
         "content",
     ),
+    ("status", STATUS_TOOL_PARAMETERS, {"agent_id": "coder"}, "agent_id"),
     (
         "subagent",
         SUBAGENT_TOOL_PARAMETERS,
