@@ -228,6 +228,20 @@ class MessageFacts:
 
 
 @dataclass(frozen=True)
+class QuotedMessageFacts:
+    """One replied-to platform message resolved for on-demand attachment ingestion.
+
+    ``content=None`` means the platform exposed a reply reference but the original
+    message is no longer available. A non-empty content list belongs to the quoted
+    sender, never to the sender of the triggering message.
+    """
+
+    user_id: str | None
+    user_display_name: str | None
+    content: list[ContentBlock] | None
+
+
+@dataclass(frozen=True)
 class FileData:
     """One outbound file payload prepared for a channel adapter send."""
 

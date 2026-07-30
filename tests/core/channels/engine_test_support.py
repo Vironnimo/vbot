@@ -20,6 +20,7 @@ from core.channels.adapter import (
     ChannelAccessRegistry,
     ConversationFacts,
     MessageFacts,
+    QuotedMessageFacts,
     ReplyPlanFacts,
     RouteFacts,
     RunButtonBindingRegistry,
@@ -87,6 +88,7 @@ class FakeTransport:
         self,
         *,
         media_builder: Callable[[Any], Awaitable[list[ContentBlock]]] | None = None,
+        quoted_builder: Callable[[Any], Awaitable[QuotedMessageFacts | None]] | None = None,
     ) -> None:
         self.sent: list[tuple[str, str]] = []
         self.sent_reply_targets: list[str | None] = []
@@ -94,6 +96,7 @@ class FakeTransport:
         self.activity_targets: list[str] = []
         self.activity_thread_ids: list[str | None] = []
         self._media_builder = media_builder
+        self._quoted_builder = quoted_builder
 
     async def send_text(
         self,
@@ -119,6 +122,11 @@ class FakeTransport:
         if self._media_builder is None:
             raise AssertionError("media builder not configured for this test")
         return await self._media_builder(raw_message)
+
+    async def build_quoted_message(self, raw_message: Any) -> QuotedMessageFacts | None:
+        if self._quoted_builder is None:
+            return None
+        return await self._quoted_builder(raw_message)
 
     def caption_text(self, raw_message: Any) -> str | None:
         return getattr(raw_message, "caption", None)
@@ -404,6 +412,7 @@ __all__ = [
     "AttachmentTypeNotAllowedError",
     "ConversationFacts",
     "MessageFacts",
+    "QuotedMessageFacts",
     "ReplyPlanFacts",
     "RouteFacts",
     "ChannelConfig",

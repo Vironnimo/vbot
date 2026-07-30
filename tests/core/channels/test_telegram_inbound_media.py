@@ -23,6 +23,7 @@ from tests.core.channels.telegram_test_support import (
     make_adapter,
     make_completed_run,
     make_document_update,
+    make_group_update,
     make_photo_update,
     make_update,
 )
@@ -73,6 +74,78 @@ async def test_inbound_photo_stores_attachment_and_triggers_media_block(
     assert isinstance(blocks[0], MediaBlock)
     stored = attachment_store.get(blocks[0].attachment_id)
     assert stored.media_type == "image/png"
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_addressed_group_reply_downloads_quoted_photo_on_demand(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attachment_store = AttachmentStore(tmp_path)
+    session_id = "ch-tg-assistant--10001"
+    trigger_mock = AsyncMock(
+        return_value=make_completed_run(session_id=session_id, output_text="ok")
+    )
+    adapter, _chat_sessions, _trigger_mock, bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[-10001],
+        admin_user_ids=["50"],
+        bot_username="MyBot",
+        bot_id=999,
+        trigger_run=trigger_mock,
+        attachment_store=attachment_store,
+    )
+    telegram_file = SimpleNamespace(
+        file_size=12,
+        download_as_bytearray=AsyncMock(return_value=bytearray(b"\x89PNG\r\n\x1a\nIMG")),
+    )
+    bot.get_file.return_value = telegram_file
+    replied_photo = SimpleNamespace(
+        from_user=SimpleNamespace(id=77, full_name="Juan", username="juan"),
+        sender_chat=None,
+        text=None,
+        caption="Sunset",
+        photo=[SimpleNamespace(file_id="photo-juan", file_unique_id="juan-1")],
+        document=None,
+        voice=None,
+        audio=None,
+        video=None,
+        video_note=None,
+        animation=None,
+    )
+
+    await adapter._handle_inbound_message(
+        make_group_update(
+            user_id=50,
+            text="@MyBot, what do you think?",
+            message_id=701,
+            reply_to_message=replied_photo,
+        ),
+        SimpleNamespace(),
+    )
+    await drain_chat_queue(adapter, -10001)
+
+    bot.get_file.assert_awaited_once_with("photo-juan")
+    telegram_file.download_as_bytearray.assert_awaited_once()
+    trigger_mock.assert_awaited_once()
+    awaited = trigger_mock.await_args
+    assert awaited is not None
+    blocks = awaited.args[1]
+    assert isinstance(blocks, list)
+    assert blocks[:3] == [
+        TextBlock(type="text", text="@MyBot, what do you think?"),
+        TextBlock(type="text", text="[quoted-message] [Juan|77|member]:"),
+        TextBlock(type="text", text="Sunset"),
+    ]
+    assert isinstance(blocks[3], MediaBlock)
+    assert awaited.kwargs["sender"] == MessageSender(
+        id="50",
+        display_name="50",
+        role="admin",
+    )
+    assert "tool_restriction" not in awaited.kwargs
     await adapter.stop()
 
 

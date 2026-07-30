@@ -394,12 +394,13 @@ def make_group_update(
     text: str | None = "hello",
     message_id: int | None = None,
     reply_to_user_id: int | None = None,
+    reply_to_message: object | None = None,
     message_thread_id: int | None = None,
     is_topic_message: bool = False,
 ) -> SimpleNamespace:
-    reply_to_message = None
-    if reply_to_user_id is not None:
-        reply_to_message = SimpleNamespace(from_user=SimpleNamespace(id=reply_to_user_id))
+    resolved_reply = reply_to_message
+    if resolved_reply is None and reply_to_user_id is not None:
+        resolved_reply = SimpleNamespace(from_user=SimpleNamespace(id=reply_to_user_id))
     return SimpleNamespace(
         effective_chat=SimpleNamespace(id=chat_id),
         effective_user=SimpleNamespace(id=user_id),
@@ -408,6 +409,6 @@ def make_group_update(
             message_thread_id=message_thread_id,
             is_topic_message=is_topic_message,
             message_id=message_id,
-            reply_to_message=reply_to_message,
+            reply_to_message=resolved_reply,
         ),
     )

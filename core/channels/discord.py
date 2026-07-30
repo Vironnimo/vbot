@@ -17,6 +17,7 @@ from core.channels.adapter import (
     DeniedChatFacts,
     DeniedChatLog,
     FileData,
+    QuotedMessageFacts,
     RouteFacts,
     content_blocks_for_attachment,
 )
@@ -215,6 +216,65 @@ class DiscordChannelAdapter(ChannelAdapter):
             blocks.extend(content_blocks_for_attachment(record))
         return blocks
 
+    async def build_quoted_message(self, raw_message: Any) -> QuotedMessageFacts | None:
+        """Fetch and download attachments from the Discord message being replied to."""
+        reference = getattr(raw_message, "reference", None)
+        if reference is None:
+            return None
+
+        replied_message = getattr(reference, "resolved", None)
+        if replied_message is None:
+            replied_message = getattr(reference, "cached_message", None)
+        if replied_message is None or _message_author_id(replied_message) is None:
+            message_id = _snowflake_string(getattr(reference, "message_id", None))
+            channel = getattr(raw_message, "channel", None)
+            fetch_message = getattr(channel, "fetch_message", None)
+            if message_id is None or not callable(fetch_message):
+                return QuotedMessageFacts(
+                    user_id=None,
+                    user_display_name=None,
+                    content=None,
+                )
+            try:
+                replied_message = await fetch_message(int(message_id))
+            except Exception as error:
+                _LOGGER.debug(
+                    "Discord replied-to message unavailable (channel=%s message=%s): %s",
+                    self._config.id,
+                    message_id,
+                    error,
+                )
+                return QuotedMessageFacts(
+                    user_id=None,
+                    user_display_name=None,
+                    content=None,
+                )
+
+        user_id = _message_author_id(replied_message)
+        if user_id is None:
+            return QuotedMessageFacts(
+                user_id=None,
+                user_display_name=None,
+                content=None,
+            )
+        if user_id == self._effective_bot_id():
+            return None
+        if not _message_attachments(replied_message):
+            return None
+
+        blocks = await self.build_media_blocks(replied_message)
+        if not any(not isinstance(block, TextBlock) for block in blocks):
+            return QuotedMessageFacts(
+                user_id=user_id,
+                user_display_name=_user_display_name(getattr(replied_message, "author", None)),
+                content=None,
+            )
+        return QuotedMessageFacts(
+            user_id=user_id,
+            user_display_name=_user_display_name(getattr(replied_message, "author", None)),
+            content=blocks,
+        )
+
     # -- Inbound handling -------------------------------------------------------------
 
     async def _handle_inbound_message(self, message: Any) -> None:
@@ -255,7 +315,11 @@ class DiscordChannelAdapter(ChannelAdapter):
             if attachments:
                 await self._engine.handle_inbound_media(conversation, (message,))
             elif content is not None:
-                await self._engine.handle_inbound_text(conversation, content)
+                await self._engine.handle_inbound_text(
+                    conversation,
+                    content,
+                    raw_message=message,
+                )
 
             if should_backfill and conversation.message_id is not None:
                 self._seen_message_ids(conversation.chat_id).add(conversation.message_id)
@@ -641,6 +705,10 @@ def _message_attachments(message: Any) -> tuple[Any, ...]:
     if not isinstance(attachments, Sequence):
         return ()
     return tuple(attachments)
+
+
+def _message_author_id(message: Any) -> str | None:
+    return _snowflake_string(getattr(getattr(message, "author", None), "id", None))
 
 
 def _observed_message_body(message: Any) -> str | None:
