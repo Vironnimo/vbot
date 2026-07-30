@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -25,6 +25,7 @@ from core.runs import TOOL_CALL_STARTED_EVENT, Run, RunStatus
 from core.sessions import ChatSessionManager
 from core.tools import (
     ToolContext,
+    ToolContract,
     ToolRegistry,
     tool_failure,
     tool_success,
@@ -94,6 +95,7 @@ async def _dispatch_tool_calls(
     tool_restriction: Sequence[str] | None = None,
     base_allowed_tools: Sequence[str] | None = None,
     session_tool_grants: tuple[str, ...] = (),
+    tool_contracts: Mapping[str, ToolContract] | None = None,
 ) -> tuple[list[Any], list[JsonObject]]:
     """Adapt runtime-shaped fixtures to the production Run-local context."""
     return await _dispatch_resolved_tool_calls(
@@ -112,6 +114,7 @@ async def _dispatch_tool_calls(
             tool_restriction=tool_restriction,
             base_allowed_tools=base_allowed_tools,
             session_tool_grants=session_tool_grants,
+            tool_contracts=tool_contracts or {},
         ),
         tool_calls,
     )
@@ -469,6 +472,67 @@ def _started_event_arguments(run: Run) -> JsonObject:
         if event.type == TOOL_CALL_STARTED_EVENT:
             return cast(JsonObject, event.payload["tool_call"]["arguments"])
     raise AssertionError("no tool_call_started event was emitted")
+
+
+@pytest.mark.asyncio
+async def test_dispatch_validates_and_emits_exact_provider_cycle_contract(
+    tmp_path: Path,
+) -> None:
+    handler_calls: list[JsonObject] = []
+
+    def handler(_context: ToolContext, arguments: JsonObject) -> JsonObject:
+        handler_calls.append(arguments)
+        return tool_success({})
+
+    tools = ToolRegistry()
+    tools.register(
+        "profiled",
+        "Canonical broad Tool.",
+        {
+            "type": "object",
+            "properties": {"target": {"type": "string"}},
+            "required": ["target"],
+            "additionalProperties": False,
+        },
+        handler,
+    )
+    definitions = [
+        {
+            "name": "profiled",
+            "description": "Narrow Provider-cycle Tool.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "enum": ["visible"],
+                    }
+                },
+                "required": ["target"],
+                "additionalProperties": False,
+            },
+        }
+    ]
+    contracts = tools.contracts_for_provider_definitions(definitions)
+    runtime, agent = _build_runtime_and_agent(tmp_path, tools)
+    session = _build_session(tmp_path)
+    run = Run(run_id="run-profile", agent_id=agent.id, session_id=session.id)
+
+    messages, _ = await _dispatch_tool_calls(
+        runtime,
+        agent,
+        [ToolCall(id="profile-call", name="profiled", arguments={"target": "hidden"})],
+        session,
+        run,
+        nesting_depth=0,
+        tool_contracts=contracts,
+    )
+
+    result = _decode_tool_result(messages[0].content)
+    started = next(event for event in run.events if event.type == TOOL_CALL_STARTED_EVENT)
+    assert result["error"]["code"] == "invalid_arguments"
+    assert handler_calls == []
+    assert started.payload["schema_fingerprint"] == contracts["profiled"].schema_fingerprint
 
 
 class TestExtensionDecisionWiring:

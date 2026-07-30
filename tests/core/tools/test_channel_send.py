@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
+
+import pytest
 
 from core.channels.adapter import FileData, RouteFacts
 from core.channels.channels import ChannelNotFoundError
@@ -15,7 +18,13 @@ from core.tools.channel import (
     CHANNEL_SEND_TOOL_PARAMETERS,
     register_channel_send_tool,
 )
-from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope, tool_failure
+from core.tools.tools import (
+    ToolContext,
+    ToolDefinitionProfileContext,
+    ToolRegistry,
+    is_tool_result_envelope,
+    tool_failure,
+)
 
 _TEST_MAX_ATTACHMENT_SIZE_BYTES = 20_971_520
 
@@ -93,12 +102,117 @@ def make_channel_config(
     *,
     channel_id: str = "tg-assistant",
     agent_id: str = "agent-1",
+    platform: str = "telegram",
+    enabled: bool = True,
     allowed_chat_ids: list[int] | None = None,
 ) -> Mock:
     return Mock(
         id=channel_id,
         agent_id=agent_id,
+        platform=platform,
+        enabled=enabled,
         allowed_chat_ids=allowed_chat_ids or [],
+    )
+
+
+def test_channel_send_profile_uses_enabled_agent_channels_and_platform_capabilities(
+    tmp_path: Path,
+) -> None:
+    channel_service = Mock()
+    channel_service.list_channels.return_value = [
+        make_channel_config(channel_id="tg-primary"),
+        make_channel_config(channel_id="discord-primary", platform="discord"),
+        make_channel_config(channel_id="tg-disabled", enabled=False),
+        make_channel_config(channel_id="tg-other", agent_id="agent-2"),
+    ]
+    registry = ToolRegistry()
+    register_channel_send_tool(
+        registry,
+        channel_service,
+        make_chat_sessions(),
+        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
+    )
+    profile_context = ToolDefinitionProfileContext(agent_id="agent-1")
+
+    first = registry.provider_definitions(
+        [CHANNEL_SEND_TOOL_NAME],
+        profile_context=profile_context,
+    )
+    second = registry.provider_definitions(
+        [CHANNEL_SEND_TOOL_NAME],
+        profile_context=profile_context,
+    )
+
+    assert first == second
+    parameters = first[0]["parameters"]
+    branches = {
+        branch["description"].split(" enabled ", 1)[1].split(" Channel", 1)[0]: branch
+        for branch in parameters["oneOf"]
+    }
+    telegram = branches["telegram"]
+    discord = branches["discord"]
+    assert telegram["properties"]["channel_id"]["enum"] == ["tg-primary"]
+    assert set(telegram["properties"]) == {
+        "channel_id",
+        "message",
+        "platform_target",
+        "thread_id",
+        "file_paths",
+        "buttons",
+    }
+    assert discord["properties"]["channel_id"]["enum"] == ["discord-primary"]
+    assert set(discord["properties"]) == {
+        "channel_id",
+        "message",
+        "platform_target",
+        "file_paths",
+    }
+    assert telegram["additionalProperties"] is False
+    assert discord["additionalProperties"] is False
+
+    contract = registry.contracts_for_provider_definitions(first)[CHANNEL_SEND_TOOL_NAME]
+    with pytest.raises(ValueError):
+        asyncio.run(
+            registry.dispatch(
+                replace(make_context(tmp_path), input_contract=contract),
+                {
+                    "channel_id": "discord-primary",
+                    "message": "Hello",
+                    "buttons": [[{"label": "Go", "data": "run:go"}]],
+                },
+                [CHANNEL_SEND_TOOL_NAME],
+            )
+        )
+
+
+def test_channel_send_profile_hides_tool_without_enabled_owned_channel() -> None:
+    channel_service = Mock()
+    channel_service.list_channels.return_value = [
+        make_channel_config(channel_id="tg-disabled", enabled=False),
+        make_channel_config(channel_id="tg-other", agent_id="agent-2"),
+    ]
+    registry = ToolRegistry()
+    register_channel_send_tool(
+        registry,
+        channel_service,
+        make_chat_sessions(),
+        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
+    )
+    profile_context = ToolDefinitionProfileContext(agent_id="agent-1")
+
+    assert (
+        registry.provider_definitions(
+            [CHANNEL_SEND_TOOL_NAME],
+            profile_context=profile_context,
+        )
+        == []
+    )
+    assert (
+        registry.prompt_definitions(
+            [CHANNEL_SEND_TOOL_NAME],
+            profile_context=profile_context,
+        )
+        == []
     )
 
 

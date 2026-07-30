@@ -15,6 +15,9 @@ from core.tools import (
     Tool,
     ToolCall,
     ToolContext,
+    ToolContractError,
+    ToolDefinitionProfile,
+    ToolDefinitionProfileContext,
     ToolDisplay,
     ToolExecutionConfig,
     ToolExecutor,
@@ -640,6 +643,86 @@ class TestToolRegistryDefinitions:
             }
         ]
 
+    def test_configuration_profile_is_stable_and_shared_by_provider_and_prompt(self) -> None:
+        registry = ToolRegistry()
+
+        def resolve(context: ToolDefinitionProfileContext) -> ToolDefinitionProfile:
+            return ToolDefinitionProfile(
+                key=f"agent:{context.agent_id}:readme-only",
+                description="Read this Agent's README file.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "enum": ["README.md"],
+                        }
+                    },
+                    "required": ["path"],
+                    "additionalProperties": False,
+                },
+            )
+
+        registry.register(
+            name="read_file",
+            description="Read a UTF-8 text file from the workspace.",
+            parameters=READ_FILE_SCHEMA,
+            handler=read_file_handler,
+            definition_profile_resolver=resolve,
+        )
+        context = ToolDefinitionProfileContext(agent_id="agent-1")
+
+        first = registry.provider_definitions(["read_file"], profile_context=context)
+        second = registry.provider_definitions(["read_file"], profile_context=context)
+        prompt = registry.prompt_definitions(["read_file"], profile_context=context)
+
+        assert first == second
+        assert first[0]["parameters"]["properties"]["path"]["enum"] == ["README.md"]
+        assert prompt == [
+            {
+                "name": "read_file",
+                "description": "Read this Agent's README file.",
+            }
+        ]
+        first[0]["parameters"]["properties"]["path"]["enum"].append("SECRET.md")
+        assert registry.provider_definitions(
+            ["read_file"],
+            profile_context=context,
+        )[0]["parameters"]["properties"]["path"]["enum"] == ["README.md"]
+
+    def test_configuration_profile_can_hide_tool_for_one_agent(self) -> None:
+        registry = ToolRegistry()
+        registry.register(
+            name="read_file",
+            description="Read a UTF-8 text file from the workspace.",
+            parameters=READ_FILE_SCHEMA,
+            handler=read_file_handler,
+            definition_profile_resolver=lambda context: (
+                ToolDefinitionProfile(
+                    key="enabled",
+                    description="Read a UTF-8 text file from the workspace.",
+                    parameters=READ_FILE_SCHEMA,
+                )
+                if context.agent_id == "enabled-agent"
+                else None
+            ),
+        )
+
+        assert (
+            registry.provider_definitions(
+                ["read_file"],
+                profile_context=ToolDefinitionProfileContext(agent_id="disabled-agent"),
+            )
+            == []
+        )
+        assert (
+            registry.prompt_definitions(
+                ["read_file"],
+                profile_context=ToolDefinitionProfileContext(agent_id="disabled-agent"),
+            )
+            == []
+        )
+
     def test_empty_allowlist_omits_tools_from_both_definition_sets(self) -> None:
         registry = ToolRegistry()
         register_read_file(registry)
@@ -945,6 +1028,54 @@ class TestToolRegistryDispatch:
 
 
 class TestToolExecutor:
+    @pytest.mark.asyncio
+    async def test_exact_provider_contract_flows_to_dispatch_validation(self) -> None:
+        registry = ToolRegistry()
+        handler_calls: list[JsonObject] = []
+
+        def handler(_context: ToolContext, arguments: JsonObject) -> JsonObject:
+            handler_calls.append(arguments)
+            return tool_success({})
+
+        registry.register(
+            "read_file",
+            "Read a UTF-8 text file from the workspace.",
+            READ_FILE_SCHEMA,
+            handler,
+        )
+        definitions = [
+            {
+                "name": "read_file",
+                "description": "Read only the public README.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "enum": ["README.md"],
+                        }
+                    },
+                    "required": ["path"],
+                    "additionalProperties": False,
+                },
+            }
+        ]
+        contracts = registry.contracts_for_provider_definitions(definitions)
+        executor = ToolExecutor(registry)
+
+        results = await executor.execute_many(
+            [ToolCall(id="call-1", name="read_file", arguments={"path": "SECRET.md"})],
+            replace(
+                make_execution_config(allowed_tools=["read_file"]),
+                input_contracts=contracts,
+            ),
+        )
+
+        assert results[0]["error"]["code"] == "invalid_arguments"
+        assert handler_calls == []
+        with pytest.raises(ToolContractError):
+            contracts["read_file"].validate_arguments({"path": "SECRET.md"})
+
     @pytest.mark.asyncio
     async def test_nesting_depth_flows_from_config_to_context(self) -> None:
         registry = ToolRegistry()

@@ -112,6 +112,37 @@ class ToolDisplay:
 
 
 @dataclass(frozen=True)
+class ToolDefinitionProfileContext:
+    """Stable configuration identity used to select model-facing Tool profiles."""
+
+    agent_id: str
+
+
+@dataclass(frozen=True)
+class ToolDefinitionProfile:
+    """One immutable model-facing definition selected from stable configuration."""
+
+    key: str
+    description: str
+    parameters: JsonObject = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.key, str) or not self.key:
+            raise ValueError("Tool definition profile key must be a non-empty string")
+        if not isinstance(self.description, str) or not self.description:
+            raise ValueError("Tool definition profile description must be a non-empty string")
+        if not isinstance(self.parameters, dict):
+            raise ValueError("Tool definition profile parameters must be a JSON Schema object")
+        object.__setattr__(self, "parameters", copy.deepcopy(self.parameters))
+
+
+ToolDefinitionProfileResolver = Callable[
+    [ToolDefinitionProfileContext],
+    ToolDefinitionProfile | None,
+]
+
+
+@dataclass(frozen=True)
 class ToolContext:
     """Runtime-owned execution identity passed to a single tool call."""
 
@@ -157,6 +188,13 @@ class ToolContext:
     # axis before the ordinary allowlist.
     session_tool_grants: Sequence[str] = field(default_factory=tuple)
     nesting_depth: int = 0
+    # Exact model-facing contract used for this Provider cycle. Direct callers and
+    # legacy execution paths leave it unset and use the Tool's canonical contract.
+    input_contract: ToolContract | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     @property
     def effective_cwd(self) -> Path:
@@ -274,6 +312,7 @@ class ToolExecutionConfig:
     tool_settings: Mapping[str, Any] | None = None
     session_tool_grants: Sequence[str] = field(default_factory=tuple)
     nesting_depth: int = 0
+    input_contracts: Mapping[str, ToolContract] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -310,6 +349,11 @@ class Tool:
     # a tool to its owning extension.
     extension: str | None = None
     parallel_safe: bool = True
+    definition_profile_resolver: ToolDefinitionProfileResolver | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         contract = compile_tool_contract(
@@ -434,6 +478,10 @@ class ToolRegistry:
 
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
+        self._definition_profile_cache: dict[
+            tuple[str, str],
+            tuple[str, ToolContract],
+        ] = {}
 
     def register(
         self,
@@ -450,6 +498,7 @@ class ToolRegistry:
         extension: str | None = None,
         result_schema: JsonObject | None = None,
         parallel_safe: bool = True,
+        definition_profile_resolver: ToolDefinitionProfileResolver | None = None,
     ) -> Tool:
         """Register a tool and return its immutable definition.
 
@@ -460,7 +509,15 @@ class ToolRegistry:
         precondition (surfaced by ``tool.list``); ``extension`` names the owning
         extension (``None`` for a built-in), set at extension-tool apply time.
         """
-        self._validate_tool(name, description, parameters, handler, display, ready)
+        self._validate_tool(
+            name,
+            description,
+            parameters,
+            handler,
+            display,
+            ready,
+            definition_profile_resolver,
+        )
         if name in self._tools:
             raise DuplicateToolError(f"Tool already registered: {name}")
         tool = Tool(
@@ -476,6 +533,7 @@ class ToolRegistry:
             readiness_hint=readiness_hint,
             extension=extension,
             parallel_safe=parallel_safe,
+            definition_profile_resolver=definition_profile_resolver,
         )
         self._tools[name] = tool
         return tool
@@ -494,6 +552,10 @@ class ToolRegistry:
     def unregister(self, name: str) -> None:
         """Remove a registered tool when it exists."""
         self._tools.pop(name, None)
+        for cache_key in [
+            cache_key for cache_key in self._definition_profile_cache if cache_key[0] == name
+        ]:
+            self._definition_profile_cache.pop(cache_key, None)
 
     def is_parallel_safe(self, name: str) -> bool:
         """Return whether a registered Tool may overlap a sibling call."""
@@ -563,21 +625,24 @@ class ToolRegistry:
         include_internal: bool = False,
         session_grants: Sequence[str] = (),
         ready_only: bool = True,
+        profile_context: ToolDefinitionProfileContext | None = None,
     ) -> list[JsonObject]:
         """Return provider-ready tool definitions for allowed, ready tools.
 
         *ready_only* defaults to ``True``: provider definitions are a model-facing
         surface, so a not-ready tool is hidden by default.
         """
-        return [
-            self._to_provider_definition(tool)
-            for tool in self._model_facing_tools(
-                allowed_tools,
-                include_internal=include_internal,
-                session_grants=session_grants,
-                ready_only=ready_only,
-            )
-        ]
+        definitions: list[JsonObject] = []
+        for tool in self._model_facing_tools(
+            allowed_tools,
+            include_internal=include_internal,
+            session_grants=session_grants,
+            ready_only=ready_only,
+        ):
+            definition = self._to_provider_definition(tool, profile_context)
+            if definition is not None:
+                definitions.append(definition)
+        return definitions
 
     def prompt_definitions(
         self,
@@ -586,6 +651,7 @@ class ToolRegistry:
         include_internal: bool = False,
         session_grants: Sequence[str] = (),
         ready_only: bool = True,
+        profile_context: ToolDefinitionProfileContext | None = None,
     ) -> list[JsonObject]:
         """Return prompt-ready name and description pairs for allowed, ready tools.
 
@@ -593,15 +659,43 @@ class ToolRegistry:
         tool is absent from the prompt tool list and, through it, gate 2 of a
         ``tool:<name>``-owned prompt block.
         """
-        return [
-            {"name": tool.name, "description": tool.description}
-            for tool in self._model_facing_tools(
-                allowed_tools,
-                include_internal=include_internal,
-                session_grants=session_grants,
-                ready_only=ready_only,
+        definitions: list[JsonObject] = []
+        for tool in self._model_facing_tools(
+            allowed_tools,
+            include_internal=include_internal,
+            session_grants=session_grants,
+            ready_only=ready_only,
+        ):
+            resolved = self._resolve_definition_profile(tool, profile_context)
+            if resolved is None:
+                continue
+            description, _contract = resolved
+            definitions.append({"name": tool.name, "description": description})
+        return definitions
+
+    def contracts_for_provider_definitions(
+        self,
+        definitions: Sequence[JsonObject],
+    ) -> dict[str, ToolContract]:
+        """Compile the exact model-facing input contracts for one Provider cycle."""
+        contracts: dict[str, ToolContract] = {}
+        for definition in definitions:
+            name = definition.get("name")
+            parameters = definition.get("parameters")
+            if not isinstance(name, str) or not name:
+                raise ValueError("Provider Tool definition name must be a non-empty string")
+            if name in contracts:
+                raise ValueError(f"Duplicate Provider Tool definition: {name}")
+            if not isinstance(parameters, dict):
+                raise ValueError(f"Provider Tool definition parameters must be an object: {name}")
+            tool = self._tools.get(name)
+            contracts[name] = compile_tool_contract(
+                name=name,
+                input_schema=parameters,
+                result_schema=tool.contract.result_schema if tool is not None else None,
+                parallel_safe=tool.parallel_safe if tool is not None else True,
             )
-        ]
+        return contracts
 
     async def dispatch(
         self,
@@ -626,7 +720,7 @@ class ToolRegistry:
                 f"tool '{context.tool_name}' is not available: its extension is not configured",
                 retryable=False,
             )
-        tool.contract.validate_arguments(arguments)
+        (context.input_contract or tool.contract).validate_arguments(arguments)
 
         result = tool.handler(context, arguments)
         if inspect.isawaitable(result):
@@ -665,6 +759,7 @@ class ToolRegistry:
         handler: ToolHandler,
         display: ToolDisplay | None = None,
         ready: ToolReadinessPredicate | None = None,
+        definition_profile_resolver: ToolDefinitionProfileResolver | None = None,
     ) -> None:
         if not name:
             raise ValueError("Tool name is required")
@@ -678,6 +773,8 @@ class ToolRegistry:
             raise ValueError("Tool display must be a ToolDisplay instance")
         if ready is not None and not callable(ready):
             raise ValueError("Tool ready predicate must be callable")
+        if definition_profile_resolver is not None and not callable(definition_profile_resolver):
+            raise ValueError("Tool definition profile resolver must be callable")
 
     @staticmethod
     def _is_allowed(
@@ -694,13 +791,55 @@ class ToolRegistry:
             or name in allowed_tools
         )
 
-    @staticmethod
-    def _to_provider_definition(tool: Tool) -> JsonObject:
+    def _to_provider_definition(
+        self,
+        tool: Tool,
+        profile_context: ToolDefinitionProfileContext | None,
+    ) -> JsonObject | None:
+        resolved = self._resolve_definition_profile(tool, profile_context)
+        if resolved is None:
+            return None
+        description, contract = resolved
         return {
             "name": tool.name,
-            "description": tool.description,
-            "parameters": copy.deepcopy(tool.contract.input_schema),
+            "description": description,
+            "parameters": copy.deepcopy(contract.input_schema),
         }
+
+    def _resolve_definition_profile(
+        self,
+        tool: Tool,
+        profile_context: ToolDefinitionProfileContext | None,
+    ) -> tuple[str, ToolContract] | None:
+        resolver = tool.definition_profile_resolver
+        if resolver is None or profile_context is None:
+            return tool.description, tool.contract
+        try:
+            profile = resolver(profile_context)
+        except Exception as error:
+            _LOGGER.warning(
+                "Tool %s definition profile resolver raised: %s",
+                tool.name,
+                error,
+                exc_info=True,
+            )
+            return None
+        if profile is None:
+            return None
+
+        cache_key = (tool.name, profile.key)
+        cached = self._definition_profile_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        contract = compile_tool_contract(
+            name=tool.name,
+            input_schema=profile.parameters,
+            result_schema=tool.contract.result_schema,
+            parallel_safe=tool.parallel_safe,
+        )
+        resolved = (profile.description, contract)
+        self._definition_profile_cache[cache_key] = resolved
+        return resolved
 
 
 class ToolPromptBlockRegistry:
@@ -883,6 +1022,7 @@ class ToolExecutor:
                 tool_settings=config.tool_settings,
                 session_tool_grants=config.session_tool_grants,
                 nesting_depth=config.nesting_depth,
+                input_contract=config.input_contracts.get(tool_call.name),
             )
             return await self._dispatch_with_envelope(context, tool_call, config.allowed_tools)
 

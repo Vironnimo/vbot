@@ -57,6 +57,7 @@ from core.tools.availability import (
     memory_tool_enabled,
     subagent_allowed_agents,
 )
+from core.tools.tools import ToolDefinitionProfileContext
 from core.utils.logging import get_logger
 
 JsonObject = dict[str, Any]
@@ -262,6 +263,7 @@ class ToolPromptRegistry(Protocol):
         *,
         include_internal: bool = False,
         session_grants: Sequence[str] = (),
+        profile_context: ToolDefinitionProfileContext | None = None,
     ) -> list[dict[str, Any]]:
         """Return prompt-ready tool name and description mappings."""
         ...
@@ -272,6 +274,7 @@ class ToolPromptRegistry(Protocol):
         *,
         include_internal: bool = False,
         session_grants: Sequence[str] = (),
+        profile_context: ToolDefinitionProfileContext | None = None,
     ) -> list[dict[str, Any]]:
         """Return provider-ready tool schemas."""
         ...
@@ -1590,15 +1593,18 @@ class SystemPromptManager:
         agent: PromptAgent,
         session_tool_grants: Sequence[str] = (),
     ) -> list[JsonObject]:
+        profile_context = ToolDefinitionProfileContext(agent_id=agent.id)
         definitions = self._tool_registry.provider_definitions(
             expand_companion_tools(agent.allowed_tools),
             session_grants=session_tool_grants,
+            profile_context=profile_context,
         )
         definitions = self._apply_memory_tool_visibility(
             definitions,
             agent,
             lambda allowed: self._tool_registry.provider_definitions(
                 allowed,
+                profile_context=profile_context,
             ),
         )
         definitions = self._apply_identity_only_tool_visibility(definitions, agent)
@@ -1617,20 +1623,24 @@ class SystemPromptManager:
         *,
         effective_tool_names: Sequence[str] | None = None,
     ) -> list[JsonObject]:
+        profile_context = ToolDefinitionProfileContext(agent_id=agent.id)
         if effective_tool_names is not None:
             return self._tool_registry.prompt_definitions(
                 effective_tool_names,
                 session_grants=session_tool_grants,
+                profile_context=profile_context,
             )
         definitions = self._tool_registry.prompt_definitions(
             expand_companion_tools(agent.allowed_tools),
             session_grants=session_tool_grants,
+            profile_context=profile_context,
         )
         definitions = self._apply_memory_tool_visibility(
             definitions,
             agent,
             lambda allowed: self._tool_registry.prompt_definitions(
                 allowed,
+                profile_context=profile_context,
             ),
         )
         definitions = self._apply_identity_only_tool_visibility(definitions, agent)

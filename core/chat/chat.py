@@ -6,7 +6,7 @@ import asyncio
 import json
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
@@ -186,6 +186,7 @@ from core.sessions import (
 from core.tools import (
     ANALYZE_IMAGE_TOOL_NAME,
     HISTORY_TOOL_NAME,
+    ToolContract,
     ToolNotFoundError,
     project_bash_tool_definitions,
 )
@@ -231,6 +232,7 @@ class _RequestState:
     tools: list[JsonObject]
     allowed_tool_names: tuple[str, ...]
     session_tool_grants: tuple[str, ...]
+    tool_contracts: Mapping[str, ToolContract] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1413,6 +1415,7 @@ class ChatLoop:
                     context.request_state.tools,
                     context.request_state.allowed_tool_names,
                     context.request_state.session_tool_grants,
+                    context.request_state.tool_contracts,
                 )
 
             try:
@@ -1472,6 +1475,7 @@ class ChatLoop:
                                 context.request_state.tools,
                                 context.request_state.allowed_tool_names,
                                 context.request_state.session_tool_grants,
+                                context.request_state.tool_contracts,
                             )
                         # Rebuilding applies the fallback route's media and Tool
                         # capabilities. The persisted primary tool cycle may
@@ -1938,6 +1942,7 @@ class ChatLoop:
             for definition in tools
             if isinstance(definition.get("name"), str)
         )
+        tool_contracts = self._dependencies.tools.contracts_for_provider_definitions(tools)
         prompt_read_paths: list[Path] = []
         system_prompt = system_prompts.build_system_prompt(
             agent,
@@ -1995,6 +2000,7 @@ class ChatLoop:
                 tools,
                 allowed_tool_names,
                 session_tool_grants,
+                tool_contracts,
             )
 
         if _session_has_any_content_blocks(effective_messages):
@@ -2022,6 +2028,7 @@ class ChatLoop:
             tools,
             allowed_tool_names,
             session_tool_grants,
+            tool_contracts,
         )
 
     def _route_tool_definitions(
@@ -2238,6 +2245,7 @@ class ChatLoop:
                         tool_restriction=context.request.tool_restriction,
                         base_allowed_tools=state.allowed_tool_names,
                         session_tool_grants=state.session_tool_grants,
+                        tool_contracts=state.tool_contracts,
                     )
                     terminal_error = _terminal_outcome_error(
                         terminal_outcome,
@@ -2590,6 +2598,7 @@ class ChatLoop:
             rebuilt_state.tools,
             rebuilt_state.allowed_tool_names,
             rebuilt_state.session_tool_grants,
+            rebuilt_state.tool_contracts,
         )
 
     def _load_compaction_settings(

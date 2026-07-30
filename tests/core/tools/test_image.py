@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,12 +13,75 @@ from core.tools import ToolContractError
 from core.tools.image import (
     ANALYZE_IMAGE_TOOL_DESCRIPTION,
     ANALYZE_IMAGE_TOOL_NAME,
+    IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION,
     IMAGE_GENERATION_TOOL_DESCRIPTION,
     IMAGE_GENERATION_TOOL_NAME,
     register_analyze_image_tool,
     register_image_generation_tool,
 )
-from core.tools.tools import ToolContext, ToolRegistry
+from core.tools.tools import ToolContext, ToolDefinitionProfileContext, ToolRegistry
+
+
+def test_image_generation_profile_matches_configured_model_capability(tmp_path: Path) -> None:
+    text_only_service = _ImageService(
+        tmp_path / "text.png",
+        supports_source_images=False,
+    )
+    editing_service = _ImageService(
+        tmp_path / "editing.png",
+        supports_source_images=True,
+    )
+    text_only_registry = ToolRegistry()
+    editing_registry = ToolRegistry()
+    register_image_generation_tool(text_only_registry, text_only_service)
+    register_image_generation_tool(editing_registry, editing_service)
+    profile_context = ToolDefinitionProfileContext(agent_id="agent-1")
+
+    text_only = text_only_registry.provider_definitions(
+        [IMAGE_GENERATION_TOOL_NAME],
+        profile_context=profile_context,
+    )
+    editing = editing_registry.provider_definitions(
+        [IMAGE_GENERATION_TOOL_NAME],
+        profile_context=profile_context,
+    )
+
+    text_only_properties = text_only[0]["parameters"]["properties"]
+    editing_properties = editing[0]["parameters"]["properties"]
+    assert text_only[0]["description"] == IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION
+    assert "source_images" not in text_only_properties
+    assert {"prompt", "aspect_ratio", "resolution"} == set(text_only_properties)
+    assert editing[0]["description"] == IMAGE_GENERATION_TOOL_DESCRIPTION
+    assert "source_images" in editing_properties
+    assert text_only == text_only_registry.provider_definitions(
+        [IMAGE_GENERATION_TOOL_NAME],
+        profile_context=profile_context,
+    )
+
+
+@pytest.mark.asyncio
+async def test_image_generation_text_only_profile_rejects_source_images_before_handler(
+    tmp_path: Path,
+) -> None:
+    service = _ImageService(
+        tmp_path / "unused.png",
+        supports_source_images=False,
+    )
+    registry = ToolRegistry()
+    register_image_generation_tool(registry, service)
+    definitions = registry.provider_definitions(
+        [IMAGE_GENERATION_TOOL_NAME],
+        profile_context=ToolDefinitionProfileContext(agent_id="agent-1"),
+    )
+    contract = registry.contracts_for_provider_definitions(definitions)[IMAGE_GENERATION_TOOL_NAME]
+
+    with pytest.raises(ToolContractError, match="Additional properties"):
+        await registry.dispatch(
+            replace(_make_context(tmp_path), input_contract=contract),
+            {"prompt": "make it rainy", "source_images": ["photo.png"]},
+        )
+
+    assert service.received_prompt is None
 
 
 @pytest.mark.asyncio
@@ -286,15 +350,20 @@ class _ImageService:
         *,
         generation_error: Exception | None = None,
         analysis_error: Exception | None = None,
+        supports_source_images: bool = True,
     ) -> None:
         self._file_path = file_path
         self._generation_error = generation_error
         self._analysis_error = analysis_error
+        self._supports_source_images = supports_source_images
         self.received_prompt: str | None = None
         self.received_call_options: dict[str, object] | None = None
         self.received_source_paths: tuple[Path, ...] | None = None
         self.received_analysis_prompt: str | None = None
         self.received_analysis_paths: tuple[Path, ...] | None = None
+
+    def generation_supports_source_images(self) -> bool:
+        return self._supports_source_images
 
     async def generate_artifacts(
         self,

@@ -96,6 +96,8 @@ class StubTools:
         self.provider_allowlist: list[str] | None = None
         self.prompt_allowlist_calls: list[list[str] | None] = []
         self.provider_allowlist_calls: list[list[str] | None] = []
+        self.prompt_profile_agent_ids: list[str | None] = []
+        self.provider_profile_agent_ids: list[str | None] = []
 
     def prompt_definitions(
         self,
@@ -103,9 +105,11 @@ class StubTools:
         *,
         include_internal: bool = False,
         session_grants: Sequence[str] = (),
+        profile_context: Any | None = None,
     ) -> list[dict[str, Any]]:
         self.prompt_allowlist = list(allowed_tools) if allowed_tools is not None else None
         self.prompt_allowlist_calls.append(self.prompt_allowlist)
+        self.prompt_profile_agent_ids.append(getattr(profile_context, "agent_id", None))
         # skill / skill_manage are ordinary registered tools, so the real registry
         # lists them in the prompt surface too (both prompt and provider definitions
         # build from one ``list_tools``). Gate 2 for a ``tool:<name>``-owned block
@@ -125,9 +129,11 @@ class StubTools:
         *,
         include_internal: bool = False,
         session_grants: Sequence[str] = (),
+        profile_context: Any | None = None,
     ) -> list[dict[str, Any]]:
         self.provider_allowlist = list(allowed_tools) if allowed_tools is not None else None
         self.provider_allowlist_calls.append(self.provider_allowlist)
+        self.provider_profile_agent_ids.append(getattr(profile_context, "agent_id", None))
         tools = [
             {
                 "name": "read_file",

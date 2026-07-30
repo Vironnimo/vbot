@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,8 @@ from core.tools.arguments import optional_string
 from core.tools.tools import (
     JsonObject,
     ToolContext,
+    ToolDefinitionProfile,
+    ToolDefinitionProfileContext,
     ToolDisplay,
     ToolRegistry,
     tool_failure,
@@ -56,6 +59,12 @@ IMAGE_GENERATION_TOOL_DESCRIPTION = (
     "generation model. Local source files are uploaded to the configured external "
     "provider. The result includes each image's file path and WebUI/Desktop Markdown "
     "for displaying it there. To send an image through a channel, use its file path "
+    "with `channel_send`."
+)
+IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION = (
+    "Generate new images from text using the configured image generation model. "
+    "The result includes each image's file path and WebUI/Desktop Markdown for "
+    "displaying it there. To send an image through a channel, use its file path "
     "with `channel_send`."
 )
 IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
@@ -110,6 +119,39 @@ IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
     "required": ["prompt"],
     "additionalProperties": False,
 }
+
+
+def _image_generation_text_only_parameters() -> JsonObject:
+    parameters = copy.deepcopy(IMAGE_GENERATION_TOOL_PARAMETERS)
+    properties = parameters.get("properties")
+    if not isinstance(properties, dict):
+        raise ValueError("image_generation canonical properties must be an object")
+    properties.pop("source_images", None)
+    return parameters
+
+
+IMAGE_GENERATION_TEXT_ONLY_TOOL_PARAMETERS = _image_generation_text_only_parameters()
+
+
+def _image_generation_profile_resolver(image_service: Any):
+    def resolve(
+        _context: ToolDefinitionProfileContext,
+    ) -> ToolDefinitionProfile:
+        capability = getattr(image_service, "generation_supports_source_images", None)
+        supports_source_images = bool(capability()) if callable(capability) else False
+        if supports_source_images:
+            return ToolDefinitionProfile(
+                key="generation-and-editing",
+                description=IMAGE_GENERATION_TOOL_DESCRIPTION,
+                parameters=IMAGE_GENERATION_TOOL_PARAMETERS,
+            )
+        return ToolDefinitionProfile(
+            key="text-generation-only",
+            description=IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION,
+            parameters=IMAGE_GENERATION_TEXT_ONLY_TOOL_PARAMETERS,
+        )
+
+    return resolve
 
 
 def _collect_call_options(arguments: JsonObject) -> JsonObject:
@@ -283,4 +325,5 @@ def register_image_generation_tool(registry: ToolRegistry, image_service: Any) -
         display=ToolDisplay(
             summary_fields=("prompt", "source_images", "aspect_ratio", "resolution")
         ),
+        definition_profile_resolver=_image_generation_profile_resolver(image_service),
     )

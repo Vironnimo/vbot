@@ -57,6 +57,21 @@ def test_provider_tool_definitions_use_same_agent_allowlist(
         },
     ]
     assert tools.provider_allowlist_calls == [["read_file"], ["memory"]]
+    assert tools.provider_profile_agent_ids == ["coder", "coder"]
+
+
+def test_prompt_tool_definitions_use_agent_configuration_profile(
+    workspace: Path,
+    tmp_path: Path,
+) -> None:
+    tools = StubTools()
+    manager = _manager(tmp_path, tools=tools)
+    agent = _agent(workspace, agent_id="profile-owner", allowed_tools=["read_file"])
+
+    manager.build_system_prompt(agent)
+
+    assert tools.prompt_profile_agent_ids
+    assert set(tools.prompt_profile_agent_ids) == {"profile-owner"}
 
 
 def test_provider_tool_definitions_omit_memory_when_agent_memory_is_off(

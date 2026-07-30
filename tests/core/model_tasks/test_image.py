@@ -40,6 +40,45 @@ async def test_generate_without_configured_binding_is_expected_error(tmp_path: P
         await service.generate("a cat")
 
 
+def test_generation_source_image_capability_follows_configured_model(tmp_path: Path) -> None:
+    image_model = _image_model({})
+    text_model = _image_model({})
+    text_model.capabilities.input_modalities = ("text",)
+
+    assert (
+        ImageService(
+            _RoutingModelTasks(image_model),
+            cast(Any, object()),
+            tmp_path / "image",
+        ).generation_supports_source_images()
+        is True
+    )
+    assert (
+        ImageService(
+            _RoutingModelTasks(text_model),
+            cast(Any, object()),
+            tmp_path / "text",
+        ).generation_supports_source_images()
+        is False
+    )
+    assert (
+        ImageService(
+            _MissingModelTasks(),
+            cast(Any, object()),
+            tmp_path / "missing",
+        ).generation_supports_source_images()
+        is False
+    )
+    assert (
+        ImageService(
+            _LocalModelTasks(),
+            cast(Any, object()),
+            tmp_path / "local",
+        ).generation_supports_source_images()
+        is False
+    )
+
+
 @pytest.mark.asyncio
 async def test_generate_with_local_target_is_unsupported(tmp_path: Path) -> None:
     """Local image targets are out of scope for this iteration."""

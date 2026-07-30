@@ -6,7 +6,7 @@ import asyncio
 import json
 import re
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -25,6 +25,7 @@ from core.tools import (
     InvalidToolResultError,
     SessionToolUnavailableError,
     ToolContext,
+    ToolContract,
     ToolExecutionConfig,
     ToolExecutor,
     ToolNotAllowedError,
@@ -72,6 +73,7 @@ class ToolDispatchContext:
     tool_restriction: Sequence[str] | None = None
     base_allowed_tools: Sequence[str] | None = None
     session_tool_grants: Sequence[str] = ()
+    tool_contracts: Mapping[str, ToolContract] = field(default_factory=dict)
     _result_persisted_callbacks: dict[str, list[ToolResultPersistedCallback]] = field(
         default_factory=dict,
         init=False,
@@ -194,7 +196,7 @@ class _EmittingToolRegistry(ToolRegistry):
                 elif decision.replacement is not None:
                     result = decision.replacement
 
-            fingerprint = _safe_schema_fingerprint(self, context.tool_name)
+            fingerprint = _tool_context_schema_fingerprint(self, context)
             self._run.emit(
                 TOOL_CALL_STARTED_EVENT,
                 {
@@ -332,6 +334,13 @@ def _safe_schema_fingerprint(registry: Any, tool_name: str) -> str:
         return ""
 
 
+def _tool_context_schema_fingerprint(registry: Any, context: ToolContext) -> str:
+    contract = context.input_contract
+    if contract is not None:
+        return contract.schema_fingerprint
+    return _safe_schema_fingerprint(registry, context.tool_name)
+
+
 async def _dispatch_tool_calls(
     context: ToolDispatchContext,
     tool_calls: list[ToolCall],
@@ -394,6 +403,7 @@ async def _dispatch_tool_calls(
             skill_activation_hook=session.register_skill_activation,
             tool_call_result_persisted_registrar=context.register_result_persisted,
             nesting_depth=context.nesting_depth,
+            input_contracts=context.tool_contracts,
         ),
     )
     tool_messages: list[ChatMessage] = []
@@ -432,7 +442,12 @@ def _fail_tool_calls_without_dispatch(
         context.run.tool_call_count += 1
         started_at = datetime.now(UTC)
         started_perf = time.perf_counter()
-        fingerprint = _safe_schema_fingerprint(context.registry, tool_call.name)
+        contract = context.tool_contracts.get(tool_call.name)
+        fingerprint = (
+            contract.schema_fingerprint
+            if contract is not None
+            else _safe_schema_fingerprint(context.registry, tool_call.name)
+        )
         context.run.emit(
             TOOL_CALL_STARTED_EVENT,
             {

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import copy
+import hashlib
+import json
 from typing import TYPE_CHECKING, Any
 
 from core.attachments.attachments import _sniff_mime
@@ -17,6 +20,8 @@ from core.tools.arguments import optional_string, required_string
 from core.tools.tools import (
     JsonObject,
     ToolContext,
+    ToolDefinitionProfile,
+    ToolDefinitionProfileContext,
     ToolDisplay,
     ToolRegistry,
     tool_failure,
@@ -138,6 +143,92 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
     "additionalProperties": False,
 }
 
+_CHANNEL_PROFILE_FIELDS: dict[str, tuple[str, ...]] = {
+    "telegram": (
+        "channel_id",
+        "message",
+        "platform_target",
+        "thread_id",
+        "file_paths",
+        "buttons",
+    ),
+    "discord": (
+        "channel_id",
+        "message",
+        "platform_target",
+        "file_paths",
+    ),
+}
+
+
+def _channel_send_profile_parameters(configs: list[ChannelConfig]) -> JsonObject:
+    canonical_properties = CHANNEL_SEND_TOOL_PARAMETERS["properties"]
+    if not isinstance(canonical_properties, dict):
+        raise ValueError("channel_send canonical properties must be an object")
+
+    channels_by_platform: dict[str, list[str]] = {}
+    for config in configs:
+        channels_by_platform.setdefault(config.platform, []).append(config.id)
+
+    branches: list[JsonObject] = []
+    for platform in sorted(channels_by_platform):
+        channel_ids = sorted(channels_by_platform[platform])
+        field_names = _CHANNEL_PROFILE_FIELDS.get(
+            platform,
+            ("channel_id", "message", "platform_target", "file_paths"),
+        )
+        properties = {name: copy.deepcopy(canonical_properties[name]) for name in field_names}
+        channel_id_schema = properties["channel_id"]
+        channel_id_schema["enum"] = channel_ids
+        branch: JsonObject = {
+            "type": "object",
+            "description": (f"Send through an enabled {platform} Channel owned by this Agent."),
+            "properties": properties,
+            "required": ["channel_id"],
+            "anyOf": [{"required": ["message"]}, {"required": ["file_paths"]}],
+            "additionalProperties": False,
+        }
+        if platform == "telegram":
+            branch["not"] = {"required": ["buttons", "file_paths"]}
+        branches.append(branch)
+
+    return {
+        "type": "object",
+        "description": (
+            "Choose one enabled Channel owned by this Agent. Each branch exposes "
+            "only the arguments supported by that Channel's platform."
+        ),
+        "oneOf": branches,
+    }
+
+
+def _channel_send_profile_resolver(channel_service: ChannelService):
+    def resolve(
+        context: ToolDefinitionProfileContext,
+    ) -> ToolDefinitionProfile | None:
+        configs = sorted(
+            (
+                config
+                for config in channel_service.list_channels()
+                if config.enabled and config.agent_id == context.agent_id
+            ),
+            key=lambda config: (config.platform, config.id),
+        )
+        if not configs:
+            return None
+        signature = json.dumps(
+            [(config.platform, config.id) for config in configs],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return ToolDefinitionProfile(
+            key=f"channels:{hashlib.sha256(signature).hexdigest()}",
+            description=CHANNEL_SEND_TOOL_DESCRIPTION,
+            parameters=_channel_send_profile_parameters(configs),
+        )
+
+    return resolve
+
 
 def _channel_send_display_summary(arguments: JsonObject) -> str:
     parts: list[str] = []
@@ -177,6 +268,7 @@ def register_channel_send_tool(
         handler,
         result_schema={"type": "object", "required": ["channel_id", "platform_target"]},
         display=ToolDisplay(summary_builder=_channel_send_display_summary),
+        definition_profile_resolver=_channel_send_profile_resolver(channel_service),
     )
 
 
