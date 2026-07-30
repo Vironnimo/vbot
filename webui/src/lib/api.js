@@ -24,6 +24,7 @@ export const WEBSOCKET_ERROR_RESPONSE = 'invalid_websocket_event';
 export const RUN_EVENT_ASSISTANT_OUTPUT_DELTA = 'assistant_output_delta';
 export const RUN_EVENT_REASONING_DELTA = 'reasoning_delta';
 export const RUN_EVENT_TOOL_CALL_DELTA = 'tool_call_delta';
+export const RUN_EVENT_STREAM_ATTEMPT_RESTARTED = 'stream_attempt_restarted';
 export const RUN_EVENT_TOOL_CALL_STDOUT = 'tool_call_stdout';
 export const RUN_EVENT_TOOL_CALL_STDERR = 'tool_call_stderr';
 export const RUN_EVENT_PROVIDER_HEARTBEAT = 'provider_heartbeat';
@@ -39,6 +40,7 @@ export const RUN_EVENT_TYPES = [
   'compaction_completed',
   RUN_EVENT_REASONING_DELTA,
   'reasoning',
+  RUN_EVENT_STREAM_ATTEMPT_RESTARTED,
   RUN_EVENT_TOOL_CALL_DELTA,
   'tool_call_started',
   RUN_EVENT_TOOL_CALL_STDOUT,

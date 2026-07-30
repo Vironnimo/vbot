@@ -1,6 +1,7 @@
 import {
   RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
   RUN_EVENT_REASONING_DELTA,
+  RUN_EVENT_STREAM_ATTEMPT_RESTARTED,
   RUN_EVENT_TOOL_CALL_DELTA,
   cancelRun as requestCancelRun,
   cancelToolCall as requestCancelToolCall,
@@ -1010,6 +1011,9 @@ export function appendRunEvent(sessionState, event) {
   }
 
   sessionState.runEvents = [...sessionState.runEvents, normalizedEvent];
+  if (normalizedEvent.type === RUN_EVENT_STREAM_ATTEMPT_RESTARTED) {
+    discardStreamingAttempt(sessionState, normalizedEvent.run_id);
+  }
   if (normalizedEvent.type === 'run_started') {
     beginRunFromEvent(sessionState, normalizedEvent);
   }
@@ -1551,9 +1555,21 @@ function firstSeenSequence(existingSequence, candidateSequence) {
 // `tool_call_result` mark phase boundaries; the compressed `streamingRunEvents`
 // tag each retained delta with the current phase.
 function advanceStreamingPhase(sessionState, event) {
-  if (event.type === 'tool_call_started' || event.type === 'tool_call_result') {
+  if (
+    event.type === 'tool_call_started' ||
+    event.type === 'tool_call_result' ||
+    event.type === RUN_EVENT_STREAM_ATTEMPT_RESTARTED
+  ) {
     sessionState.streamingPhase += 1;
   }
+}
+
+function discardStreamingAttempt(sessionState, runId) {
+  sessionState.streamingRunEvents = sessionState.streamingRunEvents.filter(
+    (event) =>
+      event.run_id !== runId ||
+      event._streamingPhase !== sessionState.streamingPhase,
+  );
 }
 
 // --- Two-bar project chat helpers -----------------------------------------

@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-found]
 
-from core.runs import ChatRunManager, RunStatus
+from core.runs import STREAM_ATTEMPT_RESTARTED_EVENT, ChatRunManager, RunStatus
 from core.subagents import (
     SUBAGENT_SESSION_STARTED_EVENT,
     SUBAGENT_STATUS_CHANGED_EVENT,
@@ -136,6 +136,7 @@ def test_websocket_excludes_streaming_delta_events(tmp_path: Path) -> None:
 
 def test_websocket_output_mappings_exclude_streaming_delta_event_types() -> None:
     assert RUN_DELTA_EVENT_TYPES.isdisjoint(RUN_OUTPUT_EVENT_TYPES)
+    assert STREAM_ATTEMPT_RESTARTED_EVENT in RUN_DELTA_EVENT_TYPES
     assert RUN_DELTA_EVENT_TYPES.isdisjoint(SERVER_EVENT_TYPES)
 
 

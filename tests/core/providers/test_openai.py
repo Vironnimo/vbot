@@ -701,7 +701,7 @@ async def test_codex_websocket_failure_before_events_disables_route_and_falls_ba
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_codex_websocket_failure_after_event_never_replays_over_sse() -> None:
+async def test_codex_websocket_failure_after_event_disables_route_for_next_attempt() -> None:
     websocket = _FakeCodexWebSocket(
         [
             [
@@ -736,6 +736,16 @@ async def test_codex_websocket_failure_after_event_never_replays_over_sse() -> N
 
     assert sse_route.call_count == 0
     assert websocket.closed is True
+
+    raw = await adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="gpt-5.6-terra",
+        conversation_id="orchestrator:sess-42",
+    )
+
+    assert adapter.normalize_response(raw)["content"] == "Done"
+    assert sse_route.call_count == 1
+    assert len(connector.calls) == 1
     await adapter.aclose()
 
 

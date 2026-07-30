@@ -68,7 +68,6 @@ class StreamRecoveryAction(Enum):
 def decide_stream_recovery(
     error: Exception,
     *,
-    emitted_replay_blocking_delta: bool,
     can_restart: bool,
     has_partial_content: bool,
     finish_received: bool = False,
@@ -76,34 +75,30 @@ def decide_stream_recovery(
     """Decide how to recover from a broken streaming attempt.
 
     Provider-agnostic: it reads only normalized vBot errors plus the attempt's
-    state, so the same matrix holds for every adapter. Answer text and Tool Call
-    fragments block replay because a second attempt could duplicate durable or
-    actionable output. Readable reasoning alone does not: it has no Tool side
-    effect and can be discarded from the active Continuation Checkpoint before
-    the attempt is retried.
+    state, so the same matrix holds for every adapter. Answer text blocks replay
+    because a second attempt could duplicate user-visible output. Readable
+    Reasoning and an in-flight Tool Call do not: neither has a Tool side effect,
+    and both can be discarded before the attempt is retried.
 
     A normalized finish delta is the provider's logical completion boundary. A
     later transport error therefore cannot turn the completed response back into
-    a partial one; the accumulated response is accepted as complete. Before any
-    replay-blocking delta a drop can otherwise be replayed cleanly: a
+    a partial one; the accumulated response is accepted as complete. Before
+    answer text a drop can otherwise be replayed cleanly: a
     streaming-unsupported error falls back to a non-streaming request, a
     restartable transient (transport/timeout drop or chunk stall) replays the
-    whole stream while restarts remain, anything else fails. Once answer text or
-    a Tool Call fragment has escaped, the stream is never replayed: accumulated
-    content is preserved as an interrupted assistant turn, while a Tool-only
-    interruption propagates without reissuing an actionable prefix.
+    whole stream while restarts remain, anything else fails. Once answer text
+    has escaped, the stream is never replayed and accumulated content is
+    preserved as an interrupted Assistant turn.
     """
     if finish_received:
         return StreamRecoveryAction.ACCEPT_COMPLETE
-    if not emitted_replay_blocking_delta:
+    if not has_partial_content:
         if _is_streaming_fallback_error(error):
             return StreamRecoveryAction.FALLBACK
         if can_restart and _is_stream_restartable_error(error):
             return StreamRecoveryAction.RESTART
         return StreamRecoveryAction.FAIL
-    if has_partial_content:
-        return StreamRecoveryAction.PRESERVE_PARTIAL
-    return StreamRecoveryAction.FAIL
+    return StreamRecoveryAction.PRESERVE_PARTIAL
 
 
 def _is_streaming_fallback_error(error: Exception) -> bool:
@@ -124,10 +119,10 @@ def _is_stream_restartable_error(error: Exception) -> bool:
     chunk stall (``StreamingChunkTimeoutError``) — the provider went silent after
     the connect succeeded, which is exactly the transient "not yet visible" case
     the restart was built for (it carries no ``retryable`` attribute, so it is
-    matched by type). The chat loop restarts from scratch only when *nothing
-    visible* has been emitted yet, so the replay cannot duplicate output the user
-    already saw — this is the streaming analogue of the streaming→non-streaming
-    fallback.
+    matched by type). The chat loop restarts from scratch only before answer
+    text has been emitted, so the replay cannot duplicate an answer the user
+    already saw — this is the streaming analogue of the
+    streaming-to-non-streaming fallback.
     """
     if isinstance(error, (StreamingChunkTimeoutError, StreamingProgressTimeoutError)):
         return True

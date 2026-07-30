@@ -749,9 +749,9 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             ):
                 yield delta
         except _CodexWebSocketTransportError as exc:
+            self._codex_websocket_disabled_routes.add(route)
             if exc.events_received:
                 raise
-            self._codex_websocket_disabled_routes.add(route)
             async for delta in self._stream_responses_sse(
                 payload,
                 endpoint_path=CODEX_RESPONSES_ENDPOINT,

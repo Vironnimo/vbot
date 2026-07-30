@@ -172,6 +172,7 @@ from core.runs import (
     MODEL_FALLBACK_ACTIVATED_EVENT,
     MODEL_STEP_USAGE_EVENT,
     PROVIDER_HEARTBEAT_EVENT,
+    STREAM_ATTEMPT_RESTARTED_EVENT,
     USER_MESSAGE_EVENT,
     QueuedRunItem,
     Run,
@@ -2810,10 +2811,10 @@ class ChatLoop:
         request_context: dict[str, Any] | None = None,
         continuation_tracker: ContinuationTracker | None = None,
     ) -> _AssistantStep:
-        # A transient drop before answer text or a Tool Call fragment is replayed
-        # as a full stream restart. Readable Reasoning alone is discarded from the
-        # active checkpoint before replay. Once replay-blocking output arrives,
-        # partial output cannot be replayed cleanly.
+        # A transient drop before answer text is replayed as a full stream
+        # restart. Readable Reasoning and any unexecuted Tool Call preview are
+        # discarded before replay. Once answer text arrives, partial output
+        # cannot be replayed cleanly.
         for attempt in range(MAX_STREAM_RESTARTS + 1):
             try:
                 return await self._consume_stream_attempt(
@@ -2909,9 +2910,6 @@ class ChatLoop:
             # action stays here (the chat loop owns side effects, not the policy).
             action = decide_stream_recovery(
                 exc,
-                emitted_replay_blocking_delta=(
-                    accumulator.partial_content is not None or accumulator.has_partial_tool_call
-                ),
                 can_restart=can_restart,
                 has_partial_content=accumulator.partial_content is not None,
                 finish_received=accumulator.finish_reason is not None,
@@ -2939,6 +2937,7 @@ class ChatLoop:
             elif action is StreamRecoveryAction.RESTART:
                 if continuation_tracker is not None:
                     await continuation_tracker.discard_stream_attempt()
+                run.emit(STREAM_ATTEMPT_RESTARTED_EVENT)
                 raise _StreamRestartNeeded(exc) from exc
             elif action is StreamRecoveryAction.PRESERVE_PARTIAL:
                 interruption_cause = normalize_interruption_cause(exc)
