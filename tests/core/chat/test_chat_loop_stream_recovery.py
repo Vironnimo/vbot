@@ -27,6 +27,7 @@ from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
 from core.runs import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     MODEL_STEP_USAGE_EVENT,
+    STREAM_ATTEMPT_RESTARTED_EVENT,
     RunCancelledError,
     RunStatus,
 )
@@ -515,12 +516,13 @@ async def test_streaming_mode_preserves_partial_after_classified_responses_error
 
 
 @pytest.mark.asyncio
-async def test_streaming_mode_does_not_restart_after_tool_call_delta(tmp_path: Path) -> None:
+async def test_streaming_mode_restarts_after_unexecuted_tool_call_delta(tmp_path: Path) -> None:
     agent = StubAgent(id="coder", model="openai/gpt-5.6-terra", allowed_tools=["*"])
     adapter = StubAdapter(
         [],
         stream_responses=[
             [
+                {"type": "reasoning_delta", "text": "Discarded plan."},
                 {
                     "type": "tool_call_delta",
                     "id": "call_1",
@@ -528,19 +530,29 @@ async def test_streaming_mode_does_not_restart_after_tool_call_delta(tmp_path: P
                     "arguments_delta": '{"path":"note.txt"}',
                 },
                 NetworkError("dropped after Tool Call"),
-            ]
+            ],
+            [
+                {"type": "content_delta", "text": "Recovered"},
+                {"type": "finish", "reason": "stop"},
+            ],
         ],
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
 
-    with pytest.raises(NetworkError, match="dropped after Tool Call"):
-        await build_chat_loop(runtime, streaming=True).send(
-            "coder",
-            "Hi",
-            session_id="session-one",
-        )
+    assistant = await build_chat_loop(runtime, streaming=True).send(
+        "coder",
+        "Hi",
+        session_id="session-one",
+    )
 
-    assert len(adapter.stream_requests) == 1
+    run = next(iter(runtime.chat_runs._runs.values()))
+    assert assistant.content == "Recovered"
+    assert len(adapter.stream_requests) == 2
+    assert persisted_roles(runtime.chat_sessions.get("coder", "session-one").load()) == [
+        "user",
+        "assistant",
+    ]
+    assert any(event.type == STREAM_ATTEMPT_RESTARTED_EVENT for event in run.events)
 
 
 def _classified_responses_error(

@@ -37,6 +37,7 @@ vi.mock('$lib/api.js', () =>
     RUN_EVENT_ASSISTANT_OUTPUT_DELTA: 'assistant_output_delta',
     RUN_EVENT_REASONING_DELTA: 'reasoning_delta',
     RUN_EVENT_PROVIDER_HEARTBEAT: 'provider_heartbeat',
+    RUN_EVENT_STREAM_ATTEMPT_RESTARTED: 'stream_attempt_restarted',
     RUN_EVENT_TOOL_CALL_DELTA: 'tool_call_delta',
     RUN_EVENT_TOOL_CALL_STDERR: 'tool_call_stderr',
     RUN_EVENT_TOOL_CALL_STDOUT: 'tool_call_stdout',

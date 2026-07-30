@@ -797,7 +797,6 @@ async def test_finalize_partial_fields_drops_in_flight_tool_call_without_raising
 async def test_decide_recovery_streaming_unsupported_before_visible_falls_back() -> None:
     action = decide_stream_recovery(
         ProviderStreamingUnsupportedError("no streaming"),
-        emitted_replay_blocking_delta=False,
         can_restart=True,
         has_partial_content=False,
     )
@@ -808,7 +807,6 @@ async def test_decide_recovery_streaming_unsupported_before_visible_falls_back()
 async def test_decide_recovery_accepts_logically_finished_stream() -> None:
     action = decide_stream_recovery(
         NetworkError("missing transport terminator"),
-        emitted_replay_blocking_delta=False,
         can_restart=True,
         has_partial_content=False,
         finish_received=True,
@@ -826,7 +824,6 @@ async def test_decide_recovery_restartable_transient_before_visible_restarts() -
     ):
         action = decide_stream_recovery(
             error,
-            emitted_replay_blocking_delta=False,
             can_restart=True,
             has_partial_content=False,
         )
@@ -837,7 +834,6 @@ async def test_decide_recovery_restartable_transient_before_visible_restarts() -
 async def test_decide_recovery_restartable_before_visible_fails_when_budget_exhausted() -> None:
     action = decide_stream_recovery(
         NetworkError("dropped"),
-        emitted_replay_blocking_delta=False,
         can_restart=False,
         has_partial_content=False,
     )
@@ -848,7 +844,6 @@ async def test_decide_recovery_restartable_before_visible_fails_when_budget_exha
 async def test_decide_recovery_non_restartable_before_visible_fails() -> None:
     action = decide_stream_recovery(
         ProviderError("fatal", retryable=False),
-        emitted_replay_blocking_delta=False,
         can_restart=True,
         has_partial_content=False,
     )
@@ -865,7 +860,6 @@ async def test_decide_recovery_visible_with_content_preserves_partial() -> None:
     ):
         action = decide_stream_recovery(
             error,
-            emitted_replay_blocking_delta=True,
             can_restart=True,
             has_partial_content=True,
         )
@@ -876,7 +870,16 @@ async def test_decide_recovery_visible_with_content_preserves_partial() -> None:
 async def test_decide_recovery_reasoning_only_restarts_when_budget_remains() -> None:
     action = decide_stream_recovery(
         NetworkError("dropped"),
-        emitted_replay_blocking_delta=False,
+        can_restart=True,
+        has_partial_content=False,
+    )
+
+    assert action is StreamRecoveryAction.RESTART
+
+
+async def test_decide_recovery_tool_preview_restarts_when_no_answer_text_exists() -> None:
+    action = decide_stream_recovery(
+        NetworkError("dropped after Tool Call preview"),
         can_restart=True,
         has_partial_content=False,
     )

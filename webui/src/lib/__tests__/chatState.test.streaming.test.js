@@ -18,6 +18,55 @@ import {
 } from './chatState.support.js';
 
 describe('chat state helpers', () => {
+  it('discards failed-attempt reasoning and Tool previews before a stream restart', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-stream-restart',
+    );
+
+    appendRunEvent(sessionState, {
+      type: 'reasoning_delta',
+      run_id: 'run-stream-restart',
+      sequence: 1,
+      payload: { reasoning_delta: 'Discard this plan.' },
+    });
+    appendRunEvent(sessionState, {
+      type: 'tool_call_delta',
+      run_id: 'run-stream-restart',
+      sequence: 2,
+      payload: {
+        tool_call_id: 'call-discarded',
+        name_delta: 'read',
+        arguments_delta: '{"path":"partial',
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'stream_attempt_restarted',
+      run_id: 'run-stream-restart',
+      sequence: 3,
+      payload: {},
+    });
+    appendRunEvent(sessionState, {
+      type: 'reasoning_delta',
+      run_id: 'run-stream-restart',
+      sequence: 4,
+      payload: { reasoning_delta: 'Recovered plan.' },
+    });
+
+    const renderItems = visibleTimelineItemsForRender(sessionState);
+
+    expect(sessionState.streamingPhase).toBe(1);
+    expect(sessionState.streamingRunEvents).toHaveLength(1);
+    expect(renderItems[0].tools).toEqual([]);
+    expect(renderItems[0].reasoning).toEqual([
+      expect.objectContaining({
+        type: 'reasoning',
+        content: 'Recovered plan.',
+      }),
+    ]);
+  });
+
   it('keeps render selector assistant/reasoning streaming content inside assistant runs', () => {
     const sessionState = ensureSessionState(
       createChatState(),
