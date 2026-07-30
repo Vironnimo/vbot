@@ -1911,6 +1911,102 @@ textarea::placeholder {
   color: var(--amber);
 }
 
+.compaction-disclosure > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.compaction-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.compaction-disclosure > summary:hover,
+.compaction-disclosure > summary:focus-visible {
+  color: var(--text-med);
+}
+
+.compaction-disclosure > summary:focus-visible {
+  border-radius: var(--r-sm);
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: var(--focus-ring);
+}
+
+.compaction-sep__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  white-space: nowrap;
+}
+
+.compaction-sep__chevron {
+  flex: 0 0 auto;
+  fill: none;
+  opacity: 0.55;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.compaction-disclosure[open] .compaction-sep__chevron {
+  transform: rotate(180deg);
+}
+
+.compaction-disclosure > summary:hover .compaction-sep__chevron,
+.compaction-disclosure > summary:focus-visible .compaction-sep__chevron {
+  opacity: 1;
+}
+
+.compaction-detail {
+  margin: calc(-1 * var(--space-md)) var(--space-xl) var(--space-xl);
+  border-left: 2px solid var(--border-2);
+  padding-left: var(--space-md);
+}
+
+.compaction-disclosure--in-run .compaction-detail {
+  margin: 0 0 var(--space-md);
+}
+
+.compaction-detail__header {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.compaction-detail__text {
+  max-height: min(52vh, 560px);
+  overflow: auto;
+  padding: var(--space-sm) var(--space-md) var(--space-sm) 0;
+  color: var(--text-med);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-body);
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  tab-size: 2;
+  white-space: pre-wrap;
+}
+
+.compaction-detail:hover .compaction-copy,
+.compaction-detail:focus-within .compaction-copy {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.btn-tertiary.btn-icon.compaction-copy {
+  width: 24px;
+  height: 24px;
+}
+
 .msg {
   display: flex;
   flex-direction: column;

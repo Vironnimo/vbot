@@ -107,6 +107,8 @@ describe('ChatTimeline', () => {
   });
 
   it('renders a live Compaction divider between its surrounding Run output', () => {
+    const summaryText =
+      '\n# Exact compaction summary\n\n<tag> stays text & *stars* stay literal\n';
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -142,6 +144,7 @@ describe('ChatTimeline', () => {
         message: {
           id: 'checkpoint-live',
           role: 'compaction_checkpoint',
+          content: summaryText,
           timestamp: '2026-07-29T17:55:25Z',
         },
       },
@@ -181,6 +184,15 @@ describe('ChatTimeline', () => {
       'Context compacted · ~250,000 → ~30,000 tokens',
     );
     expect(divider?.classList.contains('compaction-sep--running')).toBe(false);
+    const disclosure = document.querySelector('.compaction-disclosure--in-run');
+    expect(disclosure?.open).toBe(false);
+    expect(disclosure?.querySelector('summary')).toBe(divider);
+    expect(
+      disclosure?.querySelector('.compaction-detail__text').textContent,
+    ).toBe(summaryText);
+    divider.click();
+    flushSync();
+    expect(disclosure.open).toBe(true);
     expect(
       before.compareDocumentPosition(divider) &
         Node.DOCUMENT_POSITION_FOLLOWING,
@@ -220,9 +232,12 @@ describe('ChatTimeline', () => {
     );
     expect(divider?.classList.contains('compaction-sep--running')).toBe(true);
     expect(divider?.getAttribute('aria-busy')).toBe('true');
+    expect(document.querySelector('.compaction-disclosure')).toBeNull();
   });
 
   it('keeps persisted Compaction token counts after History reload', () => {
+    const summaryText =
+      'Remember this exactly:\n\n- first fact\n- <literal tag>\n\nTrailing line.';
     const sessionState = ensureSessionState(
       createChatState(),
       'alpha',
@@ -232,7 +247,7 @@ describe('ChatTimeline', () => {
       {
         id: 'checkpoint-history',
         role: 'compaction_checkpoint',
-        content: 'Summary',
+        content: summaryText,
         timestamp: '2026-07-29T17:55:25Z',
         usage: {
           compacted_token_count: 220_000,
@@ -251,9 +266,19 @@ describe('ChatTimeline', () => {
     });
     flushSync();
 
-    expect(document.querySelector('.compaction-sep')?.textContent.trim()).toBe(
+    const divider = document.querySelector('.compaction-sep');
+    expect(divider?.textContent.trim()).toBe(
       'Context compacted · ~250,000 → ~30,000 tokens',
     );
+    expect(divider?.tagName).toBe('SUMMARY');
+    const disclosure = document.querySelector('.compaction-disclosure');
+    expect(disclosure?.open).toBe(false);
+    divider.click();
+    flushSync();
+    expect(disclosure.open).toBe(true);
+    expect(
+      disclosure.querySelector('.compaction-detail__text').textContent,
+    ).toBe(summaryText);
   });
 
   it('groups multi-day history with Today for the current day', () => {

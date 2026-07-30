@@ -39,11 +39,12 @@ import {
 } from '../statisticsView.js';
 
 describe('statisticsView formatting', () => {
-  it('exposes the six sub-views (skills between tools and limits) and three granularities', () => {
+  it('exposes the seven sub-views and three granularities', () => {
     expect(STATISTICS_SUB_VIEWS).toEqual([
       'overview',
       'usage',
       'runs',
+      'compactions',
       'tools',
       'skills',
       'limits',

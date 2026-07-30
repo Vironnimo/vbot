@@ -447,6 +447,43 @@ class RunsSection:
 
 
 @dataclass(frozen=True)
+class CompactionStrategyCount:
+    strategy: str
+    compactions: int
+
+
+@dataclass(frozen=True)
+class CompactionReclaimStats:
+    observations: int
+    total_tokens: int
+    average_tokens: float | None
+    p50_tokens: float | None
+    p95_tokens: float | None
+
+
+@dataclass(frozen=True)
+class CompactionSessionStat:
+    agent_id: str
+    session_id: str
+    compactions: int
+    estimated_reclaimed_tokens: int
+    last_compaction: str
+
+
+@dataclass(frozen=True)
+class CompactionsSection:
+    total_compactions: int
+    sessions_with_compactions: int
+    average_per_compacted_session: float | None
+    p50_per_compacted_session: float | None
+    p95_per_compacted_session: float | None
+    max_per_session: int
+    by_strategy: list[CompactionStrategyCount]
+    reclaim: CompactionReclaimStats
+    top_sessions: list[CompactionSessionStat]
+
+
+@dataclass(frozen=True)
 class CountEntry:
     key: str
     count: int
@@ -507,6 +544,7 @@ class StatisticsReport:
     overview: OverviewSection
     usage: UsageSection
     runs: RunsSection
+    compactions: CompactionsSection
     errors: ErrorsSection
     tools: ToolsSection
     skills: SkillsSection
@@ -709,6 +747,15 @@ class _ToolAcc:
     error_codes: Counter[str] = field(default_factory=Counter)
 
 
+@dataclass
+class _CompactionSessionAcc:
+    agent_id: str
+    session_id: str
+    compactions: int = 0
+    estimated_reclaimed_tokens: int = 0
+    last_compaction: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Aggregator — accumulates over one full scan, then builds the frozen report
 # ---------------------------------------------------------------------------
@@ -739,6 +786,11 @@ class _Aggregator:
         self._derived_fallback_runs = 0
         self._runs_per_session: list[SessionRunCount] = []
         self._longest_runs: list[LongestRun] = []
+
+        self._total_compactions = 0
+        self._compactions_by_strategy: Counter[str] = Counter()
+        self._compaction_reclaim_samples: list[int] = []
+        self._compactions_by_session: dict[tuple[str, str], _CompactionSessionAcc] = {}
 
         self._models: dict[str, _ModelAcc] = {}
         self._providers: dict[str, _ProviderAcc] = {}
@@ -822,6 +874,8 @@ class _Aggregator:
                 self._chat_message_role_counts[message.role] += 1
                 agent.chat_messages += 1
             cache_tracker.observe(message)
+            if message.role == "compaction_checkpoint":
+                self._record_compaction(agent_id, session_id, message)
             if message.role == "run_summary":
                 self._record_run(agent, agent_id, session_id, current, message)
                 current = []
@@ -890,6 +944,26 @@ class _Aggregator:
             self._record_error(agent, current_model, message, day)
         elif message.role == "tool":
             self._record_tool(agent, message)
+
+    def _record_compaction(self, agent_id: str, session_id: str, message: ChatMessage) -> None:
+        self._total_compactions += 1
+        self._compactions_by_strategy[message.compaction_strategy or UNKNOWN_MODEL_KEY] += 1
+
+        key = (agent_id, session_id)
+        session = self._compactions_by_session.get(key)
+        if session is None:
+            session = _CompactionSessionAcc(agent_id=agent_id, session_id=session_id)
+            self._compactions_by_session[key] = session
+        session.compactions += 1
+        session.last_compaction = _max_timestamp(session.last_compaction, message.timestamp)
+
+        before = _usage_nonnegative_int(message.usage, "context_tokens_before")
+        after = _usage_nonnegative_int(message.usage, "context_tokens_after")
+        if before is None or after is None:
+            return
+        reclaimed = max(0, before - after)
+        session.estimated_reclaimed_tokens += reclaimed
+        self._compaction_reclaim_samples.append(reclaimed)
 
     def _record_usage(self, message: ChatMessage, day: str | None) -> None:
         self._usage_assistant_messages += 1
@@ -1072,6 +1146,7 @@ class _Aggregator:
             overview=self._build_overview(),
             usage=self._build_usage(),
             runs=self._build_runs(),
+            compactions=self._build_compactions(),
             errors=self._build_errors(),
             tools=self._build_tools(),
             skills=self._build_skills(skill_inventory),
@@ -1089,6 +1164,52 @@ class _Aggregator:
             project_ids=frozenset(self._scanned_project_ids),
         )
         return self._skill_usage.build(inventory)
+
+    def _build_compactions(self) -> CompactionsSection:
+        sessions = list(self._compactions_by_session.values())
+        counts = sorted(session.compactions for session in sessions)
+        reclaim = sorted(self._compaction_reclaim_samples)
+        top_sessions = sorted(
+            sessions,
+            key=lambda session: (
+                -session.compactions,
+                -session.estimated_reclaimed_tokens,
+                session.agent_id,
+                session.session_id,
+            ),
+        )[:TOP_SESSIONS]
+        return CompactionsSection(
+            total_compactions=self._total_compactions,
+            sessions_with_compactions=len(sessions),
+            average_per_compacted_session=_mean(counts),
+            p50_per_compacted_session=_nearest_rank_percentile(counts, 50),
+            p95_per_compacted_session=_nearest_rank_percentile(counts, 95),
+            max_per_session=max(counts, default=0),
+            by_strategy=[
+                CompactionStrategyCount(strategy=strategy, compactions=count)
+                for strategy, count in sorted(
+                    self._compactions_by_strategy.items(),
+                    key=lambda item: (-item[1], item[0]),
+                )
+            ],
+            reclaim=CompactionReclaimStats(
+                observations=len(reclaim),
+                total_tokens=sum(reclaim),
+                average_tokens=_mean(reclaim),
+                p50_tokens=_nearest_rank_percentile(reclaim, 50),
+                p95_tokens=_nearest_rank_percentile(reclaim, 95),
+            ),
+            top_sessions=[
+                CompactionSessionStat(
+                    agent_id=session.agent_id,
+                    session_id=session.session_id,
+                    compactions=session.compactions,
+                    estimated_reclaimed_tokens=session.estimated_reclaimed_tokens,
+                    last_compaction=session.last_compaction or "",
+                )
+                for session in top_sessions
+            ],
+        )
 
     def _build_overview(self) -> OverviewSection:
         durations = sorted(self._run_durations)
@@ -1813,6 +1934,15 @@ def _max_timestamp(current: str | None, candidate: str) -> str:
 
 def _mean(values: list[int]) -> float | None:
     return sum(values) / len(values) if values else None
+
+
+def _usage_nonnegative_int(usage: JsonObject | None, field_name: str) -> int | None:
+    if not isinstance(usage, dict):
+        return None
+    value = usage.get(field_name)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
 
 
 def _nearest_rank_percentile(sorted_values: list[int], percentile: float) -> float | None:

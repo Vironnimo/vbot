@@ -271,6 +271,64 @@ def _longest_run_lines(runs: object) -> list[str]:
     return lines
 
 
+def _format_compactions(section: Mapping[str, Any], window: object) -> str:
+    lines = ["compactions:", *_window_lines(window)]
+    lines.append(f"total compactions: {_int(section.get('total_compactions'))}")
+    lines.append(f"sessions with compactions: {_int(section.get('sessions_with_compactions'))}")
+    lines.append(
+        "compactions per compacted session: "
+        f"average={_number(section.get('average_per_compacted_session'))} "
+        f"p50={_number(section.get('p50_per_compacted_session'))} "
+        f"p95={_number(section.get('p95_per_compacted_session'))} "
+        f"max={_int(section.get('max_per_session'))}"
+    )
+
+    reclaim = section.get("reclaim")
+    if isinstance(reclaim, dict):
+        lines.append(
+            "estimated reclaimed tokens: "
+            f"observations={_int(reclaim.get('observations'))} "
+            f"total={_int(reclaim.get('total_tokens'))} "
+            f"average={_number(reclaim.get('average_tokens'))} "
+            f"p50={_number(reclaim.get('p50_tokens'))} "
+            f"p95={_number(reclaim.get('p95_tokens'))}"
+        )
+
+    lines.append("")
+    lines.append("by strategy:")
+    lines.extend(_compaction_strategy_lines(section.get("by_strategy")))
+
+    lines.append("")
+    lines.append("most compacted sessions:")
+    lines.extend(_compaction_session_lines(section.get("top_sessions")))
+    return "\n".join(lines)
+
+
+def _compaction_strategy_lines(entries: object) -> list[str]:
+    rows = _dict_rows(entries)
+    if not rows:
+        return ["  no compactions recorded"]
+    return [
+        f"  {_text(row.get('strategy'))}: {_int(row.get('compactions'))}"
+        for row in rows[:_TOP_ROWS]
+    ]
+
+
+def _compaction_session_lines(entries: object) -> list[str]:
+    rows = _dict_rows(entries)
+    if not rows:
+        return ["  no compacted sessions"]
+    lines: list[str] = []
+    for row in rows[:_TOP_ROWS]:
+        lines.append(
+            f"  {_text(row.get('agent_id'))} {_text(row.get('session_id'))}: "
+            f"compactions={_int(row.get('compactions'))} "
+            f"estimated_reclaimed_tokens={_int(row.get('estimated_reclaimed_tokens'))} "
+            f"last_compaction={_timestamp(row.get('last_compaction'))}"
+        )
+    return lines
+
+
 def _format_errors(section: Mapping[str, Any], window: object) -> str:
     lines = ["errors:", *_window_lines(window)]
     lines.append(f"total errors: {_int(section.get('total_errors'))}")
@@ -471,6 +529,7 @@ _SECTION_FORMATTERS = {
     "overview": _format_overview,
     "usage": _format_usage,
     "runs": _format_runs,
+    "compactions": _format_compactions,
     "errors": _format_errors,
     "tools": _format_tools,
     "skills": _format_skills,

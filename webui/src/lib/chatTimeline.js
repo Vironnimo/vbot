@@ -60,7 +60,11 @@ export function assistantRunChildProgressKey(child) {
   const contentLength =
     typeof child.content === 'string' ? child.content.length : 0;
   if (child.type === 'compaction_separator') {
-    return `${chunkCount}:${latestSequence ?? ''}:${child.status ?? ''}:${child.contextTokensBefore ?? ''}:${child.contextTokensAfter ?? ''}`;
+    const summaryLength =
+      typeof child.message?.content === 'string'
+        ? child.message.content.length
+        : 0;
+    return `${chunkCount}:${latestSequence ?? ''}:${child.status ?? ''}:${child.contextTokensBefore ?? ''}:${child.contextTokensAfter ?? ''}:${summaryLength}`;
   }
   return `${chunkCount}:${latestSequence ?? ''}:${contentLength}`;
 }

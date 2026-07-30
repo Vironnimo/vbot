@@ -115,6 +115,24 @@ def _run_summary(*, status: str, at: datetime, duration_ms: int, run_id: str) ->
     )
 
 
+def _compaction(
+    *,
+    at: datetime,
+    before: int,
+    after: int,
+    strategy: str = "summary_tail",
+) -> ChatMessage:
+    return ChatMessage.compaction_checkpoint(
+        summary=f"Summary at {at.isoformat()}",
+        projection=[ChatMessage.user("preserved tail", timestamp=at)],
+        compacted_token_count=before - after,
+        context_tokens_before=before,
+        context_tokens_after=after,
+        strategy=strategy,
+        timestamp=at,
+    )
+
+
 def _write_session(manager: ChatSessionManager, agent_id: str, messages: list[ChatMessage]) -> str:
     session = manager.create(agent_id)
     for message in messages:
@@ -155,6 +173,12 @@ def test_empty_data_returns_zeroed_report(tmp_path: Path) -> None:
     assert report.overview.session_records_by_role["agent_takeover"] == 0
     assert report.usage.providers == []
     assert report.runs.duration.p95_ms is None
+    assert report.compactions.total_compactions == 0
+    assert report.compactions.sessions_with_compactions == 0
+    assert report.compactions.average_per_compacted_session is None
+    assert report.compactions.max_per_session == 0
+    assert report.compactions.reclaim.observations == 0
+    assert report.compactions.top_sessions == []
     assert report.errors.total_errors == 0
     assert report.tools.tools == []
     # Fully JSON-serializable.
@@ -347,6 +371,67 @@ def test_fork_counts_only_activity_appended_after_copied_history(tmp_path: Path)
     edit = next(tool for tool in report.tools.tools if tool.name == "edit")
     assert edit.successes == 1
     assert edit.failures == 1
+
+
+def test_compactions_report_distribution_reclaim_strategy_window_and_forks(
+    tmp_path: Path,
+) -> None:
+    service, manager = _service(tmp_path, ["main"])
+    day_one = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+    day_two = datetime(2026, 6, 2, 9, 0, tzinfo=UTC)
+    day_three = datetime(2026, 6, 3, 9, 0, tzinfo=UTC)
+
+    source = manager.create("main")
+    source.append(_compaction(at=day_one, before=100_000, after=70_000))
+    source.append(_compaction(at=day_two, before=90_000, after=30_000))
+
+    fork = asyncio.run(manager.fork("main", source.id))
+    fork.append(_compaction(at=day_three, before=95_000, after=25_000))
+
+    second_session_id = _write_session(
+        manager,
+        "main",
+        [
+            _compaction(
+                at=day_two + timedelta(hours=1),
+                before=80_000,
+                after=40_000,
+                strategy="continuation",
+            ),
+            _compaction(
+                at=day_three + timedelta(hours=1),
+                before=75_000,
+                after=25_000,
+            ),
+        ],
+    )
+
+    report = service.report(since=day_two, until=day_three + timedelta(hours=2))
+    compactions = report.compactions
+
+    # The fork's copied source checkpoint is historical context, not new activity.
+    assert compactions.total_compactions == 4
+    assert compactions.sessions_with_compactions == 3
+    assert compactions.average_per_compacted_session == pytest.approx(4 / 3)
+    assert compactions.p50_per_compacted_session == 1.0
+    assert compactions.p95_per_compacted_session == 2.0
+    assert compactions.max_per_session == 2
+    assert [(row.strategy, row.compactions) for row in compactions.by_strategy] == [
+        ("summary_tail", 3),
+        ("continuation", 1),
+    ]
+    assert compactions.reclaim.observations == 4
+    assert compactions.reclaim.total_tokens == 220_000
+    assert compactions.reclaim.average_tokens == 55_000
+    assert compactions.reclaim.p50_tokens == 50_000
+    assert compactions.reclaim.p95_tokens == 70_000
+    assert compactions.top_sessions[0].session_id == second_session_id
+    assert compactions.top_sessions[0].compactions == 2
+    assert compactions.top_sessions[0].estimated_reclaimed_tokens == 90_000
+    assert {row.session_id for row in compactions.top_sessions[1:]} == {
+        source.id,
+        fork.id,
+    }
 
 
 def test_chat_messages_exclude_thinking_and_tool_only_model_steps(tmp_path: Path) -> None:

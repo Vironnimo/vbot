@@ -9,7 +9,6 @@
     fileMentionStatusLabel,
     avatarForItem,
     compactToolValue,
-    compactionSeparatorLabel,
     errorMessagePresentation,
     formatTime,
     hasAssistantContent,
@@ -46,6 +45,7 @@
   } from '$lib/chatTimelinePresentation.js';
 
   import CopyButton from '../ui/CopyButton.svelte';
+  import ChatCompactionSeparator from './ChatCompactionSeparator.svelte';
   import MarkdownContent from './MarkdownContent.svelte';
 
   let {
@@ -350,9 +350,7 @@
     </div>
   </article>
 {:else if item.type === 'compaction_separator'}
-  <div class="date-sep compaction-sep">
-    {compactionSeparatorLabel(item)}
-  </div>
+  <ChatCompactionSeparator {item} />
 {:else if item.type === 'takeover_separator'}
   <div class="date-sep takeover-sep">
     {takeoverSeparatorLabel(item.message)}

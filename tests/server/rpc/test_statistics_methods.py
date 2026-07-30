@@ -132,6 +132,7 @@ def test_report_returns_full_shape_for_seeded_data(tmp_path: Path) -> None:
         "overview",
         "usage",
         "runs",
+        "compactions",
         "errors",
         "tools",
         "skills",
@@ -146,6 +147,7 @@ def test_report_returns_full_shape_for_seeded_data(tmp_path: Path) -> None:
     assert result["usage"]["models"][0]["reasoning_tokens"] == 3
     assert result["usage"]["daily"][0]["reasoning_tokens"] == 3
     assert result["runs"]["duration"]["p95_ms"] == 1200.0
+    assert result["compactions"]["total_compactions"] == 0
     assert result["window"] == {"since": None, "until": None}
 
 
@@ -159,6 +161,7 @@ def test_report_applies_time_window(tmp_path: Path) -> None:
     )
 
     assert result["overview"]["total_runs"] == 0
+    assert result["compactions"]["total_compactions"] == 0
     assert result["window"]["since"] == "2026-07-01T00:00:00+00:00"
 
 
