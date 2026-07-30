@@ -62,7 +62,6 @@ class ContinuationState:
     original_requests: list[Any] = field(default_factory=list)
     model_steps: dict[tuple[str, int], _ModelStepState] = field(default_factory=dict)
     operations: dict[str, JsonObject] = field(default_factory=dict)
-    compaction_count: int = 0
 
     @property
     def reasoning(self) -> str:
@@ -165,8 +164,6 @@ def fold_continuation_records(records: list[JsonObject]) -> ContinuationState | 
             )
             operation["status"] = "completed"
             operation["ok"] = record.get("ok") is True
-        elif record_type == "compaction_boundary" and state is not None:
-            state.compaction_count += 1
         elif record_type == "run_interrupted" and state is not None:
             state.latest_run_id = _required_string(record, "run_id")
             state.cause = _required_cause(record)
@@ -292,9 +289,6 @@ class ContinuationTracker:
             )
         self._flush_boundary(*records)
         self._step += 1
-
-    def record_compaction_boundary(self) -> None:
-        self._flush_boundary(self._record("compaction_boundary"))
 
     def mark_interruption_cause(self, cause: ContinuationCause) -> None:
         self.interruption_cause = cause

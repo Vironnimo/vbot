@@ -2562,8 +2562,6 @@ class ChatLoop:
             context.working_project_context = prompt_refresh.working_project_context
             context.skill_registry = prompt_refresh.skill_registry
             context.skill_catalog = prompt_refresh.skill_catalog
-        if context.continuation_tracker is not None:
-            context.continuation_tracker.record_compaction_boundary()
         persisted_ordinal = checkpoint_ordinal(session.load(), checkpoint.id)
         checkpoint_usage = checkpoint.usage or {}
         run.emit(
