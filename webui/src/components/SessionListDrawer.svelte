@@ -1,4 +1,6 @@
 <script>
+  import { tick } from 'svelte';
+
   import Badge from './ui/Badge.svelte';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
@@ -14,6 +16,7 @@
     setSessionCompactionPolicy,
   } from '$lib/api.js';
   import { normalizeCompactionPolicy } from '$lib/compactionPolicy.js';
+  import { computePanelPosition, portal } from '$lib/dropdownPanel.js';
   import { activeLocaleTag, t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
   import {
@@ -46,6 +49,10 @@
   // inline, the draft title, and any rename error. Only ever one of each at a
   // time — opening a menu or starting an edit on another row supersedes.
   let openMenuSessionId = $state(null);
+  let menuTriggerElement = $state(null);
+  let menuElement = $state(null);
+  let menuStyle = $state('visibility: hidden;');
+  let menuPlacement = $state('bottom');
   let editingSessionId = $state(null);
   let editValue = $state('');
   let renameError = $state(null);
@@ -64,6 +71,7 @@
   let policyError = $state(null);
 
   const SESSION_TITLE_MAX_LENGTH = 200;
+  const SESSION_ACTION_MENU_FALLBACK_WIDTH = 160;
 
   let loadedAgentId = '';
   let loadVersion = 0;
@@ -163,12 +171,47 @@
     onSessionSelected?.(sessionId);
   };
 
-  const toggleMenu = (sessionId) => {
-    openMenuSessionId = openMenuSessionId === sessionId ? null : sessionId;
+  const toggleMenu = async (sessionId, triggerElement) => {
+    if (openMenuSessionId === sessionId) {
+      closeMenu();
+      return;
+    }
+
+    openMenuSessionId = sessionId;
+    menuTriggerElement = triggerElement;
+    menuStyle = 'visibility: hidden;';
+    await tick();
+    updateMenuPosition();
   };
 
   const closeMenu = () => {
     openMenuSessionId = null;
+    menuTriggerElement = null;
+    menuElement = null;
+    menuStyle = 'visibility: hidden;';
+    menuPlacement = 'bottom';
+  };
+
+  const updateMenuPosition = () => {
+    if (openMenuSessionId === null || !menuTriggerElement || !menuElement) {
+      return;
+    }
+
+    const menuRect = menuElement.getBoundingClientRect();
+    const { placement, left, width, verticalRule, optionsMaxHeight } =
+      computePanelPosition(menuTriggerElement, {
+        contentHeight: menuElement.scrollHeight || menuRect.height,
+        panelWidth: menuRect.width || SESSION_ACTION_MENU_FALLBACK_WIDTH,
+        horizontalAlign: 'end',
+      });
+
+    menuPlacement = placement;
+    menuStyle = [
+      `left: ${left}px`,
+      verticalRule,
+      `width: ${width}px`,
+      `max-height: ${optionsMaxHeight}px`,
+    ].join('; ');
   };
 
   // Enter inline-rename for a row. Seeds the field with the existing custom
@@ -333,15 +376,16 @@
   };
 
   // Close an open row menu on an outside click or Escape, mirroring the
-  // Dropdown primitive. Clicks inside any row's action area (trigger or menu)
-  // are left to the buttons' own handlers.
+  // Dropdown primitive. The menu is portaled, so both its original action
+  // area and its document-root panel must count as inside.
   const handleDocumentMouseDown = (event) => {
     if (openMenuSessionId === null) {
       return;
     }
     if (
       event.target instanceof Element &&
-      event.target.closest('.session-row__actions')
+      (event.target.closest('.session-row__actions') ||
+        menuElement?.contains(event.target))
     ) {
       return;
     }
@@ -353,6 +397,27 @@
       closeMenu();
     }
   };
+
+  const handleWindowScroll = (event) => {
+    if (openMenuSessionId === null) {
+      return;
+    }
+    if (event.target instanceof Node && menuElement?.contains(event.target)) {
+      return;
+    }
+    closeMenu();
+  };
+
+  $effect(() => {
+    if (openMenuSessionId === null) {
+      return undefined;
+    }
+
+    window.addEventListener('scroll', handleWindowScroll, true);
+    return () => {
+      window.removeEventListener('scroll', handleWindowScroll, true);
+    };
+  });
 
   // Focus (and select) the inline rename field as soon as it mounts.
   const autofocusRename = (node) => {
@@ -394,6 +459,8 @@
   onmousedown={handleDocumentMouseDown}
   onkeydown={handleDocumentKeyDown}
 />
+
+<svelte:window onresize={closeMenu} />
 
 <aside class="session-drawer" aria-label={t('sessions.title', 'Sessions')}>
   <div class="session-drawer__header">
@@ -559,7 +626,7 @@
                 aria-label={t('sessions.actions', 'Session actions')}
                 aria-haspopup="menu"
                 aria-expanded={openMenuSessionId === session.id}
-                onclick={() => toggleMenu(session.id)}
+                onclick={(event) => toggleMenu(session.id, event.currentTarget)}
               >
                 <svg viewBox="0 0 16 16" aria-hidden="true">
                   <circle cx="3" cy="8" r="1.4" />
@@ -568,7 +635,15 @@
                 </svg>
               </button>
               {#if openMenuSessionId === session.id}
-                <div class="session-row__menu" role="menu">
+                <div
+                  bind:this={menuElement}
+                  use:portal
+                  class="session-row__menu"
+                  role="menu"
+                  data-placement={menuPlacement}
+                  data-positioning="fixed"
+                  style={menuStyle}
+                >
                   <button
                     type="button"
                     class="session-row__menu-item"
@@ -836,11 +911,12 @@
   }
 
   .session-row__menu {
-    position: absolute;
-    top: calc(100% + 3px);
-    right: 0;
-    z-index: 20;
+    position: fixed;
+    z-index: var(--z-floating);
+    width: max-content;
     min-width: 132px;
+    max-width: calc(100vw - 16px);
+    overflow-y: auto;
     padding: 4px;
     border: 1px solid var(--border);
     border-radius: var(--r-md);

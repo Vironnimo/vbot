@@ -231,6 +231,39 @@ describe('SessionListDrawer', () => {
     );
   });
 
+  it('portals the complete row menu outside the clipped session drawer', async () => {
+    mountedComponent = mount(SessionListDrawer, {
+      target: document.body,
+      props: {
+        agentId: 'alpha',
+        currentSessionId: 'session-1',
+      },
+    });
+    flushSync();
+    await waitForCondition(
+      () => document.querySelector('.session-row') !== null,
+    );
+
+    document.querySelector('.session-row__menu-trigger').click();
+    flushSync();
+    await waitForCondition(
+      () =>
+        document.querySelector('.session-row__menu')?.style.visibility !==
+        'hidden',
+    );
+
+    const drawer = document.querySelector('.session-drawer');
+    const menu = document.querySelector('.session-row__menu');
+    const labels = Array.from(
+      menu.querySelectorAll('.session-row__menu-item'),
+    ).map((item) => item.textContent.trim());
+
+    expect(menu.parentElement).toBe(document.body);
+    expect(drawer.contains(menu)).toBe(false);
+    expect(menu.dataset.positioning).toBe('fixed');
+    expect(labels).toEqual(['Rename', 'Compaction Policy', 'Delete']);
+  });
+
   it('cancels inline rename on Escape without calling the API', async () => {
     mountedComponent = mount(SessionListDrawer, {
       target: document.body,
