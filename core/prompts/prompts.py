@@ -376,16 +376,8 @@ class ChannelPromptMetadata(Protocol):
 class ChannelPromptRegistry(Protocol):
     """Channel registry methods needed for prompt-visible channel filtering."""
 
-    def has_active_channels(self) -> bool:
-        """Return whether any channel adapter is currently running."""
-        ...
-
     def list_channels(self) -> Sequence[ChannelPromptMetadata]:
         """Return all configured channels."""
-        ...
-
-    def _is_running(self, channel_id: str) -> bool:
-        """Return whether one configured channel adapter is currently running."""
         ...
 
 
@@ -1498,7 +1490,7 @@ class SystemPromptManager:
             )
 
         def channel_list(context: BlockRenderContext) -> str:
-            return _format_channel_list(self._agent_active_channels(context.agent))
+            return _format_channel_list(self._agent_enabled_channels(context.agent))
 
         def skill_list(context: BlockRenderContext) -> str:
             if skill_catalog is not None:
@@ -1545,7 +1537,7 @@ class SystemPromptManager:
         - ``identity`` → the Agent has an Identity/Memory Workspace.
         - ``memory`` → the memory tool is enabled for the agent.
         - ``tool:<name>`` → ``<name>`` is in the agent's effective allowed tools.
-        - ``channel`` → the agent has at least one active+enabled+running channel.
+        - ``channel`` → the agent has at least one enabled Channel config.
         - ``extension:<name>`` → the extension is in the loaded-extension set the
           runtime rebuilds and injects on every extension (re)load.
         """
@@ -1557,7 +1549,7 @@ class SystemPromptManager:
             mode = getattr(agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
             return memory_tool_enabled(mode)
         if owner == "channel":
-            return bool(self._agent_active_channels(agent))
+            return bool(self._agent_enabled_channels(agent))
         tool_prefix = "tool:"
         if owner.startswith(tool_prefix):
             tool_name = owner[len(tool_prefix) :]
@@ -1716,21 +1708,19 @@ class SystemPromptManager:
             return self._storage.read_agent_prompt_fragment(agent_id, fragment_name)
         return self._storage.read_prompt_fragment(fragment_name)
 
-    def _agent_active_channels(self, agent: PromptAgent) -> list[ChannelPromptMetadata]:
+    def _agent_enabled_channels(self, agent: PromptAgent) -> list[ChannelPromptMetadata]:
         channel_registry = self._channel_registry
-        if channel_registry is None or not channel_registry.has_active_channels():
+        if channel_registry is None:
             return []
 
-        active_channels: list[ChannelPromptMetadata] = []
+        enabled_channels: list[ChannelPromptMetadata] = []
         for channel in channel_registry.list_channels():
             if channel.agent_id != agent.id:
                 continue
             if not channel.enabled:
                 continue
-            if not channel_registry._is_running(channel.id):
-                continue
-            active_channels.append(channel)
-        return active_channels
+            enabled_channels.append(channel)
+        return enabled_channels
 
 
 def _normalize_prompt_scope(scope: Any = None) -> PromptScope:
@@ -1818,8 +1808,8 @@ def _format_tool_list(tool_definitions: list[dict[str, Any]]) -> str:
 
 def _format_channel_list(channels: list[ChannelPromptMetadata]) -> str:
     # No ``- None`` fallback anymore: the ``core:channels`` block is owner
-    # ``channel``, so with no active channels the whole block gates out (D5). This
-    # producer is only invoked when at least one channel is active.
+    # ``channel``, so with no enabled channels the whole block gates out (D5). This
+    # producer is only invoked when at least one channel is enabled.
     lines: list[str] = []
     for channel in channels:
         target_hint = (

@@ -87,11 +87,11 @@ def test_identity_agent_prompt_assembles_blocks_in_default_layout_order(
     assert "## Available Tools" not in prompt
     assert "- read_file: Read a workspace file" not in prompt
     assert "shell" not in prompt
-    # Channels block (only this agent's active channels).
+    # Channels block (only this agent's enabled Channel configs).
     assert "## Channels" in prompt
     assert "- tg-private: telegram (default target available)" in prompt
     assert "- tg-group: telegram (explicit target required)" in prompt
-    assert "You can send messages and files through these active channels:" in prompt
+    assert "You can send messages and files through these configured channels:" in prompt
     assert (
         "Use `channel_send` for proactive outbound messages and whenever you send a file "
         "through a channel."
@@ -186,7 +186,7 @@ def test_memory_block_includes_only_agent_memory(workspace: Path, tmp_path: Path
 
 
 def test_channel_less_agent_has_no_channels_block(workspace: Path, tmp_path: Path) -> None:
-    # Adapted from the old "renders - None" test: with no active channels the whole
+    # Adapted from the old "renders - None" test: with no enabled Channels the whole
     # block gates out (owner "channel"), it does not render "- None".
     manager = _manager(tmp_path, channels=StubChannels([]))
     agent = _agent(workspace, allowed_tools=["read_file"])
@@ -195,6 +195,30 @@ def test_channel_less_agent_has_no_channels_block(workspace: Path, tmp_path: Pat
 
     assert "## Channels" not in prompt
     assert "- None" not in prompt
+
+
+def test_disabled_channel_does_not_enable_channels_block(
+    workspace: Path,
+    tmp_path: Path,
+) -> None:
+    channels = StubChannels(
+        [
+            ChannelConfig(
+                id="tg-disabled",
+                platform="telegram",
+                agent_id="coder",
+                allowed_chat_ids=["8506476339"],
+                token_env_var="TELEGRAM_BOT_TOKEN",
+                enabled=False,
+            )
+        ]
+    )
+    manager = _manager(tmp_path, channels=channels)
+
+    prompt = manager.build_system_prompt(_agent(workspace))
+
+    assert "## Channels" not in prompt
+    assert "tg-disabled" not in prompt
 
 
 def test_channels_block_absent_without_channel_registry(workspace: Path, tmp_path: Path) -> None:

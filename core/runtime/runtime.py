@@ -1374,7 +1374,7 @@ class Runtime:
             raise RuntimeError("Attachment store not available")
 
         self._tools.unregister("channel_send")
-        if not self._channel_service.has_active_channels():
+        if not self._channel_service.has_enabled_channels():
             return
 
         try:
@@ -1431,7 +1431,7 @@ class Runtime:
             return registry.create(DEFAULT_RECALL_BACKEND, context)
 
     def reload_channel_tool(self) -> None:
-        """Re-register channel_send based on current active channel adapters."""
+        """Re-register channel_send based on persisted enabled Channel configs."""
         self._ensure_started()
         self._sync_channel_tool_registration()
 
