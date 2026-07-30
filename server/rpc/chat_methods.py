@@ -198,6 +198,15 @@ def _command_outcome_response(outcome: CommandOutcome) -> JsonObject:
     return response
 
 
+def _primary_command_run(outcome: CommandOutcome) -> Run | None:
+    primary_runs = [
+        command_run.run for command_run in outcome.runs if command_run.role == "primary"
+    ]
+    if len(primary_runs) > 1:
+        raise ValueError("A command outcome may expose at most one primary Run")
+    return primary_runs[0] if primary_runs else None
+
+
 async def _execute_chat_command(
     state: Any,
     agent_id: str,
@@ -205,7 +214,7 @@ async def _execute_chat_command(
     prepared: PreparedCommand,
     *,
     project_id: str | None = None,
-) -> JsonObject:
+) -> Run | JsonObject:
     dispatcher = _state_command_dispatcher(state)
     emitted_changes: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
 
@@ -232,6 +241,9 @@ async def _execute_chat_command(
 
     for change in outcome.resource_changes:
         on_change(change)
+    primary_run = _primary_command_run(outcome)
+    if primary_run is not None:
+        return primary_run
     return _command_outcome_response(outcome)
 
 

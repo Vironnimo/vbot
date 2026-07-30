@@ -745,12 +745,19 @@ class RecordingCompactionService:
     def __init__(self) -> None:
         self.calls = 0
 
+    @staticmethod
+    def estimate_messages_tokens(_messages: list[JsonObject]) -> int:
+        return 12_345
+
     async def compact(self, *args: Any, **kwargs: Any) -> ChatMessage:
         self.calls += 1
+        context_tokens_before = kwargs.get("context_tokens_before")
         return ChatMessage.compaction_checkpoint(
             summary="Compacted context",
             projection=[ChatMessage.user("tail")],
             compacted_token_count=1,
+            context_tokens_before=context_tokens_before,
+            context_tokens_after=1_234 if context_tokens_before is not None else None,
         )
 
 

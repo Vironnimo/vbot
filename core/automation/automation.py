@@ -588,3 +588,19 @@ class TriggerService:
         return await self._chat_loop.compact_session(
             agent_id, session_id, instruction, project_id=project_id
         )
+
+    async def start_compaction_run(
+        self,
+        agent_id: str,
+        session_id: str,
+        instruction: str | None = None,
+        *,
+        project_id: str | None = None,
+    ) -> Run:
+        """Start manual Compaction as the Session's observable active Run."""
+        return await self._chat_loop.start_compaction_run(
+            agent_id,
+            session_id,
+            instruction,
+            project_id=project_id,
+        )

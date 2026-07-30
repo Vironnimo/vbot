@@ -17,5 +17,9 @@ class ChatSessionError(ChatError):
     """Raised when a chat session operation cannot be completed."""
 
 
+class CompactionUnavailableError(ChatError):
+    """Raised when manual Compaction has no configured execution service."""
+
+
 class ToolIterationLimitError(ChatError):
     """Raised when a chat run exceeds its configured tool-iteration limit."""
