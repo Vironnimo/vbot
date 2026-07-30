@@ -164,22 +164,32 @@ def test_register_grep_tool_exposes_provider_schema() -> None:
 
     parameters = definition["parameters"]
     assert parameters["type"] == "object"
-    assert parameters["required"] == ["pattern"]
-    assert parameters["additionalProperties"] is False
-    assert set(parameters["properties"]) == {
+    branches = parameters["oneOf"]
+    assert len(branches) == 3
+    branches_by_mode = {
+        branch["properties"]["output_mode"]["enum"][0]: branch for branch in branches
+    }
+    assert set(branches_by_mode) == {"content", "files_with_matches", "count"}
+    expected_common = {
         "pattern",
         "path",
         "glob",
         "ignore_case",
         "literal",
         "multiline",
-        "context",
         "limit",
         "offset",
         "include_ignored",
         "output_mode",
     }
-    assert "description" not in parameters["properties"]
+    assert set(branches_by_mode["content"]["properties"]) == expected_common | {"context"}
+    assert set(branches_by_mode["files_with_matches"]["properties"]) == expected_common
+    assert set(branches_by_mode["count"]["properties"]) == expected_common
+    assert branches_by_mode["content"]["required"] == ["pattern"]
+    assert branches_by_mode["files_with_matches"]["required"] == ["pattern", "output_mode"]
+    assert branches_by_mode["count"]["required"] == ["pattern", "output_mode"]
+    assert all(branch["additionalProperties"] is False for branch in branches)
+    assert all("description" not in branch["properties"] for branch in branches)
 
 
 def test_grep_searches_relative_workspace_path(
@@ -321,6 +331,26 @@ def test_grep_output_modes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     count_data = assert_success_envelope(count_result)
     assert files_data["content"] == "one.txt\ntwo.txt"
     assert count_data["content"] == "one.txt:2\ntwo.txt:1"
+
+
+@pytest.mark.parametrize("output_mode", ["files_with_matches", "count"])
+def test_grep_rejects_context_outside_content_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    output_mode: str,
+) -> None:
+    force_python_fallback(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace.joinpath("one.txt").write_text("hit\n", encoding="utf-8")
+
+    result = grep_handler(
+        make_context(workspace),
+        {"pattern": "hit", "output_mode": output_mode, "context": 1},
+    )
+
+    error = assert_failure_envelope(result, "invalid_arguments")
+    assert error["message"] == "context is only valid when output_mode is content"
 
 
 def test_grep_literal_and_ignore_case(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import threading
 from bisect import bisect_right
+from copy import deepcopy
 from pathlib import Path
 from typing import NamedTuple
 
@@ -76,73 +77,115 @@ GREP_TOOL_DESCRIPTION = (
     "output_mode requests matching files or counts; paths are relative to the "
     "working directory (absolute when outside it). Page with offset."
 )
+_GREP_COMMON_PARAMETERS: JsonObject = {
+    "pattern": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Regex search pattern. Set literal=true for fixed-string matching.",
+    },
+    "path": {
+        "type": "string",
+        "description": "Directory or file to search in (default: working directory).",
+    },
+    "glob": {
+        "type": "string",
+        "description": "Optional search-root-relative file glob filter for candidate files.",
+    },
+    "ignore_case": {
+        "type": "boolean",
+        "description": "Case-insensitive search (default: false).",
+    },
+    "literal": {
+        "type": "boolean",
+        "description": "Treat pattern as fixed text instead of regex (default: false).",
+    },
+    "multiline": {
+        "type": "boolean",
+        "description": (
+            "Match across lines: '.' matches newlines and patterns can span lines (default: false)."
+        ),
+    },
+    "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "description": (
+            "Maximum results (default: 100). content limits matches; "
+            "files_with_matches/count limit returned file rows."
+        ),
+    },
+    "offset": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Skip the first N results before applying limit (default: 0).",
+    },
+    "include_ignored": {
+        "type": "boolean",
+        "description": (
+            "Also search .gitignore'd files (default: false). Hidden dotfiles are "
+            "always searched; .git internals never."
+        ),
+    },
+}
+_GREP_CONTEXT_PARAMETER: JsonObject = {
+    "type": "integer",
+    "minimum": 0,
+    "description": "Number of context lines before and after content matches (default: 0).",
+}
+
+
+def _grep_output_branch(
+    output_mode: str,
+    description: str,
+    *,
+    require_output_mode: bool,
+    include_context: bool,
+) -> JsonObject:
+    properties = deepcopy(_GREP_COMMON_PARAMETERS)
+    properties["output_mode"] = {
+        "type": "string",
+        "enum": [output_mode],
+        "description": description,
+    }
+    if include_context:
+        properties["context"] = deepcopy(_GREP_CONTEXT_PARAMETER)
+    required = ["pattern"]
+    if require_output_mode:
+        required.append("output_mode")
+    return {
+        "type": "object",
+        "description": description,
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+    }
+
+
 GREP_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
-    "properties": {
-        "pattern": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Regex search pattern. Set literal=true for fixed-string matching.",
-        },
-        "path": {
-            "type": "string",
-            "description": "Directory or file to search in (default: working directory).",
-        },
-        "glob": {
-            "type": "string",
-            "description": "Optional search-root-relative file glob filter for candidate files.",
-        },
-        "ignore_case": {
-            "type": "boolean",
-            "description": "Case-insensitive search (default: false).",
-        },
-        "literal": {
-            "type": "boolean",
-            "description": "Treat pattern as fixed text instead of regex (default: false).",
-        },
-        "multiline": {
-            "type": "boolean",
-            "description": (
-                "Match across lines: '.' matches newlines and patterns can span "
-                "lines (default: false)."
-            ),
-        },
-        "context": {
-            "type": "integer",
-            "minimum": 0,
-            "description": "Number of context lines before and after content matches (default: 0).",
-        },
-        "limit": {
-            "type": "integer",
-            "minimum": 1,
-            "description": (
-                "Maximum results (default: 100). content limits matches; "
-                "files_with_matches/count limit returned file rows."
-            ),
-        },
-        "offset": {
-            "type": "integer",
-            "minimum": 0,
-            "description": "Skip the first N results before applying limit (default: 0).",
-        },
-        "include_ignored": {
-            "type": "boolean",
-            "description": (
-                "Also search .gitignore'd files (default: false). Hidden dotfiles are "
-                "always searched; .git internals never."
-            ),
-        },
-        "output_mode": {
-            "type": "string",
-            "enum": ["content", "files_with_matches", "count"],
-            "description": (
-                "Output format: content returns path:line:text rows (default), "
-                "files_with_matches returns matching file paths, count returns path:count rows."
-            ),
-        },
-    },
-    "required": ["pattern"],
-    "additionalProperties": False,
+    "description": (
+        "Choose one output mode. Omit output_mode for content rows. Only content mode "
+        "accepts context lines."
+    ),
+    "oneOf": [
+        _grep_output_branch(
+            "content",
+            "Return path:line:text rows with optional surrounding context. This is the default.",
+            require_output_mode=False,
+            include_context=True,
+        ),
+        _grep_output_branch(
+            "files_with_matches",
+            "Return only paths of files containing at least one match.",
+            require_output_mode=True,
+            include_context=False,
+        ),
+        _grep_output_branch(
+            "count",
+            "Return one path:count row per matching file.",
+            require_output_mode=True,
+            include_context=False,
+        ),
+    ],
 }
 
 
@@ -617,6 +660,8 @@ def grep_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         output_mode = str(arguments.get("output_mode") or "content").strip() or "content"
         if output_mode not in SUPPORTED_OUTPUT_MODES:
             raise ValueError("output_mode must be one of: content, files_with_matches, count")
+        if output_mode != "content" and "context" in arguments:
+            raise ValueError("context is only valid when output_mode is content")
         glob_pattern = _normalize_glob_argument(arguments.get("glob"))
     except ValueError as error:
         return tool_failure("invalid_arguments", str(error))
