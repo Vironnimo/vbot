@@ -34,7 +34,9 @@ from core.compaction import (
 )
 from core.providers.adapter import TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.runs import (
+    COMPACTION_ABORTED_EVENT,
     COMPACTION_COMPLETED_EVENT,
+    COMPACTION_STARTED_EVENT,
     Run,
 )
 from core.tools import (
@@ -468,7 +470,11 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
         projection=session.load()[-2:],
         compacted_token_count=42,
     )
-    compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
+    compaction_service = StubCompactionService(
+        should_auto=True,
+        checkpoint=checkpoint,
+        context_tokens_after=30,
+    )
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
     messages = await loop._build_request_messages(agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
@@ -515,13 +521,29 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
     )
     assert rebuilt[2]["content"] == "Tail user"
     assert rebuilt[3]["content"] == "Tail assistant"
-    assert any(event.type == COMPACTION_COMPLETED_EVENT for event in run.events)
+    compaction_events = [
+        event
+        for event in run.events
+        if event.type in {COMPACTION_STARTED_EVENT, COMPACTION_COMPLETED_EVENT}
+    ]
+    assert [event.type for event in compaction_events] == [
+        COMPACTION_STARTED_EVENT,
+        COMPACTION_COMPLETED_EVENT,
+    ]
+    assert compaction_events[0].payload == {"context_tokens_before": 90}
     compaction_event = next(
         event for event in run.events if event.type == COMPACTION_COMPLETED_EVENT
     )
     assert compaction_event.payload["checkpoint"] == 1
     assert compaction_event.payload["checkpoint_id"] == checkpoint.id
     assert compaction_event.payload["history_available"] is True
+    assert compaction_event.payload["context_tokens_before"] == 90
+    assert compaction_event.payload["context_tokens_after"] == 30
+    assert session.load()[-1].usage == {
+        "compacted_token_count": 42,
+        "context_tokens_before": 90,
+        "context_tokens_after": 30,
+    }
 
 
 @pytest.mark.asyncio
@@ -1083,6 +1105,11 @@ async def test_compaction_maybe_auto_compact_logs_warning_when_compaction_fails(
         "Compaction failed; continuing without compaction" in record.message
         for record in caplog.records
     )
+    assert [event.type for event in run.events] == [
+        COMPACTION_STARTED_EVENT,
+        COMPACTION_ABORTED_EVENT,
+    ]
+    assert run.events[-1].payload == {"reason": "failed"}
 
 
 @pytest.mark.asyncio

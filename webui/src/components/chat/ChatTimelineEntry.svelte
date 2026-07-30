@@ -9,6 +9,7 @@
     fileMentionStatusLabel,
     avatarForItem,
     compactToolValue,
+    compactionSeparatorLabel,
     errorMessagePresentation,
     formatTime,
     hasAssistantContent,
@@ -350,7 +351,7 @@
   </article>
 {:else if item.type === 'compaction_separator'}
   <div class="date-sep compaction-sep">
-    {t('chat.compacted', 'Context compacted')}
+    {compactionSeparatorLabel(item)}
   </div>
 {:else if item.type === 'takeover_separator'}
   <div class="date-sep takeover-sep">

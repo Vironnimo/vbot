@@ -125,10 +125,20 @@ describe('ChatTimeline', () => {
       },
     });
     appendRunEvent(sessionState, {
-      type: 'compaction_completed',
+      type: 'compaction_started',
       run_id: 'run-compaction',
       sequence: 2,
       payload: {
+        context_tokens_before: 250_000,
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'compaction_completed',
+      run_id: 'run-compaction',
+      sequence: 3,
+      payload: {
+        context_tokens_before: 250_000,
+        context_tokens_after: 30_000,
         message: {
           id: 'checkpoint-live',
           role: 'compaction_checkpoint',
@@ -139,7 +149,7 @@ describe('ChatTimeline', () => {
     appendRunEvent(sessionState, {
       type: 'assistant_output',
       run_id: 'run-compaction',
-      sequence: 3,
+      sequence: 4,
       payload: {
         message: {
           id: 'assistant-after',
@@ -167,7 +177,10 @@ describe('ChatTimeline', () => {
       element.textContent.includes('After checkpoint'),
     );
 
-    expect(divider?.textContent.trim()).toBe('Context compacted');
+    expect(divider?.textContent.trim()).toBe(
+      'Context compacted · ~250,000 → ~30,000 tokens',
+    );
+    expect(divider?.classList.contains('compaction-sep--running')).toBe(false);
     expect(
       before.compareDocumentPosition(divider) &
         Node.DOCUMENT_POSITION_FOLLOWING,
@@ -175,6 +188,72 @@ describe('ChatTimeline', () => {
     expect(
       divider.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  it('renders the running Compaction state before a checkpoint exists', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-running-compaction',
+    );
+    appendRunEvent(sessionState, {
+      type: 'compaction_started',
+      run_id: 'run-compaction',
+      sequence: 1,
+      payload: {
+        context_tokens_before: 250_000,
+      },
+    });
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    const divider = document.querySelector('.run-compaction-sep');
+    expect(divider?.textContent.trim()).toBe(
+      'Compacting current conversation…',
+    );
+    expect(divider?.classList.contains('compaction-sep--running')).toBe(true);
+    expect(divider?.getAttribute('aria-busy')).toBe('true');
+  });
+
+  it('keeps persisted Compaction token counts after History reload', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-history-compaction',
+    );
+    loadHistory(sessionState, [
+      {
+        id: 'checkpoint-history',
+        role: 'compaction_checkpoint',
+        content: 'Summary',
+        timestamp: '2026-07-29T17:55:25Z',
+        usage: {
+          compacted_token_count: 220_000,
+          context_tokens_before: 250_000,
+          context_tokens_after: 30_000,
+        },
+      },
+    ]);
+
+    mountedComponent = mount(ChatTimeline, {
+      target: document.body,
+      props: {
+        sessionState,
+        agentName: 'Alpha',
+      },
+    });
+    flushSync();
+
+    expect(document.querySelector('.compaction-sep')?.textContent.trim()).toBe(
+      'Context compacted · ~250,000 → ~30,000 tokens',
+    );
   });
 
   it('groups multi-day history with Today for the current day', () => {

@@ -6,6 +6,7 @@
   import {
     avatarForItem,
     compactToolValue,
+    compactionSeparatorLabel,
     formatTime,
     isRowCancellable,
     isRunChildWorking,
@@ -502,8 +503,13 @@
           })}
         </Banner>
       {:else if child.type === 'compaction_separator'}
-        <div class="date-sep compaction-sep run-compaction-sep">
-          {t('chat.compacted', 'Context compacted')}
+        <div
+          class="date-sep compaction-sep run-compaction-sep"
+          class:compaction-sep--running={child.status === 'running'}
+          role="status"
+          aria-busy={child.status === 'running'}
+        >
+          {compactionSeparatorLabel(child)}
         </div>
       {/if}
     {/each}

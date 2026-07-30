@@ -59,6 +59,9 @@ export function assistantRunChildProgressKey(child) {
 
   const contentLength =
     typeof child.content === 'string' ? child.content.length : 0;
+  if (child.type === 'compaction_separator') {
+    return `${chunkCount}:${latestSequence ?? ''}:${child.status ?? ''}:${child.contextTokensBefore ?? ''}:${child.contextTokensAfter ?? ''}`;
+  }
   return `${chunkCount}:${latestSequence ?? ''}:${contentLength}`;
 }
 
@@ -834,16 +837,69 @@ function appendLiveRunEvent(assistantRun, event) {
     return;
   }
 
-  if (event.type === 'compaction_completed') {
-    const message = event.payload?.message;
+  if (event.type === 'compaction_started') {
     assistantRun.items.push({
-      id: `compaction-${message?.id ?? event.sequence ?? assistantRun.items.length}`,
+      id: `compaction-start-${assistantRun.id}-${event.sequence ?? assistantRun.items.length}`,
       type: 'compaction_separator',
+      status: CHAT_STATUS_RUNNING,
       sequence: event.sequence ?? assistantRun.items.length,
-      timestamp: message?.timestamp ?? event.timestamp,
-      message,
+      timestamp: event.timestamp,
+      contextTokensBefore: event.payload?.context_tokens_before,
+      contextTokensAfter: null,
+      message: null,
       events: [event],
     });
+    syncAssistantRunCollections(assistantRun);
+    return;
+  }
+
+  if (event.type === 'compaction_aborted') {
+    const runningIndex = assistantRun.items.findLastIndex(
+      (item) =>
+        item.type === 'compaction_separator' &&
+        item.status === CHAT_STATUS_RUNNING,
+    );
+    if (runningIndex >= 0) {
+      assistantRun.items.splice(runningIndex, 1);
+      syncAssistantRunCollections(assistantRun);
+    }
+    return;
+  }
+
+  if (event.type === 'compaction_completed') {
+    const message = event.payload?.message;
+    const runningItem = [...assistantRun.items]
+      .reverse()
+      .find(
+        (item) =>
+          item.type === 'compaction_separator' &&
+          item.status === CHAT_STATUS_RUNNING,
+      );
+    const completedItem = {
+      id:
+        runningItem?.id ??
+        `compaction-${message?.id ?? event.sequence ?? assistantRun.items.length}`,
+      type: 'compaction_separator',
+      status: CHAT_STATUS_COMPLETED,
+      sequence:
+        runningItem?.sequence ?? event.sequence ?? assistantRun.items.length,
+      timestamp: message?.timestamp ?? event.timestamp,
+      contextTokensBefore:
+        event.payload?.context_tokens_before ??
+        message?.usage?.context_tokens_before ??
+        null,
+      contextTokensAfter:
+        event.payload?.context_tokens_after ??
+        message?.usage?.context_tokens_after ??
+        null,
+      message,
+      events: [...(runningItem?.events ?? []), event],
+    };
+    if (runningItem) {
+      Object.assign(runningItem, completedItem);
+    } else {
+      assistantRun.items.push(completedItem);
+    }
     syncAssistantRunCollections(assistantRun);
     return;
   }
@@ -863,6 +919,11 @@ function appendLiveRunEvent(assistantRun, event) {
   }
 
   if (TERMINAL_RUN_EVENTS.has(event.type)) {
+    assistantRun.items = assistantRun.items.filter(
+      (item) =>
+        item.type !== 'compaction_separator' ||
+        item.status !== CHAT_STATUS_RUNNING,
+    );
     const timing = normalizedTiming(event.payload?.timing);
     assistantRun.endTimestamp = event.timestamp ?? assistantRun.endTimestamp;
     assistantRun.startTimestamp =
@@ -1456,6 +1517,8 @@ function isAssistantRunEvent(event) {
     'tool_call_result',
     'subagent_session_started',
     'subagent_status_changed',
+    'compaction_started',
+    'compaction_aborted',
     'compaction_completed',
     RUN_EVENT_ASSISTANT_OUTPUT_DELTA,
     'assistant_output',

@@ -316,11 +316,22 @@ describe('live compaction timeline projection', () => {
       },
     });
     appendRunEvent(sessionState, {
-      type: 'compaction_completed',
+      type: 'compaction_started',
       run_id: 'run-compaction',
       sequence: 4,
+      timestamp: '2026-07-29T17:55:20Z',
+      payload: {
+        context_tokens_before: 250_000,
+      },
+    });
+    appendRunEvent(sessionState, {
+      type: 'compaction_completed',
+      run_id: 'run-compaction',
+      sequence: 5,
       timestamp: '2026-07-29T17:55:25Z',
       payload: {
+        context_tokens_before: 250_000,
+        context_tokens_after: 30_000,
         message: {
           id: 'checkpoint-1',
           role: 'compaction_checkpoint',
@@ -331,7 +342,7 @@ describe('live compaction timeline projection', () => {
     appendRunEvent(sessionState, {
       type: 'tool_call_started',
       run_id: 'run-compaction',
-      sequence: 5,
+      sequence: 6,
       payload: {
         tool_call: { id: 'call-edit', index: 0, name: 'edit', arguments: {} },
       },
@@ -349,11 +360,55 @@ describe('live compaction timeline projection', () => {
       'tool_call',
     ]);
     expect(liveRun.items[1].message.id).toBe('checkpoint-1');
+    expect(liveRun.items[1].status).toBe(CHAT_STATUS_COMPLETED);
+    expect(liveRun.items[1].contextTokensBefore).toBe(250_000);
+    expect(liveRun.items[1].contextTokensAfter).toBe(30_000);
+    expect(liveRun.items[1].events.map((event) => event.type)).toEqual([
+      'compaction_started',
+      'compaction_completed',
+    ]);
     expect(
       sessionState.messages.some(
         (message) => message.role === 'compaction_checkpoint',
       ),
     ).toBe(false);
+  });
+
+  it('shows an in-progress checkpoint immediately and removes it when the attempt aborts', () => {
+    const sessionState = ensureSessionState(
+      createChatState(),
+      'alpha',
+      'session-compaction-progress',
+    );
+    appendRunEvent(sessionState, {
+      type: 'compaction_started',
+      run_id: 'run-progress',
+      sequence: 1,
+      payload: { context_tokens_before: 250_000 },
+    });
+
+    const running = visibleTimelineItemsForRender(sessionState).find(
+      (item) => item.type === 'assistant_run',
+    );
+    expect(running.items).toMatchObject([
+      {
+        type: 'compaction_separator',
+        status: CHAT_STATUS_RUNNING,
+        contextTokensBefore: 250_000,
+      },
+    ]);
+
+    appendRunEvent(sessionState, {
+      type: 'compaction_aborted',
+      run_id: 'run-progress',
+      sequence: 2,
+      payload: { reason: 'failed' },
+    });
+
+    const aborted = visibleTimelineItemsForRender(sessionState).find(
+      (item) => item.type === 'assistant_run',
+    );
+    expect(aborted.items).toEqual([]);
   });
 });
 
