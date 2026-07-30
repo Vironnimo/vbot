@@ -307,5 +307,5 @@ async def test_observed_message_waits_behind_active_channel_run(
         for message in chat_sessions.get("assistant", SESSION_ID).load()
         if message.role == "note"
     ]
-    assert notes_after_release[-1] == "[channel-message] Alice (50): side conversation"
+    assert notes_after_release[-1] == "[channel-message] [Alice|50|member]: side conversation"
     await engine.stop()

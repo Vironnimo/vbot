@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from .engine_test_support import (
+    CHANNEL_GROUP_REPLY_SURFACE,
     CHANNEL_REPLY_SURFACE,
     SESSION_ID,
     AsyncMock,
+    MemoryChannelAccessRegistry,
     MessageSender,
     Path,
+    assert_member_trigger,
     command_outcome,
     drain,
     make_command_dispatcher,
@@ -15,6 +18,11 @@ from .engine_test_support import (
     make_conversation,
     make_engine,
     pytest,
+)
+
+MEMBER_TOOL_DENIAL = (
+    "Tool access denied: the current sender is a group member. "
+    "Group members may use only web_search and web_fetch."
 )
 
 
@@ -31,12 +39,140 @@ async def test_group_message_triggers_run_with_sender(tmp_path: Path) -> None:
     )
     await drain(engine, 12345)
 
-    trigger_mock.assert_awaited_once_with(
+    assert_member_trigger(
+        trigger_mock,
         "assistant",
         "hello",
         SESSION_ID,
         sender=MessageSender(id="50", display_name="Alice"),
-        reply_surface=CHANNEL_REPLY_SURFACE,
+    )
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_member_tool_access_is_limited_with_exact_live_denial(tmp_path: Path) -> None:
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
+    access = MemoryChannelAccessRegistry()
+    engine, _sessions, _trigger, _transport = make_engine(
+        tmp_path,
+        trigger_run=trigger_mock,
+        response_mode="all",
+        access_registry=access,
+    )
+
+    await engine.handle_inbound_text(
+        make_conversation(kind="group", user_display_name="Alice"),
+        "hello",
+    )
+    await drain(engine, 12345)
+
+    resolver = assert_member_trigger(
+        trigger_mock,
+        "assistant",
+        "hello",
+        SESSION_ID,
+        sender=MessageSender(id="50", display_name="Alice", role="member"),
+    )
+    assert resolver("web_search") is None
+    assert resolver("web_fetch") is None
+    assert resolver("bash") == MEMBER_TOOL_DENIAL
+    assert "Do not retry" not in MEMBER_TOOL_DENIAL
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_grant_after_member_ingress_does_not_upgrade_admitted_run(
+    tmp_path: Path,
+) -> None:
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
+    access = MemoryChannelAccessRegistry()
+    engine, _sessions, _trigger, _transport = make_engine(
+        tmp_path,
+        trigger_run=trigger_mock,
+        response_mode="all",
+        access_registry=access,
+    )
+
+    await engine.handle_inbound_text(make_conversation(kind="group"), "hello")
+    await drain(engine, 12345)
+    resolver = assert_member_trigger(
+        trigger_mock,
+        "assistant",
+        "hello",
+        SESSION_ID,
+        sender=MessageSender(id="50", display_name="50", role="member"),
+    )
+
+    access.admin_user_ids.add("50")
+
+    assert resolver("bash") == MEMBER_TOOL_DENIAL
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_revoke_before_next_tool_call_limits_active_admin_run(
+    tmp_path: Path,
+) -> None:
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
+    access = MemoryChannelAccessRegistry(["50"])
+    engine, _sessions, _trigger, _transport = make_engine(
+        tmp_path,
+        trigger_run=trigger_mock,
+        response_mode="all",
+        access_registry=access,
+    )
+
+    await engine.handle_inbound_text(
+        make_conversation(kind="group", user_display_name="Alice"),
+        "hello",
+    )
+    await drain(engine, 12345)
+
+    awaited = trigger_mock.await_args
+    assert awaited is not None
+    assert awaited.args == ("assistant", "hello", SESSION_ID)
+    kwargs = dict(awaited.kwargs)
+    assert kwargs.pop("sender") == MessageSender(id="50", display_name="Alice", role="admin")
+    assert kwargs.pop("reply_surface") == CHANNEL_GROUP_REPLY_SURFACE
+    assert "tool_restriction" not in kwargs
+    resolver = kwargs.pop("tool_denial_resolver")
+    assert kwargs == {}
+    assert resolver("bash") is None
+
+    access.admin_user_ids.remove("50")
+
+    assert resolver("bash") == MEMBER_TOOL_DENIAL
+    assert resolver("web_search") is None
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_group_role_is_derived_from_sender_id_not_display_name(tmp_path: Path) -> None:
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
+    access = MemoryChannelAccessRegistry(["50"])
+    engine, _sessions, _trigger, _transport = make_engine(
+        tmp_path,
+        trigger_run=trigger_mock,
+        response_mode="all",
+        access_registry=access,
+    )
+
+    await engine.handle_inbound_text(
+        make_conversation(kind="group", user_id=50, user_display_name="Same Name"),
+        "admin message",
+    )
+    await drain(engine, 12345)
+    await engine.handle_inbound_text(
+        make_conversation(kind="group", user_id=51, user_display_name="Same Name"),
+        "member message",
+    )
+    await drain(engine, 12345)
+
+    assert trigger_mock.await_args_list[0].kwargs["sender"] == MessageSender(
+        id="50", display_name="Same Name", role="admin"
+    )
+    assert trigger_mock.await_args_list[1].kwargs["sender"] == MessageSender(
+        id="51", display_name="Same Name", role="member"
     )
     await engine.stop()
 
@@ -72,12 +208,12 @@ async def test_group_sender_display_name_falls_back_to_user_id(tmp_path: Path) -
     await engine.handle_inbound_text(make_conversation(kind="group"), "hello")
     await drain(engine, 12345)
 
-    trigger_mock.assert_awaited_once_with(
+    assert_member_trigger(
+        trigger_mock,
         "assistant",
         "hello",
         SESSION_ID,
         sender=MessageSender(id="50", display_name="50"),
-        reply_surface=CHANNEL_REPLY_SURFACE,
     )
     await engine.stop()
 
@@ -162,7 +298,7 @@ async def test_group_unaddressed_text_is_observed_as_note(tmp_path: Path) -> Non
         for message in chat_sessions.get("assistant", SESSION_ID).load()
         if message.role == "note"
     ]
-    assert notes == ["[channel-message] Alice (50): hello\nworld"]
+    assert notes == ["[channel-message] [Alice|50|member]: hello\nworld"]
     trigger_mock.assert_not_awaited()
     command_dispatcher.execute.assert_not_awaited()
     assert transport.sent == []
@@ -278,10 +414,10 @@ async def test_direct_message_always_triggers_in_mention_mode(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_group_command_from_owner_is_dispatched(tmp_path: Path) -> None:
+async def test_group_command_from_admin_is_dispatched(tmp_path: Path) -> None:
     command_dispatcher = make_command_dispatcher(result=command_outcome("stop", "Run cancelled."))
     engine, _sessions, trigger_mock, transport = make_engine(
-        tmp_path, command_dispatcher=command_dispatcher, owner_user_ids=["50"]
+        tmp_path, command_dispatcher=command_dispatcher, admin_user_ids=["50"]
     )
 
     await engine.handle_inbound_text(make_conversation(kind="group"), "/stop")
@@ -294,12 +430,12 @@ async def test_group_command_from_owner_is_dispatched(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_group_command_from_non_owner_is_denied_without_dispatch(tmp_path: Path) -> None:
+async def test_group_command_from_member_is_denied_without_dispatch(tmp_path: Path) -> None:
     command_dispatcher = make_command_dispatcher(result=command_outcome("stop", "Run cancelled."))
     engine, chat_sessions, trigger_mock, transport = make_engine(
         tmp_path,
         command_dispatcher=command_dispatcher,
-        owner_user_ids=["99"],
+        admin_user_ids=["99"],
         observe_unaddressed=True,
     )
 
@@ -314,12 +450,12 @@ async def test_group_command_from_non_owner_is_denied_without_dispatch(tmp_path:
 
 
 @pytest.mark.asyncio
-async def test_group_mention_from_non_owner_starts_a_normal_run(tmp_path: Path) -> None:
+async def test_group_mention_from_member_starts_a_normal_run(tmp_path: Path) -> None:
     trigger_mock = AsyncMock(return_value=make_completed_run(output_text="research complete"))
     engine, _sessions, _trigger, transport = make_engine(
         tmp_path,
         trigger_run=trigger_mock,
-        owner_user_ids=["99"],
+        admin_user_ids=["99"],
     )
 
     await engine.handle_inbound_text(
@@ -334,7 +470,7 @@ async def test_group_mention_from_non_owner_starts_a_normal_run(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
-async def test_group_command_denied_for_everyone_when_owner_list_is_empty(
+async def test_group_command_denied_when_sender_is_not_admin(
     tmp_path: Path,
 ) -> None:
     command_dispatcher = make_command_dispatcher(result=command_outcome("stop", "Run cancelled."))
@@ -366,7 +502,7 @@ async def test_group_command_auth_applies_in_all_response_mode(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
-async def test_dm_command_is_authorized_without_owner_list(tmp_path: Path) -> None:
+async def test_dm_command_is_authorized_without_group_admin(tmp_path: Path) -> None:
     command_dispatcher = make_command_dispatcher(result=command_outcome("stop", "Run cancelled."))
     engine, _sessions, _trigger, transport = make_engine(
         tmp_path, command_dispatcher=command_dispatcher

@@ -110,6 +110,95 @@ async def test_channel_list_happy_path_returns_serialized_channels() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "params", "service_method", "service_args"),
+    [
+        (
+            "channel.access.get",
+            {"id": "tg-assistant"},
+            "channel_access",
+            ("tg-assistant",),
+        ),
+        (
+            "channel.identity.set",
+            {"id": "tg-assistant", "user_id": "50"},
+            "set_channel_self_user_id",
+            ("tg-assistant", "50"),
+        ),
+        (
+            "channel.admin.grant",
+            {"id": "tg-assistant", "access_scope_id": "-100", "user_id": "51"},
+            "grant_channel_group_admin",
+            ("tg-assistant", "-100", "51"),
+        ),
+        (
+            "channel.admin.revoke",
+            {"id": "tg-assistant", "access_scope_id": "-100", "user_id": "51"},
+            "revoke_channel_group_admin",
+            ("tg-assistant", "-100", "51"),
+        ),
+    ],
+)
+async def test_channel_access_methods_return_saved_state_without_runtime_reload(
+    method: str,
+    params: dict[str, str],
+    service_method: str,
+    service_args: tuple[str, ...],
+) -> None:
+    saved = {
+        "channel_id": "tg-assistant",
+        "self_user_id": "50",
+        "groups": [
+            {
+                "access_scope_id": "-100",
+                "admin_user_ids": ["50", "51"],
+                "participants": [],
+            }
+        ],
+    }
+    channel_service = Mock()
+    getattr(channel_service, service_method).return_value = saved
+    state = _state(channel_service=channel_service)
+
+    response = await dispatch_rpc(state, {"method": method, "params": params})
+
+    assert response == {"ok": True, "result": saved}
+    getattr(channel_service, service_method).assert_called_once_with(*service_args)
+    state.runtime.reload_channel_tool.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "params"),
+    [
+        (
+            "channel.create",
+            {
+                "id": "tg-assistant",
+                "platform": "telegram",
+                "agent_id": "assistant",
+                "token_env_var": "TELEGRAM_BOT_TOKEN_TG_ASSISTANT",
+                "owner_user_ids": ["50"],
+            },
+        ),
+        (
+            "channel.update",
+            {"id": "tg-assistant", "owner_user_ids": ["50"]},
+        ),
+    ],
+)
+async def test_channel_rpc_rejects_legacy_owner_field(
+    method: str,
+    params: dict[str, object],
+) -> None:
+    response = await dispatch_rpc(_state(), {"method": method, "params": params})
+
+    assert response["ok"] is False
+    assert response["error"]["code"] == "invalid_request"
+    assert "owner_user_ids" in response["error"]["message"]
+
+
+@pytest.mark.asyncio
 async def test_channel_create_happy_path_calls_service_and_reload() -> None:
     channel_service = Mock()
     state = _state(channel_service=channel_service)

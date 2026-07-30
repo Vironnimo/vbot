@@ -56,7 +56,6 @@ async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
         "enabled",
         "response_mode",
         "mention_patterns",
-        "owner_user_ids",
         "observe_unaddressed",
     }
     _reject_unsupported(params, supported_fields, "channel.create")
@@ -73,7 +72,6 @@ async def _create_channel(state: Any, params: JsonObject) -> JsonObject:
         enabled=_optional_bool(params, "enabled", default=True),
         response_mode=_optional_channel_response_mode(params, "response_mode"),
         mention_patterns=_optional_string_list(params, "mention_patterns", default=[]),
-        owner_user_ids=_optional_user_id_list(params, "owner_user_ids", default=[]),
         observe_unaddressed=_optional_bool(params, "observe_unaddressed", default=False),
     )
 
@@ -123,7 +121,6 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
         "enabled",
         "response_mode",
         "mention_patterns",
-        "owner_user_ids",
         "observe_unaddressed",
     }
     _reject_unsupported(params, supported_fields, "channel.update")
@@ -146,8 +143,6 @@ async def _update_channel(state: Any, params: JsonObject) -> JsonObject:
         updates["response_mode"] = _optional_channel_response_mode(params, "response_mode")
     if "mention_patterns" in params:
         updates["mention_patterns"] = _required_string_list(params, "mention_patterns")
-    if "owner_user_ids" in params:
-        updates["owner_user_ids"] = _required_user_id_list(params, "owner_user_ids")
     if "observe_unaddressed" in params:
         updates["observe_unaddressed"] = _required_bool(params, "observe_unaddressed")
 
@@ -336,6 +331,82 @@ def _channel_status(state: Any, params: JsonObject) -> JsonObject:
     }
 
 
+def _channel_access_get(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"id"}, "channel.access.get")
+    channel_id = _required_string(params, "id")
+    try:
+        return cast(JsonObject, state.runtime.channel_service.channel_access(channel_id))
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+
+
+def _channel_identity_set(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, {"id", "user_id"}, "channel.identity.set")
+    channel_id = _required_string(params, "id")
+    user_id = _required_string(params, "user_id")
+    try:
+        result = state.runtime.channel_service.set_channel_self_user_id(channel_id, user_id)
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
+    _LOGGER.info("Channel own identity set (channel=%s user=%s)", channel_id, user_id)
+    return cast(JsonObject, result)
+
+
+def _channel_admin_grant(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(
+        params,
+        {"id", "access_scope_id", "user_id"},
+        "channel.admin.grant",
+    )
+    channel_id = _required_string(params, "id")
+    access_scope_id = _required_string(params, "access_scope_id")
+    user_id = _required_string(params, "user_id")
+    try:
+        result = state.runtime.channel_service.grant_channel_group_admin(
+            channel_id,
+            access_scope_id,
+            user_id,
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
+    _LOGGER.info(
+        "Channel group admin granted (channel=%s scope=%s user=%s)",
+        channel_id,
+        access_scope_id,
+        user_id,
+    )
+    return cast(JsonObject, result)
+
+
+def _channel_admin_revoke(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(
+        params,
+        {"id", "access_scope_id", "user_id"},
+        "channel.admin.revoke",
+    )
+    channel_id = _required_string(params, "id")
+    access_scope_id = _required_string(params, "access_scope_id")
+    user_id = _required_string(params, "user_id")
+    try:
+        result = state.runtime.channel_service.revoke_channel_group_admin(
+            channel_id,
+            access_scope_id,
+            user_id,
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    publish_resource_changed(state, RESOURCE_KIND_CHANNELS)
+    _LOGGER.info(
+        "Channel group admin revoked (channel=%s scope=%s user=%s)",
+        channel_id,
+        access_scope_id,
+        user_id,
+    )
+    return cast(JsonObject, result)
+
+
 def _channel_token_input(params: JsonObject, channel_id: str) -> tuple[str, str | None]:
     has_env_var = "token_env_var" in params
     has_managed_token = "token" in params
@@ -437,31 +508,6 @@ def _optional_channel_response_mode(params: JsonObject, key: str) -> str:
     return response_mode
 
 
-def _required_user_id_list(params: JsonObject, key: str) -> list[str]:
-    value = params.get(key)
-    if not isinstance(value, list):
-        raise RpcError(
-            RPC_ERROR_INVALID_REQUEST,
-            f"params.{key} must be a list of platform user ids",
-        )
-
-    parsed: list[str] = []
-    for item in value:
-        if isinstance(item, bool) or not isinstance(item, (int, str)):
-            raise RpcError(
-                RPC_ERROR_INVALID_REQUEST,
-                f"params.{key} must contain strings or integers only",
-            )
-        normalized = str(item).strip()
-        if not normalized:
-            raise RpcError(
-                RPC_ERROR_INVALID_REQUEST,
-                f"params.{key} must not contain empty values",
-            )
-        parsed.append(normalized)
-    return parsed
-
-
 def _required_platform_id_list(params: JsonObject, key: str) -> list[str]:
     value = params.get(key)
     if not isinstance(value, list):
@@ -498,12 +544,6 @@ def _optional_platform_id_list(
     return _required_platform_id_list(params, key)
 
 
-def _optional_user_id_list(params: JsonObject, key: str, *, default: list[str]) -> list[str]:
-    if key not in params:
-        return list(default)
-    return _required_user_id_list(params, key)
-
-
 def _channel_config_by_id(channel_service: Any, channel_id: str) -> ChannelConfig:
     for config in channel_service.list_channels():
         if config.id == channel_id:
@@ -523,4 +563,8 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "channel.disable": _disable_channel,
         "channel.set_token": _set_channel_token,
         "channel.status": _channel_status,
+        "channel.access.get": _channel_access_get,
+        "channel.identity.set": _channel_identity_set,
+        "channel.admin.grant": _channel_admin_grant,
+        "channel.admin.revoke": _channel_admin_revoke,
     }

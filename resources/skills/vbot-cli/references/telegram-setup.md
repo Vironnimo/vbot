@@ -76,11 +76,27 @@ Disable privacy mode when the bot must see plain group messages — required for
 1. Send `/setprivacy` to BotFather, select the bot, choose `Disable`.
 2. Remove the bot from the group and re-add it (Telegram applies the change only on re-join).
 
-Group gating fields (`response_mode`, `mention_patterns`, `owner_user_ids`, `observe_unaddressed`) are not exposed as CLI flags; configure them through the WebUI channel editor or the `channel.update` RPC.
+Group gating is available through `channel add`/`channel update`: `--response-mode mention|all`, list-replacing `--mention-pattern`, and `--observe-unaddressed true|false`.
+
+After each relevant person has sent at least one message in the allowed group, establish the Channel account's own identity and inspect the saved roles:
+
+```bash
+vbot channel identity tg-main --user <your-telegram-user-id>
+vbot channel access tg-main --group <telegram-group-id>
+```
+
+The own identity is an admin in every group and cannot be demoted. Add or remove other admins without replacing the group list:
+
+```bash
+vbot channel grant-admin tg-main --group <telegram-group-id> --user <user-id>
+vbot channel revoke-admin tg-main --group <telegram-group-id> --user <user-id>
+```
+
+Admins retain the Agent's existing Tool access. Members may authorize only `web_search` and `web_fetch`; group Commands and reserved Run buttons require admin.
 
 ## Troubleshooting
 
 - **Bot does not react at all in a direct chat** → chat not on the allowlist. Check `vbot channel status` for the denied entry and allow it.
 - **Channel `failed=yes`** → read the `failure_reason`; use `channel set-token <id> --stdin` when the token is missing, invalid, or revoked, then check `channel status` again.
 - **Bot ignores its visible name or other plain group messages** → privacy mode is still on (step 5), or the text did not match a configured wake word. @username and replies remain available with privacy mode on.
-- **Group commands ignored** → group slash commands require the sender to be in `owner_user_ids`; an empty list means nobody may use them.
+- **Group commands ignored** → group slash commands require the sender's `admin` role. Confirm own identity and group roles with `channel identity` and `channel access`, then use additive `grant-admin` if needed.

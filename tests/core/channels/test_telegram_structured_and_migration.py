@@ -231,7 +231,7 @@ async def test_group_start_command_keeps_normal_command_path(
         trigger_run=trigger_mock,
     )
 
-    # No owner_user_ids: a group /start is an unauthorized group command and is dropped.
+    # The sender is a member, so a group /start is unauthorized and dropped.
     await adapter._handle_inbound_message(
         make_group_update(text="/start"),
         SimpleNamespace(),

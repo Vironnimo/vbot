@@ -24,11 +24,15 @@ from cli.autostart_management import (
     enable_autostart,
 )
 from cli.channel_management import (
+    channel_access,
     channel_add,
     channel_disable,
     channel_enable,
+    channel_grant_admin,
+    channel_identity,
     channel_list,
     channel_remove,
+    channel_revoke_admin,
     channel_set_token,
     channel_status,
     channel_update,
@@ -218,7 +222,6 @@ def run(
             Sequence[str],
             str,
             Sequence[str],
-            Sequence[str],
             bool,
             str | None,
         ],
@@ -231,6 +234,16 @@ def run(
     disable_channel: Callable[[ServerInstance, str], CommandResult] = channel_disable,
     channel_status_fn: Callable[[ServerInstance, str], CommandResult] = channel_status,
     set_channel_token: Callable[[ServerInstance, str, str], CommandResult] = channel_set_token,
+    channel_identity_fn: Callable[
+        [ServerInstance, str, str | None], CommandResult
+    ] = channel_identity,
+    channel_access_fn: Callable[[ServerInstance, str, str], CommandResult] = channel_access,
+    grant_channel_admin_fn: Callable[
+        [ServerInstance, str, str, str], CommandResult
+    ] = channel_grant_admin,
+    revoke_channel_admin_fn: Callable[
+        [ServerInstance, str, str, str], CommandResult
+    ] = channel_revoke_admin,
     list_tools_fn: Callable[[ServerInstance], CommandResult] = tool_list,
     list_prompts_fn: Callable[[ServerInstance, str], CommandResult] = prompt_list,
     update_prompt_fn: Callable[[ServerInstance, str, str, str], CommandResult] = prompt_update,
@@ -379,6 +392,10 @@ def run(
             disable_channel=disable_channel,
             channel_status_fn=channel_status_fn,
             set_channel_token=set_channel_token,
+            channel_identity_fn=channel_identity_fn,
+            channel_access_fn=channel_access_fn,
+            grant_channel_admin_fn=grant_channel_admin_fn,
+            revoke_channel_admin_fn=revoke_channel_admin_fn,
         )
         print_channel_command_result(args.command, result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
@@ -830,7 +847,6 @@ def dispatch_channel_command(
             Sequence[str],
             str,
             Sequence[str],
-            Sequence[str],
             bool,
             str | None,
         ],
@@ -843,6 +859,10 @@ def dispatch_channel_command(
     disable_channel: Callable[[ServerInstance, str], CommandResult],
     channel_status_fn: Callable[[ServerInstance, str], CommandResult],
     set_channel_token: Callable[[ServerInstance, str, str], CommandResult],
+    channel_identity_fn: Callable[[ServerInstance, str, str | None], CommandResult],
+    channel_access_fn: Callable[[ServerInstance, str, str], CommandResult],
+    grant_channel_admin_fn: Callable[[ServerInstance, str, str, str], CommandResult],
+    revoke_channel_admin_fn: Callable[[ServerInstance, str, str, str], CommandResult],
 ) -> CommandResult:
     """Dispatch one parsed channel command against the server RPC client."""
 
@@ -867,7 +887,6 @@ def dispatch_channel_command(
             args.allow,
             args.response_mode,
             args.mention_patterns,
-            args.owner_user_ids,
             args.observe_unaddressed == "true",
             token,
         )
@@ -893,6 +912,24 @@ def dispatch_channel_command(
                 instance=instance,
             )
         return set_channel_token(instance, args.id, token)
+    if args.command == "identity":
+        return channel_identity_fn(instance, args.id, args.user)
+    if args.command == "access":
+        return channel_access_fn(instance, args.id, args.access_scope_id)
+    if args.command == "grant-admin":
+        return grant_channel_admin_fn(
+            instance,
+            args.id,
+            args.access_scope_id,
+            args.user_id,
+        )
+    if args.command == "revoke-admin":
+        return revoke_channel_admin_fn(
+            instance,
+            args.id,
+            args.access_scope_id,
+            args.user_id,
+        )
     raise ValueError(f"Unsupported channel command: {args.command}")
 
 
@@ -914,8 +951,6 @@ def _channel_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         changes["response_mode"] = args.response_mode
     if args.mention_patterns is not None:
         changes["mention_patterns"] = list(args.mention_patterns)
-    if args.owner_user_ids is not None:
-        changes["owner_user_ids"] = list(args.owner_user_ids)
     if args.observe_unaddressed is not None:
         changes["observe_unaddressed"] = args.observe_unaddressed == "true"
     return changes

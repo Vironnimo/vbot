@@ -15,9 +15,13 @@
     deleteChannel as deleteChannelRequest,
     disableChannel,
     enableChannel,
+    getChannelAccess,
     getChannelStatus,
+    grantChannelAdmin,
     listAgents,
     listChannels,
+    revokeChannelAdmin,
+    setChannelIdentity,
     updateChannel,
   } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
@@ -204,7 +208,14 @@
       const statusResults = await Promise.all(
         nextState.channels.map(async (channel) => {
           try {
-            return await getChannelStatus(channel.id);
+            const status = await getChannelStatus(channel.id);
+            let access = null;
+            try {
+              access = await getChannelAccess(channel.id);
+            } catch {
+              // Channel status remains useful when access state cannot be loaded.
+            }
+            return { ...status, access };
           } catch {
             return {
               id: channel.id,
@@ -311,6 +322,41 @@
       });
       onToast({
         title: t('settings.channels.denied.allowSuccess', 'Chat allowed.'),
+        variant: 'success',
+      });
+    });
+  }
+
+  async function setOwnIdentity(channel, participant) {
+    await runChannelAction(channel.id, async () => {
+      await setChannelIdentity(channel.id, participant.user_id);
+      onToast({
+        title: t(
+          'settings.channels.access.identitySuccess',
+          'Own identity updated.',
+        ),
+        variant: 'success',
+      });
+    });
+  }
+
+  async function toggleParticipantRole(channel, group, participant) {
+    await runChannelAction(channel.id, async () => {
+      if (participant.role === 'admin') {
+        await revokeChannelAdmin(
+          channel.id,
+          group.access_scope_id,
+          participant.user_id,
+        );
+      } else {
+        await grantChannelAdmin(
+          channel.id,
+          group.access_scope_id,
+          participant.user_id,
+        );
+      }
+      onToast({
+        title: t('settings.channels.access.roleSuccess', 'Group role updated.'),
         variant: 'success',
       });
     });
@@ -639,6 +685,113 @@
               </Button>
             </div>
           </div>
+        </div>
+
+        <div class="s-channel-access">
+          <div class="s-channel-access-heading">
+            <div class="s-channel-denied-title">
+              {t('settings.channels.access.title', 'Group access')}
+            </div>
+            <div class="s-row-desc">
+              {t('settings.channels.access.identity', 'Own identity')}:
+              {channel.access?.self_user_id ??
+                t('settings.channels.access.identityUnset', 'Not set')}
+            </div>
+          </div>
+
+          {#if !channel.access?.groups?.length}
+            <div class="s-row-desc">
+              {t(
+                'settings.channels.access.empty',
+                'No group participants have been seen yet.',
+              )}
+            </div>
+          {:else}
+            {#each channel.access.groups as group (group.access_scope_id)}
+              <div class="s-channel-access-group">
+                <div class="s-channel-access-group-title">
+                  {t('settings.channels.access.group', 'Group')} · ID {group.access_scope_id}
+                </div>
+
+                {#if group.participants.length === 0}
+                  <div class="s-row-desc">
+                    {t(
+                      'settings.channels.access.noParticipants',
+                      'No seen participants.',
+                    )}
+                  </div>
+                {:else}
+                  {#each group.participants as participant (participant.user_id)}
+                    {@const isOwnIdentity =
+                      participant.user_id === channel.access.self_user_id}
+                    <div class="s-channel-access-row">
+                      <div class="s-channel-access-participant">
+                        <span class="s-channel-access-name">
+                          {participant.display_name}
+                        </span>
+                        <span class="s-row-desc">ID {participant.user_id}</span>
+                      </div>
+                      <StatusChip
+                        variant={participant.role === 'admin'
+                          ? 'success'
+                          : 'info'}
+                      >
+                        {participant.role === 'admin'
+                          ? t('settings.channels.access.admin', 'Admin')
+                          : t('settings.channels.access.member', 'Member')}
+                      </StatusChip>
+                      <div class="s-row-actions s-row-actions--channel-access">
+                        <Button
+                          variant="secondary"
+                          disabled={rowBusy || isOwnIdentity}
+                          ariaLabel={t(
+                            'settings.channels.access.thisIsMeAria',
+                            'Use {name} as own identity',
+                            { name: participant.display_name },
+                          )}
+                          onClick={() => setOwnIdentity(channel, participant)}
+                        >
+                          {isOwnIdentity
+                            ? t('settings.channels.access.me', 'Me')
+                            : t(
+                                'settings.channels.access.thisIsMe',
+                                'This is me',
+                              )}
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          disabled={rowBusy || isOwnIdentity}
+                          ariaLabel={participant.role === 'admin'
+                            ? t(
+                                'settings.channels.access.makeMemberAria',
+                                'Make {name} a member',
+                                { name: participant.display_name },
+                              )
+                            : t(
+                                'settings.channels.access.makeAdminAria',
+                                'Make {name} an admin',
+                                { name: participant.display_name },
+                              )}
+                          onClick={() =>
+                            toggleParticipantRole(channel, group, participant)}
+                        >
+                          {participant.role === 'admin'
+                            ? t(
+                                'settings.channels.access.makeMember',
+                                'Make member',
+                              )
+                            : t(
+                                'settings.channels.access.makeAdmin',
+                                'Make admin',
+                              )}
+                        </Button>
+                      </div>
+                    </div>
+                  {/each}
+                {/if}
+              </div>
+            {/each}
+          {/if}
         </div>
 
         {#if channel.denied_chats?.length}

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -351,6 +351,19 @@ def _optional_run_kwargs(
     return options
 
 
+def _optional_tool_access_kwargs(
+    restriction: Sequence[str] | None,
+    denial_resolver: Callable[[str], str | None] | None,
+) -> dict[str, Any]:
+    """Omit unrestricted defaults so unrelated trigger call shapes stay stable."""
+    options: dict[str, Any] = {}
+    if restriction is not None:
+        options["tool_restriction"] = restriction
+    if denial_resolver is not None:
+        options["tool_denial_resolver"] = denial_resolver
+    return options
+
+
 class TriggerService:
     """Start programmatic chat runs and queue triggers behind active runs."""
 
@@ -421,6 +434,8 @@ class TriggerService:
         sender: MessageSender | None = None,
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
+        tool_restriction: Sequence[str] | None = None,
+        tool_denial_resolver: Callable[[str], str | None] | None = None,
         waiting_work_admission: WaitingWorkAdmission | None = None,
         input_persisted_hook: Callable[[], None] | None = None,
         contributes_to_agent_activity: bool = True,
@@ -431,6 +446,10 @@ class TriggerService:
         ``project_id`` creates the auto-session under that project's anchor and
         scopes the Run to the project (cwd = repo, project files in the prompt).
         """
+        tool_access_kwargs = _optional_tool_access_kwargs(
+            tool_restriction,
+            tool_denial_resolver,
+        )
         if session_id is None:
             try:
                 if internal:
@@ -440,6 +459,7 @@ class TriggerService:
                         internal=True,
                         reply_surface=reply_surface,
                         project_id=project_id,
+                        **tool_access_kwargs,
                         **_optional_run_kwargs(input_persisted_hook, contributes_to_agent_activity),
                     )
                 return await self._trigger_chat_loop.start_run_in_new_session(
@@ -448,6 +468,7 @@ class TriggerService:
                     sender=sender,
                     reply_surface=reply_surface,
                     project_id=project_id,
+                    **tool_access_kwargs,
                     **_optional_run_kwargs(input_persisted_hook, contributes_to_agent_activity),
                 )
             except BaseException:
@@ -464,6 +485,7 @@ class TriggerService:
                     internal=True,
                     reply_surface=reply_surface,
                     project_id=project_id,
+                    **tool_access_kwargs,
                     **_optional_run_kwargs(input_persisted_hook, contributes_to_agent_activity),
                 )
             else:
@@ -474,6 +496,7 @@ class TriggerService:
                     sender=sender,
                     reply_surface=reply_surface,
                     project_id=project_id,
+                    **tool_access_kwargs,
                     **_optional_run_kwargs(input_persisted_hook, contributes_to_agent_activity),
                 )
         except ActiveRunError:
@@ -487,6 +510,7 @@ class TriggerService:
                             internal=True,
                             reply_surface=reply_surface,
                             project_id=project_id,
+                            **tool_access_kwargs,
                             **_optional_run_kwargs(
                                 input_persisted_hook, contributes_to_agent_activity
                             ),
@@ -499,6 +523,7 @@ class TriggerService:
                             internal=True,
                             reply_surface=reply_surface,
                             project_id=project_id,
+                            **tool_access_kwargs,
                             waiting_work_admission=waiting_work_admission,
                             **_optional_run_kwargs(
                                 input_persisted_hook, contributes_to_agent_activity
@@ -513,6 +538,7 @@ class TriggerService:
                             sender=sender,
                             reply_surface=reply_surface,
                             project_id=project_id,
+                            **tool_access_kwargs,
                             **_optional_run_kwargs(
                                 input_persisted_hook, contributes_to_agent_activity
                             ),
@@ -525,6 +551,7 @@ class TriggerService:
                             sender=sender,
                             reply_surface=reply_surface,
                             project_id=project_id,
+                            **tool_access_kwargs,
                             waiting_work_admission=waiting_work_admission,
                             **_optional_run_kwargs(
                                 input_persisted_hook, contributes_to_agent_activity

@@ -482,6 +482,15 @@ export function getChannelStatus(id, options = {}) {
   return rpc('channel.status', { id }, options);
 }
 
+export function getChannelAccess(id, options = {}) {
+  requireNonEmptyString(
+    id,
+    'Channel id must be a non-empty string',
+    'channel.access.get',
+  );
+  return rpc('channel.access.get', { id }, options);
+}
+
 export function createChannel(params = {}, options = {}) {
   requirePlainObject(
     params,
@@ -516,6 +525,59 @@ export function disableChannel(id, options = {}) {
     'channel.disable',
   );
   return rpc('channel.disable', { id }, options);
+}
+
+export function setChannelIdentity(id, userId, options = {}) {
+  requireNonEmptyString(
+    id,
+    'Channel id must be a non-empty string',
+    'channel.identity.set',
+  );
+  requireNonEmptyString(
+    userId,
+    'Channel user id must be a non-empty string',
+    'channel.identity.set',
+  );
+  return rpc('channel.identity.set', { id, user_id: userId }, options);
+}
+
+export function grantChannelAdmin(id, accessScopeId, userId, options = {}) {
+  return mutateChannelAdmin(
+    'channel.admin.grant',
+    id,
+    accessScopeId,
+    userId,
+    options,
+  );
+}
+
+export function revokeChannelAdmin(id, accessScopeId, userId, options = {}) {
+  return mutateChannelAdmin(
+    'channel.admin.revoke',
+    id,
+    accessScopeId,
+    userId,
+    options,
+  );
+}
+
+function mutateChannelAdmin(method, id, accessScopeId, userId, options) {
+  requireNonEmptyString(id, 'Channel id must be a non-empty string', method);
+  requireNonEmptyString(
+    accessScopeId,
+    'Channel group id must be a non-empty string',
+    method,
+  );
+  requireNonEmptyString(
+    userId,
+    'Channel user id must be a non-empty string',
+    method,
+  );
+  return rpc(
+    method,
+    { id, access_scope_id: accessScopeId, user_id: userId },
+    options,
+  );
 }
 
 export function listExtensions(options = {}) {

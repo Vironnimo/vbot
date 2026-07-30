@@ -71,6 +71,7 @@ class ToolDispatchContext:
     project_id: str | None = None
     skill_project_id: str | None = None
     tool_restriction: Sequence[str] | None = None
+    tool_denial_resolver: Callable[[str], str | None] | None = None
     base_allowed_tools: Sequence[str] | None = None
     session_tool_grants: Sequence[str] = ()
     tool_contracts: Mapping[str, ToolContract] = field(default_factory=dict)
@@ -111,11 +112,13 @@ class _EmittingToolRegistry(ToolRegistry):
         run: Run,
         extension_registry: ExtensionRegistry | None = None,
         note_hook: Callable[[str], None] | None = None,
+        denial_resolver: Callable[[str], str | None] | None = None,
     ) -> None:
         self._registry = registry
         self._run = run
         self._extension_registry = extension_registry
         self._note_hook = note_hook
+        self._denial_resolver = denial_resolver
         self._tool_timings: dict[str, JsonObject] = {}
         self._extension_hook_lock = asyncio.Lock()
 
@@ -157,6 +160,47 @@ class _EmittingToolRegistry(ToolRegistry):
         started_at = datetime.now(UTC)
         started_perf = time.perf_counter()
         try:
+            denial_message = (
+                self._denial_resolver(context.tool_name)
+                if self._denial_resolver is not None
+                else None
+            )
+            if denial_message is not None:
+                denied_result = tool_failure("tool_not_allowed", denial_message)
+                timing = _timing_payload(started_at, started_perf)
+                self._tool_timings[context.tool_call_id] = timing
+                self._run.emit(
+                    TOOL_CALL_STARTED_EVENT,
+                    {
+                        "tool_call": {
+                            "id": context.tool_call_id,
+                            "index": context.tool_call_index,
+                            "name": context.tool_name,
+                            "arguments": deepcopy(arguments),
+                        },
+                        "display": _tool_display_payload(
+                            self._registry,
+                            context.tool_name,
+                            arguments,
+                        ),
+                        "schema_fingerprint": _tool_context_schema_fingerprint(self, context),
+                    },
+                )
+                self._run.emit(
+                    TOOL_CALL_RESULT_EVENT,
+                    {
+                        "tool_call": {
+                            "id": context.tool_call_id,
+                            "index": context.tool_call_index,
+                            "name": context.tool_name,
+                        },
+                        "result": denied_result,
+                        "timing": timing,
+                        "schema_fingerprint": _tool_context_schema_fingerprint(self, context),
+                        "error_code": "tool_not_allowed",
+                    },
+                )
+                return denied_result
             # Decision pipeline runs before the started event so the timeline
             # shows the effective (possibly modified) arguments. A deny or
             # replace short-circuits execution; a modify rewrites the input the
@@ -354,6 +398,7 @@ async def _dispatch_tool_calls(
         run,
         context.extension_registry,
         note_hook=session.add_note,
+        denial_resolver=context.tool_denial_resolver,
     )
     executor = ToolExecutor(emitting_registry)
     workspace = _agent_workspace(agent, context.data_root)

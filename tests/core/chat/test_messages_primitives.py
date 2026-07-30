@@ -46,12 +46,25 @@ class TestMessageSender:
     def test_to_dict_returns_canonical_fields(self):
         sender = MessageSender(id="50", display_name="Alice")
 
-        assert sender.to_dict() == {"id": "50", "display_name": "Alice"}
+        assert sender.to_dict() == {
+            "id": "50",
+            "display_name": "Alice",
+            "role": "member",
+        }
 
     def test_from_dict_round_trips(self):
-        sender = MessageSender(id="50", display_name="Alice")
+        sender = MessageSender(id="50", display_name="Alice", role="admin")
 
         assert MessageSender.from_dict(sender.to_dict()) == sender
+
+    def test_from_dict_defaults_legacy_sender_to_member(self):
+        assert MessageSender.from_dict({"id": "50", "display_name": "Alice"}) == MessageSender(
+            id="50", display_name="Alice", role="member"
+        )
+
+    def test_from_dict_rejects_unknown_role(self):
+        with pytest.raises(ChatMessageValidationError, match="sender role must be admin or member"):
+            MessageSender.from_dict({"id": "50", "display_name": "Alice", "role": "owner"})
 
     @pytest.mark.parametrize("bad_id", [None, "", 50, {"nested": True}])
     def test_from_dict_rejects_bad_id(self, bad_id):
@@ -108,10 +121,35 @@ class TestReplySurface:
         assert reply_surface_from_note(note) == surface
         assert _embed_notes_into_request([note])[0]["content"] == (
             "<system-reminder>\n"
+            "The current conversation is a direct message on Telegram. "
             "Your reply to the following request will be delivered via Telegram using channel "
             "`tg-main`. Return normal reply text; vBot delivers it automatically. To deliver any "
             "file, always call `channel_send` and include every file path in `file_paths`.\n"
             "</system-reminder>"
+        )
+
+    @pytest.mark.parametrize(
+        ("platform", "display_name"),
+        [("telegram", "Telegram"), ("discord", "Discord")],
+    )
+    def test_group_channel_note_states_conversation_kind(self, platform: str, display_name: str):
+        direct = ReplySurface.channel(
+            platform=platform,
+            platform_display_name=display_name,
+            channel_id=f"{platform}-main",
+        )
+        group = ReplySurface.channel(
+            platform=platform,
+            platform_display_name=display_name,
+            channel_id=f"{platform}-main",
+            conversation_kind="group",
+        )
+        note = ChatMessage.note(group.to_note_content())
+
+        assert reply_surface_from_note(note) == group
+        assert direct.identity != group.identity
+        assert _embed_notes_into_request([note])[0]["content"].startswith(
+            f"<system-reminder>\nThe current conversation is a group chat on {display_name}. "
         )
 
     def test_append_decision_uses_latest_tag_switch_and_compaction_chronology(self):
@@ -187,7 +225,7 @@ class TestChatMessageFactories:
             "timestamp": "2026-05-03T14:30:00+00:00",
             "role": "user",
             "content": "Hello from the group.",
-            "sender": {"id": "50", "display_name": "Alice"},
+            "sender": {"id": "50", "display_name": "Alice", "role": "member"},
         }
 
         parsed = ChatMessage.from_dict(message.to_dict())

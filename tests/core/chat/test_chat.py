@@ -628,9 +628,22 @@ async def test_tool_restriction_denies_at_dispatch_without_changing_definitions(
     await run.wait()
 
     assert sorted(unrestricted_ran) == ["memory", "weather"]
+    restricted_request = restricted_adapter.requests[0]
+    unrestricted_request = unrestricted_adapter.requests[0]
     assert (
-        restricted_adapter.requests[0]["kwargs"]["tools"]
-        == unrestricted_adapter.requests[0]["kwargs"]["tools"]
+        json.dumps(
+            restricted_request["kwargs"]["tools"],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode()
+        == json.dumps(
+            unrestricted_request["kwargs"]["tools"],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode()
+    )
+    assert restricted_request["messages"][0]["content"].encode() == (
+        unrestricted_request["messages"][0]["content"].encode()
     )
 
 

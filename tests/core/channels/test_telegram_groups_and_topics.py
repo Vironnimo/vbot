@@ -59,6 +59,33 @@ async def test_strip_bot_command_suffix(
 
 
 @pytest.mark.asyncio
+async def test_topic_uses_parent_telegram_group_as_access_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _chat_sessions, _trigger_mock, _bot = make_adapter(
+        tmp_path,
+        monkeypatch,
+        allowed_chat_ids=[-10001],
+    )
+
+    conversation = adapter._conversation_facts(
+        make_group_update(
+            text="hello",
+            message_id=777,
+            message_thread_id=42,
+            is_topic_message=True,
+        )
+    )
+
+    assert conversation is not None
+    assert conversation.chat_id == "-10001"
+    assert conversation.thread_id == "42"
+    assert conversation.access_scope_id == "-10001"
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
 async def test_dm_command_with_own_bot_suffix_is_dispatched_stripped(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -152,7 +179,7 @@ async def test_group_message_without_mention_is_observed_when_enabled(
         for message in chat_sessions.get("assistant", session_id).load()
         if message.role == "note"
     ]
-    assert notes[-1] == "[channel-message] 50 (50): just chatting"
+    assert notes[-1] == "[channel-message] [50|50|member]: just chatting"
     trigger_mock.assert_not_awaited()
     bot.send_message.assert_not_awaited()
     await adapter.stop()

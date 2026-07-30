@@ -147,6 +147,108 @@ def test_parse_args_supports_channel_list_target_options() -> None:
     assert args.data_dir == "dev"
 
 
+def test_parse_args_supports_channel_identity_and_group_access_commands() -> None:
+    identity = cli_main.parse_args(["channel", "identity", "tg-assistant", "--user", "50"])
+    access = cli_main.parse_args(["channel", "access", "tg-assistant", "--group", "-100"])
+    grant = cli_main.parse_args(
+        [
+            "channel",
+            "grant-admin",
+            "tg-assistant",
+            "--group",
+            "-100",
+            "--user",
+            "51",
+        ]
+    )
+    revoke = cli_main.parse_args(
+        [
+            "channel",
+            "revoke-admin",
+            "tg-assistant",
+            "--group",
+            "-100",
+            "--user",
+            "51",
+        ]
+    )
+
+    assert (identity.command, identity.id, identity.user) == (
+        "identity",
+        "tg-assistant",
+        "50",
+    )
+    assert (access.command, access.id, access.access_scope_id) == (
+        "access",
+        "tg-assistant",
+        "-100",
+    )
+    assert (grant.command, grant.id, grant.access_scope_id, grant.user_id) == (
+        "grant-admin",
+        "tg-assistant",
+        "-100",
+        "51",
+    )
+    assert (revoke.command, revoke.id, revoke.access_scope_id, revoke.user_id) == (
+        "revoke-admin",
+        "tg-assistant",
+        "-100",
+        "51",
+    )
+
+
+def test_parse_args_rejects_legacy_owner_flag() -> None:
+    with pytest.raises(SystemExit):
+        cli_main.parse_args(
+            [
+                "channel",
+                "update",
+                "tg-assistant",
+                "--owner-user",
+                "50",
+            ]
+        )
+
+
+def test_run_dispatches_additive_channel_admin_command(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[tuple[str, str, str]] = []
+
+    def fake_resolve(*, host: str, port: int | None, data_dir: str | None) -> ServerInstance:
+        return instance
+
+    def fake_grant(
+        resolved_instance: ServerInstance,
+        channel_id: str,
+        access_scope_id: str,
+        user_id: str,
+    ) -> CommandResult:
+        assert resolved_instance == instance
+        calls.append((channel_id, access_scope_id, user_id))
+        return CommandResult(ok=True, message="admin saved", instance=resolved_instance)
+
+    exit_code = cli_main.run(
+        [
+            "channel",
+            "grant-admin",
+            "tg-assistant",
+            "--group",
+            "-100",
+            "--user",
+            "51",
+        ],
+        resolve=fake_resolve,
+        grant_channel_admin_fn=fake_grant,
+    )
+
+    assert exit_code == 0
+    assert calls == [("tg-assistant", "-100", "51")]
+    assert "result: admin saved" in capsys.readouterr().out
+
+
 def test_parse_args_supports_channel_update_options() -> None:
     args = cli_main.parse_args(
         [
@@ -546,7 +648,7 @@ def test_channel_update_rejects_empty_changes(tmp_path: Path) -> None:
         message=(
             "no channel fields provided; use one of: --platform, --agent, --token-env, "
             "--dm-scope, --allow, --enabled, --response-mode, --mention-pattern, "
-            "--owner-user, --observe-unaddressed"
+            "--observe-unaddressed"
         ),
         instance=instance,
     )
@@ -608,6 +710,88 @@ def test_channel_list_formats_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPat
             "enabled=no allowed_chat_ids=- token_env_var=TELEGRAM_BOT_TOKEN_TG_WORK"
         ),
     ]
+
+
+def test_channel_access_commands_use_additive_rpc_actions_and_saved_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    instance = make_instance(tmp_path)
+    calls: list[dict[str, Any]] = []
+    saved_state = {
+        "channel_id": "tg-assistant",
+        "self_user_id": "50",
+        "groups": [
+            {
+                "access_scope_id": "-100",
+                "admin_user_ids": ["50", "51"],
+                "participants": [
+                    {
+                        "user_id": "50",
+                        "display_name": "Alice",
+                        "last_seen_at": "2026-07-30T10:00:00+00:00",
+                        "role": "admin",
+                    },
+                    {
+                        "user_id": "51",
+                        "display_name": "Bob",
+                        "last_seen_at": "2026-07-30T10:01:00+00:00",
+                        "role": "admin",
+                    },
+                ],
+            }
+        ],
+    }
+
+    def fake_post(
+        url: str, *, json: dict[str, Any], timeout: float, trust_env: bool
+    ) -> httpx.Response:
+        calls.append(json)
+        return httpx.Response(200, json={"ok": True, "result": saved_state})
+
+    monkeypatch.setattr(channel_management.httpx, "post", fake_post)
+
+    shown_identity = channel_management.channel_identity(instance, "tg-assistant")
+    saved_identity = channel_management.channel_identity(instance, "tg-assistant", "50")
+    listed = channel_management.channel_access(instance, "tg-assistant", "-100")
+    granted = channel_management.channel_grant_admin(instance, "tg-assistant", "-100", "51")
+    revoked = channel_management.channel_revoke_admin(instance, "tg-assistant", "-100", "51")
+
+    assert calls == [
+        {"method": "channel.access.get", "params": {"id": "tg-assistant"}},
+        {
+            "method": "channel.identity.set",
+            "params": {"id": "tg-assistant", "user_id": "50"},
+        },
+        {"method": "channel.access.get", "params": {"id": "tg-assistant"}},
+        {
+            "method": "channel.admin.grant",
+            "params": {
+                "id": "tg-assistant",
+                "access_scope_id": "-100",
+                "user_id": "51",
+            },
+        },
+        {
+            "method": "channel.admin.revoke",
+            "params": {
+                "id": "tg-assistant",
+                "access_scope_id": "-100",
+                "user_id": "51",
+            },
+        },
+    ]
+    assert shown_identity.message == "channel=tg-assistant self_user_id=50"
+    assert saved_identity.message == "channel=tg-assistant self_user_id=50"
+    assert listed.message.splitlines() == [
+        "channel=tg-assistant group=-100",
+        "admins=50,51",
+        "participants:",
+        "- user_id=50 name=Alice role=admin",
+        "- user_id=51 name=Bob role=admin",
+    ]
+    assert granted.message == listed.message
+    assert revoked.message == listed.message
 
 
 def test_channel_commands_surface_rpc_domain_errors(
@@ -731,7 +915,6 @@ def test_run_dispatches_channel_commands(
         allowed_chat_ids: Sequence[str],
         response_mode: str,
         mention_patterns: Sequence[str],
-        owner_user_ids: Sequence[str],
         observe_unaddressed: bool,
         token: str | None,
     ) -> CommandResult:
@@ -748,7 +931,6 @@ def test_run_dispatches_channel_commands(
                     "allowed_chat_ids": allowed_chat_ids,
                     "response_mode": response_mode,
                     "mention_patterns": mention_patterns,
-                    "owner_user_ids": owner_user_ids,
                     "observe_unaddressed": observe_unaddressed,
                     "token": token,
                 },
@@ -904,8 +1086,6 @@ def test_channel_update_maps_group_response_policy_fields() -> None:
             "--mention-pattern",
             "@vbot",
             "bot please",
-            "--owner-user",
-            "42",
             "--observe-unaddressed",
             "true",
         ]
@@ -914,7 +1094,6 @@ def test_channel_update_maps_group_response_policy_fields() -> None:
     assert cli_main._channel_changes_from_args(args) == {
         "response_mode": "all",
         "mention_patterns": ["@vbot", "bot please"],
-        "owner_user_ids": ["42"],
         "observe_unaddressed": True,
     }
 
@@ -952,12 +1131,11 @@ def test_channel_add_advanced_policy_is_sent_and_confirmed(
         ["123"],
         "all",
         ["@vbot"],
-        ["42"],
-        True,
+        observe_unaddressed=True,
     )
 
     assert result.ok is True
     assert result.message.splitlines()[0] == "created channel tg-main"
     assert "response_mode=all" in result.message
-    assert calls[0]["params"]["owner_user_ids"] == ["42"]
+    assert "owner_user_ids" not in calls[0]["params"]
     assert calls[0]["params"]["observe_unaddressed"] is True

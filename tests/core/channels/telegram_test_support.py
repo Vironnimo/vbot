@@ -23,10 +23,18 @@ from core.chat.commands import CommandOutcome, CommandUnavailability, PreparedCo
 from core.runs import ASSISTANT_OUTPUT_EVENT, Run, WaitingWorkAdmission
 from core.sessions import ChatSessionManager
 
+from .engine_test_support import MemoryChannelAccessRegistry
+
 CHANNEL_REPLY_SURFACE = ReplySurface.channel(
     platform="telegram",
     platform_display_name="Telegram",
     channel_id="tg-assistant",
+)
+CHANNEL_GROUP_REPLY_SURFACE = ReplySurface.channel(
+    platform="telegram",
+    platform_display_name="Telegram",
+    channel_id="tg-assistant",
+    conversation_kind="group",
 )
 
 
@@ -36,7 +44,6 @@ def make_config(
     allowed_chat_ids: list[int] | None = None,
     response_mode: str = "mention",
     mention_patterns: list[str] | None = None,
-    owner_user_ids: list[str] | None = None,
     observe_unaddressed: bool = False,
 ) -> ChannelConfig:
     config = ChannelConfig(
@@ -49,7 +56,6 @@ def make_config(
         enabled=True,
         response_mode=response_mode,
         mention_patterns=list(mention_patterns or []),
-        owner_user_ids=list(owner_user_ids or []),
         observe_unaddressed=observe_unaddressed,
     )
     config.validate()
@@ -240,7 +246,7 @@ def make_adapter(
     allowed_chat_ids: list[int] | None = None,
     response_mode: str = "mention",
     mention_patterns: list[str] | None = None,
-    owner_user_ids: list[str] | None = None,
+    admin_user_ids: list[str] | None = None,
     observe_unaddressed: bool = False,
     bot_username: str | None = None,
     bot_display_name: str | None = None,
@@ -288,7 +294,6 @@ def make_adapter(
             allowed_chat_ids=allowed_chat_ids,
             response_mode=response_mode,
             mention_patterns=mention_patterns,
-            owner_user_ids=owner_user_ids,
             observe_unaddressed=observe_unaddressed,
         ),
         cast(Any, trigger_service),
@@ -297,6 +302,7 @@ def make_adapter(
         attachment_store=attachment_store,
         command_dispatcher=cast(Any, resolved_command_dispatcher),
         chat_migration_persister=chat_migration_persister,
+        access_registry=MemoryChannelAccessRegistry(list(admin_user_ids or [])),
     )
     if bot_username is not None or bot_display_name is not None or bot_id is not None:
         adapter._set_bot_identity(

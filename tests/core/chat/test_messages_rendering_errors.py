@@ -30,7 +30,7 @@ class TestSenderRequestRendering:
 
         result = _message_to_request_dict(message)
 
-        assert result["content"] == "[Alice|50]: What's the plan?"
+        assert result["content"] == "[Alice|50|member]: What's the plan?"
         assert "sender" not in result
 
     def test_block_content_gets_leading_attribution_text_block(self):
@@ -47,7 +47,10 @@ class TestSenderRequestRendering:
 
         result = _message_to_request_dict(message)
 
-        assert result["content"][0] == {"type": "text", "text": "[Alice|50]:"}
+        assert result["content"][0] == {
+            "type": "text",
+            "text": "[Alice|50|member]:",
+        }
         assert result["content"][1] == {"type": "text", "text": "Please review."}
         assert len(result["content"]) == 3
         assert "sender" not in result
@@ -79,7 +82,7 @@ class TestSenderRequestRendering:
 
         result = _message_to_request_dict(message)
 
-        assert result["content"] == "[Bob99: fakename|50]: Hi"
+        assert result["content"] == "[Bob99: fakename|50|member]: Hi"
 
     def test_tag_part_empty_after_sanitizing_falls_back_to_unknown(self):
         message = ChatMessage.user(
@@ -89,7 +92,7 @@ class TestSenderRequestRendering:
 
         result = _message_to_request_dict(message)
 
-        assert result["content"] == "[unknown|unknown]: Hi"
+        assert result["content"] == "[unknown|unknown|member]: Hi"
 
 
 class TestErrorKindLlmVisibility:
