@@ -2220,6 +2220,7 @@ class ChatLoop:
                                     assistant_message, replay_policy=replay_policy
                                 ),
                             ],
+                            allow_continuation=True,
                         )
                     return assistant_message
 
@@ -2319,6 +2320,14 @@ class ChatLoop:
                     context,
                     target,
                     usage=assistant_message.usage,
+                    continuation_request_messages=[
+                        *messages_for_request,
+                        _assistant_continuation_dict(
+                            assistant_message,
+                            replay_policy=replay_policy,
+                        ),
+                        *tool_request_messages,
+                    ],
                 )
                 context.request_state = compacted_state
                 state = compacted_state
@@ -2392,6 +2401,7 @@ class ChatLoop:
         usage: JsonObject | None,
         *,
         continuation_request_messages: list[JsonObject] | None = None,
+        allow_continuation: bool = False,
     ) -> _RequestState:
         """Auto-compact when configured token thresholds are exceeded."""
         if context.request_state is None:
@@ -2413,7 +2423,7 @@ class ChatLoop:
         )
         if not settings.auto:
             return current_state
-        if settings.strategy == "continuation" and continuation_request_messages is None:
+        if settings.strategy == "continuation" and not allow_continuation:
             return current_state
         from core.compaction import (
             MIN_AUTO_COMPACTION_RECLAIM_TOKENS,

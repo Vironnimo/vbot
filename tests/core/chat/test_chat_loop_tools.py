@@ -634,6 +634,7 @@ async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
         def __init__(self) -> None:
             self.compacted = False
             self.compact_calls = 0
+            self.request_messages: list[JsonObject] = []
 
         def estimate_messages_tokens(self, _messages: list[JsonObject]) -> int:
             return 90
@@ -668,6 +669,7 @@ async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
 
             self.compacted = True
             self.compact_calls += 1
+            self.request_messages = [dict(message) for message in kwargs["request_messages"]]
             tail_user = next(
                 message
                 for message in messages
@@ -729,6 +731,15 @@ async def test_auto_compaction_preserves_active_tool_continuation_reasoning(
     continued_tool_names = [tool["name"] for tool in adapter.requests[1]["kwargs"]["tools"]]
     assert assistant.content == "Sunny"
     assert compaction_service.compact_calls == 1
+    assert compaction_service.request_messages[:2] == adapter.requests[0]["messages"]
+    assert [message["role"] for message in compaction_service.request_messages] == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+    ]
+    assert compaction_service.request_messages[2]["reasoning"] == "Need weather."
+    assert compaction_service.request_messages[3]["tool_call_id"] == "call_abc"
     assert HISTORY_TOOL_NAME not in first_tool_names
     assert HISTORY_TOOL_NAME in continued_tool_names
     assert [message["role"] for message in continued_messages] == [

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import pytest
@@ -11,15 +10,12 @@ from core.chat import ChatMessage
 from core.chat.messages import COMPACTION_SUMMARY_NOTE_PREFIX, _effective_compaction_messages
 from core.compaction import (
     MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
-    TOOL_RESULT_CONTENT_PLACEHOLDER,
     CompactionError,
     CompactionInsufficientReclaimError,
     CompactionService,
     CompactionSettings,
     find_tail_boundary,
-    is_compacted_tool_result_content,
 )
-from core.compaction.compaction import _age_tool_payloads
 from core.utils.tokens import NATIVE_MEDIA_TOKEN_RESERVE
 
 TIMESTAMP = "2026-05-19T12:00:00+00:00"
@@ -68,17 +64,41 @@ def checkpoint(projection: list[ChatMessage], count: int = 10) -> ChatMessage:
     )
 
 
-def test_find_tail_boundary_keeps_complete_user_turns() -> None:
-    messages = [
-        user("u1", "first " * 30),
-        assistant("a1", "answer " * 30),
-        user("u2", "second " * 30),
-        assistant("a2", "answer " * 30),
-        user("u3", "last"),
-        assistant("a3", "last answer"),
+def provider_request(messages: list[ChatMessage]) -> list[dict[str, Any]]:
+    return [
+        {"id": "system-1", "role": "system", "content": "system"},
+        *(item.to_dict() for item in messages),
     ]
 
-    assert find_tail_boundary(messages, tail_tokens=5) == "u3"
+
+def test_find_tail_boundary_can_split_one_user_turn_at_assistant_boundary() -> None:
+    messages = [
+        user("u1", "Keep working"),
+        assistant("a1", "older answer " * 100),
+        assistant("a2", "recent answer"),
+    ]
+
+    assert find_tail_boundary(messages, tail_tokens=1) == "a2"
+
+
+def test_find_tail_boundary_keeps_parallel_tool_cycle_atomic() -> None:
+    messages = [
+        user("u1", "Keep working"),
+        message(
+            "a1",
+            "assistant",
+            "",
+            model="openai/gpt-5",
+            tool_calls=[
+                {"id": "c1", "name": "read", "arguments": {"path": "one"}},
+                {"id": "c2", "name": "read", "arguments": {"path": "two"}},
+            ],
+        ),
+        message("t1", "tool", "one", tool_call_id="c1", name="read"),
+        message("t2", "tool", "two", tool_call_id="c2", name="read"),
+    ]
+
+    assert find_tail_boundary(messages, tail_tokens=1) == "a1"
 
 
 def test_context_ratio_and_absolute_token_triggers() -> None:
@@ -124,6 +144,8 @@ async def test_summary_tail_executes_one_call_and_materializes_projection() -> N
         user("u2", "recent request"),
         assistant("a2", "recent response"),
     ]
+    request = provider_request(messages)
+    tools = [{"name": "read", "description": "Read a file", "parameters": {}}]
 
     result = await CompactionService().compact(
         messages,
@@ -131,19 +153,87 @@ async def test_summary_tail_executes_one_call_and_materializes_projection() -> N
         summary_adapter=summary_adapter,
         summary_model_id="openai/summary",
         storage=StubStorage(),
-        settings=CompactionSettings(tail_tokens=5),
+        settings=CompactionSettings(tail_tokens=10),
+        request_messages=request,
         active_adapter=active_adapter,
         active_model_id="openai/active",
+        active_tools=tools,
     )
 
     assert len(summary_adapter.requests) == 1
     assert active_adapter.requests == []
     assert summary_adapter.requests[0]["model_id"] == "openai/summary"
-    assert "old request" in summary_adapter.requests[0]["messages"][0]["content"]
+    assert summary_adapter.requests[0]["messages"][:-1] == request[:3]
+    assert summary_adapter.requests[0]["tools"] == tools
+    assert "Compact" not in summary_adapter.requests[0]["messages"][1]["content"]
+    assert summary_adapter.requests[0]["messages"][-1]["content"] == (
+        "Preserve decisions and unfinished work."
+    )
     effective = _effective_compaction_messages([*messages, result])
     assert effective[0].role == "note"
     assert effective[0].content == f"{COMPACTION_SUMMARY_NOTE_PREFIX}NEW SUMMARY"
     assert [item.id for item in effective[1:]] == ["u2", "a2"]
+
+
+@pytest.mark.asyncio
+async def test_summary_tail_preserves_exact_active_model_prefix_with_reasoning() -> None:
+    adapter = StubAdapter("NEW SUMMARY")
+    messages = [
+        user("u1", "old request " * 100),
+        assistant("a1", "old response " * 100),
+        user("u2", "recent request"),
+        assistant("a2", "recent response"),
+    ]
+    request = provider_request(messages)
+    request[2]["reasoning"] = "provider-readable"
+    request[2]["reasoning_meta"] = {"signature": "provider-opaque"}
+
+    await CompactionService().compact(
+        messages,
+        agent=object(),
+        summary_adapter=adapter,
+        summary_model_id="gpt-5",
+        storage=StubStorage(),
+        settings=CompactionSettings(tail_tokens=10),
+        request_messages=request,
+        active_adapter=adapter,
+        active_model_id="gpt-5",
+    )
+
+    assert adapter.requests[0]["messages"][:-1] == request[:3]
+
+
+@pytest.mark.asyncio
+async def test_custom_summary_model_drops_active_provider_reasoning_state() -> None:
+    summary_adapter = StubAdapter("NEW SUMMARY")
+    active_adapter = StubAdapter("must not be used")
+    messages = [
+        user("u1", "old request " * 100),
+        assistant("a1", "old response " * 100),
+        user("u2", "recent request"),
+        assistant("a2", "recent response"),
+    ]
+    request = provider_request(messages)
+    request[2]["reasoning"] = "provider-readable"
+    request[2]["reasoning_meta"] = {"signature": "provider-opaque"}
+
+    await CompactionService().compact(
+        messages,
+        agent=object(),
+        summary_adapter=summary_adapter,
+        summary_model_id="claude-summary",
+        storage=StubStorage(),
+        settings=CompactionSettings(tail_tokens=10),
+        request_messages=request,
+        active_adapter=active_adapter,
+        active_model_id="gpt-5",
+    )
+
+    sent_head = summary_adapter.requests[0]["messages"][:-1]
+    assert [message["id"] for message in sent_head] == ["system-1", "u1", "a1"]
+    assert sent_head[2]["content"] == request[2]["content"]
+    assert "reasoning" not in sent_head[2]
+    assert "reasoning_meta" not in sent_head[2]
 
 
 @pytest.mark.asyncio
@@ -154,38 +244,51 @@ async def test_next_compaction_consumes_previous_projection_not_hidden_history()
     )
     hidden = user("u1", "hidden-secret-marker")
 
+    latest = assistant("a2", "new")
+    request = [
+        {"id": "system-1", "role": "system", "content": "system"},
+        {
+            "role": "user",
+            "content": f"{COMPACTION_SUMMARY_NOTE_PREFIX}PRIOR",
+        },
+        {"id": "u2", "role": "user", "content": "kept"},
+        latest.to_dict(),
+    ]
+
     await CompactionService().compact(
-        [hidden, prior, assistant("a2", "new")],
+        [hidden, prior, latest],
         agent=object(),
         summary_adapter=adapter,
         summary_model_id="openai/summary",
         storage=StubStorage(),
         settings=CompactionSettings(tail_tokens=1),
+        request_messages=request,
     )
 
-    rendered = adapter.requests[0]["messages"][0]["content"]
-    assert "hidden-secret-marker" not in rendered
-    assert "<previous_summary>\nPRIOR\n</previous_summary>" in rendered
-    assert rendered.index("<previous_summary>") < rendered.index("<history>")
+    compact_request = adapter.requests[0]["messages"]
+    assert compact_request[:-1] == request[:-1]
+    assert "hidden-secret-marker" not in str(compact_request)
+    assert str(compact_request).count(COMPACTION_SUMMARY_NOTE_PREFIX + "PRIOR") == 1
+    assert "<previous_summary>" not in str(compact_request)
 
 
-def test_summary_tail_auto_compaction_waits_when_only_prior_summary_is_eligible() -> None:
+def test_summary_tail_auto_compaction_advances_inside_retained_user_turn() -> None:
     current_user = user("u1", "One long-running user turn")
-    carrier = message(
+    old_carrier = message(
         "a1",
         "assistant",
         "",
         model="openai/gpt-5",
         tool_calls=[{"id": "call-1", "name": "read", "arguments": {"path": "one"}}],
     )
-    result = message(
+    old_result = message(
         "t1",
         "tool",
         "result one",
         tool_call_id="call-1",
         name="read",
     )
-    prior = checkpoint([current_user, carrier, result])
+    prior = checkpoint([current_user, old_carrier, old_result])
     next_carrier = message(
         "a2",
         "assistant",
@@ -202,41 +305,30 @@ def test_summary_tail_auto_compaction_waits_when_only_prior_summary_is_eligible(
     )
 
     can_compact = CompactionService().has_new_compactable_context(
-        [current_user, carrier, result, prior, next_carrier, next_result],
-        CompactionSettings(tail_tokens=1),
-    )
-
-    assert can_compact is False
-
-
-def test_summary_tail_auto_compaction_resumes_when_retained_turn_becomes_eligible() -> None:
-    retained_user = user("u1", "Previously retained turn")
-    retained_assistant = assistant("a1", "Previously retained answer")
-    prior = checkpoint([retained_user, retained_assistant])
-    next_user = user("u2", "A new turn that advances the tail boundary")
-
-    can_compact = CompactionService().has_new_compactable_context(
-        [retained_user, retained_assistant, prior, next_user],
+        [current_user, old_carrier, old_result, prior, next_carrier, next_result],
         CompactionSettings(tail_tokens=1),
     )
 
     assert can_compact is True
 
 
-@pytest.mark.asyncio
-async def test_summary_tail_ages_old_tool_payloads_inside_one_long_user_turn() -> None:
-    adapter = StubAdapter()
-    old_arguments = {"path": "old.txt", "replacement": "A" * 12_000}
-    old_result_content = json.dumps(
-        {
-            "ok": True,
-            "data": {
-                "path": "old.txt",
-                "content": "R" * 40_000,
-                "line_count": 900,
-            },
-        }
+def test_summary_tail_auto_compaction_waits_when_only_prior_summary_is_in_head() -> None:
+    retained_user = user("u1", "Previously retained turn " * 100)
+    prior = checkpoint([retained_user])
+
+    can_compact = CompactionService().has_new_compactable_context(
+        [retained_user, prior],
+        CompactionSettings(tail_tokens=1),
     )
+
+    assert can_compact is False
+
+
+@pytest.mark.asyncio
+async def test_summary_tail_compacts_consumed_tool_batch_without_rewriting_request() -> None:
+    adapter = StubAdapter("TOOL SUMMARY")
+    old_arguments = {"path": "old.txt", "query": "Q" * 8_000}
+    old_result_content = "sensitive-output-" * 5_000
     old_carrier = message(
         "a-old",
         "assistant",
@@ -261,7 +353,7 @@ async def test_summary_tail_ages_old_tool_payloads_inside_one_long_user_turn() -
     latest_result = message(
         "t-latest",
         "tool",
-        json.dumps({"ok": True, "data": {"path": "latest.txt"}}),
+        "latest result",
         tool_call_id="call-latest",
         name="edit",
     )
@@ -272,6 +364,7 @@ async def test_summary_tail_ages_old_tool_payloads_inside_one_long_user_turn() -
         latest_carrier,
         latest_result,
     ]
+    request = provider_request(messages)
     original_snapshot = [item.to_dict() for item in messages]
     service = CompactionService()
 
@@ -287,223 +380,31 @@ async def test_summary_tail_ages_old_tool_payloads_inside_one_long_user_turn() -
         summary_model_id="openai/summary",
         storage=StubStorage(),
         settings=CompactionSettings(tail_tokens=1),
+        request_messages=request,
         minimum_reclaim_tokens=MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
     )
 
-    assert adapter.requests == []
+    compact_request = adapter.requests[0]["messages"]
+    assert compact_request[:-1] == request[:-2]
+    assert compact_request[-2]["content"] == old_result_content
+    assert compact_request[-3]["tool_calls"][0]["arguments"] == old_arguments
     assert [item.to_dict() for item in messages] == original_snapshot
     effective = _effective_compaction_messages([*messages, result])
-    aged_carrier = next(item for item in effective if item.id == "a-old")
-    aged_result = next(item for item in effective if item.id == "t-old")
-    retained_latest = next(item for item in effective if item.id == "t-latest")
-    assert aged_carrier.tool_calls is not None
-    assert isinstance(aged_carrier.tool_calls[0].arguments, dict)
-    assert len(json.dumps(aged_carrier.tool_calls[0].arguments)) <= 2_000
-    assert is_compacted_tool_result_content(aged_result.content)
-    assert json.loads(str(aged_result.content))["outcome"]["ok"] is True
-    assert retained_latest == latest_result
-    assert not service.has_new_compactable_context(
-        [*messages, result],
-        CompactionSettings(tail_tokens=1),
-    )
+    assert [item.id for item in effective[1:]] == ["a-latest", "t-latest"]
+    assert all(item.id not in {"a-old", "t-old"} for item in effective)
 
 
 @pytest.mark.asyncio
-async def test_tool_aging_reuses_previous_summary_without_model_call() -> None:
-    adapter = StubAdapter("must not be used")
-    current_user = user("u1", "Continue the current Run")
-    old_carrier = message(
-        "a1",
-        "assistant",
-        "",
-        model="openai/gpt-5",
-        tool_calls=[{"id": "c1", "name": "read", "arguments": {"path": "old"}}],
-    )
-    old_result = message(
-        "t1",
-        "tool",
-        json.dumps({"ok": True, "data": {"content": "X" * 30_000}}),
-        tool_call_id="c1",
-        name="read",
-    )
-    latest_carrier = message(
-        "a2",
-        "assistant",
-        "",
-        model="openai/gpt-5",
-        tool_calls=[{"id": "c2", "name": "read", "arguments": {"path": "latest"}}],
-    )
-    latest_result = message(
-        "t2",
-        "tool",
-        json.dumps({"ok": True, "data": {"path": "latest"}}),
-        tool_call_id="c2",
-        name="read",
-    )
-    prior = checkpoint(
-        [current_user, old_carrier, old_result, latest_carrier, latest_result],
-        count=500,
-    )
-
-    result = await CompactionService().compact(
-        [current_user, old_carrier, old_result, latest_carrier, latest_result, prior],
-        agent=object(),
-        summary_adapter=adapter,
-        summary_model_id="openai/summary",
-        storage=StubStorage(),
-        settings=CompactionSettings(tail_tokens=1),
-        minimum_reclaim_tokens=MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
-    )
-
-    assert adapter.requests == []
-    assert result.content == "PRIOR"
-    effective = _effective_compaction_messages(
-        [current_user, old_carrier, old_result, latest_carrier, latest_result, prior, result]
-    )
-    summary_notes = [
-        item
-        for item in effective
-        if item.role == "note"
-        and isinstance(item.content, str)
-        and item.content.startswith(COMPACTION_SUMMARY_NOTE_PREFIX)
-    ]
-    assert [item.content for item in summary_notes] == [f"{COMPACTION_SUMMARY_NOTE_PREFIX}PRIOR"]
-
-
-def test_tool_aging_preserves_newest_and_incomplete_batches() -> None:
-    messages = [
-        user("u1", "long run"),
-        message(
-            "a1",
-            "assistant",
-            "",
-            model="openai/gpt-5",
-            tool_calls=[{"id": "c1", "name": "read", "arguments": {"path": "one"}}],
-        ),
-        message(
-            "t1",
-            "tool",
-            json.dumps({"ok": True, "data": {"content": "X" * 30_000}}),
-            tool_call_id="c1",
-            name="read",
-        ),
-        message(
-            "a2",
-            "assistant",
-            "",
-            model="openai/gpt-5",
-            tool_calls=[{"id": "c2", "name": "read", "arguments": {"path": "two"}}],
-        ),
-        message(
-            "t2",
-            "tool",
-            json.dumps({"ok": True, "data": {"content": "Y" * 30_000}}),
-            tool_call_id="c2",
-            name="read",
-        ),
-        message(
-            "a3",
-            "assistant",
-            "",
-            model="openai/gpt-5",
-            tool_calls=[{"id": "c3", "name": "read", "arguments": {"path": "three"}}],
-        ),
-    ]
-
-    projected, reclaimed = _age_tool_payloads(messages)
-
-    assert reclaimed > 0
-    assert is_compacted_tool_result_content(projected[2].content)
-    assert projected[4] == messages[4]
-    assert projected[5] == messages[5]
-
-
-@pytest.mark.asyncio
-async def test_summary_prompt_omits_raw_tool_result_content() -> None:
-    adapter = StubAdapter()
-    tool_call = {"id": "call-1", "name": "read", "arguments": {}}
-    messages = [
-        user("u1", "old"),
-        message("a1", "assistant", "", model="openai/gpt-5", tool_calls=[tool_call]),
-        message("t1", "tool", "sensitive-output", tool_call_id="call-1", name="read"),
-        user("u2", "tail"),
-    ]
-
-    await CompactionService().compact(
-        messages,
-        agent=object(),
-        summary_adapter=adapter,
-        summary_model_id="openai/summary",
-        storage=StubStorage(),
-        settings=CompactionSettings(tail_tokens=1),
-    )
-
-    prompt = adapter.requests[0]["messages"][0]["content"]
-    assert TOOL_RESULT_CONTENT_PLACEHOLDER in prompt
-    assert "sensitive-output" not in prompt
-
-
-@pytest.mark.asyncio
-async def test_summary_prompt_includes_bounded_structured_tool_outcome() -> None:
-    adapter = StubAdapter()
-    raw_body = "private-body-" * 3_000
-    messages = [
-        user("u1", "old"),
-        message(
-            "a1",
-            "assistant",
-            "",
-            model="openai/gpt-5",
-            tool_calls=[
-                {
-                    "id": "call-1",
-                    "name": "read",
-                    "arguments": {
-                        "path": "report.txt",
-                        "query": "Q" * 8_000,
-                        "api_key": "argument-secret",
-                    },
-                }
-            ],
-        ),
-        message(
-            "t1",
-            "tool",
-            json.dumps(
-                {
-                    "ok": True,
-                    "data": {
-                        "path": "report.txt",
-                        "line_count": 42,
-                        "content": raw_body,
-                        "access_token": "result-secret",
-                    },
-                }
-            ),
-            tool_call_id="call-1",
-            name="read",
-        ),
-        user("u2", "tail"),
-    ]
-
-    await CompactionService().compact(
-        messages,
-        agent=object(),
-        summary_adapter=adapter,
-        summary_model_id="openai/summary",
-        storage=StubStorage(),
-        settings=CompactionSettings(tail_tokens=1),
-    )
-
-    prompt = adapter.requests[0]["messages"][0]["content"]
-    assert '"ok":true' in prompt
-    assert "report.txt" in prompt
-    assert "line_count" in prompt
-    assert raw_body not in prompt
-    assert "Q" * 8_000 not in prompt
-    assert "argument-secret" not in prompt
-    assert "result-secret" not in prompt
-    assert "[REDACTED]" in prompt
+async def test_summary_tail_requires_active_request_context() -> None:
+    with pytest.raises(CompactionError, match="active request"):
+        await CompactionService().compact(
+            [user("u1", "old"), assistant("a1", "tail")],
+            agent=object(),
+            summary_adapter=StubAdapter(),
+            summary_model_id="openai/summary",
+            storage=StubStorage(),
+            settings=CompactionSettings(tail_tokens=1),
+        )
 
 
 @pytest.mark.asyncio
@@ -526,6 +427,7 @@ async def test_automatic_compaction_rejects_projection_below_minimum_reclaim() -
             summary_model_id="openai/summary",
             storage=StubStorage(),
             settings=CompactionSettings(tail_tokens=1),
+            request_messages=provider_request(messages),
             minimum_reclaim_tokens=MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
         )
 
@@ -549,6 +451,7 @@ async def test_compaction_checkpoint_records_context_tokens_before_and_after() -
         summary_model_id="openai/summary",
         storage=StubStorage(),
         settings=CompactionSettings(tail_tokens=1),
+        request_messages=provider_request(messages),
         context_tokens_before=25_000,
     )
 
