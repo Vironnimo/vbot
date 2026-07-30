@@ -37,6 +37,8 @@ DEFAULT_WAITING_WORK_LIMIT = 32
 
 RUN_STARTED_EVENT = "run_started"
 USER_MESSAGE_EVENT = "user_message_persisted"
+COMPACTION_STARTED_EVENT = "compaction_started"
+COMPACTION_ABORTED_EVENT = "compaction_aborted"
 COMPACTION_COMPLETED_EVENT = "compaction_completed"
 REASONING_EVENT = "reasoning"
 ASSISTANT_OUTPUT_DELTA_EVENT = "assistant_output_delta"

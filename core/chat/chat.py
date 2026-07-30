@@ -166,7 +166,9 @@ from core.providers.errors import NetworkError
 from core.providers.providers import resolve_effective_context_window
 from core.providers.reasoning import REASONING_REPLAY_CURRENT_RUN, ReasoningReplayPolicy
 from core.runs import (
+    COMPACTION_ABORTED_EVENT,
     COMPACTION_COMPLETED_EVENT,
+    COMPACTION_STARTED_EVENT,
     MODEL_FALLBACK_ACTIVATED_EVENT,
     MODEL_STEP_USAGE_EVENT,
     PROVIDER_HEARTBEAT_EVENT,
@@ -1029,6 +1031,9 @@ class ChatLoop:
                 active_adapter=adapter,
                 active_model_id=model_id,
                 active_tools=request_state.tools,
+                context_tokens_before=self._compaction_service.estimate_messages_tokens(
+                    request_state.messages
+                ),
             )
             ordinal = (
                 len([message for message in messages if message.role == "compaction_checkpoint"])
@@ -2469,6 +2474,10 @@ class ChatLoop:
             settings,
         )
         close_summary_adapter = summary_adapter is not target.adapter
+        run.emit(
+            COMPACTION_STARTED_EVENT,
+            {"context_tokens_before": input_tokens},
+        )
         try:
             checkpoint = await self._compaction_service.compact(
                 session_messages,
@@ -2482,8 +2491,13 @@ class ChatLoop:
                 active_model_id=target.model_id,
                 active_tools=tools,
                 minimum_reclaim_tokens=MIN_AUTO_COMPACTION_RECLAIM_TOKENS,
+                context_tokens_before=input_tokens,
             )
         except CompactionInsufficientReclaimError as exc:
+            run.emit(
+                COMPACTION_ABORTED_EVENT,
+                {"reason": "insufficient_reclaim"},
+            )
             _LOGGER.info(
                 "Auto-compaction skipped because projected reclaim was too small "
                 "(run=%s session=%s reason=%s)",
@@ -2493,6 +2507,10 @@ class ChatLoop:
             )
             return current_state
         except Exception:
+            run.emit(
+                COMPACTION_ABORTED_EVENT,
+                {"reason": "failed"},
+            )
             _LOGGER.warning("Compaction failed; continuing without compaction", exc_info=True)
             return current_state
         finally:
@@ -2536,6 +2554,7 @@ class ChatLoop:
         if context.continuation_tracker is not None:
             context.continuation_tracker.record_compaction_boundary()
         persisted_ordinal = checkpoint_ordinal(session.load(), checkpoint.id)
+        checkpoint_usage = checkpoint.usage or {}
         run.emit(
             COMPACTION_COMPLETED_EVENT,
             {
@@ -2543,6 +2562,8 @@ class ChatLoop:
                 "checkpoint": persisted_ordinal,
                 "checkpoint_id": checkpoint.id,
                 "history_available": True,
+                "context_tokens_before": checkpoint_usage.get("context_tokens_before"),
+                "context_tokens_after": checkpoint_usage.get("context_tokens_after"),
             },
         )
         rebuilt_state = await self._build_request_state(

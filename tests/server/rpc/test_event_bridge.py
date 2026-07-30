@@ -16,7 +16,9 @@ from typing import Any, cast
 import pytest
 
 from core.runs import (
+    COMPACTION_ABORTED_EVENT,
     COMPACTION_COMPLETED_EVENT,
+    COMPACTION_STARTED_EVENT,
     MODEL_STEP_USAGE_EVENT,
     RUN_COMPLETED_EVENT,
     RUN_FAILED_EVENT,
@@ -228,6 +230,32 @@ def test_server_event_forwards_compaction_checkpoint_as_run_output() -> None:
 
     assert summary["type"] == "run_output"
     assert summary["payload"]["output"] == event.payload
+
+
+@pytest.mark.parametrize(
+    ("event_type", "payload"),
+    [
+        (COMPACTION_STARTED_EVENT, {"context_tokens_before": 250_000}),
+        (COMPACTION_ABORTED_EVENT, {"reason": "failed"}),
+    ],
+)
+def test_server_event_forwards_compaction_lifecycle_output(
+    event_type: str,
+    payload: dict[str, Any],
+) -> None:
+    event = RunEvent(
+        sequence=8,
+        run_id="run-1",
+        agent_id="builder",
+        session_id="sess-uuid",
+        type=event_type,
+        payload=payload,
+    )
+
+    summary = _server_event_from_run_event(event)
+
+    assert summary["type"] == "run_output"
+    assert summary["payload"]["output"] == payload
 
 
 def test_server_event_hides_internal_continuation_on_terminal_events() -> None:

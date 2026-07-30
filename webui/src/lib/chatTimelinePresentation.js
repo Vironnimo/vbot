@@ -985,6 +985,32 @@ export const takeoverSeparatorLabel = (message) => {
   return t('chat.takenOverGeneric', 'Session taken over');
 };
 
+export const compactionSeparatorLabel = (item) => {
+  if (item?.status === 'running') {
+    return t(
+      'chat.compactingCurrentConversation',
+      'Compacting current conversation…',
+    );
+  }
+
+  const usage = item?.message?.usage ?? {};
+  const before =
+    item?.contextTokensBefore ?? usage.context_tokens_before ?? null;
+  const after = item?.contextTokensAfter ?? usage.context_tokens_after ?? null;
+  if (Number.isFinite(before) && Number.isFinite(after)) {
+    const numberFormat = new Intl.NumberFormat(activeLocaleTag());
+    return t(
+      'chat.compactedWithTokens',
+      'Context compacted · ~{before} → ~{after} tokens',
+      {
+        before: numberFormat.format(before),
+        after: numberFormat.format(after),
+      },
+    );
+  }
+  return t('chat.compacted', 'Context compacted');
+};
+
 function parseTakeoverContent(content) {
   const parsed = parseJsonValue(content);
   if (!isPlainObject(parsed)) {

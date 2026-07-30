@@ -34,6 +34,8 @@ export const RUN_EVENT_TYPES = [
   'user_message_persisted',
   'model_fallback_activated',
   'error_message_persisted',
+  'compaction_started',
+  'compaction_aborted',
   'compaction_completed',
   RUN_EVENT_REASONING_DELTA,
   'reasoning',

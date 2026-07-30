@@ -1907,6 +1907,10 @@ textarea::placeholder {
   padding: 0;
 }
 
+.compaction-sep--running {
+  color: var(--amber);
+}
+
 .msg {
   display: flex;
   flex-direction: column;

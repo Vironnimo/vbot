@@ -328,11 +328,18 @@ class CompactionService:
         active_model_id: str | None = None,
         active_tools: list[JsonObject] | None = None,
         minimum_reclaim_tokens: int = 0,
+        context_tokens_before: int | None = None,
     ) -> ChatMessage:
         """Execute at most one Model request and persist its assembled projection."""
         del agent
         if minimum_reclaim_tokens < 0:
             raise CompactionError("minimum_reclaim_tokens cannot be negative")
+        if context_tokens_before is not None and (
+            isinstance(context_tokens_before, bool)
+            or not isinstance(context_tokens_before, int)
+            or context_tokens_before < 0
+        ):
+            raise CompactionError("context_tokens_before must be a non-negative integer")
         strategy = self._strategies.get(settings.strategy)
         if strategy is None:
             raise CompactionError(f"Unknown compaction strategy: {settings.strategy}")
@@ -394,6 +401,12 @@ class CompactionService:
             summary=summary,
             projection=projection,
             compacted_token_count=plan.compacted_token_count,
+            context_tokens_before=context_tokens_before,
+            context_tokens_after=(
+                max(0, context_tokens_before - reclaimed_tokens)
+                if context_tokens_before is not None
+                else None
+            ),
             policy=settings.strategy,
             strategy=strategy.id,
         )

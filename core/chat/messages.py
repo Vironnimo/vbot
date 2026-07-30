@@ -456,21 +456,31 @@ class ChatMessage:
         summary: str,
         projection: list[ChatMessage],
         compacted_token_count: int,
+        context_tokens_before: int | None = None,
+        context_tokens_after: int | None = None,
         policy: str = "custom",
         strategy: str = "custom",
         timestamp: datetime | None = None,
     ) -> ChatMessage:
         """Create a self-contained compaction checkpoint projection."""
+        if (context_tokens_before is None) != (context_tokens_after is None):
+            raise ChatMessageValidationError(
+                "compaction checkpoints require both context token counts or neither"
+            )
         summary_note = f"{COMPACTION_SUMMARY_NOTE_PREFIX}{summary}"
         projected = _compaction_projection_without_provider_state(projection)
         if not (projected and projected[0].role == "note" and projected[0].content == summary_note):
             projected.insert(0, cls.note(summary_note, timestamp=timestamp))
+        usage = {"compacted_token_count": compacted_token_count}
+        if context_tokens_before is not None and context_tokens_after is not None:
+            usage["context_tokens_before"] = context_tokens_before
+            usage["context_tokens_after"] = context_tokens_after
         return cls(
             id=_new_message_id(),
             timestamp=_format_timestamp(timestamp),
             role="compaction_checkpoint",
             content=summary,
-            usage={"compacted_token_count": compacted_token_count},
+            usage=usage,
             projection=[message.to_dict() for message in projected],
             compaction_policy=policy,
             compaction_strategy=strategy,
@@ -1755,6 +1765,20 @@ def _validate_compaction_checkpoint_message(message: ChatMessage) -> None:
             raise ChatMessageValidationError(
                 "compaction checkpoints usage.compacted_token_count must be a non-negative integer"
             )
+        before_present = "context_tokens_before" in message.usage
+        after_present = "context_tokens_after" in message.usage
+        if before_present != after_present:
+            raise ChatMessageValidationError(
+                "compaction checkpoints require both context token counts or neither"
+            )
+        for field_name in ("context_tokens_before", "context_tokens_after"):
+            if field_name not in message.usage:
+                continue
+            token_count = message.usage[field_name]
+            if isinstance(token_count, bool) or not isinstance(token_count, int) or token_count < 0:
+                raise ChatMessageValidationError(
+                    f"compaction checkpoints usage.{field_name} must be a non-negative integer"
+                )
 
     _reject_fields(
         message,

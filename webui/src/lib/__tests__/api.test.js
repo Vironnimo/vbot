@@ -911,6 +911,8 @@ describe('subscribeRunEvents()', () => {
     expect(RUN_EVENT_TYPES).toContain(RUN_EVENT_TOOL_CALL_STDERR);
     expect(RUN_EVENT_TYPES).toContain('model_fallback_activated');
     expect(RUN_EVENT_TYPES).toContain('error_message_persisted');
+    expect(RUN_EVENT_TYPES).toContain('compaction_started');
+    expect(RUN_EVENT_TYPES).toContain('compaction_aborted');
     expect(RUN_EVENT_TYPES).toContain('compaction_completed');
     expect(RUN_EVENT_TYPES).toContain('subagent_session_started');
     expect(RUN_EVENT_TYPES).toContain('subagent_status_changed');

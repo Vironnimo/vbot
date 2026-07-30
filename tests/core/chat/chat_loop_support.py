@@ -836,12 +836,14 @@ class StubCompactionService:
         should_auto: bool,
         has_compactable_context: bool = True,
         estimated_tokens: int = 0,
+        context_tokens_after: int | None = None,
         checkpoint: ChatMessage | None = None,
         compact_error: Exception | None = None,
     ) -> None:
         self._should_auto = should_auto
         self._has_compactable_context = has_compactable_context
         self._estimated_tokens = estimated_tokens
+        self._context_tokens_after = context_tokens_after
         self._checkpoint = checkpoint
         self._compact_error = compact_error
         self.compactable_context_calls: list[tuple[list[str], Any]] = []
@@ -894,13 +896,29 @@ class StubCompactionService:
                 "summary_model": getattr(settings, "summary_model", None),
                 "instruction": instruction,
                 "minimum_reclaim_tokens": minimum_reclaim_tokens,
+                "context_tokens_before": kwargs.get("context_tokens_before"),
             }
         )
         if self._compact_error is not None:
             raise self._compact_error
         if self._checkpoint is None:
             raise AssertionError("StubCompactionService requires checkpoint for successful compact")
-        return self._checkpoint
+        context_tokens_before = kwargs.get("context_tokens_before")
+        if not isinstance(context_tokens_before, int) or isinstance(context_tokens_before, bool):
+            return self._checkpoint
+        context_tokens_after = (
+            self._context_tokens_after
+            if self._context_tokens_after is not None
+            else max(0, context_tokens_before - 1)
+        )
+        return replace(
+            self._checkpoint,
+            usage={
+                **(self._checkpoint.usage or {}),
+                "context_tokens_before": context_tokens_before,
+                "context_tokens_after": context_tokens_after,
+            },
+        )
 
 
 def _write_test_skill(tmp_path: Path, name: str) -> Path:
