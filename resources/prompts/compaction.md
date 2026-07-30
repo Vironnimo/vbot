@@ -1,8 +1,6 @@
-Here is the context of the ongoing task. Reconstruct a continuation context for the next model call so work can resume without losing critical details.
+Compact the conversation prefix above into a continuation context for the next model call so work can resume without losing critical details.
 
-The conversation history to compact is provided inside <history>...</history>.
-
-If an earlier compaction summary is provided inside <previous_summary>...</previous_summary>, treat it as established context that precedes <history>. Carry its still-relevant facts forward into your output — do not drop them just because they are not repeated in <history>. Your output must stand alone as the complete continuation context, covering both the previous summary and the new history.
+An earlier compaction summary, when present, is already part of the conversation above. Treat it as established context and carry its still-relevant facts forward. Your output replaces the entire prefix above and must stand alone.
 
 If a <user_instruction>...</user_instruction> block is present, the user gave it for this specific compaction. Follow it and let it steer what you emphasize, keep, or condense — without ever dropping the critical details required below.
 
@@ -11,8 +9,8 @@ Requirements:
 - Preserve what has already been tried and the outcome of each attempt.
 - Preserve the current task status and the immediate next concrete step.
 - Keep important technical decisions, constraints, and blockers.
-- Treat placeholder tool-result content as intentional redaction; do not invent missing tool output.
-- Do not add facts that are not present in the history.
+- Preserve important Tool outcomes, but omit raw Tool protocol and bulky output that the continuation no longer needs.
+- Do not add facts that are not present in the conversation.
 
 Write the output as continuation context, not as a retrospective summary.
 Start with this exact line:

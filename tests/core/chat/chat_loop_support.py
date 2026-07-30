@@ -897,6 +897,10 @@ class StubCompactionService:
                 "instruction": instruction,
                 "minimum_reclaim_tokens": minimum_reclaim_tokens,
                 "context_tokens_before": kwargs.get("context_tokens_before"),
+                "request_messages": [
+                    dict(message) for message in kwargs.get("request_messages") or []
+                ],
+                "active_tools": [dict(tool) for tool in kwargs.get("active_tools") or []],
             }
         )
         if self._compact_error is not None:

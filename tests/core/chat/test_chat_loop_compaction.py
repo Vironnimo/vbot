@@ -51,6 +51,7 @@ from tests.core.chat.chat_loop_support import (
     StubModels,
     StubProject,
     StubProjects,
+    StubProviderCredentials,
     StubRuntime,
     StubSkill,
     StubSkills,
@@ -510,6 +511,7 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
     assert len(compaction_service.compact_calls) == 1
     assert compaction_service.compact_calls[0]["summary_model_id"] == "gpt-5.2"
     assert compaction_service.compact_calls[0]["summary_adapter"] is adapter
+    assert compaction_service.compact_calls[0]["request_messages"] == messages
     assert (
         compaction_service.compact_calls[0]["minimum_reclaim_tokens"]
         == MIN_AUTO_COMPACTION_RECLAIM_TOKENS
@@ -1214,6 +1216,56 @@ async def test_compact_session_appends_checkpoint_and_closes_adapter(tmp_path: P
     assert HISTORY_COMPACTION_GUIDANCE.format(ordinal=1) in str(
         persisted_checkpoint.projection[0]["content"]
     )
+
+
+@pytest.mark.asyncio
+async def test_compact_session_keeps_configured_summary_model(tmp_path: Path) -> None:
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["*"])
+    active_adapter = ClosingStubAdapter([])
+    summary_adapter = ClosingStubAdapter([])
+    runtime: Any = StubRuntime(
+        data_dir=tmp_path,
+        agent=agent,
+        adapter=active_adapter,
+        adapters_by_connection={"anthropic:api-key": summary_adapter},
+        provider_ids={"openai", "anthropic"},
+        storage=StubStorage(
+            {
+                "auto": True,
+                "threshold": 0.8,
+                "tail_tokens": 15_000,
+                "summary_model": "anthropic/claude-summary",
+            }
+        ),
+        models=StubModels(
+            {
+                ("openai", "gpt-5.2"): 100,
+                ("anthropic", "claude-summary"): 100,
+            }
+        ),
+    )
+    runtime.provider_credentials = StubProviderCredentials({"openai:api-key", "anthropic:api-key"})
+    session = runtime.chat_sessions.create("coder", session_id="session-one")
+    session.append(ChatMessage.user("Tail user"))
+    session.append(ChatMessage.assistant(model=agent.model, content="Tail assistant"))
+    checkpoint = ChatMessage.compaction_checkpoint(
+        summary="Compacted context.",
+        projection=session.load()[-2:],
+        compacted_token_count=42,
+    )
+    compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
+
+    reply = await build_chat_loop(
+        runtime,
+        compaction_service=cast(Any, compaction_service),
+    ).compact_session("coder", "session-one")
+
+    compact_call = compaction_service.compact_calls[0]
+    assert reply == "Context compacted."
+    assert compact_call["summary_adapter"] is summary_adapter
+    assert compact_call["summary_model_id"] == "claude-summary"
+    assert active_adapter.closed is True
+    assert summary_adapter.closed is True
 
 
 @pytest.mark.asyncio
