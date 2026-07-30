@@ -540,8 +540,33 @@ def test_channel_service_start_marks_missing_agent_channel_failed(tmp_path: Path
     service.start()
 
     assert service.has_active_channels() is False
+    assert service.has_enabled_channels() is False
     assert service.is_failed(config.id) is True
     assert service.failure_reason(config.id) == "Unknown agent_id: assistant"
+
+
+def test_channel_config_create_delete_controls_tool_registration_without_liveness(
+    tmp_path: Path,
+) -> None:
+    service = make_service(tmp_path)
+    hook_calls = 0
+
+    def hook() -> None:
+        nonlocal hook_calls
+        hook_calls += 1
+
+    service._notify_tool_registration_changed_hook = hook
+
+    service.create_channel(make_config(enabled=True))
+
+    assert service.has_enabled_channels() is True
+    assert service.has_active_channels() is False
+    assert hook_calls == 1
+
+    service.delete_channel("tg-assistant")
+
+    assert service.has_enabled_channels() is False
+    assert hook_calls == 2
 
 
 @pytest.mark.asyncio
@@ -885,7 +910,7 @@ async def test_channel_service_send_rejects_empty_button_data(
 
 
 @pytest.mark.asyncio
-async def test_channel_service_notifies_hook_when_adapter_crashes(
+async def test_channel_service_adapter_crash_does_not_change_tool_registration(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -910,7 +935,8 @@ async def test_channel_service_notifies_hook_when_adapter_crashes(
     await wait_until(lambda: config.id not in service._adapter_tasks)
 
     assert service.has_active_channels() is False
-    assert hook_calls >= 2
+    assert service.has_enabled_channels() is True
+    assert hook_calls == 0
 
 
 @pytest.mark.asyncio

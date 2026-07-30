@@ -1,6 +1,6 @@
 ## Channels
 
-You can send messages and files through these active channels:
+You can send messages and files through these configured channels:
 {generated:channel_list}
 
 Rules:

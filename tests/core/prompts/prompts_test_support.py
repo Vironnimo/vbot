@@ -174,14 +174,8 @@ class StubChannels:
     def __init__(self, channels: list[ChannelConfig]) -> None:
         self._channels = channels
 
-    def has_active_channels(self) -> bool:
-        return any(channel.enabled for channel in self._channels)
-
     def list_channels(self) -> list[ChannelConfig]:
         return list(self._channels)
-
-    def _is_running(self, channel_id: str) -> bool:
-        return any(channel.id == channel_id and channel.enabled for channel in self._channels)
 
 
 def _real_fragments() -> dict[str, str]:

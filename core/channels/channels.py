@@ -649,7 +649,6 @@ class ChannelService:
             )
             return
 
-        had_active_channels = self.has_active_channels()
         adapter = self._create_adapter(config)
         task = loop.create_task(
             self._run_adapter(normalized_id, adapter), name=f"channel:{normalized_id}"
@@ -661,12 +660,10 @@ class ChannelService:
             self._on_adapter_task_done(channel, completed_task)
 
         task.add_done_callback(on_done)
-        self._notify_tool_registration_if_changed(had_active_channels)
 
     def stop_channel(self, channel_id: str) -> None:
         """Stop one running channel adapter task when active."""
         normalized_id = _normalize_channel_id(channel_id)
-        had_active_channels = self.has_active_channels()
 
         self._pending_start_requests.pop(normalized_id, None)
         self._cancel_restart_task(normalized_id)
@@ -694,8 +691,6 @@ class ChannelService:
                     self._on_stop_task_done(channel, completed_task)
 
                 stop_task.add_done_callback(on_stop_done)
-
-        self._notify_tool_registration_if_changed(had_active_channels)
 
     def restart_channel(self, channel_id: str) -> bool:
         """Rebuild one enabled channel adapter from its current config and credentials.
@@ -827,6 +822,7 @@ class ChannelService:
             raise ChannelConfigError("config must be a ChannelConfig instance")
         config.validate()
         self._validate_agent_exists(config.agent_id)
+        had_enabled_channels = self.has_enabled_channels()
 
         try:
             self._storage.get(config.id)
@@ -843,6 +839,7 @@ class ChannelService:
             except Exception:
                 self._rollback_created_channel(config.id)
                 raise
+        self._notify_tool_registration_if_changed(had_enabled_channels)
 
     def update_channel(self, channel_id: str, **fields: Any) -> None:
         """Update mutable fields, persist, and restart when currently running."""
@@ -856,6 +853,7 @@ class ChannelService:
         if not fields:
             return
 
+        had_enabled_channels = self.has_enabled_channels()
         updated = replace(config, **fields)
         updated.validate()
         self._validate_agent_exists(updated.agent_id)
@@ -875,30 +873,39 @@ class ChannelService:
         except Exception:
             self._rollback_updated_channel(normalized_id, config, was_running)
             raise
+        self._notify_tool_registration_if_changed(had_enabled_channels)
 
     def delete_channel(self, channel_id: str) -> None:
         """Delete one channel config and stop any active adapter task."""
         normalized_id = _normalize_channel_id(channel_id)
+        had_enabled_channels = self.has_enabled_channels()
         self.stop_channel(normalized_id)
         self._pending_start_requests.pop(normalized_id, None)
         self._storage.delete(normalized_id)
+        self._notify_tool_registration_if_changed(had_enabled_channels)
 
     def enable_channel(self, channel_id: str) -> None:
         """Enable one channel and start its adapter task."""
         normalized_id = _normalize_channel_id(channel_id)
         config = self._storage.get(normalized_id)
         self._validate_agent_exists(config.agent_id)
+        had_enabled_channels = self.has_enabled_channels()
         if not config.enabled:
             self._storage.save(replace(config, enabled=True))
-        self.start_channel(normalized_id)
+        try:
+            self.start_channel(normalized_id)
+        finally:
+            self._notify_tool_registration_if_changed(had_enabled_channels)
 
     def disable_channel(self, channel_id: str) -> None:
         """Disable one channel and stop its adapter task."""
         normalized_id = _normalize_channel_id(channel_id)
         config = self._storage.get(normalized_id)
+        had_enabled_channels = self.has_enabled_channels()
         if config.enabled:
             self._storage.save(replace(config, enabled=False))
         self.stop_channel(normalized_id)
+        self._notify_tool_registration_if_changed(had_enabled_channels)
 
     def record_chat_id_migration(self, channel_id: str, old_chat_id: str, new_chat_id: str) -> None:
         """Persist a platform-side chat-id migration into the channel's allowlist.
@@ -929,6 +936,18 @@ class ChannelService:
     def has_active_channels(self) -> bool:
         """Return whether at least one channel adapter task is currently running."""
         return any(not task.done() for task in self._adapter_tasks.values())
+
+    def has_enabled_channels(self) -> bool:
+        """Return whether a valid Agent owns at least one enabled Channel config."""
+        for config in self._storage.load_all():
+            if not config.enabled:
+                continue
+            try:
+                self._validate_agent_exists(config.agent_id)
+            except ChannelConfigError:
+                continue
+            return True
+        return False
 
     def is_running(self, channel_id: str) -> bool:
         """Return whether one channel's adapter task is currently running."""
@@ -966,8 +985,8 @@ class ChannelService:
         self._failed_channels.add(channel_id)
         self._failure_reasons[channel_id] = reason
 
-    def _notify_tool_registration_if_changed(self, had_active_channels: bool) -> None:
-        if had_active_channels == self.has_active_channels():
+    def _notify_tool_registration_if_changed(self, had_enabled_channels: bool) -> None:
+        if had_enabled_channels == self.has_enabled_channels():
             return
         self._notify_tool_registration_changed()
 
@@ -1167,7 +1186,6 @@ class ChannelService:
             self._adapter_restart_attempts.pop(channel_id, None)
             self._failed_channels.discard(channel_id)
             self._failure_reasons.pop(channel_id, None)
-            self._notify_tool_registration_changed()
             return
 
         self._failure_reasons[channel_id] = str(error)
@@ -1179,7 +1197,6 @@ class ChannelService:
             exc_info=(type(error), error, error.__traceback__),
         )
         self._schedule_restart(channel_id)
-        self._notify_tool_registration_changed()
 
     def _schedule_restart(self, channel_id: str) -> None:
         if not self._started:

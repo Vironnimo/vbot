@@ -650,6 +650,45 @@ async def test_runtime_start_registers_channel_send_when_enabled_channel_starts(
     await asyncio.sleep(0)
 
 
+def test_runtime_registers_channel_send_for_enabled_channel_without_running_adapter(
+    config: Config,
+) -> None:
+    runtime = Runtime(config)
+    seed_agent_store = AgentStore(
+        config.data_dir,
+        template_dir=runtime._resolve_resources_path() / "workspace-templates",  # noqa: SLF001
+    )
+    seed_agent_store.create("assistant", "Assistant")
+    channel_dir = config.data_dir / "channels" / "tg-assistant"
+    channel_dir.mkdir(parents=True, exist_ok=True)
+    channel_dir.joinpath("channel.json").write_text(
+        "\n".join(
+            (
+                "{",
+                '  "id": "tg-assistant",',
+                '  "platform": "telegram",',
+                '  "agent_id": "assistant",',
+                '  "dm_scope": "per_conversation",',
+                '  "allowed_chat_ids": [12345],',
+                '  "token_env_var": "TELEGRAM_BOT_TOKEN_TG_ASSISTANT",',
+                '  "enabled": true',
+                "}",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    runtime.start()
+
+    tool_names = sorted(tool.name for tool in runtime.tools.list_tools())
+    assert "channel_send" in tool_names
+    assert runtime.channel_service.has_enabled_channels() is True
+    assert runtime.channel_service.has_active_channels() is False
+
+    runtime.stop()
+
+
 def test_start_bootstraps_main_agent_when_data_dir_is_empty(config: Config):
     """Runtime.start() leaves a new data dir with a usable default agent."""
     logging.getLogger("vbot").handlers = []
