@@ -19,6 +19,7 @@ from core.channels.adapter import (
     DeniedChatFacts,
     DeniedChatLog,
     FileData,
+    QuotedMessageFacts,
     RouteFacts,
     RunButtonBindingRegistry,
     content_blocks_for_attachment,
@@ -77,6 +78,7 @@ class _PendingForwardComment:
     conversation: ConversationFacts
     text: str
     message_id: int
+    raw_message: Any
 
 
 class TelegramChannelAdapter(ChannelAdapter):
@@ -574,6 +576,38 @@ class TelegramChannelAdapter(ChannelAdapter):
         blocks.extend(content_blocks_for_attachment(record))
         return blocks
 
+    async def build_quoted_message(self, raw_message: Any) -> QuotedMessageFacts | None:
+        """Download attachment content from the Telegram message being replied to."""
+        replied_message = getattr(raw_message, "reply_to_message", None)
+        if replied_message is None:
+            return None
+
+        author = _telegram_message_author(replied_message)
+        if author is None:
+            return QuotedMessageFacts(
+                user_id=None,
+                user_display_name=None,
+                content=None,
+            )
+        user_id, display_name = author
+        if self._bot_id is not None and user_id == str(self._bot_id):
+            return None
+        if not _telegram_message_has_media(replied_message):
+            return None
+
+        blocks = await self.build_media_blocks(replied_message)
+        if not any(not isinstance(block, TextBlock) for block in blocks):
+            return QuotedMessageFacts(
+                user_id=user_id,
+                user_display_name=display_name,
+                content=None,
+            )
+        return QuotedMessageFacts(
+            user_id=user_id,
+            user_display_name=display_name,
+            content=blocks,
+        )
+
     async def _build_audio_video_block(self, message: Any) -> MediaBlock | None:
         """Store one voice/audio/video/video-note/animation payload and return its block.
 
@@ -647,6 +681,9 @@ class TelegramChannelAdapter(ChannelAdapter):
             return
 
         message_text = self._strip_bot_command_suffix(message_text)
+        message = getattr(update, "effective_message", None)
+        if message is None:
+            return
 
         # /start is Telegram's first-contact ritual in private chats; groups keep the
         # normal command/gating path (where an unknown /start is simply not addressed).
@@ -672,7 +709,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             await self._engine.handle_inbound_text(conversation, message_text)
             return
 
-        await self._buffer_possible_forward_comment(conversation, message_text)
+        await self._buffer_possible_forward_comment(conversation, message_text, message)
 
     def _strip_bot_command_suffix(self, text: str) -> str:
         # Telegram group clients send commands as `/cmd@botusername`. Strip the suffix
@@ -1056,10 +1093,15 @@ class TelegramChannelAdapter(ChannelAdapter):
         self,
         conversation: ConversationFacts,
         message_text: str,
+        raw_message: Any,
     ) -> None:
         message_id = _parse_message_id(conversation.message_id)
         if message_id is None:
-            await self._engine.handle_inbound_text(conversation, message_text)
+            await self._engine.handle_inbound_text(
+                conversation,
+                message_text,
+                raw_message=raw_message,
+            )
             return
 
         await self._flush_pending_forward_comment(conversation.chat_id)
@@ -1067,6 +1109,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             conversation=conversation,
             text=message_text,
             message_id=message_id,
+            raw_message=raw_message,
         )
         task = asyncio.create_task(
             self._flush_forward_comment_after_delay(conversation.chat_id),
@@ -1112,7 +1155,11 @@ class TelegramChannelAdapter(ChannelAdapter):
         pending = self._pending_forward_comments.pop(chat_id, None)
         self._cancel_forward_comment_task(chat_id)
         if pending is not None:
-            await self._engine.handle_inbound_text(pending.conversation, pending.text)
+            await self._engine.handle_inbound_text(
+                pending.conversation,
+                pending.text,
+                raw_message=pending.raw_message,
+            )
 
     def _cancel_forward_comment_task(self, chat_id: str) -> None:
         task = self._forward_comment_tasks.pop(chat_id, None)
@@ -1637,6 +1684,47 @@ def _extract_caption(message: Any) -> str | None:
         return None
     caption = caption.strip()
     return caption or None
+
+
+def _telegram_message_has_media(message: Any) -> bool:
+    photos = getattr(message, "photo", None)
+    if isinstance(photos, (list, tuple)) and bool(photos):
+        return True
+    return any(
+        getattr(message, attribute_name, None) is not None
+        for attribute_name in (
+            "document",
+            "voice",
+            "audio",
+            "video",
+            "video_note",
+            "animation",
+        )
+    )
+
+
+def _telegram_message_author(message: Any) -> tuple[str, str | None] | None:
+    user = getattr(message, "from_user", None)
+    user_id = getattr(user, "id", None)
+    if _is_integer(user_id):
+        return str(user_id), _user_display_name(user)
+
+    sender_chat = getattr(message, "sender_chat", None)
+    sender_chat_id = getattr(sender_chat, "id", None)
+    if not _is_integer(sender_chat_id):
+        return None
+    display_name = next(
+        (
+            value.strip()
+            for value in (
+                getattr(sender_chat, "title", None),
+                getattr(sender_chat, "username", None),
+            )
+            if isinstance(value, str) and value.strip()
+        ),
+        None,
+    )
+    return str(sender_chat_id), display_name
 
 
 def _default_photo_filename(file_unique_id: object) -> str:

@@ -15,6 +15,7 @@ from .engine_test_support import (
     MessageFacts,
     MessageSender,
     Path,
+    QuotedMessageFacts,
     SimpleNamespace,
     TextBlock,
     assert_member_trigger,
@@ -179,6 +180,118 @@ async def test_media_path_carries_group_sender(tmp_path: Path) -> None:
         [block],
         SESSION_ID,
         sender=MessageSender(id="50", display_name="Alice"),
+    )
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_addressed_group_reply_ingests_quoted_media_with_original_authority(
+    tmp_path: Path,
+) -> None:
+    block = MediaBlock(
+        type="media",
+        attachment_id="att-quoted",
+        filename="juan.png",
+        media_type="image/png",
+    )
+    quoted_builder = AsyncMock(
+        return_value=QuotedMessageFacts(
+            user_id="77",
+            user_display_name="Juan",
+            content=[block],
+        )
+    )
+    transport = FakeTransport(quoted_builder=quoted_builder)
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
+    engine, _sessions, _trigger, _transport = make_engine(
+        tmp_path,
+        trigger_run=trigger_mock,
+        transport=transport,
+        admin_user_ids=["77"],
+    )
+
+    await engine.handle_inbound_text(
+        make_conversation(
+            kind="group",
+            user_id=50,
+            user_display_name="Alice",
+            mentioned_bot=True,
+        ),
+        "What do you think of Juan's image?",
+        raw_message="telegram-reply",
+    )
+    await drain(engine, 12345)
+
+    quoted_builder.assert_awaited_once_with("telegram-reply")
+    assert_member_trigger(
+        trigger_mock,
+        "assistant",
+        [
+            TextBlock(type="text", text="What do you think of Juan's image?"),
+            TextBlock(type="text", text="[quoted-message] [Juan|77|admin]:"),
+            block,
+        ],
+        SESSION_ID,
+        sender=MessageSender(id="50", display_name="Alice"),
+    )
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_unaddressed_group_reply_does_not_resolve_quoted_media(tmp_path: Path) -> None:
+    quoted_builder = AsyncMock()
+    transport = FakeTransport(quoted_builder=quoted_builder)
+    engine, _sessions, trigger_mock, _transport = make_engine(
+        tmp_path,
+        transport=transport,
+    )
+
+    await engine.handle_inbound_text(
+        make_conversation(kind="group"),
+        "What about this?",
+        raw_message="telegram-reply",
+    )
+    await drain(engine, 12345)
+
+    quoted_builder.assert_not_awaited()
+    trigger_mock.assert_not_awaited()
+    await engine.stop()
+
+
+@pytest.mark.asyncio
+async def test_unavailable_quoted_message_keeps_triggering_question(tmp_path: Path) -> None:
+    transport = FakeTransport(
+        quoted_builder=AsyncMock(
+            return_value=QuotedMessageFacts(
+                user_id=None,
+                user_display_name=None,
+                content=None,
+            )
+        )
+    )
+    trigger_mock = AsyncMock(return_value=make_completed_run(output_text="ok"))
+    engine, _sessions, _trigger, _transport = make_engine(
+        tmp_path,
+        trigger_run=trigger_mock,
+        transport=transport,
+    )
+
+    await engine.handle_inbound_text(
+        make_conversation(kind="group", mentioned_bot=True),
+        "What was in the deleted reply?",
+        raw_message="missing-reply",
+    )
+    await drain(engine, 12345)
+
+    assert_member_trigger(
+        trigger_mock,
+        "assistant",
+        [
+            TextBlock(type="text", text="What was in the deleted reply?"),
+            TextBlock(type="text", text="[quoted-message unavailable]"),
+        ],
+        SESSION_ID,
+        sender=MessageSender(id="50", display_name="50"),
     )
     await engine.stop()
 

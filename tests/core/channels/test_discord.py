@@ -77,6 +77,7 @@ class FakeChannel:
         self.sent: list[dict[str, Any]] = []
         self.history_messages: list[Any] = []
         self.history_calls: list[dict[str, Any]] = []
+        self.fetch_message = AsyncMock(side_effect=LookupError("message unavailable"))
         self.typing_indicator = FakeTyping()
 
     async def send(self, **payload: Any) -> SimpleNamespace:
@@ -388,6 +389,74 @@ async def test_group_mention_triggers_shared_run_with_sender(tmp_path: Path) -> 
         reply_surface=CHANNEL_REPLY_SURFACE,
     )
     assert channel.sent[0]["content"] == "ok"
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
+async def test_addressed_group_reply_downloads_quoted_attachment_on_demand(
+    tmp_path: Path,
+) -> None:
+    guild = SimpleNamespace(id=1)
+    channel = FakeChannel(100, guild=guild)
+    attachment_store = AttachmentStore(tmp_path)
+    session_id = "ch-dc-assistant-100"
+    trigger_mock = AsyncMock(return_value=make_completed_run(session_id=session_id))
+    adapter, _sessions, _trigger, _client = make_adapter(
+        tmp_path,
+        target=channel,
+        allowed_chat_ids=[100],
+        admin_user_ids=[50],
+        trigger_run=trigger_mock,
+        attachment_store=attachment_store,
+    )
+    quoted_attachment = FakeAttachment(
+        300,
+        "juan.png",
+        b"\x89PNG\r\n\x1a\nDATA",
+    )
+    quoted_message = make_message(
+        channel,
+        message_id=199,
+        author_id=77,
+        content="Sunset",
+        display_name="Juan",
+        attachments=[quoted_attachment],
+    )
+    message = make_message(
+        channel,
+        message_id=200,
+        author_id=50,
+        content="What do you think, <@999>?",
+        display_name="Alice",
+        mentions=[SimpleNamespace(id=999)],
+        reference=SimpleNamespace(
+            resolved=quoted_message,
+            cached_message=None,
+            message_id=199,
+        ),
+    )
+
+    await adapter._handle_inbound_message(message)
+    await drain_chat_queue(adapter, 100)
+
+    quoted_attachment.read.assert_awaited_once()
+    trigger_mock.assert_awaited_once()
+    awaited = trigger_mock.await_args
+    assert awaited is not None
+    blocks = awaited.args[1]
+    assert isinstance(blocks, list)
+    assert blocks[:3] == [
+        TextBlock(type="text", text="What do you think, <@999>?"),
+        TextBlock(type="text", text="[quoted-message] [Juan|77|member]:"),
+        TextBlock(type="text", text="Sunset"),
+    ]
+    assert isinstance(blocks[3], MediaBlock)
+    assert awaited.kwargs["sender"] == MessageSender(
+        id="50",
+        display_name="Alice",
+        role="admin",
+    )
+    assert "tool_restriction" not in awaited.kwargs
     await adapter.stop()
 
 

@@ -26,6 +26,7 @@ from core.channels.adapter import (
     ChannelAccessRegistry,
     ConversationFacts,
     MessageFacts,
+    QuotedMessageFacts,
     ReplyPlanFacts,
     RouteFacts,
     RunButtonBinding,
@@ -75,6 +76,8 @@ _MEMBER_TOOL_DENIAL = (
     "Tool access denied: the current sender is a group member. "
     "Group members may use only web_search and web_fetch."
 )
+_QUOTED_MESSAGE_PREFIX = "[quoted-message]"
+_QUOTED_MESSAGE_UNAVAILABLE = "[quoted-message unavailable]"
 _SENDER_TAG_UNSAFE_CHARACTERS = str.maketrans("", "", "[]|\r\n")
 
 CHANNEL_WAITING_WORK_LIMIT = 8
@@ -127,6 +130,13 @@ class ConversationTransport(Protocol):
     async def build_media_blocks(self, raw_message: Any) -> list[ContentBlock]:
         """Convert one raw platform message into canonical content blocks."""
 
+    async def build_quoted_message(self, raw_message: Any) -> QuotedMessageFacts | None:
+        """Resolve attachment content from the message referenced by ``raw_message``.
+
+        Called only after the triggering message passed response gating and Queue
+        admission, so adapters may perform metadata fetches and attachment downloads.
+        """
+
     def caption_text(self, raw_message: Any) -> str | None:
         """Extract caption text from one raw platform message for gating checks."""
 
@@ -139,6 +149,9 @@ class ConversationTransport(Protocol):
 class _QueuedInboundMessage:
     conversation: ConversationFacts
     message: MessageFacts
+    # The platform trigger stays opaque until the worker may resolve a replied-to
+    # attachment after response gating and waiting-work admission.
+    raw_message: Any | None = None
     admission: WaitingWorkAdmission | None = None
 
 
@@ -223,6 +236,8 @@ class ChannelConversationEngine:
         self,
         conversation: ConversationFacts,
         message_text: str,
+        *,
+        raw_message: Any | None = None,
     ) -> None:
         """Gate one inbound text and execute or enqueue a prepared command/message."""
         conversation = self._snapshot_group_sender(conversation)
@@ -290,6 +305,7 @@ class ChannelConversationEngine:
             _QueuedInboundMessage(
                 conversation=conversation,
                 message=MessageFacts(content=message_text),
+                raw_message=raw_message,
             ),
         ):
             await self._reject_overflow(conversation)
@@ -849,14 +865,73 @@ class ChannelConversationEngine:
         # Prepared commands have their own queued-work type; only plain messages
         # reach this path, so processing goes straight to trigger/relay.
         route, reply_plan = self.prepare_inbound_route(queued.conversation)
+        content: str | list[ContentBlock] = queued.message.content
+        failure_reply: str | None = None
+        if queued.conversation.kind == "group" and queued.raw_message is not None:
+            try:
+                quoted = await self._transport.build_quoted_message(queued.raw_message)
+            except Exception as error:
+                _LOGGER.warning(
+                    "Channel quoted attachment processing failed (channel=%s target=%s): %s",
+                    self._config.id,
+                    reply_plan.platform_target,
+                    error,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+                quoted = QuotedMessageFacts(
+                    user_id=None,
+                    user_display_name=None,
+                    content=None,
+                )
+                failure_reply = _media_failure_reply(error)
+            if quoted is not None:
+                content = self._content_with_quoted_message(queued, quoted)
+
+        if failure_reply is not None:
+            await self._send_reply(reply_plan, failure_reply)
         await self._trigger_and_relay(
             route,
             reply_plan,
-            queued.message.content,
+            content,
             conversation=queued.conversation,
             sender=self._sender_for(queued.conversation),
             waiting_work_admission=queued.admission,
         )
+
+    def _content_with_quoted_message(
+        self,
+        queued: _QueuedInboundMessage,
+        quoted: QuotedMessageFacts,
+    ) -> list[ContentBlock]:
+        if not isinstance(queued.message.content, str):
+            raise AssertionError("queued inbound text message must contain text")
+        blocks: list[ContentBlock] = [TextBlock(type="text", text=queued.message.content)]
+        if quoted.content is None or quoted.user_id is None:
+            blocks.append(TextBlock(type="text", text=_QUOTED_MESSAGE_UNAVAILABLE))
+            return blocks
+
+        quoted_conversation = self._snapshot_group_sender(
+            replace(
+                queued.conversation,
+                user_id=quoted.user_id,
+                user_display_name=quoted.user_display_name,
+                sender_role=None,
+                message_id=None,
+                mentioned_bot=False,
+                is_reply_to_bot=False,
+            )
+        )
+        quoted_sender = self._sender_for(quoted_conversation)
+        if quoted_sender is None:
+            raise AssertionError("quoted group message must have a sender")
+        blocks.append(
+            TextBlock(
+                type="text",
+                text=f"{_QUOTED_MESSAGE_PREFIX} {_sender_tag(quoted_sender)}:",
+            )
+        )
+        blocks.extend(quoted.content)
+        return blocks
 
     async def _process_queued_media(self, queued: _QueuedInboundMedia) -> None:
         route, reply_plan = self.prepare_inbound_route(queued.conversation)
@@ -1308,6 +1383,13 @@ def _tapped_button_label(event: InteractionEvent) -> str:
 def _sanitize_sender_tag_part(value: str) -> str:
     sanitized = value.translate(_SENDER_TAG_UNSAFE_CHARACTERS).strip()
     return sanitized or "unknown"
+
+
+def _sender_tag(sender: MessageSender) -> str:
+    return (
+        f"[{_sanitize_sender_tag_part(sender.display_name)}"
+        f"|{_sanitize_sender_tag_part(sender.id)}|{sender.role}]"
+    )
 
 
 def _extract_assistant_output(event: RunEvent) -> str | None:

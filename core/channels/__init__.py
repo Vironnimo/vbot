@@ -6,6 +6,7 @@ from core.channels.adapter import (
     DeniedChatFacts,
     DeniedChatLog,
     MessageFacts,
+    QuotedMessageFacts,
     ReplyPlanFacts,
     RouteFacts,
 )
@@ -42,6 +43,7 @@ __all__ = [
     "DeniedChatFacts",
     "DeniedChatLog",
     "MessageFacts",
+    "QuotedMessageFacts",
     "ReplyPlanFacts",
     "RouteFacts",
     "load_validated_channel_json",
