@@ -480,6 +480,49 @@ def test_analyze_image_cases_use_production_schema_and_exact_arguments() -> None
         )
 
 
+def test_bash_cases_use_production_profiles_and_exact_arguments() -> None:
+    for case_name in PROBE.BASH_CASES:
+        scenario = PROBE._scenario(
+            SimpleNamespace(
+                scenario="bash",
+                bash_case=case_name,
+                lines=8,
+            ),
+        )
+        contracts = PROBE._compile_probe_contracts(
+            scenario.tools,
+            require_closed_input=scenario.require_closed_input,
+        )
+        arguments = scenario.expected_arguments
+        parameters = scenario.tools[0]["parameters"]
+
+        assert arguments is not None
+        assert "additionalProperties" not in json.dumps(parameters)
+        assert "oneOf" not in parameters
+        contracts[PROBE.BASH_TOOL_NAME].validate_arguments(arguments)
+        assert (
+            PROBE._expected_argument_measurements(
+                [{"name": PROBE.BASH_TOOL_NAME, "arguments": arguments}],
+                scenario,
+            )["expected_arguments_match"]
+            is True
+        )
+
+    top = PROBE._bash_scenario("top_auto_default")
+    sub = PROBE._bash_scenario("sub_auto_default")
+    assert top.tools[0]["parameters"] is PROBE.BASH_TOOL_PARAMETERS
+    assert top.expected_arguments == {
+        "mode": "auto",
+        "command": "python -m pytest tests/core/tools/test_bash.py -q",
+    }
+    assert top.tools[0]["parameters"]["properties"]["yield_after"]["default"] == 30
+    assert sub.tools[0]["parameters"]["properties"]["mode"]["enum"] == [
+        "foreground",
+        "auto",
+    ]
+    assert sub.tools[0]["parameters"]["properties"]["yield_after"]["default"] == 1800
+
+
 def test_channel_send_cases_use_production_profiles_and_exact_arguments() -> None:
     for case_name in PROBE.CHANNEL_SEND_CASES:
         scenario = PROBE._scenario(

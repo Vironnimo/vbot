@@ -1416,49 +1416,29 @@ def test_register_bash_tool() -> None:
     tool = registry.get("bash")
     assert tool.description == BASH_TOOL_DESCRIPTION
     assert tool.parameters == BASH_TOOL_PARAMETERS
-    assert "Choose foreground for bounded commands whose result is needed" in tool.description
-    assert (
-        "Do not manually detach or daemonize a long-lived command inside foreground"
-        in tool.description
-    )
+    assert "Use foreground when this Run needs the result" in tool.description
+    assert "Never manually detach or daemonize a command" in tool.description
     assert "that bypasses vBot's process ownership" in tool.description
-    assert (
-        "Use background when it is known to be long-lived, or auto when it should be observed"
-        in tool.description
-    )
-    assert "read the file's tail to check progress" not in tool.description
-    branches = {
-        branch["properties"]["mode"]["enum"][0]: branch for branch in tool.parameters["oneOf"]
-    }
-    assert set(branches) == {"foreground", "auto", "background"}
-    assert set(branches["foreground"]["properties"]) == {
-        "mode",
-        "command",
-        "workdir",
-        "timeout",
-    }
-    assert set(branches["auto"]["properties"]) == {
+    assert "continue independent work or end the Run instead of polling" in tool.description
+    assert "oneOf" not in tool.parameters
+    assert "additionalProperties" not in tool.parameters
+    assert set(tool.parameters["properties"]) == {
         "mode",
         "command",
         "workdir",
         "yield_after",
         "timeout",
     }
-    assert set(branches["background"]["properties"]) == {
-        "mode",
-        "command",
-        "workdir",
-        "timeout",
-    }
-    assert all(branch["required"] == ["mode", "command"] for branch in branches.values())
-    assert all(branch["additionalProperties"] is False for branch in branches.values())
-    assert "env" not in {
-        property_name for branch in branches.values() for property_name in branch["properties"]
-    }
-    assert branches["auto"]["properties"]["yield_after"]["default"] == 30
-    assert "does not extend yield_after" in branches["auto"]["properties"]["timeout"]["description"]
-    assert "coalesced at the Session's next Run boundary" in tool.description
-    assert "complete combined stdout/stderr stream live through exit" in tool.description
+    assert tool.parameters["required"] == ["mode", "command"]
+    assert tool.parameters["properties"]["mode"]["enum"] == [
+        "foreground",
+        "auto",
+        "background",
+    ]
+    assert "env" not in tool.parameters["properties"]
+    assert tool.parameters["properties"]["yield_after"]["default"] == 30
+    assert "does not extend yield_after" in tool.parameters["properties"]["timeout"]["description"]
+    assert "complete combined stdout/stderr stream through exit" in tool.description
     assert tool.parallel_safe is True
 
 
@@ -1480,20 +1460,16 @@ def test_subagent_projection_exposes_only_non_handoff_bash_modes() -> None:
 
     projected = project_bash_tool_definitions(definitions, nesting_depth=1)
     bash_definition = projected[0]
-    branches = {
-        branch["properties"]["mode"]["enum"][0]: branch
-        for branch in bash_definition["parameters"]["oneOf"]
-    }
 
     assert bash_definition["description"] == BASH_SUBAGENT_TOOL_DESCRIPTION
     assert bash_definition["parameters"] == BASH_SUBAGENT_TOOL_PARAMETERS
-    assert "Do not manually detach or daemonize a command" in bash_definition["description"]
-    assert (
-        "every command must remain under vBot's process ownership" in bash_definition["description"]
-    )
-    assert set(branches) == {"foreground", "auto"}
-    assert branches["auto"]["properties"]["yield_after"]["default"] == 1800
-    assert "process handoff is unavailable" in branches["auto"]["properties"]["mode"]["description"]
+    parameters = bash_definition["parameters"]
+    assert "oneOf" not in parameters
+    assert "additionalProperties" not in parameters
+    assert parameters["properties"]["mode"]["enum"] == ["foreground", "auto"]
+    assert parameters["properties"]["yield_after"]["default"] == 1800
+    assert "handoff is unavailable" in parameters["properties"]["mode"]["description"]
+    assert "process handoff is unavailable" in bash_definition["description"]
     assert projected[1] is definitions[1]
     assert definitions[0]["description"] == BASH_TOOL_DESCRIPTION
     assert definitions[0]["parameters"] == BASH_TOOL_PARAMETERS
