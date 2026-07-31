@@ -80,6 +80,11 @@ from core.tools.speech import (
     TEXT_TO_SPEECH_TOOL_NAME,
     TEXT_TO_SPEECH_TOOL_PARAMETERS,
 )
+from core.tools.status import (
+    STATUS_TOOL_DESCRIPTION,
+    STATUS_TOOL_NAME,
+    STATUS_TOOL_PARAMETERS,
+)
 from core.tools.web_fetch import (
     WEB_FETCH_TOOL_DESCRIPTION,
     WEB_FETCH_TOOL_NAME,
@@ -124,6 +129,7 @@ PROBE_SCENARIOS = (
     "read",
     "skill",
     "skill_list",
+    "status",
     "text_to_speech",
     "web_fetch",
     "web_search",
@@ -191,6 +197,7 @@ READ_CASES = (
     "offset_character_limit",
 )
 SKILL_CASES = ("activate", "skill_md", "reference", "script", "asset")
+STATUS_CASES = ("current", "session", "agent_session")
 TEXT_TO_SPEECH_CASES = ("plain", "unicode_multiline")
 WEB_FETCH_CASES = ("default", "markdown", "text", "raw")
 WEB_SEARCH_CASES = (
@@ -287,6 +294,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=SKILL_CASES,
         default="activate",
         help="Exact skill argument shape requested by the skill scenario.",
+    )
+    parser.add_argument(
+        "--status-case",
+        choices=STATUS_CASES,
+        default="current",
+        help="Exact status argument shape requested by the status scenario.",
     )
     parser.add_argument(
         "--speech-case",
@@ -778,6 +791,35 @@ def _read_scenario(case_name: str) -> ProbeScenario:
     )
 
 
+def _status_scenario(case_name: str) -> ProbeScenario:
+    status_arguments = {
+        "current": {},
+        "session": {"session_id": "session-123"},
+        "agent_session": {"session_id": "session-123", "agent_id": "tester"},
+    }
+    expected_arguments = status_arguments[case_name]
+    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
+    instruction = (
+        f"Call {STATUS_TOOL_NAME} exactly once with exactly this JSON object as its "
+        f"arguments: {rendered_arguments}. Preserve every value and omit every field not "
+        "shown."
+    )
+    return ProbeScenario(
+        "status",
+        [
+            {
+                "name": STATUS_TOOL_NAME,
+                "description": STATUS_TOOL_DESCRIPTION,
+                "parameters": STATUS_TOOL_PARAMETERS,
+            }
+        ],
+        _probe_messages(instruction),
+        STATUS_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
+    )
+
+
 def _text_to_speech_scenario(case_name: str) -> ProbeScenario:
     speech_arguments = {
         "plain": {"text": "Please read this sentence aloud."},
@@ -1086,6 +1128,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _skill_scenario(str(args.skill_case))
     if name == "skill_list":
         return _skill_list_scenario()
+    if name == "status":
+        return _status_scenario(str(args.status_case))
     if name == "text_to_speech":
         return _text_to_speech_scenario(str(args.speech_case))
     if name == "web_fetch":
@@ -1769,6 +1813,7 @@ async def _run(args: argparse.Namespace) -> int:
             "process_case": args.process_case if scenario.name == "process" else None,
             "read_case": args.read_case if scenario.name == "read" else None,
             "skill_case": args.skill_case if scenario.name == "skill" else None,
+            "status_case": args.status_case if scenario.name == "status" else None,
             "speech_case": args.speech_case if scenario.name == "text_to_speech" else None,
             "web_fetch_case": (args.web_fetch_case if scenario.name == "web_fetch" else None),
             "web_search_case": (args.web_search_case if scenario.name == "web_search" else None),
