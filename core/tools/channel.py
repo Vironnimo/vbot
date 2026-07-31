@@ -51,7 +51,6 @@ _INTERACTION_BUTTON_ARGUMENTS = frozenset(("label", "data"))
 
 CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
-    "description": "Send one message, one or more files, or both.",
     "properties": {
         "channel_id": {
             "type": "string",
@@ -61,9 +60,7 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
         "message": {
             "type": "string",
             "minLength": 1,
-            "description": (
-                "Outbound message text. At least one of message or file_paths is required."
-            ),
+            "description": ("Outbound message text. Required unless file_paths is provided."),
         },
         "platform_target": {
             "type": "string",
@@ -79,10 +76,8 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Optional thread/topic inside the target chat (e.g. a Telegram forum "
-                "topic id). When the target comes from session metadata, the last "
-                "reply's topic is used automatically; ignored on platforms whose "
-                "threads are their own targets (Discord)."
+                "Telegram thread or forum-topic id. Omit to reuse the last Reply Target's "
+                "thread when available."
             ),
         },
         "file_paths": {
@@ -94,8 +89,8 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
             "minItems": 1,
             "description": (
                 "File paths to deliver through the channel. Use for every channel file "
-                "delivery, including replies. Relative paths resolve from the working "
-                "directory."
+                "delivery, including replies. Required unless message is provided; relative "
+                "paths resolve from the working directory."
             ),
         },
         "buttons": {
@@ -110,37 +105,27 @@ CHANNEL_SEND_TOOL_PARAMETERS: JsonObject = {
                         "label": {
                             "type": "string",
                             "minLength": 1,
-                            "description": "User-visible text shown on the button.",
+                            "description": "Text shown on the button.",
                         },
                         "data": {
                             "type": "string",
                             "minLength": 1,
                             "description": (
-                                "Callback payload sent when the user selects the button. "
-                                "Use '<prefix>:<payload>'; max 64 UTF-8 bytes."
+                                "Callback payload as '<prefix>:<payload>'; max 64 UTF-8 bytes."
                             ),
                         },
                     },
                     "required": ["label", "data"],
-                    "additionalProperties": False,
                 },
             },
             "description": (
-                "Optional inline-keyboard rows; each button is {label, data}. data is the "
-                "callback payload, format '<prefix>:<payload>', max 64 bytes; an extension "
-                "registered for '<prefix>' handles taps. The reserved prefix 'run' wakes you "
-                "instead: a tap on a 'run:<payload>' button starts a run carrying the tap "
-                "context — the tapped button and the message's current button state — so you "
-                "can act on it and reply. When sent from an Identity Agent Session, the tap "
-                "and later Telegram messages continue in this Session until the user sends "
-                "'/new'. Telegram only; cannot be combined with file_paths."
+                "Telegram inline-keyboard rows. Use 'run:<payload>' to wake this Agent; other "
+                "prefixes require a registered interaction handler. Cannot be combined with "
+                "file_paths."
             ),
         },
     },
     "required": ["channel_id"],
-    "anyOf": [{"required": ["message"]}, {"required": ["file_paths"]}],
-    "not": {"required": ["buttons", "file_paths"]},
-    "additionalProperties": False,
 }
 
 _CHANNEL_PROFILE_FIELDS: dict[str, tuple[str, ...]] = {
@@ -170,36 +155,49 @@ def _channel_send_profile_parameters(configs: list[ChannelConfig]) -> JsonObject
     for config in configs:
         channels_by_platform.setdefault(config.platform, []).append(config.id)
 
-    branches: list[JsonObject] = []
-    for platform in sorted(channels_by_platform):
-        channel_ids = sorted(channels_by_platform[platform])
-        field_names = _CHANNEL_PROFILE_FIELDS.get(
-            platform,
-            ("channel_id", "message", "platform_target", "file_paths"),
-        )
-        properties = {name: copy.deepcopy(canonical_properties[name]) for name in field_names}
-        channel_id_schema = properties["channel_id"]
-        channel_id_schema["enum"] = channel_ids
-        branch: JsonObject = {
-            "type": "object",
-            "description": (f"Send through an enabled {platform} Channel owned by this Agent."),
-            "properties": properties,
-            "required": ["channel_id"],
-            "anyOf": [{"required": ["message"]}, {"required": ["file_paths"]}],
-            "additionalProperties": False,
-        }
-        if platform == "telegram":
-            branch["not"] = {"required": ["buttons", "file_paths"]}
-        branches.append(branch)
-
+    visible_fields = {
+        field_name
+        for platform in channels_by_platform
+        for field_name in _CHANNEL_PROFILE_FIELDS[platform]
+    }
+    properties = {
+        name: copy.deepcopy(schema)
+        for name, schema in canonical_properties.items()
+        if name in visible_fields
+    }
+    channel_id_schema = properties["channel_id"]
+    channel_id_schema["enum"] = sorted(
+        channel_id for channel_ids in channels_by_platform.values() for channel_id in channel_ids
+    )
     return {
         "type": "object",
-        "description": (
-            "Choose one enabled Channel owned by this Agent. Each branch exposes "
-            "only the arguments supported by that Channel's platform."
-        ),
-        "oneOf": branches,
+        "properties": properties,
+        "required": ["channel_id"],
     }
+
+
+def _channel_send_profile_description(configs: list[ChannelConfig]) -> str:
+    channels_by_platform: dict[str, list[str]] = {}
+    for config in configs:
+        channels_by_platform.setdefault(config.platform, []).append(config.id)
+    available = "; ".join(
+        f"{platform.title()}: {', '.join(sorted(channel_ids))}"
+        for platform, channel_ids in sorted(channels_by_platform.items())
+    )
+    return f"{CHANNEL_SEND_TOOL_DESCRIPTION} Enabled Channels — {available}."
+
+
+def _channel_send_definition_profile(configs: list[ChannelConfig]) -> ToolDefinitionProfile:
+    signature = json.dumps(
+        [(config.platform, config.id) for config in configs],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return ToolDefinitionProfile(
+        key=f"channels:{hashlib.sha256(signature).hexdigest()}",
+        description=_channel_send_profile_description(configs),
+        parameters=_channel_send_profile_parameters(configs),
+    )
 
 
 def _channel_send_profile_resolver(channel_service: ChannelService):
@@ -216,16 +214,7 @@ def _channel_send_profile_resolver(channel_service: ChannelService):
         )
         if not configs:
             return None
-        signature = json.dumps(
-            [(config.platform, config.id) for config in configs],
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        return ToolDefinitionProfile(
-            key=f"channels:{hashlib.sha256(signature).hexdigest()}",
-            description=CHANNEL_SEND_TOOL_DESCRIPTION,
-            parameters=_channel_send_profile_parameters(configs),
-        )
+        return _channel_send_definition_profile(configs)
 
     return resolve
 
@@ -266,6 +255,7 @@ def register_channel_send_tool(
         CHANNEL_SEND_TOOL_DESCRIPTION,
         CHANNEL_SEND_TOOL_PARAMETERS,
         handler,
+        open_input_schema=True,
         result_schema={"type": "object", "required": ["channel_id", "platform_target"]},
         display=ToolDisplay(summary_builder=_channel_send_display_summary),
         definition_profile_resolver=_channel_send_profile_resolver(channel_service),
@@ -306,6 +296,7 @@ async def _handle_channel_send_tool(
             )
 
         channel_config = _channel_config_for_agent(channel_service, channel_id, context.agent_id)
+        _validate_platform_arguments(arguments, channel_config)
         platform_target, thread_id = _send_target_from_arguments_or_context(
             arguments,
             chat_sessions,
@@ -348,6 +339,16 @@ async def _handle_channel_send_tool(
     if thread_id is not None:
         result["thread_id"] = thread_id
     return tool_success(result)
+
+
+def _validate_platform_arguments(arguments: JsonObject, channel_config: ChannelConfig) -> None:
+    allowed_arguments = frozenset(_CHANNEL_PROFILE_FIELDS[channel_config.platform])
+    unsupported_arguments = sorted(set(arguments) - allowed_arguments)
+    if unsupported_arguments:
+        names = ", ".join(unsupported_arguments)
+        raise ValueError(
+            f"{names} not supported by {channel_config.platform} Channel {channel_config.id}"
+        )
 
 
 def _contains_run_button(buttons: list[list[InteractionButton]] | None) -> bool:
@@ -496,6 +497,8 @@ def _build_file_data(
         return []
     if not isinstance(value, list):
         raise ValueError("file_paths must be an array of strings")
+    if not value:
+        raise ValueError("file_paths must contain at least one file path")
 
     files: list[FileData] = []
     for index, raw_path in enumerate(value):
@@ -542,11 +545,15 @@ def _build_buttons(value: object) -> list[list[InteractionButton]] | None:
         return None
     if not isinstance(value, list):
         raise ValueError("buttons must be an array of button rows")
+    if not value:
+        raise ValueError("buttons must contain at least one button row")
 
     rows: list[list[InteractionButton]] = []
     for row_index, row in enumerate(value):
         if not isinstance(row, list):
             raise ValueError(f"buttons[{row_index}] must be an array of buttons")
+        if not row:
+            raise ValueError(f"buttons[{row_index}] must contain at least one button")
         buttons: list[InteractionButton] = []
         for button_index, button in enumerate(row):
             if not isinstance(button, dict):
