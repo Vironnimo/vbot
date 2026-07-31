@@ -37,6 +37,11 @@ from core.tools.process import (
     PROCESS_TOOL_NAME,
     PROCESS_TOOL_PARAMETERS,
 )
+from core.tools.web_fetch import (
+    WEB_FETCH_TOOL_DESCRIPTION,
+    WEB_FETCH_TOOL_NAME,
+    WEB_FETCH_TOOL_PARAMETERS,
+)
 from core.utils.config import Config
 
 DEFAULT_PROVIDER = "opencode-go"
@@ -58,6 +63,7 @@ PROBE_SCENARIOS = (
     "unknown_property_pressure",
     "large_arguments",
     "process",
+    "web_fetch",
 )
 OPTIONAL_BOOLEAN_CASES = ("omit", "include_links", "raw", "both")
 PROCESS_CASES = (
@@ -76,6 +82,7 @@ PROCESS_CASES = (
     "input_empty_eof",
     "kill",
 )
+WEB_FETCH_CASES = ("default", "markdown", "text", "raw")
 
 PROBE_TOOL = {
     "name": PROBE_TOOL_NAME,
@@ -120,6 +127,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=PROCESS_CASES,
         default="status_list",
         help="Exact process argument shape requested by the process scenario.",
+    )
+    parser.add_argument(
+        "--web-fetch-case",
+        choices=WEB_FETCH_CASES,
+        default="default",
+        help="Exact web_fetch argument shape requested by the web_fetch scenario.",
     )
     parser.add_argument(
         "--profile",
@@ -354,6 +367,37 @@ def _process_scenario(case_name: str) -> ProbeScenario:
     )
 
 
+def _web_fetch_scenario(case_name: str) -> ProbeScenario:
+    url = "https://example.com/provider-tool-probe"
+    web_fetch_arguments: dict[str, dict[str, Any]] = {
+        "default": {"url": url},
+        "markdown": {"url": url, "output": "markdown"},
+        "text": {"url": url, "output": "text"},
+        "raw": {"url": url, "output": "raw"},
+    }
+    expected_arguments = web_fetch_arguments[case_name]
+    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
+    instruction = (
+        f"Call {WEB_FETCH_TOOL_NAME} exactly once with exactly this JSON object as its "
+        f"arguments: {rendered_arguments}. Preserve every value and omit every field not "
+        "shown."
+    )
+    return ProbeScenario(
+        "web_fetch",
+        [
+            {
+                "name": WEB_FETCH_TOOL_NAME,
+                "description": WEB_FETCH_TOOL_DESCRIPTION,
+                "parameters": WEB_FETCH_TOOL_PARAMETERS,
+            }
+        ],
+        _probe_messages(instruction),
+        WEB_FETCH_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
+    )
+
+
 def _scenario(args: argparse.Namespace) -> ProbeScenario:
     direct = json.loads(json.dumps(PROBE_TOOL))
     name = str(args.scenario)
@@ -459,6 +503,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         )
     if name == "process":
         return _process_scenario(str(args.process_case))
+    if name == "web_fetch":
+        return _web_fetch_scenario(str(args.web_fetch_case))
     raise AssertionError(f"unsupported probe scenario: {name}")
 
 
@@ -1126,6 +1172,7 @@ async def _run(args: argparse.Namespace) -> int:
                 else None
             ),
             "process_case": args.process_case if scenario.name == "process" else None,
+            "web_fetch_case": (args.web_fetch_case if scenario.name == "web_fetch" else None),
             "request_messages": len(messages),
             "request_tools": len(tools),
             "trace_replay": traced_request is not None,

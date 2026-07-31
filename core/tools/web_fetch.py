@@ -123,11 +123,10 @@ WebFetchOutput = Literal["markdown", "text", "raw"]
 WEB_FETCH_TOOL_NAME = "web_fetch"
 _WEB_FETCH_OUTPUTS: tuple[WebFetchOutput, ...] = ("markdown", "text", "raw")
 WEB_FETCH_TOOL_DESCRIPTION = (
-    "Fetch a public HTTP or HTTPS URL and return the page content as clean, "
-    "readable text or raw HTML according to the required output mode. PDF, Word, "
-    "and Excel documents are returned as extracted "
-    "text. An image URL is shown to you directly when the model supports vision; "
-    "other binary files (executables, archives, media) return a short notice "
+    "Fetch a public HTTP or HTTPS URL and return clean, readable Markdown by default, "
+    "cleaned text, or raw HTML. PDF, Word, and Excel documents are returned as "
+    "extracted text. An image URL is shown to you directly when the model supports "
+    "vision; other binary files (executables, archives, media) return a short notice "
     "instead of raw bytes."
 )
 WEB_FETCH_TOOL_PARAMETERS: JsonObject = {
@@ -151,7 +150,6 @@ WEB_FETCH_TOOL_PARAMETERS: JsonObject = {
         },
     },
     "required": ["url"],
-    "additionalProperties": False,
 }
 
 
@@ -1151,6 +1149,7 @@ def register_web_fetch_tool(registry: ToolRegistry, *, attachment_store: Any) ->
         result_schema={"type": "object", "required": ["content"]},
         display=ToolDisplay(summary_fields=("url",)),
         parallel_safe=True,
+        open_input_schema=True,
     )
 
 

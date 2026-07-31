@@ -312,6 +312,36 @@ def test_process_argument_measurements_report_only_structural_differences() -> N
     assert marker not in json.dumps(result)
 
 
+def test_web_fetch_cases_use_production_schema_and_exact_expected_arguments() -> None:
+    for case_name in PROBE.WEB_FETCH_CASES:
+        scenario = PROBE._scenario(
+            SimpleNamespace(
+                scenario="web_fetch",
+                web_fetch_case=case_name,
+                lines=8,
+            ),
+        )
+        contracts = PROBE._compile_probe_contracts(
+            scenario.tools,
+            require_closed_input=scenario.require_closed_input,
+        )
+        arguments = scenario.expected_arguments
+
+        assert scenario.tools[0]["parameters"] is PROBE.WEB_FETCH_TOOL_PARAMETERS
+        assert arguments is not None
+        contracts[PROBE.WEB_FETCH_TOOL_NAME].validate_arguments(arguments)
+        assert (
+            PROBE._expected_argument_measurements(
+                [{"name": PROBE.WEB_FETCH_TOOL_NAME, "arguments": arguments}],
+                scenario,
+            )["expected_arguments_match"]
+            is True
+        )
+
+    default = PROBE._web_fetch_scenario("default")
+    assert default.expected_arguments == {"url": "https://example.com/provider-tool-probe"}
+
+
 def test_probe_runtime_suppresses_background_service_start_hooks() -> None:
     class RuntimeStub:
         def __init__(self) -> None:

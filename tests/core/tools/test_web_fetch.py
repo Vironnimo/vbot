@@ -277,7 +277,7 @@ def test_register_web_fetch_tool_schema() -> None:
     parameters = definition["parameters"]
     assert parameters["type"] == "object"
     assert parameters["required"] == ["url"]
-    assert parameters["additionalProperties"] is False
+    assert "additionalProperties" not in parameters
     assert set(parameters["properties"]) == {"url", "output"}
     output = parameters["properties"]["output"]
     assert output["type"] == "string"
@@ -304,6 +304,7 @@ def test_web_fetch_openai_wire_preserves_optional_output_and_disables_strict_mod
     parameters = definition["parameters"]
     assert parameters["required"] == ["url"]
     assert definition["strict"] is False
+    assert "additionalProperties" not in parameters
     assert parameters["properties"]["output"]["enum"] == ["markdown", "text", "raw"]
 
 
@@ -653,8 +654,11 @@ async def test_web_fetch_handler_validation_error_signals_not_retryable(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("output", [None, "markdown"])
 async def test_web_fetch_handler_html_extraction(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    output: str | None,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -679,7 +683,7 @@ async def test_web_fetch_handler_html_extraction(
         ),
     )
 
-    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url, output))
 
     data = assert_success_envelope(result)
     content = data["content"]
