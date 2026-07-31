@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 from core.automation.cron import CronJobNotFoundError, CronJobValidationError, CronServiceError
 from core.projects import format_agent_address, parse_agent_address
 from core.tools.arguments import optional_string, required_string
-from core.tools.contracts import action_schema
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -23,10 +22,8 @@ if TYPE_CHECKING:
 
 CRON_TOOL_NAME = "cron"
 CRON_TOOL_DESCRIPTION = (
-    "Create and manage persisted schedules that start Runs. Set action to create, list, "
-    "update, delete, enable, or disable. New jobs are enabled immediately, use the server "
-    "timezone, and start a fresh Session on every fire. Use list to obtain job ids; disable "
-    "pauses a job without deleting it."
+    "Create and manage persisted schedules that start Runs in fresh Sessions. New jobs are "
+    "enabled immediately and use the server timezone; disable pauses without deleting."
 )
 
 CRON_ACTIONS = frozenset(("create", "list", "update", "delete", "enable", "disable"))
@@ -62,7 +59,9 @@ _ACTION_RECOMMENDATIONS = {
 _CRON_ID_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
-    "description": "Existing job id returned by list.",
+    "description": (
+        "Existing job id returned by list. Required for update, delete, enable, and disable."
+    ),
 }
 _CRON_TARGET_PARAMETER: JsonObject = {
     "type": "string",
@@ -76,16 +75,16 @@ _CRON_NAME_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
     "description": (
-        "Optional human-readable job name for create or update. If omitted on create, a stable "
-        "name is derived from the first useful prompt line."
+        "Human-readable name for create or update. Omit on create to derive one from prompt; "
+        "omit on update to keep the existing name."
     ),
 }
 _CRON_PROMPT_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
     "description": (
-        "Instruction for create or update. Required on create and must be self-contained "
-        "because every fire starts a fresh Session. Omit on update to keep the existing prompt."
+        "Self-contained instruction for each fresh Session. Required on create; omit on update "
+        "to keep the existing prompt."
     ),
 }
 _CRON_SCHEDULE_PARAMETER: JsonObject = {
@@ -102,74 +101,29 @@ _CRON_REPEAT_PARAMETER: JsonObject = {
     "type": ["integer", "null"],
     "minimum": 1,
     "description": (
-        "Number of future fires, including the next one. A positive integer sets the count. "
-        "On update, omit repeat to keep the current count or set it to null to make a recurring "
-        "job unlimited. On create, omit it for an unlimited recurring job. One-time schedules "
-        "accept only 1 and never null."
+        "Future fires including the next. Use a positive integer; use null on update to make a "
+        "recurring job unlimited. Omit on create for unlimited recurrence or on update to keep "
+        "the current count. One-time schedules accept only 1, never null."
     ),
 }
 
-CRON_TOOL_PARAMETERS: JsonObject = action_schema(
-    {
-        "create": {
-            "type": "object",
-            "description": "Create and immediately enable one persisted schedule.",
-            "properties": {
-                "target": _CRON_TARGET_PARAMETER,
-                "name": _CRON_NAME_PARAMETER,
-                "prompt": _CRON_PROMPT_PARAMETER,
-                "schedule": _CRON_SCHEDULE_PARAMETER,
-                "repeat": _CRON_REPEAT_PARAMETER,
-            },
-            "required": ["prompt", "schedule"],
+CRON_TOOL_PARAMETERS: JsonObject = {
+    "type": "object",
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": ["create", "list", "update", "delete", "enable", "disable"],
+            "description": "Schedule action to perform.",
         },
-        "list": {
-            "type": "object",
-            "description": "List all persisted schedules and their current ids and state.",
-            "properties": {},
-            "required": [],
-        },
-        "update": {
-            "type": "object",
-            "description": (
-                "Update one schedule. Include id and at least one field that should change."
-            ),
-            "properties": {
-                "id": _CRON_ID_PARAMETER,
-                "target": _CRON_TARGET_PARAMETER,
-                "name": _CRON_NAME_PARAMETER,
-                "prompt": _CRON_PROMPT_PARAMETER,
-                "schedule": _CRON_SCHEDULE_PARAMETER,
-                "repeat": _CRON_REPEAT_PARAMETER,
-            },
-            "required": ["id"],
-            "minProperties": 3,
-        },
-        "delete": {
-            "type": "object",
-            "description": "Delete one persisted schedule.",
-            "properties": {"id": _CRON_ID_PARAMETER},
-            "required": ["id"],
-        },
-        "enable": {
-            "type": "object",
-            "description": "Enable one persisted schedule.",
-            "properties": {"id": _CRON_ID_PARAMETER},
-            "required": ["id"],
-        },
-        "disable": {
-            "type": "object",
-            "description": "Pause one persisted schedule without deleting it.",
-            "properties": {"id": _CRON_ID_PARAMETER},
-            "required": ["id"],
-        },
+        "id": _CRON_ID_PARAMETER,
+        "target": _CRON_TARGET_PARAMETER,
+        "name": _CRON_NAME_PARAMETER,
+        "prompt": _CRON_PROMPT_PARAMETER,
+        "schedule": _CRON_SCHEDULE_PARAMETER,
+        "repeat": _CRON_REPEAT_PARAMETER,
     },
-    description=(
-        "Flat action interface. Each action exposes only its valid arguments and "
-        "structurally requires every field it needs."
-    ),
-    action_description=("Create, list, update, delete, enable, or disable a persisted schedule."),
-)
+    "required": ["action"],
+}
 
 _LOGGER = get_logger("tools.cron")
 
@@ -185,6 +139,7 @@ def register_cron_tool(registry: ToolRegistry, cron_service: CronService) -> Non
         CRON_TOOL_DESCRIPTION,
         CRON_TOOL_PARAMETERS,
         handler,
+        open_input_schema=True,
         result_schema={"type": "object"},
         display=ToolDisplay(summary_builder=_cron_display_summary),
     )

@@ -43,6 +43,11 @@ from core.tools.channel import (
     _channel_send_definition_profile,
 )
 from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
+from core.tools.cron import (
+    CRON_TOOL_DESCRIPTION,
+    CRON_TOOL_NAME,
+    CRON_TOOL_PARAMETERS,
+)
 from core.tools.edit import (
     EDIT_TOOL_DESCRIPTION,
     EDIT_TOOL_NAME,
@@ -157,6 +162,7 @@ PROBE_SCENARIOS = (
     "analyze_image",
     "bash",
     "channel_send",
+    "cron",
     "edit",
     "glob",
     "grep",
@@ -213,6 +219,28 @@ CHANNEL_SEND_CASES = (
     "discord_message_file",
     "mixed_telegram_button",
     "mixed_discord_file",
+)
+CRON_CASES = (
+    "create_cron",
+    "create_interval",
+    "create_once_relative",
+    "create_once_iso",
+    "create_target",
+    "create_name",
+    "create_repeat",
+    "create_repeat_null",
+    "create_all",
+    "list",
+    "update_target",
+    "update_name",
+    "update_prompt",
+    "update_schedule",
+    "update_repeat",
+    "update_repeat_null",
+    "update_all",
+    "delete",
+    "enable",
+    "disable",
 )
 EDIT_CASES = ("default", "replace_false", "replace_true", "multiline", "delete")
 IMAGE_GENERATION_CASES = (
@@ -406,6 +434,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=CHANNEL_SEND_CASES,
         default="telegram_message",
         help="Exact channel_send profile and argument shape requested by the scenario.",
+    )
+    parser.add_argument(
+        "--cron-case",
+        choices=CRON_CASES,
+        default="create_cron",
+        help="Exact cron action and argument shape requested by the scenario.",
     )
     parser.add_argument(
         "--edit-case",
@@ -717,6 +751,127 @@ def _image_generation_scenario(case_name: str) -> ProbeScenario:
         ],
         _probe_messages(instruction),
         IMAGE_GENERATION_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
+    )
+
+
+def _cron_scenario(case_name: str) -> ProbeScenario:
+    cron_arguments: dict[str, dict[str, Any]] = {
+        "create_cron": {
+            "action": "create",
+            "prompt": "Prepare the daily operations summary.",
+            "schedule": "0 9 * * *",
+        },
+        "create_interval": {
+            "action": "create",
+            "prompt": "Check the service health.",
+            "schedule": "every 2h",
+        },
+        "create_once_relative": {
+            "action": "create",
+            "prompt": "Send the deployment reminder.",
+            "schedule": "in 30m",
+            "repeat": 1,
+        },
+        "create_once_iso": {
+            "action": "create",
+            "prompt": "Send the deployment reminder.",
+            "schedule": "2026-08-01T09:00:00+02:00",
+        },
+        "create_target": {
+            "action": "create",
+            "target": "reviewer@vbot",
+            "prompt": "Review the current release state.",
+            "schedule": "0 10 * * 1",
+        },
+        "create_name": {
+            "action": "create",
+            "name": "Daily operations summary",
+            "prompt": "Prepare the daily operations summary.",
+            "schedule": "0 9 * * *",
+        },
+        "create_repeat": {
+            "action": "create",
+            "prompt": "Check the service health.",
+            "schedule": "every 2h",
+            "repeat": 3,
+        },
+        "create_repeat_null": {
+            "action": "create",
+            "prompt": "Check the service health.",
+            "schedule": "every 2h",
+            "repeat": None,
+        },
+        "create_all": {
+            "action": "create",
+            "target": "reviewer@vbot",
+            "name": "Release review",
+            "prompt": "Review the current release state.",
+            "schedule": "0 10 * * 1",
+            "repeat": 6,
+        },
+        "list": {"action": "list"},
+        "update_target": {
+            "action": "update",
+            "id": "job-123",
+            "target": "reviewer@vbot",
+        },
+        "update_name": {
+            "action": "update",
+            "id": "job-123",
+            "name": "Updated operations summary",
+        },
+        "update_prompt": {
+            "action": "update",
+            "id": "job-123",
+            "prompt": "Prepare the revised operations summary.",
+        },
+        "update_schedule": {
+            "action": "update",
+            "id": "job-123",
+            "schedule": "every 4h",
+        },
+        "update_repeat": {
+            "action": "update",
+            "id": "job-123",
+            "repeat": 4,
+        },
+        "update_repeat_null": {
+            "action": "update",
+            "id": "job-123",
+            "repeat": None,
+        },
+        "update_all": {
+            "action": "update",
+            "id": "job-123",
+            "target": "reviewer@vbot",
+            "name": "Updated release review",
+            "prompt": "Review the revised release state.",
+            "schedule": "0 11 * * 1",
+            "repeat": 8,
+        },
+        "delete": {"action": "delete", "id": "job-123"},
+        "enable": {"action": "enable", "id": "job-123"},
+        "disable": {"action": "disable", "id": "job-123"},
+    }
+    expected_arguments = cron_arguments[case_name]
+    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
+    instruction = (
+        f"Call {CRON_TOOL_NAME} exactly once with exactly this JSON object as its arguments: "
+        f"{rendered_arguments}. Preserve every value and do not add any field."
+    )
+    return ProbeScenario(
+        "cron",
+        [
+            {
+                "name": CRON_TOOL_NAME,
+                "description": CRON_TOOL_DESCRIPTION,
+                "parameters": CRON_TOOL_PARAMETERS,
+            }
+        ],
+        _probe_messages(instruction),
+        CRON_TOOL_NAME,
         require_closed_input=False,
         expected_arguments=expected_arguments,
     )
@@ -1818,6 +1973,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _bash_scenario(str(args.bash_case))
     if name == "channel_send":
         return _channel_send_scenario(str(args.channel_send_case))
+    if name == "cron":
+        return _cron_scenario(str(args.cron_case))
     if name == "edit":
         return _edit_scenario(str(args.edit_case))
     if name == "glob":
@@ -2527,6 +2684,7 @@ async def _run(args: argparse.Namespace) -> int:
             "channel_send_case": (
                 args.channel_send_case if scenario.name == "channel_send" else None
             ),
+            "cron_case": args.cron_case if scenario.name == "cron" else None,
             "edit_case": args.edit_case if scenario.name == "edit" else None,
             "glob_case": args.glob_case if scenario.name == "glob" else None,
             "grep_case": args.grep_case if scenario.name == "grep" else None,

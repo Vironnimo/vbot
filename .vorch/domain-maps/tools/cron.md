@@ -6,7 +6,7 @@ Manages persisted time-based automation jobs through `CronService`.
 
 - Tool name: `cron`
 - Registration: `register_cron_tool(registry, cron_service)`
-- Schema: one flat discriminated union with a closed branch per required `action`. Each branch advertises only its valid fields and structurally requires them: `create` requires `prompt` + `schedule`; `update` requires `id` plus at least one changed field; delete/enable/disable require `id`; list contains only `action`. The handler retains the same validation as defense in depth.
+- Schema: one open flat object requiring `action`, with optional siblings `id`, `target`, `name`, `prompt`, `schedule`, and `repeat`. The handler requires `prompt` + `schedule` for create, `id` plus at least one changed field for update, `id` for delete/enable/disable, no extra fields for list, and rejects every action-inapplicable or unknown field. The model-facing schema emits no branch keywords or `additionalProperties`; `repeat` retains the genuine `integer | null` semantic because update uses explicit null to make recurring jobs unlimited.
 - Actions: `create`, `list`, `update`, `delete`, `enable`, and `disable`. `create` requires `prompt` + `schedule`; `update` requires `id` + at least one changed field; delete/enable/disable require `id`; list needs only `action`.
 - Display: the summary leads with `action`, followed by available `name`, `id`, target, and schedule values.
 
@@ -22,6 +22,6 @@ Manages persisted time-based automation jobs through `CronService`.
 ## Constraints & Gotchas
 
 - Unknown action-specific arguments, missing required arguments, domain validation failures, and missing jobs return non-retryable failure envelopes whose message includes an exact valid call or directs the Agent to `{"action":"list"}` for current ids.
-- The canonical registry rejects the retired nested `request.operation` envelope, operation-key envelopes, stringified operation objects, the old `agent_id` spelling, and removed `timezone`, `session_id`, or `status` arguments before the handler runs.
+- The required `action` contract rejects retired nested `request.operation`, operation-key, and stringified operation shapes before the handler runs; the handler rejects the old `agent_id` spelling and removed `timezone`, `session_id`, or `status` arguments.
 - The Tool never accepts a timezone. Cron expressions and offset-free Once values use the server's IANA system timezone, including future DST rules; an explicit Once offset remains an absolute instant.
 - A repeat is consumed when `TriggerService` admits or queues the Run, before its terminal result. A failed admitted Run therefore counts; a trigger failure before admission does not. Missed Once jobs do not catch up after restart; list reports them as `missed`. Repeated recurring Run failures eventually stop a job as `failed`; enable retries it after resetting the consecutive-failure streak.
