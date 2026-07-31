@@ -7,7 +7,6 @@ from typing import Any
 import pytest
 
 from core.memory import MemoryService
-from core.tools.contracts import ToolContractError
 from core.tools.memory import (
     _MAX_MEMORY_FAILURES_PER_RUN,
     MEMORY_TOOL_DESCRIPTION,
@@ -81,27 +80,12 @@ def test_register_memory_tool_exposes_provider_schema(tmp_path: Path) -> None:
     definition = registry.provider_definitions(["memory"])[0]
     assert definition["name"] == "memory"
     parameters = definition["parameters"]
-    branches = {branch["properties"]["action"]["enum"][0]: branch for branch in parameters["oneOf"]}
-    assert set(branches) == {"list", "add", "replace", "remove"}
-    assert set(branches["list"]["properties"]) == {"action", "scope"}
-    assert branches["list"]["required"] == ["action", "scope"]
-    assert set(branches["add"]["properties"]) == {"action", "scope", "content"}
-    assert branches["add"]["required"] == ["action", "scope", "content"]
-    assert set(branches["replace"]["properties"]) == {
-        "action",
-        "scope",
-        "entry_id",
-        "content",
-    }
-    assert branches["replace"]["required"] == [
-        "action",
-        "scope",
-        "entry_id",
-        "content",
-    ]
-    assert set(branches["remove"]["properties"]) == {"action", "scope", "entry_id"}
-    assert branches["remove"]["required"] == ["action", "scope", "entry_id"]
-    assert all(branch["additionalProperties"] is False for branch in branches.values())
+    assert set(parameters["properties"]) == {"action", "scope", "content", "entry_id"}
+    assert parameters["properties"]["action"]["enum"] == ["list", "add", "replace", "remove"]
+    assert parameters["required"] == ["action", "scope"]
+    assert "oneOf" not in parameters
+    assert "additionalProperties" not in parameters
+    assert tool.open_input_schema is True
 
 
 def test_memory_tool_adds_and_lists_user_entries(tmp_path: Path) -> None:
@@ -126,26 +110,45 @@ def test_memory_tool_adds_and_lists_user_entries(tmp_path: Path) -> None:
     assert "Prefers direct answers." in (context.workspace / "USER.md").read_text(encoding="utf-8")
 
 
-def test_memory_add_contract_rejects_entry_id_before_handler(tmp_path: Path) -> None:
+def test_memory_add_handler_rejects_entry_id(tmp_path: Path) -> None:
     registry = ToolRegistry()
     register_memory_tool(registry, MemoryService())
     context = make_context(tmp_path)
 
-    with pytest.raises(ToolContractError, match=r"Additional properties.*entry_id"):
-        asyncio.run(
-            registry.dispatch(
-                context,
-                {
-                    "action": "add",
-                    "scope": "user",
-                    "content": "Prefers direct answers.",
-                    "entry_id": 1,
-                },
-                [MEMORY_TOOL_NAME],
-            )
+    result = asyncio.run(
+        registry.dispatch(
+            context,
+            {
+                "action": "add",
+                "scope": "user",
+                "content": "Prefers direct answers.",
+                "entry_id": 1,
+            },
+            [MEMORY_TOOL_NAME],
         )
+    )
 
+    error = assert_failure(result, "invalid_arguments")
+    assert "entry_id" in error["message"]
     assert not (context.workspace / "USER.md").exists()
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    (
+        {"action": "list"},
+        {"action": "add", "scope": "user"},
+        {"action": "replace", "scope": "agent", "entry_id": 1},
+        {"action": "replace", "scope": "agent", "content": "new"},
+        {"action": "remove", "scope": "agent"},
+    ),
+)
+def test_memory_handler_rejects_missing_action_fields(
+    tmp_path: Path, arguments: JsonObject
+) -> None:
+    result = memory_handler(make_context(tmp_path), arguments, MemoryService())
+
+    assert_failure(result, "invalid_arguments")
 
 
 def test_memory_tool_rejects_retired_operation_shapes(tmp_path: Path) -> None:

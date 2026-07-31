@@ -9,7 +9,6 @@ from collections import OrderedDict
 from core.memory import MemoryEntry, MemoryError, MemoryScope, MemoryService
 from core.tools.arguments import required_int
 from core.tools.availability import MEMORY_TOOL_NAME
-from core.tools.contracts import action_schema
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -20,24 +19,11 @@ from core.tools.tools import (
 )
 
 MEMORY_TOOL_DESCRIPTION = (
-    "List or edit pinned memory by setting action to list, add, replace, or remove. "
-    "USER.md "
-    "('user' scope — who the user is: preferences, "
-    "role, communication style) and MEMORY.md ('agent' scope — your own environment, "
-    "conventions, and tool quirks). Entries are injected into every future turn, so keep "
-    "them compact and high-signal.\n\n"
-    "WHEN: save proactively when the user states a preference, correction, or personal "
-    "detail, or you learn a stable fact about their environment or workflow. Priority order "
-    "when you save: user preferences and corrections first, then environment facts, then "
-    "reusable procedures.\n\n"
-    "SKIP: trivial or easily re-discovered facts, raw data, task progress, completed-work "
-    "logs, and temporary TODO state (recall those from past sessions with session_search, if "
-    "that tool is available). Also skip anything stale within a week: PR/issue numbers, "
-    "commit hashes, 'fixed bug X', 'phase N done', file counts. A reusable workflow belongs "
-    "in a skill rather than memory (capture it with the skill_manage tool, if you have it).\n\n"
-    "IF FULL: an add is rejected once a scope is at its budget. Call list, then "
-    "remove or shorten stale entries to make room, and re-add.\n\n"
-    "For replace/remove, call list first — 1-based ids shift after a remove."
+    "Manage compact pinned memory injected into future turns. Use user scope for durable "
+    "preferences, corrections, and personal details; use agent scope for stable environment "
+    "facts and conventions. Skip task progress, logs, transient identifiers, and easily "
+    "rediscovered facts. List before replace or remove because ids shift. If add is full, "
+    "remove or shorten a stale entry and retry."
 )
 MEMORY_ACTIONS = ("list", "add", "replace", "remove")
 MEMORY_SCOPES = ("user", "agent")
@@ -57,53 +43,20 @@ _MEMORY_ENTRY_ID_PARAMETER: JsonObject = {
     "description": "1-based entry id returned by list. Required for replace and remove.",
 }
 
-MEMORY_TOOL_PARAMETERS: JsonObject = action_schema(
-    {
-        "list": {
-            "type": "object",
-            "description": "List current pinned entries and their 1-based ids.",
-            "properties": {"scope": _MEMORY_SCOPE_PARAMETER},
-            "required": ["scope"],
+MEMORY_TOOL_PARAMETERS: JsonObject = {
+    "type": "object",
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": list(MEMORY_ACTIONS),
+            "description": "Memory action to perform.",
         },
-        "add": {
-            "type": "object",
-            "description": "Add one pinned entry.",
-            "properties": {
-                "scope": _MEMORY_SCOPE_PARAMETER,
-                "content": _MEMORY_CONTENT_PARAMETER,
-            },
-            "required": ["scope", "content"],
-        },
-        "replace": {
-            "type": "object",
-            "description": (
-                "Replace one existing pinned entry. Call list first because ids can shift."
-            ),
-            "properties": {
-                "scope": _MEMORY_SCOPE_PARAMETER,
-                "entry_id": _MEMORY_ENTRY_ID_PARAMETER,
-                "content": _MEMORY_CONTENT_PARAMETER,
-            },
-            "required": ["scope", "entry_id", "content"],
-        },
-        "remove": {
-            "type": "object",
-            "description": (
-                "Remove one existing pinned entry. Call list first because ids can shift."
-            ),
-            "properties": {
-                "scope": _MEMORY_SCOPE_PARAMETER,
-                "entry_id": _MEMORY_ENTRY_ID_PARAMETER,
-            },
-            "required": ["scope", "entry_id"],
-        },
+        "scope": _MEMORY_SCOPE_PARAMETER,
+        "content": _MEMORY_CONTENT_PARAMETER,
+        "entry_id": _MEMORY_ENTRY_ID_PARAMETER,
     },
-    description=(
-        "Flat action interface. Each action exposes only its valid arguments and "
-        "structurally requires every field it needs."
-    ),
-    action_description="Memory action to perform.",
-)
+    "required": ["action", "scope"],
+}
 
 _MEMORY_ACTION_FIELDS = {
     "list": frozenset({"action", "scope"}),
@@ -341,6 +294,7 @@ def register_memory_tool(registry: ToolRegistry, memory_service: MemoryService) 
         MEMORY_TOOL_DESCRIPTION,
         MEMORY_TOOL_PARAMETERS,
         make_memory_handler(memory_service),
+        open_input_schema=True,
         result_schema={"type": "object", "required": ["content", "scope", "entries"]},
         display=ToolDisplay(
             summary_builder=_memory_display_summary,

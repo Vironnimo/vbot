@@ -57,6 +57,11 @@ from core.tools.image import (
     IMAGE_GENERATION_TOOL_NAME,
     IMAGE_GENERATION_TOOL_PARAMETERS,
 )
+from core.tools.memory import (
+    MEMORY_TOOL_DESCRIPTION,
+    MEMORY_TOOL_NAME,
+    MEMORY_TOOL_PARAMETERS,
+)
 from core.tools.process import (
     PROCESS_TOOL_DESCRIPTION,
     PROCESS_TOOL_NAME,
@@ -138,6 +143,7 @@ PROBE_SCENARIOS = (
     "glob",
     "grep",
     "image_generation",
+    "memory",
     "process",
     "project",
     "read",
@@ -165,6 +171,16 @@ IMAGE_GENERATION_CASES = (
     "text_aspect",
     "text_resolution",
     "text_all",
+)
+MEMORY_CASES = (
+    "list_user",
+    "list_agent",
+    "add_user",
+    "add_agent",
+    "replace_user",
+    "replace_agent",
+    "remove_user",
+    "remove_agent",
 )
 GLOB_CASES = (
     "default",
@@ -318,6 +334,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=IMAGE_GENERATION_CASES,
         default="full_default",
         help="Exact image_generation profile and argument shape requested by the scenario.",
+    )
+    parser.add_argument(
+        "--memory-case",
+        choices=MEMORY_CASES,
+        default="list_user",
+        help="Exact memory action and argument shape requested by the scenario.",
     )
     parser.add_argument(
         "--glob-case",
@@ -750,6 +772,58 @@ def _grep_scenario(case_name: str) -> ProbeScenario:
         ],
         _probe_messages(instruction),
         GREP_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
+    )
+
+
+def _memory_scenario(case_name: str) -> ProbeScenario:
+    memory_arguments: dict[str, dict[str, Any]] = {
+        "list_user": {"action": "list", "scope": "user"},
+        "list_agent": {"action": "list", "scope": "agent"},
+        "add_user": {
+            "action": "add",
+            "scope": "user",
+            "content": "Prefers concise answers.",
+        },
+        "add_agent": {
+            "action": "add",
+            "scope": "agent",
+            "content": "Workspace uses PowerShell.",
+        },
+        "replace_user": {
+            "action": "replace",
+            "scope": "user",
+            "entry_id": 2,
+            "content": "Prefers direct, concise answers.",
+        },
+        "replace_agent": {
+            "action": "replace",
+            "scope": "agent",
+            "entry_id": 2,
+            "content": "Workspace uses PowerShell 7.",
+        },
+        "remove_user": {"action": "remove", "scope": "user", "entry_id": 2},
+        "remove_agent": {"action": "remove", "scope": "agent", "entry_id": 2},
+    }
+    expected_arguments = memory_arguments[case_name]
+    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
+    instruction = (
+        f"Call {MEMORY_TOOL_NAME} exactly once with exactly this JSON object as its "
+        f"arguments: {rendered_arguments}. Preserve every value and omit every field not "
+        "shown."
+    )
+    return ProbeScenario(
+        "memory",
+        [
+            {
+                "name": MEMORY_TOOL_NAME,
+                "description": MEMORY_TOOL_DESCRIPTION,
+                "parameters": MEMORY_TOOL_PARAMETERS,
+            }
+        ],
+        _probe_messages(instruction),
+        MEMORY_TOOL_NAME,
         require_closed_input=False,
         expected_arguments=expected_arguments,
     )
@@ -1333,6 +1407,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _grep_scenario(str(args.grep_case))
     if name == "image_generation":
         return _image_generation_scenario(str(args.image_generation_case))
+    if name == "memory":
+        return _memory_scenario(str(args.memory_case))
     if name == "process":
         return _process_scenario(str(args.process_case))
     if name == "project":
@@ -2032,6 +2108,7 @@ async def _run(args: argparse.Namespace) -> int:
             "image_generation_case": (
                 args.image_generation_case if scenario.name == "image_generation" else None
             ),
+            "memory_case": args.memory_case if scenario.name == "memory" else None,
             "process_case": args.process_case if scenario.name == "process" else None,
             "read_case": args.read_case if scenario.name == "read" else None,
             "session_read_case": (
