@@ -141,7 +141,7 @@ _BRANCH_MISSING_REQUIRED_CALLS = (
 
 @pytest.mark.parametrize(
     "profile",
-    ("openai_non_strict", "best_effort"),
+    ("explicit_non_strict", "omit_strict"),
 )
 def test_skill_schema_exposes_direct_fields_in_every_provider_profile(profile: str) -> None:
     rendered = render_tool_definitions(
@@ -158,7 +158,7 @@ def test_skill_schema_exposes_direct_fields_in_every_provider_profile(profile: s
     assert set(rendered["parameters"]["properties"]) == {"name", "file_path"}
     assert rendered["parameters"]["required"] == ["name"]
     assert rendered["parameters"] == SKILL_TOOL_PARAMETERS
-    if profile == "openai_non_strict":
+    if profile == "explicit_non_strict":
         assert rendered["strict"] is False
     else:
         assert "strict" not in rendered
@@ -166,7 +166,7 @@ def test_skill_schema_exposes_direct_fields_in_every_provider_profile(profile: s
 
 @pytest.mark.parametrize(
     "profile",
-    ("openai_non_strict", "best_effort"),
+    ("explicit_non_strict", "omit_strict"),
 )
 def test_skill_list_schema_is_an_empty_call_in_every_provider_profile(profile: str) -> None:
     rendered = render_tool_definitions(
@@ -181,7 +181,7 @@ def test_skill_list_schema_is_an_empty_call_in_every_provider_profile(profile: s
     )[0]
 
     assert rendered["parameters"] == SKILL_LIST_TOOL_PARAMETERS
-    if profile == "openai_non_strict":
+    if profile == "explicit_non_strict":
         assert rendered["strict"] is False
     else:
         assert "strict" not in rendered
@@ -192,7 +192,7 @@ def test_skill_list_schema_is_an_empty_call_in_every_provider_profile(profile: s
     _BRANCH_COMPLETE_SCHEMAS,
     ids=[contract[0] for contract in _BRANCH_COMPLETE_SCHEMAS],
 )
-@pytest.mark.parametrize("profile", ("openai_non_strict", "best_effort"))
+@pytest.mark.parametrize("profile", ("explicit_non_strict", "omit_strict"))
 def test_branch_complete_schema_reaches_provider_unchanged(
     tool_name: str,
     schema: JsonObject,

@@ -44,15 +44,15 @@ def test_anthropic_sanitizer_rejects_non_object_roots(schema: object) -> None:
         sanitize_anthropic_tool_input_schema(schema)
 
 
-def test_openai_profile_preserves_canonical_schema_and_explicitly_disables_strict() -> None:
-    rendered = render_tool_definitions([_tool("read")], profile="openai_non_strict")
+def test_explicit_non_strict_profile_preserves_schema_and_disables_strict() -> None:
+    rendered = render_tool_definitions([_tool("read")], profile="explicit_non_strict")
 
     assert rendered == [{**_tool("read"), "strict": False}]
     assert rendered[0]["parameters"]["required"] == ["path"]
     assert rendered[0]["parameters"] is not _SCHEMA
 
 
-@pytest.mark.parametrize("profile", ("openai_non_strict", "best_effort"))
+@pytest.mark.parametrize("profile", ("explicit_non_strict", "omit_strict"))
 def test_caller_cannot_enable_strict_mode(profile: str) -> None:
     tool = {**_tool("read"), "strict": True}
 
@@ -62,14 +62,14 @@ def test_caller_cannot_enable_strict_mode(profile: str) -> None:
     )
 
     assert rendered.get("strict") is not True
-    if profile == "openai_non_strict":
+    if profile == "explicit_non_strict":
         assert rendered["strict"] is False
     else:
         assert "strict" not in rendered
 
 
-def test_best_effort_profile_preserves_schema_and_emits_no_internal_fields() -> None:
-    rendered = render_tool_definitions([_tool("read")], profile="best_effort")
+def test_omit_strict_profile_preserves_schema_and_emits_no_internal_fields() -> None:
+    rendered = render_tool_definitions([_tool("read")], profile="omit_strict")
 
     assert rendered == [_tool("read")]
     assert rendered[0]["parameters"] is not _SCHEMA

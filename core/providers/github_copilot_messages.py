@@ -306,7 +306,7 @@ def _apply_safe_messages_tools(
     if not policy.supports_tools or not isinstance(tools, list) or not tools:
         return
 
-    rendered = render_tool_definitions(tools, profile="best_effort")
+    rendered = render_tool_definitions(tools, profile="omit_strict")
     payload["tools"] = [tool for tool in (_safe_tool(tool) for tool in rendered) if tool]
     if not payload["tools"]:
         payload.pop("tools")

@@ -1249,7 +1249,7 @@ def _apply_anthropic_tools(
         return
     rendered = render_tool_definitions(
         tools,
-        profile="best_effort",
+        profile="omit_strict",
     )
     payload["tools"] = [
         {

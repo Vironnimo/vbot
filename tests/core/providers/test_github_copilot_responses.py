@@ -84,6 +84,7 @@ def test_build_payload_maps_reasoning_and_gates_tools_and_structured_output() ->
             "name": "search",
             "description": "Search",
             "parameters": {"type": "object"},
+            "strict": False,
         }
     ]
     assert payload["tool_choice"] == "auto"
@@ -110,6 +111,7 @@ def test_build_payload_maps_history_tool_without_special_case() -> None:
             "name": HISTORY_TOOL_NAME,
             "description": HISTORY_TOOL_DESCRIPTION,
             "parameters": HISTORY_TOOL_PARAMETERS,
+            "strict": False,
         }
     ]
 
@@ -141,6 +143,7 @@ def test_build_payload_prefers_nested_function_tool_definition_when_top_level_na
             "name": "search",
             "description": "Search docs",
             "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
+            "strict": False,
         }
     ]
 
