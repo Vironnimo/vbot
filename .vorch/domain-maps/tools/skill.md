@@ -6,7 +6,7 @@ Tools that activate/read allowed Skills and expose the live Skill catalog during
 
 - Tool names: `skill` and `skill_list`.
 - Registration: `register_skill_tool(registry, resolve_registry, refresh_skills)` registers both Tools. `resolve_registry` maps `(skill_project_id, agent_id)` to the live registry a call uses; `refresh_skills` rescans Skills from disk (wired to `Runtime.reload_skills`, invoked once on a `skill` name miss).
-- `skill` schema: one closed flat object with required non-blank `name` and optional `file_path`; `name` alone activates and `name` plus `file_path` reads. `file_path` accepts `SKILL.md` or a relative path below `scripts/`, `references/`, or `assets/`.
+- `skill` schema: one flat model-facing object with required non-blank `name` and optional `file_path`; `name` alone activates and `name` plus `file_path` reads. `file_path` accepts `SKILL.md` or a relative path below `scripts/`, `references/`, or `assets/`. The schema omits `additionalProperties`; the handler remains authoritative for unknown arguments.
 - `skill_list` schema: one closed empty object. The Tool is registered with `session_scoped=True`; normal Runs receive no grant, while Reflection passes the ephemeral Run grant `("skill_list",)` and includes it in the dispatch restriction.
 - Display: summary fields `name`, `file_path`.
 - `ToolContext.activate_skill(name, content) -> bool | None` — dedup-only session hook (`ChatSession.register_skill_activation`): `True` fresh, `False` already active, `None` no hook (treated as fresh). Nothing is persisted through the hook — the tool result itself is the durable carrier.
