@@ -64,7 +64,6 @@ _DIRECT_TOOL_SCHEMAS: tuple[tuple[str, JsonObject], ...] = (
 )
 
 _BRANCH_COMPLETE_SCHEMAS = (
-    ("bash", BASH_TOOL_PARAMETERS),
     ("cron", CRON_TOOL_PARAMETERS),
     ("grep", GREP_TOOL_PARAMETERS),
     ("history", HISTORY_TOOL_PARAMETERS),
@@ -73,12 +72,6 @@ _BRANCH_COMPLETE_SCHEMAS = (
 )
 
 _BRANCH_INAPPLICABLE_CALLS = (
-    (
-        "bash",
-        BASH_TOOL_PARAMETERS,
-        {"mode": "foreground", "command": "echo ok", "yield_after": 30},
-        "yield_after",
-    ),
     ("cron", CRON_TOOL_PARAMETERS, {"action": "list", "id": "job"}, "id"),
     ("history", HISTORY_TOOL_PARAMETERS, {"action": "overview", "query": "text"}, "query"),
     (
@@ -96,7 +89,6 @@ _BRANCH_INAPPLICABLE_CALLS = (
 )
 
 _BRANCH_MISSING_REQUIRED_CALLS = (
-    ("bash", BASH_TOOL_PARAMETERS, {"mode": "auto"}, "command"),
     ("cron", CRON_TOOL_PARAMETERS, {"action": "update", "id": "job"}, "minProperties"),
     ("history", HISTORY_TOOL_PARAMETERS, {"action": "search"}, "query"),
     (
@@ -228,6 +220,7 @@ def test_direct_tool_schema_is_closed_and_declares_required_properties(
     assert schema["type"] == "object", tool_name
     if tool_name in {
         "analyze_image",
+        "bash",
         "channel_send",
         "edit",
         "glob",

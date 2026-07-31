@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 from core.tools.arguments import optional_number, optional_string
-from core.tools.contracts import discriminated_union_schema
 from core.tools.process_manager import (
     ProcessManager,
     ProcessSession,
@@ -62,45 +61,29 @@ def _shell_syntax_notes() -> str:
     """
     if sys.platform == "win32":
         return (
-            " Commands run in PowerShell 7 (pwsh) on this host — not cmd and not bash: "
-            "use $env:VAR (not %VAR% or export), 2>$null (not 2>/dev/null or NUL), "
-            "and set $env:VAR = 'x' on its own (there is no VAR=x command prefix). "
-            "PowerShell runs non-interactively: Read-Host is unavailable. For later process "
-            "input, read the raw stdin pipe with [Console]::In.ReadLine(), "
-            "[Console]::In.ReadToEnd(), or a native child process."
+            " Commands use PowerShell 7 (pwsh), not cmd or bash: use $env:VAR, redirect "
+            "stderr with 2>$null, and assign environment variables separately. PowerShell "
+            "is non-interactive: Read-Host is unavailable; raw stdin requires "
+            "[Console]::In.ReadLine(), [Console]::In.ReadToEnd(), or a native child process."
         )
     return " Commands run in bash on this host."
 
 
 BASH_TOOL_DESCRIPTION = (
-    "Run a shell command on the host system. Choose foreground for bounded commands whose "
-    "result is needed in this Run, auto when independent work can continue after a bounded "
-    "foreground wait, and background for long-lived commands such as servers. Auto waits "
-    f"for yield_after seconds (default {DEFAULT_YIELD_AFTER_SECONDS:g}), then hands a "
-    "still-running process to vBot; "
-    "background hands it off immediately. Handed-off processes return a session_id for the "
-    "process Tool and are monitored automatically. When available, log_file receives their "
-    "complete combined stdout/stderr stream live through exit. Their terminal results are "
-    "coalesced at the Session's next Run boundary, so continue independent work or end the "
-    "current Run; do not poll merely to wait or start another copy. Result output keeps only "
-    f"the newest {BASH_MODEL_OUTPUT_CAP_CHARS} characters; when truncated, search/read "
-    "log_file for the complete output. Do not manually detach or daemonize a long-lived "
-    "command inside foreground using Start-Process, start, nohup, shell &, or similar "
-    "constructs; that bypasses vBot's process ownership. Use background when it is known to "
-    "be long-lived, or auto when it should be observed first and handed off if still running."
-    + _shell_syntax_notes()
+    "Run a shell command on the host. Use foreground when this Run needs the result, auto to "
+    "wait before handing off a still-running command, and background for known long-lived "
+    "commands. Handed-off commands are monitored automatically: continue independent work "
+    "or end the Run instead of polling or starting another copy. Never manually detach or "
+    "daemonize a command because that bypasses vBot's process ownership. Result output keeps "
+    f"the newest {BASH_MODEL_OUTPUT_CAP_CHARS} characters; log_file, when present, receives "
+    "the complete combined stdout/stderr stream through exit." + _shell_syntax_notes()
 )
 BASH_SUBAGENT_TOOL_DESCRIPTION = (
-    "Run a shell command inside this Sub-Agent without process handoff. Choose foreground "
-    "to wait until the command exits, times out, or the Run is cancelled. Choose auto only "
-    "for bounded work: it waits for yield_after seconds "
-    f"(default {DEFAULT_SUBAGENT_YIELD_AFTER_SECONDS:g}) and kills a still-running command "
-    "instead of handing it off. timeout is an independent hard kill deadline and never "
-    "extends yield_after. Result output keeps only "
-    f"the newest {BASH_MODEL_OUTPUT_CAP_CHARS} characters; when truncated, search/read "
-    "log_file for the complete output. Do not manually detach or daemonize a command using "
-    "Start-Process, start, nohup, shell &, or similar constructs; process handoff is "
-    "unavailable here and every command must remain under vBot's process ownership."
+    "Run a shell command inside this Sub-Agent, where process handoff is unavailable. Use "
+    "foreground to wait for completion and auto only for bounded work; auto kills a command "
+    "still running after yield_after. Never manually detach or daemonize a command. Result "
+    f"output keeps the newest {BASH_MODEL_OUTPUT_CAP_CHARS} characters; log_file, when "
+    "present, receives the complete combined stdout/stderr stream through exit."
     + _shell_syntax_notes()
 )
 BASH_EXECUTION_MODES = ("foreground", "auto", "background")
@@ -112,15 +95,15 @@ _BASH_COMMAND_PARAMETER: JsonObject = {
 _BASH_WORKDIR_PARAMETER: JsonObject = {
     "type": "string",
     "description": (
-        "Directory to run the command in (default: the working directory; "
-        "a relative value resolves from it)."
+        "Directory to run in. Omit to use the working directory; a relative path resolves from it."
     ),
 }
 _BASH_TIMEOUT_PARAMETER: JsonObject = {
     "type": "number",
     "exclusiveMinimum": 0,
     "description": (
-        "Seconds after which the process is killed. In auto mode this does not extend yield_after."
+        "Hard kill deadline in seconds. Omit for no Tool-level timeout; in auto mode it does "
+        "not extend yield_after."
     ),
 }
 
@@ -134,69 +117,37 @@ def _bash_tool_parameters(*, subagent: bool) -> JsonObject:
         if subagent
         else "a still-running command is handed to vBot"
     )
-    variants: dict[str, JsonObject] = {
-        "foreground": {
-            "type": "object",
-            "description": (
-                "Wait until the command exits, reaches timeout, or the Run is cancelled. "
-                "Never hand off the process."
-            ),
-            "properties": {
-                "command": _BASH_COMMAND_PARAMETER,
-                "workdir": _BASH_WORKDIR_PARAMETER,
-                "timeout": _BASH_TIMEOUT_PARAMETER,
-            },
-            "required": ["command"],
-        },
-        "auto": {
-            "type": "object",
-            "description": (
-                f"Wait up to yield_after seconds; then {yield_after_effect} if it is still running."
-            ),
-            "properties": {
-                "command": _BASH_COMMAND_PARAMETER,
-                "workdir": _BASH_WORKDIR_PARAMETER,
-                "yield_after": {
-                    "type": "number",
-                    "minimum": 0,
-                    "description": (
-                        f"Seconds to wait before {yield_after_effect}; "
-                        f"default {yield_after_default:g}. Independent of timeout."
-                    ),
-                    "default": yield_after_default,
-                },
-                "timeout": _BASH_TIMEOUT_PARAMETER,
-            },
-            "required": ["command"],
-        },
-    }
     mode_description = (
-        "foreground waits for completion and auto kills at the yield_after boundary; "
-        "process handoff is unavailable in this Sub-Agent."
+        "Execution behavior: foreground waits for completion; auto waits until yield_after, "
+        "then kills a still-running command because handoff is unavailable."
         if subagent
-        else "foreground waits for completion, auto waits before handing off, and "
-        "background hands off immediately."
+        else "Execution behavior: foreground waits for completion; auto waits until "
+        "yield_after before handing off; background hands off immediately."
     )
-    if not subagent:
-        variants["background"] = {
-            "type": "object",
-            "description": "Hand off the command immediately for long-lived work.",
-            "properties": {
-                "command": _BASH_COMMAND_PARAMETER,
-                "workdir": _BASH_WORKDIR_PARAMETER,
-                "timeout": _BASH_TIMEOUT_PARAMETER,
+    modes = BASH_EXECUTION_MODES[:2] if subagent else BASH_EXECUTION_MODES
+    return {
+        "type": "object",
+        "properties": {
+            "mode": {
+                "type": "string",
+                "enum": list(modes),
+                "description": mode_description,
             },
-            "required": ["command"],
-        }
-    return discriminated_union_schema(
-        "mode",
-        variants,
-        description=(
-            "Choose one execution mode. Each mode exposes only the arguments valid for "
-            "that execution contract."
-        ),
-        discriminator_description=mode_description,
-    )
+            "command": _BASH_COMMAND_PARAMETER,
+            "workdir": _BASH_WORKDIR_PARAMETER,
+            "yield_after": {
+                "type": "number",
+                "minimum": 0,
+                "description": (
+                    f"Seconds auto waits before {yield_after_effect}. Omit to wait "
+                    f"{yield_after_default:g} seconds; independent of timeout."
+                ),
+                "default": yield_after_default,
+            },
+            "timeout": _BASH_TIMEOUT_PARAMETER,
+        },
+        "required": ["mode", "command"],
+    }
 
 
 BASH_TOOL_PARAMETERS = _bash_tool_parameters(subagent=False)
@@ -423,6 +374,7 @@ def register_bash_tool(
         BASH_TOOL_DESCRIPTION,
         BASH_TOOL_PARAMETERS,
         handler,
+        open_input_schema=True,
         result_schema={"type": "object", "required": ["status"]},
         display=ToolDisplay(summary_fields=("command",)),
     )

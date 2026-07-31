@@ -32,6 +32,12 @@ from core.providers.tool_schema import (
     render_tool_definitions,
 )
 from core.runtime.runtime import Runtime
+from core.tools.bash import (
+    BASH_TOOL_DESCRIPTION,
+    BASH_TOOL_NAME,
+    BASH_TOOL_PARAMETERS,
+    project_bash_tool_definitions,
+)
 from core.tools.channel import (
     CHANNEL_SEND_TOOL_NAME,
     _channel_send_definition_profile,
@@ -144,6 +150,7 @@ PROBE_SCENARIOS = (
     "unknown_property_pressure",
     "large_arguments",
     "analyze_image",
+    "bash",
     "channel_send",
     "edit",
     "glob",
@@ -165,6 +172,26 @@ PROBE_SCENARIOS = (
 )
 OPTIONAL_BOOLEAN_CASES = ("omit", "include_links", "raw", "both")
 ANALYZE_IMAGE_CASES = ("single", "multiple")
+BASH_CASES = (
+    "top_foreground",
+    "top_foreground_workdir",
+    "top_foreground_timeout",
+    "top_foreground_all_multiline",
+    "top_auto_default",
+    "top_auto_zero",
+    "top_auto_yield",
+    "top_auto_timeout",
+    "top_auto_all",
+    "top_background",
+    "top_background_workdir",
+    "top_background_timeout",
+    "top_background_all",
+    "sub_foreground",
+    "sub_foreground_all",
+    "sub_auto_default",
+    "sub_auto_zero",
+    "sub_auto_all",
+)
 CHANNEL_SEND_CASES = (
     "telegram_message",
     "telegram_target",
@@ -344,6 +371,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=ANALYZE_IMAGE_CASES,
         default="single",
         help="Exact analyze_image argument shape requested by the scenario.",
+    )
+    parser.add_argument(
+        "--bash-case",
+        choices=BASH_CASES,
+        default="top_foreground",
+        help="Exact top-level or Sub-Agent bash argument shape requested by the scenario.",
     )
     parser.add_argument(
         "--channel-send-case",
@@ -800,6 +833,119 @@ def _grep_scenario(case_name: str) -> ProbeScenario:
         ],
         _probe_messages(instruction),
         GREP_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
+    )
+
+
+def _bash_scenario(case_name: str) -> ProbeScenario:
+    bash_arguments: dict[str, dict[str, Any]] = {
+        "top_foreground": {"mode": "foreground", "command": "python --version"},
+        "top_foreground_workdir": {
+            "mode": "foreground",
+            "command": "python --version",
+            "workdir": "src",
+        },
+        "top_foreground_timeout": {
+            "mode": "foreground",
+            "command": "python --version",
+            "timeout": 120,
+        },
+        "top_foreground_all_multiline": {
+            "mode": "foreground",
+            "command": ("python --version\npython -m pytest tests/core/tools/test_bash.py -q"),
+            "workdir": "src",
+            "timeout": 120,
+        },
+        "top_auto_default": {
+            "mode": "auto",
+            "command": "python -m pytest tests/core/tools/test_bash.py -q",
+        },
+        "top_auto_zero": {
+            "mode": "auto",
+            "command": "python -m pytest tests/core/tools/test_bash.py -q",
+            "yield_after": 0,
+        },
+        "top_auto_yield": {
+            "mode": "auto",
+            "command": "python -m pytest tests/core/tools/test_bash.py -q",
+            "yield_after": 5,
+        },
+        "top_auto_timeout": {
+            "mode": "auto",
+            "command": "python -m pytest tests/core/tools/test_bash.py -q",
+            "timeout": 120,
+        },
+        "top_auto_all": {
+            "mode": "auto",
+            "command": "python -m pytest tests/core/tools/test_bash.py -q",
+            "workdir": "src",
+            "yield_after": 5,
+            "timeout": 120,
+        },
+        "top_background": {
+            "mode": "background",
+            "command": "python -m http.server 8765",
+        },
+        "top_background_workdir": {
+            "mode": "background",
+            "command": "python -m http.server 8765",
+            "workdir": "public",
+        },
+        "top_background_timeout": {
+            "mode": "background",
+            "command": "python -m http.server 8765",
+            "timeout": 600,
+        },
+        "top_background_all": {
+            "mode": "background",
+            "command": "python -m http.server 8765",
+            "workdir": "public",
+            "timeout": 600,
+        },
+        "sub_foreground": {"mode": "foreground", "command": "python --version"},
+        "sub_foreground_all": {
+            "mode": "foreground",
+            "command": "python --version",
+            "workdir": "src",
+            "timeout": 120,
+        },
+        "sub_auto_default": {
+            "mode": "auto",
+            "command": "python -m pytest tests/core/tools/test_bash.py -q",
+        },
+        "sub_auto_zero": {
+            "mode": "auto",
+            "command": "python -m pytest tests/core/tools/test_bash.py -q",
+            "yield_after": 0,
+        },
+        "sub_auto_all": {
+            "mode": "auto",
+            "command": "python -m pytest tests/core/tools/test_bash.py -q",
+            "workdir": "src",
+            "yield_after": 300,
+            "timeout": 600,
+        },
+    }
+    expected_arguments = bash_arguments[case_name]
+    definition = {
+        "name": BASH_TOOL_NAME,
+        "description": BASH_TOOL_DESCRIPTION,
+        "parameters": BASH_TOOL_PARAMETERS,
+    }
+    if case_name.startswith("sub_"):
+        definition = project_bash_tool_definitions([definition], nesting_depth=1)[0]
+    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
+    instruction = (
+        f"Call {BASH_TOOL_NAME} exactly once with exactly this JSON object as its arguments: "
+        f"{rendered_arguments}. Preserve every value and do not add any field. Do not execute "
+        "or describe the command yourself."
+    )
+    return ProbeScenario(
+        "bash",
+        [definition],
+        _probe_messages(instruction),
+        BASH_TOOL_NAME,
         require_closed_input=False,
         expected_arguments=expected_arguments,
     )
@@ -1544,6 +1690,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         )
     if name == "analyze_image":
         return _analyze_image_scenario(str(args.analyze_image_case))
+    if name == "bash":
+        return _bash_scenario(str(args.bash_case))
     if name == "channel_send":
         return _channel_send_scenario(str(args.channel_send_case))
     if name == "edit":
@@ -2249,6 +2397,7 @@ async def _run(args: argparse.Namespace) -> int:
             "analyze_image_case": (
                 args.analyze_image_case if scenario.name == "analyze_image" else None
             ),
+            "bash_case": args.bash_case if scenario.name == "bash" else None,
             "channel_send_case": (
                 args.channel_send_case if scenario.name == "channel_send" else None
             ),
