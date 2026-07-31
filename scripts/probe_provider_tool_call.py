@@ -50,6 +50,11 @@ from core.tools.web_fetch import (
     WEB_FETCH_TOOL_NAME,
     WEB_FETCH_TOOL_PARAMETERS,
 )
+from core.tools.write import (
+    WRITE_TOOL_DESCRIPTION,
+    WRITE_TOOL_NAME,
+    WRITE_TOOL_PARAMETERS,
+)
 from core.utils.config import Config
 
 DEFAULT_PROVIDER = "opencode-go"
@@ -74,6 +79,7 @@ PROBE_SCENARIOS = (
     "skill",
     "skill_list",
     "web_fetch",
+    "write",
 )
 OPTIONAL_BOOLEAN_CASES = ("omit", "include_links", "raw", "both")
 PROCESS_CASES = (
@@ -469,6 +475,32 @@ def _skill_list_scenario() -> ProbeScenario:
     )
 
 
+def _write_scenario() -> ProbeScenario:
+    expected_arguments = {
+        "path": "notes/provider-tool-probe.txt",
+        "content": "first line\nsecond line\n",
+    }
+    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
+    instruction = (
+        f"Call {WRITE_TOOL_NAME} exactly once with exactly this JSON object as its "
+        f"arguments: {rendered_arguments}. Preserve every value and do not add any field."
+    )
+    return ProbeScenario(
+        "write",
+        [
+            {
+                "name": WRITE_TOOL_NAME,
+                "description": WRITE_TOOL_DESCRIPTION,
+                "parameters": WRITE_TOOL_PARAMETERS,
+            }
+        ],
+        _probe_messages(instruction),
+        WRITE_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
+    )
+
+
 def _scenario(args: argparse.Namespace) -> ProbeScenario:
     direct = json.loads(json.dumps(PROBE_TOOL))
     name = str(args.scenario)
@@ -580,6 +612,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _skill_list_scenario()
     if name == "web_fetch":
         return _web_fetch_scenario(str(args.web_fetch_case))
+    if name == "write":
+        return _write_scenario()
     raise AssertionError(f"unsupported probe scenario: {name}")
 
 

@@ -248,7 +248,7 @@ def test_direct_tool_schema_is_closed_and_declares_required_properties(
     schema: JsonObject,
 ) -> None:
     assert schema["type"] == "object", tool_name
-    if tool_name in {"process", "skill", "web_fetch"}:
+    if tool_name in {"process", "skill", "web_fetch", "write"}:
         assert "oneOf" not in schema
         assert "additionalProperties" not in schema
         assert set(schema.get("required", ())) <= set(schema["properties"]), tool_name

@@ -78,7 +78,7 @@ def test_register_write_tool_exposes_provider_schema() -> None:
     parameters = definition["parameters"]
     assert parameters["type"] == "object"
     assert parameters["required"] == ["path", "content"]
-    assert parameters["additionalProperties"] is False
+    assert "additionalProperties" not in parameters
     assert set(parameters["properties"]) == {"path", "content"}
     assert parameters["properties"]["path"]["type"] == "string"
     assert parameters["properties"]["content"]["type"] == "string"

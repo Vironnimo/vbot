@@ -48,7 +48,6 @@ WRITE_TOOL_PARAMETERS: JsonObject = {
         },
     },
     "required": ["path", "content"],
-    "additionalProperties": False,
 }
 
 
@@ -153,6 +152,7 @@ def register_write_tool(registry: ToolRegistry, *, file_state: FileReadState) ->
         make_write_handler(file_state),
         result_schema={"type": "object", "required": ["path", "bytes", "message"]},
         display=ToolDisplay(summary_fields=("path",), hidden_argument_keys=("content",)),
+        open_input_schema=True,
     )
 
 

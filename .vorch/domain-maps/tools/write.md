@@ -6,7 +6,7 @@ Creates or replaces a complete UTF-8 text file.
 
 - Tool name: `write`
 - Registration: `register_write_tool(registry, *, file_state)` — the `FileReadState` guard registry is injected (factory `make_write_handler(file_state)`, mirrors the read tool).
-- Schema: required `path` and `content`; `additionalProperties: false`.
+- Schema: required `path` and `content`; the model-facing schema omits `additionalProperties`, while the handler rejects unknown arguments.
 - Success data includes `message`, resolved `path`, and written byte count.
 - Display: summary field `path`; hides `content` from argument details.
 
