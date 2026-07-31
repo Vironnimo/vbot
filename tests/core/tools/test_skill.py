@@ -43,7 +43,7 @@ def test_skill_tool_describes_activation_and_file_path_contract() -> None:
     assert properties["name"]["pattern"] == r"\S"
     assert properties["file_path"]["type"] == "string"
     assert SKILL_TOOL_PARAMETERS["required"] == ["name"]
-    assert SKILL_TOOL_PARAMETERS["additionalProperties"] is False
+    assert "additionalProperties" not in SKILL_TOOL_PARAMETERS
     assert SKILL_LIST_TOOL_PARAMETERS == {
         "type": "object",
         "properties": {},
@@ -80,6 +80,26 @@ def test_skill_tool_result_carries_full_content(tmp_path: Path) -> None:
     assert "Investigate failures methodically." in content
     assert "frontmatter" not in content
     assert registered == {"debugging": content}
+
+
+def test_skill_tool_handler_rejects_unknown_arguments(tmp_path: Path) -> None:
+    tools = ToolRegistry()
+    register_skill_tool(
+        tools, _fixed_registry(SkillRegistry.load(_skills_dir(tmp_path))), _no_refresh
+    )
+
+    result = asyncio.run(
+        async_dispatch(
+            tools,
+            _context(tmp_path),
+            {"name": "debugging", "unexpected": True},
+        )
+    )
+
+    assert result == tool_failure(
+        "invalid_arguments",
+        "Unknown argument(s): unexpected",
+    )
 
 
 def test_skill_tool_without_activation_hook_still_returns_content(tmp_path: Path) -> None:

@@ -88,7 +88,6 @@ SKILL_TOOL_PARAMETERS: JsonObject = {
         "file_path": _SKILL_FILE_PATH_PARAMETER,
     },
     "required": ["name"],
-    "additionalProperties": False,
 }
 SKILL_LIST_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -239,6 +238,7 @@ def register_skill_tool(
         make_skill_handler(resolve_registry, refresh_skills),
         result_schema={"type": "object"},
         display=ToolDisplay(summary_fields=("name", "file_path")),
+        open_input_schema=True,
     )
     registry.register(
         SKILL_LIST_TOOL_NAME,

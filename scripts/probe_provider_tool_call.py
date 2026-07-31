@@ -37,6 +37,11 @@ from core.tools.process import (
     PROCESS_TOOL_NAME,
     PROCESS_TOOL_PARAMETERS,
 )
+from core.tools.skill import (
+    SKILL_TOOL_DESCRIPTION,
+    SKILL_TOOL_NAME,
+    SKILL_TOOL_PARAMETERS,
+)
 from core.tools.web_fetch import (
     WEB_FETCH_TOOL_DESCRIPTION,
     WEB_FETCH_TOOL_NAME,
@@ -63,6 +68,7 @@ PROBE_SCENARIOS = (
     "unknown_property_pressure",
     "large_arguments",
     "process",
+    "skill",
     "web_fetch",
 )
 OPTIONAL_BOOLEAN_CASES = ("omit", "include_links", "raw", "both")
@@ -82,6 +88,7 @@ PROCESS_CASES = (
     "input_empty_eof",
     "kill",
 )
+SKILL_CASES = ("activate", "skill_md", "reference", "script", "asset")
 WEB_FETCH_CASES = ("default", "markdown", "text", "raw")
 
 PROBE_TOOL = {
@@ -127,6 +134,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=PROCESS_CASES,
         default="status_list",
         help="Exact process argument shape requested by the process scenario.",
+    )
+    parser.add_argument(
+        "--skill-case",
+        choices=SKILL_CASES,
+        default="activate",
+        help="Exact skill argument shape requested by the skill scenario.",
     )
     parser.add_argument(
         "--web-fetch-case",
@@ -398,6 +411,38 @@ def _web_fetch_scenario(case_name: str) -> ProbeScenario:
     )
 
 
+def _skill_scenario(case_name: str) -> ProbeScenario:
+    name = "vbot-cli"
+    skill_arguments: dict[str, dict[str, Any]] = {
+        "activate": {"name": name},
+        "skill_md": {"name": name, "file_path": "SKILL.md"},
+        "reference": {"name": name, "file_path": "references/commands.md"},
+        "script": {"name": name, "file_path": "scripts/run.py"},
+        "asset": {"name": name, "file_path": "assets/template.txt"},
+    }
+    expected_arguments = skill_arguments[case_name]
+    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
+    instruction = (
+        f"Call {SKILL_TOOL_NAME} exactly once with exactly this JSON object as its "
+        f"arguments: {rendered_arguments}. Preserve every value and omit every field not "
+        "shown."
+    )
+    return ProbeScenario(
+        "skill",
+        [
+            {
+                "name": SKILL_TOOL_NAME,
+                "description": SKILL_TOOL_DESCRIPTION,
+                "parameters": SKILL_TOOL_PARAMETERS,
+            }
+        ],
+        _probe_messages(instruction),
+        SKILL_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
+    )
+
+
 def _scenario(args: argparse.Namespace) -> ProbeScenario:
     direct = json.loads(json.dumps(PROBE_TOOL))
     name = str(args.scenario)
@@ -503,6 +548,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         )
     if name == "process":
         return _process_scenario(str(args.process_case))
+    if name == "skill":
+        return _skill_scenario(str(args.skill_case))
     if name == "web_fetch":
         return _web_fetch_scenario(str(args.web_fetch_case))
     raise AssertionError(f"unsupported probe scenario: {name}")
@@ -1172,6 +1219,7 @@ async def _run(args: argparse.Namespace) -> int:
                 else None
             ),
             "process_case": args.process_case if scenario.name == "process" else None,
+            "skill_case": args.skill_case if scenario.name == "skill" else None,
             "web_fetch_case": (args.web_fetch_case if scenario.name == "web_fetch" else None),
             "request_messages": len(messages),
             "request_tools": len(tools),
