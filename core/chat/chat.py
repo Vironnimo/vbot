@@ -448,6 +448,7 @@ class _RunExecutionContext:
     skill_project_id: str | None
     skill_registry: SkillRegistry
     skill_catalog: PinnedSkillCatalog
+    prompt_cache_affinity_id: str
     prior_continuation: ContinuationState | None
     continuation_tracker: ContinuationTracker | None
     continuation_reminder: str | None
@@ -551,7 +552,11 @@ def _resolve_wire_media_support(adapter: Any, model_id: str) -> frozenset[str]:
     return frozenset()
 
 
-def _resolve_request_context_kwargs(adapter: Any, run: Run) -> dict[str, Any]:
+def _resolve_request_context_kwargs(
+    adapter: Any,
+    run: Run,
+    prompt_cache_affinity_id: str,
+) -> dict[str, Any]:
     """Resolve per-request conversation-context kwargs for one request build.
 
     Mirrors ``_resolve_reasoning_replay_policy``: adapters and test doubles that
@@ -564,6 +569,7 @@ def _resolve_request_context_kwargs(adapter: Any, run: Run) -> dict[str, Any]:
                 agent_id=run.agent_id,
                 session_id=run.session_id,
                 project_id=run.project_id,
+                prompt_cache_affinity_id=prompt_cache_affinity_id,
             )
         )
     return {}
@@ -1113,6 +1119,11 @@ class ChatLoop:
             )
             checkpoint = finalize_checkpoint_history_guidance(checkpoint, ordinal=ordinal)
             session.append(checkpoint)
+            self._dependencies.sessions.rotate_prompt_cache_affinity_id(
+                run.agent_id,
+                run.session_id,
+                run.project_id,
+            )
             try:
                 self._refresh_prompt_context_after_compaction(
                     agent_id=run.agent_id,
@@ -1302,6 +1313,13 @@ class ChatLoop:
             skill_project_id=skill_project_id,
             skill_registry=skill_registry,
             skill_catalog=skill_catalog,
+            prompt_cache_affinity_id=(
+                self._dependencies.sessions.prompt_cache_affinity_id(
+                    run.agent_id,
+                    run.session_id,
+                    project_id,
+                )
+            ),
             prior_continuation=prior_continuation,
             continuation_tracker=continuation_tracker,
             continuation_reminder=continuation_reminder,
@@ -2217,6 +2235,7 @@ class ChatLoop:
                 messages_for_request,
                 tools,
                 run,
+                prompt_cache_affinity_id=context.prompt_cache_affinity_id,
                 chunk_timeout_seconds=target.chunk_timeout_seconds,
                 continuation_tracker=context.continuation_tracker,
             )
@@ -2623,6 +2642,13 @@ class ChatLoop:
         )
         checkpoint = finalize_checkpoint_history_guidance(checkpoint, ordinal=ordinal)
         session.append(checkpoint)
+        context.prompt_cache_affinity_id = (
+            self._dependencies.sessions.rotate_prompt_cache_affinity_id(
+                run.agent_id,
+                run.session_id,
+                run.project_id,
+            )
+        )
         try:
             prompt_refresh = self._refresh_prompt_context_after_compaction(
                 agent_id=run.agent_id,
@@ -2843,10 +2869,15 @@ class ChatLoop:
         messages: list[JsonObject],
         tools: list[JsonObject],
         run: Run,
+        prompt_cache_affinity_id: str,
         chunk_timeout_seconds: float | None = STREAM_CHUNK_TIMEOUT_SECONDS,
         continuation_tracker: ContinuationTracker | None = None,
     ) -> _AssistantStep:
-        request_context = _resolve_request_context_kwargs(adapter, run)
+        request_context = _resolve_request_context_kwargs(
+            adapter,
+            run,
+            prompt_cache_affinity_id,
+        )
         if self._streaming:
             return await self._send_streaming_assistant_request(
                 agent,

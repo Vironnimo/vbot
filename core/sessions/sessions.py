@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import builtins
 import contextvars
+import hashlib
 import json
 import os
 import re
@@ -48,6 +49,10 @@ SESSION_TERMINAL_RUN_STATUSES = frozenset({"completed", "failed", "cancelled"})
 # copied from and the fork point. Written on every fork (even when the source had no
 # sidecar) so a fork is self-describing.
 FORK_SOURCE_META_KEY = "fork_source"
+# Internal sidecar key for the Provider prompt-cache routing lineage. It is
+# deliberately separate from Session identity: cache-compatible forks inherit
+# it while keeping their own transcript, Run, and transport-continuation scope.
+PROMPT_CACHE_AFFINITY_META_KEY = "prompt_cache_affinity_id"
 # Fork strip policy, owned beside the fork primitive. A fork is a plain, unbound
 # session: it must never inherit a channel binding, a sub-agent parent linkage, or
 # accumulated reflection cadence counters. The key names are literals on purpose —
@@ -70,7 +75,9 @@ SESSION_FORK_ALWAYS_STRIP_META_KEYS = frozenset(
 # so a different agent must re-pin its own catalog on the fork's first run. A
 # same-agent fork (e.g. ``/reflect``) deliberately keeps them, so the fork stays
 # prompt-cache-warm against the source.
-SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS = frozenset({"pinned_skill_catalog", "seen_skills"})
+SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS = frozenset(
+    {"pinned_skill_catalog", "seen_skills", PROMPT_CACHE_AFFINITY_META_KEY}
+)
 # A ``/agent`` move is cross-agent by definition, so it uses the same Agent-owned
 # Skill-catalog strip set as a cross-Agent fork.
 SESSION_MOVE_STRIP_META_KEYS = SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS
@@ -90,6 +97,34 @@ CHANNEL_MESSAGE_NOTE_PREFIX = "[channel-message] "
 SKILL_AVAILABLE_NOTE_PREFIX = "[skill-available] "
 _TAIL_CHUNK_SIZE = 8192
 _LOGGER = get_logger("sessions")
+
+
+def _new_prompt_cache_affinity_id() -> str:
+    """Return one opaque 128-bit prompt-cache lineage id."""
+    return uuid.uuid4().hex
+
+
+def _default_prompt_cache_affinity_id(
+    agent_id: str,
+    session_id: str,
+    project_id: str | None,
+) -> str:
+    """Derive the stable initial lineage without creating a metadata sidecar."""
+    address = json.dumps(
+        [project_id, agent_id, session_id],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(address).hexdigest()[:32]
+
+
+def _is_prompt_cache_affinity_id(value: Any) -> bool:
+    """Return whether *value* is one canonical 128-bit lowercase hex id."""
+    return (
+        isinstance(value, str)
+        and len(value) == 32
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 @dataclass(frozen=True)
@@ -620,6 +655,41 @@ class ChatSessionManager:
         session = self.get(agent_id, session_id, project_id)
         return self._load_sidecar(session)
 
+    def prompt_cache_affinity_id(
+        self,
+        agent_id: str,
+        session_id: str,
+        project_id: str | None = None,
+    ) -> str:
+        """Return the Session's stable, provider-neutral prompt-cache lineage.
+
+        Sessions created before the first metadata write derive an opaque id
+        deterministically from their full address. A Compaction or other cache
+        epoch boundary persists a replacement id in the sidecar. This keeps the
+        source of a fork byte-for-byte untouched while still letting the fork
+        inherit the exact affinity the source resolves.
+        """
+        metadata = self.get_metadata(agent_id, session_id, project_id)
+        stored = metadata.get(PROMPT_CACHE_AFFINITY_META_KEY)
+        if stored is None:
+            return _default_prompt_cache_affinity_id(agent_id, session_id, project_id)
+        if not isinstance(stored, str) or not _is_prompt_cache_affinity_id(stored):
+            raise ChatSessionError(f"invalid prompt cache affinity id for session: {session_id}")
+        return stored
+
+    def rotate_prompt_cache_affinity_id(
+        self,
+        agent_id: str,
+        session_id: str,
+        project_id: str | None = None,
+    ) -> str:
+        """Start and persist a fresh prompt-cache epoch for one Session."""
+        affinity_id = _new_prompt_cache_affinity_id()
+        metadata = self.get_metadata(agent_id, session_id, project_id)
+        metadata[PROMPT_CACHE_AFFINITY_META_KEY] = affinity_id
+        self.set_metadata(agent_id, session_id, metadata, project_id)
+        return affinity_id
+
     def set_metadata(
         self,
         agent_id: str,
@@ -1027,11 +1097,29 @@ class ChatSessionManager:
                 raise ChatSessionError(f"failed to copy session transcript: {session_id}") from exc
             message_count = transcript_bytes.count(SESSION_LINE_ENDING_BYTES)
 
+            source_metadata = self._load_sidecar(source)
             forked_metadata = {
-                key: value
-                for key, value in self._load_sidecar(source).items()
-                if key not in strip_meta_keys
+                key: value for key, value in source_metadata.items() if key not in strip_meta_keys
             }
+            same_prompt_scope = (
+                destination_agent_id == source_agent_id and target_project_id == source_project_id
+            )
+            if same_prompt_scope:
+                stored_affinity = source_metadata.get(PROMPT_CACHE_AFFINITY_META_KEY)
+                if stored_affinity is None:
+                    stored_affinity = _default_prompt_cache_affinity_id(
+                        source_agent_id,
+                        session_id,
+                        source_project_id,
+                    )
+                elif not _is_prompt_cache_affinity_id(stored_affinity):
+                    fork_session.delete()
+                    raise ChatSessionError(
+                        f"invalid prompt cache affinity id for session: {session_id}"
+                    )
+                forked_metadata[PROMPT_CACHE_AFFINITY_META_KEY] = stored_affinity
+            else:
+                forked_metadata[PROMPT_CACHE_AFFINITY_META_KEY] = _new_prompt_cache_affinity_id()
             forked_metadata[FORK_SOURCE_META_KEY] = {
                 "agent_id": source_agent_id,
                 "session_id": session_id,

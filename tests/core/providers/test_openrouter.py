@@ -532,23 +532,27 @@ def test_openrouter_session_id_is_stable_scoped_and_opaque(
         project_id="vbot",
         agent_id="builder",
         session_id="main",
+        prompt_cache_affinity_id="shared-lineage",
     )
-    repeated = openrouter_adapter.request_context_kwargs(
+    fork = openrouter_adapter.request_context_kwargs(
+        project_id="vbot",
+        agent_id="builder",
+        session_id="reflection-fork",
+        prompt_cache_affinity_id="shared-lineage",
+    )
+    other_lineage = openrouter_adapter.request_context_kwargs(
         project_id="vbot",
         agent_id="builder",
         session_id="main",
-    )
-    other_project = openrouter_adapter.request_context_kwargs(
-        project_id="other",
-        agent_id="builder",
-        session_id="main",
+        prompt_cache_affinity_id="other-lineage",
     )
 
-    assert first == repeated
-    assert first != other_project
+    assert first == fork
+    assert first != other_lineage
     assert first["session_id"].startswith("vbot-")
     assert "builder" not in first["session_id"]
     assert "main" not in first["session_id"]
+    assert "shared-lineage" not in first["session_id"]
     assert len(first["session_id"]) < 256
 
 

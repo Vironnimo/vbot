@@ -98,6 +98,7 @@ _CODEX_STABLE_VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+$")
 # hermes-agent transport.
 CODEX_CACHE_SCOPE_HEADERS = ("session_id", "x-client-request-id")
 CONVERSATION_ID_KWARG = "conversation_id"
+PROMPT_CACHE_AFFINITY_ID_KWARG = "prompt_cache_affinity_id"
 _NORMALIZED_CODEX_STREAM_RESPONSE_KEY = "_normalized_codex_stream_response"
 _CODEX_TRANSPORT_AUTO: Literal["auto"] = "auto"
 _CODEX_TRANSPORT_SSE: Literal["sse"] = "sse"
@@ -307,21 +308,23 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         agent_id: str,
         session_id: str,
         project_id: str | None = None,
+        prompt_cache_affinity_id: str | None = None,
     ) -> dict[str, Any]:
-        """Scope the Codex prompt cache to the conversation.
+        """Separate Codex transport continuation from prompt-cache routing.
 
         The ChatGPT Codex backend routes its prompt cache by per-request headers
         (``CODEX_CACHE_SCOPE_HEADERS``), not the body-level ``prompt_cache_key``.
-        Handing the adapter a stable conversation id lets the ``subscription``
-        (Codex) path stamp those headers so a growing shared prefix reliably hits
-        the same cache-warm machine across turns. The value only steers routing,
-        never correctness — the wire prefix still decides what actually caches —
-        so ``agent_id:session_id`` (stable per conversation) is enough. The
-        ``api-key`` ``/chat/completions`` path ignores it (that path caches by
-        OpenAI's default prefix-hash routing).
+        Cache-compatible forks share ``prompt_cache_affinity_id`` so their exact
+        copied prefix reaches the same cache-warm route. ``conversation_id``
+        remains unique per vBot Session and scopes the local WebSocket plus
+        ``previous_response_id`` continuation. The API-key paths ignore both.
         """
         del project_id
-        return {CONVERSATION_ID_KWARG: f"{agent_id}:{session_id}"}
+        conversation_id = f"{agent_id}:{session_id}"
+        return {
+            CONVERSATION_ID_KWARG: conversation_id,
+            PROMPT_CACHE_AFFINITY_ID_KWARG: (prompt_cache_affinity_id or conversation_id),
+        }
 
     def wire_media_support(self, model_id: str) -> frozenset[str]:
         """Wire media depends on the connection's wire variant.
@@ -383,6 +386,10 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         """
 
         conversation_id = kwargs.pop(CONVERSATION_ID_KWARG, None)
+        prompt_cache_affinity_id = kwargs.pop(
+            PROMPT_CACHE_AFFINITY_ID_KWARG,
+            conversation_id,
+        )
         if self._connection_mode == CODEX_RESPONSES_MODE:
             payload = self._build_responses_payload(
                 messages,
@@ -394,7 +401,8 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             async for _delta in self._stream_responses(
                 payload,
                 endpoint_path=CODEX_RESPONSES_ENDPOINT,
-                cache_scope_id=conversation_id,
+                cache_scope_id=prompt_cache_affinity_id,
+                conversation_id=conversation_id,
                 state=state,
             ):
                 pass
@@ -425,6 +433,10 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         """
 
         conversation_id = kwargs.pop(CONVERSATION_ID_KWARG, None)
+        prompt_cache_affinity_id = kwargs.pop(
+            PROMPT_CACHE_AFFINITY_ID_KWARG,
+            conversation_id,
+        )
         if self._connection_mode == CODEX_RESPONSES_MODE:
             payload = self._build_responses_payload(
                 messages,
@@ -435,7 +447,8 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             async for delta in self._stream_responses(
                 payload,
                 endpoint_path=CODEX_RESPONSES_ENDPOINT,
-                cache_scope_id=conversation_id,
+                cache_scope_id=prompt_cache_affinity_id,
+                conversation_id=conversation_id,
             ):
                 yield delta
             return
@@ -658,17 +671,20 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         *,
         endpoint_path: str,
         cache_scope_id: str | None = None,
+        conversation_id: str | None = None,
         state: ResponsesStreamState | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         stream_state = state or ResponsesStreamState()
         if (
             endpoint_path == CODEX_RESPONSES_ENDPOINT
             and cache_scope_id
+            and conversation_id
             and self._codex_transport == _CODEX_TRANSPORT_AUTO
         ):
             async for delta in self._stream_codex_auto(
                 payload,
                 cache_scope_id=cache_scope_id,
+                conversation_id=conversation_id,
                 state=stream_state,
             ):
                 yield delta
@@ -721,6 +737,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         payload: dict[str, Any],
         *,
         cache_scope_id: str,
+        conversation_id: str,
         state: ResponsesStreamState,
     ) -> AsyncIterator[dict[str, Any]]:
         websocket_headers = await self._build_codex_websocket_headers(cache_scope_id)
@@ -728,7 +745,10 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         model_id = payload.get("model")
         if not isinstance(model_id, str) or not model_id:
             raise ProviderError("Codex WebSocket request is missing a model", retryable=False)
-        route = (cache_scope_id, model_id, account_id)
+        # The provider-visible headers share cache locality across compatible
+        # forks; the local route must remain Session-unique so one branch can
+        # never consume another branch's ``previous_response_id`` state.
+        route = (conversation_id, model_id, account_id)
         if route in self._codex_websocket_disabled_routes:
             async for delta in self._stream_responses_sse(
                 payload,

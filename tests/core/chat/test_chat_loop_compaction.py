@@ -479,6 +479,7 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
     messages = await loop._build_request_messages(agent, session)
     run = Run(run_id="run-1", agent_id=agent.id, session_id=session.id)
+    affinity_before = runtime.chat_sessions.prompt_cache_affinity_id("coder", session.id)
 
     with caplog.at_level("INFO", logger="vbot.chat"):
         rebuilt = await _maybe_auto_compact(
@@ -508,6 +509,7 @@ async def test_compaction_maybe_auto_compact_appends_checkpoint_and_rebuilds_mes
         "assistant",
         "compaction_checkpoint",
     ]
+    assert runtime.chat_sessions.prompt_cache_affinity_id("coder", session.id) != affinity_before
     assert len(compaction_service.compact_calls) == 1
     assert compaction_service.compact_calls[0]["summary_model_id"] == "gpt-5.2"
     assert compaction_service.compact_calls[0]["summary_adapter"] is adapter
@@ -587,15 +589,21 @@ async def test_compaction_allows_repeated_automatic_checkpoints_in_one_run(
     context.request_state = await loop._build_request_state(agent, session)
 
     requested_compactions = 5
+    affinity_epochs = [context.prompt_cache_affinity_id]
     for _ in range(requested_compactions):
         context.request_state = await loop._maybe_auto_compact_state(
             context,
             context.primary_target,
             usage={"input_tokens": 90},
         )
+        affinity_epochs.append(context.prompt_cache_affinity_id)
 
     assert len(compaction_service.compact_calls) == requested_compactions
     assert persisted_roles(session.load()).count("compaction_checkpoint") == requested_compactions
+    assert len(set(affinity_epochs)) == requested_compactions + 1
+    assert context.prompt_cache_affinity_id == runtime.chat_sessions.prompt_cache_affinity_id(
+        "coder", session.id
+    )
 
 
 def test_compaction_does_not_restore_rich_content_for_aged_tool_result() -> None:
@@ -1200,12 +1208,14 @@ async def test_compact_session_appends_checkpoint_and_closes_adapter(tmp_path: P
     )
     compaction_service = StubCompactionService(should_auto=True, checkpoint=checkpoint)
     loop = build_chat_loop(runtime, compaction_service=cast(Any, compaction_service))
+    affinity_before = runtime.chat_sessions.prompt_cache_affinity_id("coder", session.id)
 
     reply = await loop.compact_session("coder", "session-one")
 
     assert reply == "Context compacted."
     assert persisted_roles(session.load()) == ["user", "assistant", "compaction_checkpoint"]
     assert len(compaction_service.compact_calls) == 1
+    assert runtime.chat_sessions.prompt_cache_affinity_id("coder", session.id) != affinity_before
     assert compaction_service.compact_calls[0]["summary_model_id"] == "gpt-5.2"
     assert compaction_service.compact_calls[0]["summary_adapter"] is adapter
     assert compaction_service.compact_calls[0]["storage"] is runtime.storage
