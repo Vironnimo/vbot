@@ -165,6 +165,10 @@ HA_LIST_SERVICES_PARAMETERS = _HOMEASSISTANT_EXTENSION.HA_LIST_SERVICES_PARAMETE
 HA_CALL_SERVICE_DESCRIPTION = _HOMEASSISTANT_EXTENSION.HA_CALL_SERVICE_DESCRIPTION
 HA_CALL_SERVICE_NAME = _HOMEASSISTANT_EXTENSION.HA_CALL_SERVICE_NAME
 HA_CALL_SERVICE_PARAMETERS = _HOMEASSISTANT_EXTENSION.HA_CALL_SERVICE_PARAMETERS
+_WORD_COUNT_EXAMPLE = importlib.import_module("examples.extensions.word_count")
+WORD_COUNT_NAME = _WORD_COUNT_EXAMPLE.WORD_COUNT_NAME
+WORD_COUNT_DESCRIPTION = _WORD_COUNT_EXAMPLE.WORD_COUNT_DESCRIPTION
+WORD_COUNT_PARAMETERS = _WORD_COUNT_EXAMPLE.WORD_COUNT_PARAMETERS
 
 DEFAULT_PROVIDER = "opencode-go"
 DEFAULT_CONNECTION = "opencode-go:api-key"
@@ -212,6 +216,7 @@ PROBE_SCENARIOS = (
     "web_fetch",
     "web_search",
     "write",
+    "word_count",
 )
 OPTIONAL_BOOLEAN_CASES = ("omit", "include_links", "raw", "both")
 ANALYZE_IMAGE_CASES = ("single", "multiple")
@@ -462,6 +467,7 @@ WEB_SEARCH_CASES = (
     "recency_year",
     "all",
 )
+WORD_COUNT_CASES = ("plain", "empty", "unicode_multiline")
 
 PROBE_TOOL = {
     "name": PROBE_TOOL_NAME,
@@ -650,6 +656,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=WEB_SEARCH_CASES,
         default="default",
         help="Exact web_search argument shape requested by the web_search scenario.",
+    )
+    parser.add_argument(
+        "--word-count-case",
+        choices=WORD_COUNT_CASES,
+        default="plain",
+        help="Exact word_count argument value requested by the scenario.",
     )
     parser.add_argument(
         "--profile",
@@ -2328,6 +2340,34 @@ def _skill_list_scenario() -> ProbeScenario:
     )
 
 
+def _word_count_scenario(case_name: str) -> ProbeScenario:
+    arguments_by_case = {
+        "plain": {"text": "Count these three words"},
+        "empty": {"text": ""},
+        "unicode_multiline": {"text": "Grüße aus Berlin\nzweite Zeile 🙂"},
+    }
+    expected_arguments = arguments_by_case[case_name]
+    rendered_arguments = json.dumps(expected_arguments, ensure_ascii=False, separators=(",", ":"))
+    instruction = (
+        f"Call {WORD_COUNT_NAME} exactly once with exactly this JSON object as its arguments: "
+        f"{rendered_arguments}. Preserve every character and line break; do not add any field."
+    )
+    return ProbeScenario(
+        "word_count",
+        [
+            {
+                "name": WORD_COUNT_NAME,
+                "description": WORD_COUNT_DESCRIPTION,
+                "parameters": WORD_COUNT_PARAMETERS,
+            }
+        ],
+        _probe_messages(instruction),
+        WORD_COUNT_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
+    )
+
+
 def _write_scenario() -> ProbeScenario:
     expected_arguments = {
         "path": "notes/provider-tool-probe.txt",
@@ -2513,6 +2553,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _web_search_scenario(str(args.web_search_case))
     if name == "write":
         return _write_scenario()
+    if name == "word_count":
+        return _word_count_scenario(str(args.word_count_case))
     raise AssertionError(f"unsupported probe scenario: {name}")
 
 

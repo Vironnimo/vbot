@@ -458,6 +458,39 @@ def test_write_scenario_uses_production_schema_and_exact_arguments() -> None:
     )
 
 
+def test_word_count_cases_use_production_schema_and_exact_arguments() -> None:
+    for case_name in PROBE.WORD_COUNT_CASES:
+        scenario = PROBE._scenario(
+            SimpleNamespace(
+                scenario="word_count",
+                word_count_case=case_name,
+                lines=8,
+            ),
+        )
+        contracts = PROBE._compile_probe_contracts(
+            scenario.tools,
+            require_closed_input=scenario.require_closed_input,
+        )
+        arguments = scenario.expected_arguments
+
+        assert scenario.tools[0]["parameters"] is PROBE.WORD_COUNT_PARAMETERS
+        assert arguments is not None
+        assert "additionalProperties" not in scenario.tools[0]["parameters"]
+        contracts[PROBE.WORD_COUNT_NAME].validate_arguments(arguments)
+        assert (
+            PROBE._expected_argument_measurements(
+                [{"name": PROBE.WORD_COUNT_NAME, "arguments": arguments}],
+                scenario,
+            )["expected_arguments_match"]
+            is True
+        )
+
+    assert PROBE._word_count_scenario("empty").expected_arguments == {"text": ""}
+    assert PROBE._word_count_scenario("unicode_multiline").expected_arguments == {
+        "text": "Grüße aus Berlin\nzweite Zeile 🙂"
+    }
+
+
 def test_edit_cases_use_production_schema_and_exact_expected_arguments() -> None:
     for case_name in PROBE.EDIT_CASES:
         scenario = PROBE._scenario(
