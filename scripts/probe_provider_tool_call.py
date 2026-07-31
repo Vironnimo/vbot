@@ -51,6 +51,11 @@ from core.tools.image import (
     ANALYZE_IMAGE_TOOL_DESCRIPTION,
     ANALYZE_IMAGE_TOOL_NAME,
     ANALYZE_IMAGE_TOOL_PARAMETERS,
+    IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION,
+    IMAGE_GENERATION_TEXT_ONLY_TOOL_PARAMETERS,
+    IMAGE_GENERATION_TOOL_DESCRIPTION,
+    IMAGE_GENERATION_TOOL_NAME,
+    IMAGE_GENERATION_TOOL_PARAMETERS,
 )
 from core.tools.process import (
     PROCESS_TOOL_DESCRIPTION,
@@ -132,6 +137,7 @@ PROBE_SCENARIOS = (
     "edit",
     "glob",
     "grep",
+    "image_generation",
     "process",
     "project",
     "read",
@@ -148,6 +154,18 @@ PROBE_SCENARIOS = (
 OPTIONAL_BOOLEAN_CASES = ("omit", "include_links", "raw", "both")
 ANALYZE_IMAGE_CASES = ("single", "multiple")
 EDIT_CASES = ("default", "replace_false", "replace_true", "multiline", "delete")
+IMAGE_GENERATION_CASES = (
+    "full_default",
+    "full_source_one",
+    "full_source_many",
+    "full_aspect",
+    "full_resolution",
+    "full_all",
+    "text_default",
+    "text_aspect",
+    "text_resolution",
+    "text_all",
+)
 GLOB_CASES = (
     "default",
     "path",
@@ -294,6 +312,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=EDIT_CASES,
         default="default",
         help="Exact edit argument shape requested by the edit scenario.",
+    )
+    parser.add_argument(
+        "--image-generation-case",
+        choices=IMAGE_GENERATION_CASES,
+        default="full_default",
+        help="Exact image_generation profile and argument shape requested by the scenario.",
     )
     parser.add_argument(
         "--glob-case",
@@ -522,6 +546,65 @@ def _analyze_image_scenario(case_name: str) -> ProbeScenario:
         ],
         _probe_messages(instruction),
         ANALYZE_IMAGE_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
+    )
+
+
+def _image_generation_scenario(case_name: str) -> ProbeScenario:
+    prompt = "A red fox in snow, cinematic light."
+    one_source = ["images/source.png"]
+    many_sources = ["images/source.png", "C:/images/reference.png"]
+    image_generation_arguments: dict[str, dict[str, Any]] = {
+        "full_default": {"prompt": prompt},
+        "full_source_one": {"prompt": prompt, "source_images": one_source},
+        "full_source_many": {"prompt": prompt, "source_images": many_sources},
+        "full_aspect": {"prompt": prompt, "aspect_ratio": "16:9"},
+        "full_resolution": {"prompt": prompt, "resolution": "4K"},
+        "full_all": {
+            "prompt": "Ändere das Licht.\nBehalte Motiv und Komposition unverändert.",
+            "source_images": many_sources,
+            "aspect_ratio": "16:9",
+            "resolution": "4K",
+        },
+        "text_default": {"prompt": prompt},
+        "text_aspect": {"prompt": prompt, "aspect_ratio": "16:9"},
+        "text_resolution": {"prompt": prompt, "resolution": "4K"},
+        "text_all": {
+            "prompt": prompt,
+            "aspect_ratio": "16:9",
+            "resolution": "4K",
+        },
+    }
+    expected_arguments = image_generation_arguments[case_name]
+    text_only = case_name.startswith("text_")
+    description = (
+        IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION
+        if text_only
+        else IMAGE_GENERATION_TOOL_DESCRIPTION
+    )
+    parameters = (
+        IMAGE_GENERATION_TEXT_ONLY_TOOL_PARAMETERS
+        if text_only
+        else IMAGE_GENERATION_TOOL_PARAMETERS
+    )
+    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"), ensure_ascii=False)
+    instruction = (
+        f"Call {IMAGE_GENERATION_TOOL_NAME} exactly once with exactly this JSON object as "
+        f"its arguments: {rendered_arguments}. Preserve every character, path, and array "
+        "item; omit every field not shown."
+    )
+    return ProbeScenario(
+        "image_generation",
+        [
+            {
+                "name": IMAGE_GENERATION_TOOL_NAME,
+                "description": description,
+                "parameters": parameters,
+            }
+        ],
+        _probe_messages(instruction),
+        IMAGE_GENERATION_TOOL_NAME,
         require_closed_input=False,
         expected_arguments=expected_arguments,
     )
@@ -1248,6 +1331,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _glob_scenario(str(args.glob_case))
     if name == "grep":
         return _grep_scenario(str(args.grep_case))
+    if name == "image_generation":
+        return _image_generation_scenario(str(args.image_generation_case))
     if name == "process":
         return _process_scenario(str(args.process_case))
     if name == "project":
@@ -1944,6 +2029,9 @@ async def _run(args: argparse.Namespace) -> int:
             "edit_case": args.edit_case if scenario.name == "edit" else None,
             "glob_case": args.glob_case if scenario.name == "glob" else None,
             "grep_case": args.grep_case if scenario.name == "grep" else None,
+            "image_generation_case": (
+                args.image_generation_case if scenario.name == "image_generation" else None
+            ),
             "process_case": args.process_case if scenario.name == "process" else None,
             "read_case": args.read_case if scenario.name == "read" else None,
             "session_read_case": (

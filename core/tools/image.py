@@ -51,17 +51,13 @@ ANALYZE_IMAGE_TOOL_PARAMETERS: JsonObject = {
     "required": ["prompt", "images"],
 }
 IMAGE_GENERATION_TOOL_DESCRIPTION = (
-    "Generate new images or edit local source images using the configured image "
-    "generation model. Local source files are uploaded to the configured external "
-    "provider. The result includes each image's file path and WebUI/Desktop Markdown "
-    "for displaying it there. To send an image through a channel, use its file path "
-    "with `channel_send`."
+    "Generate new images or edit local source images using the configured model. Source "
+    "files are uploaded to the configured external provider. Returns image artifacts with "
+    "local paths and chat display links."
 )
 IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION = (
-    "Generate new images from text using the configured image generation model. "
-    "The result includes each image's file path and WebUI/Desktop Markdown for "
-    "displaying it there. To send an image through a channel, use its file path "
-    "with `channel_send`."
+    "Generate new images from text using the configured model. Returns image artifacts "
+    "with local paths and chat display links."
 )
 IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -70,13 +66,8 @@ IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "minLength": 1,
             "description": (
-                "The text prompt describing the image to generate. Be specific "
-                "and concrete — name the subject and its key attributes, the "
-                "setting, composition/framing, lighting, mood, and the visual "
-                "medium or style (e.g. photo, oil painting, 3D render, flat "
-                "vector). For an edit, state both the requested changes and what "
-                "must remain unchanged. Detailed prompts produce markedly better "
-                "images than short vague ones."
+                "Describe the subject, setting, composition, lighting, mood, and visual "
+                "style. For edits, state both the changes and what must remain unchanged."
             ),
         },
         "source_images": {
@@ -84,36 +75,29 @@ IMAGE_GENERATION_TOOL_PARAMETERS: JsonObject = {
             "items": {"type": "string", "minLength": 1},
             "minItems": 1,
             "description": (
-                "Optional local image paths to edit or use as references. Paths may "
-                "be absolute or relative to the current working directory and are "
-                "uploaded to the configured external provider. Use the exact Path "
-                "shown for an attachment, a file loaded from disk, or a previously "
-                "generated image. Omit this field to generate from text only."
+                "Local images to edit or use as references, in order. Use absolute paths "
+                "or paths relative to the current working directory. Omit for text-only "
+                "generation."
             ),
         },
         "aspect_ratio": {
             "type": "string",
             "pattern": r".*\S.*",
             "description": (
-                "Optional. Desired aspect ratio, e.g. 1:1, 16:9, 3:2, 9:16. "
-                "Sent as a native parameter for models that support it, "
-                "otherwise added to the prompt as a best-effort hint. Overrides "
-                "the Settings default for this call."
+                "Desired aspect ratio, such as 1:1 or 16:9. Omit to use Settings; "
+                "unsupported values become best-effort prompt hints."
             ),
         },
         "resolution": {
             "type": "string",
             "pattern": r".*\S.*",
             "description": (
-                "Optional. Desired output resolution, e.g. 1K, 2K, 4K (higher "
-                "means more detail and quality). Sent as a native parameter for "
-                "models that support it, otherwise added to the prompt as a "
-                "best-effort hint. Overrides the Settings default for this call."
+                "Desired output resolution, such as 1K, 2K, or 4K. Omit to use Settings; "
+                "unsupported values become best-effort prompt hints."
             ),
         },
     },
     "required": ["prompt"],
-    "additionalProperties": False,
 }
 
 
@@ -129,13 +113,16 @@ def _image_generation_text_only_parameters() -> JsonObject:
 IMAGE_GENERATION_TEXT_ONLY_TOOL_PARAMETERS = _image_generation_text_only_parameters()
 
 
+def _generation_supports_source_images(image_service: Any) -> bool:
+    capability = getattr(image_service, "generation_supports_source_images", None)
+    return bool(capability()) if callable(capability) else False
+
+
 def _image_generation_profile_resolver(image_service: Any):
     def resolve(
         _context: ToolDefinitionProfileContext,
     ) -> ToolDefinitionProfile:
-        capability = getattr(image_service, "generation_supports_source_images", None)
-        supports_source_images = bool(capability()) if callable(capability) else False
-        if supports_source_images:
+        if _generation_supports_source_images(image_service):
             return ToolDefinitionProfile(
                 key="generation-and-editing",
                 description=IMAGE_GENERATION_TOOL_DESCRIPTION,
@@ -169,7 +156,7 @@ def _collect_source_paths(context: ToolContext, arguments: JsonObject) -> tuple[
     """Resolve optional source-image paths against the Run's effective cwd."""
 
     raw_paths = arguments.get("source_images")
-    if raw_paths is None or raw_paths == []:
+    if raw_paths is None:
         return ()
     if not isinstance(raw_paths, list):
         raise ValueError("source_images must be an array of local image paths")
@@ -273,6 +260,11 @@ def make_image_generation_handler(image_service: Any):
         prompt = arguments.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip():
             return tool_failure("invalid_arguments", "prompt must be a non-empty string")
+        if "source_images" in arguments and not _generation_supports_source_images(image_service):
+            return tool_failure(
+                "invalid_arguments",
+                "source_images is unavailable for the configured image generation model",
+            )
 
         try:
             call_options = _collect_call_options(arguments)
@@ -318,6 +310,7 @@ def register_image_generation_tool(registry: ToolRegistry, image_service: Any) -
         IMAGE_GENERATION_TOOL_DESCRIPTION,
         IMAGE_GENERATION_TOOL_PARAMETERS,
         make_image_generation_handler(image_service),
+        open_input_schema=True,
         result_schema={"type": "object", "required": ["message", "images"]},
         display=ToolDisplay(
             summary_fields=("prompt", "source_images", "aspect_ratio", "resolution")

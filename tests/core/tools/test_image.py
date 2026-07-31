@@ -15,8 +15,10 @@ from core.tools.image import (
     ANALYZE_IMAGE_TOOL_NAME,
     ANALYZE_IMAGE_TOOL_PARAMETERS,
     IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION,
+    IMAGE_GENERATION_TEXT_ONLY_TOOL_PARAMETERS,
     IMAGE_GENERATION_TOOL_DESCRIPTION,
     IMAGE_GENERATION_TOOL_NAME,
+    make_image_generation_handler,
     register_analyze_image_tool,
     register_image_generation_tool,
 )
@@ -50,6 +52,10 @@ def test_image_generation_profile_matches_configured_model_capability(tmp_path: 
     text_only_properties = text_only[0]["parameters"]["properties"]
     editing_properties = editing[0]["parameters"]["properties"]
     assert text_only[0]["description"] == IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION
+    assert "additionalProperties" not in text_only[0]["parameters"]
+    assert "additionalProperties" not in editing[0]["parameters"]
+    assert text_only_registry.get(IMAGE_GENERATION_TOOL_NAME).open_input_schema is True
+    assert editing_registry.get(IMAGE_GENERATION_TOOL_NAME).open_input_schema is True
     assert "source_images" not in text_only_properties
     assert {"prompt", "aspect_ratio", "resolution"} == set(text_only_properties)
     assert editing[0]["description"] == IMAGE_GENERATION_TOOL_DESCRIPTION
@@ -61,7 +67,7 @@ def test_image_generation_profile_matches_configured_model_capability(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_image_generation_text_only_profile_rejects_source_images_before_handler(
+async def test_image_generation_text_only_profile_rejects_source_images_in_handler(
     tmp_path: Path,
 ) -> None:
     service = _ImageService(
@@ -76,12 +82,15 @@ async def test_image_generation_text_only_profile_rejects_source_images_before_h
     )
     contract = registry.contracts_for_provider_definitions(definitions)[IMAGE_GENERATION_TOOL_NAME]
 
-    with pytest.raises(ToolContractError, match="Additional properties"):
-        await registry.dispatch(
-            replace(_make_context(tmp_path), input_contract=contract),
-            {"prompt": "make it rainy", "source_images": ["photo.png"]},
-        )
+    result = await registry.dispatch(
+        replace(_make_context(tmp_path), input_contract=contract),
+        {"prompt": "make it rainy", "source_images": ["photo.png"]},
+    )
 
+    assert result["error"] == {
+        "code": "invalid_arguments",
+        "message": "source_images is unavailable for the configured image generation model",
+    }
     assert service.received_prompt is None
 
 
@@ -90,6 +99,10 @@ async def test_image_generation_tool_returns_artifact_payloads(tmp_path: Path) -
     image_path = tmp_path / "artifact-1.png"
     registry = ToolRegistry()
     register_image_generation_tool(registry, _ImageService(image_path))
+    tool = registry.get(IMAGE_GENERATION_TOOL_NAME)
+    assert "additionalProperties" not in tool.parameters
+    assert "additionalProperties" not in IMAGE_GENERATION_TEXT_ONLY_TOOL_PARAMETERS
+    assert tool.open_input_schema is True
     context = _make_context(tmp_path)
 
     result = await registry.dispatch(context, {"prompt": "a red fox"})
@@ -101,13 +114,7 @@ async def test_image_generation_tool_returns_artifact_payloads(tmp_path: Path) -
     assert isinstance(data, dict)
     # The model-facing copies carry the absolute file path for out-of-chat use.
     assert data["images"] == [{**_ARTIFACT_PAYLOAD, "path": str(image_path)}]
-    assert IMAGE_GENERATION_TOOL_DESCRIPTION == (
-        "Generate new images or edit local source images using the configured image "
-        "generation model. Local source files are uploaded to the configured external "
-        "provider. The result includes each image's file path and WebUI/Desktop Markdown "
-        "for displaying it there. To send an image through a channel, use its file path "
-        "with `channel_send`."
-    )
+    assert "configured external provider" in IMAGE_GENERATION_TOOL_DESCRIPTION
     assert data["message"] == (
         "Image generation complete.\n\n"
         "WebUI/Desktop: embed this Markdown in your reply:\n"
@@ -134,11 +141,15 @@ async def test_image_generation_tool_rejects_unknown_arguments(tmp_path: Path) -
     registry = ToolRegistry()
     register_image_generation_tool(registry, _ImageService(tmp_path / "unused.png"))
 
-    with pytest.raises(ToolContractError, match="Additional properties"):
-        await registry.dispatch(
-            _make_context(tmp_path),
-            {"prompt": "a red fox", "unexpected": True},
-        )
+    result = await registry.dispatch(
+        _make_context(tmp_path),
+        {"prompt": "a red fox", "unexpected": True},
+    )
+
+    assert result["error"] == {
+        "code": "invalid_arguments",
+        "message": "Unknown argument(s): unexpected",
+    }
 
 
 @pytest.mark.asyncio
@@ -226,6 +237,27 @@ async def test_image_generation_tool_rejects_single_source_path_string(tmp_path:
             {"prompt": "make it rainy", "source_images": str(source)},
         )
 
+    assert service.received_source_paths is None
+
+
+@pytest.mark.asyncio
+async def test_image_generation_tool_rejects_empty_source_images(tmp_path: Path) -> None:
+    service = _ImageService(tmp_path / "artifact-1.png")
+    registry = ToolRegistry()
+    register_image_generation_tool(registry, service)
+
+    with pytest.raises(ToolContractError, match="non-empty"):
+        await registry.dispatch(
+            _make_context(tmp_path),
+            {"prompt": "make it rainy", "source_images": []},
+        )
+
+    handler_result = await make_image_generation_handler(service)(
+        _make_context(tmp_path),
+        {"prompt": "make it rainy", "source_images": []},
+    )
+    assert handler_result["error"]["code"] == "invalid_arguments"
+    assert "at least one" in handler_result["error"]["message"]
     assert service.received_source_paths is None
 
 
