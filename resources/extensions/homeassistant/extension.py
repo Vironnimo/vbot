@@ -100,9 +100,8 @@ HA_GET_STATE_PARAMETERS: JsonObject = {
 
 HA_LIST_SERVICES_NAME = "ha_list_services"
 HA_LIST_SERVICES_DESCRIPTION = (
-    "List all services available in Home Assistant, optionally filtered "
-    "by domain (e.g. light, climate). Use this to discover what actions "
-    "are available before calling ha_call_service."
+    "List Home Assistant services, optionally by domain. Use before ha_call_service "
+    "to discover available actions and parameters."
 )
 HA_LIST_SERVICES_PARAMETERS: JsonObject = {
     "type": "object",
@@ -111,11 +110,10 @@ HA_LIST_SERVICES_PARAMETERS: JsonObject = {
             "type": "string",
             "minLength": 1,
             "pattern": "^[a-z][a-z0-9_]*$",
-            "description": "Optional domain filter (e.g. light, climate).",
+            "description": "Domain to include (e.g. light or climate). Omit for all domains.",
         },
     },
     "required": [],
-    "additionalProperties": False,
 }
 
 HA_CALL_SERVICE_NAME = "ha_call_service"
@@ -722,6 +720,7 @@ def register(api: Any) -> None:
         list_services_handler,
         result_schema={"type": "object", "required": ["count", "domains"]},
         parallel_safe=True,
+        open_input_schema=True,
         ready=_is_ready,
         readiness_hint=_HASS_READINESS_HINT,
     )
