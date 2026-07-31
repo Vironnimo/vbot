@@ -349,6 +349,7 @@ class Tool:
     # a tool to its owning extension.
     extension: str | None = None
     parallel_safe: bool = True
+    open_input_schema: bool = False
     definition_profile_resolver: ToolDefinitionProfileResolver | None = field(
         default=None,
         repr=False,
@@ -361,6 +362,7 @@ class Tool:
             input_schema=self.parameters,
             result_schema=self.result_schema,
             parallel_safe=self.parallel_safe,
+            require_closed_input=not self.open_input_schema,
         )
         object.__setattr__(self, "parameters", copy.deepcopy(contract.input_schema))
         object.__setattr__(self, "result_schema", copy.deepcopy(contract.result_schema))
@@ -498,6 +500,7 @@ class ToolRegistry:
         extension: str | None = None,
         result_schema: JsonObject | None = None,
         parallel_safe: bool = True,
+        open_input_schema: bool = False,
         definition_profile_resolver: ToolDefinitionProfileResolver | None = None,
     ) -> Tool:
         """Register a tool and return its immutable definition.
@@ -533,6 +536,7 @@ class ToolRegistry:
             readiness_hint=readiness_hint,
             extension=extension,
             parallel_safe=parallel_safe,
+            open_input_schema=open_input_schema,
             definition_profile_resolver=definition_profile_resolver,
         )
         self._tools[name] = tool
@@ -694,6 +698,7 @@ class ToolRegistry:
                 input_schema=parameters,
                 result_schema=tool.contract.result_schema if tool is not None else None,
                 parallel_safe=tool.parallel_safe if tool is not None else True,
+                require_closed_input=not (tool is not None and tool.open_input_schema),
             )
         return contracts
 
@@ -836,6 +841,7 @@ class ToolRegistry:
             input_schema=profile.parameters,
             result_schema=tool.contract.result_schema,
             parallel_safe=tool.parallel_safe,
+            require_closed_input=not tool.open_input_schema,
         )
         resolved = (profile.description, contract)
         self._definition_profile_cache[cache_key] = resolved

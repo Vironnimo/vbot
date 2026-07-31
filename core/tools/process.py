@@ -6,7 +6,6 @@ from datetime import datetime
 from pathlib import Path
 
 from core.tools.arguments import optional_bool, optional_string, required_string
-from core.tools.contracts import action_schema
 from core.tools.process_manager import (
     ProcessManager,
     ProcessSession,
@@ -41,86 +40,54 @@ _PROCESS_ACTION_ARGUMENTS = {
     "kill": frozenset({"action", "session_id"}),
 }
 
-PROCESS_TOOL_PARAMETERS: JsonObject = action_schema(
-    {
-        "status": {
-            "type": "object",
-            "description": (
-                "List tracked background Process Sessions without session_id, or inspect "
-                "one immediately by session_id."
-            ),
-            "properties": {
-                "session_id": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": (
-                        "Process Session id returned by the bash Tool. Omit to list all "
-                        "currently tracked Process Sessions."
-                    ),
-                },
-            },
-            "required": [],
-        },
-        "input": {
-            "type": "object",
-            "description": (
-                "Write raw UTF-8 to one running Process Session's stdin pipe. This is not an "
-                "interactive terminal or TTY. On Windows, PowerShell host prompts such as "
-                "Read-Host are unavailable; use [Console]::In.ReadLine(), "
-                "[Console]::In.ReadToEnd(), or a native child process."
-            ),
-            "properties": {
-                "session_id": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "Process Session id returned by the bash Tool.",
-                },
-                "text": {
-                    "type": "string",
-                    "description": (
-                        "UTF-8 text to send. It may be empty to send only a newline or EOF."
-                    ),
-                },
-                "newline": {
-                    "type": "boolean",
-                    "default": True,
-                    "description": (
-                        "Append the platform line ending after text; default true. Set false "
-                        "for raw text or when closing stdin without sending a line."
-                    ),
-                },
-                "eof": {
-                    "type": "boolean",
-                    "default": False,
-                    "description": (
-                        "Close stdin after sending text and the optional newline; default false."
-                    ),
-                },
-            },
-            "required": ["session_id", "text"],
-        },
-        "kill": {
-            "type": "object",
-            "description": "Stop one Process Session.",
-            "properties": {
-                "session_id": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "Process Session id returned by the bash Tool.",
-                },
-            },
-            "required": ["session_id"],
-        },
-    },
-    description=(
+PROCESS_TOOL_PARAMETERS: JsonObject = {
+    "type": "object",
+    "description": (
         "Use status without session_id to list tracked background Process Sessions, "
         "or provide session_id to inspect one. input and kill require session_id."
     ),
-    action_description=(
-        "status lists or inspects Process Sessions without waiting, input sends stdin "
-        "to a running Process Session, and kill stops one."
-    ),
-)
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": list(PROCESS_ACTIONS),
+            "description": (
+                "status lists or inspects Process Sessions without waiting, input sends "
+                "stdin to a running Process Session, and kill stops one."
+            ),
+        },
+        "session_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Process Session id returned by the bash Tool. Required for input and kill; "
+                "omit for status to list all tracked Process Sessions."
+            ),
+        },
+        "text": {
+            "type": "string",
+            "description": (
+                "UTF-8 text to send for input; required but may be empty to send only a "
+                "newline or EOF. This is a raw stdin pipe, not a terminal or TTY. On Windows, "
+                "Read-Host is unavailable; use [Console]::In.ReadLine(), "
+                "[Console]::In.ReadToEnd(), or a native child process."
+            ),
+        },
+        "newline": {
+            "type": "boolean",
+            "description": (
+                "For input, append the platform line ending after text; default true. Set "
+                "false for raw text or when closing stdin without sending a line."
+            ),
+        },
+        "eof": {
+            "type": "boolean",
+            "description": (
+                "For input, close stdin after sending text and the optional newline; default false."
+            ),
+        },
+    },
+    "required": ["action"],
+}
 
 
 def make_process_handler(process_manager: ProcessManager):
@@ -306,6 +273,7 @@ def register_process_tool(registry: ToolRegistry, process_manager: ProcessManage
         make_process_handler(process_manager),
         result_schema={"type": "object"},
         display=ToolDisplay(summary_builder=_process_display_summary),
+        open_input_schema=True,
     )
 
 
