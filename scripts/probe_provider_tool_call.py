@@ -32,6 +32,11 @@ from core.providers.tool_schema import (
 )
 from core.runtime.runtime import Runtime
 from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
+from core.tools.glob import (
+    GLOB_TOOL_DESCRIPTION,
+    GLOB_TOOL_NAME,
+    GLOB_TOOL_PARAMETERS,
+)
 from core.tools.process import (
     PROCESS_TOOL_DESCRIPTION,
     PROCESS_TOOL_NAME,
@@ -80,6 +85,7 @@ PROBE_SCENARIOS = (
     "missing_required_pressure",
     "unknown_property_pressure",
     "large_arguments",
+    "glob",
     "process",
     "read",
     "skill",
@@ -88,6 +94,16 @@ PROBE_SCENARIOS = (
     "write",
 )
 OPTIONAL_BOOLEAN_CASES = ("omit", "include_links", "raw", "both")
+GLOB_CASES = (
+    "default",
+    "path",
+    "limit",
+    "offset",
+    "page",
+    "include_false",
+    "include_true",
+    "all",
+)
 PROCESS_CASES = (
     "status_list",
     "status_one",
@@ -152,6 +168,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=OPTIONAL_BOOLEAN_CASES,
         default="omit",
         help="Requested argument shape for the optional_booleans scenarios.",
+    )
+    parser.add_argument(
+        "--glob-case",
+        choices=GLOB_CASES,
+        default="default",
+        help="Exact glob argument shape requested by the glob scenario.",
     )
     parser.add_argument(
         "--process-case",
@@ -306,6 +328,47 @@ def _optional_boolean_scenario(
         [tool],
         _probe_messages(instructions[case_name]),
         PROBE_TOOL_NAME,
+    )
+
+
+def _glob_scenario(case_name: str) -> ProbeScenario:
+    pattern = "**/*.py"
+    glob_arguments: dict[str, dict[str, Any]] = {
+        "default": {"pattern": pattern},
+        "path": {"pattern": pattern, "path": "src"},
+        "limit": {"pattern": pattern, "limit": 25},
+        "offset": {"pattern": pattern, "offset": 10},
+        "page": {"pattern": pattern, "limit": 25, "offset": 10},
+        "include_false": {"pattern": pattern, "include_ignored": False},
+        "include_true": {"pattern": pattern, "include_ignored": True},
+        "all": {
+            "pattern": pattern,
+            "path": "src",
+            "limit": 25,
+            "offset": 10,
+            "include_ignored": True,
+        },
+    }
+    expected_arguments = glob_arguments[case_name]
+    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
+    instruction = (
+        f"Call {GLOB_TOOL_NAME} exactly once with exactly this JSON object as its "
+        f"arguments: {rendered_arguments}. Preserve every value and omit every field not "
+        "shown."
+    )
+    return ProbeScenario(
+        "glob",
+        [
+            {
+                "name": GLOB_TOOL_NAME,
+                "description": GLOB_TOOL_DESCRIPTION,
+                "parameters": GLOB_TOOL_PARAMETERS,
+            }
+        ],
+        _probe_messages(instruction),
+        GLOB_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
     )
 
 
@@ -661,6 +724,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
             ),
             PROBE_TOOL_NAME,
         )
+    if name == "glob":
+        return _glob_scenario(str(args.glob_case))
     if name == "process":
         return _process_scenario(str(args.process_case))
     if name == "read":
@@ -1339,6 +1404,7 @@ async def _run(args: argparse.Namespace) -> int:
                 }
                 else None
             ),
+            "glob_case": args.glob_case if scenario.name == "glob" else None,
             "process_case": args.process_case if scenario.name == "process" else None,
             "read_case": args.read_case if scenario.name == "read" else None,
             "skill_case": args.skill_case if scenario.name == "skill" else None,

@@ -70,7 +70,6 @@ GLOB_TOOL_PARAMETERS: JsonObject = {
         },
     },
     "required": ["pattern"],
-    "additionalProperties": False,
 }
 
 
@@ -195,6 +194,7 @@ def register_glob_tool(registry: ToolRegistry) -> None:
         result_schema={"type": "object", "required": ["content"]},
         display=ToolDisplay(summary_fields=("pattern",)),
         parallel_safe=True,
+        open_input_schema=True,
     )
 
 

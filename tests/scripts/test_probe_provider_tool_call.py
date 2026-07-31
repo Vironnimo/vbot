@@ -449,6 +449,36 @@ def test_read_cases_use_production_schema_and_exact_expected_arguments() -> None
     assert path_only.expected_arguments == {"path": "src/provider_tool_probe.py"}
 
 
+def test_glob_cases_use_production_schema_and_exact_expected_arguments() -> None:
+    for case_name in PROBE.GLOB_CASES:
+        scenario = PROBE._scenario(
+            SimpleNamespace(
+                scenario="glob",
+                glob_case=case_name,
+                lines=8,
+            ),
+        )
+        contracts = PROBE._compile_probe_contracts(
+            scenario.tools,
+            require_closed_input=scenario.require_closed_input,
+        )
+        arguments = scenario.expected_arguments
+
+        assert scenario.tools[0]["parameters"] is PROBE.GLOB_TOOL_PARAMETERS
+        assert arguments is not None
+        contracts[PROBE.GLOB_TOOL_NAME].validate_arguments(arguments)
+        assert (
+            PROBE._expected_argument_measurements(
+                [{"name": PROBE.GLOB_TOOL_NAME, "arguments": arguments}],
+                scenario,
+            )["expected_arguments_match"]
+            is True
+        )
+
+    default = PROBE._glob_scenario("default")
+    assert default.expected_arguments == {"pattern": "**/*.py"}
+
+
 def test_probe_runtime_suppresses_background_service_start_hooks() -> None:
     class RuntimeStub:
         def __init__(self) -> None:
