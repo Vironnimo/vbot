@@ -573,6 +573,33 @@ def test_web_search_cases_use_production_schema_and_exact_expected_arguments() -
     assert default.expected_arguments == {"query": "vBot Tool schemas"}
 
 
+def test_text_to_speech_cases_use_production_schema_and_exact_arguments() -> None:
+    for case_name in PROBE.TEXT_TO_SPEECH_CASES:
+        scenario = PROBE._scenario(
+            SimpleNamespace(
+                scenario="text_to_speech",
+                speech_case=case_name,
+                lines=8,
+            ),
+        )
+        contracts = PROBE._compile_probe_contracts(
+            scenario.tools,
+            require_closed_input=scenario.require_closed_input,
+        )
+        arguments = scenario.expected_arguments
+
+        assert scenario.tools[0]["parameters"] is PROBE.TEXT_TO_SPEECH_TOOL_PARAMETERS
+        assert arguments is not None
+        contracts[PROBE.TEXT_TO_SPEECH_TOOL_NAME].validate_arguments(arguments)
+        assert (
+            PROBE._expected_argument_measurements(
+                [{"name": PROBE.TEXT_TO_SPEECH_TOOL_NAME, "arguments": arguments}],
+                scenario,
+            )["expected_arguments_match"]
+            is True
+        )
+
+
 def test_probe_runtime_suppresses_background_service_start_hooks() -> None:
     class RuntimeStub:
         def __init__(self) -> None:

@@ -65,6 +65,11 @@ from core.tools.skill import (
     SKILL_TOOL_NAME,
     SKILL_TOOL_PARAMETERS,
 )
+from core.tools.speech import (
+    TEXT_TO_SPEECH_TOOL_DESCRIPTION,
+    TEXT_TO_SPEECH_TOOL_NAME,
+    TEXT_TO_SPEECH_TOOL_PARAMETERS,
+)
 from core.tools.web_fetch import (
     WEB_FETCH_TOOL_DESCRIPTION,
     WEB_FETCH_TOOL_NAME,
@@ -107,6 +112,7 @@ PROBE_SCENARIOS = (
     "read",
     "skill",
     "skill_list",
+    "text_to_speech",
     "web_fetch",
     "web_search",
     "write",
@@ -172,6 +178,7 @@ READ_CASES = (
     "offset_character_limit",
 )
 SKILL_CASES = ("activate", "skill_md", "reference", "script", "asset")
+TEXT_TO_SPEECH_CASES = ("plain", "unicode_multiline")
 WEB_FETCH_CASES = ("default", "markdown", "text", "raw")
 WEB_SEARCH_CASES = (
     "default",
@@ -261,6 +268,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=SKILL_CASES,
         default="activate",
         help="Exact skill argument shape requested by the skill scenario.",
+    )
+    parser.add_argument(
+        "--speech-case",
+        choices=TEXT_TO_SPEECH_CASES,
+        default="plain",
+        help="Exact text_to_speech argument shape requested by the scenario.",
     )
     parser.add_argument(
         "--web-fetch-case",
@@ -689,6 +702,34 @@ def _read_scenario(case_name: str) -> ProbeScenario:
     )
 
 
+def _text_to_speech_scenario(case_name: str) -> ProbeScenario:
+    speech_arguments = {
+        "plain": {"text": "Please read this sentence aloud."},
+        "unicode_multiline": {"text": "Grüße aus Köln.\nZweite Zeile: 你好 — fertig."},
+    }
+    expected_arguments = speech_arguments[case_name]
+    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"), ensure_ascii=False)
+    instruction = (
+        f"Call {TEXT_TO_SPEECH_TOOL_NAME} exactly once with exactly this JSON object as "
+        f"its arguments: {rendered_arguments}. Preserve every character and do not add "
+        "any field."
+    )
+    return ProbeScenario(
+        "text_to_speech",
+        [
+            {
+                "name": TEXT_TO_SPEECH_TOOL_NAME,
+                "description": TEXT_TO_SPEECH_TOOL_DESCRIPTION,
+                "parameters": TEXT_TO_SPEECH_TOOL_PARAMETERS,
+            }
+        ],
+        _probe_messages(instruction),
+        TEXT_TO_SPEECH_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
+    )
+
+
 def _web_fetch_scenario(case_name: str) -> ProbeScenario:
     url = "https://example.com/provider-tool-probe"
     web_fetch_arguments: dict[str, dict[str, Any]] = {
@@ -965,6 +1006,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _skill_scenario(str(args.skill_case))
     if name == "skill_list":
         return _skill_list_scenario()
+    if name == "text_to_speech":
+        return _text_to_speech_scenario(str(args.speech_case))
     if name == "web_fetch":
         return _web_fetch_scenario(str(args.web_fetch_case))
     if name == "web_search":
@@ -1643,6 +1686,7 @@ async def _run(args: argparse.Namespace) -> int:
             "process_case": args.process_case if scenario.name == "process" else None,
             "read_case": args.read_case if scenario.name == "read" else None,
             "skill_case": args.skill_case if scenario.name == "skill" else None,
+            "speech_case": args.speech_case if scenario.name == "text_to_speech" else None,
             "web_fetch_case": (args.web_fetch_case if scenario.name == "web_fetch" else None),
             "web_search_case": (args.web_search_case if scenario.name == "web_search" else None),
             "request_messages": len(messages),
