@@ -337,6 +337,7 @@ class ProcessManager:
                 "finished_at": session.finished_at,
                 "output": _decode(bytes(session.combined_buffer)),
                 "truncated": session.truncated,
+                "stdin_open": session.stdin_open,
                 "waiting_for_input": _is_waiting_for_input(session),
                 "log_file": session.log_file,
             }

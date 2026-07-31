@@ -40,9 +40,10 @@ BASH_MODEL_OUTPUT_CAP_CHARS = 30_000
 # diagnose, small enough not to bloat an error envelope.
 FAILURE_OUTPUT_TAIL_CHARS = 10_000
 BASH_HANDOFF_PROCESS_NOTE = (
-    "Use session_id with the process Tool for status, input, or kill. output is the newest "
-    "capped snapshot collected before handoff. When present, log_file receives the complete "
-    "combined stdout/stderr stream live from command start through exit."
+    "Use session_id with the process Tool for status, raw stdin input, or kill. Process input "
+    "writes to a pipe; it does not provide a terminal or TTY. output is the newest capped "
+    "snapshot collected before handoff. When present, log_file receives the complete combined "
+    "stdout/stderr stream live from command start through exit."
 )
 DEFAULT_YIELD_AFTER_SECONDS = 30.0
 # Inside a Sub-Agent auto mode cannot hand off, so its yield_after threshold
@@ -63,7 +64,10 @@ def _shell_syntax_notes() -> str:
         return (
             " Commands run in PowerShell 7 (pwsh) on this host — not cmd and not bash: "
             "use $env:VAR (not %VAR% or export), 2>$null (not 2>/dev/null or NUL), "
-            "and set $env:VAR = 'x' on its own (there is no VAR=x command prefix)."
+            "and set $env:VAR = 'x' on its own (there is no VAR=x command prefix). "
+            "PowerShell runs non-interactively: Read-Host is unavailable. For later process "
+            "input, read the raw stdin pipe with [Console]::In.ReadLine(), "
+            "[Console]::In.ReadToEnd(), or a native child process."
         )
     return " Commands run in bash on this host."
 

@@ -29,7 +29,8 @@ PROCESS_TOOL_DESCRIPTION = (
     "cannot access arbitrary operating-system processes. Bash output is only a capped "
     "snapshot; when log_file is present, it receives the complete combined stdout/stderr "
     "stream live through exit. Completion is delivered automatically, so use status only "
-    "for an immediate snapshot, input to send stdin, and kill to stop a Process Session."
+    "for an immediate snapshot, input to write raw UTF-8 to the stdin pipe, and kill to stop "
+    "a Process Session. Input is not an interactive terminal or TTY."
 )
 PROCESS_ACTIONS = ("status", "input", "kill")
 PROCESS_STATUS_OUTPUT_CAP_CHARS = 30_000
@@ -62,7 +63,12 @@ PROCESS_TOOL_PARAMETERS: JsonObject = action_schema(
         },
         "input": {
             "type": "object",
-            "description": "Send stdin to one running Process Session.",
+            "description": (
+                "Write raw UTF-8 to one running Process Session's stdin pipe. This is not an "
+                "interactive terminal or TTY. On Windows, PowerShell host prompts such as "
+                "Read-Host are unavailable; use [Console]::In.ReadLine(), "
+                "[Console]::In.ReadToEnd(), or a native child process."
+            ),
             "properties": {
                 "session_id": {
                     "type": "string",
@@ -245,6 +251,7 @@ def _session_summary(session: ProcessSession) -> JsonObject:
         "exit_code": session.exit_code,
         "started_at": _format_timestamp(session.started_at),
         "finished_at": _format_timestamp(session.finished_at),
+        "stdin_open": session.stdin_open,
         "log_file": str(session.log_file) if session.log_file is not None else None,
     }
 
@@ -265,6 +272,7 @@ def _status_snapshot_data(snapshot: JsonObject) -> JsonObject:
         "exit_code": snapshot["exit_code"],
         "started_at": _format_timestamp(snapshot.get("started_at")),
         "finished_at": _format_timestamp(snapshot.get("finished_at")),
+        "stdin_open": snapshot["stdin_open"],
         "waiting_for_input": snapshot["waiting_for_input"],
         "output_tail": output,
         "output_truncated": truncated,

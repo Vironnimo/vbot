@@ -109,7 +109,8 @@ def test_schema_exposes_small_flat_action_contract() -> None:
         "cannot access arbitrary operating-system processes. Bash output is only a capped "
         "snapshot; when log_file is present, it receives the complete combined stdout/stderr "
         "stream live through exit. Completion is delivered automatically, so use status only "
-        "for an immediate snapshot, input to send stdin, and kill to stop a Process Session."
+        "for an immediate snapshot, input to write raw UTF-8 to the stdin pipe, and kill to "
+        "stop a Process Session. Input is not an interactive terminal or TTY."
     )
     assert PROCESS_TOOL_PARAMETERS["type"] == "object"
     branches = {
@@ -132,6 +133,8 @@ def test_schema_exposes_small_flat_action_contract() -> None:
     assert all(branch["additionalProperties"] is False for branch in branches.values())
     input_properties = cast(dict[str, Any], branches["input"]["properties"])
     assert "returned by the bash Tool" in input_properties["session_id"]["description"]
+    assert "Read-Host are unavailable" in branches["input"]["description"]
+    assert "[Console]::In.ReadLine()" in branches["input"]["description"]
     assert input_properties["newline"]["default"] is True
     assert input_properties["eof"]["default"] is False
 
@@ -157,6 +160,7 @@ async def test_status_without_session_id_lists_owned_sessions_only(
             "exit_code": None,
             "started_at": manager.get_session(owned_session_id, AGENT_A).started_at.isoformat(),
             "finished_at": None,
+            "stdin_open": True,
             "log_file": None,
         }
     ]
@@ -189,6 +193,7 @@ async def test_status_with_session_id_returns_non_consuming_snapshot(
     assert first_data["exit_code"] == 0
     assert first_data["output_tail"].strip() == "snapshot-output"
     assert first_data["output_truncated"] is False
+    assert first_data["stdin_open"] is False
     assert first_data["waiting_for_input"] is False
     assert first_data["log_file"] is None
 
@@ -231,6 +236,7 @@ async def test_status_reports_waiting_for_input_after_idle_period(
     await manager.kill(session_id, AGENT_A)
 
     assert cast(dict[str, Any], result["data"])["waiting_for_input"] is True
+    assert cast(dict[str, Any], result["data"])["stdin_open"] is True
 
 
 @pytest.mark.asyncio
