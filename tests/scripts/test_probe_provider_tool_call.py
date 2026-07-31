@@ -779,6 +779,46 @@ def test_ha_list_services_cases_use_production_schema_and_exact_arguments() -> N
     assert PROBE._ha_list_services_scenario("domain").expected_arguments == {"domain": "climate"}
 
 
+def test_ha_call_service_cases_use_production_schema_and_exact_arguments() -> None:
+    for case_name in PROBE.HA_CALL_SERVICE_CASES:
+        scenario = PROBE._scenario(
+            SimpleNamespace(
+                scenario="ha_call_service",
+                ha_call_service_case=case_name,
+                lines=8,
+            ),
+        )
+        contracts = PROBE._compile_probe_contracts(
+            scenario.tools,
+            require_closed_input=scenario.require_closed_input,
+        )
+        arguments = scenario.expected_arguments
+
+        assert scenario.tools[0]["parameters"] is PROBE.HA_CALL_SERVICE_PARAMETERS
+        assert arguments is not None
+        assert "additionalProperties" not in scenario.tools[0]["parameters"]
+        contracts[PROBE.HA_CALL_SERVICE_NAME].validate_arguments(arguments)
+        assert (
+            PROBE._expected_argument_measurements(
+                [{"name": PROBE.HA_CALL_SERVICE_NAME, "arguments": arguments}],
+                scenario,
+            )["expected_arguments_match"]
+            is True
+        )
+
+    assert PROBE._ha_call_service_scenario("base").expected_arguments == {
+        "domain": "light",
+        "service": "turn_on",
+    }
+    assert PROBE._ha_call_service_scenario("empty_data").expected_arguments["data"] == {}
+    assert PROBE._ha_call_service_scenario("all").expected_arguments == {
+        "domain": "light",
+        "service": "turn_on",
+        "entity_id": "light.living_room",
+        "data": {"brightness": 180, "rgb_color": [255, 120, 40]},
+    }
+
+
 def test_image_generation_cases_use_production_profiles_and_exact_arguments() -> None:
     for case_name in PROBE.IMAGE_GENERATION_CASES:
         scenario = PROBE._scenario(

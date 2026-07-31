@@ -118,8 +118,7 @@ HA_LIST_SERVICES_PARAMETERS: JsonObject = {
 
 HA_CALL_SERVICE_NAME = "ha_call_service"
 HA_CALL_SERVICE_DESCRIPTION = (
-    "Call a Home Assistant service (action) on a domain. "
-    "Use ha_list_services first to discover available services and their parameters."
+    "Call a Home Assistant service. Use ha_list_services to discover names and parameters."
 )
 HA_CALL_SERVICE_PARAMETERS: JsonObject = {
     "type": "object",
@@ -128,30 +127,26 @@ HA_CALL_SERVICE_PARAMETERS: JsonObject = {
             "type": "string",
             "minLength": 1,
             "pattern": "^[a-z][a-z0-9_]*$",
-            "description": "Service domain (e.g. light, climate, switch).",
+            "description": "Service domain (e.g. light or climate).",
         },
         "service": {
             "type": "string",
             "minLength": 1,
             "pattern": "^[a-z][a-z0-9_]*$",
-            "description": "Service name (e.g. turn_on, turn_off, set_temperature).",
+            "description": "Service name (e.g. turn_on or set_temperature).",
         },
         "entity_id": {
             "type": "string",
             "minLength": 1,
             "pattern": r"^[a-z_][a-z0-9_]*\.[a-z0-9_]+$",
-            "description": "Optional target entity id (e.g. light.living_room).",
+            "description": "Target entity id. Omit for service-defined targeting.",
         },
         "data": {
             "type": "object",
-            "description": (
-                "Optional service-specific data fields (e.g. brightness, temperature). "
-                "Do not include entity_id; use the top-level entity_id parameter."
-            ),
+            "description": "Service data. Omit when none; put entity_id in the top-level field.",
         },
     },
     "required": ["domain", "service"],
-    "additionalProperties": False,
 }
 
 # ---------------------------------------------------------------------------
@@ -731,6 +726,7 @@ def register(api: Any) -> None:
         call_service_handler,
         result_schema={"type": "object", "required": ["result"]},
         display=ToolDisplay(summary_fields=("domain", "service", "entity_id")),
+        open_input_schema=True,
         ready=_is_ready,
         readiness_hint=_HASS_READINESS_HINT,
     )

@@ -30,7 +30,7 @@ Tool names: `ha_list_entities`, `ha_get_state`, `ha_list_services`, `ha_call_ser
 
 ### `ha_call_service`
 
-- `POST /api/services/{domain}/{service}`. Schema: required non-empty string `domain`, required non-empty string `service`, optional non-empty string `entity_id`, optional `data` (object); `additionalProperties: false`.
+- `POST /api/services/{domain}/{service}`. Model-facing schema: open flat object with required non-empty strings `domain` and `service`, optional non-empty string `entity_id`, and optional open `data` object; the handler rejects unknown top-level fields and invalid values.
 - `domain`/`service` validated `^[a-z][a-z0-9_]*$`; `entity_id` validated with the entity regex when provided. Display summary fields: `domain`, `service`, `entity_id`.
 - `data` must not include `entity_id`; callers use the top-level `entity_id` field so entity targeting always passes the strict validator.
 - Blocked domains: `shell_command`, `command_line`, `python_script`, `pyscript`, `hassio`, `rest_command`.

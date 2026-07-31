@@ -268,7 +268,9 @@ def test_provider_schemas_follow_each_tools_current_migration_state() -> None:
     list_services = tools.get(HA_LIST_SERVICES_NAME)
     assert list_services.open_input_schema is True
     assert "additionalProperties" not in list_services.parameters
-    assert tools.get(HA_CALL_SERVICE_NAME).parameters["additionalProperties"] is False
+    call_service = tools.get(HA_CALL_SERVICE_NAME)
+    assert call_service.open_input_schema is True
+    assert "additionalProperties" not in call_service.parameters
 
     entity_id = tools.get(HA_GET_STATE_NAME).parameters["properties"]["entity_id"]
     assert entity_id["minLength"] == 1
@@ -278,8 +280,7 @@ def test_provider_schemas_follow_each_tools_current_migration_state() -> None:
     assert call_properties["service"]["pattern"]
     assert call_properties["data"]["type"] == "object"
     assert call_properties["data"]["description"] == (
-        "Optional service-specific data fields (e.g. brightness, temperature). "
-        "Do not include entity_id; use the top-level entity_id parameter."
+        "Service data. Omit when none; put entity_id in the top-level field."
     )
 
 
@@ -603,6 +604,20 @@ async def test_list_services_handler_rejects_unknown_arguments_after_open_schema
     tools = _tools_with_token()
 
     result = await _dispatch(tools, HA_LIST_SERVICES_NAME, {"unknown": True})
+
+    error = assert_failure_envelope(result, "validation_error")
+    assert error["message"] == "Unknown argument(s): unknown"
+
+
+@pytest.mark.asyncio
+async def test_call_service_handler_rejects_unknown_arguments_after_open_schema() -> None:
+    tools = _tools_with_token()
+
+    result = await _dispatch(
+        tools,
+        HA_CALL_SERVICE_NAME,
+        {"domain": "light", "service": "turn_on", "unknown": True},
+    )
 
     error = assert_failure_envelope(result, "validation_error")
     assert error["message"] == "Unknown argument(s): unknown"
