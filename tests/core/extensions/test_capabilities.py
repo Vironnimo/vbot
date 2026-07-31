@@ -199,6 +199,31 @@ def test_extension_tool_can_declare_an_open_model_facing_schema(tmp_path: Path) 
     assert result["data"] == {"arguments": {"unknown": "preserved"}}
 
 
+def test_word_count_example_uses_an_open_schema_and_handler_validation(tmp_path: Path) -> None:
+    examples_root = Path(__file__).resolve().parents[3] / "examples" / "extensions"
+    registry = ExtensionRegistry.load(examples_root)
+    tool_registry = ToolRegistry()
+    registry.apply_tools(tool_registry)
+
+    tool = tool_registry.get("word_count")
+    assert tool.open_input_schema is True
+    assert "additionalProperties" not in tool.parameters
+
+    success = asyncio.run(
+        tool_registry.dispatch(_tool_context("word_count", tmp_path), {"text": "one two"})
+    )
+    rejected = asyncio.run(
+        tool_registry.dispatch(
+            _tool_context("word_count", tmp_path),
+            {"text": "one", "unknown": True},
+        )
+    )
+
+    assert success["data"] == {"word_count": 2}
+    assert rejected["error"]["code"] == "invalid_arguments"
+    assert rejected["error"]["message"] == "Unknown argument(s): unknown"
+
+
 def test_extension_not_ready_tool_hidden_from_provider_definitions_but_registered(
     tmp_path: Path,
 ) -> None:

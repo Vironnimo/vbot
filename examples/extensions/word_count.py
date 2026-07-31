@@ -20,13 +20,14 @@ from core.tools import tool_failure, tool_success
 # JSON Schema for the tool's arguments — the same shape the model sees for
 # built-in tools. Keep descriptions short: every tool enlarges the system
 # prompt like any other.
-_PARAMETERS = {
+WORD_COUNT_NAME = "word_count"
+WORD_COUNT_DESCRIPTION = "Count whitespace-separated words in a piece of text."
+WORD_COUNT_PARAMETERS = {
     "type": "object",
     "properties": {
         "text": {"type": "string", "description": "Text to count words in."},
     },
     "required": ["text"],
-    "additionalProperties": False,
 }
 
 _RESULT_SCHEMA = {
@@ -40,6 +41,12 @@ _RESULT_SCHEMA = {
 
 
 def _word_count(context, arguments):
+    unknown = sorted(set(arguments) - {"text"})
+    if unknown:
+        return tool_failure(
+            "invalid_arguments",
+            f"Unknown argument(s): {', '.join(unknown)}",
+        )
     text = arguments.get("text")
     if not isinstance(text, str):
         # Expected bad input → a failure envelope, never a raised exception.
@@ -51,10 +58,11 @@ def register(api):
     # Declares the tool; the runtime registers it into the live ToolRegistry
     # after the last built-in tool, right before the system prompt is built.
     api.register_tool(
-        "word_count",
-        "Count the number of whitespace-separated words in a piece of text.",
-        _PARAMETERS,
+        WORD_COUNT_NAME,
+        WORD_COUNT_DESCRIPTION,
+        WORD_COUNT_PARAMETERS,
         _word_count,
         result_schema=_RESULT_SCHEMA,
         parallel_safe=True,
+        open_input_schema=True,
     )

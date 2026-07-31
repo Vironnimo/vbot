@@ -137,7 +137,6 @@ PARAMETERS = {
     "type": "object",
     "properties": {"text": {"type": "string", "description": "Text to count."}},
     "required": ["text"],
-    "additionalProperties": False,
 }
 
 RESULT = {
@@ -148,6 +147,9 @@ RESULT = {
 }
 
 def word_count(context, arguments):
+    unknown = sorted(set(arguments) - {"text"})
+    if unknown:
+        return tool_failure("invalid_arguments", f"Unknown argument(s): {', '.join(unknown)}")
     text = arguments.get("text")
     if not isinstance(text, str):
         return tool_failure("invalid_arguments", "`text` must be a string.")
@@ -161,6 +163,7 @@ def register(api):
         word_count,
         result_schema=RESULT,
         parallel_safe=True,
+        open_input_schema=True,
     )
 ```
 
