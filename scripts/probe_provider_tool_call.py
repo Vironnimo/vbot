@@ -70,6 +70,11 @@ from core.tools.web_fetch import (
     WEB_FETCH_TOOL_NAME,
     WEB_FETCH_TOOL_PARAMETERS,
 )
+from core.tools.web_search import (
+    WEB_SEARCH_TOOL_DESCRIPTION,
+    WEB_SEARCH_TOOL_NAME,
+    WEB_SEARCH_TOOL_PARAMETERS,
+)
 from core.tools.write import (
     WRITE_TOOL_DESCRIPTION,
     WRITE_TOOL_NAME,
@@ -103,6 +108,7 @@ PROBE_SCENARIOS = (
     "skill",
     "skill_list",
     "web_fetch",
+    "web_search",
     "write",
 )
 OPTIONAL_BOOLEAN_CASES = ("omit", "include_links", "raw", "both")
@@ -167,6 +173,20 @@ READ_CASES = (
 )
 SKILL_CASES = ("activate", "skill_md", "reference", "script", "asset")
 WEB_FETCH_CASES = ("default", "markdown", "text", "raw")
+WEB_SEARCH_CASES = (
+    "default",
+    "operator_query",
+    "domains_one",
+    "domains_many",
+    "count_min",
+    "count_max",
+    "page_first",
+    "page_later",
+    "recency_day",
+    "recency_month",
+    "recency_year",
+    "all",
+)
 
 PROBE_TOOL = {
     "name": PROBE_TOOL_NAME,
@@ -247,6 +267,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=WEB_FETCH_CASES,
         default="default",
         help="Exact web_fetch argument shape requested by the web_fetch scenario.",
+    )
+    parser.add_argument(
+        "--web-search-case",
+        choices=WEB_SEARCH_CASES,
+        default="default",
+        help="Exact web_search argument shape requested by the web_search scenario.",
     )
     parser.add_argument(
         "--profile",
@@ -694,6 +720,54 @@ def _web_fetch_scenario(case_name: str) -> ProbeScenario:
     )
 
 
+def _web_search_scenario(case_name: str) -> ProbeScenario:
+    query = "vBot Tool schemas"
+    web_search_arguments: dict[str, dict[str, Any]] = {
+        "default": {"query": query},
+        "operator_query": {"query": 'vBot "Tool schema" -deprecated'},
+        "domains_one": {"query": query, "domains": ["openai.com"]},
+        "domains_many": {
+            "query": query,
+            "domains": ["docs.python.org", "openai.com"],
+        },
+        "count_min": {"query": query, "count": 1},
+        "count_max": {"query": query, "count": 20},
+        "page_first": {"query": query, "page": 1},
+        "page_later": {"query": query, "page": 3},
+        "recency_day": {"query": query, "recency": "day"},
+        "recency_month": {"query": query, "recency": "month"},
+        "recency_year": {"query": query, "recency": "year"},
+        "all": {
+            "query": query,
+            "domains": ["docs.python.org", "openai.com"],
+            "count": 20,
+            "page": 3,
+            "recency": "month",
+        },
+    }
+    expected_arguments = web_search_arguments[case_name]
+    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
+    instruction = (
+        f"Call {WEB_SEARCH_TOOL_NAME} exactly once with exactly this JSON object as its "
+        f"arguments: {rendered_arguments}. Preserve every value and omit every field not "
+        "shown."
+    )
+    return ProbeScenario(
+        "web_search",
+        [
+            {
+                "name": WEB_SEARCH_TOOL_NAME,
+                "description": WEB_SEARCH_TOOL_DESCRIPTION,
+                "parameters": WEB_SEARCH_TOOL_PARAMETERS,
+            }
+        ],
+        _probe_messages(instruction),
+        WEB_SEARCH_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
+    )
+
+
 def _skill_scenario(case_name: str) -> ProbeScenario:
     name = "vbot-cli"
     skill_arguments: dict[str, dict[str, Any]] = {
@@ -893,6 +967,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _skill_list_scenario()
     if name == "web_fetch":
         return _web_fetch_scenario(str(args.web_fetch_case))
+    if name == "web_search":
+        return _web_search_scenario(str(args.web_search_case))
     if name == "write":
         return _write_scenario()
     raise AssertionError(f"unsupported probe scenario: {name}")
@@ -1568,6 +1644,7 @@ async def _run(args: argparse.Namespace) -> int:
             "read_case": args.read_case if scenario.name == "read" else None,
             "skill_case": args.skill_case if scenario.name == "skill" else None,
             "web_fetch_case": (args.web_fetch_case if scenario.name == "web_fetch" else None),
+            "web_search_case": (args.web_search_case if scenario.name == "web_search" else None),
             "request_messages": len(messages),
             "request_tools": len(tools),
             "trace_replay": traced_request is not None,

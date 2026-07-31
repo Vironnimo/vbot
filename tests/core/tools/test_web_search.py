@@ -100,7 +100,8 @@ def test_register_web_search_tool_schema() -> None:
     parameters = definition["parameters"]
     assert parameters["type"] == "object"
     assert parameters["required"] == ["query"]
-    assert parameters["additionalProperties"] is False
+    assert "additionalProperties" not in parameters
+    assert tool.open_input_schema is True
 
     properties = parameters["properties"]
     assert "provider" not in properties
@@ -126,8 +127,10 @@ def test_register_web_search_tool_schema() -> None:
     page_schema = properties["page"]
     assert page_schema["minimum"] == 1
     assert page_schema["maximum"] == 10
+    assert page_schema["default"] == 1
     assert properties["recency"]["enum"] == ["day", "month", "year"]
-    assert "provider-neutral age window" in properties["recency"]["description"]
+    assert "Omit" in properties["recency"]["description"]
+    assert all("default" not in schema for name, schema in properties.items() if name != "page")
 
 
 @pytest.mark.asyncio

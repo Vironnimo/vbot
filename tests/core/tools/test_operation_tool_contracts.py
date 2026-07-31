@@ -249,6 +249,7 @@ def test_direct_tool_schema_is_closed_and_declares_required_properties(
         "read",
         "skill",
         "web_fetch",
+        "web_search",
         "write",
     }:
         assert "oneOf" not in schema
