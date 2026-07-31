@@ -557,7 +557,7 @@ async def test_reflect_forks_and_runs_restricted_review(monkeypatch: pytest.Monk
         "skill_list",
         "skill_manage",
     )
-    assert captured[0]["tool_grants"] == ("skill_list",)
+    assert "tool_grants" not in captured[0]
     assert captured[0]["reply_surface"] == ReplySurface.webui()
     # The brief carries the fragment marker plus the focus text.
     assert "Review this session" in captured[0]["message"]

@@ -648,7 +648,7 @@ async def test_tool_restriction_denies_at_dispatch_without_changing_definitions(
 
 
 @pytest.mark.asyncio
-async def test_run_tool_grant_exposes_session_scoped_tool_only_for_that_run(
+async def test_skill_list_is_present_from_first_run_and_restriction_keeps_definitions(
     tmp_path: Path,
 ) -> None:
     from tests.core.chat.test_chat_loop import StubAdapter, StubAgent, StubRuntime
@@ -662,8 +662,19 @@ async def test_run_tool_grant_exposes_session_scoped_tool_only_for_that_run(
 
         tools = ToolRegistry()
         tools.register(
+            "skill",
+            "Load one Skill.",
+            {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+                "additionalProperties": False,
+            },
+            lambda _context, _arguments: tool_success({"loaded": True}),
+        )
+        tools.register(
             "skill_list",
-            "List Skills during Reflection.",
+            "List Skills.",
             {
                 "type": "object",
                 "properties": {},
@@ -673,7 +684,7 @@ async def test_run_tool_grant_exposes_session_scoped_tool_only_for_that_run(
             list_skills,
             session_scoped=True,
         )
-        agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=[])
+        agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=["skill"])
         responses = (
             [
                 {
@@ -702,16 +713,19 @@ async def test_run_tool_grant_exposes_session_scoped_tool_only_for_that_run(
         "Reflect",
         session_id="reflection",
         tool_restriction=("skill_list",),
-        tool_grants=("skill_list",),
     )
     await reflection_run.wait()
 
-    assert normal_adapter.requests[0]["kwargs"]["tools"] == []
-    assert [
-        definition["name"] for definition in reflection_adapter.requests[0]["kwargs"]["tools"]
-    ] == ["skill_list"]
-    assert normal_runtime.system_prompts.effective_tool_name_calls == [()]
-    assert reflection_runtime.system_prompts.effective_tool_name_calls == [("skill_list",)]
+    normal_definitions = normal_adapter.requests[0]["kwargs"]["tools"]
+    reflection_definitions = reflection_adapter.requests[0]["kwargs"]["tools"]
+    assert [definition["name"] for definition in normal_definitions] == ["skill", "skill_list"]
+    assert reflection_definitions == normal_definitions
+    assert (
+        normal_adapter.requests[0]["messages"][0]["content"]
+        == (reflection_adapter.requests[0]["messages"][0]["content"])
+    )
+    assert normal_runtime.system_prompts.effective_tool_name_calls == [("skill", "skill_list")]
+    assert reflection_runtime.system_prompts.effective_tool_name_calls == [("skill", "skill_list")]
     assert normal_ran == []
     assert reflection_ran == ["skill_list"]
 

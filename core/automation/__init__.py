@@ -9,7 +9,6 @@ from core.automation.cron import (
 )
 from core.automation.reflection import (
     REFLECTION_COUNTERS_META_KEY,
-    REFLECTION_TOOL_GRANTS,
     REFLECTION_TOOL_RESTRICTION,
     ReflectionResult,
     ReflectionService,
@@ -17,7 +16,6 @@ from core.automation.reflection import (
 
 __all__ = [
     "REFLECTION_COUNTERS_META_KEY",
-    "REFLECTION_TOOL_GRANTS",
     "REFLECTION_TOOL_RESTRICTION",
     "CronService",
     "ReflectionResult",

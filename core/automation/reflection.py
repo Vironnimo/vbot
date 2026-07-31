@@ -39,11 +39,10 @@ if TYPE_CHECKING:
     from core.runtime.interfaces import RuntimeServices
 
 REFLECT_FRAGMENT_NAME = "reflect.md"
-# The restriction is the Reflection Run's dispatch boundary. The matching Run
-# grant adds only the Session-scoped Skill catalog Tool to the model-facing set;
-# it does not persist capability state into the forked Session.
+# The restriction is the Reflection Run's dispatch boundary. ``skill_list`` is
+# already part of every Session whose Agent can use ``skill``, so Reflection
+# never changes the provider-visible Tool set at the fork boundary.
 REFLECTION_TOOL_RESTRICTION = ("memory", "skill", SKILL_LIST_TOOL_NAME, "skill_manage")
-REFLECTION_TOOL_GRANTS = (SKILL_LIST_TOOL_NAME,)
 # Session-sidecar key holding the cadence counters. Kept out of forks via the
 # always-strip policy in ``core/sessions`` so a fork restarts at zero.
 REFLECTION_COUNTERS_META_KEY = "reflection_counters"
@@ -261,7 +260,6 @@ class ReflectionService:
             reply_surface=reply_surface,
             project_id=project_id,
             tool_restriction=REFLECTION_TOOL_RESTRICTION,
-            tool_grants=REFLECTION_TOOL_GRANTS,
             contributes_to_agent_activity=False,
         )
         final_message = await review_run.wait()

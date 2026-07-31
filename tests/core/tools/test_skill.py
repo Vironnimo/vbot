@@ -366,9 +366,9 @@ def test_skill_tool_resolves_registry_from_project_id(tmp_path: Path) -> None:
     assert identity_result == tool_failure("skill_not_found", "Skill not found: proj-skill")
 
 
-def test_skill_list_tool_returns_grouped_skills_when_granted(tmp_path: Path) -> None:
-    # Reflection gets the live, agent-aware catalog grouped by origin through its
-    # explicit Run grant, independently of the Agent's ordinary Tool allowlist.
+def test_skill_list_tool_returns_grouped_skills_with_session_grant(tmp_path: Path) -> None:
+    # The live, agent-aware catalog is grouped by origin through Chat-derived
+    # Session state, independently of the Agent's ordinary Tool allowlist.
     agent_dir = tmp_path / "agent"
     (agent_dir / "mine").mkdir(parents=True)
     (agent_dir / "mine" / "SKILL.md").write_text(
@@ -409,7 +409,7 @@ def test_skill_tool_requires_non_blank_name(tmp_path: Path) -> None:
         asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "  "}))
 
 
-def test_skill_list_tool_is_hidden_and_rejected_without_run_grant(tmp_path: Path) -> None:
+def test_skill_list_tool_is_hidden_and_rejected_without_session_grant(tmp_path: Path) -> None:
     tools = ToolRegistry()
     register_skill_tool(
         tools,
