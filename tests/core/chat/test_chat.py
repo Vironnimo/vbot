@@ -648,6 +648,65 @@ async def test_tool_restriction_denies_at_dispatch_without_changing_definitions(
 
 
 @pytest.mark.asyncio
+async def test_same_scope_fork_reuses_cache_affinity_but_not_session_context(
+    tmp_path: Path,
+) -> None:
+    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent, StubRuntime
+
+    class RequestContextAdapter(StubAdapter):
+        def __init__(self) -> None:
+            super().__init__(
+                [
+                    {"content": "Source answer", "tool_calls": None},
+                    {"content": "Fork answer", "tool_calls": None},
+                ]
+            )
+            self.context_calls: list[dict[str, Any]] = []
+
+        def request_context_kwargs(
+            self,
+            *,
+            agent_id: str,
+            session_id: str,
+            project_id: str | None = None,
+            prompt_cache_affinity_id: str | None = None,
+        ) -> dict[str, Any]:
+            context = {
+                "agent_id": agent_id,
+                "session_id": session_id,
+                "project_id": project_id,
+                "prompt_cache_affinity_id": prompt_cache_affinity_id,
+            }
+            self.context_calls.append(context)
+            return {
+                "transport_probe": session_id,
+                "cache_probe": prompt_cache_affinity_id,
+            }
+
+    agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=[])
+    adapter = RequestContextAdapter()
+    runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
+    source = runtime.chat_sessions.create("coder", session_id="source")
+    loop = build_chat_loop(runtime)
+
+    source_run = await loop.start_run("coder", "Build it", session_id=source.id)
+    await source_run.wait()
+    fork = await runtime.chat_sessions.fork("coder", source.id)
+    fork_run = await loop.start_run("coder", "Review it", session_id=fork.id)
+    await fork_run.wait()
+
+    assert [call["session_id"] for call in adapter.context_calls] == [source.id, fork.id]
+    source_affinity, fork_affinity = [
+        call["prompt_cache_affinity_id"] for call in adapter.context_calls
+    ]
+    assert source_affinity == fork_affinity
+    assert adapter.requests[0]["kwargs"]["transport_probe"] == source.id
+    assert adapter.requests[1]["kwargs"]["transport_probe"] == fork.id
+    assert adapter.requests[0]["kwargs"]["cache_probe"] == source_affinity
+    assert adapter.requests[1]["kwargs"]["cache_probe"] == source_affinity
+
+
+@pytest.mark.asyncio
 async def test_skill_list_is_present_from_first_run_and_restriction_keeps_definitions(
     tmp_path: Path,
 ) -> None:

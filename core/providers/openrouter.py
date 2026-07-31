@@ -350,14 +350,16 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         agent_id: str,
         session_id: str,
         project_id: str | None = None,
+        prompt_cache_affinity_id: str | None = None,
     ) -> dict[str, Any]:
-        """Pin OpenRouter routing to one vBot Session without leaking its address."""
+        """Pin OpenRouter routing to one cache lineage without leaking its address."""
 
-        address = json.dumps(
-            [project_id, agent_id, session_id],
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
+        scope = (
+            ["prompt-cache-affinity", prompt_cache_affinity_id]
+            if prompt_cache_affinity_id is not None
+            else ["session", project_id, agent_id, session_id]
+        )
+        address = json.dumps(scope, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         digest = hashlib.sha256(address).hexdigest()
         return {"session_id": f"vbot-{digest}"}
 

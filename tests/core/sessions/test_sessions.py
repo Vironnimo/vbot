@@ -11,6 +11,7 @@ import pytest
 from core.chat import ChatMessage, ToolCall
 from core.sessions import (
     FORK_SOURCE_META_KEY,
+    PROMPT_CACHE_AFFINITY_META_KEY,
     ChatSession,
     ChatSessionError,
     ChatSessionManager,
@@ -546,6 +547,34 @@ class TestChatSessionManager:
         metadata = manager.get_metadata("coder", "session-one")
 
         assert metadata == {}
+
+    def test_prompt_cache_affinity_is_stable_opaque_and_address_scoped(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        manager.create("coder", session_id="session-one", project_id="acme")
+        manager.create("reviewer", session_id="session-one", project_id="acme")
+
+        first = manager.prompt_cache_affinity_id("coder", "session-one", "acme")
+        repeated = manager.prompt_cache_affinity_id("coder", "session-one", "acme")
+        other_agent = manager.prompt_cache_affinity_id("reviewer", "session-one", "acme")
+
+        assert first == repeated
+        assert first != other_agent
+        assert len(first) == 32
+        assert first != "session-one"
+        assert not manager.get("coder", "session-one", "acme").sidecar_path.exists()
+
+    def test_rotate_prompt_cache_affinity_starts_persisted_epoch(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        manager.create("coder", session_id="session-one")
+        previous = manager.prompt_cache_affinity_id("coder", "session-one")
+
+        rotated = manager.rotate_prompt_cache_affinity_id("coder", "session-one")
+
+        assert rotated != previous
+        assert manager.prompt_cache_affinity_id("coder", "session-one") == rotated
+        assert manager.get_metadata("coder", "session-one") == {
+            PROMPT_CACHE_AFFINITY_META_KEY: rotated
+        }
 
     def test_get_metadata_returns_sidecar_payload(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
@@ -1328,6 +1357,75 @@ class TestChatSessionManagerFork:
             message.to_dict() for message in source.load()
         ]
 
+    def test_same_scope_fork_inherits_source_prompt_cache_affinity(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        source = self._populate(manager, "alpha", "sess", project_id="acme")
+        source_affinity = manager.prompt_cache_affinity_id("alpha", source.id, "acme")
+
+        fork = asyncio.run(
+            manager.fork(
+                "alpha",
+                source.id,
+                source_project_id="acme",
+                target_project_id="acme",
+            )
+        )
+
+        assert manager.prompt_cache_affinity_id("alpha", fork.id, "acme") == source_affinity
+        assert (
+            manager.get_metadata("alpha", fork.id, "acme")[PROMPT_CACHE_AFFINITY_META_KEY]
+            == source_affinity
+        )
+
+    @pytest.mark.parametrize(
+        ("target_agent_id", "target_project_id"),
+        [("beta", "acme"), ("alpha", "other")],
+    )
+    def test_rehomed_fork_starts_new_prompt_cache_affinity(
+        self,
+        tmp_path,
+        target_agent_id,
+        target_project_id,
+    ):
+        manager = ChatSessionManager(tmp_path)
+        source = self._populate(manager, "alpha", "sess", project_id="acme")
+        source_affinity = manager.prompt_cache_affinity_id("alpha", source.id, "acme")
+
+        fork = asyncio.run(
+            manager.fork(
+                "alpha",
+                source.id,
+                target_agent_id=target_agent_id,
+                source_project_id="acme",
+                target_project_id=target_project_id,
+            )
+        )
+
+        fork_affinity = manager.prompt_cache_affinity_id(
+            target_agent_id,
+            fork.id,
+            target_project_id,
+        )
+        assert fork_affinity != source_affinity
+        assert (
+            manager.get_metadata(target_agent_id, fork.id, target_project_id)[
+                PROMPT_CACHE_AFFINITY_META_KEY
+            ]
+            == fork_affinity
+        )
+
+    def test_nested_same_scope_forks_keep_one_prompt_cache_lineage(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        source = self._populate(manager, "alpha", "sess")
+
+        first_fork = asyncio.run(manager.fork("alpha", source.id))
+        second_fork = asyncio.run(manager.fork("alpha", first_fork.id))
+
+        assert {
+            manager.prompt_cache_affinity_id("alpha", session_id)
+            for session_id in (source.id, first_fork.id, second_fork.id)
+        } == {manager.prompt_cache_affinity_id("alpha", source.id)}
+
     def test_fork_leaves_source_untouched(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
         source = self._populate(manager, "alpha", "sess")
@@ -1412,7 +1510,10 @@ class TestChatSessionManagerFork:
 
         fork = asyncio.run(manager.fork("alpha", "sess"))
 
-        assert list(manager.get_metadata("alpha", fork.id)) == [FORK_SOURCE_META_KEY]
+        assert list(manager.get_metadata("alpha", fork.id)) == [
+            PROMPT_CACHE_AFFINITY_META_KEY,
+            FORK_SOURCE_META_KEY,
+        ]
 
     def test_fork_of_unknown_session_raises(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
@@ -1443,11 +1544,15 @@ class TestForkStripPolicy:
 
     def test_cross_agent_strip_set_tracks_chat_constants(self) -> None:
         from core.chat.chat import PINNED_SKILL_CATALOG_META_KEY, SEEN_SKILLS_META_KEY
-        from core.sessions import SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS
+        from core.sessions import (
+            PROMPT_CACHE_AFFINITY_META_KEY,
+            SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS,
+        )
 
         assert {
             PINNED_SKILL_CATALOG_META_KEY,
             SEEN_SKILLS_META_KEY,
+            PROMPT_CACHE_AFFINITY_META_KEY,
         } == SESSION_FORK_CROSS_AGENT_STRIP_META_KEYS
 
 

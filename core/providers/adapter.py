@@ -500,19 +500,20 @@ class ProviderAdapter(ABC):
         agent_id: str,
         session_id: str,
         project_id: str | None = None,
+        prompt_cache_affinity_id: str | None = None,
     ) -> JsonObject:
         """Return extra per-request kwargs derived from the conversation identity.
 
         The chat layer calls this once per provider request and merges the
         result into the ``send()``/``stream()`` kwargs, letting an adapter turn
-        the stable ``(agent_id, session_id)`` pair into a provider-specific
-        routing hint (e.g. the OpenAI Codex prompt-cache scope headers) without
-        the chat layer knowing any provider specifics.  The ABC default adds
-        nothing, so only adapters that override this ever receive the extra
-        kwargs — the chat call for every other provider is byte-for-byte
-        unchanged, and no wire that would reject an unknown field is touched.
+        Session identity stays available for stateful transport continuation;
+        ``prompt_cache_affinity_id`` is a separate, provider-neutral routing
+        lineage inherited only by cache-compatible forks. Concrete adapters map
+        either identity onto their own wire without the chat layer knowing any
+        provider specifics. The ABC default adds nothing, so no unrelated wire
+        receives an unknown field.
         """
-        del agent_id, session_id, project_id
+        del agent_id, session_id, project_id, prompt_cache_affinity_id
         return {}
 
     @abstractmethod

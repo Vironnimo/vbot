@@ -452,14 +452,21 @@ async def test_codex_send_collects_text_deltas_when_completed_output_is_empty() 
     }
 
 
-def test_request_context_kwargs_scopes_conversation() -> None:
-    """The hook maps ``(agent_id, session_id)`` to a stable conversation id."""
+def test_request_context_kwargs_separates_conversation_and_cache_affinity() -> None:
+    """The hook keeps transport identity distinct from cache routing."""
 
     adapter = OpenAIAdapter(_subscription_config(), _jwt_with_account())
 
-    context = adapter.request_context_kwargs(agent_id="orchestrator", session_id="sess-42")
+    context = adapter.request_context_kwargs(
+        agent_id="orchestrator",
+        session_id="sess-42",
+        prompt_cache_affinity_id="shared-cache-lineage",
+    )
 
-    assert context == {"conversation_id": "orchestrator:sess-42"}
+    assert context == {
+        "conversation_id": "orchestrator:sess-42",
+        "prompt_cache_affinity_id": "shared-cache-lineage",
+    }
 
 
 @respx.mock
@@ -488,13 +495,16 @@ async def test_codex_send_stamps_cache_scope_headers() -> None:
         SAMPLE_MESSAGES,
         model_id="gpt-5-codex",
         conversation_id="orchestrator:sess-42",
+        prompt_cache_affinity_id="shared-cache-lineage",
     )
 
     request = route.calls.last.request
-    assert request.headers["session_id"] == "orchestrator:sess-42"
-    assert request.headers["x-client-request-id"] == "orchestrator:sess-42"
+    assert request.headers["session_id"] == "shared-cache-lineage"
+    assert request.headers["x-client-request-id"] == "shared-cache-lineage"
     # The routing hint rides on headers only — never on the request body.
-    assert "conversation_id" not in json.loads(request.content)
+    request_body = json.loads(request.content)
+    assert "conversation_id" not in request_body
+    assert "prompt_cache_affinity_id" not in request_body
 
 
 @respx.mock
@@ -587,6 +597,62 @@ async def test_codex_websocket_reuses_connection_and_sends_only_new_tool_result(
     assert "session_id" not in websocket_headers
     await adapter.aclose()
     assert websocket.closed is True
+
+
+@pytest.mark.asyncio
+async def test_codex_shared_cache_affinity_does_not_share_websocket_continuation() -> None:
+    source_websocket = _FakeCodexWebSocket(
+        [
+            [
+                _codex_output_item_event(0, dict(_CODEX_REASONING_ITEM)),
+                _codex_output_item_event(1, dict(_CODEX_TOOL_CALL_ITEM)),
+                _codex_completed_event("resp_source", []),
+            ]
+        ]
+    )
+    fork_websocket = _FakeCodexWebSocket(
+        [[_codex_completed_event("resp_fork", [dict(_CODEX_FINAL_MESSAGE_ITEM)])]]
+    )
+    connector = _FakeCodexWebSocketConnector([source_websocket, fork_websocket])
+    adapter = OpenAIAdapter(
+        _subscription_config(),
+        _jwt_with_account("acct_openai"),
+        connection_mode=CODEX_RESPONSES_MODE,
+        codex_websocket_connect=connector,
+    )
+
+    source_raw = await adapter.send(
+        SAMPLE_MESSAGES,
+        model_id="gpt-5.6-terra",
+        conversation_id="orchestrator:source",
+        prompt_cache_affinity_id="shared-cache-lineage",
+        thinking_effort="high",
+        tools=_CODEX_TOOLS,
+    )
+    source = adapter.normalize_response(source_raw)
+    await adapter.send(
+        _messages_with_codex_tool_result(source),
+        model_id="gpt-5.6-terra",
+        conversation_id="orchestrator:fork",
+        prompt_cache_affinity_id="shared-cache-lineage",
+        thinking_effort="high",
+        tools=_CODEX_TOOLS,
+    )
+
+    assert len(connector.calls) == 2
+    assert source_websocket.closed is True
+    assert "previous_response_id" not in source_websocket.sent_payloads[0]
+    assert "previous_response_id" not in fork_websocket.sent_payloads[0]
+    assert fork_websocket.sent_payloads[0]["input"][-1] == {
+        "type": "function_call_output",
+        "call_id": "call_1",
+        "output": '{"ok":true,"data":{"level":91}}',
+    }
+    for _url, connect_kwargs in connector.calls:
+        headers = connect_kwargs["additional_headers"]
+        assert headers["session-id"] == "shared-cache-lineage"
+        assert headers["x-client-request-id"] == "shared-cache-lineage"
+    await adapter.aclose()
 
 
 @pytest.mark.asyncio
