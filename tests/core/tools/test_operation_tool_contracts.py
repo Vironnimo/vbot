@@ -228,6 +228,7 @@ def test_direct_tool_schema_is_closed_and_declares_required_properties(
     assert schema["type"] == "object", tool_name
     if tool_name in {
         "analyze_image",
+        "channel_send",
         "edit",
         "glob",
         "grep",

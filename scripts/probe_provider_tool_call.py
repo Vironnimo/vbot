@@ -26,11 +26,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from core.channels.channels import ChannelConfig
 from core.providers.tool_schema import (
     ToolSchemaProfile,
     render_tool_definitions,
 )
 from core.runtime.runtime import Runtime
+from core.tools.channel import (
+    CHANNEL_SEND_TOOL_NAME,
+    _channel_send_definition_profile,
+)
 from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
 from core.tools.edit import (
     EDIT_TOOL_DESCRIPTION,
@@ -139,6 +144,7 @@ PROBE_SCENARIOS = (
     "unknown_property_pressure",
     "large_arguments",
     "analyze_image",
+    "channel_send",
     "edit",
     "glob",
     "grep",
@@ -159,6 +165,22 @@ PROBE_SCENARIOS = (
 )
 OPTIONAL_BOOLEAN_CASES = ("omit", "include_links", "raw", "both")
 ANALYZE_IMAGE_CASES = ("single", "multiple")
+CHANNEL_SEND_CASES = (
+    "telegram_message",
+    "telegram_target",
+    "telegram_file",
+    "telegram_files",
+    "telegram_message_file",
+    "telegram_thread",
+    "telegram_button",
+    "telegram_button_rows",
+    "discord_message",
+    "discord_target",
+    "discord_file",
+    "discord_message_file",
+    "mixed_telegram_button",
+    "mixed_discord_file",
+)
 EDIT_CASES = ("default", "replace_false", "replace_true", "multiline", "delete")
 IMAGE_GENERATION_CASES = (
     "full_default",
@@ -322,6 +344,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=ANALYZE_IMAGE_CASES,
         default="single",
         help="Exact analyze_image argument shape requested by the scenario.",
+    )
+    parser.add_argument(
+        "--channel-send-case",
+        choices=CHANNEL_SEND_CASES,
+        default="telegram_message",
+        help="Exact channel_send profile and argument shape requested by the scenario.",
     )
     parser.add_argument(
         "--edit-case",
@@ -772,6 +800,123 @@ def _grep_scenario(case_name: str) -> ProbeScenario:
         ],
         _probe_messages(instruction),
         GREP_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
+    )
+
+
+def _channel_send_scenario(case_name: str) -> ProbeScenario:
+    channel_arguments: dict[str, dict[str, Any]] = {
+        "telegram_message": {
+            "channel_id": "telegram-probe",
+            "message": "Provider Tool probe complete.",
+        },
+        "telegram_target": {
+            "channel_id": "telegram-probe",
+            "message": "Provider Tool probe complete.",
+            "platform_target": "123456789",
+        },
+        "telegram_file": {
+            "channel_id": "telegram-probe",
+            "file_paths": ["artifacts/provider-tool-probe.txt"],
+        },
+        "telegram_files": {
+            "channel_id": "telegram-probe",
+            "file_paths": [
+                "artifacts/provider-tool-probe.txt",
+                "artifacts/provider-tool-probe.png",
+            ],
+            "platform_target": "123456789",
+        },
+        "telegram_message_file": {
+            "channel_id": "telegram-probe",
+            "message": "Attached probe result.",
+            "file_paths": ["artifacts/provider-tool-probe.txt"],
+        },
+        "telegram_thread": {
+            "channel_id": "telegram-probe",
+            "message": "Threaded probe result.",
+            "platform_target": "123456789",
+            "thread_id": "42",
+        },
+        "telegram_button": {
+            "channel_id": "telegram-probe",
+            "message": "Continue the probe?",
+            "buttons": [[{"label": "Continue", "data": "run:continue"}]],
+        },
+        "telegram_button_rows": {
+            "channel_id": "telegram-probe",
+            "message": "Choose a probe result.",
+            "buttons": [
+                [
+                    {"label": "Accept", "data": "run:accept"},
+                    {"label": "Retry", "data": "run:retry"},
+                ],
+                [{"label": "Cancel", "data": "run:cancel"}],
+            ],
+            "platform_target": "123456789",
+        },
+        "discord_message": {
+            "channel_id": "discord-probe",
+            "message": "Provider Tool probe complete.",
+        },
+        "discord_target": {
+            "channel_id": "discord-probe",
+            "message": "Provider Tool probe complete.",
+            "platform_target": "987654321",
+        },
+        "discord_file": {
+            "channel_id": "discord-probe",
+            "file_paths": ["artifacts/provider-tool-probe.txt"],
+        },
+        "discord_message_file": {
+            "channel_id": "discord-probe",
+            "message": "Attached probe result.",
+            "file_paths": ["artifacts/provider-tool-probe.txt"],
+            "platform_target": "987654321",
+        },
+        "mixed_telegram_button": {
+            "channel_id": "telegram-probe",
+            "message": "Continue the mixed-profile probe?",
+            "buttons": [[{"label": "Continue", "data": "run:continue"}]],
+        },
+        "mixed_discord_file": {
+            "channel_id": "discord-probe",
+            "file_paths": ["artifacts/provider-tool-probe.txt"],
+        },
+    }
+    expected_arguments = channel_arguments[case_name]
+    platforms = (
+        ("discord", "telegram")
+        if case_name.startswith("mixed_")
+        else (("discord",) if case_name.startswith("discord_") else ("telegram",))
+    )
+    configs = [
+        ChannelConfig(
+            id=f"{platform}-probe",
+            platform=platform,
+            agent_id="probe-agent",
+            token_env_var=f"PROBE_{platform.upper()}_TOKEN",
+        )
+        for platform in platforms
+    ]
+    profile = _channel_send_definition_profile(configs)
+    rendered_arguments = json.dumps(expected_arguments, ensure_ascii=False, separators=(",", ":"))
+    instruction = (
+        f"Call {CHANNEL_SEND_TOOL_NAME} exactly once with exactly this JSON object as its "
+        f"arguments: {rendered_arguments}. Preserve every value and do not add any field."
+    )
+    return ProbeScenario(
+        "channel_send",
+        [
+            {
+                "name": CHANNEL_SEND_TOOL_NAME,
+                "description": profile.description,
+                "parameters": profile.parameters,
+            }
+        ],
+        _probe_messages(instruction),
+        CHANNEL_SEND_TOOL_NAME,
         require_closed_input=False,
         expected_arguments=expected_arguments,
     )
@@ -1399,6 +1544,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         )
     if name == "analyze_image":
         return _analyze_image_scenario(str(args.analyze_image_case))
+    if name == "channel_send":
+        return _channel_send_scenario(str(args.channel_send_case))
     if name == "edit":
         return _edit_scenario(str(args.edit_case))
     if name == "glob":
@@ -2101,6 +2248,9 @@ async def _run(args: argparse.Namespace) -> int:
             ),
             "analyze_image_case": (
                 args.analyze_image_case if scenario.name == "analyze_image" else None
+            ),
+            "channel_send_case": (
+                args.channel_send_case if scenario.name == "channel_send" else None
             ),
             "edit_case": args.edit_case if scenario.name == "edit" else None,
             "glob_case": args.glob_case if scenario.name == "glob" else None,

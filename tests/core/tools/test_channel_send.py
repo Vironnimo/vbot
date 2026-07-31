@@ -48,15 +48,15 @@ def test_channel_send_agent_guidance_requires_tool_for_channel_files() -> None:
     assert isinstance(file_paths, dict)
     assert file_paths["description"] == (
         "File paths to deliver through the channel. Use for every channel file delivery, "
-        "including replies. Relative paths resolve from the working directory."
+        "including replies. Required unless message is provided; relative paths resolve "
+        "from the working directory."
     )
     buttons = properties["buttons"]
     assert isinstance(buttons, dict)
     button_properties = buttons["items"]["items"]["properties"]
-    assert button_properties["label"]["description"] == ("User-visible text shown on the button.")
+    assert button_properties["label"]["description"] == "Text shown on the button."
     assert button_properties["data"]["description"] == (
-        "Callback payload sent when the user selects the button. Use '<prefix>:<payload>'; "
-        "max 64 UTF-8 bytes."
+        "Callback payload as '<prefix>:<payload>'; max 64 UTF-8 bytes."
     )
 
 
@@ -145,14 +145,15 @@ def test_channel_send_profile_uses_enabled_agent_channels_and_platform_capabilit
 
     assert first == second
     parameters = first[0]["parameters"]
-    branches = {
-        branch["description"].split(" enabled ", 1)[1].split(" Channel", 1)[0]: branch
-        for branch in parameters["oneOf"]
-    }
-    telegram = branches["telegram"]
-    discord = branches["discord"]
-    assert telegram["properties"]["channel_id"]["enum"] == ["tg-primary"]
-    assert set(telegram["properties"]) == {
+    assert "oneOf" not in parameters
+    assert "anyOf" not in parameters
+    assert "not" not in parameters
+    assert "additionalProperties" not in str(parameters)
+    assert parameters["properties"]["channel_id"]["enum"] == [
+        "discord-primary",
+        "tg-primary",
+    ]
+    assert set(parameters["properties"]) == {
         "channel_id",
         "message",
         "platform_target",
@@ -160,29 +161,53 @@ def test_channel_send_profile_uses_enabled_agent_channels_and_platform_capabilit
         "file_paths",
         "buttons",
     }
-    assert discord["properties"]["channel_id"]["enum"] == ["discord-primary"]
-    assert set(discord["properties"]) == {
+    assert first[0]["description"].endswith(
+        "Enabled Channels — Discord: discord-primary; Telegram: tg-primary."
+    )
+
+    contract = registry.contracts_for_provider_definitions(first)[CHANNEL_SEND_TOOL_NAME]
+    result = asyncio.run(
+        registry.dispatch(
+            replace(make_context(tmp_path), input_contract=contract),
+            {
+                "channel_id": "discord-primary",
+                "message": "Hello",
+                "buttons": [[{"label": "Go", "data": "run:go"}]],
+            },
+            [CHANNEL_SEND_TOOL_NAME],
+        )
+    )
+    assert result == tool_failure(
+        "invalid_arguments",
+        "buttons not supported by discord Channel discord-primary",
+    )
+
+
+def test_channel_send_discord_profile_omits_telegram_only_fields() -> None:
+    channel_service = Mock()
+    channel_service.list_channels.return_value = [
+        make_channel_config(channel_id="discord-primary", platform="discord")
+    ]
+    registry = ToolRegistry()
+    register_channel_send_tool(
+        registry,
+        channel_service,
+        make_chat_sessions(),
+        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
+    )
+
+    definition = registry.provider_definitions(
+        [CHANNEL_SEND_TOOL_NAME],
+        profile_context=ToolDefinitionProfileContext(agent_id="agent-1"),
+    )[0]
+
+    assert set(definition["parameters"]["properties"]) == {
         "channel_id",
         "message",
         "platform_target",
         "file_paths",
     }
-    assert telegram["additionalProperties"] is False
-    assert discord["additionalProperties"] is False
-
-    contract = registry.contracts_for_provider_definitions(first)[CHANNEL_SEND_TOOL_NAME]
-    with pytest.raises(ValueError):
-        asyncio.run(
-            registry.dispatch(
-                replace(make_context(tmp_path), input_contract=contract),
-                {
-                    "channel_id": "discord-primary",
-                    "message": "Hello",
-                    "buttons": [[{"label": "Go", "data": "run:go"}]],
-                },
-                [CHANNEL_SEND_TOOL_NAME],
-            )
-        )
+    assert definition["description"].endswith("Enabled Channels — Discord: discord-primary.")
 
 
 def test_channel_send_profile_hides_tool_without_enabled_owned_channel() -> None:
@@ -553,7 +578,52 @@ def test_channel_send_rejects_unknown_button_fields(tmp_path: Path) -> None:
     error = result["error"]
     assert isinstance(error, dict)
     assert error["code"] == "invalid_arguments"
-    assert "Additional properties are not allowed" in str(error["message"])
+    assert "buttons[0][0] has unknown field(s): unexpected" in str(error["message"])
+    channel_service.send.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    (
+        ("thread_id", "42"),
+        ("buttons", [[{"label": "Go", "data": "run:go"}]]),
+    ),
+)
+def test_channel_send_rejects_telegram_only_fields_for_discord(
+    tmp_path: Path,
+    field_name: str,
+    value: object,
+) -> None:
+    channel_service = Mock()
+    channel_service.send = AsyncMock()
+    channel_service.list_channels.return_value = [
+        make_channel_config(channel_id="discord-primary", platform="discord")
+    ]
+    registry = ToolRegistry()
+    register_channel_send_tool(
+        registry,
+        channel_service,
+        make_chat_sessions(),
+        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
+    )
+
+    result = asyncio.run(
+        dispatch(
+            registry,
+            tmp_path,
+            {
+                "channel_id": "discord-primary",
+                "message": "Hello",
+                "platform_target": "12345",
+                field_name: value,
+            },
+        )
+    )
+
+    assert result == tool_failure(
+        "invalid_arguments",
+        f"{field_name} not supported by discord Channel discord-primary",
+    )
     channel_service.send.assert_not_awaited()
 
 
@@ -905,8 +975,47 @@ def test_channel_send_requires_message_or_file_paths(tmp_path: Path) -> None:
     error = result["error"]
     assert isinstance(error, dict)
     assert error["code"] == "invalid_arguments"
-    assert "is a required property" in str(error["message"])
+    assert "at least one of message or file_paths must be provided" in str(error["message"])
     channel_service.send.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    (
+        (
+            {"channel_id": "tg-assistant", "message": "Hello", "file_paths": []},
+            "arguments/file_paths: [] should be non-empty [minItems]",
+        ),
+        (
+            {"channel_id": "tg-assistant", "message": "Hello", "buttons": []},
+            "arguments/buttons: [] should be non-empty [minItems]",
+        ),
+        (
+            {"channel_id": "tg-assistant", "message": "Hello", "buttons": [[]]},
+            "arguments/buttons[0]: [] should be non-empty [minItems]",
+        ),
+    ),
+)
+def test_channel_send_rejects_explicit_empty_collections(
+    tmp_path: Path,
+    arguments: dict[str, object],
+    message: str,
+) -> None:
+    channel_service = Mock()
+    channel_service.send = AsyncMock()
+    channel_service.list_channels.return_value = [make_channel_config()]
+    registry = ToolRegistry()
+    register_channel_send_tool(
+        registry,
+        channel_service,
+        make_chat_sessions(),
+        max_attachment_size_bytes=_TEST_MAX_ATTACHMENT_SIZE_BYTES,
+    )
+
+    result = asyncio.run(dispatch(registry, tmp_path, arguments))
+
+    assert result == tool_failure("invalid_arguments", message)
+    channel_service.send.assert_not_awaited()
 
 
 def test_channel_send_file_paths_only_forwards_files(tmp_path: Path) -> None:

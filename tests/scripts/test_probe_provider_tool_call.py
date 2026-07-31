@@ -480,6 +480,44 @@ def test_analyze_image_cases_use_production_schema_and_exact_arguments() -> None
         )
 
 
+def test_channel_send_cases_use_production_profiles_and_exact_arguments() -> None:
+    for case_name in PROBE.CHANNEL_SEND_CASES:
+        scenario = PROBE._scenario(
+            SimpleNamespace(
+                scenario="channel_send",
+                channel_send_case=case_name,
+                lines=8,
+            ),
+        )
+        contracts = PROBE._compile_probe_contracts(
+            scenario.tools,
+            require_closed_input=scenario.require_closed_input,
+        )
+        arguments = scenario.expected_arguments
+
+        assert arguments is not None
+        assert "additionalProperties" not in json.dumps(scenario.tools[0]["parameters"])
+        assert "oneOf" not in scenario.tools[0]["parameters"]
+        contracts[PROBE.CHANNEL_SEND_TOOL_NAME].validate_arguments(arguments)
+        assert (
+            PROBE._expected_argument_measurements(
+                [{"name": PROBE.CHANNEL_SEND_TOOL_NAME, "arguments": arguments}],
+                scenario,
+            )["expected_arguments_match"]
+            is True
+        )
+
+    telegram = PROBE._channel_send_scenario("telegram_message")
+    discord = PROBE._channel_send_scenario("discord_message")
+    mixed = PROBE._channel_send_scenario("mixed_telegram_button")
+    assert "buttons" in telegram.tools[0]["parameters"]["properties"]
+    assert "buttons" not in discord.tools[0]["parameters"]["properties"]
+    assert mixed.tools[0]["parameters"]["properties"]["channel_id"]["enum"] == [
+        "discord-probe",
+        "telegram-probe",
+    ]
+
+
 def test_image_generation_cases_use_production_profiles_and_exact_arguments() -> None:
     for case_name in PROBE.IMAGE_GENERATION_CASES:
         scenario = PROBE._scenario(
