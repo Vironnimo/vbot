@@ -3,20 +3,22 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal, Protocol, cast
 
 from core.chat.messages import (
     COMPACTION_SUMMARY_NOTE_PREFIX,
     ChatMessage,
     JsonObject,
+    ToolCall,
+    _compaction_projection_without_provider_state,
     _effective_compaction_messages,
     _latest_compaction_checkpoint,
 )
+from core.debug.redaction import redact_json_body
 from core.utils.errors import VBotError
 from core.utils.tokens import estimate_message_tokens, estimate_request_input_tokens
 
-# Reader compatibility for checkpoints written by the removed Tool-aging projection.
 TOOL_RESULT_COMPACTED_FIELD = "_vbot_compacted_tool_result"
 
 TRIGGER_CONTEXT_RATIO = "context_ratio"
@@ -26,6 +28,12 @@ STRATEGY_CONTINUATION = "continuation"
 COMPACTION_POLICY_META_KEY = "compaction_policy"
 
 MIN_AUTO_COMPACTION_RECLAIM_TOKENS = 4_096
+TAIL_SOFT_LIMIT_PERCENT = 115
+MAX_TOOL_RESULT_DIGEST_CHARS = 1_600
+MAX_TOOL_RESULT_VALUE_CHARS = 800
+MAX_TOOL_ARGUMENTS_CHARS = 2_000
+MAX_TOOL_ARGUMENT_VALUE_CHARS = 512
+MAX_PROJECTED_COLLECTION_ITEMS = 12
 
 ModelTarget = Literal["active", "summary"]
 
@@ -103,6 +111,23 @@ class CompactionContext:
     storage: Any
 
 
+@dataclass(frozen=True)
+class _TailPlan:
+    """One bounded working-Tail projection and its canonical suffix boundary."""
+
+    boundary_id: str
+    boundary_index: int
+    pinned_user: ChatMessage | None
+    projected_suffix: tuple[ChatMessage, ...]
+    payload_reclaim_tokens: int
+
+    @property
+    def retained_messages(self) -> tuple[ChatMessage, ...]:
+        if self.pinned_user is None:
+            return self.projected_suffix
+        return (self.pinned_user, *self.projected_suffix)
+
+
 class CompactionStrategy(Protocol):
     """Builds one CompactionPlan without performing Model I/O."""
 
@@ -121,29 +146,9 @@ class CompactionInsufficientReclaimError(CompactionError):
 
 
 def find_tail_boundary(messages: list[ChatMessage], tail_tokens: int) -> str:
-    """Return the provider-visible message id where the safe retained tail starts."""
-    if not messages:
-        raise CompactionError("Cannot find tail boundary for an empty message list")
-    if tail_tokens <= 0:
-        raise CompactionError("tail_tokens must be positive")
+    """Return the canonical boundary of the bounded chronological Tail suffix."""
 
-    fallback_id: str | None = None
-    accumulated_tokens = 0
-    for index in range(len(messages) - 1, -1, -1):
-        message = messages[index]
-        accumulated_tokens += _estimate_message_tokens(message)
-        if not _can_start_tail(message):
-            continue
-        try:
-            _validate_projection(messages[index:])
-        except CompactionError:
-            continue
-        fallback_id = message.id
-        if accumulated_tokens >= tail_tokens:
-            return message.id
-    if fallback_id is not None:
-        return fallback_id
-    raise CompactionError("Cannot find a provider-safe tail boundary")
+    return _plan_working_tail(messages, tail_tokens).boundary_id
 
 
 class SummarizationStrategy:
@@ -155,27 +160,34 @@ class SummarizationStrategy:
         messages = list(context.messages)
         if not messages:
             raise CompactionError("Cannot compact an empty Context")
-        boundary_id = find_tail_boundary(messages, settings.tail_tokens)
-        boundary_index = _find_boundary_index(messages, boundary_id)
-        head = messages[:boundary_index]
-        tail = messages[boundary_index:]
-        request_prefix = _request_prefix_before_tail(context.request_messages, boundary_id)
+        tail_plan = _plan_working_tail(messages, settings.tail_tokens)
+        head = messages[: tail_plan.boundary_index]
+        request_prefix = _request_prefix_before_tail(
+            context.request_messages,
+            tail_plan.boundary_id,
+        )
         prompt = _build_compaction_instruction(
             context.storage.read_prompt_fragment("compaction.md"),
             context.instruction,
         )
+        pinned_user_id = tail_plan.pinned_user.id if tail_plan.pinned_user is not None else None
         return CompactionPlan(
             model_messages=(
                 *request_prefix,
                 {"role": "user", "content": prompt},
             ),
             model_target="summary",
-            after_summary=tuple(tail),
+            after_summary=tail_plan.retained_messages,
             compacted_token_count=(
                 context.previous_compacted_token_count
                 + _estimate_token_span(
-                    [message for message in head if not _is_compaction_summary_note(message)]
+                    [
+                        message
+                        for message in head
+                        if not _is_compaction_summary_note(message) and message.id != pinned_user_id
+                    ]
                 )
+                + tail_plan.payload_reclaim_tokens
             ),
         )
 
@@ -275,12 +287,18 @@ class CompactionService:
         if not effective:
             return False
         try:
-            boundary_id = find_tail_boundary(effective, settings.tail_tokens)
+            tail_plan = _plan_working_tail(effective, settings.tail_tokens)
         except CompactionError:
             return False
-        boundary_index = _find_boundary_index(effective, boundary_id)
-        compactable_prefix = effective[:boundary_index]
-        return any(not _is_compaction_summary_note(message) for message in compactable_prefix)
+        pinned_user_id = tail_plan.pinned_user.id if tail_plan.pinned_user is not None else None
+        compactable_prefix = effective[: tail_plan.boundary_index]
+        return (
+            any(
+                not _is_compaction_summary_note(message) and message.id != pinned_user_id
+                for message in compactable_prefix
+            )
+            or tail_plan.payload_reclaim_tokens >= MIN_AUTO_COMPACTION_RECLAIM_TOKENS
+        )
 
     async def compact(
         self,
@@ -384,6 +402,348 @@ class CompactionService:
         return estimated_tokens
 
 
+def _plan_working_tail(messages: list[ChatMessage], tail_tokens: int) -> _TailPlan:
+    """Build an exact-first recent working trajectory around one active User anchor."""
+
+    if not messages:
+        raise CompactionError("Cannot find tail boundary for an empty message list")
+    if tail_tokens <= 0:
+        raise CompactionError("tail_tokens must be positive")
+
+    safe_boundaries = _safe_tail_boundary_indices(messages)
+    if not safe_boundaries:
+        raise CompactionError("Cannot find a provider-safe tail boundary")
+
+    latest_user_index = next(
+        (index for index in range(len(messages) - 1, -1, -1) if messages[index].role == "user"),
+        None,
+    )
+    active_user = messages[latest_user_index] if latest_user_index is not None else None
+    retained_tokens = _tail_token_span([active_user]) if active_user is not None else 0
+    soft_limit = _tail_soft_limit(tail_tokens)
+    consumed_tool_batches = _consumed_tool_batch_assistant_ids(messages)
+
+    selected_start = len(messages)
+    projected_suffix: tuple[ChatMessage, ...] = ()
+    selected_group = False
+    for boundary_index in reversed(safe_boundaries):
+        source_group = messages[boundary_index:selected_start]
+        exact_group = _checkpoint_projection(source_group)
+        exact_increment = _tail_increment_tokens(exact_group, active_user)
+
+        if not selected_group or retained_tokens + exact_increment <= soft_limit:
+            chosen_group = exact_group
+            chosen_increment = exact_increment
+        else:
+            compacted_group = _project_consumed_tool_payloads(
+                source_group,
+                consumed_tool_batches,
+            )
+            compacted_increment = _tail_increment_tokens(compacted_group, active_user)
+            if compacted_group == exact_group or retained_tokens + compacted_increment > soft_limit:
+                break
+            chosen_group = compacted_group
+            chosen_increment = compacted_increment
+
+        projected_suffix = (*chosen_group, *projected_suffix)
+        selected_start = boundary_index
+        retained_tokens += chosen_increment
+        selected_group = True
+        if retained_tokens >= tail_tokens:
+            break
+
+    if selected_start >= len(messages):
+        raise CompactionError("Cannot find a provider-safe tail boundary")
+
+    pinned_user = (
+        active_user
+        if latest_user_index is not None and latest_user_index < selected_start
+        else None
+    )
+    exact_suffix = _checkpoint_projection(messages[selected_start:])
+    payload_reclaim = max(
+        0,
+        _tail_token_span(exact_suffix) - _tail_token_span(projected_suffix),
+    )
+    return _TailPlan(
+        boundary_id=messages[selected_start].id,
+        boundary_index=selected_start,
+        pinned_user=pinned_user,
+        projected_suffix=projected_suffix,
+        payload_reclaim_tokens=payload_reclaim,
+    )
+
+
+def _safe_tail_boundary_indices(messages: list[ChatMessage]) -> list[int]:
+    boundaries: list[int] = []
+    for index, message in enumerate(messages):
+        if not _can_start_tail(message):
+            continue
+        try:
+            _validate_projection(messages[index:])
+        except CompactionError:
+            continue
+        boundaries.append(index)
+    return boundaries
+
+
+def _checkpoint_projection(messages: list[ChatMessage]) -> tuple[ChatMessage, ...]:
+    return tuple(_compaction_projection_without_provider_state(messages))
+
+
+def _tail_increment_tokens(
+    messages: tuple[ChatMessage, ...],
+    active_user: ChatMessage | None,
+) -> int:
+    if active_user is None:
+        return _tail_token_span(messages)
+    return _tail_token_span([message for message in messages if message.id != active_user.id])
+
+
+def _tail_token_span(messages: list[ChatMessage] | tuple[ChatMessage, ...]) -> int:
+    estimated_tokens, _ = estimate_request_input_tokens([message.to_dict() for message in messages])
+    return estimated_tokens
+
+
+def _tail_soft_limit(tail_tokens: int) -> int:
+    return (tail_tokens * TAIL_SOFT_LIMIT_PERCENT + 99) // 100
+
+
+@dataclass(frozen=True)
+class _ToolBatch:
+    assistant_index: int
+    result_indices: tuple[int, ...]
+
+
+def _complete_tool_batches(messages: list[ChatMessage]) -> list[_ToolBatch]:
+    """Return complete Assistant/Tool batches without crossing a later message."""
+
+    batches: list[_ToolBatch] = []
+    pending_assistant_index: int | None = None
+    pending_call_ids: set[str] = set()
+    result_indices: list[int] = []
+    for index, message in enumerate(messages):
+        if message.role in {"note", "run_summary", "agent_takeover", "error"}:
+            continue
+        if message.role == "assistant":
+            pending_assistant_index = index if message.tool_calls else None
+            pending_call_ids = {call.id for call in message.tool_calls or []}
+            result_indices = []
+            continue
+        if message.role == "tool":
+            if pending_assistant_index is not None and message.tool_call_id in pending_call_ids:
+                pending_call_ids.remove(cast(str, message.tool_call_id))
+                result_indices.append(index)
+                if not pending_call_ids:
+                    batches.append(
+                        _ToolBatch(
+                            assistant_index=pending_assistant_index,
+                            result_indices=tuple(result_indices),
+                        )
+                    )
+                    pending_assistant_index = None
+                    result_indices = []
+            continue
+        pending_assistant_index = None
+        pending_call_ids = set()
+        result_indices = []
+    return batches
+
+
+def _consumed_tool_batch_assistant_ids(messages: list[ChatMessage]) -> set[str]:
+    """Return Tool carriers whose Results were followed by another Assistant step."""
+
+    assistant_indices = [
+        index for index, message in enumerate(messages) if message.role == "assistant"
+    ]
+    consumed: set[str] = set()
+    for batch in _complete_tool_batches(messages):
+        batch_end = max(batch.result_indices, default=batch.assistant_index)
+        if any(index > batch_end for index in assistant_indices):
+            consumed.add(messages[batch.assistant_index].id)
+    return consumed
+
+
+def _project_consumed_tool_payloads(
+    messages: list[ChatMessage],
+    consumed_assistant_ids: set[str],
+) -> tuple[ChatMessage, ...]:
+    """Deterministically shrink consumed Tool payloads in one pressure group."""
+
+    projected = list(messages)
+    for batch in _complete_tool_batches(messages):
+        assistant_message = projected[batch.assistant_index]
+        if assistant_message.id not in consumed_assistant_ids:
+            continue
+        if assistant_message.tool_calls:
+            compacted_calls = [
+                _compact_tool_call(tool_call) for tool_call in assistant_message.tool_calls
+            ]
+            if compacted_calls != assistant_message.tool_calls:
+                projected[batch.assistant_index] = replace(
+                    assistant_message,
+                    tool_calls=compacted_calls,
+                )
+        for result_index in batch.result_indices:
+            result_message = projected[result_index]
+            if not isinstance(result_message.content, str) or is_compacted_tool_result_content(
+                result_message.content
+            ):
+                continue
+            digest = _tool_result_digest(result_message)
+            if len(digest) < len(result_message.content):
+                projected[result_index] = replace(result_message, content=digest)
+    return _checkpoint_projection(projected)
+
+
+def _compact_tool_call(tool_call: ToolCall) -> ToolCall:
+    original = cast(JsonObject, redact_json_body(tool_call.arguments))
+    compacted = _compact_json_value(
+        original,
+        string_limit=MAX_TOOL_ARGUMENT_VALUE_CHARS,
+    )
+    if not isinstance(compacted, dict):
+        return tool_call
+    if len(_json_dumps(compacted)) > MAX_TOOL_ARGUMENTS_CHARS:
+        compacted = _compact_oversized_arguments(
+            original,
+            original_chars=len(_json_dumps(original)),
+        )
+    if len(_json_dumps(compacted)) > MAX_TOOL_ARGUMENTS_CHARS:
+        compacted = {
+            "_vbot_compacted_arguments": {
+                "original_chars": len(_json_dumps(original)),
+                "key_count": len(original),
+                "keys": [
+                    _shorten_text(str(key), max_chars=64)
+                    for key in list(original)[:MAX_PROJECTED_COLLECTION_ITEMS]
+                ],
+            }
+        }
+    if compacted == tool_call.arguments:
+        return tool_call
+    return replace(tool_call, arguments=cast(JsonObject, compacted))
+
+
+def _compact_oversized_arguments(arguments: JsonObject, *, original_chars: int) -> JsonObject:
+    projected: JsonObject = {}
+    for key, value in list(arguments.items())[:MAX_PROJECTED_COLLECTION_ITEMS]:
+        projected[key] = _compact_json_value(
+            value,
+            string_limit=96,
+            max_depth=2,
+        )
+    projected["_vbot_compacted_arguments"] = {
+        "original_chars": original_chars,
+        "omitted_keys": max(0, len(arguments) - len(projected)),
+    }
+    return projected
+
+
+def _tool_result_digest(message: ChatMessage) -> str:
+    content = cast(str, message.content)
+    try:
+        parsed = json.loads(content)
+    except (TypeError, ValueError):
+        outcome: Any = {
+            "type": "text",
+            "preview": _shorten_text(content, max_chars=MAX_TOOL_RESULT_VALUE_CHARS),
+        }
+    else:
+        outcome = _compact_json_value(
+            redact_json_body(parsed),
+            string_limit=MAX_TOOL_RESULT_VALUE_CHARS,
+        )
+    payload: JsonObject = {
+        TOOL_RESULT_COMPACTED_FIELD: True,
+        "message_id": message.id,
+        "tool": message.name,
+        "original_chars": len(content),
+        "outcome": outcome,
+    }
+    serialized = _json_dumps(payload)
+    if len(serialized) <= MAX_TOOL_RESULT_DIGEST_CHARS:
+        return serialized
+    payload["outcome"] = {
+        "type": type(outcome).__name__,
+        "preview": _shorten_text(
+            _json_dumps(outcome),
+            max_chars=MAX_TOOL_RESULT_DIGEST_CHARS // 2,
+        ),
+    }
+    serialized = _json_dumps(payload)
+    if len(serialized) <= MAX_TOOL_RESULT_DIGEST_CHARS:
+        return serialized
+    payload["outcome"] = {"type": type(outcome).__name__, "compacted": True}
+    return _json_dumps(payload)
+
+
+def _compact_json_value(
+    value: Any,
+    *,
+    string_limit: int,
+    max_depth: int = 4,
+    _depth: int = 0,
+) -> Any:
+    if _depth >= max_depth:
+        return _value_shape(value)
+    if isinstance(value, dict):
+        projected: JsonObject = {}
+        items = list(value.items())
+        for key, item in items[:MAX_PROJECTED_COLLECTION_ITEMS]:
+            projected[str(key)] = _compact_json_value(
+                item,
+                string_limit=string_limit,
+                max_depth=max_depth,
+                _depth=_depth + 1,
+            )
+        if len(items) > MAX_PROJECTED_COLLECTION_ITEMS:
+            projected["_vbot_omitted_keys"] = len(items) - MAX_PROJECTED_COLLECTION_ITEMS
+        return projected
+    if isinstance(value, list):
+        projected_items = [
+            _compact_json_value(
+                item,
+                string_limit=string_limit,
+                max_depth=max_depth,
+                _depth=_depth + 1,
+            )
+            for item in value[:MAX_PROJECTED_COLLECTION_ITEMS]
+        ]
+        if len(value) > MAX_PROJECTED_COLLECTION_ITEMS:
+            projected_items.append(
+                {"_vbot_omitted_items": len(value) - MAX_PROJECTED_COLLECTION_ITEMS}
+            )
+        return projected_items
+    if isinstance(value, str) and len(value) > string_limit:
+        return _shorten_text(value, max_chars=string_limit)
+    return value
+
+
+def _value_shape(value: Any) -> JsonObject:
+    if isinstance(value, dict):
+        return {"_vbot_compacted_object_keys": len(value)}
+    if isinstance(value, list):
+        return {"_vbot_compacted_list_items": len(value)}
+    if isinstance(value, str):
+        return {"_vbot_compacted_string_chars": len(value)}
+    return {"_vbot_compacted_type": type(value).__name__}
+
+
+def _shorten_text(value: str, *, max_chars: int) -> str:
+    if len(value) <= max_chars:
+        return value
+    marker = f"\n...[{len(value)} chars compacted]...\n"
+    remaining = max(0, max_chars - len(marker))
+    head_chars = (remaining * 2) // 3
+    tail_chars = remaining - head_chars
+    return f"{value[:head_chars]}{marker}{value[-tail_chars:] if tail_chars else ''}"
+
+
+def _json_dumps(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+
+
 def _is_compaction_summary_note(message: ChatMessage) -> bool:
     return (
         message.role == "note"
@@ -458,13 +818,6 @@ def _estimate_message_tokens(message: ChatMessage) -> int:
     return estimated_tokens
 
 
-def _find_boundary_index(messages: list[ChatMessage], boundary_id: str) -> int:
-    for index, message in enumerate(messages):
-        if message.id == boundary_id:
-            return index
-    raise CompactionError(f"Tail boundary id was not found in messages: {boundary_id}")
-
-
 def _request_prefix_before_tail(
     request_messages: tuple[JsonObject, ...],
     tail_boundary_id: str,
@@ -493,7 +846,7 @@ def _strip_assistant_reasoning_fields(messages: list[JsonObject]) -> None:
 
 
 def is_compacted_tool_result_content(content: Any) -> bool:
-    """Recognize a legacy Tool-aging digest from an existing checkpoint."""
+    """Recognize a deterministic Tool Result digest in a checkpoint."""
 
     if not isinstance(content, str):
         return False
