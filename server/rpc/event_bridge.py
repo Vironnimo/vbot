@@ -204,6 +204,7 @@ def _server_event_from_run_event(event: RunEvent) -> JsonObject:
         # rebuild the ``agent@projekt`` address it keys session state by.
         "project_id": event.project_id,
         "session_id": event.session_id,
+        "run_kind": event.run_kind.value,
         "run_event_type": event.type,
         "run_event_sequence": event.sequence,
         "run_event_timestamp": event.timestamp,

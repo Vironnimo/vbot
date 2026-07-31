@@ -24,6 +24,7 @@
     createSessionListState,
     selectSession,
     sessionDisplayName,
+    visibleSessionsForSelection,
   } from '$lib/sessionListView.js';
 
   let {
@@ -44,6 +45,13 @@
   });
 
   let sessionState = $state(createSessionListState());
+  let showAllSessions = $state(false);
+  let visibleSessions = $derived(
+    visibleSessionsForSelection(sessionState.sessions, {
+      showAll: showAllSessions,
+      selectedSessionId: currentSessionId,
+    }),
+  );
 
   // Row-action state: which row's "…" menu is open, which row is being renamed
   // inline, the draft title, and any rename error. Only ever one of each at a
@@ -465,6 +473,15 @@
 <aside class="session-drawer" aria-label={t('sessions.title', 'Sessions')}>
   <div class="session-drawer__header">
     <h3 class="session-drawer__title">{t('sessions.title', 'Sessions')}</h3>
+    <div class="session-drawer__filter">
+      <span>{t('sessions.showAll', 'Show all')}</span>
+      <Toggle
+        size="sm"
+        checked={showAllSessions}
+        ariaLabel={t('sessions.showAllAria', 'Show all sessions')}
+        onChange={(checked) => (showAllSessions = checked)}
+      />
+    </div>
   </div>
 
   {#if actionError}
@@ -498,9 +515,19 @@
         'No sessions found for this agent.',
       )}
     />
+  {:else if visibleSessions.length === 0}
+    <EmptyState
+      density="compact"
+      class="session-drawer__empty-layout"
+      title={t('sessions.noImportantTitle', 'No important sessions')}
+      description={t(
+        'sessions.noImportantDescription',
+        'Turn on Show all to browse Cron and Reflection sessions.',
+      )}
+    />
   {:else}
     <ul class="session-drawer__list">
-      {#each sessionState.sessions as session (session.id)}
+      {#each visibleSessions as session (session.id)}
         <li
           class="session-row"
           class:session-row--editing={editingSessionId === session.id}
@@ -597,6 +624,16 @@
                       {t('sessions.fork', 'Fork')}
                     </Badge>
                   </span>
+                {/if}
+                {#if session.run_kinds.includes('cron')}
+                  <Badge variant="warn">
+                    {t('sessions.runKind.cron', 'Cron')}
+                  </Badge>
+                {/if}
+                {#if session.run_kinds.includes('reflection')}
+                  <Badge variant="neutral">
+                    {t('sessions.runKind.reflection', 'Reflection')}
+                  </Badge>
                 {/if}
               </div>
               <p class="session-row__meta">
@@ -802,6 +839,16 @@
     font-weight: 500;
     letter-spacing: 0.08em;
     text-transform: uppercase;
+  }
+
+  .session-drawer__filter {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-med);
+    font-family: var(--font-ui);
+    font-size: var(--fs-body-sm);
+    white-space: nowrap;
   }
 
   .session-drawer__list {

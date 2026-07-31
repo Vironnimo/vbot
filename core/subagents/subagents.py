@@ -24,6 +24,7 @@ from core.runs import (
     Run,
     RunCancelledError,
     RunExecutor,
+    RunKind,
     RunNotFoundError,
     RunStatus,
 )
@@ -318,6 +319,7 @@ async def _handle_subagent(
                 display_content=content,
                 project_id=target_project_id,
                 working_project_id=resolve_working_project_id(target_project_id, target_agent),
+                run_kind=RunKind.SUBAGENT,
             )
             if activity is not None:
                 activity.mark_queued()
@@ -847,6 +849,7 @@ async def _start_subagent_run(
         executor=executor,
         project_id=project_id,
         working_project_id=resolve_working_project_id(project_id, target_agent),
+        run_kind=RunKind.SUBAGENT,
     )
 
 

@@ -1,4 +1,5 @@
 const SESSION_FALLBACK_NAME = 'Session';
+const BACKGROUND_ONLY_RUN_KINDS = new Set(['cron', 'reflection']);
 
 export function createSessionListState() {
   return {
@@ -67,6 +68,31 @@ export function sessionDisplayName(session) {
   return asOptionalText(session?.id) ?? SESSION_FALLBACK_NAME;
 }
 
+export function visibleSessionsForSelection(
+  sessions,
+  { showAll = false, selectedSessionId = null } = {},
+) {
+  const normalizedSelectedSessionId = asOptionalText(selectedSessionId);
+  return (Array.isArray(sessions) ? sessions : []).filter(
+    (session) =>
+      showAll ||
+      session?.id === normalizedSelectedSessionId ||
+      !isBackgroundOnlySession(session),
+  );
+}
+
+export function isBackgroundOnlySession(session) {
+  const runKinds = normalizeRunKinds(session?.run_kinds);
+  const isChannelSession =
+    asOptionalText(session?.platform) !== null &&
+    asOptionalText(session?.platform_conv_id) !== null;
+  return (
+    !isChannelSession &&
+    runKinds.length > 0 &&
+    runKinds.every((runKind) => BACKGROUND_ONLY_RUN_KINDS.has(runKind))
+  );
+}
+
 function normalizeSessions(sessions) {
   const rawSessions = Array.isArray(sessions) ? sessions : [];
   const normalizedSessions = rawSessions
@@ -92,6 +118,7 @@ function normalizeSession(session) {
   const forkSource = isPlainObject(session?.fork_source)
     ? session.fork_source
     : null;
+  const runKinds = normalizeRunKinds(session?.run_kinds);
 
   const normalizedSession = {
     id,
@@ -112,6 +139,12 @@ function normalizeSession(session) {
     subagent_parent: subagentParent,
     fork_source: forkSource,
     is_fork: forkSource !== null,
+    run_kinds: runKinds,
+    is_background_only: isBackgroundOnlySession({
+      run_kinds: runKinds,
+      platform,
+      platform_conv_id: platformConvId,
+    }),
     compaction_policy_override: isPlainObject(
       session?.compaction_policy_override,
     )
@@ -127,6 +160,17 @@ function normalizeSession(session) {
   normalizedSession.display_name = sessionDisplayName(normalizedSession);
 
   return normalizedSession;
+}
+
+function normalizeRunKinds(runKinds) {
+  const normalized = [];
+  for (const value of Array.isArray(runKinds) ? runKinds : []) {
+    const runKind = asOptionalText(value);
+    if (runKind !== null && !normalized.includes(runKind)) {
+      normalized.push(runKind);
+    }
+  }
+  return normalized;
 }
 
 function normalizeSubagentParent(parent) {

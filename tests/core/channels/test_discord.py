@@ -23,7 +23,7 @@ from core.channels.discord import (
 from core.chat import CommandUnavailability, MessageSender, PreparedCommand, ReplySurface
 from core.chat.content_blocks import MediaBlock, TextBlock
 from core.extensions import InteractionButton
-from core.runs import ASSISTANT_OUTPUT_EVENT, Run, WaitingWorkAdmission
+from core.runs import ASSISTANT_OUTPUT_EVENT, Run, RunKind, WaitingWorkAdmission
 from core.sessions import ChatSessionManager
 
 from .engine_test_support import MemoryChannelAccessRegistry, assert_member_trigger
@@ -637,10 +637,12 @@ async def test_mention_backfills_history_since_last_bot_reply_in_order(
         reply_surface: ReplySurface,
         tool_restriction: tuple[str, ...],
         tool_denial_resolver: Any,
+        run_kind: RunKind,
     ) -> Run:
         assert reply_surface == CHANNEL_REPLY_SURFACE
         assert tool_restriction == ("web_search", "web_fetch")
         assert callable(tool_denial_resolver)
+        assert run_kind is RunKind.CHANNEL
         observed_at_trigger.extend(
             message.content
             for message in chat_sessions.get("assistant", session_id).load()

@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-found]
 
-from core.runs import STREAM_ATTEMPT_RESTARTED_EVENT, ChatRunManager, RunStatus
+from core.runs import STREAM_ATTEMPT_RESTARTED_EVENT, ChatRunManager, RunKind, RunStatus
 from core.subagents import (
     SUBAGENT_SESSION_STARTED_EVENT,
     SUBAGENT_STATUS_CHANGED_EVENT,
@@ -1000,6 +1000,7 @@ def test_websocket_handshake_active_runs_lists_running_with_sse_url_and_omits_te
                 "agent_id": "coder",
                 "project_id": None,
                 "session_id": "session-running",
+                "run_kind": RunKind.USER,
                 "status": RunStatus.RUNNING,
             },
         )(),
@@ -1035,6 +1036,7 @@ def test_websocket_handshake_active_runs_lists_running_with_sse_url_and_omits_te
             "agent_id": "coder",
             "project_id": None,
             "session_id": "session-running",
+            "run_kind": "user",
             "status": "running",
             "sse_url": "/api/runs/run-running/events",
         }

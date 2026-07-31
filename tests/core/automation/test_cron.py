@@ -22,6 +22,7 @@ from core.automation.cron import (
     CronService,
     CronStorageError,
 )
+from core.runs import RunKind
 
 
 def make_service(
@@ -561,7 +562,12 @@ async def test_run_once_job_fires_and_marks_completed(
 
     # Assert
     trigger_service.trigger_run.assert_awaited_once_with(
-        "agent-one", "Once prompt", None, project_id=None
+        "agent-one",
+        "Once prompt",
+        None,
+        project_id=None,
+        run_kind=RunKind.CRON,
+        contributes_to_agent_activity=False,
     )
     fired_line = next(
         record.getMessage()
@@ -753,7 +759,12 @@ async def test_run_once_job_retries_completed_save_without_refiring(
 
     # Assert
     trigger_service.trigger_run.assert_awaited_once_with(
-        "agent-one", "Once prompt", None, project_id=None
+        "agent-one",
+        "Once prompt",
+        None,
+        project_id=None,
+        run_kind=RunKind.CRON,
+        contributes_to_agent_activity=False,
     )
     assert save_attempts == 4
     updated = service.get_job(job.id)
@@ -865,7 +876,11 @@ async def test_run_cron_job_fires_and_updates_last_fired_at(
         _session_id: str | None = None,
         *,
         project_id: str | None = None,
+        run_kind: RunKind,
+        contributes_to_agent_activity: bool,
     ) -> None:
+        assert run_kind is RunKind.CRON
+        assert contributes_to_agent_activity is False
         service._jobs[job.id].status = "paused"
 
     trigger_service.trigger_run.side_effect = trigger_and_pause
@@ -875,7 +890,12 @@ async def test_run_cron_job_fires_and_updates_last_fired_at(
 
     # Assert
     trigger_service.trigger_run.assert_awaited_once_with(
-        "agent-one", "Cron prompt", None, project_id=None
+        "agent-one",
+        "Cron prompt",
+        None,
+        project_id=None,
+        run_kind=RunKind.CRON,
+        contributes_to_agent_activity=False,
     )
     updated = service.get_job(job.id)
     assert updated.last_fired_at is not None
@@ -913,7 +933,11 @@ async def test_run_cron_job_continues_after_trigger_failure(
         _session_id: str | None = None,
         *,
         project_id: str | None = None,
+        run_kind: RunKind,
+        contributes_to_agent_activity: bool,
     ) -> None:
+        assert run_kind is RunKind.CRON
+        assert contributes_to_agent_activity is False
         if trigger_service.trigger_run.await_count == 1:
             raise RuntimeError("boom")
         service._jobs[job.id].status = "paused"
@@ -1067,7 +1091,12 @@ async def test_run_once_job_fires_with_project_id(
 
     # Assert
     trigger_service.trigger_run.assert_awaited_once_with(
-        "builder", "Once prompt", None, project_id="vbot"
+        "builder",
+        "Once prompt",
+        None,
+        project_id="vbot",
+        run_kind=RunKind.CRON,
+        contributes_to_agent_activity=False,
     )
     assert service.get_job(job.id).status == "completed"
 

@@ -16,6 +16,7 @@ from .engine_test_support import (
     MessageSender,
     Path,
     QuotedMessageFacts,
+    RunKind,
     SimpleNamespace,
     TextBlock,
     assert_member_trigger,
@@ -53,6 +54,7 @@ async def test_block_content_skips_command_dispatch_and_triggers_run(tmp_path: P
         SESSION_ID,
         sender=None,
         reply_surface=CHANNEL_REPLY_SURFACE,
+        run_kind=RunKind.CHANNEL,
     )
     assert transport.sent == [("12345", "ok")]
     await engine.stop()
@@ -139,6 +141,7 @@ async def test_media_companion_text_precedes_built_media_blocks(tmp_path: Path) 
         SESSION_ID,
         sender=None,
         reply_surface=CHANNEL_REPLY_SURFACE,
+        run_kind=RunKind.CHANNEL,
     )
     await engine.stop()
 

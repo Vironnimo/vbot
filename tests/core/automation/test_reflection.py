@@ -16,6 +16,7 @@ from core.automation.reflection import (
     ReflectionService,
     _cadence_instruction,
 )
+from core.runs import RunKind
 from core.sessions import SESSION_FORK_ALWAYS_STRIP_META_KEYS
 
 REFLECT_BRIEF = "Review this session and update your memory and skill library."
@@ -74,6 +75,16 @@ class _FakeSessions:
     ) -> str:
         self.titles.append((session_id, title))
         return title
+
+    def record_run_kind(
+        self,
+        agent_id: str,
+        session_id: str,
+        run_kind: RunKind,
+        project_id: str | None = None,
+    ) -> None:
+        metadata = self.metadata.setdefault(session_id, {})
+        metadata.setdefault("run_kinds", []).append(run_kind.value)
 
     async def fork(self, source_agent_id: str, session_id: str, **kwargs: Any) -> Any:
         self.fork_counter += 1
@@ -443,7 +454,9 @@ async def test_run_review_reports_fork_before_run_and_returns_summary() -> None:
     )
     assert loop.started[0]["reply_surface"] is None
     assert "tool_grants" not in loop.started[0]
+    assert loop.started[0]["run_kind"] is RunKind.REFLECTION
     assert loop.started[0]["contributes_to_agent_activity"] is False
+    assert sessions.metadata["fork-1"]["run_kinds"] == ["reflection"]
 
 
 @pytest.mark.asyncio

@@ -49,6 +49,7 @@ from core.runs import (
     RUN_CANCELLED_EVENT,
     RUN_COMPLETED_EVENT,
     RUN_FAILED_EVENT,
+    RunKind,
     WaitingWorkAdmission,
     WaitingWorkLimitError,
 )
@@ -1008,6 +1009,7 @@ class ChannelConversationEngine:
                         route.session_id,
                         internal=True,
                         reply_surface=reply_surface,
+                        run_kind=RunKind.CHANNEL,
                         **tool_access_kwargs,
                     )
                 else:
@@ -1017,6 +1019,7 @@ class ChannelConversationEngine:
                         route.session_id,
                         internal=True,
                         reply_surface=reply_surface,
+                        run_kind=RunKind.CHANNEL,
                         **tool_access_kwargs,
                         waiting_work_admission=waiting_work_admission,
                     )
@@ -1028,6 +1031,7 @@ class ChannelConversationEngine:
                         route.session_id,
                         sender=sender,
                         reply_surface=reply_surface,
+                        run_kind=RunKind.CHANNEL,
                         **tool_access_kwargs,
                     )
                 else:
@@ -1037,6 +1041,7 @@ class ChannelConversationEngine:
                         route.session_id,
                         sender=sender,
                         reply_surface=reply_surface,
+                        run_kind=RunKind.CHANNEL,
                         **tool_access_kwargs,
                         waiting_work_admission=waiting_work_admission,
                     )

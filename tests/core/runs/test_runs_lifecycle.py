@@ -6,11 +6,13 @@ from .runs_test_support import (
     ASSISTANT_OUTPUT_DELTA_EVENT,
     REASONING_DELTA_EVENT,
     RUN_AGENT_ACTIVITY_FIELD,
+    RUN_KIND_FIELD,
     RUN_STARTED_EVENT,
     TOOL_CALL_DELTA_EVENT,
     Any,
     ChatRunManager,
     Run,
+    RunKind,
     RunNotFoundError,
     RunStatus,
     aclosing,
@@ -63,6 +65,26 @@ async def test_run_activity_projection_policy_is_carried_by_every_event() -> Non
     ]
     assert all(event.contributes_to_agent_activity is False for event in run.events)
     assert all(event.to_dict()[RUN_AGENT_ACTIVITY_FIELD] is False for event in run.events)
+
+
+async def test_run_kind_is_carried_by_run_and_every_event() -> None:
+    manager = ChatRunManager()
+
+    async def execute(_run: Run) -> str:
+        return "done"
+
+    run = await manager.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=execute,
+        project_id=None,
+        run_kind=RunKind.CRON,
+    )
+    assert await run.wait() == "done"
+
+    assert run.run_kind is RunKind.CRON
+    assert all(event.run_kind is RunKind.CRON for event in run.events)
+    assert all(event.to_dict()[RUN_KIND_FIELD] == "cron" for event in run.events)
 
 
 async def test_allows_parallel_runs_for_different_sessions() -> None:

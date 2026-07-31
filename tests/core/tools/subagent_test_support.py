@@ -15,7 +15,7 @@ import core.subagents.subagents as subagent_module
 from core.agents import AgentNotFoundError
 from core.chat import ChatMessage, ChatSessionManager
 from core.projects import AgentResolutionError
-from core.runs import ActiveRunError, Run, RunCancelledError, RunNotFoundError
+from core.runs import ActiveRunError, Run, RunCancelledError, RunKind, RunNotFoundError
 from core.storage import TemporaryFileManager
 from core.subagents.subagents import (
     SubAgentBatchTracker,
@@ -273,6 +273,7 @@ class FakeRunManager:
         executor: Any,
         project_id: str | None = None,
         working_project_id: str | None = None,
+        run_kind: RunKind = RunKind.USER,
     ) -> Run:
         if self.start_error is not None:
             raise self.start_error
@@ -284,6 +285,7 @@ class FakeRunManager:
             session_id=session_id,
             project_id=project_id,
             working_project_id=working_project_id,
+            run_kind=run_kind,
         )
         self.started.append((agent_id, session_id, executor, run))
         self.runs[run.id] = run
@@ -300,6 +302,7 @@ class FakeRunManager:
         internal: bool = False,
         project_id: str | None = None,
         working_project_id: str | None = None,
+        run_kind: RunKind = RunKind.USER,
     ) -> Any:
         future: asyncio.Future[Run] = asyncio.get_running_loop().create_future()
         item = SimpleNamespace(
@@ -312,6 +315,7 @@ class FakeRunManager:
             session_id=session_id,
             project_id=project_id,
             working_project_id=working_project_id,
+            run_kind=run_kind,
         )
         self.enqueued.append(
             {
