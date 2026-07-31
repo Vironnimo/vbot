@@ -244,6 +244,7 @@ def test_direct_tool_schema_is_closed_and_declares_required_properties(
         "edit",
         "glob",
         "grep",
+        "image_generation",
         "process",
         "project",
         "read",
