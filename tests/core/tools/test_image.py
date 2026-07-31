@@ -13,6 +13,7 @@ from core.tools import ToolContractError
 from core.tools.image import (
     ANALYZE_IMAGE_TOOL_DESCRIPTION,
     ANALYZE_IMAGE_TOOL_NAME,
+    ANALYZE_IMAGE_TOOL_PARAMETERS,
     IMAGE_GENERATION_TEXT_ONLY_TOOL_DESCRIPTION,
     IMAGE_GENERATION_TOOL_DESCRIPTION,
     IMAGE_GENERATION_TOOL_NAME,
@@ -252,6 +253,10 @@ async def test_analyze_image_tool_resolves_paths_and_returns_analysis(
     service = _ImageService(tmp_path / "unused.png")
     registry = ToolRegistry()
     register_analyze_image_tool(registry, service)
+    tool = registry.get(ANALYZE_IMAGE_TOOL_NAME)
+    assert tool.parameters == ANALYZE_IMAGE_TOOL_PARAMETERS
+    assert "additionalProperties" not in tool.parameters
+    assert tool.open_input_schema is True
 
     result = await registry.dispatch(
         _make_context(workspace, tool_name=ANALYZE_IMAGE_TOOL_NAME),
@@ -301,11 +306,14 @@ async def test_analyze_image_tool_rejects_invalid_arguments_and_maps_image_error
 
     with pytest.raises(ToolContractError, match="non-empty"):
         await registry.dispatch(context, {"prompt": "Describe it.", "images": []})
-    with pytest.raises(ToolContractError, match="Additional properties"):
-        await registry.dispatch(
-            context,
-            {"prompt": "Describe it.", "images": ["photo.png"], "extra": True},
-        )
+    unknown = await registry.dispatch(
+        context,
+        {"prompt": "Describe it.", "images": ["photo.png"], "extra": True},
+    )
+    assert unknown["error"] == {
+        "code": "invalid_arguments",
+        "message": "Unknown argument(s): extra",
+    }
     image_error = await registry.dispatch(
         context,
         {"prompt": "Describe it.", "images": ["photo.png"]},

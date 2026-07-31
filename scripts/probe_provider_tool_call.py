@@ -47,6 +47,11 @@ from core.tools.grep import (
     GREP_TOOL_NAME,
     GREP_TOOL_PARAMETERS,
 )
+from core.tools.image import (
+    ANALYZE_IMAGE_TOOL_DESCRIPTION,
+    ANALYZE_IMAGE_TOOL_NAME,
+    ANALYZE_IMAGE_TOOL_PARAMETERS,
+)
 from core.tools.process import (
     PROCESS_TOOL_DESCRIPTION,
     PROCESS_TOOL_NAME,
@@ -110,6 +115,7 @@ PROBE_SCENARIOS = (
     "missing_required_pressure",
     "unknown_property_pressure",
     "large_arguments",
+    "analyze_image",
     "edit",
     "glob",
     "grep",
@@ -124,6 +130,7 @@ PROBE_SCENARIOS = (
     "write",
 )
 OPTIONAL_BOOLEAN_CASES = ("omit", "include_links", "raw", "both")
+ANALYZE_IMAGE_CASES = ("single", "multiple")
 EDIT_CASES = ("default", "replace_false", "replace_true", "multiline", "delete")
 GLOB_CASES = (
     "default",
@@ -238,6 +245,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=OPTIONAL_BOOLEAN_CASES,
         default="omit",
         help="Requested argument shape for the optional_booleans scenarios.",
+    )
+    parser.add_argument(
+        "--analyze-image-case",
+        choices=ANALYZE_IMAGE_CASES,
+        default="single",
+        help="Exact analyze_image argument shape requested by the scenario.",
     )
     parser.add_argument(
         "--edit-case",
@@ -422,6 +435,40 @@ def _optional_boolean_scenario(
         [tool],
         _probe_messages(instructions[case_name]),
         PROBE_TOOL_NAME,
+    )
+
+
+def _analyze_image_scenario(case_name: str) -> ProbeScenario:
+    analyze_arguments = {
+        "single": {
+            "prompt": "Read every visible label and report uncertainty.",
+            "images": ["images/photo.png"],
+        },
+        "multiple": {
+            "prompt": "Vergleiche beide Bilder.\nNenne Unterschiede und Unsicherheit.",
+            "images": ["images/photo.png", "C:/images/reference.png"],
+        },
+    }
+    expected_arguments = analyze_arguments[case_name]
+    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"), ensure_ascii=False)
+    instruction = (
+        f"Call {ANALYZE_IMAGE_TOOL_NAME} exactly once with exactly this JSON object as "
+        f"its arguments: {rendered_arguments}. Preserve every character, path, and array "
+        "item; do not add any field."
+    )
+    return ProbeScenario(
+        "analyze_image",
+        [
+            {
+                "name": ANALYZE_IMAGE_TOOL_NAME,
+                "description": ANALYZE_IMAGE_TOOL_DESCRIPTION,
+                "parameters": ANALYZE_IMAGE_TOOL_PARAMETERS,
+            }
+        ],
+        _probe_messages(instruction),
+        ANALYZE_IMAGE_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
     )
 
 
@@ -1021,6 +1068,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
             ),
             PROBE_TOOL_NAME,
         )
+    if name == "analyze_image":
+        return _analyze_image_scenario(str(args.analyze_image_case))
     if name == "edit":
         return _edit_scenario(str(args.edit_case))
     if name == "glob":
@@ -1710,6 +1759,9 @@ async def _run(args: argparse.Namespace) -> int:
                     "optional_booleans_schema_defaults",
                 }
                 else None
+            ),
+            "analyze_image_case": (
+                args.analyze_image_case if scenario.name == "analyze_image" else None
             ),
             "edit_case": args.edit_case if scenario.name == "edit" else None,
             "glob_case": args.glob_case if scenario.name == "glob" else None,

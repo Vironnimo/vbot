@@ -8,7 +8,7 @@ Built-in `analyze_image` and `image_generation` Tools for isolated visual analys
 
 - Tool name: `analyze_image`
 - Registration: `register_analyze_image_tool(registry, image_service)`
-- Schema: required non-empty `prompt` plus required non-empty `images` array of local path strings; `additionalProperties: false`. The handler accepts one string leniently as a one-item list, resolves paths against `ToolContext.effective_cwd`, and calls `ImageService.analyze()`.
+- Model-facing schema: required non-empty `prompt` plus required non-empty `images` array of local path strings, with no `additionalProperties` keyword. The handler rejects unknown or malformed arguments, does not coerce a single path string into an array, resolves paths against `ToolContext.effective_cwd`, and calls `ImageService.analyze()`.
 - Display: summary fields `prompt`, `images`.
 - Success data: `{ analysis, model, image_count, usage? }`.
 - Invalid arguments return `invalid_arguments`; expected image-task failures return `image_understanding_error`.

@@ -453,6 +453,33 @@ def test_edit_cases_use_production_schema_and_exact_expected_arguments() -> None
     }
 
 
+def test_analyze_image_cases_use_production_schema_and_exact_arguments() -> None:
+    for case_name in PROBE.ANALYZE_IMAGE_CASES:
+        scenario = PROBE._scenario(
+            SimpleNamespace(
+                scenario="analyze_image",
+                analyze_image_case=case_name,
+                lines=8,
+            ),
+        )
+        contracts = PROBE._compile_probe_contracts(
+            scenario.tools,
+            require_closed_input=scenario.require_closed_input,
+        )
+        arguments = scenario.expected_arguments
+
+        assert scenario.tools[0]["parameters"] is PROBE.ANALYZE_IMAGE_TOOL_PARAMETERS
+        assert arguments is not None
+        contracts[PROBE.ANALYZE_IMAGE_TOOL_NAME].validate_arguments(arguments)
+        assert (
+            PROBE._expected_argument_measurements(
+                [{"name": PROBE.ANALYZE_IMAGE_TOOL_NAME, "arguments": arguments}],
+                scenario,
+            )["expected_arguments_match"]
+            is True
+        )
+
+
 def test_project_scenario_uses_production_schema_and_exact_arguments() -> None:
     scenario = PROBE._scenario(SimpleNamespace(scenario="project", lines=8))
     contracts = PROBE._compile_probe_contracts(
