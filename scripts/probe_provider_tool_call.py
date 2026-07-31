@@ -2971,6 +2971,20 @@ def _validation_location(message: str) -> tuple[str | None, str | None]:
     return match.group("path") or "/", match.group("keyword")
 
 
+def _probe_tool_call_stream_key(delta: dict[str, Any]) -> str:
+    """Return the stable Tool Call key used by the normalized stream contract."""
+    slot = delta.get("slot")
+    if isinstance(slot, int) and not isinstance(slot, bool):
+        return f"index:{slot}"
+    if isinstance(slot, str) and slot:
+        return f"slot:{slot}"
+
+    tool_call_id = delta.get("id")
+    if isinstance(tool_call_id, str) and tool_call_id:
+        return f"id:{tool_call_id}"
+    raise ValueError("tool_call_delta must contain a slot or non-empty id")
+
+
 async def _probe_stream(
     adapter: Any,
     messages: list[dict[str, Any]],
@@ -2988,8 +3002,8 @@ async def _probe_stream(
     reasoning_chars = 0
     tool_argument_chars = 0
     tool_name_chars = 0
-    tool_names_by_id: dict[str, str] = {}
-    tool_arguments_by_id: dict[str, str] = {}
+    tool_names_by_stream_key: dict[str, str] = {}
+    tool_arguments_by_stream_key: dict[str, str] = {}
     finish_reason: str | None = None
     status = "stream_ended"
     error_type: str | None = None
@@ -3025,14 +3039,14 @@ async def _probe_stream(
                 elif delta_type == "reasoning_delta" and isinstance(text, str):
                     reasoning_chars += len(text)
                 elif delta_type == "tool_call_delta":
-                    tool_call_id = str(delta.get("id", ""))
+                    stream_key = _probe_tool_call_stream_key(delta)
                     name_delta = str(delta.get("name_delta", ""))
-                    tool_names_by_id[tool_call_id] = (
-                        tool_names_by_id.get(tool_call_id, "") + name_delta
+                    tool_names_by_stream_key[stream_key] = (
+                        tool_names_by_stream_key.get(stream_key, "") + name_delta
                     )
                     arguments_delta = str(delta.get("arguments_delta", ""))
-                    tool_arguments_by_id[tool_call_id] = (
-                        tool_arguments_by_id.get(tool_call_id, "") + arguments_delta
+                    tool_arguments_by_stream_key[stream_key] = (
+                        tool_arguments_by_stream_key.get(stream_key, "") + arguments_delta
                     )
                     tool_name_chars += len(name_delta)
                     tool_argument_chars += len(arguments_delta)
@@ -3049,8 +3063,8 @@ async def _probe_stream(
     parsed_calls: list[dict[str, Any]] = []
     validation = _invalid_measurement("invalid_json")
     try:
-        for tool_call_id, name in tool_names_by_id.items():
-            arguments = json.loads(tool_arguments_by_id.get(tool_call_id, ""))
+        for stream_key, name in tool_names_by_stream_key.items():
+            arguments = json.loads(tool_arguments_by_stream_key.get(stream_key, ""))
             parsed_calls.append({"name": name, "arguments": arguments})
     except json.JSONDecodeError:
         pass
