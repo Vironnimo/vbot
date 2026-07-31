@@ -27,6 +27,8 @@ The adapter is selected by provider `adapter`, not by connection, so the same `O
 
 ## Wire Contract
 
+Every OpenAI function Tool definition carries `strict: false` on Chat Completions, public Responses, and subscription Codex Responses. This is mandatory on Responses because OpenAI may otherwise normalize an omitted field into strict mode. A live `openai:subscription` GPT-5.6 Luna probe on 2026-07-31 forced a Tool Call whose only required argument was `url`; with the explicit opt-out the model omitted both optional Boolean arguments as requested and the canonical schema remained unchanged.
+
 ### Chat Completions (conservative `api-key` fallback)
 
 Used when `connection_mode` is `None` or `chat_completions`. Delegates to `OpenAICompatibleAdapter`; behavior is unchanged from the generic OpenAI-compatible contract:

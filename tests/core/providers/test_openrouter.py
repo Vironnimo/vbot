@@ -138,6 +138,17 @@ async def test_gpt_5_6_uses_responses_and_replays_exact_output(
         model_id="openai/gpt-5.6-sol",
         thinking_effort="high",
         session_id="vbot-session",
+        tools=[
+            {
+                "name": "lookup",
+                "description": "Look up a value.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": [],
+                },
+            }
+        ],
     )
 
     request_body = json.loads(route.calls.last.request.content)
@@ -146,6 +157,8 @@ async def test_gpt_5_6_uses_responses_and_replays_exact_output(
     assert request_body["include"] == ["reasoning.encrypted_content"]
     assert request_body["store"] is False
     assert request_body["session_id"] == "vbot-session"
+    assert request_body["tools"][0]["strict"] is False
+    assert request_body["tools"][0]["parameters"]["required"] == []
     assert "temperature" not in request_body
     assert adapter.reasoning_replay_policy("openai/gpt-5.6-sol") == "full_history"
 

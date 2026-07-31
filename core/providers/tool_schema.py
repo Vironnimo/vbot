@@ -1,4 +1,4 @@
-"""Provider-neutral Tool schemas with an explicit OpenAI strict-mode opt-out."""
+"""Provider-neutral Tool schemas that never enable strict Tool calling."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
 JsonObject = dict[str, Any]
-ToolSchemaProfile = Literal["openai_non_strict", "best_effort"]
+ToolSchemaProfile = Literal["explicit_non_strict", "omit_strict"]
 
 
 def render_tool_definitions(
@@ -17,9 +17,9 @@ def render_tool_definitions(
 ) -> list[JsonObject]:
     """Render Tool definitions without ever enabling Provider strict mode.
 
-    OpenAI Responses may normalize an omitted ``strict`` flag into strict mode.
-    Its profile therefore emits ``strict: false`` explicitly. Other Providers
-    receive the canonical schema without a strict-mode field.
+    Responses-style APIs may normalize an omitted ``strict`` flag into strict
+    mode. Their profile therefore emits ``strict: false`` explicitly. Provider
+    contracts without that field receive the canonical schema without it.
     """
     normalized = [_normalized_tool(tool) for tool in tools]
     return [
@@ -27,7 +27,7 @@ def render_tool_definitions(
             "name": tool["name"],
             "description": tool["description"],
             "parameters": copy.deepcopy(tool["parameters"]),
-            **({"strict": False} if profile == "openai_non_strict" else {}),
+            **({"strict": False} if profile == "explicit_non_strict" else {}),
         }
         for tool in normalized
     ]

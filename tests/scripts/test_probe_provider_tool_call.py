@@ -129,9 +129,9 @@ def test_probe_profiles_never_enable_strict_mode() -> None:
         SimpleNamespace(profile="auto", provider="opencode-go", wire="openai")
     )
 
-    assert openai == "openai_non_strict"
-    assert anthropic == "best_effort"
-    assert opencode_go == "best_effort"
+    assert openai == "explicit_non_strict"
+    assert anthropic == "omit_strict"
+    assert opencode_go == "omit_strict"
 
 
 def test_nested_operation_scenario_compiles_and_validates() -> None:

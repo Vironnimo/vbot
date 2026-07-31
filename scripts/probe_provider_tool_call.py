@@ -7,11 +7,11 @@ responses.
 
 Examples:
     python scripts/probe_provider_tool_call.py --model glm-5.2 --mode stream
-    python scripts/probe_provider_tool_call.py --wire openai --profile openai_non_strict \
+    python scripts/probe_provider_tool_call.py --wire openai --profile explicit_non_strict \
         --scenario nested_operation --mode nonstream
     python scripts/probe_provider_tool_call.py --provider openai \
         --connection openai:subscription --model gpt-5.6-luna --wire openai \
-        --profile openai_non_strict --scenario optional_booleans
+        --profile explicit_non_strict --scenario optional_booleans
     python scripts/probe_provider_tool_call.py --scenario large_arguments --lines 500
 """
 
@@ -93,7 +93,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--profile",
-        choices=("auto", "openai_non_strict", "best_effort"),
+        choices=("auto", "explicit_non_strict", "omit_strict"),
         default="auto",
         help="Expected production Tool-schema profile for this route.",
     )
@@ -330,13 +330,13 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
 
 
 def _expected_profile(args: argparse.Namespace) -> ToolSchemaProfile:
-    if args.profile == "openai_non_strict":
-        return "openai_non_strict"
-    if args.profile == "best_effort":
-        return "best_effort"
+    if args.profile == "explicit_non_strict":
+        return "explicit_non_strict"
+    if args.profile == "omit_strict":
+        return "omit_strict"
     if args.provider == "openai":
-        return "openai_non_strict"
-    return "best_effort"
+        return "explicit_non_strict"
+    return "omit_strict"
 
 
 def _tool_choice(value: str, tool_name: str) -> str | dict[str, Any] | None:

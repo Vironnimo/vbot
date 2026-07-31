@@ -326,6 +326,7 @@ async def test_send_routes_gpt_5_4_responses_with_nested_tool_name_and_visible_r
                     "properties": {"q": {"type": "string"}},
                     "required": ["q"],
                 },
+                "strict": False,
             }
         ],
         "reasoning": {"effort": "high", "summary": "auto"},
@@ -434,6 +435,7 @@ async def test_send_routes_gpt_5_4_family_responses_with_nested_tool_name(
                     "properties": {"q": {"type": "string"}},
                     "required": ["q"],
                 },
+                "strict": False,
             }
         ],
         "reasoning": {"effort": "high", "summary": "auto"},
@@ -516,6 +518,7 @@ async def test_send_routes_gpt_5_4_family_responses_with_blank_top_level_tool_na
                 "properties": {"q": {"type": "string"}},
                 "required": ["q"],
             },
+            "strict": False,
         }
     ]
 

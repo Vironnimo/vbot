@@ -339,7 +339,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         _apply_openai_tools(
             payload,
             request_kwargs,
-            profile=("openai_non_strict" if self._config.id == "openai" else "best_effort"),
+            profile=("explicit_non_strict" if self._config.id == "openai" else "omit_strict"),
         )
         self._apply_reasoning(payload, request_kwargs, model_id)
         # Apply provider defaults (lower priority — caller kwargs win)

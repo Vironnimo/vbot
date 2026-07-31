@@ -490,7 +490,7 @@ class TestSendRequestFormat:
         request_body = json.loads(route.calls.last.request.content)
         rendered = render_tool_definitions(
             [READ_TOOL_DEFINITION],
-            profile="openai_non_strict",
+            profile="explicit_non_strict",
         )[0]
         assert request_body["tools"] == [
             {
@@ -542,7 +542,7 @@ class TestSendRequestFormat:
         await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", tools=[definition])
 
         request_body = json.loads(route.calls.last.request.content)
-        rendered = render_tool_definitions([definition], profile="openai_non_strict")[0]
+        rendered = render_tool_definitions([definition], profile="explicit_non_strict")[0]
         assert request_body["tools"] == [
             {
                 "type": "function",

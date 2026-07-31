@@ -324,7 +324,7 @@ class OllamaAdapter(ProviderAdapter):
 
         tools = request_kwargs.pop("tools", None)
         if tools:
-            rendered_tools = render_tool_definitions(tools, profile="best_effort")
+            rendered_tools = render_tool_definitions(tools, profile="omit_strict")
             payload["tools"] = [
                 {
                     "type": "function",

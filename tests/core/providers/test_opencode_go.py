@@ -721,7 +721,7 @@ class TestOpenCodeGoAdapterMinimaxRouting:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_openai_path_keeps_best_effort_tool_profile(
+    async def test_openai_path_omits_unsupported_strict_field(
         self,
         opencode_go_adapter: OpenCodeGoAdapter,
     ) -> None:

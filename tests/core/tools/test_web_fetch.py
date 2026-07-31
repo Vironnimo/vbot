@@ -298,7 +298,7 @@ def test_web_fetch_openai_wire_preserves_optional_output_and_disables_strict_mod
                 "parameters": WEB_FETCH_TOOL_PARAMETERS,
             }
         ],
-        profile="openai_non_strict",
+        profile="explicit_non_strict",
     )
 
     parameters = definition["parameters"]
