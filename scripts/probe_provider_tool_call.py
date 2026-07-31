@@ -37,6 +37,11 @@ from core.tools.glob import (
     GLOB_TOOL_NAME,
     GLOB_TOOL_PARAMETERS,
 )
+from core.tools.grep import (
+    GREP_TOOL_DESCRIPTION,
+    GREP_TOOL_NAME,
+    GREP_TOOL_PARAMETERS,
+)
 from core.tools.process import (
     PROCESS_TOOL_DESCRIPTION,
     PROCESS_TOOL_NAME,
@@ -86,6 +91,7 @@ PROBE_SCENARIOS = (
     "unknown_property_pressure",
     "large_arguments",
     "glob",
+    "grep",
     "process",
     "read",
     "skill",
@@ -103,6 +109,30 @@ GLOB_CASES = (
     "include_false",
     "include_true",
     "all",
+)
+GREP_CASES = (
+    "default",
+    "content",
+    "files",
+    "count",
+    "path",
+    "glob",
+    "ignore_case_false",
+    "ignore_case_true",
+    "literal_false",
+    "literal_true",
+    "multiline_false",
+    "multiline_true",
+    "context_zero",
+    "context_positive",
+    "limit",
+    "offset",
+    "page",
+    "include_ignored_false",
+    "include_ignored_true",
+    "all_content",
+    "all_files",
+    "all_count",
 )
 PROCESS_CASES = (
     "status_list",
@@ -174,6 +204,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=GLOB_CASES,
         default="default",
         help="Exact glob argument shape requested by the glob scenario.",
+    )
+    parser.add_argument(
+        "--grep-case",
+        choices=GREP_CASES,
+        default="default",
+        help="Exact grep argument shape requested by the grep scenario.",
     )
     parser.add_argument(
         "--process-case",
@@ -367,6 +403,66 @@ def _glob_scenario(case_name: str) -> ProbeScenario:
         ],
         _probe_messages(instruction),
         GLOB_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
+    )
+
+
+def _grep_scenario(case_name: str) -> ProbeScenario:
+    pattern = "TODO|FIXME"
+    common_all = {
+        "pattern": pattern,
+        "path": "src",
+        "glob": "**/*.py",
+        "ignore_case": True,
+        "literal": True,
+        "multiline": True,
+        "limit": 25,
+        "offset": 10,
+        "include_ignored": True,
+    }
+    grep_arguments: dict[str, dict[str, Any]] = {
+        "default": {"pattern": pattern},
+        "content": {"pattern": pattern, "output_mode": "content"},
+        "files": {"pattern": pattern, "output_mode": "files_with_matches"},
+        "count": {"pattern": pattern, "output_mode": "count"},
+        "path": {"pattern": pattern, "path": "src"},
+        "glob": {"pattern": pattern, "glob": "**/*.py"},
+        "ignore_case_false": {"pattern": pattern, "ignore_case": False},
+        "ignore_case_true": {"pattern": pattern, "ignore_case": True},
+        "literal_false": {"pattern": pattern, "literal": False},
+        "literal_true": {"pattern": pattern, "literal": True},
+        "multiline_false": {"pattern": pattern, "multiline": False},
+        "multiline_true": {"pattern": pattern, "multiline": True},
+        "context_zero": {"pattern": pattern, "context": 0},
+        "context_positive": {"pattern": pattern, "context": 3},
+        "limit": {"pattern": pattern, "limit": 25},
+        "offset": {"pattern": pattern, "offset": 10},
+        "page": {"pattern": pattern, "limit": 25, "offset": 10},
+        "include_ignored_false": {"pattern": pattern, "include_ignored": False},
+        "include_ignored_true": {"pattern": pattern, "include_ignored": True},
+        "all_content": {**common_all, "output_mode": "content", "context": 3},
+        "all_files": {**common_all, "output_mode": "files_with_matches"},
+        "all_count": {**common_all, "output_mode": "count"},
+    }
+    expected_arguments = grep_arguments[case_name]
+    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
+    instruction = (
+        f"Call {GREP_TOOL_NAME} exactly once with exactly this JSON object as its "
+        f"arguments: {rendered_arguments}. Preserve every value and omit every field not "
+        "shown."
+    )
+    return ProbeScenario(
+        "grep",
+        [
+            {
+                "name": GREP_TOOL_NAME,
+                "description": GREP_TOOL_DESCRIPTION,
+                "parameters": GREP_TOOL_PARAMETERS,
+            }
+        ],
+        _probe_messages(instruction),
+        GREP_TOOL_NAME,
         require_closed_input=False,
         expected_arguments=expected_arguments,
     )
@@ -726,6 +822,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         )
     if name == "glob":
         return _glob_scenario(str(args.glob_case))
+    if name == "grep":
+        return _grep_scenario(str(args.grep_case))
     if name == "process":
         return _process_scenario(str(args.process_case))
     if name == "read":
@@ -1405,6 +1503,7 @@ async def _run(args: argparse.Namespace) -> int:
                 else None
             ),
             "glob_case": args.glob_case if scenario.name == "glob" else None,
+            "grep_case": args.grep_case if scenario.name == "grep" else None,
             "process_case": args.process_case if scenario.name == "process" else None,
             "read_case": args.read_case if scenario.name == "read" else None,
             "skill_case": args.skill_case if scenario.name == "skill" else None,
