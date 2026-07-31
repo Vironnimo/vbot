@@ -34,54 +34,27 @@ _LOGGER = get_logger("tools.status")
 
 STATUS_TOOL_NAME = "status"
 STATUS_TOOL_DESCRIPTION = (
-    "Show status for the current chat Session. Optionally provide session_id for another "
-    "Session owned by this Agent, or provide agent_id with session_id for another Agent's "
-    "Session."
+    "Show status for the current or a targeted chat Session, including model, usage, "
+    "runtime, and activity."
 )
 _STATUS_SESSION_ID_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
-    "description": "Session id to inspect.",
+    "description": "Session to inspect. Omit for the current Session.",
 }
 _STATUS_AGENT_ID_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
-    "description": "Agent id that owns the target Session.",
+    "description": "Agent that owns the target Session. Requires session_id; omit for this Agent.",
 }
 
 STATUS_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
-    "description": (
-        "Choose one targeting mode: no arguments for the current Session, session_id for "
-        "another Session owned by the current Agent, or session_id with agent_id for an "
-        "exact Agent/Session pair."
-    ),
-    "oneOf": [
-        {
-            "type": "object",
-            "description": "Inspect the current Agent's current Session.",
-            "properties": {},
-            "required": [],
-            "additionalProperties": False,
-        },
-        {
-            "type": "object",
-            "description": "Inspect another Session owned by the current Agent.",
-            "properties": {"session_id": _STATUS_SESSION_ID_PARAMETER},
-            "required": ["session_id"],
-            "additionalProperties": False,
-        },
-        {
-            "type": "object",
-            "description": "Inspect one exact Agent/Session pair.",
-            "properties": {
-                "session_id": _STATUS_SESSION_ID_PARAMETER,
-                "agent_id": _STATUS_AGENT_ID_PARAMETER,
-            },
-            "required": ["session_id", "agent_id"],
-            "additionalProperties": False,
-        },
-    ],
+    "properties": {
+        "session_id": _STATUS_SESSION_ID_PARAMETER,
+        "agent_id": _STATUS_AGENT_ID_PARAMETER,
+    },
+    "required": [],
 }
 
 
@@ -213,6 +186,7 @@ def register_status_tool(
             projects,
             local_context_windows_loader,
         ),
+        open_input_schema=True,
         result_schema={"type": "object", "required": ["text", "agent_id", "session_id"]},
         display=ToolDisplay(),
         parallel_safe=True,

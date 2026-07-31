@@ -70,7 +70,6 @@ _BRANCH_COMPLETE_SCHEMAS = (
     ("history", HISTORY_TOOL_PARAMETERS),
     ("memory", MEMORY_TOOL_PARAMETERS),
     ("skill_manage", SKILL_MANAGE_TOOL_PARAMETERS),
-    ("status", STATUS_TOOL_PARAMETERS),
     ("subagent", SUBAGENT_TOOL_PARAMETERS),
 )
 
@@ -95,7 +94,6 @@ _BRANCH_INAPPLICABLE_CALLS = (
         {"action": "delete", "name": "demo", "content": "text"},
         "content",
     ),
-    ("status", STATUS_TOOL_PARAMETERS, {"agent_id": "coder"}, "agent_id"),
     (
         "subagent",
         SUBAGENT_TOOL_PARAMETERS,
@@ -250,6 +248,7 @@ def test_direct_tool_schema_is_closed_and_declares_required_properties(
         "project",
         "read",
         "skill",
+        "status",
         "text_to_speech",
         "web_fetch",
         "web_search",

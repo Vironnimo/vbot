@@ -24,7 +24,7 @@ from core.projects import AgentResolutionError, AgentResolver, ConfigAgent, Proj
 from core.runs import ChatRunManager, Run
 from core.sessions import ChatSessionManager
 from core.tools import ToolContext, ToolRegistry, tool_failure
-from core.tools.status import STATUS_TOOL_NAME, register_status_tool
+from core.tools.status import STATUS_TOOL_NAME, STATUS_TOOL_PARAMETERS, register_status_tool
 
 
 def _make_agent(*, model: str = "openai/gpt-5.2") -> Agent:
@@ -184,22 +184,12 @@ def test_status_tool_registered_with_correct_name() -> None:
 
     tool = registry.get(STATUS_TOOL_NAME)
     assert tool.name == STATUS_TOOL_NAME
-    assert "session_id for another Session owned by this Agent" in tool.description
-    assert "Returns activity running/idle" not in tool.description
-    branches = tool.parameters["oneOf"]
-    assert isinstance(branches, list)
-    assert len(branches) == 3
-    assert [set(branch["properties"]) for branch in branches] == [
-        set(),
-        {"session_id"},
-        {"agent_id", "session_id"},
-    ]
-    assert [branch["required"] for branch in branches] == [
-        [],
-        ["session_id"],
-        ["session_id", "agent_id"],
-    ]
-    assert all(branch["additionalProperties"] is False for branch in branches)
+    assert tool.parameters == STATUS_TOOL_PARAMETERS
+    assert tool.parameters["required"] == []
+    assert set(tool.parameters["properties"]) == {"agent_id", "session_id"}
+    assert "oneOf" not in tool.parameters
+    assert "additionalProperties" not in tool.parameters
+    assert tool.open_input_schema is True
 
 
 def test_status_tool_returns_text_with_full_deps(tmp_path: Path) -> None:
