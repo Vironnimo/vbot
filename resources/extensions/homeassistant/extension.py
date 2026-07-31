@@ -92,11 +92,10 @@ HA_GET_STATE_PARAMETERS: JsonObject = {
             "type": "string",
             "minLength": 1,
             "pattern": r"^[a-z_][a-z0-9_]*\.[a-z0-9_]+$",
-            "description": "Entity id (e.g. light.living_room, sensor.temperature).",
+            "description": "Home Assistant entity id (e.g. light.living_room).",
         },
     },
     "required": ["entity_id"],
-    "additionalProperties": False,
 }
 
 HA_LIST_SERVICES_NAME = "ha_list_services"
@@ -712,6 +711,7 @@ def register(api: Any) -> None:
         },
         display=ToolDisplay(summary_fields=("entity_id",)),
         parallel_safe=True,
+        open_input_schema=True,
         ready=_is_ready,
         readiness_hint=_HASS_READINESS_HINT,
     )

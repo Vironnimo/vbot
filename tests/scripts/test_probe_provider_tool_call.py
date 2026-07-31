@@ -716,6 +716,38 @@ def test_ha_list_entities_cases_use_production_schema_and_exact_arguments() -> N
     }
 
 
+def test_ha_get_state_cases_use_production_schema_and_exact_arguments() -> None:
+    for case_name in PROBE.HA_GET_STATE_CASES:
+        scenario = PROBE._scenario(
+            SimpleNamespace(
+                scenario="ha_get_state",
+                ha_get_state_case=case_name,
+                lines=8,
+            ),
+        )
+        contracts = PROBE._compile_probe_contracts(
+            scenario.tools,
+            require_closed_input=scenario.require_closed_input,
+        )
+        arguments = scenario.expected_arguments
+
+        assert scenario.tools[0]["parameters"] is PROBE.HA_GET_STATE_PARAMETERS
+        assert arguments is not None
+        assert "additionalProperties" not in scenario.tools[0]["parameters"]
+        contracts[PROBE.HA_GET_STATE_NAME].validate_arguments(arguments)
+        assert (
+            PROBE._expected_argument_measurements(
+                [{"name": PROBE.HA_GET_STATE_NAME, "arguments": arguments}],
+                scenario,
+            )["expected_arguments_match"]
+            is True
+        )
+
+    assert PROBE._ha_get_state_scenario("light").expected_arguments == {
+        "entity_id": "light.living_room"
+    }
+
+
 def test_image_generation_cases_use_production_profiles_and_exact_arguments() -> None:
     for case_name in PROBE.IMAGE_GENERATION_CASES:
         scenario = PROBE._scenario(
