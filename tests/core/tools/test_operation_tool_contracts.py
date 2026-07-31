@@ -67,7 +67,6 @@ _DIRECT_TOOL_SCHEMAS: tuple[tuple[str, JsonObject], ...] = (
 _OPENAI_STRICT_SHIPPED_TOOLS = {
     "analyze_image",
     "project",
-    "skill",
     "text_to_speech",
     "write",
 }
@@ -121,7 +120,7 @@ _BRANCH_INAPPLICABLE_CALLS = (
     ),
 )
 
-_BRANCH_MISSING_REQUIRED_CALLS: tuple[tuple[str, JsonObject, JsonObject, str], ...] = (
+_BRANCH_MISSING_REQUIRED_CALLS = (
     ("bash", BASH_TOOL_PARAMETERS, {"mode": "auto"}, "command"),
     ("cron", CRON_TOOL_PARAMETERS, {"action": "update", "id": "job"}, "minProperties"),
     ("history", HISTORY_TOOL_PARAMETERS, {"action": "search"}, "query"),
@@ -132,7 +131,6 @@ _BRANCH_MISSING_REQUIRED_CALLS: tuple[tuple[str, JsonObject, JsonObject, str], .
         "content",
     ),
     ("process", PROCESS_TOOL_PARAMETERS, {"action": "input", "session_id": "proc"}, "text"),
-    ("skill", SKILL_TOOL_PARAMETERS, {}, "name"),
     (
         "skill_manage",
         SKILL_MANAGE_TOOL_PARAMETERS,
@@ -174,30 +172,25 @@ def test_shipped_tool_profile_eligibility_snapshot_is_explicit() -> None:
     "profile",
     ("openai_strict", "anthropic_strict", "best_effort"),
 )
-def test_skill_schema_exposes_required_name_in_every_provider_profile(profile: str) -> None:
+def test_skill_schema_exposes_direct_fields_in_every_provider_profile(profile: str) -> None:
     rendered = render_tool_definitions(
         [
             {
                 "name": "skill",
-                "description": "Activate a Skill.",
+                "description": "List or activate Skills.",
                 "parameters": SKILL_TOOL_PARAMETERS,
             }
         ],
         profile=profile,  # type: ignore[arg-type]
     )[0]
-    parameters = rendered["parameters"]
 
-    assert set(parameters["properties"]) == {"name", "file_path"}
-    assert "name" in parameters["required"]
-    if profile == "openai_strict":
+    assert set(rendered["parameters"]["properties"]) == {"name", "file_path"}
+    assert rendered["parameters"]["required"] == []
+    assert rendered["parameters"] == SKILL_TOOL_PARAMETERS
+    if profile == "anthropic_strict":
         assert rendered["strict"] is True
-        assert set(parameters["required"]) == {"name", "file_path"}
-    elif profile == "anthropic_strict":
-        assert rendered["strict"] is True
-        assert parameters == SKILL_TOOL_PARAMETERS
     else:
         assert "strict" not in rendered
-        assert parameters == SKILL_TOOL_PARAMETERS
 
 
 @pytest.mark.parametrize(
