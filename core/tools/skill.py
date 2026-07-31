@@ -13,7 +13,6 @@ from core.skills.skills import (
     SKILL_FILENAME,
     SkillRegistry,
     _scan_skill_resources,
-    skill_origin_sort_key,
 )
 from core.tools.tools import (
     JsonObject,
@@ -41,10 +40,10 @@ SkillRefresh = Callable[[], None]
 
 SKILL_TOOL_NAME = "skill"
 SKILL_TOOL_DESCRIPTION = (
-    "List available Skills, activate one by name, or read one UTF-8 file by "
-    "Skill-relative path. Call with no arguments to list; with name to activate "
-    "SKILL.md; or with name and file_path to read a file. Activation lists references "
-    "and assets as Skill-relative paths and scripts as absolute paths for direct execution."
+    "Activate one Skill by its required name, or read one UTF-8 file by Skill-relative "
+    "path. Omit file_path (or pass null) to load SKILL.md instructions; provide file_path "
+    "to read that package file without activation. Activation lists references and assets "
+    "as Skill-relative paths and scripts as absolute paths for direct execution."
 )
 SKILL_STATUS_LOADED = "loaded"
 SKILL_STATUS_ALREADY_ACTIVE = "already_active"
@@ -59,49 +58,31 @@ SKILL_PATH_RESOLUTION_NOTE = (
 )
 _SKILL_NAME_PARAMETER: JsonObject = {
     "type": "string",
-    "description": "Skill name to activate or read.",
+    "minLength": 1,
+    "pattern": r"\S",
+    "description": "Required Skill name to activate or read.",
 }
 _SKILL_FILE_PATH_PARAMETER: JsonObject = {
-    "type": "string",
+    "type": ["string", "null"],
     "minLength": 1,
     "pattern": r"^(SKILL\.md|(?:scripts|references|assets)/.+)$",
     "description": (
-        "Path relative to the named Skill, such as 'references/api.md'. "
-        "Returns that UTF-8 file instead of activating the Skill."
+        "Skill-relative path such as 'references/api.md'. A string reads that UTF-8 "
+        "file instead of activating the Skill; omit it or pass null to activate."
     ),
 }
 SKILL_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "description": (
-        "Choose exactly one mode: no arguments lists Skills, name activates a Skill, "
-        "and name with file_path reads one package file without activation."
+        "name is always required. Omit file_path (or pass null) to activate the Skill; "
+        "provide file_path to read one package file without activation."
     ),
-    "oneOf": [
-        {
-            "type": "object",
-            "description": "List available Skills.",
-            "properties": {},
-            "required": [],
-            "additionalProperties": False,
-        },
-        {
-            "type": "object",
-            "description": "Activate one Skill and load its SKILL.md instructions.",
-            "properties": {"name": _SKILL_NAME_PARAMETER},
-            "required": ["name"],
-            "additionalProperties": False,
-        },
-        {
-            "type": "object",
-            "description": "Read one UTF-8 file from a Skill package without activating it.",
-            "properties": {
-                "name": _SKILL_NAME_PARAMETER,
-                "file_path": _SKILL_FILE_PATH_PARAMETER,
-            },
-            "required": ["name", "file_path"],
-            "additionalProperties": False,
-        },
-    ],
+    "properties": {
+        "name": _SKILL_NAME_PARAMETER,
+        "file_path": _SKILL_FILE_PATH_PARAMETER,
+    },
+    "required": ["name"],
+    "additionalProperties": False,
 }
 
 
@@ -134,18 +115,11 @@ def make_skill_handler(
 
         skill_name = arguments.get("name")
         file_path = arguments.get("file_path")
-        # No name → list mode: report the live, agent-aware catalog instead of
-        # activating, so an agent can see skills it authored after the session's
-        # pinned catalog was fixed.
-        if skill_name is None or (isinstance(skill_name, str) and not skill_name.strip()):
-            if file_path is not None:
-                return tool_failure(
-                    "invalid_arguments",
-                    "file_path requires a non-empty skill name",
-                )
-            return _skill_list_result(skill_registry, context.allowed_skills)
-        if not isinstance(skill_name, str):
-            return tool_failure("invalid_arguments", "name must be a string")
+        if not isinstance(skill_name, str) or not skill_name.strip():
+            return tool_failure(
+                "invalid_arguments",
+                "name must be a non-empty string",
+            )
         if file_path is not None and (not isinstance(file_path, str) or not file_path.strip()):
             return tool_failure(
                 "invalid_arguments",
@@ -321,26 +295,6 @@ def _already_active_result(skill_name: str) -> JsonObject:
             ),
         }
     )
-
-
-def _skill_list_result(
-    skill_registry: SkillRegistry,
-    allowed_skills: Sequence[str] | None,
-) -> JsonObject:
-    """Return the currently available skills grouped by origin (the tool's list mode)."""
-    allowed = ["*"] if allowed_skills is None else list(allowed_skills)
-    skills = skill_registry.filter_allowed(allowed)
-    grouped: dict[str | None, list[JsonObject]] = {}
-    for skill in skills:
-        origin = getattr(skill, "origin", None)
-        grouped.setdefault(origin, []).append(
-            {"name": skill.name, "description": skill.description}
-        )
-    skill_groups = [
-        {"origin": origin, "skills": grouped[origin]}
-        for origin in sorted(grouped, key=skill_origin_sort_key)
-    ]
-    return tool_success({"skill_groups": skill_groups, "count": len(skills)})
 
 
 def _allowed_skill_names(
