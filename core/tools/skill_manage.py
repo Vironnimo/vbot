@@ -37,7 +37,7 @@ SKILL_MANAGE_TOOL_DESCRIPTION = (
     "UTF-8 support file. Set action to create, edit, patch, write_file, remove_file, "
     "or delete. Omit scope for your private Skill home; use scope='global' only when "
     "the user explicitly requested a Skill shared by all Agents. Project and bundled "
-    "Skills are read-only here; use the skill tool to list or read Skills."
+    "Skills are read-only here; use the skill tool to activate or read Skills."
 )
 
 _ACTIONS = ("create", "edit", "patch", "write_file", "remove_file", "delete")

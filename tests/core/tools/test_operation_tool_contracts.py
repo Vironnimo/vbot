@@ -67,6 +67,7 @@ _DIRECT_TOOL_SCHEMAS: tuple[tuple[str, JsonObject], ...] = (
 _OPENAI_STRICT_SHIPPED_TOOLS = {
     "analyze_image",
     "project",
+    "skill",
     "text_to_speech",
     "write",
 }
@@ -78,7 +79,6 @@ _BRANCH_COMPLETE_SCHEMAS = (
     ("history", HISTORY_TOOL_PARAMETERS),
     ("memory", MEMORY_TOOL_PARAMETERS),
     ("process", PROCESS_TOOL_PARAMETERS),
-    ("skill", SKILL_TOOL_PARAMETERS),
     ("skill_manage", SKILL_MANAGE_TOOL_PARAMETERS),
     ("status", STATUS_TOOL_PARAMETERS),
     ("subagent", SUBAGENT_TOOL_PARAMETERS),
@@ -107,12 +107,6 @@ _BRANCH_INAPPLICABLE_CALLS = (
     ),
     ("process", PROCESS_TOOL_PARAMETERS, {"action": "status", "text": "hello"}, "text"),
     (
-        "skill",
-        SKILL_TOOL_PARAMETERS,
-        {"file_path": "references/guide.md"},
-        "file_path",
-    ),
-    (
         "skill_manage",
         SKILL_MANAGE_TOOL_PARAMETERS,
         {"action": "delete", "name": "demo", "content": "text"},
@@ -127,7 +121,7 @@ _BRANCH_INAPPLICABLE_CALLS = (
     ),
 )
 
-_BRANCH_MISSING_REQUIRED_CALLS = (
+_BRANCH_MISSING_REQUIRED_CALLS: tuple[tuple[str, JsonObject, JsonObject, str], ...] = (
     ("bash", BASH_TOOL_PARAMETERS, {"mode": "auto"}, "command"),
     ("cron", CRON_TOOL_PARAMETERS, {"action": "update", "id": "job"}, "minProperties"),
     ("history", HISTORY_TOOL_PARAMETERS, {"action": "search"}, "query"),
@@ -138,6 +132,7 @@ _BRANCH_MISSING_REQUIRED_CALLS = (
         "content",
     ),
     ("process", PROCESS_TOOL_PARAMETERS, {"action": "input", "session_id": "proc"}, "text"),
+    ("skill", SKILL_TOOL_PARAMETERS, {}, "name"),
     (
         "skill_manage",
         SKILL_MANAGE_TOOL_PARAMETERS,
@@ -173,6 +168,36 @@ def test_shipped_tool_profile_eligibility_snapshot_is_explicit() -> None:
         decision.strict or decision.reason is not None for decision in openai_decisions.values()
     )
     assert all("strict" not in definition for definition in anthropic_definitions)
+
+
+@pytest.mark.parametrize(
+    "profile",
+    ("openai_strict", "anthropic_strict", "best_effort"),
+)
+def test_skill_schema_exposes_required_name_in_every_provider_profile(profile: str) -> None:
+    rendered = render_tool_definitions(
+        [
+            {
+                "name": "skill",
+                "description": "Activate a Skill.",
+                "parameters": SKILL_TOOL_PARAMETERS,
+            }
+        ],
+        profile=profile,  # type: ignore[arg-type]
+    )[0]
+    parameters = rendered["parameters"]
+
+    assert set(parameters["properties"]) == {"name", "file_path"}
+    assert "name" in parameters["required"]
+    if profile == "openai_strict":
+        assert rendered["strict"] is True
+        assert set(parameters["required"]) == {"name", "file_path"}
+    elif profile == "anthropic_strict":
+        assert rendered["strict"] is True
+        assert parameters == SKILL_TOOL_PARAMETERS
+    else:
+        assert "strict" not in rendered
+        assert parameters == SKILL_TOOL_PARAMETERS
 
 
 @pytest.mark.parametrize(

@@ -31,20 +31,16 @@ def _no_refresh() -> None:
 
 
 def test_skill_tool_describes_activation_and_file_path_contract() -> None:
-    branches = cast(list[dict[str, Any]], SKILL_TOOL_PARAMETERS["oneOf"])
+    properties = cast(dict[str, Any], SKILL_TOOL_PARAMETERS["properties"])
 
     assert "scripts as absolute paths for direct execution" in SKILL_TOOL_DESCRIPTION
-    assert [set(branch["properties"]) for branch in branches] == [
-        set(),
-        {"name"},
-        {"name", "file_path"},
-    ]
-    assert [branch["required"] for branch in branches] == [
-        [],
-        ["name"],
-        ["name", "file_path"],
-    ]
-    assert all(branch["additionalProperties"] is False for branch in branches)
+    assert set(properties) == {"name", "file_path"}
+    assert properties["name"]["type"] == "string"
+    assert properties["name"]["minLength"] == 1
+    assert properties["name"]["pattern"] == r"\S"
+    assert properties["file_path"]["type"] == ["string", "null"]
+    assert SKILL_TOOL_PARAMETERS["required"] == ["name"]
+    assert SKILL_TOOL_PARAMETERS["additionalProperties"] is False
 
 
 def test_skill_tool_result_carries_full_content(tmp_path: Path) -> None:
@@ -89,6 +85,24 @@ def test_skill_tool_without_activation_hook_still_returns_content(tmp_path: Path
     assert data["status"] == "loaded"
     assert cast(str, data["content"]).startswith('<skill_content name="debugging">')
     assert "Investigate failures methodically." in cast(str, data["content"])
+
+
+def test_skill_tool_null_file_path_activates_for_strict_providers(tmp_path: Path) -> None:
+    registry = SkillRegistry.load(_skills_dir(tmp_path))
+    tools = ToolRegistry()
+    register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
+
+    result = asyncio.run(
+        async_dispatch(
+            tools,
+            _context(tmp_path),
+            {"name": "debugging", "file_path": None},
+        )
+    )
+    data = cast(dict[str, Any], result["data"])
+
+    assert result["ok"] is True
+    assert data["status"] == "loaded"
 
 
 def test_skill_tool_unknown_skill_rescans_once_then_fails(tmp_path: Path) -> None:
@@ -266,7 +280,7 @@ def test_skill_tool_file_path_requires_name(tmp_path: Path) -> None:
 
     with pytest.raises(
         ToolContractError,
-        match=r"Additional properties.*file_path",
+        match=r"arguments: 'name' is a required property \[required\]",
     ):
         asyncio.run(
             async_dispatch(
@@ -345,46 +359,25 @@ def test_skill_tool_resolves_registry_from_project_id(tmp_path: Path) -> None:
     assert identity_result == tool_failure("skill_not_found", "Skill not found: proj-skill")
 
 
-def test_skill_tool_list_mode_returns_grouped_skills(tmp_path: Path) -> None:
-    # No name → list mode: the live, agent-aware catalog grouped by origin.
-    agent_dir = tmp_path / "agent"
-    (agent_dir / "mine").mkdir(parents=True)
-    (agent_dir / "mine" / "SKILL.md").write_text(
-        "---\nname: mine\ndescription: Mine.\n---\n\nBody.\n", encoding="utf-8"
-    )
-    registry = SkillRegistry.load(
-        agent_dir, extra_dirs=[_skills_dir(tmp_path)], origins=["agent", "global"]
-    )
+def test_skill_tool_requires_name(tmp_path: Path) -> None:
+    registry = SkillRegistry.load(_skills_dir(tmp_path))
     tools = ToolRegistry()
     register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
 
-    result = asyncio.run(async_dispatch(tools, _context(tmp_path), {}))
-    data = cast(dict[str, Any], result["data"])
-
-    assert result["ok"] is True
-    groups = {
-        group["origin"]: [s["name"] for s in group["skills"]] for group in data["skill_groups"]
-    }
-    assert groups == {"agent": ["mine"], "global": ["debugging"]}
-    assert data["count"] == 2
-    # Sort order: global before agent.
-    origins_in_order = [group["origin"] for group in data["skill_groups"]]
-    assert origins_in_order.index("global") < origins_in_order.index("agent")
-    assert "<skill_content" not in str(result)
+    with pytest.raises(
+        ToolContractError,
+        match=r"arguments: 'name' is a required property \[required\]",
+    ):
+        asyncio.run(async_dispatch(tools, _context(tmp_path), {}))
 
 
-def test_skill_tool_blank_name_lists_instead_of_activating(tmp_path: Path) -> None:
-    registry = SkillRegistry.load(_skills_dir(tmp_path), origins=["global"])
+def test_skill_tool_rejects_blank_name(tmp_path: Path) -> None:
+    registry = SkillRegistry.load(_skills_dir(tmp_path))
     tools = ToolRegistry()
     register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
 
-    result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "  "}))
-    data = cast(dict[str, Any], result["data"])
-
-    assert result["ok"] is True
-    assert [skill["name"] for group in data["skill_groups"] for skill in group["skills"]] == [
-        "debugging"
-    ]
+    with pytest.raises(ToolContractError, match=r"does not match '\\\\S' \[pattern\]"):
+        asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "  "}))
 
 
 def test_skill_tool_loads_agent_own_skill_bypassing_allowlist(tmp_path: Path) -> None:
