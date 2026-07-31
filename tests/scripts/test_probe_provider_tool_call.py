@@ -637,6 +637,51 @@ def test_cron_cases_use_production_schema_and_exact_arguments() -> None:
     assert PROBE._cron_scenario("update_repeat_null").expected_arguments["repeat"] is None
 
 
+def test_history_cases_use_production_schema_and_exact_arguments() -> None:
+    for case_name in PROBE.HISTORY_CASES:
+        scenario = PROBE._scenario(
+            SimpleNamespace(
+                scenario="history",
+                history_case=case_name,
+                lines=8,
+            ),
+        )
+        contracts = PROBE._compile_probe_contracts(
+            scenario.tools,
+            require_closed_input=scenario.require_closed_input,
+        )
+        arguments = scenario.expected_arguments
+
+        assert scenario.tools[0]["parameters"] is PROBE.HISTORY_TOOL_PARAMETERS
+        assert arguments is not None
+        assert "additionalProperties" not in json.dumps(scenario.tools[0]["parameters"])
+        assert "oneOf" not in scenario.tools[0]["parameters"]
+        contracts[PROBE.HISTORY_TOOL_NAME].validate_arguments(arguments)
+        assert (
+            PROBE._expected_argument_measurements(
+                [{"name": PROBE.HISTORY_TOOL_NAME, "arguments": arguments}],
+                scenario,
+            )["expected_arguments_match"]
+            is True
+        )
+
+    assert PROBE._history_scenario("overview_default").expected_arguments == {"action": "overview"}
+    assert PROBE._history_scenario("search_default").expected_arguments == {
+        "action": "search",
+        "query": "deployment failure",
+    }
+    assert PROBE._history_scenario("read_default").expected_arguments == {"action": "read"}
+    assert PROBE._history_scenario("around_default").expected_arguments == {
+        "action": "around",
+        "message_id": "message-123",
+    }
+    for action in ("overview", "search", "read", "around"):
+        assert PROBE._history_scenario(f"{action}_cursor").expected_arguments == {
+            "action": action,
+            "cursor": "opaque-history-cursor",
+        }
+
+
 def test_image_generation_cases_use_production_profiles_and_exact_arguments() -> None:
     for case_name in PROBE.IMAGE_GENERATION_CASES:
         scenario = PROBE._scenario(

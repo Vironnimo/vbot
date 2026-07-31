@@ -65,7 +65,7 @@ def _serialized_size(result: dict[str, Any]) -> int:
     return len(json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
-def test_registration_is_session_scoped_and_schema_is_closed(tmp_path: Path) -> None:
+def test_registration_is_session_scoped_and_schema_is_flat(tmp_path: Path) -> None:
     manager = ChatSessionManager(tmp_path)
     registry = ToolRegistry()
 
@@ -73,56 +73,35 @@ def test_registration_is_session_scoped_and_schema_is_closed(tmp_path: Path) -> 
 
     tool = registry.get(HISTORY_TOOL_NAME)
     assert tool.session_scoped is True
-    branches = {
-        branch["properties"]["action"]["enum"][0]: branch for branch in tool.parameters["oneOf"]
-    }
-    assert set(branches) == {"overview", "search", "read", "around"}
-    assert set(branches["overview"]["properties"]) == {"action", "limit", "cursor"}
-    assert set(branches["search"]["properties"]) == {
+    assert tool.open_input_schema is True
+    assert set(tool.parameters["properties"]) == {
         "action",
         "query",
-        "checkpoint",
-        "roles",
-        "match",
-        "limit",
-        "cursor",
-    }
-    assert set(branches["read"]["properties"]) == {
-        "action",
-        "checkpoint",
-        "roles",
-        "direction",
-        "limit",
-        "cursor",
-    }
-    assert set(branches["around"]["properties"]) == {
-        "action",
         "message_id",
         "checkpoint",
         "roles",
+        "match",
+        "direction",
+        "limit",
         "before",
         "after",
         "cursor",
     }
-    assert all(branch["required"] == ["action"] for branch in branches.values())
-    assert all(branch["additionalProperties"] is False for branch in branches.values())
-    assert branches["search"]["if"] == {"required": ["cursor"]}
-    assert branches["search"]["else"] == {"required": ["query"]}
-    assert branches["around"]["else"] == {"required": ["message_id"]}
-    assert "else" not in branches["read"]
+    assert tool.parameters["required"] == ["action"]
+    assert "oneOf" not in tool.parameters
+    assert "additionalProperties" not in tool.parameters
+    assert '"default"' not in json.dumps(tool.parameters)
     assert tool.description == (
         "Recover original records from this Session after Compaction. Use overview to inspect "
         "available checkpoint sections, search to find matching records, read to retrieve "
         "canonical records chronologically, or around to retrieve complete records near a known "
         "message id. This Tool is available only after the Session has a Compaction checkpoint."
     )
-    assert tool.parameters["description"] == (
-        "Choose one History action, or continue a previous page with only that same action "
-        "and its cursor."
+    assert tool.parameters["properties"]["query"]["description"] == (
+        "Text to find. Required for search unless cursor is set."
     )
-    assert branches["search"]["properties"]["query"]["description"] == "Non-blank text to find."
-    assert branches["around"]["properties"]["message_id"]["description"] == (
-        "Canonical Message id to use as the anchor."
+    assert tool.parameters["properties"]["message_id"]["description"] == (
+        "Anchor Message id. Required for around unless cursor is set."
     )
     display = registry.display_for_call(
         HISTORY_TOOL_NAME,

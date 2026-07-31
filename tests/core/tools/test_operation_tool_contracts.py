@@ -9,7 +9,6 @@ import pytest
 from core.providers.tool_schema import render_tool_definitions
 from core.tools.bash import BASH_TOOL_PARAMETERS
 from core.tools.channel import CHANNEL_SEND_TOOL_PARAMETERS
-from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.cron import CRON_TOOL_PARAMETERS
 from core.tools.edit import EDIT_TOOL_PARAMETERS
 from core.tools.glob import GLOB_TOOL_PARAMETERS
@@ -45,6 +44,7 @@ _DIRECT_TOOL_SCHEMAS: tuple[tuple[str, JsonObject], ...] = (
     ("cron", CRON_TOOL_PARAMETERS),
     ("edit", EDIT_TOOL_PARAMETERS),
     ("glob", GLOB_TOOL_PARAMETERS),
+    ("grep", GREP_TOOL_PARAMETERS),
     ("history", HISTORY_TOOL_PARAMETERS),
     ("image_generation", IMAGE_GENERATION_TOOL_PARAMETERS),
     ("memory", MEMORY_TOOL_PARAMETERS),
@@ -61,19 +61,6 @@ _DIRECT_TOOL_SCHEMAS: tuple[tuple[str, JsonObject], ...] = (
     ("web_fetch", WEB_FETCH_TOOL_PARAMETERS),
     ("web_search", WEB_SEARCH_TOOL_PARAMETERS),
     ("write", WRITE_TOOL_PARAMETERS),
-)
-
-_BRANCH_COMPLETE_SCHEMAS = (
-    ("grep", GREP_TOOL_PARAMETERS),
-    ("history", HISTORY_TOOL_PARAMETERS),
-)
-
-_BRANCH_INAPPLICABLE_CALLS = (
-    ("history", HISTORY_TOOL_PARAMETERS, {"action": "overview", "query": "text"}, "query"),
-)
-
-_BRANCH_MISSING_REQUIRED_CALLS = (
-    ("history", HISTORY_TOOL_PARAMETERS, {"action": "search"}, "query"),
 )
 
 
@@ -127,64 +114,10 @@ def test_skill_list_schema_is_an_empty_call_in_every_provider_profile(profile: s
 
 @pytest.mark.parametrize(
     ("tool_name", "schema"),
-    _BRANCH_COMPLETE_SCHEMAS,
-    ids=[contract[0] for contract in _BRANCH_COMPLETE_SCHEMAS],
-)
-@pytest.mark.parametrize("profile", ("explicit_non_strict", "omit_strict"))
-def test_branch_complete_schema_reaches_provider_unchanged(
-    tool_name: str,
-    schema: JsonObject,
-    profile: str,
-) -> None:
-    rendered = render_tool_definitions(
-        [{"name": tool_name, "description": f"Call {tool_name}.", "parameters": schema}],
-        profile=profile,  # type: ignore[arg-type]
-    )
-
-    assert rendered[0]["parameters"] == schema
-    assert rendered[0].get("strict") is not True
-
-
-@pytest.mark.parametrize(
-    ("tool_name", "schema", "arguments", "field_name"),
-    _BRANCH_INAPPLICABLE_CALLS,
-    ids=[contract[0] for contract in _BRANCH_INAPPLICABLE_CALLS],
-)
-def test_branch_complete_schema_rejects_inapplicable_fields(
-    tool_name: str,
-    schema: JsonObject,
-    arguments: JsonObject,
-    field_name: str,
-) -> None:
-    contract = compile_tool_contract(name=tool_name, input_schema=schema)
-
-    with pytest.raises(ToolContractError, match=field_name):
-        contract.validate_arguments(arguments)
-
-
-@pytest.mark.parametrize(
-    ("tool_name", "schema", "arguments", "requirement"),
-    _BRANCH_MISSING_REQUIRED_CALLS,
-    ids=[contract[0] for contract in _BRANCH_MISSING_REQUIRED_CALLS],
-)
-def test_branch_complete_schema_enforces_variant_requirements(
-    tool_name: str,
-    schema: JsonObject,
-    arguments: JsonObject,
-    requirement: str,
-) -> None:
-    contract = compile_tool_contract(name=tool_name, input_schema=schema)
-
-    with pytest.raises(ToolContractError, match=requirement):
-        contract.validate_arguments(arguments)
-
-
-@pytest.mark.parametrize(
-    ("tool_name", "schema"),
     _DIRECT_TOOL_SCHEMAS,
     ids=[contract[0] for contract in _DIRECT_TOOL_SCHEMAS],
 )
-def test_direct_tool_schema_is_closed_and_declares_required_properties(
+def test_direct_tool_schema_is_flat_and_declares_required_properties(
     tool_name: str,
     schema: JsonObject,
 ) -> None:
@@ -197,6 +130,7 @@ def test_direct_tool_schema_is_closed_and_declares_required_properties(
         "edit",
         "glob",
         "grep",
+        "history",
         "image_generation",
         "memory",
         "process",
