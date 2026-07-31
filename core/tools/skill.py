@@ -41,10 +41,15 @@ SkillRefresh = Callable[[], None]
 
 SKILL_TOOL_NAME = "skill"
 SKILL_TOOL_DESCRIPTION = (
-    "List available Skills, activate one by name, or read one UTF-8 file by "
-    "Skill-relative path. Call with no arguments to list; with name to activate "
-    "SKILL.md; or with name and file_path to read a file. Activation lists references "
-    "and assets as Skill-relative paths and scripts as absolute paths for direct execution."
+    "Activate one Skill by its required name, or read one UTF-8 file by Skill-relative "
+    "path. Omit file_path to load SKILL.md instructions; provide file_path to read that "
+    "package file without activation. Activation lists references and assets as "
+    "Skill-relative paths and scripts as absolute paths for direct execution."
+)
+SKILL_LIST_TOOL_NAME = "skill_list"
+SKILL_LIST_TOOL_DESCRIPTION = (
+    "List the currently available Skills grouped by origin. This Tool is available only "
+    "during Reflection Runs; call it with no arguments before choosing a Skill to inspect."
 )
 SKILL_STATUS_LOADED = "loaded"
 SKILL_STATUS_ALREADY_ACTIVE = "already_active"
@@ -59,10 +64,9 @@ SKILL_PATH_RESOLUTION_NOTE = (
 )
 _SKILL_NAME_PARAMETER: JsonObject = {
     "type": "string",
-    "description": (
-        "Skill name. With file_path, selects the Skill whose file to read; without "
-        "file_path, activates that Skill. Omit both fields to list available Skills."
-    ),
+    "minLength": 1,
+    "pattern": r"\S",
+    "description": "Exact Skill name. Required for activate and read.",
 }
 _SKILL_FILE_PATH_PARAMETER: JsonObject = {
     "type": "string",
@@ -70,19 +74,25 @@ _SKILL_FILE_PATH_PARAMETER: JsonObject = {
     "pattern": r"^(SKILL\.md|(?:scripts|references|assets)/.+)$",
     "description": (
         "Path relative to the named Skill, such as 'references/api.md'. "
-        "Returns that UTF-8 file instead of activating the Skill."
+        "When present, returns that UTF-8 file without activating the Skill."
     ),
 }
 SKILL_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "description": (
-        "Omit both fields to list Skills. Set name to activate a Skill, or set name "
-        "with file_path to read one package file without activation."
+        "name is required. Omit file_path to activate the Skill; provide file_path to "
+        "read one package file without activation."
     ),
     "properties": {
         "name": _SKILL_NAME_PARAMETER,
         "file_path": _SKILL_FILE_PATH_PARAMETER,
     },
+    "required": ["name"],
+    "additionalProperties": False,
+}
+SKILL_LIST_TOOL_PARAMETERS: JsonObject = {
+    "type": "object",
+    "properties": {},
     "required": [],
     "additionalProperties": False,
 }
@@ -117,18 +127,8 @@ def make_skill_handler(
 
         skill_name = arguments.get("name")
         file_path = arguments.get("file_path")
-        # No name → list mode: report the live, agent-aware catalog instead of
-        # activating, so an agent can see skills it authored after the session's
-        # pinned catalog was fixed.
-        if skill_name is None or (isinstance(skill_name, str) and not skill_name.strip()):
-            if file_path is not None:
-                return tool_failure(
-                    "invalid_arguments",
-                    "file_path requires a non-empty skill name",
-                )
-            return _skill_list_result(skill_registry, context.allowed_skills)
-        if not isinstance(skill_name, str):
-            return tool_failure("invalid_arguments", "name must be a string")
+        if not isinstance(skill_name, str) or not skill_name.strip():
+            return tool_failure("invalid_arguments", "name must be a non-empty string")
         if file_path is not None and (not isinstance(file_path, str) or not file_path.strip()):
             return tool_failure(
                 "invalid_arguments",
@@ -204,6 +204,20 @@ def make_skill_handler(
     return skill_handler
 
 
+def make_skill_list_handler(resolve_registry: SkillRegistryResolver) -> Any:
+    """Return the Reflection-only Skill catalog handler."""
+
+    def skill_list_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        if arguments:
+            names = ", ".join(sorted(arguments))
+            return tool_failure("invalid_arguments", f"Unknown argument(s): {names}")
+        identity_agent_id = context.agent_id if context.project_id is None else None
+        skill_registry = resolve_registry(context.skill_project_id, identity_agent_id)
+        return _skill_list_result(skill_registry, context.allowed_skills)
+
+    return skill_list_handler
+
+
 def register_skill_tool(
     registry: ToolRegistry,
     resolve_registry: SkillRegistryResolver,
@@ -225,6 +239,14 @@ def register_skill_tool(
         make_skill_handler(resolve_registry, refresh_skills),
         result_schema={"type": "object"},
         display=ToolDisplay(summary_fields=("name", "file_path")),
+    )
+    registry.register(
+        SKILL_LIST_TOOL_NAME,
+        SKILL_LIST_TOOL_DESCRIPTION,
+        SKILL_LIST_TOOL_PARAMETERS,
+        make_skill_list_handler(resolve_registry),
+        result_schema={"type": "object"},
+        session_scoped=True,
     )
 
 
@@ -310,7 +332,7 @@ def _skill_list_result(
     skill_registry: SkillRegistry,
     allowed_skills: Sequence[str] | None,
 ) -> JsonObject:
-    """Return the currently available skills grouped by origin (the tool's list mode)."""
+    """Return the currently available Skills grouped by origin."""
     allowed = ["*"] if allowed_skills is None else list(allowed_skills)
     skills = skill_registry.filter_allowed(allowed)
     grouped: dict[str | None, list[JsonObject]] = {}
@@ -413,10 +435,14 @@ def _present_resource_path(resource: str, directory: str) -> str:
 
 
 __all__ = [
+    "SKILL_LIST_TOOL_DESCRIPTION",
+    "SKILL_LIST_TOOL_NAME",
+    "SKILL_LIST_TOOL_PARAMETERS",
     "SKILL_TOOL_DESCRIPTION",
     "SKILL_TOOL_NAME",
     "SKILL_TOOL_PARAMETERS",
     "load_skill_file",
+    "make_skill_list_handler",
     "make_skill_handler",
     "load_skill_content",
     "register_skill_tool",

@@ -183,9 +183,9 @@ class ToolContext:
     result_persisted_hook: ToolResultPersistedHook | None = None
     allowed_skills: Sequence[str] | None = None
     tool_settings: Mapping[str, Any] | None = None
-    # Session-derived grants for tools whose authority belongs to persisted
-    # Session state rather than Agent configuration. The registry checks this
-    # axis before the ordinary allowlist.
+    # Grants for Session-scoped tools whose authority is independent of Agent
+    # configuration. They may be derived from persisted Session state or supplied
+    # ephemerally for one Run; the registry checks this axis before the allowlist.
     session_tool_grants: Sequence[str] = field(default_factory=tuple)
     nesting_depth: int = 0
     # Exact model-facing contract used for this Provider cycle. Direct callers and

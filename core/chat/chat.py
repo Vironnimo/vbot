@@ -409,6 +409,7 @@ class _RunRequest:
     sender: MessageSender | None = None
     reply_surface: ReplySurface | None = None
     tool_restriction: tuple[str, ...] | None = None
+    tool_grants: tuple[str, ...] = ()
     tool_denial_resolver: Callable[[str], str | None] | None = None
     input_persisted_hook: Callable[[], None] | None = None
     agent_overrides: AgentRunOverrides | None = None
@@ -783,6 +784,7 @@ class ChatLoop:
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
         tool_restriction: Sequence[str] | None = None,
+        tool_grants: Sequence[str] = (),
         tool_denial_resolver: Callable[[str], str | None] | None = None,
         input_persisted_hook: Callable[[], None] | None = None,
         contributes_to_agent_activity: bool = True,
@@ -797,6 +799,9 @@ class ChatLoop:
         does not touch the provider tool definitions or the system prompt, so a
         restricted run keeps a byte-identical prompt prefix (the prompt-cache
         invariant). ``None`` is the unrestricted default.
+
+        ``tool_grants`` exposes named Session-scoped Tools for this Run only. It
+        does not persist capability state into the Session.
         """
         return await self._start_run(
             agent_id,
@@ -809,6 +814,7 @@ class ChatLoop:
             reply_surface=reply_surface,
             project_id=project_id,
             tool_restriction=tool_restriction,
+            tool_grants=tool_grants,
             tool_denial_resolver=tool_denial_resolver,
             input_persisted_hook=input_persisted_hook,
             contributes_to_agent_activity=contributes_to_agent_activity,
@@ -825,6 +831,7 @@ class ChatLoop:
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
         tool_restriction: Sequence[str] | None = None,
+        tool_grants: Sequence[str] = (),
         tool_denial_resolver: Callable[[str], str | None] | None = None,
         input_persisted_hook: Callable[[], None] | None = None,
         contributes_to_agent_activity: bool = True,
@@ -847,6 +854,7 @@ class ChatLoop:
             reply_surface=reply_surface,
             project_id=project_id,
             tool_restriction=tool_restriction,
+            tool_grants=tool_grants,
             tool_denial_resolver=tool_denial_resolver,
             input_persisted_hook=input_persisted_hook,
             contributes_to_agent_activity=contributes_to_agent_activity,
@@ -1150,6 +1158,7 @@ class ChatLoop:
         reply_surface: ReplySurface | None = None,
         project_id: str | None = None,
         tool_restriction: Sequence[str] | None = None,
+        tool_grants: Sequence[str] = (),
         tool_denial_resolver: Callable[[str], str | None] | None = None,
         input_persisted_hook: Callable[[], None] | None = None,
         contributes_to_agent_activity: bool = True,
@@ -1169,6 +1178,7 @@ class ChatLoop:
             sender=sender,
             reply_surface=reply_surface,
             tool_restriction=(tuple(tool_restriction) if tool_restriction is not None else None),
+            tool_grants=tuple(tool_grants),
             tool_denial_resolver=tool_denial_resolver,
             input_persisted_hook=input_persisted_hook,
         )
@@ -1474,6 +1484,7 @@ class ChatLoop:
                 agent_project_id=context.project_id,
                 skill_registry=context.skill_registry,
                 skill_catalog=context.skill_catalog,
+                tool_grants=request.tool_grants,
             )
             if context.continuation_reminder is not None:
                 assert context.prior_continuation is not None
@@ -1539,6 +1550,7 @@ class ChatLoop:
                             agent_project_id=context.project_id,
                             skill_registry=context.skill_registry,
                             skill_catalog=context.skill_catalog,
+                            tool_grants=request.tool_grants,
                         )
                         if context.continuation_reminder is not None:
                             context.request_state = _RequestState(
@@ -1987,6 +1999,7 @@ class ChatLoop:
         agent_project_id: str | None = None,
         skill_registry: SkillRegistry | None = None,
         skill_catalog: PinnedSkillCatalog | None = None,
+        tool_grants: Sequence[str] = (),
     ) -> _RequestState:
         # For a project-born session the Working Project context lands in the system
         # prompt; for an unrooted identity session it is empty. The
@@ -1995,7 +2008,8 @@ class ChatLoop:
         # the global registry); ``skill_catalog`` is the current prompt-epoch snapshot
         # the skills block renders from, so only Compaction replaces it.
         session_messages = session.load()
-        session_tool_grants = (HISTORY_TOOL_NAME,) if history_available(session_messages) else ()
+        history_grants = (HISTORY_TOOL_NAME,) if history_available(session_messages) else ()
+        session_tool_grants = tuple(dict.fromkeys((*history_grants, *tool_grants)))
         system_prompts = self._dependencies.get_system_prompts()
         effective_input_modalities = (
             input_modalities
@@ -2647,6 +2661,7 @@ class ChatLoop:
             agent_project_id=context.project_id,
             skill_registry=context.skill_registry,
             skill_catalog=context.skill_catalog,
+            tool_grants=context.request.tool_grants,
         )
         rebuilt_messages = rebuilt_state.messages
         if context.continuation_reminder is not None:

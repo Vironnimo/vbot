@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any
 from core.chat.content_blocks import ContentBlock, TextBlock
 from core.sessions import SESSION_FORK_ALWAYS_STRIP_META_KEYS
 from core.subagents.subagents import SUBAGENT_SESSION_METADATA_FLAG
+from core.tools.skill import SKILL_LIST_TOOL_NAME
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -38,10 +39,11 @@ if TYPE_CHECKING:
     from core.runtime.interfaces import RuntimeServices
 
 REFLECT_FRAGMENT_NAME = "reflect.md"
-# Dispatch-only restriction for the review run: the fork's system prompt and
-# provider tool definitions stay byte-identical to the source (the prompt-cache
-# invariant); any other tool call fails through the normal denied path.
-REFLECTION_TOOL_RESTRICTION = ("memory", "skill", "skill_manage")
+# The restriction is the Reflection Run's dispatch boundary. The matching Run
+# grant adds only the Session-scoped Skill catalog Tool to the model-facing set;
+# it does not persist capability state into the forked Session.
+REFLECTION_TOOL_RESTRICTION = ("memory", "skill", SKILL_LIST_TOOL_NAME, "skill_manage")
+REFLECTION_TOOL_GRANTS = (SKILL_LIST_TOOL_NAME,)
 # Session-sidecar key holding the cadence counters. Kept out of forks via the
 # always-strip policy in ``core/sessions`` so a fork restarts at zero.
 REFLECTION_COUNTERS_META_KEY = "reflection_counters"
@@ -259,6 +261,7 @@ class ReflectionService:
             reply_surface=reply_surface,
             project_id=project_id,
             tool_restriction=REFLECTION_TOOL_RESTRICTION,
+            tool_grants=REFLECTION_TOOL_GRANTS,
             contributes_to_agent_activity=False,
         )
         final_message = await review_run.wait()

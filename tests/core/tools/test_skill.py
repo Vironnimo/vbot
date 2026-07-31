@@ -5,10 +5,16 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
+
 from core.skills.skills import SkillRegistry
 from core.tools import (
+    SKILL_LIST_TOOL_NAME,
+    SKILL_LIST_TOOL_PARAMETERS,
     SKILL_TOOL_NAME,
+    SessionToolUnavailableError,
     ToolContext,
+    ToolContractError,
     ToolRegistry,
     register_skill_tool,
     tool_failure,
@@ -33,10 +39,17 @@ def test_skill_tool_describes_activation_and_file_path_contract() -> None:
     assert "scripts as absolute paths for direct execution" in SKILL_TOOL_DESCRIPTION
     assert set(properties) == {"name", "file_path"}
     assert properties["name"]["type"] == "string"
-    assert "Omit both fields to list available Skills" in properties["name"]["description"]
+    assert properties["name"]["minLength"] == 1
+    assert properties["name"]["pattern"] == r"\S"
     assert properties["file_path"]["type"] == "string"
-    assert SKILL_TOOL_PARAMETERS["required"] == []
+    assert SKILL_TOOL_PARAMETERS["required"] == ["name"]
     assert SKILL_TOOL_PARAMETERS["additionalProperties"] is False
+    assert SKILL_LIST_TOOL_PARAMETERS == {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": False,
+    }
 
 
 def test_skill_tool_result_carries_full_content(tmp_path: Path) -> None:
@@ -256,18 +269,14 @@ def test_skill_tool_file_path_requires_name(tmp_path: Path) -> None:
         _no_refresh,
     )
 
-    result = asyncio.run(
-        async_dispatch(
-            tools,
-            _context(tmp_path),
-            {"file_path": "references/guide.md"},
+    with pytest.raises(ToolContractError, match="'name' is a required property"):
+        asyncio.run(
+            async_dispatch(
+                tools,
+                _context(tmp_path),
+                {"file_path": "references/guide.md"},
+            )
         )
-    )
-
-    assert result == tool_failure(
-        "invalid_arguments",
-        "file_path requires a non-empty skill name",
-    )
 
 
 def test_skill_tool_rejects_missing_relative_file(tmp_path: Path) -> None:
@@ -338,8 +347,9 @@ def test_skill_tool_resolves_registry_from_project_id(tmp_path: Path) -> None:
     assert identity_result == tool_failure("skill_not_found", "Skill not found: proj-skill")
 
 
-def test_skill_tool_list_mode_returns_grouped_skills(tmp_path: Path) -> None:
-    # No name → list mode: the live, agent-aware catalog grouped by origin.
+def test_skill_list_tool_returns_grouped_skills_when_granted(tmp_path: Path) -> None:
+    # Reflection gets the live, agent-aware catalog grouped by origin through its
+    # explicit Run grant, independently of the Agent's ordinary Tool allowlist.
     agent_dir = tmp_path / "agent"
     (agent_dir / "mine").mkdir(parents=True)
     (agent_dir / "mine" / "SKILL.md").write_text(
@@ -351,7 +361,12 @@ def test_skill_tool_list_mode_returns_grouped_skills(tmp_path: Path) -> None:
     tools = ToolRegistry()
     register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
 
-    result = asyncio.run(async_dispatch(tools, _context(tmp_path), {}))
+    context = _context(
+        tmp_path,
+        tool_name=SKILL_LIST_TOOL_NAME,
+        session_tool_grants=(SKILL_LIST_TOOL_NAME,),
+    )
+    result = asyncio.run(async_dispatch(tools, context, {}, tool_name=SKILL_LIST_TOOL_NAME))
     data = cast(dict[str, Any], result["data"])
 
     assert result["ok"] is True
@@ -366,18 +381,34 @@ def test_skill_tool_list_mode_returns_grouped_skills(tmp_path: Path) -> None:
     assert "<skill_content" not in str(result)
 
 
-def test_skill_tool_blank_name_lists_instead_of_activating(tmp_path: Path) -> None:
+def test_skill_tool_requires_non_blank_name(tmp_path: Path) -> None:
     registry = SkillRegistry.load(_skills_dir(tmp_path), origins=["global"])
     tools = ToolRegistry()
     register_skill_tool(tools, _fixed_registry(registry), _no_refresh)
 
-    result = asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "  "}))
-    data = cast(dict[str, Any], result["data"])
+    with pytest.raises(ToolContractError, match="does not match"):
+        asyncio.run(async_dispatch(tools, _context(tmp_path), {"name": "  "}))
 
-    assert result["ok"] is True
-    assert [skill["name"] for group in data["skill_groups"] for skill in group["skills"]] == [
-        "debugging"
+
+def test_skill_list_tool_is_hidden_and_rejected_without_run_grant(tmp_path: Path) -> None:
+    tools = ToolRegistry()
+    register_skill_tool(
+        tools,
+        _fixed_registry(SkillRegistry.load(_skills_dir(tmp_path))),
+        _no_refresh,
+    )
+
+    assert [definition["name"] for definition in tools.provider_definitions(["*"])] == [
+        SKILL_TOOL_NAME
     ]
+    assert [
+        definition["name"]
+        for definition in tools.provider_definitions([], session_grants=(SKILL_LIST_TOOL_NAME,))
+    ] == [SKILL_LIST_TOOL_NAME]
+
+    context = _context(tmp_path, tool_name=SKILL_LIST_TOOL_NAME)
+    with pytest.raises(SessionToolUnavailableError, match="skill_list"):
+        asyncio.run(async_dispatch(tools, context, {}, tool_name=SKILL_LIST_TOOL_NAME))
 
 
 def test_skill_tool_loads_agent_own_skill_bypassing_allowlist(tmp_path: Path) -> None:
@@ -458,8 +489,10 @@ async def async_dispatch(
     tools: ToolRegistry,
     context: ToolContext,
     arguments: dict[str, object],
+    *,
+    tool_name: str = SKILL_TOOL_NAME,
 ) -> dict[str, object]:
-    return await tools.dispatch(context, arguments, [SKILL_TOOL_NAME])
+    return await tools.dispatch(context, arguments, [tool_name])
 
 
 def _skills_dir(tmp_path: Path) -> Path:
@@ -505,13 +538,15 @@ def _context(
     *,
     project_id: str | None = None,
     allowed_skills: list[str] | None = None,
+    tool_name: str = SKILL_TOOL_NAME,
+    session_tool_grants: tuple[str, ...] = (),
 ) -> ToolContext:
     return ToolContext(
         agent_id="coder",
         session_id="session-one",
         run_id="run-one",
         tool_call_id="call-one",
-        tool_name=SKILL_TOOL_NAME,
+        tool_name=tool_name,
         tool_call_index=0,
         workspace=tmp_path,
         vbot_root=tmp_path,
@@ -522,4 +557,5 @@ def _context(
         skill_project_id=project_id,
         skill_activation_hook=activation_hook,  # type: ignore[arg-type]
         allowed_skills=["*"] if allowed_skills is None else allowed_skills,
+        session_tool_grants=session_tool_grants,
     )
