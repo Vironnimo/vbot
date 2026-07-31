@@ -32,6 +32,11 @@ from core.providers.tool_schema import (
 )
 from core.runtime.runtime import Runtime
 from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
+from core.tools.edit import (
+    EDIT_TOOL_DESCRIPTION,
+    EDIT_TOOL_NAME,
+    EDIT_TOOL_PARAMETERS,
+)
 from core.tools.glob import (
     GLOB_TOOL_DESCRIPTION,
     GLOB_TOOL_NAME,
@@ -90,6 +95,7 @@ PROBE_SCENARIOS = (
     "missing_required_pressure",
     "unknown_property_pressure",
     "large_arguments",
+    "edit",
     "glob",
     "grep",
     "process",
@@ -100,6 +106,7 @@ PROBE_SCENARIOS = (
     "write",
 )
 OPTIONAL_BOOLEAN_CASES = ("omit", "include_links", "raw", "both")
+EDIT_CASES = ("default", "replace_false", "replace_true", "multiline", "delete")
 GLOB_CASES = (
     "default",
     "path",
@@ -198,6 +205,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=OPTIONAL_BOOLEAN_CASES,
         default="omit",
         help="Requested argument shape for the optional_booleans scenarios.",
+    )
+    parser.add_argument(
+        "--edit-case",
+        choices=EDIT_CASES,
+        default="default",
+        help="Exact edit argument shape requested by the edit scenario.",
     )
     parser.add_argument(
         "--glob-case",
@@ -364,6 +377,50 @@ def _optional_boolean_scenario(
         [tool],
         _probe_messages(instructions[case_name]),
         PROBE_TOOL_NAME,
+    )
+
+
+def _edit_scenario(case_name: str) -> ProbeScenario:
+    base = {
+        "path": "src/provider_tool_probe.py",
+        "old_string": "value = 1",
+        "new_string": "value = 2",
+    }
+    edit_arguments: dict[str, dict[str, Any]] = {
+        "default": base,
+        "replace_false": {**base, "replace_all": False},
+        "replace_true": {**base, "replace_all": True},
+        "multiline": {
+            "path": "src/provider_tool_probe.py",
+            "old_string": "def old():\n    return 1\n",
+            "new_string": "def new():\n    return 2\n",
+        },
+        "delete": {
+            "path": "src/provider_tool_probe.py",
+            "old_string": "obsolete = True\n",
+            "new_string": "",
+        },
+    }
+    expected_arguments = edit_arguments[case_name]
+    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
+    instruction = (
+        f"Call {EDIT_TOOL_NAME} exactly once with exactly this JSON object as its "
+        f"arguments: {rendered_arguments}. Preserve every value and omit every field not "
+        "shown."
+    )
+    return ProbeScenario(
+        "edit",
+        [
+            {
+                "name": EDIT_TOOL_NAME,
+                "description": EDIT_TOOL_DESCRIPTION,
+                "parameters": EDIT_TOOL_PARAMETERS,
+            }
+        ],
+        _probe_messages(instruction),
+        EDIT_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
     )
 
 
@@ -820,6 +877,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
             ),
             PROBE_TOOL_NAME,
         )
+    if name == "edit":
+        return _edit_scenario(str(args.edit_case))
     if name == "glob":
         return _glob_scenario(str(args.glob_case))
     if name == "grep":
@@ -1502,6 +1561,7 @@ async def _run(args: argparse.Namespace) -> int:
                 }
                 else None
             ),
+            "edit_case": args.edit_case if scenario.name == "edit" else None,
             "glob_case": args.glob_case if scenario.name == "glob" else None,
             "grep_case": args.grep_case if scenario.name == "grep" else None,
             "process_case": args.process_case if scenario.name == "process" else None,

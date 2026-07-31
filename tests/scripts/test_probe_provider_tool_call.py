@@ -419,6 +419,40 @@ def test_write_scenario_uses_production_schema_and_exact_arguments() -> None:
     )
 
 
+def test_edit_cases_use_production_schema_and_exact_expected_arguments() -> None:
+    for case_name in PROBE.EDIT_CASES:
+        scenario = PROBE._scenario(
+            SimpleNamespace(
+                scenario="edit",
+                edit_case=case_name,
+                lines=8,
+            ),
+        )
+        contracts = PROBE._compile_probe_contracts(
+            scenario.tools,
+            require_closed_input=scenario.require_closed_input,
+        )
+        arguments = scenario.expected_arguments
+
+        assert scenario.tools[0]["parameters"] is PROBE.EDIT_TOOL_PARAMETERS
+        assert arguments is not None
+        contracts[PROBE.EDIT_TOOL_NAME].validate_arguments(arguments)
+        assert (
+            PROBE._expected_argument_measurements(
+                [{"name": PROBE.EDIT_TOOL_NAME, "arguments": arguments}],
+                scenario,
+            )["expected_arguments_match"]
+            is True
+        )
+
+    default = PROBE._edit_scenario("default")
+    assert default.expected_arguments == {
+        "path": "src/provider_tool_probe.py",
+        "old_string": "value = 1",
+        "new_string": "value = 2",
+    }
+
+
 def test_read_cases_use_production_schema_and_exact_expected_arguments() -> None:
     for case_name in PROBE.READ_CASES:
         scenario = PROBE._scenario(

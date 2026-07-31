@@ -6,7 +6,7 @@ Replaces text inside an existing file, matching `old_string` with controlled fuz
 
 - Tool name: `edit`
 - Registration: `register_edit_tool(registry, *, file_state)` — the `FileReadState` guard registry is injected (factory `make_edit_handler(file_state)`).
-- Schema: required `path`, `old_string`, `new_string`; optional boolean `replace_all`; `additionalProperties: false`.
+- Model-facing schema: required `path`, `old_string`, `new_string`; optional boolean `replace_all`. It omits `additionalProperties` and the JSON Schema `default` keyword; omission means one unique match, with the handler applying `false` and rejecting unknown or malformed arguments.
 - Success data includes `message`, resolved `path`, `first_changed_line`, and `replacements`.
 - Display: summary field `path`; hides `old_string`, `new_string`, `oldString`, and `newString` from argument details.
 

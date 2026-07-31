@@ -95,10 +95,13 @@ def test_register_edit_tool_exposes_provider_schema() -> None:
     parameters = definition["parameters"]
     assert parameters["type"] == "object"
     assert parameters["required"] == ["path", "old_string", "new_string"]
-    assert parameters["additionalProperties"] is False
+    assert "additionalProperties" not in parameters
     assert set(parameters["properties"]) == {"path", "old_string", "new_string", "replace_all"}
     assert "surrounding text" in parameters["properties"]["old_string"]["description"]
+    assert "default" not in parameters["properties"]["replace_all"]
+    assert "Omit" in parameters["properties"]["replace_all"]["description"]
     assert "filePath" not in parameters["properties"]
+    assert tool.open_input_schema is True
 
 
 def test_edit_replaces_text_in_relative_workspace_path(tmp_path: Path) -> None:
