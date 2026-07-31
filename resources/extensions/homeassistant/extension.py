@@ -63,8 +63,7 @@ _BLOCKED_DOMAINS = frozenset(
 
 HA_LIST_ENTITIES_NAME = "ha_list_entities"
 HA_LIST_ENTITIES_DESCRIPTION = (
-    "List all entities registered in Home Assistant, optionally filtered "
-    "by domain (e.g. light, climate) and area (matched against friendly_name)."
+    "List Home Assistant entities, optionally filtered by domain or friendly-name area text."
 )
 HA_LIST_ENTITIES_PARAMETERS: JsonObject = {
     "type": "object",
@@ -73,19 +72,15 @@ HA_LIST_ENTITIES_PARAMETERS: JsonObject = {
             "type": "string",
             "minLength": 1,
             "pattern": "^[a-z][a-z0-9_]*$",
-            "description": "Optional domain filter (e.g. light, climate, sensor).",
+            "description": "Domain to include (e.g. light or climate). Omit for all domains.",
         },
         "area": {
             "type": "string",
             "minLength": 1,
-            "description": (
-                "Optional area filter matched against entity friendly_name "
-                "(case-insensitive substring)."
-            ),
+            "description": "Case-insensitive friendly_name text to match. Omit for all areas.",
         },
     },
     "required": [],
-    "additionalProperties": False,
 }
 
 HA_GET_STATE_NAME = "ha_get_state"
@@ -702,6 +697,7 @@ def register(api: Any) -> None:
         list_entities_handler,
         result_schema={"type": "object", "required": ["count", "entities"]},
         parallel_safe=True,
+        open_input_schema=True,
         ready=_is_ready,
         readiness_hint=_HASS_READINESS_HINT,
     )

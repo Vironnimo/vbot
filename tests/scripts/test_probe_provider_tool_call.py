@@ -682,6 +682,40 @@ def test_history_cases_use_production_schema_and_exact_arguments() -> None:
         }
 
 
+def test_ha_list_entities_cases_use_production_schema_and_exact_arguments() -> None:
+    for case_name in PROBE.HA_LIST_ENTITIES_CASES:
+        scenario = PROBE._scenario(
+            SimpleNamespace(
+                scenario="ha_list_entities",
+                ha_list_entities_case=case_name,
+                lines=8,
+            ),
+        )
+        contracts = PROBE._compile_probe_contracts(
+            scenario.tools,
+            require_closed_input=scenario.require_closed_input,
+        )
+        arguments = scenario.expected_arguments
+
+        assert scenario.tools[0]["parameters"] is PROBE.HA_LIST_ENTITIES_PARAMETERS
+        assert arguments is not None
+        assert "additionalProperties" not in scenario.tools[0]["parameters"]
+        contracts[PROBE.HA_LIST_ENTITIES_NAME].validate_arguments(arguments)
+        assert (
+            PROBE._expected_argument_measurements(
+                [{"name": PROBE.HA_LIST_ENTITIES_NAME, "arguments": arguments}],
+                scenario,
+            )["expected_arguments_match"]
+            is True
+        )
+
+    assert PROBE._ha_list_entities_scenario("default").expected_arguments == {}
+    assert PROBE._ha_list_entities_scenario("all").expected_arguments == {
+        "domain": "climate",
+        "area": "Upstairs",
+    }
+
+
 def test_image_generation_cases_use_production_profiles_and_exact_arguments() -> None:
     for case_name in PROBE.IMAGE_GENERATION_CASES:
         scenario = PROBE._scenario(

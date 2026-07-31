@@ -14,7 +14,7 @@ Tool names: `ha_list_entities`, `ha_get_state`, `ha_list_services`, `ha_call_ser
 
 ### `ha_list_entities`
 
-- `GET /api/states`. Schema: optional non-empty string `domain`, optional non-empty string `area`; `additionalProperties: false`.
+- `GET /api/states`. Model-facing schema: open flat object with optional non-empty string `domain` and optional non-empty string `area`; omission includes every domain or area, and the handler rejects unknown fields and invalid values.
 - `domain` filters by `entity_id` prefix; `area` filters by `friendly_name` substring (case-insensitive).
 - Returns `{ count, entities: [{ entity_id, state, friendly_name }] }`.
 

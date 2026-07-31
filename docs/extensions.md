@@ -58,7 +58,7 @@ The `api` object (`ExtensionAPI`) offers:
 |---|---|
 | `api.on(event, handler)` | a hook handler for one event |
 | `api.register_command(name, description, handler, *, argument="optional", catalog_result="notice", execution_mode="serialized", argument_execution_mode=None, unavailable_surfaces=())` | a slash command |
-| `api.register_tool(name, description, parameters, handler, *, internal=False, display=None)` | an agent tool |
+| `api.register_tool(name, description, parameters, handler, *, internal=False, display=None, ready=None, readiness_hint=None, result_schema=None, parallel_safe=True, open_input_schema=False)` | an agent tool |
 | `api.register_recall_backend(name, factory)` | a session-recall backend |
 | `api.register_prompt_block(slug, *, default_text=None, render=None)` | a System Prompt block |
 | `api.register_interaction_handler(prefix, handler)` | a channel button-tap handler (see [Channel interaction handlers](#channel-interaction-handlers)) |
@@ -128,7 +128,7 @@ def guard(ctx, *, tool_name, tool_call_id, input):
 
 ## Tools
 
-`api.register_tool` mirrors the built-in `ToolRegistry.register`. A registered Extension Tool is a **normal Tool**: it appears in Provider Tool definitions and is filtered by an Agent's `allowed_tools` like any other. The handler signature `(context, arguments)` and the result envelope are identical to built-ins. Registration compiles the canonical input schema, rejects malformed or open fixed-shape objects, validates every call before the handler, and validates successful `data` against `result_schema`. Sibling calls are parallel by default within the shared limits; declare `parallel_safe=False` only when the Tool requires a whole-Tool ordering barrier. Provider strict generation is a profile-specific optimization, not an Extension guarantee; generic compatible and Ollama routes remain best-effort while the same canonical Runtime validation stays authoritative.
+`api.register_tool` mirrors the built-in `ToolRegistry.register`. A registered Extension Tool is a **normal Tool**: it appears in Provider Tool definitions and is filtered by an Agent's `allowed_tools` like any other. The handler signature `(context, arguments)` and the result envelope are identical to built-ins. Registration compiles the canonical input schema, validates every call before the handler, and validates successful `data` against `result_schema`. Set `open_input_schema=True` for a model-facing schema that follows the repository-root `TOOLS.md` rules and omits `additionalProperties`; its handler must independently reject unknown and conditionally invalid arguments. The default remains closed for existing Extensions and requires fixed-shape objects to declare `additionalProperties: false`. Sibling calls are parallel by default within the shared limits; declare `parallel_safe=False` only when the Tool requires a whole-Tool ordering barrier. Provider strict Tool calling is always disabled; Runtime validation remains authoritative.
 
 ```python
 from core.tools import tool_failure, tool_success
