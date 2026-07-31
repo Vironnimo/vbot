@@ -6,7 +6,7 @@ Searches file contents by regex or fixed string.
 
 - Tool name: `grep`
 - Registration: `register_grep_tool(registry)` — registers an async wrapper that runs the sync `grep_handler` via `asyncio.to_thread`, so the ripgrep subprocess / fallback scan never blocks the kernel event loop.
-- Schema: three closed output variants share required `pattern` and optional `path`, `glob`, `ignore_case`, `literal`, `multiline`, `limit`, `offset`, and `include_ignored`. Omitted `output_mode` selects `content`; explicit `files_with_matches` and `count` each select their own branch. Only the `content` branch exposes optional `context`, preventing an irrelevant context value from forcing the Python fallback for file/count output. camelCase aliases such as `ignoreCase` and `includeIgnored` are rejected.
+- Schema: one flat model-facing object with required `pattern` and optional `path`, `glob`, `ignore_case`, `literal`, `multiline`, `context`, `limit`, `offset`, `include_ignored`, and `output_mode`. Omitted `output_mode` selects `content`; explicit `files_with_matches` and `count` select their result shapes. Descriptions state that `context` applies only to `content`; the handler rejects it for the other modes, rejects unknown/camelCase fields, and owns all omitted defaults. The schema omits `additionalProperties` and JSON Schema defaults.
 - `output_mode`: omitted or `content` returns content rows; `files_with_matches` returns paths; `count` returns per-file counts.
 - Success data returns textual output under `data.content`.
 - Display: summary fields `pattern` and `path`.

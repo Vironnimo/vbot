@@ -9,7 +9,6 @@ import shutil
 import subprocess
 import threading
 from bisect import bisect_right
-from copy import deepcopy
 from pathlib import Path
 from typing import NamedTuple
 
@@ -126,66 +125,31 @@ _GREP_COMMON_PARAMETERS: JsonObject = {
         ),
     },
 }
-_GREP_CONTEXT_PARAMETER: JsonObject = {
-    "type": "integer",
-    "minimum": 0,
-    "description": "Number of context lines before and after content matches (default: 0).",
-}
-
-
-def _grep_output_branch(
-    output_mode: str,
-    description: str,
-    *,
-    require_output_mode: bool,
-    include_context: bool,
-) -> JsonObject:
-    properties = deepcopy(_GREP_COMMON_PARAMETERS)
-    properties["output_mode"] = {
-        "type": "string",
-        "enum": [output_mode],
-        "description": description,
-    }
-    if include_context:
-        properties["context"] = deepcopy(_GREP_CONTEXT_PARAMETER)
-    required = ["pattern"]
-    if require_output_mode:
-        required.append("output_mode")
-    return {
-        "type": "object",
-        "description": description,
-        "properties": properties,
-        "required": required,
-        "additionalProperties": False,
-    }
-
-
 GREP_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "description": (
         "Choose one output mode. Omit output_mode for content rows. Only content mode "
         "accepts context lines."
     ),
-    "oneOf": [
-        _grep_output_branch(
-            "content",
-            "Return path:line:text rows with optional surrounding context. This is the default.",
-            require_output_mode=False,
-            include_context=True,
-        ),
-        _grep_output_branch(
-            "files_with_matches",
-            "Return only paths of files containing at least one match.",
-            require_output_mode=True,
-            include_context=False,
-        ),
-        _grep_output_branch(
-            "count",
-            "Return one path:count row per matching file.",
-            require_output_mode=True,
-            include_context=False,
-        ),
-    ],
+    "properties": {
+        **_GREP_COMMON_PARAMETERS,
+        "output_mode": {
+            "type": "string",
+            "enum": ["content", "files_with_matches", "count"],
+            "description": (
+                "Result shape: content (default), files_with_matches, or count. "
+                "context is valid only for content."
+            ),
+        },
+        "context": {
+            "type": "integer",
+            "minimum": 0,
+            "description": (
+                "For content output, include this many lines before and after matches; default 0."
+            ),
+        },
+    },
+    "required": ["pattern"],
 }
 
 
@@ -807,6 +771,7 @@ def register_grep_tool(registry: ToolRegistry) -> None:
         result_schema={"type": "object", "required": ["content"]},
         display=ToolDisplay(summary_fields=("pattern", "path")),
         parallel_safe=True,
+        open_input_schema=True,
     )
 
 

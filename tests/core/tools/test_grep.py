@@ -164,12 +164,7 @@ def test_register_grep_tool_exposes_provider_schema() -> None:
 
     parameters = definition["parameters"]
     assert parameters["type"] == "object"
-    branches = parameters["oneOf"]
-    assert len(branches) == 3
-    branches_by_mode = {
-        branch["properties"]["output_mode"]["enum"][0]: branch for branch in branches
-    }
-    assert set(branches_by_mode) == {"content", "files_with_matches", "count"}
+    assert "oneOf" not in parameters
     expected_common = {
         "pattern",
         "path",
@@ -181,15 +176,19 @@ def test_register_grep_tool_exposes_provider_schema() -> None:
         "offset",
         "include_ignored",
         "output_mode",
+        "context",
     }
-    assert set(branches_by_mode["content"]["properties"]) == expected_common | {"context"}
-    assert set(branches_by_mode["files_with_matches"]["properties"]) == expected_common
-    assert set(branches_by_mode["count"]["properties"]) == expected_common
-    assert branches_by_mode["content"]["required"] == ["pattern"]
-    assert branches_by_mode["files_with_matches"]["required"] == ["pattern", "output_mode"]
-    assert branches_by_mode["count"]["required"] == ["pattern", "output_mode"]
-    assert all(branch["additionalProperties"] is False for branch in branches)
-    assert all("description" not in branch["properties"] for branch in branches)
+    assert set(parameters["properties"]) == expected_common
+    assert parameters["required"] == ["pattern"]
+    assert "additionalProperties" not in parameters
+    assert parameters["properties"]["output_mode"]["enum"] == [
+        "content",
+        "files_with_matches",
+        "count",
+    ]
+    assert "only for content" in parameters["properties"]["output_mode"]["description"]
+    assert "default 0" in parameters["properties"]["context"]["description"]
+    assert "description" not in parameters["properties"]
 
 
 def test_grep_searches_relative_workspace_path(

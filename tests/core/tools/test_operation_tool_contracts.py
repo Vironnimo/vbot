@@ -45,7 +45,6 @@ _DIRECT_TOOL_SCHEMAS: tuple[tuple[str, JsonObject], ...] = (
     ("cron", CRON_TOOL_PARAMETERS),
     ("edit", EDIT_TOOL_PARAMETERS),
     ("glob", GLOB_TOOL_PARAMETERS),
-    ("grep", GREP_TOOL_PARAMETERS),
     ("history", HISTORY_TOOL_PARAMETERS),
     ("image_generation", IMAGE_GENERATION_TOOL_PARAMETERS),
     ("memory", MEMORY_TOOL_PARAMETERS),
@@ -83,12 +82,6 @@ _BRANCH_INAPPLICABLE_CALLS = (
         "yield_after",
     ),
     ("cron", CRON_TOOL_PARAMETERS, {"action": "list", "id": "job"}, "id"),
-    (
-        "grep",
-        GREP_TOOL_PARAMETERS,
-        {"pattern": "text", "output_mode": "count", "context": 2},
-        "context",
-    ),
     ("history", HISTORY_TOOL_PARAMETERS, {"action": "overview", "query": "text"}, "query"),
     (
         "memory",
@@ -248,7 +241,7 @@ def test_direct_tool_schema_is_closed_and_declares_required_properties(
     schema: JsonObject,
 ) -> None:
     assert schema["type"] == "object", tool_name
-    if tool_name in {"glob", "process", "read", "skill", "web_fetch", "write"}:
+    if tool_name in {"glob", "grep", "process", "read", "skill", "web_fetch", "write"}:
         assert "oneOf" not in schema
         assert "additionalProperties" not in schema
         assert set(schema.get("required", ())) <= set(schema["properties"]), tool_name
