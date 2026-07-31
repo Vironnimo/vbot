@@ -68,7 +68,6 @@ _BRANCH_COMPLETE_SCHEMAS = (
     ("grep", GREP_TOOL_PARAMETERS),
     ("history", HISTORY_TOOL_PARAMETERS),
     ("skill_manage", SKILL_MANAGE_TOOL_PARAMETERS),
-    ("subagent", SUBAGENT_TOOL_PARAMETERS),
 )
 
 _BRANCH_INAPPLICABLE_CALLS = (
@@ -78,12 +77,6 @@ _BRANCH_INAPPLICABLE_CALLS = (
         "skill_manage",
         SKILL_MANAGE_TOOL_PARAMETERS,
         {"action": "delete", "name": "demo", "content": "text"},
-        "content",
-    ),
-    (
-        "subagent",
-        SUBAGENT_TOOL_PARAMETERS,
-        {"action": "status", "content": "work"},
         "content",
     ),
 )
@@ -96,12 +89,6 @@ _BRANCH_MISSING_REQUIRED_CALLS = (
         SKILL_MANAGE_TOOL_PARAMETERS,
         {"action": "create", "name": "demo"},
         "content",
-    ),
-    (
-        "subagent",
-        SUBAGENT_TOOL_PARAMETERS,
-        {"action": "run", "content": "continue", "session_id": "session"},
-        "agent_id",
     ),
 )
 
@@ -234,6 +221,7 @@ def test_direct_tool_schema_is_closed_and_declares_required_properties(
         "session_search",
         "skill",
         "status",
+        "subagent",
         "text_to_speech",
         "web_fetch",
         "web_search",

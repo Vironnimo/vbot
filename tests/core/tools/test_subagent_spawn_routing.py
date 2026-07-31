@@ -56,53 +56,39 @@ async def test_register_subagent_tools_registers_one_flat_public_tool() -> None:
     )
     assert subagent.description == SUBAGENT_TOOL_DESCRIPTION
     assert subagent.parameters == SUBAGENT_TOOL_PARAMETERS
-    branches = {
-        branch["properties"]["action"]["enum"][0]: branch for branch in subagent.parameters["oneOf"]
-    }
-    assert set(branches) == {"run", "status", "cancel"}
-    run_properties = branches["run"]["properties"]
-    assert set(run_properties) == {
+    assert "oneOf" not in subagent.parameters
+    assert "additionalProperties" not in subagent.parameters
+    properties = subagent.parameters["properties"]
+    assert set(properties) == {
         "action",
         "content",
         "agent_id",
         "session_id",
         "model",
         "thinking_effort",
+        "id",
     }
-    assert branches["run"]["required"] == ["action", "content"]
-    assert branches["run"]["if"] == {"required": ["session_id"]}
-    assert branches["run"]["then"] == {"required": ["agent_id"]}
-    for action in ("status", "cancel"):
-        assert set(branches[action]["properties"]) == {"action", "id"}
-        assert branches[action]["required"] == ["action", "id"]
-    assert all(branch["additionalProperties"] is False for branch in branches.values())
-    assert run_properties["action"]["description"] == (
-        "run starts new work or continues a Sub-Agent Session, status returns a "
-        "non-blocking snapshot for an id, and cancel stops the exact owned work for an id."
-    )
-    assert branches["status"]["properties"]["id"]["description"] == (
+    assert subagent.parameters["required"] == ["action"]
+    assert properties["action"]["enum"] == ["run", "status", "cancel"]
+    assert properties["id"]["description"] == (
         "Stable id returned by run. Required for status and cancel."
     )
-    assert run_properties["content"]["description"] == (
-        "Instruction for action run. Without session_id, provide a self-contained task "
-        "with the goal, relevant context, scope, constraints, and expected result. With "
-        "session_id, provide a continuation message that may rely on that Sub-Agent "
-        "Session's existing history."
+    assert properties["content"]["description"] == (
+        "Task or continuation message. Required for run; make it self-contained unless "
+        "continuing session_id."
     )
-    assert run_properties["agent_id"]["description"] == (
-        "Target Agent id from the allowed values for run. Omit for the calling Agent "
-        "when creating a Session; required with session_id."
+    assert properties["agent_id"]["description"] == (
+        "Target Agent for run. Omit to use the caller when starting a new Session; required "
+        "with session_id."
     )
-    assert run_properties["session_id"]["description"] == (
-        "Existing Sub-Agent Session id returned by run. With agent_id, continues that "
-        "Session instead of creating one."
+    assert properties["session_id"]["description"] == (
+        "Existing Sub-Agent Session to continue. Omit to start a new Session; requires agent_id."
     )
-    assert run_properties["model"]["description"] == (
-        "Primary Model override for action run only, in <provider>/<model-id> form. "
-        "Applies only to the newly admitted Run and does not modify the target Agent "
-        "or Session."
+    assert properties["model"]["description"] == (
+        "Model override for run as <provider>/<model-id>. Omit to inherit the target Agent; "
+        "applies only to this Run."
     )
-    assert run_properties["thinking_effort"]["enum"] == [
+    assert properties["thinking_effort"]["enum"] == [
         "",
         "high",
         "low",
@@ -112,13 +98,13 @@ async def test_register_subagent_tools_registers_one_flat_public_tool() -> None:
         "none",
         "xhigh",
     ]
-    assert run_properties["thinking_effort"]["description"] == (
-        "Thinking effort override for action run only. Omit to inherit the target Agent; "
-        "an empty string selects the Provider default. Applies only to the newly admitted Run."
+    assert properties["thinking_effort"]["description"] == (
+        "Thinking effort for run. Omit to inherit the target Agent; an empty string selects "
+        "the Provider default. Applies only to this Run."
     )
-    assert "background" not in run_properties
-    assert "run_id" not in run_properties
-    assert "queue_item_id" not in run_properties
+    assert "background" not in properties
+    assert "run_id" not in properties
+    assert "queue_item_id" not in properties
 
 
 async def test_subagent_tool_enforces_depth_limit(tmp_path: Path) -> None:

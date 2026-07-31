@@ -114,6 +114,11 @@ from core.tools.status import (
     STATUS_TOOL_NAME,
     STATUS_TOOL_PARAMETERS,
 )
+from core.tools.subagent import (
+    SUBAGENT_TOOL_DESCRIPTION,
+    SUBAGENT_TOOL_NAME,
+    SUBAGENT_TOOL_PARAMETERS,
+)
 from core.tools.web_fetch import (
     WEB_FETCH_TOOL_DESCRIPTION,
     WEB_FETCH_TOOL_NAME,
@@ -165,6 +170,7 @@ PROBE_SCENARIOS = (
     "skill",
     "skill_list",
     "status",
+    "subagent",
     "text_to_speech",
     "web_fetch",
     "web_search",
@@ -311,6 +317,23 @@ SESSION_SEARCH_CASES = (
 )
 SKILL_CASES = ("activate", "skill_md", "reference", "script", "asset")
 STATUS_CASES = ("current", "session", "agent_session")
+SUBAGENT_CASES = (
+    "run_self",
+    "run_agent",
+    "run_continue",
+    "run_model",
+    "run_all",
+    "thinking_default",
+    "thinking_minimal",
+    "thinking_low",
+    "thinking_medium",
+    "thinking_high",
+    "thinking_xhigh",
+    "thinking_max",
+    "thinking_none",
+    "status",
+    "cancel",
+)
 TEXT_TO_SPEECH_CASES = ("plain", "unicode_multiline")
 WEB_FETCH_CASES = ("default", "markdown", "text", "raw")
 WEB_SEARCH_CASES = (
@@ -449,6 +472,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=STATUS_CASES,
         default="current",
         help="Exact status argument shape requested by the status scenario.",
+    )
+    parser.add_argument(
+        "--subagent-case",
+        choices=SUBAGENT_CASES,
+        default="run_self",
+        help="Exact subagent action and argument shape requested by the scenario.",
     )
     parser.add_argument(
         "--speech-case",
@@ -1310,6 +1339,101 @@ def _status_scenario(case_name: str) -> ProbeScenario:
     )
 
 
+def _subagent_scenario(case_name: str) -> ProbeScenario:
+    subagent_arguments: dict[str, dict[str, Any]] = {
+        "run_self": {
+            "action": "run",
+            "content": "Inspect the Tool contract and report concise findings.",
+        },
+        "run_agent": {
+            "action": "run",
+            "content": "Inspect the Tool contract and report concise findings.",
+            "agent_id": "reviewer",
+        },
+        "run_continue": {
+            "action": "run",
+            "content": "Now verify the remaining edge case.",
+            "agent_id": "reviewer",
+            "session_id": "session-123",
+        },
+        "run_model": {
+            "action": "run",
+            "content": "Inspect the Tool contract and report concise findings.",
+            "model": "openai/gpt-5.6-luna",
+        },
+        "run_all": {
+            "action": "run",
+            "content": "Now verify the remaining edge case.",
+            "agent_id": "reviewer",
+            "session_id": "session-123",
+            "model": "openai/gpt-5.6-luna",
+            "thinking_effort": "high",
+        },
+        "thinking_default": {
+            "action": "run",
+            "content": "Inspect the Tool contract and report concise findings.",
+            "thinking_effort": "",
+        },
+        "thinking_minimal": {
+            "action": "run",
+            "content": "Inspect the Tool contract and report concise findings.",
+            "thinking_effort": "minimal",
+        },
+        "thinking_low": {
+            "action": "run",
+            "content": "Inspect the Tool contract and report concise findings.",
+            "thinking_effort": "low",
+        },
+        "thinking_medium": {
+            "action": "run",
+            "content": "Inspect the Tool contract and report concise findings.",
+            "thinking_effort": "medium",
+        },
+        "thinking_high": {
+            "action": "run",
+            "content": "Inspect the Tool contract and report concise findings.",
+            "thinking_effort": "high",
+        },
+        "thinking_xhigh": {
+            "action": "run",
+            "content": "Inspect the Tool contract and report concise findings.",
+            "thinking_effort": "xhigh",
+        },
+        "thinking_max": {
+            "action": "run",
+            "content": "Inspect the Tool contract and report concise findings.",
+            "thinking_effort": "max",
+        },
+        "thinking_none": {
+            "action": "run",
+            "content": "Inspect the Tool contract and report concise findings.",
+            "thinking_effort": "none",
+        },
+        "status": {"action": "status", "id": "sub_123"},
+        "cancel": {"action": "cancel", "id": "sub_123"},
+    }
+    expected_arguments = subagent_arguments[case_name]
+    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
+    instruction = (
+        f"Call {SUBAGENT_TOOL_NAME} exactly once with exactly this JSON object as its "
+        f"arguments: {rendered_arguments}. Preserve every value and do not add any field."
+    )
+    return ProbeScenario(
+        "subagent",
+        [
+            {
+                "name": SUBAGENT_TOOL_NAME,
+                "description": SUBAGENT_TOOL_DESCRIPTION,
+                "parameters": SUBAGENT_TOOL_PARAMETERS,
+            }
+        ],
+        _probe_messages(instruction),
+        SUBAGENT_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
+    )
+
+
 def _text_to_speech_scenario(case_name: str) -> ProbeScenario:
     speech_arguments = {
         "plain": {"text": "Please read this sentence aloud."},
@@ -1720,6 +1844,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _skill_list_scenario()
     if name == "status":
         return _status_scenario(str(args.status_case))
+    if name == "subagent":
+        return _subagent_scenario(str(args.subagent_case))
     if name == "text_to_speech":
         return _text_to_speech_scenario(str(args.speech_case))
     if name == "web_fetch":
@@ -2418,6 +2544,7 @@ async def _run(args: argparse.Namespace) -> int:
             ),
             "skill_case": args.skill_case if scenario.name == "skill" else None,
             "status_case": args.status_case if scenario.name == "status" else None,
+            "subagent_case": args.subagent_case if scenario.name == "subagent" else None,
             "speech_case": args.speech_case if scenario.name == "text_to_speech" else None,
             "web_fetch_case": (args.web_fetch_case if scenario.name == "web_fetch" else None),
             "web_search_case": (args.web_search_case if scenario.name == "web_search" else None),
