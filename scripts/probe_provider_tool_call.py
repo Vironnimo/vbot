@@ -9,6 +9,9 @@ Examples:
     python scripts/probe_provider_tool_call.py --model glm-5.2 --mode stream
     python scripts/probe_provider_tool_call.py --wire openai --profile openai_strict \
         --scenario nested_operation --mode nonstream
+    python scripts/probe_provider_tool_call.py --provider openai \
+        --connection openai:subscription --model gpt-5.6-luna --wire openai \
+        --profile openai_strict --scenario optional_booleans
     python scripts/probe_provider_tool_call.py --scenario large_arguments --lines 500
 """
 
@@ -43,12 +46,16 @@ PROBE_SCENARIOS = (
     "direct_required",
     "nested_operation",
     "optional_null",
+    "optional_booleans",
+    "optional_booleans_bare",
+    "optional_booleans_schema_defaults",
     "wrong_type_pressure",
     "missing_required_pressure",
     "unknown_property_pressure",
     "large_arguments",
     "strict_budget",
 )
+OPTIONAL_BOOLEAN_CASES = ("omit", "include_links", "raw", "both")
 
 PROBE_TOOL = {
     "name": PROBE_TOOL_NAME,
@@ -80,6 +87,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode", choices=("stream", "nonstream"), default="stream")
     parser.add_argument("--wire", choices=("auto", "openai", "anthropic"), default="auto")
     parser.add_argument("--scenario", choices=PROBE_SCENARIOS, default="direct_required")
+    parser.add_argument(
+        "--optional-case",
+        choices=OPTIONAL_BOOLEAN_CASES,
+        default="omit",
+        help="Requested argument shape for the optional_booleans scenarios.",
+    )
     parser.add_argument(
         "--profile",
         choices=("auto", "openai_strict", "anthropic_strict", "best_effort"),
@@ -142,6 +155,76 @@ def _probe_messages(instruction: str) -> list[dict[str, Any]]:
     ]
 
 
+def _optional_boolean_scenario(
+    name: str,
+    *,
+    schema_defaults: bool,
+    describe_defaults: bool,
+    case_name: str,
+) -> ProbeScenario:
+    include_links: dict[str, Any] = {"type": "boolean"}
+    raw: dict[str, Any] = {"type": "boolean"}
+    if describe_defaults:
+        include_links["description"] = (
+            "Optional JSON boolean. Omit it to preserve Markdown links; the value used "
+            "when omitted is true. Set false only to remove link targets."
+        )
+        raw["description"] = (
+            "Optional JSON boolean. Omit it for cleaned text; the value used when "
+            "omitted is false. Set true only to request raw HTML."
+        )
+    else:
+        include_links["description"] = (
+            "Optional JSON boolean. Send it only when the user explicitly requests a "
+            "value; otherwise omit the field."
+        )
+        raw["description"] = (
+            "Optional JSON boolean. Send it only when the user explicitly requests a "
+            "value; otherwise omit the field."
+        )
+    if schema_defaults:
+        include_links["default"] = True
+        raw["default"] = False
+    tool = {
+        "name": PROBE_TOOL_NAME,
+        "description": "Inspect one synthetic URL without fetching or changing external state.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "minLength": 1},
+                "include_links": include_links,
+                "raw": raw,
+            },
+            "required": ["url"],
+            "additionalProperties": False,
+        },
+    }
+    instructions = {
+        "omit": (
+            "Call the supplied Tool exactly once with url=https://example.com/omit. "
+            "Omit both include_links and raw. Do not add either omitted field."
+        ),
+        "include_links": (
+            "Call the supplied Tool exactly once with url=https://example.com/links and "
+            "include_links=false. Omit raw. Do not add the omitted field."
+        ),
+        "raw": (
+            "Call the supplied Tool exactly once with url=https://example.com/raw and "
+            "raw=true. Omit include_links. Do not add the omitted field."
+        ),
+        "both": (
+            "Call the supplied Tool exactly once with url=https://example.com/both, "
+            "include_links=false, and raw=true."
+        ),
+    }
+    return ProbeScenario(
+        name,
+        [tool],
+        _probe_messages(instructions[case_name]),
+        PROBE_TOOL_NAME,
+    )
+
+
 def _scenario(args: argparse.Namespace, profile: ToolSchemaProfile) -> ProbeScenario:
     direct = json.loads(json.dumps(PROBE_TOOL))
     name = str(args.scenario)
@@ -197,6 +280,17 @@ def _scenario(args: argparse.Namespace, profile: ToolSchemaProfile) -> ProbeScen
             [direct],
             _probe_messages("Inspect key alpha without a note."),
             PROBE_TOOL_NAME,
+        )
+    if name in {
+        "optional_booleans",
+        "optional_booleans_bare",
+        "optional_booleans_schema_defaults",
+    }:
+        return _optional_boolean_scenario(
+            name,
+            schema_defaults=name == "optional_booleans_schema_defaults",
+            describe_defaults=name != "optional_booleans_bare",
+            case_name=str(getattr(args, "optional_case", "omit")),
         )
     if name == "wrong_type_pressure":
         direct["parameters"]["properties"]["count"] = {"type": "integer", "minimum": 1}
@@ -475,6 +569,75 @@ def _argument_measurements(tool_calls: Any) -> tuple[int, int, int]:
     return call_count, argument_chars, content_chars
 
 
+def _optional_boolean_measurements(
+    tool_calls: Any,
+    tools: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if len(tools) != 1:
+        return {}
+    parameters = tools[0].get("parameters")
+    properties = parameters.get("properties") if isinstance(parameters, dict) else None
+    if not isinstance(properties, dict) or not {
+        "url",
+        "include_links",
+        "raw",
+    }.issubset(properties):
+        return {}
+
+    measurements: list[dict[str, Any]] = []
+    if isinstance(tool_calls, list):
+        for index, call in enumerate(tool_calls, start=1):
+            arguments = call.get("arguments") if isinstance(call, dict) else None
+            if not isinstance(arguments, dict):
+                measurements.append(
+                    {
+                        "call": index,
+                        "url": "invalid",
+                        "include_links": "invalid",
+                        "raw": "invalid",
+                        "unexpected_fields": None,
+                    }
+                )
+                continue
+            measurements.append(
+                {
+                    "call": index,
+                    "url": "present" if isinstance(arguments.get("url"), str) else "invalid",
+                    "include_links": _boolean_argument_state(arguments, "include_links"),
+                    "raw": _boolean_argument_state(arguments, "raw"),
+                    "unexpected_fields": len(set(arguments) - {"url", "include_links", "raw"}),
+                }
+            )
+    return {"optional_boolean_calls": measurements}
+
+
+def _boolean_argument_state(arguments: dict[str, Any], name: str) -> str:
+    if name not in arguments:
+        return "omitted"
+    value = arguments[name]
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    return "invalid"
+
+
+def _start_probe_runtime(runtime: Runtime) -> None:
+    """Bootstrap Provider dependencies without starting background services."""
+
+    def _do_not_start() -> None:
+        return None
+
+    for hook_name in (
+        "_start_process_manager",
+        "_start_channel_service",
+        "_start_cron_service",
+        "_start_provider_usage_service",
+    ):
+        setattr(runtime, hook_name, _do_not_start)
+    runtime.start()
+
+
 def _compile_probe_contracts(tools: list[dict[str, Any]]) -> dict[str, ToolContract]:
     contracts: dict[str, ToolContract] = {}
     for tool in tools:
@@ -643,6 +806,7 @@ async def _probe_stream(
         "tool_argument_chars": tool_argument_chars,
         "finish_reason": finish_reason,
         "error_type": error_type,
+        **_optional_boolean_measurements(parsed_calls, tools),
         **validation,
     }
 
@@ -680,6 +844,7 @@ async def _probe_nonstream(
             "tool_argument_chars": argument_chars,
             "tool_content_chars": tool_content_chars,
             "error_type": None,
+            **_optional_boolean_measurements(normalized_tool_calls, tools),
             **_validation_measurements(normalized_tool_calls, contracts),
         }
     except TimeoutError:
@@ -724,7 +889,7 @@ async def _run(args: argparse.Namespace) -> int:
     strict_requested = profile != "best_effort"
     strict_active = strict_requested and strict_tool_count == len(rendered)
     runtime = Runtime(Config(data_dir=args.data_dir))
-    runtime.start()
+    _start_probe_runtime(runtime)
     adapter = runtime.get_adapter(args.provider, args.connection)
     request_adapter: Any = adapter
     try:
@@ -769,6 +934,16 @@ async def _run(args: argparse.Namespace) -> int:
             ],
             "tool_choice": args.tool_choice,
             "requested_lines": args.lines if scenario.name == "large_arguments" else None,
+            "optional_case": (
+                args.optional_case
+                if scenario.name
+                in {
+                    "optional_booleans",
+                    "optional_booleans_bare",
+                    "optional_booleans_schema_defaults",
+                }
+                else None
+            ),
             "request_messages": len(messages),
             "request_tools": len(tools),
             "trace_replay": traced_request is not None,

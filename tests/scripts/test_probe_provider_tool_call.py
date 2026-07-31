@@ -153,3 +153,144 @@ def test_nested_operation_scenario_compiles_and_validates() -> None:
     )
 
     assert result["schema_valid"] is True
+
+
+def test_optional_boolean_scenarios_differ_only_by_schema_defaults() -> None:
+    without_defaults = PROBE._scenario(
+        SimpleNamespace(scenario="optional_booleans", optional_case="omit", lines=8),
+        "openai_strict",
+    )
+    with_defaults = PROBE._scenario(
+        SimpleNamespace(
+            scenario="optional_booleans_schema_defaults",
+            optional_case="omit",
+            lines=8,
+        ),
+        "openai_strict",
+    )
+
+    without_schema = without_defaults.tools[0]["parameters"]
+    with_schema = with_defaults.tools[0]["parameters"]
+    assert without_defaults.messages == with_defaults.messages
+    assert "default" not in without_schema["properties"]["include_links"]
+    assert "default" not in without_schema["properties"]["raw"]
+    assert with_schema["properties"]["include_links"]["default"] is True
+    assert with_schema["properties"]["raw"]["default"] is False
+
+
+def test_bare_optional_boolean_scenario_omits_default_values_from_descriptions() -> None:
+    scenario = PROBE._scenario(
+        SimpleNamespace(scenario="optional_booleans_bare", optional_case="omit", lines=8),
+        "openai_strict",
+    )
+
+    properties = scenario.tools[0]["parameters"]["properties"]
+    assert "default" not in properties["include_links"]
+    assert "default" not in properties["raw"]
+    assert "true" not in properties["include_links"]["description"]
+    assert "false" not in properties["raw"]["description"]
+    assert "otherwise omit the field" in properties["include_links"]["description"]
+
+
+def test_optional_boolean_measurements_report_presence_without_argument_values() -> None:
+    scenario = PROBE._scenario(
+        SimpleNamespace(scenario="optional_booleans", optional_case="omit", lines=8),
+        "openai_strict",
+    )
+
+    result = PROBE._optional_boolean_measurements(
+        [
+            {"name": scenario.primary_tool_name, "arguments": {"url": "secret-one"}},
+            {
+                "name": scenario.primary_tool_name,
+                "arguments": {"url": "secret-two", "include_links": False},
+            },
+            {
+                "name": scenario.primary_tool_name,
+                "arguments": {"url": "secret-three", "raw": True},
+            },
+        ],
+        scenario.tools,
+    )
+
+    assert result == {
+        "optional_boolean_calls": [
+            {
+                "call": 1,
+                "url": "present",
+                "include_links": "omitted",
+                "raw": "omitted",
+                "unexpected_fields": 0,
+            },
+            {
+                "call": 2,
+                "url": "present",
+                "include_links": "false",
+                "raw": "omitted",
+                "unexpected_fields": 0,
+            },
+            {
+                "call": 3,
+                "url": "present",
+                "include_links": "omitted",
+                "raw": "true",
+                "unexpected_fields": 0,
+            },
+        ]
+    }
+    assert "secret" not in json.dumps(result)
+
+
+def test_optional_boolean_cases_request_one_exact_argument_shape() -> None:
+    expected_fragments = {
+        "omit": "Omit both include_links and raw",
+        "include_links": "include_links=false. Omit raw",
+        "raw": "raw=true. Omit include_links",
+        "both": "include_links=false, and raw=true",
+    }
+
+    for case_name, expected_fragment in expected_fragments.items():
+        scenario = PROBE._scenario(
+            SimpleNamespace(
+                scenario="optional_booleans",
+                optional_case=case_name,
+                lines=8,
+            ),
+            "openai_strict",
+        )
+
+        assert "exactly once" in scenario.messages[1]["content"]
+        assert expected_fragment in scenario.messages[1]["content"]
+
+
+def test_probe_runtime_suppresses_background_service_start_hooks() -> None:
+    class RuntimeStub:
+        def __init__(self) -> None:
+            self.started = False
+            self.background_starts = 0
+
+        def _start_process_manager(self) -> None:
+            self.background_starts += 1
+
+        def _start_channel_service(self) -> None:
+            self.background_starts += 1
+
+        def _start_cron_service(self) -> None:
+            self.background_starts += 1
+
+        def _start_provider_usage_service(self) -> None:
+            self.background_starts += 1
+
+        def start(self) -> None:
+            self._start_process_manager()
+            self._start_channel_service()
+            self._start_cron_service()
+            self._start_provider_usage_service()
+            self.started = True
+
+    runtime = RuntimeStub()
+
+    PROBE._start_probe_runtime(runtime)
+
+    assert runtime.started is True
+    assert runtime.background_starts == 0
