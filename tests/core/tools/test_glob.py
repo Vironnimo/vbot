@@ -114,7 +114,7 @@ def test_register_glob_tool_exposes_provider_schema() -> None:
     parameters = definition["parameters"]
     assert parameters["type"] == "object"
     assert parameters["required"] == ["pattern"]
-    assert parameters["additionalProperties"] is False
+    assert "additionalProperties" not in parameters
     assert set(parameters["properties"]) == {
         "pattern",
         "path",
