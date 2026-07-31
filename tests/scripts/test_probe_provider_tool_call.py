@@ -512,6 +512,33 @@ def test_image_generation_cases_use_production_profiles_and_exact_arguments() ->
         )
 
 
+def test_memory_cases_use_production_schema_and_exact_arguments() -> None:
+    for case_name in PROBE.MEMORY_CASES:
+        scenario = PROBE._scenario(
+            SimpleNamespace(
+                scenario="memory",
+                memory_case=case_name,
+                lines=8,
+            ),
+        )
+        contracts = PROBE._compile_probe_contracts(
+            scenario.tools,
+            require_closed_input=scenario.require_closed_input,
+        )
+        arguments = scenario.expected_arguments
+
+        assert scenario.tools[0]["parameters"] is PROBE.MEMORY_TOOL_PARAMETERS
+        assert arguments is not None
+        contracts[PROBE.MEMORY_TOOL_NAME].validate_arguments(arguments)
+        assert (
+            PROBE._expected_argument_measurements(
+                [{"name": PROBE.MEMORY_TOOL_NAME, "arguments": arguments}],
+                scenario,
+            )["expected_arguments_match"]
+            is True
+        )
+
+
 def test_project_scenario_uses_production_schema_and_exact_arguments() -> None:
     scenario = PROBE._scenario(SimpleNamespace(scenario="project", lines=8))
     contracts = PROBE._compile_probe_contracts(

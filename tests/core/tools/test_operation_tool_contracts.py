@@ -68,7 +68,6 @@ _BRANCH_COMPLETE_SCHEMAS = (
     ("cron", CRON_TOOL_PARAMETERS),
     ("grep", GREP_TOOL_PARAMETERS),
     ("history", HISTORY_TOOL_PARAMETERS),
-    ("memory", MEMORY_TOOL_PARAMETERS),
     ("skill_manage", SKILL_MANAGE_TOOL_PARAMETERS),
     ("subagent", SUBAGENT_TOOL_PARAMETERS),
 )
@@ -82,12 +81,6 @@ _BRANCH_INAPPLICABLE_CALLS = (
     ),
     ("cron", CRON_TOOL_PARAMETERS, {"action": "list", "id": "job"}, "id"),
     ("history", HISTORY_TOOL_PARAMETERS, {"action": "overview", "query": "text"}, "query"),
-    (
-        "memory",
-        MEMORY_TOOL_PARAMETERS,
-        {"action": "add", "scope": "user", "content": "fact", "entry_id": 1},
-        "entry_id",
-    ),
     (
         "skill_manage",
         SKILL_MANAGE_TOOL_PARAMETERS,
@@ -106,12 +99,6 @@ _BRANCH_MISSING_REQUIRED_CALLS = (
     ("bash", BASH_TOOL_PARAMETERS, {"mode": "auto"}, "command"),
     ("cron", CRON_TOOL_PARAMETERS, {"action": "update", "id": "job"}, "minProperties"),
     ("history", HISTORY_TOOL_PARAMETERS, {"action": "search"}, "query"),
-    (
-        "memory",
-        MEMORY_TOOL_PARAMETERS,
-        {"action": "add", "scope": "user"},
-        "content",
-    ),
     (
         "skill_manage",
         SKILL_MANAGE_TOOL_PARAMETERS,
@@ -245,6 +232,7 @@ def test_direct_tool_schema_is_closed_and_declares_required_properties(
         "glob",
         "grep",
         "image_generation",
+        "memory",
         "process",
         "project",
         "read",

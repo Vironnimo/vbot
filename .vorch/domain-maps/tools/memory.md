@@ -7,7 +7,7 @@ Pinned memory CRUD over `USER.md` and `MEMORY.md`.
 - Tool name: `memory`
 - Registration: `register_memory_tool(registry, memory_service)`
 - Bound service: `MemoryService`
-- Schema: one flat discriminated union with a closed branch for each required `action` (`list`, `add`, `replace`, or `remove`). Every branch requires `scope`, advertises only its action's other fields, and structurally requires those fields; the handler retains the same checks as defense in depth. Retired nested `request.operation` and operation-key shapes are rejected.
+- Model-facing schema: one flat object with required `action` (`list`, `add`, `replace`, or `remove`) and `scope`, plus optional sibling fields `content` and `entry_id`; it has no `additionalProperties` keyword or defaults. Descriptions state each field's action dependency, and the handler rejects missing, inapplicable, unknown, or malformed arguments. Retired nested `request.operation` and operation-key shapes are rejected.
 - `scope`: one of `user` or `agent`.
 - `content`: required for `add` and `replace`.
 - `entry_id`: required for `replace` and `remove`; 1-based id from the current list response.
