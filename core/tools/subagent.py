@@ -6,7 +6,6 @@ from typing import Any
 
 from core.settings import ALLOWED_THINKING_EFFORTS
 from core.subagents import SubAgentCoordinator, SubAgentPromptTarget
-from core.tools.contracts import action_schema
 from core.tools.tools import (
     JsonObject,
     ToolDisplay,
@@ -81,88 +80,60 @@ _SUBAGENT_CONTENT_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
     "description": (
-        "Instruction for action run. Without session_id, provide a self-contained task "
-        "with the goal, relevant context, scope, constraints, and expected result. With "
-        "session_id, provide a continuation message that may rely on that Sub-Agent "
-        "Session's existing history."
+        "Task or continuation message. Required for run; make it self-contained unless "
+        "continuing session_id."
     ),
 }
 _SUBAGENT_AGENT_ID_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
     "description": (
-        "Target Agent id from the allowed values for run. Omit for the calling Agent "
-        "when creating a Session; required with session_id."
+        "Target Agent for run. Omit to use the caller when starting a new Session; required "
+        "with session_id."
     ),
 }
 _SUBAGENT_MODEL_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
     "description": (
-        "Primary Model override for action run only, in <provider>/<model-id> form. "
-        "Applies only to the newly admitted Run and does not modify the target Agent "
-        "or Session."
+        "Model override for run as <provider>/<model-id>. Omit to inherit the target Agent; "
+        "applies only to this Run."
     ),
 }
 _SUBAGENT_THINKING_PARAMETER: JsonObject = {
     "type": "string",
     "enum": sorted(ALLOWED_THINKING_EFFORTS),
     "description": (
-        "Thinking effort override for action run only. Omit to inherit the target Agent; "
-        "an empty string selects the Provider default. Applies only to the newly admitted Run."
+        "Thinking effort for run. Omit to inherit the target Agent; an empty string selects "
+        "the Provider default. Applies only to this Run."
     ),
 }
 _SUBAGENT_SESSION_ID_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
     "description": (
-        "Existing Sub-Agent Session id returned by run. With agent_id, continues that "
-        "Session instead of creating one."
+        "Existing Sub-Agent Session to continue. Omit to start a new Session; requires agent_id."
     ),
 }
 
 
-SUBAGENT_TOOL_PARAMETERS: JsonObject = action_schema(
-    {
-        "run": {
-            "type": "object",
-            "description": (
-                "Start work in a new Sub-Agent Session, or continue an existing Session "
-                "when both agent_id and session_id are present."
-            ),
-            "properties": {
-                "content": _SUBAGENT_CONTENT_PARAMETER,
-                "agent_id": _SUBAGENT_AGENT_ID_PARAMETER,
-                "session_id": _SUBAGENT_SESSION_ID_PARAMETER,
-                "model": _SUBAGENT_MODEL_PARAMETER,
-                "thinking_effort": _SUBAGENT_THINKING_PARAMETER,
-            },
-            "required": ["content"],
-            "if": {"required": ["session_id"]},
-            "then": {"required": ["agent_id"]},
+SUBAGENT_TOOL_PARAMETERS: JsonObject = {
+    "type": "object",
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": ["run", "status", "cancel"],
+            "description": "Lifecycle action to perform.",
         },
-        "status": {
-            "type": "object",
-            "description": "Return a non-blocking snapshot of one owned Sub-Agent work item.",
-            "properties": {"id": _SUBAGENT_ID_PARAMETER},
-            "required": ["id"],
-        },
-        "cancel": {
-            "type": "object",
-            "description": "Cancel one exact owned Sub-Agent work item.",
-            "properties": {"id": _SUBAGENT_ID_PARAMETER},
-            "required": ["id"],
-        },
+        "content": _SUBAGENT_CONTENT_PARAMETER,
+        "agent_id": _SUBAGENT_AGENT_ID_PARAMETER,
+        "session_id": _SUBAGENT_SESSION_ID_PARAMETER,
+        "model": _SUBAGENT_MODEL_PARAMETER,
+        "thinking_effort": _SUBAGENT_THINKING_PARAMETER,
+        "id": _SUBAGENT_ID_PARAMETER,
     },
-    description=(
-        "Flat action interface. Each action exposes only its valid arguments and "
-        "structurally requires every field it needs."
-    ),
-    action_description=(
-        "run starts new work or continues a Sub-Agent Session, status returns a "
-        "non-blocking snapshot for an id, and cancel stops the exact owned work for an id."
-    ),
-)
+    "required": ["action"],
+}
 
 
 def register_subagent_tools(
@@ -176,6 +147,7 @@ def register_subagent_tools(
         SUBAGENT_TOOL_DESCRIPTION,
         SUBAGENT_TOOL_PARAMETERS,
         coordinator.spawn,
+        open_input_schema=True,
         result_schema={"type": "object"},
         display=ToolDisplay(
             summary_builder=_subagent_display_summary,
