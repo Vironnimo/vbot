@@ -29,7 +29,7 @@ Do not expose `request.operation`, an operation-key object such as `{"create": {
 - The schema owns field names, JSON types, enums, variant-specific field sets and requirements, ranges, lengths, and structurally simple dependencies. The handler owns cross-field meaning, authorization, existence, state transitions, and other semantic checks, while retaining variant-field checks as defense in depth.
 - A discriminated Tool uses one flat `oneOf` union whose branches each carry a single-value discriminator enum, only that variant's properties, its requirements, and `additionalProperties: false`. Multi-action Tools use `action`; a genuine execution-contract selector may use `mode`. Unions also remain appropriate for genuine value-shape alternatives within one behavior and for a cursor-only continuation that must reject every initial-call field.
 - Do not coerce strings into numbers or booleans, accept aliases, or silently normalize retired public shapes. Runtime validation and handler validation must agree on the canonical types.
-- Provider `strict` eligibility is a consequence, not the design goal. Do not force irrelevant optional fields to be required-and-null merely to retain an OpenAI `strict: true` marker; review and pin the intentional profile decision in provider-schema tests.
+- Provider strict mode is disabled across vBot. Design the natural canonical contract: never force optional fields to be required-and-null, remove schema features, or otherwise reshape a Tool for a Provider's strict-schema subset. Provider rendering must preserve this schema, while vBot runtime validation remains authoritative.
 
 ## Descriptions and Defaults
 
@@ -53,7 +53,7 @@ Do not expose `request.operation`, an operation-key object such as `{"create": {
 4. Update the handler to consume the flat object directly and to reject action-inapplicable fields before side effects. Remove public normalizers that reconstruct the retired envelope.
 5. Reject retired nested, operation-key, alias, and stringified shapes. Do not run old and new Agent-facing contracts in parallel.
 6. Preserve historical presentation separately when needed: the WebUI may continue reading old persisted arguments, but current dispatch accepts only the new contract.
-7. Recheck Provider rendering and intentional `strict` eligibility, schema fingerprints, Tool descriptions, `ToolDisplay`, prompts, E2E fake-provider calls, and any generated Tool catalogs.
+7. Recheck Provider rendering and the non-strict invariant, schema fingerprints, Tool descriptions, `ToolDisplay`, prompts, E2E fake-provider calls, and any generated Tool catalogs.
 8. Test the exact Provider-visible branch properties and requirements, every valid action or target form, missing conditional requirements, forbidden action fields, unknown fields, retired shapes, stable success data, and expected failures.
 9. Update the owning Tool map, this domain map when the convention changes, and any prompt or user-facing documentation that teaches the call shape.
 

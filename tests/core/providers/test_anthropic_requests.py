@@ -736,14 +736,13 @@ class TestSendRequestFormat:
         request_body = _strip_cache_control(json.loads(route.calls.last.request.content))
         rendered = render_tool_definitions(
             [READ_TOOL_DEFINITION],
-            profile="anthropic_strict",
+            profile="best_effort",
         )[0]
         assert request_body["tools"] == [
             {
                 "name": "read",
                 "description": READ_TOOL_DEFINITION["description"],
                 "input_schema": rendered["parameters"],
-                "strict": True,
             }
         ]
 
@@ -772,7 +771,7 @@ class TestSendRequestFormat:
             "description": HISTORY_TOOL_DESCRIPTION,
             "parameters": HISTORY_TOOL_PARAMETERS,
         }
-        rendered = render_tool_definitions([definition], profile="anthropic_strict")[0]
+        rendered = render_tool_definitions([definition], profile="best_effort")[0]
         assert request_body["tools"] == [
             {
                 "name": HISTORY_TOOL_NAME,

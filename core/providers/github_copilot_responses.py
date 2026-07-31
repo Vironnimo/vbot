@@ -31,7 +31,7 @@ from core.providers.errors import (
     ProviderTimeoutError,
 )
 from core.providers.reasoning import reasoning_token_count
-from core.providers.tool_schema import render_tool_definitions
+from core.providers.tool_schema import ToolSchemaProfile, render_tool_definitions
 
 RESPONSES_DONE_MARKER = "[DONE]"
 REASONING_ENCRYPTED_CONTENT_INCLUDE = "reasoning.encrypted_content"
@@ -142,7 +142,7 @@ def build_responses_payload(
     policy: ResponsesRequestPolicy,
     stream: bool = False,
     document_media_types: frozenset[str] = frozenset(),
-    strict_tools: bool = False,
+    tool_schema_profile: ToolSchemaProfile = "best_effort",
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Build a stateless ``/responses`` request payload from canonical messages."""
@@ -166,7 +166,7 @@ def build_responses_payload(
         payload,
         request_kwargs,
         policy,
-        strict_capable=strict_tools,
+        profile=tool_schema_profile,
     )
     _apply_responses_reasoning(payload, request_kwargs, policy)
     _apply_responses_text_format(payload, request_kwargs, policy)
@@ -461,7 +461,7 @@ def _apply_responses_tools(
     request_kwargs: dict[str, Any],
     policy: ResponsesRequestPolicy,
     *,
-    strict_capable: bool,
+    profile: ToolSchemaProfile,
 ) -> None:
     tools = request_kwargs.pop("tools", None)
     tool_choice = request_kwargs.pop("tool_choice", None)
@@ -469,7 +469,7 @@ def _apply_responses_tools(
         return
     rendered = render_tool_definitions(
         [tool for tool in tools if isinstance(tool, Mapping)],
-        profile="openai_strict" if strict_capable else "best_effort",
+        profile=profile,
     )
     payload["tools"] = [_to_responses_function_tool(tool) for tool in rendered]
     if tool_choice is not None:
@@ -484,14 +484,14 @@ def _to_responses_function_tool(tool: Mapping[str, Any]) -> dict[str, Any]:
             "name": _function_call_name(tool),
             "description": _function_description(tool),
             "parameters": _function_parameters(tool),
-            **({"strict": True} if tool.get("strict") is True else {}),
+            **({"strict": tool["strict"]} if isinstance(tool.get("strict"), bool) else {}),
         }
     return {
         "type": "function",
         "name": _function_call_name(tool),
         "description": _function_description(tool),
         "parameters": _function_parameters(tool),
-        **({"strict": True} if tool.get("strict") is True else {}),
+        **({"strict": tool["strict"]} if isinstance(tool.get("strict"), bool) else {}),
     }
 
 

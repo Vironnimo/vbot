@@ -289,7 +289,7 @@ def test_register_web_fetch_tool_schema() -> None:
     assert "without cleanup" in output["description"]
 
 
-def test_web_fetch_openai_wire_preserves_optional_output_mode() -> None:
+def test_web_fetch_openai_wire_preserves_optional_output_and_disables_strict_mode() -> None:
     [definition] = render_tool_definitions(
         [
             {
@@ -298,12 +298,12 @@ def test_web_fetch_openai_wire_preserves_optional_output_mode() -> None:
                 "parameters": WEB_FETCH_TOOL_PARAMETERS,
             }
         ],
-        profile="openai_strict",
+        profile="openai_non_strict",
     )
 
     parameters = definition["parameters"]
     assert parameters["required"] == ["url"]
-    assert "strict" not in definition
+    assert definition["strict"] is False
     assert parameters["properties"]["output"]["enum"] == ["markdown", "text", "raw"]
 
 

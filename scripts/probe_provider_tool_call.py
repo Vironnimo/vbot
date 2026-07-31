@@ -7,11 +7,11 @@ responses.
 
 Examples:
     python scripts/probe_provider_tool_call.py --model glm-5.2 --mode stream
-    python scripts/probe_provider_tool_call.py --wire openai --profile openai_strict \
+    python scripts/probe_provider_tool_call.py --wire openai --profile openai_non_strict \
         --scenario nested_operation --mode nonstream
     python scripts/probe_provider_tool_call.py --provider openai \
         --connection openai:subscription --model gpt-5.6-luna --wire openai \
-        --profile openai_strict --scenario optional_booleans
+        --profile openai_non_strict --scenario optional_booleans
     python scripts/probe_provider_tool_call.py --scenario large_arguments --lines 500
 """
 
@@ -24,10 +24,9 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from core.providers.tool_schema import (
-    ANTHROPIC_MAX_STRICT_TOOLS,
     ToolSchemaProfile,
     render_tool_definitions,
 )
@@ -53,7 +52,6 @@ PROBE_SCENARIOS = (
     "missing_required_pressure",
     "unknown_property_pressure",
     "large_arguments",
-    "strict_budget",
 )
 OPTIONAL_BOOLEAN_CASES = ("omit", "include_links", "raw", "both")
 
@@ -95,7 +93,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--profile",
-        choices=("auto", "openai_strict", "anthropic_strict", "best_effort"),
+        choices=("auto", "openai_non_strict", "best_effort"),
         default="auto",
         help="Expected production Tool-schema profile for this route.",
     )
@@ -225,7 +223,7 @@ def _optional_boolean_scenario(
     )
 
 
-def _scenario(args: argparse.Namespace, profile: ToolSchemaProfile) -> ProbeScenario:
+def _scenario(args: argparse.Namespace) -> ProbeScenario:
     direct = json.loads(json.dumps(PROBE_TOOL))
     name = str(args.scenario)
     if name == "direct_required":
@@ -328,30 +326,16 @@ def _scenario(args: argparse.Namespace, profile: ToolSchemaProfile) -> ProbeScen
             ),
             PROBE_TOOL_NAME,
         )
-    assert name == "strict_budget"
-    tool_count = ANTHROPIC_MAX_STRICT_TOOLS + 1 if profile == "anthropic_strict" else 1
-    if profile == "openai_strict":
-        direct["parameters"]["properties"]["optional_value"] = {"type": "string"}
-    tools = []
-    for index in range(tool_count):
-        tool = json.loads(json.dumps(direct))
-        tool["name"] = f"{PROBE_TOOL_NAME}_{index}"
-        tools.append(tool)
-    return ProbeScenario(
-        name,
-        tools,
-        _probe_messages(f"Call {tools[0]['name']} with key alpha."),
-        str(tools[0]["name"]),
-    )
+    raise AssertionError(f"unsupported probe scenario: {name}")
 
 
 def _expected_profile(args: argparse.Namespace) -> ToolSchemaProfile:
-    if args.profile != "auto":
-        return cast(ToolSchemaProfile, args.profile)
-    if args.wire == "openai":
-        return "openai_strict"
-    if args.wire == "anthropic":
-        return "anthropic_strict"
+    if args.profile == "openai_non_strict":
+        return "openai_non_strict"
+    if args.profile == "best_effort":
+        return "best_effort"
+    if args.provider == "openai":
+        return "openai_non_strict"
     return "best_effort"
 
 
@@ -867,7 +851,7 @@ async def _run(args: argparse.Namespace) -> int:
     traced_request = _trace_request(trace) if trace is not None else None
     profile = _expected_profile(args)
     if traced_request is None:
-        scenario = _scenario(args, profile)
+        scenario = _scenario(args)
         messages = scenario.messages
         tools = scenario.tools
     else:
@@ -885,9 +869,10 @@ async def _run(args: argparse.Namespace) -> int:
         scenario = ProbeScenario("trace_replay", tools, messages, str(tools[0]["name"]))
     contracts = _compile_probe_contracts(tools)
     rendered = render_tool_definitions(tools, profile=profile)
-    strict_tool_count = sum(1 for tool in rendered if tool.get("strict") is True)
-    strict_requested = profile != "best_effort"
-    strict_active = strict_requested and strict_tool_count == len(rendered)
+    strict_true_tool_count = sum(1 for tool in rendered if tool.get("strict") is True)
+    if strict_true_tool_count:
+        raise AssertionError("vBot must never render a Tool with strict mode enabled")
+    explicit_non_strict_tool_count = sum(1 for tool in rendered if tool.get("strict") is False)
     runtime = Runtime(Config(data_dir=args.data_dir))
     _start_probe_runtime(runtime)
     adapter = runtime.get_adapter(args.provider, args.connection)
@@ -926,9 +911,8 @@ async def _run(args: argparse.Namespace) -> int:
             "model": args.model,
             "scenario": scenario.name,
             "profile_id": profile,
-            "strict_requested": strict_requested,
-            "strict_active": strict_active,
-            "strict_tool_count": strict_tool_count,
+            "strict_true_tool_count": strict_true_tool_count,
+            "explicit_non_strict_tool_count": explicit_non_strict_tool_count,
             "schema_fingerprint_prefix": contracts[scenario.primary_tool_name].schema_fingerprint[
                 :12
             ],

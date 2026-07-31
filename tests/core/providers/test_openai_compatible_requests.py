@@ -430,6 +430,7 @@ class TestSendRequestFormat:
                     "name": "get_weather",
                     "description": "Get current weather",
                     "parameters": SAMPLE_TOOLS[0]["parameters"],
+                    "strict": False,
                 },
             }
         ]
@@ -489,7 +490,7 @@ class TestSendRequestFormat:
         request_body = json.loads(route.calls.last.request.content)
         rendered = render_tool_definitions(
             [READ_TOOL_DEFINITION],
-            profile="openai_strict",
+            profile="openai_non_strict",
         )[0]
         assert request_body["tools"] == [
             {
@@ -498,13 +499,14 @@ class TestSendRequestFormat:
                     "name": "read",
                     "description": READ_TOOL_DEFINITION["description"],
                     "parameters": rendered["parameters"],
+                    "strict": False,
                 },
             }
         ]
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_send_uses_strict_only_for_canonical_nullable_optional(self, openai_adapter):
+    async def test_send_preserves_nullable_optional_and_disables_strict(self, openai_adapter):
         route = respx.post(OPENAI_URL).mock(return_value=httpx.Response(200, json=SUCCESS_RESPONSE))
         definition = {
             "name": "inspect",
@@ -523,8 +525,8 @@ class TestSendRequestFormat:
         await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", tools=[definition])
 
         function = json.loads(route.calls.last.request.content)["tools"][0]["function"]
-        assert function["strict"] is True
-        assert function["parameters"]["required"] == ["key", "note"]
+        assert function["strict"] is False
+        assert function["parameters"]["required"] == ["key"]
         assert function["parameters"]["properties"]["note"]["type"] == ["string", "null"]
 
     @respx.mock
@@ -540,7 +542,7 @@ class TestSendRequestFormat:
         await openai_adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.2", tools=[definition])
 
         request_body = json.loads(route.calls.last.request.content)
-        rendered = render_tool_definitions([definition], profile="openai_strict")[0]
+        rendered = render_tool_definitions([definition], profile="openai_non_strict")[0]
         assert request_body["tools"] == [
             {
                 "type": "function",
@@ -548,6 +550,7 @@ class TestSendRequestFormat:
                     "name": rendered["name"],
                     "description": rendered["description"],
                     "parameters": rendered["parameters"],
+                    "strict": False,
                 },
             }
         ]

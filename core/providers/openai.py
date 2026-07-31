@@ -487,7 +487,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             model_id=model_id,
             policy=self._responses_policy_for_model(model_id),
             stream=stream,
-            strict_tools=True,
+            tool_schema_profile="openai_non_strict",
             document_media_types=(
                 frozenset({"application/pdf"})
                 if self._uses_platform_responses(model_id)

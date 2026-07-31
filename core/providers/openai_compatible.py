@@ -65,7 +65,7 @@ from core.providers.reasoning import (
     warn_rejected_effort,
 )
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
-from core.providers.tool_schema import render_tool_definitions
+from core.providers.tool_schema import ToolSchemaProfile, render_tool_definitions
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 from core.utils.tokens import estimate_request_input_tokens
@@ -339,7 +339,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         _apply_openai_tools(
             payload,
             request_kwargs,
-            strict_capable=self._config.id == "openai",
+            profile=("openai_non_strict" if self._config.id == "openai" else "best_effort"),
         )
         self._apply_reasoning(payload, request_kwargs, model_id)
         # Apply provider defaults (lower priority — caller kwargs win)
@@ -1041,14 +1041,14 @@ def _apply_openai_tools(
     payload: dict[str, Any],
     kwargs: dict[str, Any],
     *,
-    strict_capable: bool,
+    profile: ToolSchemaProfile,
 ) -> None:
     tools = kwargs.pop("tools", None)
     if not tools:
         return
     rendered = render_tool_definitions(
         tools,
-        profile="openai_strict" if strict_capable else "best_effort",
+        profile=profile,
     )
     payload["tools"] = [
         {
@@ -1057,7 +1057,7 @@ def _apply_openai_tools(
                 "name": tool["name"],
                 "description": tool["description"],
                 "parameters": tool["parameters"],
-                **({"strict": True} if tool.get("strict") is True else {}),
+                **({"strict": tool["strict"]} if isinstance(tool.get("strict"), bool) else {}),
             },
         }
         for tool in rendered

@@ -75,7 +75,7 @@ from core.providers.reasoning import (
     resolve_reasoning_intent,
 )
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
-from core.providers.tool_schema import ToolSchemaProfile, render_tool_definitions
+from core.providers.tool_schema import render_tool_definitions
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 from core.utils.tokens import estimate_request_input_tokens
@@ -578,7 +578,6 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         _apply_anthropic_tools(
             payload,
             request_kwargs,
-            profile=self._tool_schema_profile(),
         )
         reasoning_supported = self._model_reasoning_supported(model_id)
         # Resolve the output allowance once: it both bounds any thinking budget
@@ -650,11 +649,6 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
 
         del model_id
         return True
-
-    def _tool_schema_profile(self) -> ToolSchemaProfile:
-        """Return the verified Tool-schema profile for this Messages wire."""
-
-        return "anthropic_strict" if self._config.id == "anthropic" else "best_effort"
 
     def _classify_http_status(
         self,
@@ -1249,22 +1243,19 @@ def _is_supported_reasoning_block(block: Any) -> bool:
 def _apply_anthropic_tools(
     payload: dict[str, Any],
     kwargs: dict[str, Any],
-    *,
-    profile: ToolSchemaProfile,
 ) -> None:
     tools = kwargs.pop("tools", None)
     if not tools:
         return
     rendered = render_tool_definitions(
         tools,
-        profile=profile,
+        profile="best_effort",
     )
     payload["tools"] = [
         {
             "name": tool["name"],
             "description": tool["description"],
             "input_schema": tool["parameters"],
-            **({"strict": True} if tool.get("strict") is True else {}),
         }
         for tool in rendered
     ]
