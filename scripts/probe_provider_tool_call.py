@@ -52,6 +52,11 @@ from core.tools.process import (
     PROCESS_TOOL_NAME,
     PROCESS_TOOL_PARAMETERS,
 )
+from core.tools.project import (
+    PROJECT_TOOL_DESCRIPTION,
+    PROJECT_TOOL_NAME,
+    PROJECT_TOOL_PARAMETERS,
+)
 from core.tools.read import (
     READ_TOOL_DESCRIPTION,
     READ_TOOL_NAME,
@@ -109,6 +114,7 @@ PROBE_SCENARIOS = (
     "glob",
     "grep",
     "process",
+    "project",
     "read",
     "skill",
     "skill_list",
@@ -665,6 +671,29 @@ def _process_scenario(case_name: str) -> ProbeScenario:
     )
 
 
+def _project_scenario() -> ProbeScenario:
+    expected_arguments = {"project_id": "vbot"}
+    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
+    instruction = (
+        f"Call {PROJECT_TOOL_NAME} exactly once with exactly this JSON object as its "
+        f"arguments: {rendered_arguments}. Preserve the value and do not add any field."
+    )
+    return ProbeScenario(
+        "project",
+        [
+            {
+                "name": PROJECT_TOOL_NAME,
+                "description": PROJECT_TOOL_DESCRIPTION,
+                "parameters": PROJECT_TOOL_PARAMETERS,
+            }
+        ],
+        _probe_messages(instruction),
+        PROJECT_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
+    )
+
+
 def _read_scenario(case_name: str) -> ProbeScenario:
     path = "src/provider_tool_probe.py"
     read_arguments: dict[str, dict[str, Any]] = {
@@ -1000,6 +1029,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _grep_scenario(str(args.grep_case))
     if name == "process":
         return _process_scenario(str(args.process_case))
+    if name == "project":
+        return _project_scenario()
     if name == "read":
         return _read_scenario(str(args.read_case))
     if name == "skill":

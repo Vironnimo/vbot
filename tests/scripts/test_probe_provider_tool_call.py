@@ -453,6 +453,26 @@ def test_edit_cases_use_production_schema_and_exact_expected_arguments() -> None
     }
 
 
+def test_project_scenario_uses_production_schema_and_exact_arguments() -> None:
+    scenario = PROBE._scenario(SimpleNamespace(scenario="project", lines=8))
+    contracts = PROBE._compile_probe_contracts(
+        scenario.tools,
+        require_closed_input=scenario.require_closed_input,
+    )
+    arguments = scenario.expected_arguments
+
+    assert scenario.tools[0]["parameters"] is PROBE.PROJECT_TOOL_PARAMETERS
+    assert arguments == {"project_id": "vbot"}
+    contracts[PROBE.PROJECT_TOOL_NAME].validate_arguments(arguments)
+    assert (
+        PROBE._expected_argument_measurements(
+            [{"name": PROBE.PROJECT_TOOL_NAME, "arguments": arguments}],
+            scenario,
+        )["expected_arguments_match"]
+        is True
+    )
+
+
 def test_read_cases_use_production_schema_and_exact_expected_arguments() -> None:
     for case_name in PROBE.READ_CASES:
         scenario = PROBE._scenario(

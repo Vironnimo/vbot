@@ -7,9 +7,16 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
+
 from core.projects import ProjectStore
-from core.tools import FileReadState, StaleReason, ToolContext
-from core.tools.project import PROJECT_TOOL_NAME, make_project_handler
+from core.tools import FileReadState, StaleReason, ToolContext, ToolRegistry
+from core.tools.project import (
+    PROJECT_TOOL_NAME,
+    PROJECT_TOOL_PARAMETERS,
+    make_project_handler,
+    register_project_tool,
+)
 
 
 class _Renderer:
@@ -59,6 +66,25 @@ def _handler(
         lambda _project_id: list(skills or []),
         file_state,
     )
+
+
+def test_project_tool_exposes_open_model_schema(tmp_path: Path) -> None:
+    registry = ToolRegistry()
+    projects = ProjectStore(tmp_path / "data")
+
+    register_project_tool(
+        registry,
+        projects,
+        lambda: _Renderer(),
+        lambda _project_id: [],
+        FileReadState(),
+    )
+
+    tool = registry.get(PROJECT_TOOL_NAME)
+    assert tool.parameters == PROJECT_TOOL_PARAMETERS
+    assert tool.parameters["required"] == ["project_id"]
+    assert "additionalProperties" not in tool.parameters
+    assert tool.open_input_schema is True
 
 
 def test_project_tool_loads_context_skills_and_stamps_files_read(tmp_path: Path) -> None:
@@ -119,6 +145,33 @@ def test_project_tool_rejects_unknown_project(tmp_path: Path) -> None:
     assert result["ok"] is False
     assert result["error"]["code"] == "project_not_found"
     assert result["error"]["retryable"] is False
+
+
+def test_project_tool_rejects_unknown_argument(tmp_path: Path) -> None:
+    result = _handler(ProjectStore(tmp_path / "data"), FileReadState())(
+        _context(tmp_path), {"project_id": "vbot", "unexpected": True}
+    )
+
+    assert result["ok"] is False
+    assert result["error"] == {
+        "code": "invalid_arguments",
+        "message": "Unknown argument(s): unexpected",
+    }
+
+
+@pytest.mark.parametrize("project_id", [None, 42, ""])
+def test_project_tool_rejects_missing_or_invalid_project_id(
+    tmp_path: Path, project_id: object
+) -> None:
+    arguments = {} if project_id is None else {"project_id": project_id}
+
+    result = _handler(ProjectStore(tmp_path / "data"), FileReadState())(
+        _context(tmp_path), arguments
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_arguments"
+    assert "project_id" in result["error"]["message"]
 
 
 def test_project_tool_rejects_unreachable_project_cwd(tmp_path: Path) -> None:
