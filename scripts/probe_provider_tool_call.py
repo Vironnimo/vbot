@@ -32,6 +32,11 @@ from core.providers.tool_schema import (
 )
 from core.runtime.runtime import Runtime
 from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
+from core.tools.process import (
+    PROCESS_TOOL_DESCRIPTION,
+    PROCESS_TOOL_NAME,
+    PROCESS_TOOL_PARAMETERS,
+)
 from core.utils.config import Config
 
 DEFAULT_PROVIDER = "opencode-go"
@@ -52,8 +57,25 @@ PROBE_SCENARIOS = (
     "missing_required_pressure",
     "unknown_property_pressure",
     "large_arguments",
+    "process",
 )
 OPTIONAL_BOOLEAN_CASES = ("omit", "include_links", "raw", "both")
+PROCESS_CASES = (
+    "status_list",
+    "status_one",
+    "input_omit_omit",
+    "input_true_omit",
+    "input_false_omit",
+    "input_omit_true",
+    "input_omit_false",
+    "input_true_true",
+    "input_true_false",
+    "input_false_true",
+    "input_false_false",
+    "input_empty_newline",
+    "input_empty_eof",
+    "kill",
+)
 
 PROBE_TOOL = {
     "name": PROBE_TOOL_NAME,
@@ -75,6 +97,8 @@ class ProbeScenario:
     tools: list[dict[str, Any]]
     messages: list[dict[str, Any]]
     primary_tool_name: str
+    require_closed_input: bool = True
+    expected_arguments: dict[str, Any] | None = None
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -90,6 +114,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=OPTIONAL_BOOLEAN_CASES,
         default="omit",
         help="Requested argument shape for the optional_booleans scenarios.",
+    )
+    parser.add_argument(
+        "--process-case",
+        choices=PROCESS_CASES,
+        default="status_list",
+        help="Exact process argument shape requested by the process scenario.",
     )
     parser.add_argument(
         "--profile",
@@ -142,7 +172,7 @@ def _probe_messages(instruction: str) -> list[dict[str, Any]]:
             "role": "system",
             "content": (
                 "You are a deterministic Tool Call conformance probe. Call the supplied "
-                "synthetic inspection Tool exactly once. Do not answer with ordinary text. "
+                "Tool exactly once. Do not answer with ordinary text. "
                 "Follow its schema even if the user asks for an invalid representation."
             ),
         },
@@ -220,6 +250,107 @@ def _optional_boolean_scenario(
         [tool],
         _probe_messages(instructions[case_name]),
         PROBE_TOOL_NAME,
+    )
+
+
+def _process_scenario(case_name: str) -> ProbeScenario:
+    session_id = "process-probe-session"
+    text = "probe input"
+    process_arguments: dict[str, dict[str, Any]] = {
+        "status_list": {"action": "status"},
+        "status_one": {"action": "status", "session_id": session_id},
+        "input_omit_omit": {
+            "action": "input",
+            "session_id": session_id,
+            "text": text,
+        },
+        "input_true_omit": {
+            "action": "input",
+            "session_id": session_id,
+            "text": text,
+            "newline": True,
+        },
+        "input_false_omit": {
+            "action": "input",
+            "session_id": session_id,
+            "text": text,
+            "newline": False,
+        },
+        "input_omit_true": {
+            "action": "input",
+            "session_id": session_id,
+            "text": text,
+            "eof": True,
+        },
+        "input_omit_false": {
+            "action": "input",
+            "session_id": session_id,
+            "text": text,
+            "eof": False,
+        },
+        "input_true_true": {
+            "action": "input",
+            "session_id": session_id,
+            "text": text,
+            "newline": True,
+            "eof": True,
+        },
+        "input_true_false": {
+            "action": "input",
+            "session_id": session_id,
+            "text": text,
+            "newline": True,
+            "eof": False,
+        },
+        "input_false_true": {
+            "action": "input",
+            "session_id": session_id,
+            "text": text,
+            "newline": False,
+            "eof": True,
+        },
+        "input_false_false": {
+            "action": "input",
+            "session_id": session_id,
+            "text": text,
+            "newline": False,
+            "eof": False,
+        },
+        "input_empty_newline": {
+            "action": "input",
+            "session_id": session_id,
+            "text": "",
+            "newline": True,
+        },
+        "input_empty_eof": {
+            "action": "input",
+            "session_id": session_id,
+            "text": "",
+            "newline": False,
+            "eof": True,
+        },
+        "kill": {"action": "kill", "session_id": session_id},
+    }
+    expected_arguments = process_arguments[case_name]
+    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
+    instruction = (
+        f"Call {PROCESS_TOOL_NAME} exactly once with exactly this JSON object as its "
+        f"arguments: {rendered_arguments}. Preserve every value and omit every field not "
+        "shown."
+    )
+    return ProbeScenario(
+        "process",
+        [
+            {
+                "name": PROCESS_TOOL_NAME,
+                "description": PROCESS_TOOL_DESCRIPTION,
+                "parameters": PROCESS_TOOL_PARAMETERS,
+            }
+        ],
+        _probe_messages(instruction),
+        PROCESS_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
     )
 
 
@@ -326,6 +457,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
             ),
             PROBE_TOOL_NAME,
         )
+    if name == "process":
+        return _process_scenario(str(args.process_case))
     raise AssertionError(f"unsupported probe scenario: {name}")
 
 
@@ -622,15 +755,70 @@ def _start_probe_runtime(runtime: Runtime) -> None:
     runtime.start()
 
 
-def _compile_probe_contracts(tools: list[dict[str, Any]]) -> dict[str, ToolContract]:
+def _compile_probe_contracts(
+    tools: list[dict[str, Any]],
+    *,
+    require_closed_input: bool = True,
+) -> dict[str, ToolContract]:
     contracts: dict[str, ToolContract] = {}
     for tool in tools:
         name = tool.get("name")
         parameters = tool.get("parameters")
         if not isinstance(name, str) or not isinstance(parameters, dict):
             raise ValueError("probe Tool definitions require name and parameters")
-        contracts[name] = compile_tool_contract(name=name, input_schema=parameters)
+        contracts[name] = compile_tool_contract(
+            name=name,
+            input_schema=parameters,
+            require_closed_input=require_closed_input,
+        )
     return contracts
+
+
+def _expected_argument_measurements(
+    tool_calls: Any,
+    scenario: ProbeScenario,
+) -> dict[str, Any]:
+    expected = scenario.expected_arguments
+    if expected is None:
+        return {}
+    if not isinstance(tool_calls, list) or len(tool_calls) != 1:
+        return {
+            "expected_arguments_match": False,
+            "expected_call_count": 1,
+            "actual_call_count": len(tool_calls) if isinstance(tool_calls, list) else 0,
+            "missing_expected_fields": sorted(expected),
+            "unexpected_fields": [],
+            "mismatched_fields": [],
+        }
+    call = tool_calls[0]
+    arguments = call.get("arguments") if isinstance(call, dict) else None
+    if not isinstance(arguments, dict):
+        return {
+            "expected_arguments_match": False,
+            "expected_call_count": 1,
+            "actual_call_count": 1,
+            "missing_expected_fields": sorted(expected),
+            "unexpected_fields": [],
+            "mismatched_fields": [],
+        }
+    expected_keys = set(expected)
+    actual_keys = set(arguments)
+    mismatched = sorted(
+        key for key in expected_keys & actual_keys if arguments[key] != expected[key]
+    )
+    missing = sorted(expected_keys - actual_keys)
+    unexpected = sorted(actual_keys - expected_keys)
+    tool_name_matches = call.get("name") == scenario.primary_tool_name
+    return {
+        "expected_arguments_match": (
+            tool_name_matches and not missing and not unexpected and not mismatched
+        ),
+        "expected_call_count": 1,
+        "actual_call_count": 1,
+        "missing_expected_fields": missing,
+        "unexpected_fields": unexpected,
+        "mismatched_fields": mismatched,
+    }
 
 
 def _validation_measurements(
@@ -694,6 +882,7 @@ async def _probe_stream(
     traced_request: dict[str, Any] | None,
     tools: list[dict[str, Any]],
     contracts: dict[str, ToolContract],
+    scenario: ProbeScenario,
 ) -> dict[str, Any]:
     started = time.monotonic()
     first_delta_seconds: float | None = None
@@ -791,6 +980,7 @@ async def _probe_stream(
         "finish_reason": finish_reason,
         "error_type": error_type,
         **_optional_boolean_measurements(parsed_calls, tools),
+        **_expected_argument_measurements(parsed_calls, scenario),
         **validation,
     }
 
@@ -802,6 +992,7 @@ async def _probe_nonstream(
     traced_request: dict[str, Any] | None,
     tools: list[dict[str, Any]],
     contracts: dict[str, ToolContract],
+    scenario: ProbeScenario,
 ) -> dict[str, Any]:
     started = time.monotonic()
     try:
@@ -829,6 +1020,7 @@ async def _probe_nonstream(
             "tool_content_chars": tool_content_chars,
             "error_type": None,
             **_optional_boolean_measurements(normalized_tool_calls, tools),
+            **_expected_argument_measurements(normalized_tool_calls, scenario),
             **_validation_measurements(normalized_tool_calls, contracts),
         }
     except TimeoutError:
@@ -867,7 +1059,10 @@ async def _run(args: argparse.Namespace) -> int:
         if isinstance(traced_model, str) and traced_model:
             args.model = traced_model
         scenario = ProbeScenario("trace_replay", tools, messages, str(tools[0]["name"]))
-    contracts = _compile_probe_contracts(tools)
+    contracts = _compile_probe_contracts(
+        tools,
+        require_closed_input=scenario.require_closed_input,
+    )
     rendered = render_tool_definitions(tools, profile=profile)
     strict_true_tool_count = sum(1 for tool in rendered if tool.get("strict") is True)
     if strict_true_tool_count:
@@ -890,6 +1085,7 @@ async def _run(args: argparse.Namespace) -> int:
                 traced_request,
                 tools,
                 contracts,
+                scenario,
             )
         else:
             result = await _probe_nonstream(
@@ -899,6 +1095,7 @@ async def _run(args: argparse.Namespace) -> int:
                 traced_request,
                 tools,
                 contracts,
+                scenario,
             )
     finally:
         await adapter.aclose()
@@ -928,6 +1125,7 @@ async def _run(args: argparse.Namespace) -> int:
                 }
                 else None
             ),
+            "process_case": args.process_case if scenario.name == "process" else None,
             "request_messages": len(messages),
             "request_tools": len(tools),
             "trace_replay": traced_request is not None,
@@ -941,6 +1139,7 @@ async def _run(args: argparse.Namespace) -> int:
         and result.get("finish_reason", "tool_calls") == "tool_calls"
         and (result.get("tool_argument_chars", 0) > 0 or result.get("tool_calls", 0) > 0)
         and result.get("schema_valid") is True
+        and result.get("expected_arguments_match", True) is True
     )
     return 0 if successful else 1
 

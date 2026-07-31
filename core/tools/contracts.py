@@ -123,6 +123,7 @@ def compile_tool_contract(
     input_schema: JsonObject,
     result_schema: JsonObject | None = None,
     parallel_safe: bool = True,
+    require_closed_input: bool = True,
 ) -> ToolContract:
     """Validate, copy, compile, and fingerprint one canonical Tool contract."""
     if not isinstance(name, str) or not name:
@@ -135,9 +136,15 @@ def compile_tool_contract(
     if not isinstance(parallel_safe, bool):
         raise ToolContractError("Tool parallel_safe must be a boolean")
 
-    canonical_input = _compile_schema(input_schema, label="input")
+    canonical_input = _compile_schema(
+        input_schema,
+        label="input",
+        require_closed_objects=require_closed_input,
+    )
     canonical_result = (
-        _compile_schema(result_schema, label="result") if result_schema is not None else None
+        _compile_schema(result_schema, label="result", require_closed_objects=True)
+        if result_schema is not None
+        else None
     )
     fingerprint_payload = {
         "name": name,
@@ -165,7 +172,12 @@ def compile_tool_contract(
     )
 
 
-def _compile_schema(schema: Any, *, label: str) -> JsonObject:
+def _compile_schema(
+    schema: Any,
+    *,
+    label: str,
+    require_closed_objects: bool,
+) -> JsonObject:
     if not isinstance(schema, dict):
         raise ToolContractError(f"Tool {label} schema must be a JSON Schema object")
     canonical = copy.deepcopy(schema)
@@ -177,7 +189,12 @@ def _compile_schema(schema: Any, *, label: str) -> JsonObject:
 
     if canonical.get("type") != "object":
         raise ToolContractError(f"Tool {label} schema root must have type object")
-    _validate_schema_invariants(canonical, label=label, path=())
+    _validate_schema_invariants(
+        canonical,
+        label=label,
+        path=(),
+        require_closed_objects=require_closed_objects,
+    )
     return canonical
 
 
@@ -186,6 +203,7 @@ def _validate_schema_invariants(
     *,
     label: str,
     path: tuple[str | int, ...],
+    require_closed_objects: bool,
 ) -> None:
     if isinstance(node, dict):
         reference = node.get("$ref")
@@ -194,7 +212,7 @@ def _validate_schema_invariants(
                 f"Tool {label} schema{_format_path(path)} uses an external $ref"
             )
         if node.get("type") == "object" and "properties" in node:
-            if node.get("additionalProperties") is not False:
+            if require_closed_objects and node.get("additionalProperties") is not False:
                 raise ToolContractError(
                     f"Tool {label} schema{_format_path(path)} must set "
                     "additionalProperties to false"
@@ -216,10 +234,20 @@ def _validate_schema_invariants(
                     f"Tool {label} schema{_format_path(path)} requires unknown properties: {names}"
                 )
         for key, value in node.items():
-            _validate_schema_invariants(value, label=label, path=(*path, key))
+            _validate_schema_invariants(
+                value,
+                label=label,
+                path=(*path, key),
+                require_closed_objects=require_closed_objects,
+            )
     elif isinstance(node, list):
         for index, value in enumerate(node):
-            _validate_schema_invariants(value, label=label, path=(*path, index))
+            _validate_schema_invariants(
+                value,
+                label=label,
+                path=(*path, index),
+                require_closed_objects=require_closed_objects,
+            )
 
 
 def _validate_instance(

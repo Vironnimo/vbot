@@ -117,8 +117,8 @@ Example:
 
 - Change exactly one Tool at a time. Shared Tool infrastructure may change with it only when that Tool requires the change and every previously migrated Tool remains verified.
 - Keep the repository releaseable after every Tool migration. Do not leave unrelated Tools partially converted.
-- Before moving to the next Tool, run its focused local tests and the relevant complete quality gate.
-- Before moving to the next Tool, install the current change into the live test environment and test it with Luna.
+- Before moving to the next Tool, run its focused local tests and complete Luna call matrix. Run the relevant complete quality gate once after the full Tool migration, not between individual Tools.
+- Before moving to the next Tool, pass its current production definition directly to Luna through `scripts/probe_provider_tool_call.py`; a live installation round-trip is not required for model-facing schema verification.
 - The Luna matrix must exercise every action or mode, every optional-parameter omission that selects a default, every materially different explicit value, and representative invalid calls that the handler must reject safely.
 - A Tool is migrated only when every matrix call produces a satisfactory Tool Call and runtime result. Documentation or schema inspection alone is not verification.
 - Commit each migrated and fully verified Tool as its own cohesive releaseable change before editing the next Tool.
@@ -139,4 +139,4 @@ Before accepting a Tool definition, verify all of the following:
 - The handler independently validates conditional requirements and applies all defaults.
 - The Provider wire explicitly remains non-strict where the Provider supports strict Tool calling.
 - The minified Provider definition has been measured, and every remaining sentence or schema keyword earns its context cost.
-- Focused tests, the relevant quality gate, and the complete Luna call matrix all pass before another Tool is changed.
+- Focused tests and the complete Luna call matrix pass before another Tool is changed; the relevant complete quality gate passes once at the end of the full migration.

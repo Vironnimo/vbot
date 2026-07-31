@@ -113,30 +113,27 @@ def test_schema_exposes_small_flat_action_contract() -> None:
         "stop a Process Session. Input is not an interactive terminal or TTY."
     )
     assert PROCESS_TOOL_PARAMETERS["type"] == "object"
-    branches = {
-        branch["properties"]["action"]["enum"][0]: branch
-        for branch in PROCESS_TOOL_PARAMETERS["oneOf"]
-    }
-    assert set(branches) == set(PROCESS_ACTIONS)
-    assert set(branches["status"]["properties"]) == {"action", "session_id"}
-    assert branches["status"]["required"] == ["action"]
-    assert set(branches["input"]["properties"]) == {
+    assert "oneOf" not in PROCESS_TOOL_PARAMETERS
+    properties = cast(dict[str, Any], PROCESS_TOOL_PARAMETERS["properties"])
+    assert properties["action"]["enum"] == list(PROCESS_ACTIONS)
+    assert set(properties) == {
         "action",
         "session_id",
         "text",
         "newline",
         "eof",
     }
-    assert branches["input"]["required"] == ["action", "session_id", "text"]
-    assert set(branches["kill"]["properties"]) == {"action", "session_id"}
-    assert branches["kill"]["required"] == ["action", "session_id"]
-    assert all(branch["additionalProperties"] is False for branch in branches.values())
-    input_properties = cast(dict[str, Any], branches["input"]["properties"])
-    assert "returned by the bash Tool" in input_properties["session_id"]["description"]
-    assert "Read-Host are unavailable" in branches["input"]["description"]
-    assert "[Console]::In.ReadLine()" in branches["input"]["description"]
-    assert input_properties["newline"]["default"] is True
-    assert input_properties["eof"]["default"] is False
+    assert PROCESS_TOOL_PARAMETERS["required"] == ["action"]
+    assert "additionalProperties" not in PROCESS_TOOL_PARAMETERS
+    assert "input and kill require session_id" in PROCESS_TOOL_PARAMETERS["description"]
+    assert "Required for input and kill" in properties["session_id"]["description"]
+    assert "returned by the bash Tool" in properties["session_id"]["description"]
+    assert "Read-Host is unavailable" in properties["text"]["description"]
+    assert "[Console]::In.ReadLine()" in properties["text"]["description"]
+    assert "default" not in properties["newline"]
+    assert "default true" in properties["newline"]["description"]
+    assert "default" not in properties["eof"]
+    assert "default false" in properties["eof"]["description"]
 
 
 @pytest.mark.asyncio

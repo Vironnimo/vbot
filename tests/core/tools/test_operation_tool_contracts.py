@@ -70,7 +70,6 @@ _BRANCH_COMPLETE_SCHEMAS = (
     ("grep", GREP_TOOL_PARAMETERS),
     ("history", HISTORY_TOOL_PARAMETERS),
     ("memory", MEMORY_TOOL_PARAMETERS),
-    ("process", PROCESS_TOOL_PARAMETERS),
     ("skill_manage", SKILL_MANAGE_TOOL_PARAMETERS),
     ("status", STATUS_TOOL_PARAMETERS),
     ("subagent", SUBAGENT_TOOL_PARAMETERS),
@@ -97,7 +96,6 @@ _BRANCH_INAPPLICABLE_CALLS = (
         {"action": "add", "scope": "user", "content": "fact", "entry_id": 1},
         "entry_id",
     ),
-    ("process", PROCESS_TOOL_PARAMETERS, {"action": "status", "text": "hello"}, "text"),
     (
         "skill_manage",
         SKILL_MANAGE_TOOL_PARAMETERS,
@@ -123,7 +121,6 @@ _BRANCH_MISSING_REQUIRED_CALLS = (
         {"action": "add", "scope": "user"},
         "content",
     ),
-    ("process", PROCESS_TOOL_PARAMETERS, {"action": "input", "session_id": "proc"}, "text"),
     (
         "skill_manage",
         SKILL_MANAGE_TOOL_PARAMETERS,
@@ -251,6 +248,11 @@ def test_direct_tool_schema_is_closed_and_declares_required_properties(
     schema: JsonObject,
 ) -> None:
     assert schema["type"] == "object", tool_name
+    if tool_name == "process":
+        assert "oneOf" not in schema
+        assert "additionalProperties" not in schema
+        assert set(schema.get("required", ())) <= set(schema["properties"]), tool_name
+        return
     variants = schema.get("oneOf", [schema]) if "properties" not in schema else [schema]
     assert isinstance(variants, list) and variants, tool_name
     for variant in variants:

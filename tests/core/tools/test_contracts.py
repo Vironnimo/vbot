@@ -117,7 +117,17 @@ def test_discriminated_union_schema_supports_non_action_discriminators() -> None
         contract.validate_arguments({"mode": "foreground", "command": "echo ok", "yield_after": 30})
 
 
-def test_compile_rejects_open_fixed_object() -> None:
+def test_compile_accepts_explicitly_open_model_facing_object() -> None:
+    contract = compile_tool_contract(
+        name="sample",
+        input_schema={"type": "object", "properties": {"value": {"type": "string"}}},
+        require_closed_input=False,
+    )
+
+    contract.validate_arguments({"value": "ok", "extra": True})
+
+
+def test_compile_rejects_open_object_by_default() -> None:
     with pytest.raises(ToolContractError, match="additionalProperties"):
         compile_tool_contract(
             name="sample",

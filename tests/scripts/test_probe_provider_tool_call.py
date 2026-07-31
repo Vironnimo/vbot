@@ -256,6 +256,62 @@ def test_optional_boolean_cases_request_one_exact_argument_shape() -> None:
         assert expected_fragment in scenario.messages[1]["content"]
 
 
+def test_process_cases_use_production_schema_and_exact_expected_arguments() -> None:
+    for case_name in PROBE.PROCESS_CASES:
+        scenario = PROBE._scenario(
+            SimpleNamespace(
+                scenario="process",
+                process_case=case_name,
+                lines=8,
+            ),
+        )
+        contracts = PROBE._compile_probe_contracts(
+            scenario.tools,
+            require_closed_input=scenario.require_closed_input,
+        )
+        arguments = scenario.expected_arguments
+
+        assert scenario.tools[0]["parameters"] is PROBE.PROCESS_TOOL_PARAMETERS
+        assert arguments is not None
+        contracts[PROBE.PROCESS_TOOL_NAME].validate_arguments(arguments)
+        assert (
+            PROBE._expected_argument_measurements(
+                [{"name": PROBE.PROCESS_TOOL_NAME, "arguments": arguments}],
+                scenario,
+            )["expected_arguments_match"]
+            is True
+        )
+
+
+def test_process_argument_measurements_report_only_structural_differences() -> None:
+    scenario = PROBE._process_scenario("input_omit_omit")
+    marker = "DO_NOT_PRINT_THIS_VALUE"
+    result = PROBE._expected_argument_measurements(
+        [
+            {
+                "name": PROBE.PROCESS_TOOL_NAME,
+                "arguments": {
+                    "action": "input",
+                    "session_id": marker,
+                    "text": "probe input",
+                    "eof": False,
+                },
+            }
+        ],
+        scenario,
+    )
+
+    assert result == {
+        "expected_arguments_match": False,
+        "expected_call_count": 1,
+        "actual_call_count": 1,
+        "missing_expected_fields": [],
+        "unexpected_fields": ["eof"],
+        "mismatched_fields": ["session_id"],
+    }
+    assert marker not in json.dumps(result)
+
+
 def test_probe_runtime_suppresses_background_service_start_hooks() -> None:
     class RuntimeStub:
         def __init__(self) -> None:
