@@ -6,7 +6,7 @@ Reads a file from the working directory or an absolute path. Text files return t
 
 - Tool name: `read`
 - Registration: `register_read_tool(registry, *, attachment_store, speech_service, file_state, speech_max_size_bytes)`. The handler is built by `make_read_handler(attachment_store, speech_service, file_state, *, speech_max_size_bytes)` (factory pattern, mirrors `image_generation`) and is **async** — the runtime executor already awaits async tool handlers. `render_text_file(raw, offset=None, limit=None)` remains the pure renderer for already-bounded text attachment bytes; local file reads use the streaming path in the same module.
-- Schema: required `path`; optional positive 1-indexed `offset` and `limit` controls; `offset` accepts the ordinary line number or an exact `line:character` continuation address, while the model-facing description stays focused on ordinary lines; `additionalProperties: false`.
+- Schema: required `path`; optional positive 1-indexed `offset` and `limit` controls; `offset` accepts an ordinary line number or an exact `line:character` continuation address returned by the Tool, and omitted `limit` uses 2000 in the handler. The model-facing schema omits `additionalProperties` and JSON Schema defaults; the handler rejects unknown arguments.
 - Success: `{ ok: true, data: { content }, error: null, artifacts: [...] }`. `data` is always `{ content }`; `artifacts` is empty except for the image branch.
 - Display: summary field `path`.
 

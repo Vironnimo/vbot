@@ -70,16 +70,15 @@ READ_TOOL_PARAMETERS: JsonObject = {
                     "pattern": r"^[1-9][0-9]*:[1-9][0-9]*$",
                 },
             ],
-            "description": "Line number to start reading from (1-indexed).",
+            "description": "1-indexed start line or line:character continuation address.",
         },
         "limit": {
             "type": "integer",
             "minimum": 1,
-            "description": "Maximum number of lines to read.",
+            "description": "Maximum lines to read; default 2000.",
         },
     },
     "required": ["path"],
-    "additionalProperties": False,
 }
 
 
@@ -792,6 +791,7 @@ def register_read_tool(
         result_schema={"type": "object", "required": ["content"]},
         display=ToolDisplay(summary_fields=("path",)),
         parallel_safe=True,
+        open_input_schema=True,
     )
 
 

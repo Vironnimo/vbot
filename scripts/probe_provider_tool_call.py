@@ -37,6 +37,11 @@ from core.tools.process import (
     PROCESS_TOOL_NAME,
     PROCESS_TOOL_PARAMETERS,
 )
+from core.tools.read import (
+    READ_TOOL_DESCRIPTION,
+    READ_TOOL_NAME,
+    READ_TOOL_PARAMETERS,
+)
 from core.tools.skill import (
     SKILL_LIST_TOOL_DESCRIPTION,
     SKILL_LIST_TOOL_NAME,
@@ -76,6 +81,7 @@ PROBE_SCENARIOS = (
     "unknown_property_pressure",
     "large_arguments",
     "process",
+    "read",
     "skill",
     "skill_list",
     "web_fetch",
@@ -97,6 +103,14 @@ PROCESS_CASES = (
     "input_empty_newline",
     "input_empty_eof",
     "kill",
+)
+READ_CASES = (
+    "path_only",
+    "offset_line",
+    "offset_character",
+    "limit_only",
+    "offset_line_limit",
+    "offset_character_limit",
 )
 SKILL_CASES = ("activate", "skill_md", "reference", "script", "asset")
 WEB_FETCH_CASES = ("default", "markdown", "text", "raw")
@@ -144,6 +158,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=PROCESS_CASES,
         default="status_list",
         help="Exact process argument shape requested by the process scenario.",
+    )
+    parser.add_argument(
+        "--read-case",
+        choices=READ_CASES,
+        default="path_only",
+        help="Exact read argument shape requested by the read scenario.",
     )
     parser.add_argument(
         "--skill-case",
@@ -390,6 +410,43 @@ def _process_scenario(case_name: str) -> ProbeScenario:
     )
 
 
+def _read_scenario(case_name: str) -> ProbeScenario:
+    path = "src/provider_tool_probe.py"
+    read_arguments: dict[str, dict[str, Any]] = {
+        "path_only": {"path": path},
+        "offset_line": {"path": path, "offset": 25},
+        "offset_character": {"path": path, "offset": "25:80"},
+        "limit_only": {"path": path, "limit": 120},
+        "offset_line_limit": {"path": path, "offset": 25, "limit": 120},
+        "offset_character_limit": {
+            "path": path,
+            "offset": "25:80",
+            "limit": 120,
+        },
+    }
+    expected_arguments = read_arguments[case_name]
+    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
+    instruction = (
+        f"Call {READ_TOOL_NAME} exactly once with exactly this JSON object as its "
+        f"arguments: {rendered_arguments}. Preserve every value and omit every field not "
+        "shown."
+    )
+    return ProbeScenario(
+        "read",
+        [
+            {
+                "name": READ_TOOL_NAME,
+                "description": READ_TOOL_DESCRIPTION,
+                "parameters": READ_TOOL_PARAMETERS,
+            }
+        ],
+        _probe_messages(instruction),
+        READ_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
+    )
+
+
 def _web_fetch_scenario(case_name: str) -> ProbeScenario:
     url = "https://example.com/provider-tool-probe"
     web_fetch_arguments: dict[str, dict[str, Any]] = {
@@ -606,6 +663,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         )
     if name == "process":
         return _process_scenario(str(args.process_case))
+    if name == "read":
+        return _read_scenario(str(args.read_case))
     if name == "skill":
         return _skill_scenario(str(args.skill_case))
     if name == "skill_list":
@@ -1281,6 +1340,7 @@ async def _run(args: argparse.Namespace) -> int:
                 else None
             ),
             "process_case": args.process_case if scenario.name == "process" else None,
+            "read_case": args.read_case if scenario.name == "read" else None,
             "skill_case": args.skill_case if scenario.name == "skill" else None,
             "web_fetch_case": (args.web_fetch_case if scenario.name == "web_fetch" else None),
             "request_messages": len(messages),
