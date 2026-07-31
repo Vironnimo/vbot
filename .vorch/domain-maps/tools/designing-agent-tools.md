@@ -1,12 +1,12 @@
 # Designing Agent-Facing Tools
 
-Use this guide when adding a Tool, changing its public parameters, or migrating an older Tool contract. The primary outcome is an interface an Agent can call correctly from the Tool name, description, and one compact schema without guessing which fields select behavior.
+Use this guide when adding a Tool, changing its public parameters, or migrating an older Tool contract. Repository-root `TOOLS.md` is the normative authoring standard; this supplementary guide records project-specific shape decisions and migration routing.
 
 ## Choose the Public Shape
 
 Use this decision order:
 
-1. **One behavior:** expose its arguments directly in one closed flat object. A Tool named `channel_send` that only sends should accept delivery fields directly; `action: "send"` would repeat the Tool name.
+1. **One behavior:** expose its arguments directly in one open flat object. A Tool named `channel_send` that only sends should accept delivery fields directly; `action: "send"` would repeat the Tool name.
 2. **One behavior with optional targeting or selection:** keep direct optional target fields and validate their dependencies. `status()` checks the current Session, `status(session_id)` checks another Session for the same Agent, and `status(agent_id, session_id)` changes the owner and Session; these are target variants, not actions.
 3. **Several genuinely different behaviors:** require one top-level `action` enum and place every action argument beside it. CRUD, lifecycle transitions, and read-versus-mutate behavior normally qualify. `memory(action, scope, content?, entry_id?)` and `history(action, ...)` are the reference shape.
 
@@ -18,16 +18,16 @@ Do not expose `request.operation`, an operation-key object such as `{"create": {
 - Represent one concept once. Prefer one normalized field over several overlapping schedule, selector, or mode fields; do not preserve aliases in the canonical Tool contract.
 - When two Tool names separate discovery from exact retrieval but share the same authority and lifecycle, keep one configurable capability and derive the reader as a companion. A search result should return the reader's directly callable argument shape so the Agent does not translate identifiers or depend on both toggles being configured independently.
 - Make a field optional only when omission has a real default, an unambiguous derived fallback, or selects the current target. State that behavior in the field or Tool description.
-- Put fields required for every call in every relevant branch's `required` list. For a flat multi-action Tool, use `action_schema` so each action branch structurally requires what it needs and contains no properties belonging to another action. For another genuine discriminator such as Bash's execution `mode`, use `discriminated_union_schema` with the same closed-branch rule.
-- Reject fields that are inapplicable to the selected variant at the schema boundary, with handler checks retained as defense in depth for direct callers. A typo or stale field must fail with `invalid_arguments`, not be ignored.
+- Put a field in `required` only when every valid call needs it. A multi-action Tool requires `action` and advertises the shared optional-property superset; its handler enforces action-specific requirements and dependencies.
+- Reject fields that are unknown or inapplicable to the selected action in the handler before side effects. A typo or stale field must fail with `invalid_arguments`, not be ignored.
 - Use stable IDs returned by prior Tool Results for follow-up mutations. If IDs can shift, say when the Agent must list or refresh first.
 - Use one vocabulary consistently: `action` for a domain-behavior discriminator, `mode` only for a genuine execution contract such as Bash foreground/auto/background, domain names for arguments, and existing project terms for entities. Do not alternate between `action`, `operation`, `mode`, and `type` for the same role.
 
 ## Schema and Handler Boundary
 
-- The canonical input has a JSON-object root. A direct fixed-shape root sets `additionalProperties: false`; a flat discriminated union closes every object branch instead.
-- The schema owns field names, JSON types, enums, variant-specific field sets and requirements, ranges, lengths, and structurally simple dependencies. The handler owns cross-field meaning, authorization, existence, state transitions, and other semantic checks, while retaining variant-field checks as defense in depth.
-- A discriminated Tool uses one flat `oneOf` union whose branches each carry a single-value discriminator enum, only that variant's properties, its requirements, and `additionalProperties: false`. Multi-action Tools use `action`; a genuine execution-contract selector may use `mode`. Unions also remain appropriate for genuine value-shape alternatives within one behavior and for a cursor-only continuation that must reject every initial-call field.
+- The canonical model-facing input has one open JSON-object root with `type`, `properties`, and `required`; it never emits `additionalProperties`.
+- The schema owns field names, simple JSON types, small fixed enums, universal requirements, and only constraints that materially help the Model construct a valid call. The handler owns unknown fields, conditional requirements, inapplicable fields, actual defaults, cross-field meaning, authorization, existence, state transitions, and other semantic checks.
+- An Action Tool uses one required `action` enum in the same flat property set as every action argument. `oneOf` remains appropriate only inside one genuinely multi-representation parameter, such as `read.offset`; it never encodes actions, modes, targeting variants, optionality, or cursor continuation.
 - Do not coerce strings into numbers or booleans, accept aliases, or silently normalize retired public shapes. Runtime validation and handler validation must agree on the canonical types.
 - Provider strict mode is disabled across vBot. Design the natural canonical contract: never force optional fields to be required-and-null, remove schema features, or otherwise reshape a Tool for a Provider's strict-schema subset. Provider rendering must preserve this schema, while vBot runtime validation remains authoritative.
 
@@ -35,7 +35,7 @@ Do not expose `request.operation`, an operation-key object such as `{"create": {
 
 - The Tool description says what the Tool accomplishes, when to use it, and any decision the Agent must make. Do not spend the description teaching the Agent to construct an avoidably complex envelope.
 - An `action` description names every action in operational language. Each conditional field says which actions require it.
-- Document defaults and fallbacks exactly. Avoid fuzzy time expressions, hidden unit conversions, sentinel strings, or defaults that change by Provider.
+- The handler owns every actual default. Describe meaningful omission behavior directly; never emit non-numeric schema defaults, and use a numeric schema default only under the narrow stable, plan-relevant conditions in `TOOLS.md`.
 - Keep examples canonical and short. Show omitted optional fields as omitted, not as `null`, unless `null` is a meaningful accepted value.
 
 ## Results, Errors, and Display
@@ -49,12 +49,12 @@ Do not expose `request.operation`, an operation-key object such as `{"create": {
 
 1. Inventory every accepted public shape, action, required field, default, handler branch, display summary, result field, permission rule, and persisted or UI consumer.
 2. Classify the capability with the decision order above. Do not mechanically replace every `operation` with `action`: remove the discriminator entirely when the variants only choose a target or repeat a single-purpose Tool name.
-3. Define the smallest canonical flat schema. For multiple behaviors, use `action_schema`; for an established non-action discriminator, use `discriminated_union_schema`. Make every branch complete rather than publishing one optional-property superset. Preserve behavior and established domain field names unless a name itself causes ambiguity.
+3. Define the smallest canonical open flat schema. For multiple behaviors, require `action` and publish one shared optional-property superset. Preserve behavior and established domain field names unless a name itself causes ambiguity.
 4. Update the handler to consume the flat object directly and to reject action-inapplicable fields before side effects. Remove public normalizers that reconstruct the retired envelope.
 5. Reject retired nested, operation-key, alias, and stringified shapes. Do not run old and new Agent-facing contracts in parallel.
 6. Preserve historical presentation separately when needed: the WebUI may continue reading old persisted arguments, but current dispatch accepts only the new contract.
 7. Recheck Provider rendering and the non-strict invariant, schema fingerprints, Tool descriptions, `ToolDisplay`, prompts, E2E fake-provider calls, and any generated Tool catalogs.
-8. Test the exact Provider-visible branch properties and requirements, every valid action or target form, missing conditional requirements, forbidden action fields, unknown fields, retired shapes, stable success data, and expected failures.
+8. Pass the current production definition directly to Luna through `scripts/probe_provider_tool_call.py` and compare exact arguments for every action or mode, meaningful explicit value, and default-selecting omission. Separately test missing conditional requirements, forbidden action fields, unknown fields, retired shapes, stable success data, and expected failures through the handler.
 9. Update the owning Tool map, this domain map when the convention changes, and any prompt or user-facing documentation that teaches the call shape.
 
 ## Retired Shapes
