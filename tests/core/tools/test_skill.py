@@ -48,7 +48,6 @@ def test_skill_tool_describes_activation_and_file_path_contract() -> None:
         "type": "object",
         "properties": {},
         "required": [],
-        "additionalProperties": False,
     }
 
 
