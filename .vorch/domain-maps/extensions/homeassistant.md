@@ -20,7 +20,7 @@ Tool names: `ha_list_entities`, `ha_get_state`, `ha_list_services`, `ha_call_ser
 
 ### `ha_get_state`
 
-- `GET /api/states/{entity_id}`. Schema: required `entity_id` (validated `^[a-z_][a-z0-9_]*\.[a-z0-9_]+$`); `additionalProperties: false`.
+- `GET /api/states/{entity_id}`. Model-facing schema: open flat object with required `entity_id` (validated `^[a-z_][a-z0-9_]*\.[a-z0-9_]+$`); the handler rejects unknown fields and invalid values.
 - Returns `{ entity_id, state, attributes, last_changed, last_updated }`. Display summary field: `entity_id`.
 
 ### `ha_list_services`

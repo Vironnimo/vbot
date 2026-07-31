@@ -156,6 +156,9 @@ _HOMEASSISTANT_EXTENSION = importlib.import_module("resources.extensions.homeass
 HA_LIST_ENTITIES_DESCRIPTION = _HOMEASSISTANT_EXTENSION.HA_LIST_ENTITIES_DESCRIPTION
 HA_LIST_ENTITIES_NAME = _HOMEASSISTANT_EXTENSION.HA_LIST_ENTITIES_NAME
 HA_LIST_ENTITIES_PARAMETERS = _HOMEASSISTANT_EXTENSION.HA_LIST_ENTITIES_PARAMETERS
+HA_GET_STATE_DESCRIPTION = _HOMEASSISTANT_EXTENSION.HA_GET_STATE_DESCRIPTION
+HA_GET_STATE_NAME = _HOMEASSISTANT_EXTENSION.HA_GET_STATE_NAME
+HA_GET_STATE_PARAMETERS = _HOMEASSISTANT_EXTENSION.HA_GET_STATE_PARAMETERS
 
 DEFAULT_PROVIDER = "opencode-go"
 DEFAULT_CONNECTION = "opencode-go:api-key"
@@ -182,6 +185,7 @@ PROBE_SCENARIOS = (
     "edit",
     "glob",
     "grep",
+    "ha_get_state",
     "ha_list_entities",
     "history",
     "image_generation",
@@ -319,6 +323,7 @@ GREP_CASES = (
     "all_count",
 )
 HA_LIST_ENTITIES_CASES = ("default", "domain", "area", "all")
+HA_GET_STATE_CASES = ("light", "sensor")
 HISTORY_CASES = (
     "overview_default",
     "overview_limit_min",
@@ -551,6 +556,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=HA_LIST_ENTITIES_CASES,
         default="default",
         help="Exact ha_list_entities argument shape requested by the scenario.",
+    )
+    parser.add_argument(
+        "--ha-get-state-case",
+        choices=HA_GET_STATE_CASES,
+        default="light",
+        help="Exact ha_get_state argument value requested by the scenario.",
     )
     parser.add_argument(
         "--process-case",
@@ -1273,6 +1284,33 @@ def _ha_list_entities_scenario(case_name: str) -> ProbeScenario:
         ],
         _probe_messages(instruction),
         HA_LIST_ENTITIES_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
+    )
+
+
+def _ha_get_state_scenario(case_name: str) -> ProbeScenario:
+    arguments_by_case = {
+        "light": {"entity_id": "light.living_room"},
+        "sensor": {"entity_id": "sensor.outdoor_temperature"},
+    }
+    expected_arguments = arguments_by_case[case_name]
+    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
+    instruction = (
+        f"Call {HA_GET_STATE_NAME} exactly once with exactly this JSON object as its "
+        f"arguments: {rendered_arguments}. Preserve the value; do not add any field."
+    )
+    return ProbeScenario(
+        "ha_get_state",
+        [
+            {
+                "name": HA_GET_STATE_NAME,
+                "description": HA_GET_STATE_DESCRIPTION,
+                "parameters": HA_GET_STATE_PARAMETERS,
+            }
+        ],
+        _probe_messages(instruction),
+        HA_GET_STATE_NAME,
         require_closed_input=False,
         expected_arguments=expected_arguments,
     )
@@ -2348,6 +2386,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _glob_scenario(str(args.glob_case))
     if name == "grep":
         return _grep_scenario(str(args.grep_case))
+    if name == "ha_get_state":
+        return _ha_get_state_scenario(str(args.ha_get_state_case))
     if name == "ha_list_entities":
         return _ha_list_entities_scenario(str(args.ha_list_entities_case))
     if name == "history":
