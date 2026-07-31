@@ -143,14 +143,14 @@ WEB_FETCH_TOOL_PARAMETERS: JsonObject = {
             "type": "string",
             "enum": list(_WEB_FETCH_OUTPUTS),
             "description": (
-                "Required HTML output mode: markdown cleans HTML while preserving "
-                "links as Markdown; text cleans HTML and removes link targets; raw "
-                "returns HTML without cleanup. Non-HTML text and extracted documents "
-                "are returned unchanged by this choice."
+                "Optional HTML output mode. Omit it to use markdown, which cleans HTML "
+                "while preserving links as Markdown. Use text, which cleans HTML and "
+                "removes link targets, or raw to return HTML without cleanup. Non-HTML "
+                "text and extracted documents are returned unchanged by this choice."
             ),
         },
     },
-    "required": ["url", "output"],
+    "required": ["url"],
     "additionalProperties": False,
 }
 
@@ -1081,7 +1081,7 @@ def make_web_fetch_handler(attachment_store: Any) -> ToolHandler:
                 "validation_error", "url must be a non-empty string", retryable=False
             )
 
-        output_argument = arguments.get("output")
+        output_argument = arguments.get("output", "markdown")
         if output_argument not in _WEB_FETCH_OUTPUTS:
             return tool_failure(
                 "validation_error",

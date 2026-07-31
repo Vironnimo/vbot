@@ -79,8 +79,11 @@ def make_context(workspace: Path, tool_name: str = WEB_FETCH_TOOL_NAME) -> ToolC
     )
 
 
-def web_fetch_arguments(url: str, output: str = "markdown") -> dict[str, Any]:
-    return {"url": url, "output": output}
+def web_fetch_arguments(url: str, output: str | None = None) -> dict[str, Any]:
+    arguments: dict[str, Any] = {"url": url}
+    if output is not None:
+        arguments["output"] = output
+    return arguments
 
 
 def make_result(
@@ -273,19 +276,20 @@ def test_register_web_fetch_tool_schema() -> None:
 
     parameters = definition["parameters"]
     assert parameters["type"] == "object"
-    assert parameters["required"] == ["url", "output"]
+    assert parameters["required"] == ["url"]
     assert parameters["additionalProperties"] is False
     assert set(parameters["properties"]) == {"url", "output"}
     output = parameters["properties"]["output"]
     assert output["type"] == "string"
     assert output["enum"] == ["markdown", "text", "raw"]
-    assert "Required" in output["description"]
+    assert "Optional" in output["description"]
+    assert "Omit it to use markdown" in output["description"]
     assert "preserving links" in output["description"]
     assert "removes link targets" in output["description"]
     assert "without cleanup" in output["description"]
 
 
-def test_web_fetch_openai_wire_is_strict_with_required_output_mode() -> None:
+def test_web_fetch_openai_wire_preserves_optional_output_mode() -> None:
     [definition] = render_tool_definitions(
         [
             {
@@ -298,8 +302,8 @@ def test_web_fetch_openai_wire_is_strict_with_required_output_mode() -> None:
     )
 
     parameters = definition["parameters"]
-    assert parameters["required"] == ["url", "output"]
-    assert definition["strict"] is True
+    assert parameters["required"] == ["url"]
+    assert "strict" not in definition
     assert parameters["properties"]["output"]["enum"] == ["markdown", "text", "raw"]
 
 
@@ -307,7 +311,6 @@ def test_web_fetch_openai_wire_is_strict_with_required_output_mode() -> None:
 @pytest.mark.parametrize(
     ("arguments", "message"),
     [
-        ({"url": "https://example.com"}, "output must be one of"),
         (
             {"url": "https://example.com", "output": "unsupported"},
             "output must be one of",
