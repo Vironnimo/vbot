@@ -57,12 +57,12 @@ EDIT_TOOL_PARAMETERS: JsonObject = {
         },
         "replace_all": {
             "type": "boolean",
-            "description": "Replace all occurrences instead of requiring uniqueness.",
-            "default": False,
+            "description": (
+                "Replace every occurrence. Omit to require exactly one matching location."
+            ),
         },
     },
     "required": ["path", "old_string", "new_string"],
-    "additionalProperties": False,
 }
 
 AMBIGUOUS_CONTEXT_LIMIT = 3
@@ -281,6 +281,7 @@ def register_edit_tool(registry: ToolRegistry, *, file_state: FileReadState) -> 
         EDIT_TOOL_DESCRIPTION,
         EDIT_TOOL_PARAMETERS,
         make_edit_handler(file_state),
+        open_input_schema=True,
         result_schema={
             "type": "object",
             "required": ["message", "path", "first_changed_line", "replacements"],
