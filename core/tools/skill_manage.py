@@ -21,7 +21,6 @@ from core.tools.arguments import (
     required_string,
 )
 from core.tools.availability import SKILL_MANAGE_TOOL_NAME
-from core.tools.contracts import action_schema
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -33,11 +32,9 @@ from core.tools.tools import (
 from core.utils.logging import get_logger
 
 SKILL_MANAGE_TOOL_DESCRIPTION = (
-    "Create, edit, patch, or delete one writable vBot Skill, or write/remove one "
-    "UTF-8 support file. Set action to create, edit, patch, write_file, remove_file, "
-    "or delete. Omit scope for your private Skill home; use scope='global' only when "
-    "the user explicitly requested a Skill shared by all Agents. Project and bundled "
-    "Skills are read-only here; use the skill tool to read Skills."
+    "Create, edit, patch, or delete one writable vBot Skill, or write/remove one UTF-8 "
+    "support file. Omit scope for the private Skill home; use global only when the user "
+    "explicitly requests a Skill shared by all Agents. Project and bundled Skills are read-only."
 )
 
 _ACTIONS = ("create", "edit", "patch", "write_file", "remove_file", "delete")
@@ -78,7 +75,6 @@ _NAME_PARAMETER: JsonObject = {
 _SCOPE_PARAMETER: JsonObject = {
     "type": "string",
     "enum": list(_SCOPES),
-    "default": _OWN_SCOPE,
     "description": (
         "Writable Skill home. Omit for your private home. Use 'global' only when "
         "the user explicitly requested a shared Skill."
@@ -86,110 +82,54 @@ _SCOPE_PARAMETER: JsonObject = {
 }
 _CONTENT_PARAMETER: JsonObject = {
     "type": "string",
-    "description": "Complete SKILL.md content.",
+    "description": "Complete SKILL.md content. Required for create and edit.",
 }
 _FILE_PATH_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
     "pattern": r"^(SKILL\.md|(?:scripts|references|assets)/.+)$",
-    "description": "Skill-relative package path.",
+    "description": (
+        "Skill-relative path. For patch, omit to edit SKILL.md or provide SKILL.md/a support "
+        "path. Required for write_file and remove_file under scripts, references, or assets."
+    ),
 }
 _FILE_CONTENT_PARAMETER: JsonObject = {
     "type": "string",
-    "description": "Complete UTF-8 support-file text; may be empty.",
+    "description": "Complete UTF-8 support-file text; required for write_file and may be empty.",
 }
 _OLD_STRING_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
-    "description": "Exact non-empty text to replace.",
+    "description": "Exact non-empty text to replace. Required for patch.",
 }
 _NEW_STRING_PARAMETER: JsonObject = {
     "type": "string",
-    "description": "Replacement text; may be empty.",
+    "description": "Replacement text for patch; required and may be empty.",
 }
 _REPLACE_ALL_PARAMETER: JsonObject = {
     "type": "boolean",
-    "default": False,
-    "description": (
-        "Set true to replace every match; omit or set false to require exactly one match."
-    ),
+    "description": "For patch, replace every match. Omit or set false to require one match.",
 }
 
-SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = action_schema(
-    {
-        "create": {
-            "type": "object",
-            "description": "Create one Skill from complete SKILL.md content.",
-            "properties": {
-                "name": _NAME_PARAMETER,
-                "scope": _SCOPE_PARAMETER,
-                "content": _CONTENT_PARAMETER,
-            },
-            "required": ["name", "content"],
+SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = {
+    "type": "object",
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": list(_ACTIONS),
+            "description": "Skill mutation action to perform.",
         },
-        "edit": {
-            "type": "object",
-            "description": "Replace one Skill's complete SKILL.md content.",
-            "properties": {
-                "name": _NAME_PARAMETER,
-                "scope": _SCOPE_PARAMETER,
-                "content": _CONTENT_PARAMETER,
-            },
-            "required": ["name", "content"],
-        },
-        "patch": {
-            "type": "object",
-            "description": (
-                "Replace exact text in SKILL.md or one support file. file_path defaults "
-                "to SKILL.md and replace_all defaults to false."
-            ),
-            "properties": {
-                "name": _NAME_PARAMETER,
-                "scope": _SCOPE_PARAMETER,
-                "file_path": _FILE_PATH_PARAMETER,
-                "old_string": _OLD_STRING_PARAMETER,
-                "new_string": _NEW_STRING_PARAMETER,
-                "replace_all": _REPLACE_ALL_PARAMETER,
-            },
-            "required": ["name", "old_string", "new_string"],
-        },
-        "write_file": {
-            "type": "object",
-            "description": "Write one complete UTF-8 support file.",
-            "properties": {
-                "name": _NAME_PARAMETER,
-                "scope": _SCOPE_PARAMETER,
-                "file_path": _FILE_PATH_PARAMETER,
-                "file_content": _FILE_CONTENT_PARAMETER,
-            },
-            "required": ["name", "file_path", "file_content"],
-        },
-        "remove_file": {
-            "type": "object",
-            "description": "Remove one support file.",
-            "properties": {
-                "name": _NAME_PARAMETER,
-                "scope": _SCOPE_PARAMETER,
-                "file_path": _FILE_PATH_PARAMETER,
-            },
-            "required": ["name", "file_path"],
-        },
-        "delete": {
-            "type": "object",
-            "description": "Delete one complete Skill.",
-            "properties": {
-                "name": _NAME_PARAMETER,
-                "scope": _SCOPE_PARAMETER,
-            },
-            "required": ["name"],
-        },
+        "name": _NAME_PARAMETER,
+        "scope": _SCOPE_PARAMETER,
+        "content": _CONTENT_PARAMETER,
+        "file_path": _FILE_PATH_PARAMETER,
+        "file_content": _FILE_CONTENT_PARAMETER,
+        "old_string": _OLD_STRING_PARAMETER,
+        "new_string": _NEW_STRING_PARAMETER,
+        "replace_all": _REPLACE_ALL_PARAMETER,
     },
-    description=(
-        "Flat action interface. Each action exposes only its valid arguments and "
-        "structurally requires every field it needs."
-    ),
-    action_description="Skill mutation action to perform.",
-)
+    "required": ["action", "name"],
+}
 
 
 def make_skill_manage_handler(
@@ -354,6 +294,7 @@ def register_skill_manage_tool(
             resolve_global_skills_dir,
             reload_skills,
         ),
+        open_input_schema=True,
         result_schema={"type": "object", "required": ["scope"]},
         display=ToolDisplay(summary_builder=_skill_manage_display_summary),
     )

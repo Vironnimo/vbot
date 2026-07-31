@@ -66,27 +66,14 @@ _DIRECT_TOOL_SCHEMAS: tuple[tuple[str, JsonObject], ...] = (
 _BRANCH_COMPLETE_SCHEMAS = (
     ("grep", GREP_TOOL_PARAMETERS),
     ("history", HISTORY_TOOL_PARAMETERS),
-    ("skill_manage", SKILL_MANAGE_TOOL_PARAMETERS),
 )
 
 _BRANCH_INAPPLICABLE_CALLS = (
     ("history", HISTORY_TOOL_PARAMETERS, {"action": "overview", "query": "text"}, "query"),
-    (
-        "skill_manage",
-        SKILL_MANAGE_TOOL_PARAMETERS,
-        {"action": "delete", "name": "demo", "content": "text"},
-        "content",
-    ),
 )
 
 _BRANCH_MISSING_REQUIRED_CALLS = (
     ("history", HISTORY_TOOL_PARAMETERS, {"action": "search"}, "query"),
-    (
-        "skill_manage",
-        SKILL_MANAGE_TOOL_PARAMETERS,
-        {"action": "create", "name": "demo"},
-        "content",
-    ),
 )
 
 
@@ -218,6 +205,7 @@ def test_direct_tool_schema_is_closed_and_declares_required_properties(
         "session_read",
         "session_search",
         "skill",
+        "skill_manage",
         "status",
         "subagent",
         "text_to_speech",
