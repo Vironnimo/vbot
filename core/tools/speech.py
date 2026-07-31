@@ -17,10 +17,8 @@ from core.tools.tools import (
 TEXT_TO_SPEECH_TOOL_NAME = "text_to_speech"
 _TEXT_TO_SPEECH_ARGUMENTS = frozenset({"text"})
 TEXT_TO_SPEECH_TOOL_DESCRIPTION = (
-    "Convert text to spoken audio using the configured text-to-speech model. "
-    "In the web chat the audio plays automatically. The result includes the "
-    "audio file's path — to deliver the audio anywhere else (e.g. a channel "
-    "conversation), send that file, e.g. via channel_send."
+    "Convert text to spoken audio using the configured model. The chat plays the "
+    "returned audio artifact automatically."
 )
 TEXT_TO_SPEECH_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -28,11 +26,10 @@ TEXT_TO_SPEECH_TOOL_PARAMETERS: JsonObject = {
         "text": {
             "type": "string",
             "minLength": 1,
-            "description": "The text to synthesize.",
+            "description": "Text to speak.",
         }
     },
     "required": ["text"],
-    "additionalProperties": False,
 }
 
 
@@ -84,6 +81,7 @@ def register_text_to_speech_tool(registry: ToolRegistry, speech_service: Any) ->
         TEXT_TO_SPEECH_TOOL_DESCRIPTION,
         TEXT_TO_SPEECH_TOOL_PARAMETERS,
         make_text_to_speech_handler(speech_service),
+        open_input_schema=True,
         result_schema={"type": "object", "required": ["message", "artifact"]},
         display=ToolDisplay(summary_fields=("text",)),
     )

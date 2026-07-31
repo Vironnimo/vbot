@@ -8,8 +8,11 @@ from types import SimpleNamespace
 import pytest
 
 from core.model_tasks import SpeechOutcomeUnknownError
-from core.tools import ToolContractError
-from core.tools.speech import TEXT_TO_SPEECH_TOOL_NAME, register_text_to_speech_tool
+from core.tools.speech import (
+    TEXT_TO_SPEECH_TOOL_NAME,
+    TEXT_TO_SPEECH_TOOL_PARAMETERS,
+    register_text_to_speech_tool,
+)
 from core.tools.tools import ToolContext, ToolRegistry
 
 
@@ -18,6 +21,10 @@ async def test_text_to_speech_tool_returns_artifact_payload(tmp_path: Path) -> N
     audio_path = tmp_path / "artifact-1.mp3"
     registry = ToolRegistry()
     register_text_to_speech_tool(registry, _SpeechService(audio_path))
+    tool = registry.get(TEXT_TO_SPEECH_TOOL_NAME)
+    assert tool.parameters == TEXT_TO_SPEECH_TOOL_PARAMETERS
+    assert tool.open_input_schema is True
+    assert "additionalProperties" not in tool.parameters
     context = ToolContext(
         agent_id="agent",
         session_id="session",
@@ -58,8 +65,13 @@ async def test_text_to_speech_tool_rejects_unknown_arguments(tmp_path: Path) -> 
         data_root=tmp_path,
     )
 
-    with pytest.raises(ToolContractError, match="Additional properties"):
-        await registry.dispatch(context, {"text": "hello", "unexpected": True})
+    result = await registry.dispatch(context, {"text": "hello", "unexpected": True})
+
+    assert result["ok"] is False
+    assert result["error"] == {
+        "code": "invalid_arguments",
+        "message": "Unknown argument(s): unexpected",
+    }
 
 
 @pytest.mark.asyncio

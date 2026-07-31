@@ -248,6 +248,7 @@ def test_direct_tool_schema_is_closed_and_declares_required_properties(
         "process",
         "read",
         "skill",
+        "text_to_speech",
         "web_fetch",
         "web_search",
         "write",
