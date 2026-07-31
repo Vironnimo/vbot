@@ -29,10 +29,8 @@ from core.tools.tools import (
 PROJECT_TOOL_NAME = "project"
 PROJECT_TOOL_DESCRIPTION = (
     "Load a registered Project's current instructions, absolute cwd, and Project Skills. "
-    "Identity Agents must call this tool alone and wait for its result before using file or "
-    "shell tools on a registered Project that is not already their working Project. Use "
-    "absolute file paths and set bash workdir to the returned cwd on every bash call; bash "
-    "calls are one-shot and do not retain cwd changes."
+    "Call it alone and wait for the result before taking dependent actions in that Project. "
+    "Loading Project Context does not change the current working directory."
 )
 PROJECT_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -44,7 +42,6 @@ PROJECT_TOOL_PARAMETERS: JsonObject = {
         }
     },
     "required": ["project_id"],
-    "additionalProperties": False,
 }
 
 PROJECT_PROMPT_BLOCK_HEADER = (
@@ -199,6 +196,7 @@ def register_project_tool(
         PROJECT_TOOL_DESCRIPTION,
         PROJECT_TOOL_PARAMETERS,
         make_project_handler(projects, get_renderer, list_project_skills, file_state),
+        open_input_schema=True,
         result_schema={
             "type": "object",
             "required": ["status", "project_id", "display_name", "cwd", "content"],
