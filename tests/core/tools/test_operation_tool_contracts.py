@@ -64,14 +64,12 @@ _DIRECT_TOOL_SCHEMAS: tuple[tuple[str, JsonObject], ...] = (
 )
 
 _BRANCH_COMPLETE_SCHEMAS = (
-    ("cron", CRON_TOOL_PARAMETERS),
     ("grep", GREP_TOOL_PARAMETERS),
     ("history", HISTORY_TOOL_PARAMETERS),
     ("skill_manage", SKILL_MANAGE_TOOL_PARAMETERS),
 )
 
 _BRANCH_INAPPLICABLE_CALLS = (
-    ("cron", CRON_TOOL_PARAMETERS, {"action": "list", "id": "job"}, "id"),
     ("history", HISTORY_TOOL_PARAMETERS, {"action": "overview", "query": "text"}, "query"),
     (
         "skill_manage",
@@ -82,7 +80,6 @@ _BRANCH_INAPPLICABLE_CALLS = (
 )
 
 _BRANCH_MISSING_REQUIRED_CALLS = (
-    ("cron", CRON_TOOL_PARAMETERS, {"action": "update", "id": "job"}, "minProperties"),
     ("history", HISTORY_TOOL_PARAMETERS, {"action": "search"}, "query"),
     (
         "skill_manage",
@@ -209,6 +206,7 @@ def test_direct_tool_schema_is_closed_and_declares_required_properties(
         "analyze_image",
         "bash",
         "channel_send",
+        "cron",
         "edit",
         "glob",
         "grep",
