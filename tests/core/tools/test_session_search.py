@@ -111,6 +111,11 @@ async def test_registration_exposes_two_small_stable_tools(tmp_path: Path) -> No
     }
     assert search.parameters == SESSION_SEARCH_TOOL_PARAMETERS
     assert read.parameters == SESSION_READ_TOOL_PARAMETERS
+    assert "oneOf" not in read.parameters
+    assert "additionalProperties" not in read.parameters
+    assert read.parameters["required"] == []
+    assert read.open_input_schema is True
+    assert search.open_input_schema is False
     assert search.description.startswith(SESSION_SEARCH_TOOL_DESCRIPTION)
     assert {
         SESSION_SEARCH_TOOL_NAME,
@@ -126,6 +131,28 @@ async def test_registration_exposes_two_small_stable_tools(tmp_path: Path) -> No
         backend_registry = ToolRegistry()
         register_session_search_tool(backend_registry, backend, sessions)
         assert backend_registry.get(SESSION_SEARCH_TOOL_NAME).parameters == search.parameters
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    (
+        {},
+        {"session_id": "target", "unexpected": True},
+        {"session_id": "target", "cursor": "opaque"},
+    ),
+)
+async def test_session_read_handler_rejects_invalid_flat_combinations(
+    tmp_path: Path, arguments: JsonObject
+) -> None:
+    sessions = ChatSessionManager(tmp_path)
+
+    result = await session_read_handler(
+        make_context(tmp_path, tool_name=SESSION_READ_TOOL_NAME),
+        arguments,
+        sessions,
+    )
+
+    failure(result, "invalid_arguments")
 
 
 async def test_description_explains_active_backend(tmp_path: Path) -> None:
