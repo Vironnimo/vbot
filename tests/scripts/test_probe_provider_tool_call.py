@@ -134,6 +134,14 @@ def test_probe_profiles_never_enable_strict_mode() -> None:
     assert opencode_go == "omit_strict"
 
 
+def test_probe_stream_groups_tool_fragments_by_slot_when_id_is_only_sent_once() -> None:
+    first_fragment = {"slot": 0, "id": "call-1"}
+    later_fragment = {"slot": 0}
+
+    assert PROBE._probe_tool_call_stream_key(first_fragment) == "index:0"
+    assert PROBE._probe_tool_call_stream_key(later_fragment) == "index:0"
+
+
 def test_nested_operation_scenario_compiles_and_validates() -> None:
     scenario = PROBE._scenario(
         SimpleNamespace(scenario="nested_operation", lines=8),
