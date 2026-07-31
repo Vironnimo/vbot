@@ -396,6 +396,45 @@ def test_skill_list_scenario_uses_production_schema_and_empty_arguments() -> Non
     )
 
 
+def test_skill_manage_cases_use_production_schema_and_exact_arguments() -> None:
+    for case_name in PROBE.SKILL_MANAGE_CASES:
+        scenario = PROBE._scenario(
+            SimpleNamespace(
+                scenario="skill_manage",
+                skill_manage_case=case_name,
+                lines=8,
+            ),
+        )
+        contracts = PROBE._compile_probe_contracts(
+            scenario.tools,
+            require_closed_input=scenario.require_closed_input,
+        )
+        arguments = scenario.expected_arguments
+
+        assert scenario.tools[0]["parameters"] is PROBE.SKILL_MANAGE_TOOL_PARAMETERS
+        assert arguments is not None
+        assert "additionalProperties" not in json.dumps(scenario.tools[0]["parameters"])
+        assert "oneOf" not in scenario.tools[0]["parameters"]
+        assert '"default"' not in json.dumps(scenario.tools[0]["parameters"])
+        contracts[PROBE.SKILL_MANAGE_TOOL_NAME].validate_arguments(arguments)
+        assert (
+            PROBE._expected_argument_measurements(
+                [{"name": PROBE.SKILL_MANAGE_TOOL_NAME, "arguments": arguments}],
+                scenario,
+            )["expected_arguments_match"]
+            is True
+        )
+
+    create = PROBE._skill_manage_scenario("create_own")
+    patch = PROBE._skill_manage_scenario("patch_default")
+    assert "scope" not in create.expected_arguments
+    assert "file_path" not in patch.expected_arguments
+    assert "replace_all" not in patch.expected_arguments
+    assert (
+        PROBE._skill_manage_scenario("write_asset_empty").expected_arguments["file_content"] == ""
+    )
+
+
 def test_write_scenario_uses_production_schema_and_exact_arguments() -> None:
     scenario = PROBE._scenario(SimpleNamespace(scenario="write", lines=8))
     contracts = PROBE._compile_probe_contracts(

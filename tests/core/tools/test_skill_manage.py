@@ -108,60 +108,35 @@ def test_provider_schema_is_flat_and_hermes_shaped(tmp_path: Path) -> None:
     harness = _Harness(tmp_path)
     definitions = harness.tools.provider_definitions([SKILL_MANAGE_TOOL_NAME])
     parameters = cast(dict[str, Any], definitions[0]["parameters"])
-    branches = {branch["properties"]["action"]["enum"][0]: branch for branch in parameters["oneOf"]}
 
     assert parameters == SKILL_MANAGE_TOOL_PARAMETERS
     assert parameters["type"] == "object"
-    assert set(branches) == {
+    assert "oneOf" not in parameters
+    assert "additionalProperties" not in parameters
+    properties = parameters["properties"]
+    assert set(properties) == {
+        "action",
+        "name",
+        "scope",
+        "content",
+        "file_path",
+        "file_content",
+        "old_string",
+        "new_string",
+        "replace_all",
+    }
+    assert properties["action"]["enum"] == [
         "create",
         "edit",
         "patch",
         "write_file",
         "remove_file",
         "delete",
-    }
-    assert set(branches["create"]["properties"]) == {"action", "name", "scope", "content"}
-    assert branches["create"]["required"] == ["action", "name", "content"]
-    assert set(branches["edit"]["properties"]) == {"action", "name", "scope", "content"}
-    assert branches["edit"]["required"] == ["action", "name", "content"]
-    assert set(branches["patch"]["properties"]) == {
-        "action",
-        "name",
-        "scope",
-        "file_path",
-        "old_string",
-        "new_string",
-        "replace_all",
-    }
-    assert branches["patch"]["required"] == [
-        "action",
-        "name",
-        "old_string",
-        "new_string",
     ]
-    assert set(branches["write_file"]["properties"]) == {
-        "action",
-        "name",
-        "scope",
-        "file_path",
-        "file_content",
-    }
-    assert branches["write_file"]["required"] == [
-        "action",
-        "name",
-        "file_path",
-        "file_content",
-    ]
-    assert set(branches["remove_file"]["properties"]) == {
-        "action",
-        "name",
-        "scope",
-        "file_path",
-    }
-    assert branches["remove_file"]["required"] == ["action", "name", "file_path"]
-    assert set(branches["delete"]["properties"]) == {"action", "name", "scope"}
-    assert branches["delete"]["required"] == ["action", "name"]
-    assert all(branch["additionalProperties"] is False for branch in branches.values())
+    assert parameters["required"] == ["action", "name"]
+    assert "default" not in str(parameters)
+    assert "Omit for your private home" in properties["scope"]["description"]
+    assert "Omit or set false" in properties["replace_all"]["description"]
     assert "draft_id" not in str(parameters)
     assert "source_path" not in str(parameters)
     assert "executable" not in str(parameters)
@@ -208,7 +183,7 @@ def test_create_requires_content(tmp_path: Path) -> None:
 
     assert result == tool_failure(
         "invalid_arguments",
-        "arguments: 'content' is a required property [required]",
+        "content must be a string",
         retryable=False,
     )
     assert not harness.home("main").exists()
@@ -370,8 +345,7 @@ def test_action_rejects_fields_from_another_action(tmp_path: Path) -> None:
 
     assert result == tool_failure(
         "invalid_arguments",
-        "arguments: Additional properties are not allowed ('content' was unexpected) "
-        "[additionalProperties]",
+        "Unknown delete argument(s): content",
         retryable=False,
     )
 
@@ -431,4 +405,4 @@ def test_removed_draft_action_is_rejected(tmp_path: Path) -> None:
     result = harness.run({"action": "begin", "name": "demo"})
 
     assert result["ok"] is False
-    assert "[oneOf]" in cast(dict[str, Any], result["error"])["message"]
+    assert "[enum]" in cast(dict[str, Any], result["error"])["message"]

@@ -109,6 +109,11 @@ from core.tools.skill import (
     SKILL_TOOL_NAME,
     SKILL_TOOL_PARAMETERS,
 )
+from core.tools.skill_manage import (
+    SKILL_MANAGE_TOOL_DESCRIPTION,
+    SKILL_MANAGE_TOOL_NAME,
+    SKILL_MANAGE_TOOL_PARAMETERS,
+)
 from core.tools.speech import (
     TEXT_TO_SPEECH_TOOL_DESCRIPTION,
     TEXT_TO_SPEECH_TOOL_NAME,
@@ -175,6 +180,7 @@ PROBE_SCENARIOS = (
     "session_search",
     "skill",
     "skill_list",
+    "skill_manage",
     "status",
     "subagent",
     "text_to_speech",
@@ -344,6 +350,21 @@ SESSION_SEARCH_CASES = (
     "cursor",
 )
 SKILL_CASES = ("activate", "skill_md", "reference", "script", "asset")
+SKILL_MANAGE_CASES = (
+    "create_own",
+    "create_global",
+    "edit",
+    "patch_default",
+    "patch_false",
+    "patch_true",
+    "patch_support",
+    "patch_delete",
+    "write_script",
+    "write_reference",
+    "write_asset_empty",
+    "remove_file",
+    "delete",
+)
 STATUS_CASES = ("current", "session", "agent_session")
 SUBAGENT_CASES = (
     "run_self",
@@ -500,6 +521,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=SKILL_CASES,
         default="activate",
         help="Exact skill argument shape requested by the skill scenario.",
+    )
+    parser.add_argument(
+        "--skill-manage-case",
+        choices=SKILL_MANAGE_CASES,
+        default="create_own",
+        help="Exact skill_manage action and argument shape requested by the scenario.",
     )
     parser.add_argument(
         "--status-case",
@@ -1816,6 +1843,117 @@ def _skill_scenario(case_name: str) -> ProbeScenario:
     )
 
 
+def _skill_manage_scenario(case_name: str) -> ProbeScenario:
+    skill_md = (
+        "---\nname: provider-probe\ndescription: Verify Provider Tool Calls.\n---\n\n"
+        "# Provider Probe\n\nFollow the probe instructions.\n"
+    )
+    edited_skill_md = skill_md.replace(
+        "Follow the probe instructions.",
+        "Follow the revised probe instructions.",
+    )
+    skill_manage_arguments: dict[str, dict[str, Any]] = {
+        "create_own": {
+            "action": "create",
+            "name": "provider-probe",
+            "content": skill_md,
+        },
+        "create_global": {
+            "action": "create",
+            "name": "provider-probe",
+            "scope": "global",
+            "content": skill_md,
+        },
+        "edit": {
+            "action": "edit",
+            "name": "provider-probe",
+            "content": edited_skill_md,
+        },
+        "patch_default": {
+            "action": "patch",
+            "name": "provider-probe",
+            "old_string": "Follow the probe instructions.",
+            "new_string": "Follow the revised probe instructions.",
+        },
+        "patch_false": {
+            "action": "patch",
+            "name": "provider-probe",
+            "old_string": "probe",
+            "new_string": "provider probe",
+            "replace_all": False,
+        },
+        "patch_true": {
+            "action": "patch",
+            "name": "provider-probe",
+            "old_string": "probe",
+            "new_string": "provider probe",
+            "replace_all": True,
+        },
+        "patch_support": {
+            "action": "patch",
+            "name": "provider-probe",
+            "file_path": "scripts/check.py",
+            "old_string": "value = 1",
+            "new_string": "value = 2",
+        },
+        "patch_delete": {
+            "action": "patch",
+            "name": "provider-probe",
+            "file_path": "references/notes.md",
+            "old_string": "obsolete line\n",
+            "new_string": "",
+        },
+        "write_script": {
+            "action": "write_file",
+            "name": "provider-probe",
+            "file_path": "scripts/check.py",
+            "file_content": "print('provider probe')\n",
+        },
+        "write_reference": {
+            "action": "write_file",
+            "name": "provider-probe",
+            "file_path": "references/notes.md",
+            "file_content": "Provider probe notes.\nSecond line.\n",
+        },
+        "write_asset_empty": {
+            "action": "write_file",
+            "name": "provider-probe",
+            "file_path": "assets/placeholder.txt",
+            "file_content": "",
+        },
+        "remove_file": {
+            "action": "remove_file",
+            "name": "provider-probe",
+            "file_path": "references/notes.md",
+        },
+        "delete": {"action": "delete", "name": "provider-probe"},
+    }
+    expected_arguments = skill_manage_arguments[case_name]
+    rendered_arguments = json.dumps(
+        expected_arguments,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    instruction = (
+        f"Call {SKILL_MANAGE_TOOL_NAME} exactly once with exactly this JSON object as its "
+        f"arguments: {rendered_arguments}. Preserve every value and do not add any field."
+    )
+    return ProbeScenario(
+        "skill_manage",
+        [
+            {
+                "name": SKILL_MANAGE_TOOL_NAME,
+                "description": SKILL_MANAGE_TOOL_DESCRIPTION,
+                "parameters": SKILL_MANAGE_TOOL_PARAMETERS,
+            }
+        ],
+        _probe_messages(instruction),
+        SKILL_MANAGE_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
+    )
+
+
 def _skill_list_scenario() -> ProbeScenario:
     expected_arguments: dict[str, Any] = {}
     instruction = (
@@ -1999,6 +2137,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _skill_scenario(str(args.skill_case))
     if name == "skill_list":
         return _skill_list_scenario()
+    if name == "skill_manage":
+        return _skill_manage_scenario(str(args.skill_manage_case))
     if name == "status":
         return _status_scenario(str(args.status_case))
     if name == "subagent":
@@ -2701,6 +2841,9 @@ async def _run(args: argparse.Namespace) -> int:
                 args.session_search_case if scenario.name == "session_search" else None
             ),
             "skill_case": args.skill_case if scenario.name == "skill" else None,
+            "skill_manage_case": (
+                args.skill_manage_case if scenario.name == "skill_manage" else None
+            ),
             "status_case": args.status_case if scenario.name == "status" else None,
             "subagent_case": args.subagent_case if scenario.name == "subagent" else None,
             "speech_case": args.speech_case if scenario.name == "text_to_speech" else None,
