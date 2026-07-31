@@ -256,10 +256,13 @@ def test_display_metadata_preserved() -> None:
     )
 
 
-def test_provider_schemas_reject_unknowns_and_describe_string_formats() -> None:
+def test_provider_schemas_follow_each_tools_current_migration_state() -> None:
     tools = _tools_with_token()
 
-    for name in _HA_TOOL_NAMES:
+    list_entities = tools.get(HA_LIST_ENTITIES_NAME)
+    assert list_entities.open_input_schema is True
+    assert "additionalProperties" not in list_entities.parameters
+    for name in (HA_GET_STATE_NAME, HA_LIST_SERVICES_NAME, HA_CALL_SERVICE_NAME):
         assert tools.get(name).parameters["additionalProperties"] is False
 
     entity_id = tools.get(HA_GET_STATE_NAME).parameters["properties"]["entity_id"]
@@ -543,7 +546,6 @@ async def test_get_state_invalid_entity_id(entity_id: str) -> None:
 @pytest.mark.parametrize(
     ("tool_name", "arguments", "message"),
     (
-        (HA_LIST_ENTITIES_NAME, {"unknown": True}, "Additional properties are not allowed"),
         (HA_LIST_ENTITIES_NAME, {"domain": 42}, "expected JSON string"),
         (HA_GET_STATE_NAME, {"entity_id": 42}, "expected JSON string"),
         (HA_LIST_SERVICES_NAME, {"domain": []}, "expected JSON string"),
@@ -565,6 +567,16 @@ async def test_handlers_reject_unknown_or_wrong_typed_arguments(
 
     error = assert_failure_envelope(result, "invalid_arguments")
     assert message in error["message"]
+
+
+@pytest.mark.asyncio
+async def test_list_entities_handler_rejects_unknown_arguments_after_open_schema() -> None:
+    tools = _tools_with_token()
+
+    result = await _dispatch(tools, HA_LIST_ENTITIES_NAME, {"unknown": True})
+
+    error = assert_failure_envelope(result, "validation_error")
+    assert error["message"] == "Unknown argument(s): unknown"
 
 
 @respx.mock

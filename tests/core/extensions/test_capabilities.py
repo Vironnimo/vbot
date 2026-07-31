@@ -74,6 +74,18 @@ def _ready_tool_extension_source(tool_name: str, *, ready: bool) -> str:
     )
 
 
+def _open_tool_extension_source(tool_name: str) -> str:
+    return (
+        "from core.tools import tool_success\n"
+        "def _handler(context, arguments):\n"
+        "    return tool_success({'arguments': arguments})\n"
+        "def register(api):\n"
+        f"    api.register_tool({tool_name!r}, 'desc', "
+        "{'type': 'object', 'properties': {'value': {'type': 'string'}}}, "
+        "_handler, open_input_schema=True)\n"
+    )
+
+
 def _command_extension_source(command_name: str, marker: str) -> str:
     return (
         "from core.chat import CommandFeedback, CommandOutcome\n"
@@ -168,6 +180,23 @@ def test_extension_tool_with_readiness_predicate_lands_in_registry(tmp_path: Pat
     tool = tool_registry.get("ext_ready")
     assert tool.ready is not None
     assert tool.ready() is True
+
+
+def test_extension_tool_can_declare_an_open_model_facing_schema(tmp_path: Path) -> None:
+    root = tmp_path / "extensions"
+    _write_single_file(root, "open_ext", _open_tool_extension_source("ext_open"))
+
+    registry = ExtensionRegistry.load(root)
+    tool_registry = ToolRegistry()
+    registry.apply_tools(tool_registry)
+
+    tool = tool_registry.get("ext_open")
+    assert tool.open_input_schema is True
+    assert "additionalProperties" not in tool.parameters
+    result = asyncio.run(
+        tool_registry.dispatch(_tool_context("ext_open", tmp_path), {"unknown": "preserved"})
+    )
+    assert result["data"] == {"arguments": {"unknown": "preserved"}}
 
 
 def test_extension_not_ready_tool_hidden_from_provider_definitions_but_registered(

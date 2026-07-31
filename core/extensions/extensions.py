@@ -160,6 +160,7 @@ class ToolDeclaration:
     readiness_hint: str | None = None
     result_schema: dict[str, Any] | None = None
     parallel_safe: bool = True
+    open_input_schema: bool = False
 
 
 @dataclass(frozen=True)
@@ -346,6 +347,7 @@ class ExtensionAPI:
         readiness_hint: str | None = None,
         result_schema: dict[str, Any] | None = None,
         parallel_safe: bool = True,
+        open_input_schema: bool = False,
     ) -> None:
         """Declare an agent tool, mirroring ``ToolRegistry.register``.
 
@@ -374,6 +376,7 @@ class ExtensionAPI:
                 readiness_hint=readiness_hint,
                 result_schema=result_schema,
                 parallel_safe=parallel_safe,
+                open_input_schema=open_input_schema,
             )
         )
 
@@ -738,6 +741,7 @@ class ExtensionRegistry:
                 extension=record.name,
                 result_schema=declaration.result_schema,
                 parallel_safe=declaration.parallel_safe,
+                open_input_schema=declaration.open_input_schema,
             )
         except Exception as exc:
             self._diagnose_capability(record, f"tool {name!r} registration failed: {exc}")
