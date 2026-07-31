@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from core.sessions import ChatSessionManager
-from core.tools.contracts import action_schema
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -62,11 +61,8 @@ _HISTORY_CHECKPOINT_PARAMETER: JsonObject = {
 _HISTORY_ROLES_PARAMETER: JsonObject = {
     "type": "array",
     "items": {"type": "string", "enum": list(HISTORY_SUPPORTED_ROLES)},
-    "minItems": 1,
-    "uniqueItems": True,
     "description": (
-        "For search, read, and around. Message roles to include; defaults to user, "
-        "assistant, and error."
+        "Message roles for search, read, and around. Omit to include user, assistant, and error."
     ),
 }
 _HISTORY_LIMIT_PARAMETER: JsonObject = {
@@ -86,114 +82,59 @@ _HISTORY_CURSOR_PARAMETER: JsonObject = {
     ),
 }
 
-
-def _history_action_schema(
-    description: str,
-    properties: JsonObject,
-    *,
-    required: tuple[str, ...] = (),
-) -> JsonObject:
-    cursor_variant: JsonObject = {}
-    if properties:
-        cursor_variant["not"] = {
-            "anyOf": [{"required": [name]} for name in properties],
-        }
-    schema: JsonObject = {
-        "type": "object",
-        "description": description + " Continue a previous page with cursor by itself.",
-        "properties": {
-            **properties,
-            "cursor": _HISTORY_CURSOR_PARAMETER,
+HISTORY_TOOL_PARAMETERS: JsonObject = {
+    "type": "object",
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": list(HISTORY_ACTIONS),
+            "description": (
+                "overview lists checkpoint sections, search finds records, read returns "
+                "records chronologically, and around returns records near a message_id."
+            ),
         },
-        "required": [],
-        "if": {"required": ["cursor"]},
-        "then": cursor_variant,
-    }
-    if required:
-        schema["else"] = {"required": list(required)}
-    return schema
-
-
-HISTORY_TOOL_PARAMETERS: JsonObject = action_schema(
-    {
-        "overview": _history_action_schema(
-            "List available Compaction checkpoint sections.",
-            {"limit": _HISTORY_LIMIT_PARAMETER},
-        ),
-        "search": _history_action_schema(
-            "Find matching records.",
-            {
-                "query": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "Non-blank text to find.",
-                },
-                "checkpoint": _HISTORY_CHECKPOINT_PARAMETER,
-                "roles": _HISTORY_ROLES_PARAMETER,
-                "match": {
-                    "type": "string",
-                    "enum": list(HISTORY_MATCH_MODES),
-                    "description": (
-                        "all_terms requires every query term, any_term requires at least "
-                        "one, and phrase requires the complete normalized phrase. "
-                        "Default all_terms."
-                    ),
-                },
-                "limit": _HISTORY_LIMIT_PARAMETER,
-            },
-            required=("query",),
-        ),
-        "read": _history_action_schema(
-            "Return canonical records chronologically.",
-            {
-                "checkpoint": _HISTORY_CHECKPOINT_PARAMETER,
-                "roles": _HISTORY_ROLES_PARAMETER,
-                "direction": {
-                    "type": "string",
-                    "enum": list(HISTORY_DIRECTIONS),
-                    "description": (
-                        "start returns oldest records first; end returns newest records "
-                        "first. Default start."
-                    ),
-                },
-                "limit": _HISTORY_LIMIT_PARAMETER,
-            },
-        ),
-        "around": _history_action_schema(
-            "Return complete records near one known message_id.",
-            {
-                "message_id": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "Canonical Message id to use as the anchor.",
-                },
-                "checkpoint": _HISTORY_CHECKPOINT_PARAMETER,
-                "roles": _HISTORY_ROLES_PARAMETER,
-                "before": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 100,
-                    "description": "Additional included records before the anchor; default 2.",
-                },
-                "after": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 100,
-                    "description": "Additional included records after the anchor; default 2.",
-                },
-            },
-            required=("message_id",),
-        ),
+        "query": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Text to find. Required for search unless cursor is set.",
+        },
+        "message_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Anchor Message id. Required for around unless cursor is set.",
+        },
+        "checkpoint": _HISTORY_CHECKPOINT_PARAMETER,
+        "roles": _HISTORY_ROLES_PARAMETER,
+        "match": {
+            "type": "string",
+            "enum": list(HISTORY_MATCH_MODES),
+            "description": (
+                "Search matching mode: every term, the complete phrase, or any term. "
+                "Omit for every term."
+            ),
+        },
+        "direction": {
+            "type": "string",
+            "enum": list(HISTORY_DIRECTIONS),
+            "description": "Read from the oldest or newest records. Omit for oldest first.",
+        },
+        "limit": _HISTORY_LIMIT_PARAMETER,
+        "before": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Records before the around anchor. Omit for 2.",
+        },
+        "after": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Records after the around anchor. Omit for 2.",
+        },
+        "cursor": _HISTORY_CURSOR_PARAMETER,
     },
-    description=(
-        "Choose one History action, or continue a previous page with only that same "
-        "action and its cursor."
-    ),
-    action_description=(
-        "overview lists checkpoint sections, search finds matching records, read returns "
-        "canonical records chronologically, and around returns records near a message_id."
-    ),
-)
+    "required": ["action"],
+}
 
 _ACTION_FIELDS = {
     "overview": frozenset({"action", "limit", "cursor"}),
@@ -300,6 +241,7 @@ def register_history_tool(registry: ToolRegistry, sessions: ChatSessionManager) 
         },
         session_scoped=True,
         parallel_safe=True,
+        open_input_schema=True,
         display=ToolDisplay(
             summary_builder=_history_display_summary,
             hidden_argument_keys=("query", "message_id", "cursor"),

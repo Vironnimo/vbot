@@ -63,6 +63,11 @@ from core.tools.grep import (
     GREP_TOOL_NAME,
     GREP_TOOL_PARAMETERS,
 )
+from core.tools.history import (
+    HISTORY_TOOL_DESCRIPTION,
+    HISTORY_TOOL_NAME,
+    HISTORY_TOOL_PARAMETERS,
+)
 from core.tools.image import (
     ANALYZE_IMAGE_TOOL_DESCRIPTION,
     ANALYZE_IMAGE_TOOL_NAME,
@@ -171,6 +176,7 @@ PROBE_SCENARIOS = (
     "edit",
     "glob",
     "grep",
+    "history",
     "image_generation",
     "memory",
     "process",
@@ -304,6 +310,40 @@ GREP_CASES = (
     "all_content",
     "all_files",
     "all_count",
+)
+HISTORY_CASES = (
+    "overview_default",
+    "overview_limit_min",
+    "overview_limit_max",
+    "overview_cursor",
+    "search_default",
+    "search_checkpoint",
+    "search_roles_one",
+    "search_roles_all",
+    "search_match_all_terms",
+    "search_match_phrase",
+    "search_match_any_term",
+    "search_limit",
+    "search_all",
+    "search_cursor",
+    "read_default",
+    "read_checkpoint",
+    "read_roles_empty",
+    "read_roles",
+    "read_direction_start",
+    "read_direction_end",
+    "read_limit",
+    "read_all",
+    "read_cursor",
+    "around_default",
+    "around_checkpoint",
+    "around_roles",
+    "around_before_zero",
+    "around_before_max",
+    "around_after_zero",
+    "around_after_max",
+    "around_all",
+    "around_cursor",
 )
 PROCESS_CASES = (
     "status_list",
@@ -491,6 +531,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=GREP_CASES,
         default="default",
         help="Exact grep argument shape requested by the grep scenario.",
+    )
+    parser.add_argument(
+        "--history-case",
+        choices=HISTORY_CASES,
+        default="overview_default",
+        help="Exact history action and argument shape requested by the scenario.",
     )
     parser.add_argument(
         "--process-case",
@@ -1044,6 +1090,146 @@ def _grep_scenario(case_name: str) -> ProbeScenario:
         ],
         _probe_messages(instruction),
         GREP_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
+    )
+
+
+def _history_scenario(case_name: str) -> ProbeScenario:
+    cursor = "opaque-history-cursor"
+    all_roles = [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+        "note",
+        "error",
+        "run_summary",
+        "agent_takeover",
+    ]
+    history_arguments: dict[str, dict[str, Any]] = {
+        "overview_default": {"action": "overview"},
+        "overview_limit_min": {"action": "overview", "limit": 1},
+        "overview_limit_max": {"action": "overview", "limit": 100},
+        "overview_cursor": {"action": "overview", "cursor": cursor},
+        "search_default": {"action": "search", "query": "deployment failure"},
+        "search_checkpoint": {
+            "action": "search",
+            "query": "deployment failure",
+            "checkpoint": 1,
+        },
+        "search_roles_one": {
+            "action": "search",
+            "query": "deployment failure",
+            "roles": ["assistant"],
+        },
+        "search_roles_all": {
+            "action": "search",
+            "query": "deployment failure",
+            "roles": all_roles,
+        },
+        "search_match_all_terms": {
+            "action": "search",
+            "query": "deployment failure",
+            "match": "all_terms",
+        },
+        "search_match_phrase": {
+            "action": "search",
+            "query": "deployment failure",
+            "match": "phrase",
+        },
+        "search_match_any_term": {
+            "action": "search",
+            "query": "deployment failure",
+            "match": "any_term",
+        },
+        "search_limit": {
+            "action": "search",
+            "query": "deployment failure",
+            "limit": 37,
+        },
+        "search_all": {
+            "action": "search",
+            "query": "deployment failure",
+            "checkpoint": 2,
+            "roles": ["user", "assistant", "error"],
+            "match": "phrase",
+            "limit": 37,
+        },
+        "search_cursor": {"action": "search", "cursor": cursor},
+        "read_default": {"action": "read"},
+        "read_checkpoint": {"action": "read", "checkpoint": 1},
+        "read_roles_empty": {"action": "read", "roles": []},
+        "read_roles": {"action": "read", "roles": ["tool", "note"]},
+        "read_direction_start": {"action": "read", "direction": "start"},
+        "read_direction_end": {"action": "read", "direction": "end"},
+        "read_limit": {"action": "read", "limit": 42},
+        "read_all": {
+            "action": "read",
+            "checkpoint": 3,
+            "roles": ["system", "agent_takeover"],
+            "direction": "end",
+            "limit": 42,
+        },
+        "read_cursor": {"action": "read", "cursor": cursor},
+        "around_default": {"action": "around", "message_id": "message-123"},
+        "around_checkpoint": {
+            "action": "around",
+            "message_id": "message-123",
+            "checkpoint": 1,
+        },
+        "around_roles": {
+            "action": "around",
+            "message_id": "message-123",
+            "roles": ["user", "assistant"],
+        },
+        "around_before_zero": {
+            "action": "around",
+            "message_id": "message-123",
+            "before": 0,
+        },
+        "around_before_max": {
+            "action": "around",
+            "message_id": "message-123",
+            "before": 100,
+        },
+        "around_after_zero": {
+            "action": "around",
+            "message_id": "message-123",
+            "after": 0,
+        },
+        "around_after_max": {
+            "action": "around",
+            "message_id": "message-123",
+            "after": 100,
+        },
+        "around_all": {
+            "action": "around",
+            "message_id": "message-123",
+            "checkpoint": 4,
+            "roles": ["assistant", "error"],
+            "before": 17,
+            "after": 23,
+        },
+        "around_cursor": {"action": "around", "cursor": cursor},
+    }
+    expected_arguments = history_arguments[case_name]
+    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
+    instruction = (
+        f"Call {HISTORY_TOOL_NAME} exactly once with exactly this JSON object as its arguments: "
+        f"{rendered_arguments}. Preserve every value and array item; do not add any field."
+    )
+    return ProbeScenario(
+        "history",
+        [
+            {
+                "name": HISTORY_TOOL_NAME,
+                "description": HISTORY_TOOL_DESCRIPTION,
+                "parameters": HISTORY_TOOL_PARAMETERS,
+            }
+        ],
+        _probe_messages(instruction),
+        HISTORY_TOOL_NAME,
         require_closed_input=False,
         expected_arguments=expected_arguments,
     )
@@ -2119,6 +2305,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _glob_scenario(str(args.glob_case))
     if name == "grep":
         return _grep_scenario(str(args.grep_case))
+    if name == "history":
+        return _history_scenario(str(args.history_case))
     if name == "image_generation":
         return _image_generation_scenario(str(args.image_generation_case))
     if name == "memory":
