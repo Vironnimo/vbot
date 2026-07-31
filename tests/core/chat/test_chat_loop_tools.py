@@ -93,6 +93,7 @@ async def test_nested_run_receives_non_handoff_bash_definition(tmp_path: Path) -
         BASH_TOOL_DESCRIPTION,
         BASH_TOOL_PARAMETERS,
         lambda _context, _arguments: tool_success({"status": "completed"}),
+        open_input_schema=True,
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
     parent = build_chat_loop(runtime)
