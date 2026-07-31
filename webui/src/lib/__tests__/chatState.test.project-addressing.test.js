@@ -116,6 +116,29 @@ describe('project chat addressing helpers (RPC-contract traps)', () => {
     expect(pickProjectAgentSessionId(sessions)).toBe('user-session');
     expect(pickProjectAgentSessionId([sessions[1]])).toBe('');
   });
+
+  it('does not use Cron or Reflection sessions as the Agent-bar landing session', () => {
+    const sessions = [
+      {
+        id: 'user-session',
+        last_active_at: '2026-07-20T09:00:00+00:00',
+        run_kinds: ['user'],
+      },
+      {
+        id: 'cron-session',
+        last_active_at: '2026-07-20T11:00:00+00:00',
+        run_kinds: ['cron'],
+      },
+      {
+        id: 'reflection-session',
+        last_active_at: '2026-07-20T12:00:00+00:00',
+        run_kinds: ['reflection'],
+      },
+    ];
+
+    expect(pickProjectAgentSessionId(sessions)).toBe('user-session');
+    expect(pickProjectAgentSessionId(sessions.slice(1))).toBe('');
+  });
 });
 
 describe('resolveMoveTarget (/agent move-action routing decision)', () => {

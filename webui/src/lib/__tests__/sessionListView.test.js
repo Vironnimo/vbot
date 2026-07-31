@@ -5,6 +5,7 @@ import {
   createSessionListState,
   selectSession,
   sessionDisplayName,
+  visibleSessionsForSelection,
 } from '../sessionListView.js';
 
 describe('sessionListView helpers', () => {
@@ -207,5 +208,42 @@ describe('sessionListView helpers', () => {
       title: 'Release planning',
       display_name: 'Release planning',
     });
+  });
+
+  it('hides background-only sessions unless all sessions are requested', () => {
+    const next = applySessionList(createSessionListState(), [
+      { id: 'user-session', run_kinds: ['user'] },
+      { id: 'cron-session', run_kinds: ['cron'] },
+      { id: 'reflection-session', run_kinds: ['reflection'] },
+      { id: 'mixed-session', run_kinds: ['cron', 'user'] },
+      {
+        id: 'channel-session',
+        run_kinds: ['cron'],
+        platform: 'telegram',
+        platform_conv_id: '12345',
+      },
+    ]);
+
+    expect(
+      visibleSessionsForSelection(next.sessions).map((session) => session.id),
+    ).toEqual(['channel-session', 'mixed-session', 'user-session']);
+    expect(
+      visibleSessionsForSelection(next.sessions, { showAll: true }).map(
+        (session) => session.id,
+      ),
+    ).toHaveLength(5);
+  });
+
+  it('keeps the selected background session visible in the important view', () => {
+    const next = applySessionList(createSessionListState(), [
+      { id: 'user-session', run_kinds: ['user'] },
+      { id: 'cron-session', run_kinds: ['cron'] },
+    ]);
+
+    expect(
+      visibleSessionsForSelection(next.sessions, {
+        selectedSessionId: 'cron-session',
+      }).map((session) => session.id),
+    ).toEqual(['cron-session', 'user-session']);
   });
 });

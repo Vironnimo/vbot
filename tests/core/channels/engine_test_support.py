@@ -39,7 +39,7 @@ from core.chat.commands import (
 from core.chat.content_blocks import ContentBlock, MediaBlock, TextBlock
 from core.chat.messages import GroupRole
 from core.extensions.interactions import InteractionButton, InteractionEvent
-from core.runs import ASSISTANT_OUTPUT_EVENT, ChatRunManager, Run, WaitingWorkAdmission
+from core.runs import ASSISTANT_OUTPUT_EVENT, ChatRunManager, Run, RunKind, WaitingWorkAdmission
 from core.sessions import ChatSessionManager
 
 SESSION_ID = "ch-tg-assistant-12345"
@@ -386,6 +386,7 @@ def assert_member_trigger(
     assert kwargs.pop("sender") == sender
     assert kwargs.pop("reply_surface") == reply_surface
     assert kwargs.pop("tool_restriction") == ("web_search", "web_fetch")
+    assert kwargs.pop("run_kind") is RunKind.CHANNEL
     resolver = kwargs.pop("tool_denial_resolver")
     assert callable(resolver)
     assert kwargs == {}
@@ -433,6 +434,7 @@ __all__ = [
     "ASSISTANT_OUTPUT_EVENT",
     "ChatRunManager",
     "Run",
+    "RunKind",
     "WaitingWorkAdmission",
     "ChatSessionManager",
     "SESSION_ID",

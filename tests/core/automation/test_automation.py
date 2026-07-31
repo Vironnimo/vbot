@@ -13,7 +13,7 @@ import pytest
 
 from core.automation import TriggerService
 from core.chat import ChatSessionManager, MessageSender, ReplySurface
-from core.runs import ActiveRunError, ChatRunManager, Run
+from core.runs import ActiveRunError, ChatRunManager, Run, RunKind
 
 pytestmark = pytest.mark.asyncio
 
@@ -604,8 +604,10 @@ class _CompletionChatLoop:
         internal: bool,
         project_id: str | None,
         input_persisted_hook: Callable[[], None],
+        run_kind: RunKind,
     ) -> Run:
         assert internal is True
+        assert run_kind is RunKind.SYSTEM
 
         async def executor(_run: Run) -> str:
             self.messages.append(content)
@@ -617,6 +619,7 @@ class _CompletionChatLoop:
             session_id=session_id,
             executor=executor,
             project_id=project_id,
+            run_kind=run_kind,
         )
 
 

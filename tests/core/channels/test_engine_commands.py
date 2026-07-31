@@ -7,7 +7,7 @@ from core.chat import (
     CommandFeedback,
     ExtensionCommandContext,
 )
-from core.runs import COMPACTION_COMPLETED_EVENT
+from core.runs import COMPACTION_COMPLETED_EVENT, RunKind
 
 from .engine_test_support import (
     CHANNEL_REPLY_SURFACE,
@@ -508,6 +508,7 @@ async def test_new_session_in_one_chat_leaves_other_chat_untouched(tmp_path: Pat
         "ch-tg-assistant-67890",
         sender=None,
         reply_surface=CHANNEL_REPLY_SURFACE,
+        run_kind=RunKind.CHANNEL,
     )
     metadata_b = chat_sessions.get_metadata("assistant", "ch-tg-assistant-67890")
     assert engine_module.ACTIVE_SESSION_METADATA_KEY not in metadata_b

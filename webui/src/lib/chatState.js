@@ -21,6 +21,7 @@ import {
 
 import { parseAgentAddress } from './agentAddress.js';
 import { pruneRunEventsPersistedInHistory } from './chatTimeline.js';
+import { isBackgroundOnlySession } from './sessionListView.js';
 import { createToolArgumentPreviewScanner } from './toolArgumentPreview.js';
 
 export {
@@ -1636,7 +1637,8 @@ export function pickProjectAgentSessionId(sessions) {
     if (
       session?.is_subagent_session === true ||
       (session?.subagent_parent !== null &&
-        typeof session?.subagent_parent === 'object')
+        typeof session?.subagent_parent === 'object') ||
+      isBackgroundOnlySession(session)
     ) {
       continue;
     }

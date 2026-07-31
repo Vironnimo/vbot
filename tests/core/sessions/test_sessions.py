@@ -9,9 +9,11 @@ from uuid import UUID
 import pytest
 
 from core.chat import ChatMessage, ToolCall
+from core.runs import RunKind
 from core.sessions import (
     FORK_SOURCE_META_KEY,
     PROMPT_CACHE_AFFINITY_META_KEY,
+    SESSION_RUN_KINDS_META_KEY,
     ChatSession,
     ChatSessionError,
     ChatSessionManager,
@@ -629,6 +631,19 @@ class TestChatSessionManager:
                 "platform_target": "12345678",
             },
         }
+
+    def test_record_run_kind_accumulates_distinct_session_origins(self, tmp_path):
+        manager = ChatSessionManager(tmp_path)
+        manager.create("coder", session_id="session-one")
+
+        manager.record_run_kind("coder", "session-one", RunKind.CRON)
+        manager.record_run_kind("coder", "session-one", RunKind.CRON)
+        manager.record_run_kind("coder", "session-one", RunKind.USER)
+
+        assert manager.get_metadata("coder", "session-one")[SESSION_RUN_KINDS_META_KEY] == [
+            "cron",
+            "user",
+        ]
 
     def test_set_title_stores_title_and_returns_it(self, tmp_path):
         manager = ChatSessionManager(tmp_path)
@@ -1532,7 +1547,10 @@ class TestForkStripPolicy:
 
     def test_always_strip_set_tracks_owning_domain_constants(self) -> None:
         from core.automation.reflection import REFLECTION_COUNTERS_META_KEY
-        from core.sessions import SESSION_FORK_ALWAYS_STRIP_META_KEYS
+        from core.sessions import (
+            SESSION_FORK_ALWAYS_STRIP_META_KEYS,
+            SESSION_RUN_KINDS_META_KEY,
+        )
         from core.subagents.subagents import (
             SUBAGENT_PARENT_METADATA_KEY,
             SUBAGENT_SESSION_METADATA_FLAG,
@@ -1541,6 +1559,7 @@ class TestForkStripPolicy:
         assert SUBAGENT_SESSION_METADATA_FLAG in SESSION_FORK_ALWAYS_STRIP_META_KEYS
         assert SUBAGENT_PARENT_METADATA_KEY in SESSION_FORK_ALWAYS_STRIP_META_KEYS
         assert REFLECTION_COUNTERS_META_KEY in SESSION_FORK_ALWAYS_STRIP_META_KEYS
+        assert SESSION_RUN_KINDS_META_KEY in SESSION_FORK_ALWAYS_STRIP_META_KEYS
 
     def test_cross_agent_strip_set_tracks_chat_constants(self) -> None:
         from core.chat.chat import PINNED_SKILL_CATALOG_META_KEY, SEEN_SKILLS_META_KEY

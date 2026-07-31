@@ -216,13 +216,20 @@ export const englishCatalog = Object.freeze({
   'sessions.title': 'Sessions',
   'sessions.hide': 'Hide sessions',
   'sessions.loading': 'Loading sessions…',
+  'sessions.showAll': 'Show all',
+  'sessions.showAllAria': 'Show all sessions',
   'chat.sessions.emptyTitle': 'No sessions yet',
   'sessions.no_sessions': 'No sessions found for this agent.',
+  'sessions.noImportantTitle': 'No important sessions',
+  'sessions.noImportantDescription':
+    'Turn on Show all to browse Cron and Reflection sessions.',
   'sessions.unreadCompletion': 'Unread',
   'sessions.unreadCompletionHint': 'This Session has an unread result.',
   'sessions.fork': 'Fork',
   'sessions.forkHint':
     'A copy of another session. Background reflection and /reflect review a conversation in a fork so the original session stays untouched.',
+  'sessions.runKind.cron': 'Cron',
+  'sessions.runKind.reflection': 'Reflection',
   'sessions.subagentHint':
     'A session run by a sub-agent working on behalf of a parent session. The parent is shown below.',
   'sessions.last_active': 'Last active',

@@ -10,6 +10,7 @@ from .engine_test_support import (
     MemoryChannelAccessRegistry,
     MessageSender,
     Path,
+    RunKind,
     assert_member_trigger,
     command_outcome,
     drain,
@@ -135,6 +136,7 @@ async def test_revoke_before_next_tool_call_limits_active_admin_run(
     assert kwargs.pop("sender") == MessageSender(id="50", display_name="Alice", role="admin")
     assert kwargs.pop("reply_surface") == CHANNEL_GROUP_REPLY_SURFACE
     assert "tool_restriction" not in kwargs
+    assert kwargs.pop("run_kind") is RunKind.CHANNEL
     resolver = kwargs.pop("tool_denial_resolver")
     assert kwargs == {}
     assert resolver("bash") is None
@@ -194,6 +196,7 @@ async def test_direct_message_triggers_run_without_sender(tmp_path: Path) -> Non
         SESSION_ID,
         sender=None,
         reply_surface=CHANNEL_REPLY_SURFACE,
+        run_kind=RunKind.CHANNEL,
     )
     await engine.stop()
 

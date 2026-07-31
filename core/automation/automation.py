@@ -13,6 +13,7 @@ from core.runs import (
     ActiveRunError,
     ChatRunManager,
     Run,
+    RunKind,
     RunNotFoundError,
     RunStatus,
     WaitingWorkAdmission,
@@ -189,6 +190,7 @@ class _CompletionDeliveryCoordinator:
                         internal=True,
                         project_id=key[0],
                         input_persisted_hook=self._acknowledgement_callback(key, bucket, pending),
+                        run_kind=RunKind.SYSTEM,
                     )
                 except ActiveRunError:
                     # Another ingress won the idle-session race. Keep the exact
@@ -341,13 +343,16 @@ def _completion_message(notices: list[_CompletionNotice]) -> str:
 def _optional_run_kwargs(
     callback: Callable[[], None] | None,
     contributes_to_agent_activity: bool,
+    run_kind: RunKind,
 ) -> dict[str, Any]:
-    """Omit defaulted Run options so existing producer call shapes stay stable."""
+    """Project non-default Run options onto the ChatLoop call."""
     options: dict[str, Any] = {}
     if callback is not None:
         options["input_persisted_hook"] = callback
     if not contributes_to_agent_activity:
         options["contributes_to_agent_activity"] = False
+    if run_kind is not RunKind.USER:
+        options["run_kind"] = run_kind
     return options
 
 
@@ -438,6 +443,7 @@ class TriggerService:
         tool_denial_resolver: Callable[[str], str | None] | None = None,
         waiting_work_admission: WaitingWorkAdmission | None = None,
         input_persisted_hook: Callable[[], None] | None = None,
+        run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
     ) -> Run:
         """Start a run immediately, or queue it until the target session is idle.
@@ -460,7 +466,11 @@ class TriggerService:
                         reply_surface=reply_surface,
                         project_id=project_id,
                         **tool_access_kwargs,
-                        **_optional_run_kwargs(input_persisted_hook, contributes_to_agent_activity),
+                        **_optional_run_kwargs(
+                            input_persisted_hook,
+                            contributes_to_agent_activity,
+                            run_kind,
+                        ),
                     )
                 return await self._trigger_chat_loop.start_run_in_new_session(
                     agent_id,
@@ -469,7 +479,11 @@ class TriggerService:
                     reply_surface=reply_surface,
                     project_id=project_id,
                     **tool_access_kwargs,
-                    **_optional_run_kwargs(input_persisted_hook, contributes_to_agent_activity),
+                    **_optional_run_kwargs(
+                        input_persisted_hook,
+                        contributes_to_agent_activity,
+                        run_kind,
+                    ),
                 )
             except BaseException:
                 self.release_waiting_work(waiting_work_admission)
@@ -486,7 +500,11 @@ class TriggerService:
                     reply_surface=reply_surface,
                     project_id=project_id,
                     **tool_access_kwargs,
-                    **_optional_run_kwargs(input_persisted_hook, contributes_to_agent_activity),
+                    **_optional_run_kwargs(
+                        input_persisted_hook,
+                        contributes_to_agent_activity,
+                        run_kind,
+                    ),
                 )
             else:
                 run = await self._trigger_chat_loop.start_run(
@@ -497,7 +515,11 @@ class TriggerService:
                     reply_surface=reply_surface,
                     project_id=project_id,
                     **tool_access_kwargs,
-                    **_optional_run_kwargs(input_persisted_hook, contributes_to_agent_activity),
+                    **_optional_run_kwargs(
+                        input_persisted_hook,
+                        contributes_to_agent_activity,
+                        run_kind,
+                    ),
                 )
         except ActiveRunError:
             try:
@@ -512,7 +534,9 @@ class TriggerService:
                             project_id=project_id,
                             **tool_access_kwargs,
                             **_optional_run_kwargs(
-                                input_persisted_hook, contributes_to_agent_activity
+                                input_persisted_hook,
+                                contributes_to_agent_activity,
+                                run_kind,
                             ),
                         )
                     else:
@@ -526,7 +550,9 @@ class TriggerService:
                             **tool_access_kwargs,
                             waiting_work_admission=waiting_work_admission,
                             **_optional_run_kwargs(
-                                input_persisted_hook, contributes_to_agent_activity
+                                input_persisted_hook,
+                                contributes_to_agent_activity,
+                                run_kind,
                             ),
                         )
                 else:
@@ -540,7 +566,9 @@ class TriggerService:
                             project_id=project_id,
                             **tool_access_kwargs,
                             **_optional_run_kwargs(
-                                input_persisted_hook, contributes_to_agent_activity
+                                input_persisted_hook,
+                                contributes_to_agent_activity,
+                                run_kind,
                             ),
                         )
                     else:
@@ -554,7 +582,9 @@ class TriggerService:
                             **tool_access_kwargs,
                             waiting_work_admission=waiting_work_admission,
                             **_optional_run_kwargs(
-                                input_persisted_hook, contributes_to_agent_activity
+                                input_persisted_hook,
+                                contributes_to_agent_activity,
+                                run_kind,
                             ),
                         )
                 return await queued_item.future

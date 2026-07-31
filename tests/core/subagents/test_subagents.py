@@ -18,7 +18,7 @@ import pytest
 from core.agents import AgentNotFoundError
 from core.chat import ChatMessage, ChatSessionManager
 from core.projects import AgentResolutionError
-from core.runs import ActiveRunError, Run, RunNotFoundError
+from core.runs import ActiveRunError, Run, RunKind, RunNotFoundError
 from core.storage import TemporaryFileManager
 from core.subagents.subagents import (
     SubAgentBatchTracker,
@@ -331,6 +331,7 @@ class FakeRunManager:
         executor: Any,
         project_id: str | None = None,
         working_project_id: str | None = None,
+        run_kind: RunKind = RunKind.USER,
     ) -> Run:
         if (agent_id, session_id) in self.busy_sessions:
             raise ActiveRunError(f"session already has an active run: {session_id}")
@@ -340,6 +341,7 @@ class FakeRunManager:
             session_id=session_id,
             project_id=project_id,
             working_project_id=working_project_id,
+            run_kind=run_kind,
         )
         self.started.append(
             {
@@ -348,6 +350,7 @@ class FakeRunManager:
                 "executor": executor,
                 "project_id": project_id,
                 "working_project_id": working_project_id,
+                "run_kind": run_kind,
                 "run": run,
             }
         )

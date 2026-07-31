@@ -31,6 +31,7 @@ from core.config_validation import (
     validate_optional_string,
     warn_unknown_keys,
 )
+from core.runs import RunKind
 from core.settings import is_valid_agent_id, is_valid_project_id
 from core.utils.atomic import atomic_write_text
 from core.utils.errors import VBotError
@@ -1080,6 +1081,8 @@ class CronService:
                     latest.prompt,
                     latest.session_id,
                     project_id=latest.project_id,
+                    run_kind=RunKind.CRON,
+                    contributes_to_agent_activity=False,
                 )
                 latest = self._jobs.get(job.id)
                 if latest is None:

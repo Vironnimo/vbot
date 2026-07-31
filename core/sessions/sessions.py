@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from core.chat.errors import ChatMessageValidationError, ChatSessionError
 from core.projects.store import project_sessions_dir
+from core.runs import RunKind
 from core.settings import is_valid_agent_id, is_valid_project_id
 from core.utils.logging import get_logger
 
@@ -49,6 +50,7 @@ SESSION_TERMINAL_RUN_STATUSES = frozenset({"completed", "failed", "cancelled"})
 # copied from and the fork point. Written on every fork (even when the source had no
 # sidecar) so a fork is self-describing.
 FORK_SOURCE_META_KEY = "fork_source"
+SESSION_RUN_KINDS_META_KEY = "run_kinds"
 # Internal sidecar key for the Provider prompt-cache routing lineage. It is
 # deliberately separate from Session identity: cache-compatible forks inherit
 # it while keeping their own transcript, Run, and transport-continuation scope.
@@ -68,6 +70,7 @@ SESSION_FORK_ALWAYS_STRIP_META_KEYS = frozenset(
         "is_subagent_session",
         "subagent_parent",
         "reflection_counters",
+        SESSION_RUN_KINDS_META_KEY,
     }
 )
 # Additionally stripped when a fork re-homes to a *different* agent: the pinned
@@ -718,6 +721,28 @@ class ChatSessionManager:
             raise ChatSessionError(f"failed to write metadata for session: {session_id}") from exc
         finally:
             temp_path.unlink(missing_ok=True)
+
+    def record_run_kind(
+        self,
+        agent_id: str,
+        session_id: str,
+        run_kind: RunKind,
+        project_id: str | None = None,
+    ) -> None:
+        """Record one distinct Run origin category on its owning Session."""
+        if not isinstance(run_kind, RunKind):
+            raise ChatSessionError("session run kind must be a RunKind")
+        metadata = self.get_metadata(agent_id, session_id, project_id)
+        raw_run_kinds = metadata.get(SESSION_RUN_KINDS_META_KEY, [])
+        valid_run_kinds = {kind.value for kind in RunKind}
+        if not isinstance(raw_run_kinds, list) or any(
+            not isinstance(value, str) or value not in valid_run_kinds for value in raw_run_kinds
+        ):
+            raise ChatSessionError(f"invalid run kinds for session: {session_id}")
+        if run_kind.value in raw_run_kinds:
+            return
+        metadata[SESSION_RUN_KINDS_META_KEY] = [*raw_run_kinds, run_kind.value]
+        self.set_metadata(agent_id, session_id, metadata, project_id)
 
     def retarget_identity_agent_references(
         self,

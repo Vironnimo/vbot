@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 from core.automation.cron import CronService
 from core.chat import ChatLoop
-from core.runs import ChatRunManager, RunStatus
+from core.runs import ChatRunManager, RunKind, RunStatus
 from core.runtime import Runtime
 from core.sessions import ChatSessionManager
 from core.utils.config import Config
@@ -476,6 +476,7 @@ def test_active_runs_snapshot_includes_only_running_runs_with_sse_url(
                 "agent_id": "coder",
                 "project_id": "acme",
                 "session_id": "session-running",
+                "run_kind": RunKind.USER,
                 "status": RunStatus.RUNNING,
             },
         )(),
@@ -490,6 +491,7 @@ def test_active_runs_snapshot_includes_only_running_runs_with_sse_url(
                 "agent_id": "coder",
                 "project_id": "acme",
                 "session_id": "session-terminal",
+                "run_kind": RunKind.USER,
                 "status": RunStatus.COMPLETED,
             },
         )(),
@@ -507,6 +509,7 @@ def test_active_runs_snapshot_includes_only_running_runs_with_sse_url(
             "agent_id": "coder",
             "project_id": "acme",
             "session_id": "session-running",
+            "run_kind": "user",
             "status": "running",
             "sse_url": "/api/runs/run-running/events",
         }
@@ -624,6 +627,7 @@ def test_active_runs_snapshot_keeps_project_id_none_for_identity_run(
                 "agent_id": "coder",
                 "project_id": None,
                 "session_id": "session-identity",
+                "run_kind": RunKind.USER,
                 "status": RunStatus.RUNNING,
             },
         )(),
@@ -648,6 +652,7 @@ def test_active_runs_snapshot_marks_runs_excluded_from_agent_activity() -> None:
                 "agent_id": "coder",
                 "project_id": None,
                 "session_id": "session-system",
+                "run_kind": RunKind.SYSTEM,
                 "status": RunStatus.RUNNING,
                 "contributes_to_agent_activity": False,
             },

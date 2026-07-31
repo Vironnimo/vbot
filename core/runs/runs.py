@@ -59,6 +59,7 @@ RUN_FAILED_EVENT = "run_failed"
 RUN_CANCELLED_EVENT = "run_cancelled"
 TERMINAL_EVENT_TYPES = {RUN_COMPLETED_EVENT, RUN_FAILED_EVENT, RUN_CANCELLED_EVENT}
 RUN_AGENT_ACTIVITY_FIELD = "contributes_to_agent_activity"
+RUN_KIND_FIELD = "run_kind"
 
 
 class RunStatus(StrEnum):
@@ -68,6 +69,17 @@ class RunStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+class RunKind(StrEnum):
+    """Stable origin category for one admitted Run."""
+
+    USER = "user"
+    CHANNEL = "channel"
+    CRON = "cron"
+    REFLECTION = "reflection"
+    SUBAGENT = "subagent"
+    SYSTEM = "system"
 
 
 class RunError(VBotError):
@@ -117,6 +129,7 @@ class QueuedRunItem:
     executor: RunExecutor
     internal: bool
     future: asyncio.Future[Run]
+    run_kind: RunKind = field(default=RunKind.USER, repr=False)
     contributes_to_agent_activity: bool = field(default=True, repr=False)
     working_project_id: str | None = field(default=None, repr=False)
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
@@ -128,6 +141,7 @@ class QueuedRunItem:
             "id": self.item_id,
             "content": self.display_content,
             "internal": self.internal,
+            RUN_KIND_FIELD: self.run_kind.value,
             "created_at": self.created_at,
         }
 
@@ -145,6 +159,7 @@ class RunEvent:
     # identity run). ``agent_id`` stays bare; the project rides as a sibling
     # field so a consumer can rebuild the outside ``agent@projekt`` address.
     project_id: str | None = None
+    run_kind: RunKind = RunKind.USER
     contributes_to_agent_activity: bool = True
     payload: JsonObject = field(default_factory=dict)
     timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
@@ -157,6 +172,7 @@ class RunEvent:
             "agent_id": self.agent_id,
             "session_id": self.session_id,
             "project_id": self.project_id,
+            RUN_KIND_FIELD: self.run_kind.value,
             "type": self.type,
             "payload": dict(self.payload),
             "timestamp": self.timestamp,
@@ -184,6 +200,7 @@ class Run:
         session_id: str,
         project_id: str | None = None,
         working_project_id: str | None = None,
+        run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
         event_retention_limit: int = DEFAULT_RUN_EVENT_RETENTION_LIMIT,
         subscriber_queue_limit: int = DEFAULT_RUN_SUBSCRIBER_QUEUE_LIMIT,
@@ -198,6 +215,7 @@ class Run:
         # Internal working context. This never participates in Session identity,
         # public addressing, events, or queue keys.
         self.working_project_id = working_project_id
+        self.run_kind = run_kind
         # Accessors may exclude system work from Agent/Session status while the
         # Run remains fully executable, observable, and persisted.
         self.contributes_to_agent_activity = contributes_to_agent_activity
@@ -344,6 +362,7 @@ class Run:
             agent_id=self.agent_id,
             session_id=self.session_id,
             project_id=self.project_id,
+            run_kind=self.run_kind,
             contributes_to_agent_activity=self.contributes_to_agent_activity,
             type=event_type,
             payload=dict(payload or {}),
@@ -618,6 +637,7 @@ class ChatRunManager:
         executor: RunExecutor,
         project_id: str | None,
         working_project_id: str | None = None,
+        run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
     ) -> Run:
         """Start one run if the session has no active run.
@@ -636,6 +656,7 @@ class ChatRunManager:
                 session_key=session_key,
                 executor=executor,
                 working_project_id=working_project_id,
+                run_kind=run_kind,
                 contributes_to_agent_activity=contributes_to_agent_activity,
             )
 
@@ -649,6 +670,7 @@ class ChatRunManager:
         internal: bool = False,
         project_id: str | None,
         working_project_id: str | None = None,
+        run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
         waiting_work_admission: WaitingWorkAdmission | None = None,
     ) -> QueuedRunItem:
@@ -661,6 +683,7 @@ class ChatRunManager:
             executor=executor,
             internal=internal,
             future=future,
+            run_kind=run_kind,
             contributes_to_agent_activity=contributes_to_agent_activity,
             working_project_id=working_project_id,
         )
@@ -692,6 +715,7 @@ class ChatRunManager:
                     session_key=session_key,
                     executor=item.executor,
                     working_project_id=item.working_project_id,
+                    run_kind=item.run_kind,
                     queue_item_id=item.item_id,
                     contributes_to_agent_activity=item.contributes_to_agent_activity,
                 )
@@ -1040,6 +1064,7 @@ class ChatRunManager:
                     executor=item.executor,
                     queue_item_id=item.item_id,
                     working_project_id=item.working_project_id,
+                    run_kind=item.run_kind,
                     contributes_to_agent_activity=item.contributes_to_agent_activity,
                 )
                 item.future.set_result(run)
@@ -1054,6 +1079,7 @@ class ChatRunManager:
         executor: RunExecutor,
         queue_item_id: str | None = None,
         working_project_id: str | None = None,
+        run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
     ) -> Run:
         # The key is the single source of the run's identity: the project anchor,
@@ -1066,6 +1092,7 @@ class ChatRunManager:
             session_id=session_id,
             project_id=project_id,
             working_project_id=working_project_id,
+            run_kind=run_kind,
             contributes_to_agent_activity=contributes_to_agent_activity,
             event_retention_limit=self._run_event_retention_limit,
         )

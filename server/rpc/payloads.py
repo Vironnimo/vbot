@@ -26,6 +26,7 @@ def _run_response(
         "run_id": run.id,
         "agent_id": run.agent_id,
         "session_id": run.session_id,
+        "run_kind": run.run_kind.value,
         "status": run.status.value,
         "events": [remove_opaque_provider_metadata(event.to_dict()) for event in run.events],
     }

@@ -466,6 +466,54 @@ describe('SessionListDrawer', () => {
     expect(forkBadges.length).toBe(1);
     expect(forkBadges[0].textContent.trim()).toBe('Fork');
   });
+
+  it('shows important sessions by default and reveals labelled background sessions', async () => {
+    listSessionsMock.mockResolvedValue({
+      sessions: [
+        {
+          id: 'user-session',
+          created_at: '2026-05-09T00:00:00+00:00',
+          run_kinds: ['user'],
+        },
+        {
+          id: 'cron-session',
+          created_at: '2026-05-10T00:00:00+00:00',
+          run_kinds: ['cron'],
+        },
+        {
+          id: 'reflection-session',
+          created_at: '2026-05-11T00:00:00+00:00',
+          run_kinds: ['reflection'],
+        },
+      ],
+    });
+    mountedComponent = mount(SessionListDrawer, {
+      target: document.body,
+      props: {
+        agentId: 'alpha',
+        currentSessionId: 'user-session',
+      },
+    });
+    flushSync();
+
+    await waitForCondition(
+      () => document.querySelectorAll('.session-row').length === 1,
+    );
+    expect(document.body.textContent).not.toContain('cron-session');
+    expect(document.body.textContent).not.toContain('reflection-session');
+
+    document.querySelector('[role="switch"]').click();
+    flushSync();
+
+    await waitForCondition(
+      () => document.querySelectorAll('.session-row').length === 3,
+    );
+    const badgeLabels = Array.from(document.querySelectorAll('.badge')).map(
+      (badge) => badge.textContent.trim(),
+    );
+    expect(badgeLabels).toContain('Cron');
+    expect(badgeLabels).toContain('Reflection');
+  });
 });
 
 async function waitForCondition(check, attempts = 50) {

@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from core.chat.content_blocks import ContentBlock, TextBlock
+from core.runs import RunKind
 from core.sessions import SESSION_FORK_ALWAYS_STRIP_META_KEYS
 from core.subagents.subagents import SUBAGENT_SESSION_METADATA_FLAG
 from core.tools.skill import SKILL_LIST_TOOL_NAME
@@ -248,6 +249,7 @@ class ReflectionService:
             f"{REFLECTION_FORK_TITLE}: {source_title}" if source_title else REFLECTION_FORK_TITLE
         )
         sessions.set_title(agent_id, fork.id, title, project_id)
+        sessions.record_run_kind(agent_id, fork.id, RunKind.REFLECTION, project_id)
         if on_fork_created is not None:
             on_fork_created(fork.id)
         # The fork is fresh and never busy — start directly, no queueing needed.
@@ -260,6 +262,7 @@ class ReflectionService:
             reply_surface=reply_surface,
             project_id=project_id,
             tool_restriction=REFLECTION_TOOL_RESTRICTION,
+            run_kind=RunKind.REFLECTION,
             contributes_to_agent_activity=False,
         )
         final_message = await review_run.wait()

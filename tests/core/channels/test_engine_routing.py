@@ -8,6 +8,7 @@ from .engine_test_support import (
     AsyncMock,
     Path,
     RouteFacts,
+    RunKind,
     drain,
     engine_module,
     logging,
@@ -130,6 +131,7 @@ async def test_channel_without_new_routes_to_derived_anchor(tmp_path: Path) -> N
         SESSION_ID,
         sender=None,
         reply_surface=CHANNEL_REPLY_SURFACE,
+        run_kind=RunKind.CHANNEL,
     )
     metadata = chat_sessions.get_metadata("assistant", SESSION_ID)
     assert engine_module.ACTIVE_SESSION_METADATA_KEY not in metadata

@@ -35,7 +35,7 @@ from core.chat import (
 )
 from core.chat.content_blocks import FileMentionBlock, TextBlock
 from core.projects import AgentResolutionError, ModelConfigurationError, format_agent_address
-from core.runs import ActiveRunError, ChatRunManager, RunAdmissionBlockedError
+from core.runs import ActiveRunError, ChatRunManager, RunAdmissionBlockedError, RunKind
 from core.sessions import SESSION_FORK_ALWAYS_STRIP_META_KEYS, SESSION_MOVE_STRIP_META_KEYS
 from core.tools.file_state import FileReadState
 from server.events import ServerEventBus
@@ -56,6 +56,7 @@ class _FakeRun:
         # ``_run_response`` reads ``status.value`` and ``events``; a finished run
         # with no events is enough for these address-threading assertions.
         self.status = SimpleNamespace(value="completed")
+        self.run_kind = RunKind.USER
         self.events: list[Any] = []
 
     async def wait(self) -> ChatMessage:
@@ -505,6 +506,7 @@ def _make_reflect_state(
         set_title=lambda agent_id, session_id, title, project_id=None: title_log.append(
             (session_id, title)
         ),
+        record_run_kind=lambda agent_id, session_id, run_kind, project_id=None: None,
     )
     runtime = SimpleNamespace(
         agent_resolver=SimpleNamespace(
@@ -551,6 +553,7 @@ async def test_reflect_forks_and_runs_restricted_review(monkeypatch: pytest.Monk
     assert captured[0]["session_id"] == "fork-1"
     assert captured[0]["session_id"] != "s1"
     assert captured[0]["internal"] is True
+    assert captured[0]["run_kind"] is RunKind.REFLECTION
     assert captured[0]["tool_restriction"] == (
         "memory",
         "skill",

@@ -27,7 +27,7 @@ from core.providers.accounts import (
     derive_credential_key,
     split_connection_id,
 )
-from core.runs import ChatRunManager
+from core.runs import ChatRunManager, RunKind
 from core.settings import AGENT_DEFAULT_FIELDS
 from core.settings.normalizers import normalize_extensions_settings, normalize_speech_settings
 from core.settings.settings import parse_openrouter_routing
@@ -1004,6 +1004,7 @@ class StubDelegateRun:
         self.agent_id = agent_id
         self.session_id = session_id
         self.status = SimpleNamespace(value=status)
+        self.run_kind = RunKind.USER
         self.events: list[Any] = []
         self._final_message = final_message or ChatMessage.assistant(
             model="openai/gpt-5.2",

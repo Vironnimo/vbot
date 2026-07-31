@@ -183,6 +183,7 @@ from core.runs import (
     QueuedRunItem,
     Run,
     RunExecutor,
+    RunKind,
     WaitingWorkAdmission,
 )
 from core.sessions import (
@@ -793,6 +794,7 @@ class ChatLoop:
         tool_restriction: Sequence[str] | None = None,
         tool_denial_resolver: Callable[[str], str | None] | None = None,
         input_persisted_hook: Callable[[], None] | None = None,
+        run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
     ) -> Run:
         """Start one chat run against an existing session for server-facing callers.
@@ -820,6 +822,7 @@ class ChatLoop:
             tool_restriction=tool_restriction,
             tool_denial_resolver=tool_denial_resolver,
             input_persisted_hook=input_persisted_hook,
+            run_kind=run_kind,
             contributes_to_agent_activity=contributes_to_agent_activity,
         )
 
@@ -836,6 +839,7 @@ class ChatLoop:
         tool_restriction: Sequence[str] | None = None,
         tool_denial_resolver: Callable[[str], str | None] | None = None,
         input_persisted_hook: Callable[[], None] | None = None,
+        run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
     ) -> Run:
         """Validate a target, create its Session, and start one Run.
@@ -858,6 +862,7 @@ class ChatLoop:
             tool_restriction=tool_restriction,
             tool_denial_resolver=tool_denial_resolver,
             input_persisted_hook=input_persisted_hook,
+            run_kind=run_kind,
             contributes_to_agent_activity=contributes_to_agent_activity,
         )
 
@@ -876,6 +881,7 @@ class ChatLoop:
         tool_denial_resolver: Callable[[str], str | None] | None = None,
         waiting_work_admission: WaitingWorkAdmission | None = None,
         input_persisted_hook: Callable[[], None] | None = None,
+        run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
     ) -> QueuedRunItem:
         """Queue one chat run for a busy session or start it immediately when idle.
@@ -910,6 +916,7 @@ class ChatLoop:
             project_id=project_id,
             working_project_id=working_project_id,
             waiting_work_admission=waiting_work_admission,
+            run_kind=run_kind,
             contributes_to_agent_activity=contributes_to_agent_activity,
         )
 
@@ -1011,6 +1018,12 @@ class ChatLoop:
         instruction: str | None,
     ) -> ChatMessage:
         """Execute one manual Compaction inside its canonical Run lifecycle."""
+        self._dependencies.sessions.record_run_kind(
+            run.agent_id,
+            run.session_id,
+            run.run_kind,
+            run.project_id,
+        )
         run.emit(COMPACTION_STARTED_EVENT, {})
         adapter: Any | None = None
         summary_adapter: Any | None = None
@@ -1166,6 +1179,7 @@ class ChatLoop:
         tool_restriction: Sequence[str] | None = None,
         tool_denial_resolver: Callable[[str], str | None] | None = None,
         input_persisted_hook: Callable[[], None] | None = None,
+        run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
     ) -> Run:
         agent = self._dependencies.agent_resolver.resolve_agent(project_id, agent_id)
@@ -1192,6 +1206,7 @@ class ChatLoop:
             executor=lambda run: self._execute_run(run, request),
             project_id=project_id,
             working_project_id=working_project_id,
+            run_kind=run_kind,
             contributes_to_agent_activity=contributes_to_agent_activity,
         )
 
@@ -1204,6 +1219,12 @@ class ChatLoop:
         session = self._dependencies.sessions.get(
             run.agent_id,
             run.session_id,
+            project_id,
+        )
+        self._dependencies.sessions.record_run_kind(
+            run.agent_id,
+            run.session_id,
+            run.run_kind,
             project_id,
         )
         prior_continuation: ContinuationState | None = None
