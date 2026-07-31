@@ -7,7 +7,7 @@ import ipaddress
 import re
 import socket
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from urllib.parse import unquote, urljoin, urlparse
 
 from bs4 import BeautifulSoup, Comment, Tag
@@ -17,7 +17,6 @@ from curl_cffi.requests import AsyncSession
 from curl_cffi.requests.exceptions import RequestException
 
 from core.attachments import AttachmentError, sniff_media_type
-from core.tools.arguments import optional_bool
 from core.tools.read_extract import (
     ExtractionError,
     ExtractionLimitExceededError,
@@ -119,11 +118,14 @@ _MAX_REDIRECTS = 10
 _REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
 
 IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
+WebFetchOutput = Literal["markdown", "text", "raw"]
 
 WEB_FETCH_TOOL_NAME = "web_fetch"
+_WEB_FETCH_OUTPUTS: tuple[WebFetchOutput, ...] = ("markdown", "text", "raw")
 WEB_FETCH_TOOL_DESCRIPTION = (
     "Fetch a public HTTP or HTTPS URL and return the page content as clean, "
-    "readable text. PDF, Word, and Excel documents are returned as extracted "
+    "readable text or raw HTML according to the required output mode. PDF, Word, "
+    "and Excel documents are returned as extracted "
     "text. An image URL is shown to you directly when the model supports vision; "
     "other binary files (executables, archives, media) return a short notice "
     "instead of raw bytes."
@@ -137,26 +139,18 @@ WEB_FETCH_TOOL_PARAMETERS: JsonObject = {
             "pattern": r"^https?://",
             "description": "HTTP or HTTPS URL to fetch.",
         },
-        "include_links": {
-            "type": "boolean",
+        "output": {
+            "type": "string",
+            "enum": list(_WEB_FETCH_OUTPUTS),
             "description": (
-                "Optional JSON boolean; use true or false without quotes. Omit it "
-                "to preserve Markdown links (default: true). Set to false to keep "
-                "link text without target URLs. Applies only to cleaned HTML; "
-                "ignored when raw is true and for non-HTML responses."
-            ),
-        },
-        "raw": {
-            "type": "boolean",
-            "description": (
-                "Optional JSON boolean; use true or false without quotes. Omit it "
-                "to clean HTML into readable text (default: false). Set to true to "
-                "return HTML without cleanup. Non-HTML text is already returned "
-                "unchanged."
+                "Required HTML output mode: markdown cleans HTML while preserving "
+                "links as Markdown; text cleans HTML and removes link targets; raw "
+                "returns HTML without cleanup. Non-HTML text and extracted documents "
+                "are returned unchanged by this choice."
             ),
         },
     },
-    "required": ["url"],
+    "required": ["url", "output"],
     "additionalProperties": False,
 }
 
@@ -1015,15 +1009,14 @@ def _shape_success(
     result: _FetchResult,
     url: str,
     *,
-    raw: bool,
-    include_links: bool,
+    output_mode: WebFetchOutput,
 ) -> JsonObject:
     """Turn a successful fetch into an image / binary-notice / text envelope."""
     media_type = _response_media_type(result.headers)
     sniffed = sniff_media_type(result.content, _filename_from_url(url))
 
-    # Images are shown to the model regardless of ``raw`` — ``raw`` only ever
-    # governed HTML text cleaning, and there is no textual "raw" form of an image.
+    # Images are shown to the model regardless of the HTML output mode; there is no
+    # textual "raw" form of an image.
     if sniffed.startswith("image/"):
         return _fetch_image_result(attachment_store, url, result.content)
 
@@ -1035,13 +1028,13 @@ def _shape_success(
         return document
 
     # Binary payloads (executable, archive, media) would decode to mojibake;
-    # a short notice — also regardless of ``raw`` — replaces the garbage.
+    # a short notice — also regardless of the HTML output mode — replaces the garbage.
     if _is_binary_payload(media_type, sniffed, result.content):
         return _binary_notice(url, sniffed, len(result.content))
 
     raw_body = result.text
     raw_size = len(raw_body.encode("utf-8"))
-    if raw or "html" not in media_type:
+    if output_mode == "raw" or "html" not in media_type:
         content = _truncate_utf8_with_suffix(
             raw_body,
             _MAX_URL_BYTES,
@@ -1050,7 +1043,11 @@ def _shape_success(
         return tool_success({"content": content})
 
     final_url = result.url
-    text, metadata = extract_content(raw_body, final_url, include_links=include_links)
+    text, metadata = extract_content(
+        raw_body,
+        final_url,
+        include_links=output_mode == "markdown",
+    )
     clean_size = len(text.encode("utf-8"))
 
     output = _format_output(final_url, metadata, text, raw_size, clean_size)
@@ -1071,7 +1068,7 @@ def make_web_fetch_handler(attachment_store: Any) -> ToolHandler:
         """Handle a web_fetch tool call and return a stable vBot result envelope."""
         del context
 
-        unknown_arguments = set(arguments) - {"url", "include_links", "raw"}
+        unknown_arguments = set(arguments) - {"url", "output"}
         if unknown_arguments:
             names = ", ".join(sorted(unknown_arguments))
             return tool_failure(
@@ -1084,13 +1081,14 @@ def make_web_fetch_handler(attachment_store: Any) -> ToolHandler:
                 "validation_error", "url must be a non-empty string", retryable=False
             )
 
-        try:
-            include_links = optional_bool(
-                arguments.get("include_links"), field_name="include_links", default=True
+        output_argument = arguments.get("output")
+        if output_argument not in _WEB_FETCH_OUTPUTS:
+            return tool_failure(
+                "validation_error",
+                "output must be one of: markdown, text, raw",
+                retryable=False,
             )
-            raw = optional_bool(arguments.get("raw"), field_name="raw", default=False)
-        except ValueError as error:
-            return tool_failure("validation_error", str(error), retryable=False)
+        output_mode = cast(WebFetchOutput, output_argument)
 
         url = url_argument.strip()
         parsed = urlparse(url)
@@ -1138,7 +1136,7 @@ def make_web_fetch_handler(attachment_store: Any) -> ToolHandler:
                 attempts_made=(MAX_RETRIES + 1) if retryable else None,
             )
 
-        return _shape_success(attachment_store, result, url, raw=raw, include_links=include_links)
+        return _shape_success(attachment_store, result, url, output_mode=output_mode)
 
     return web_fetch_handler
 

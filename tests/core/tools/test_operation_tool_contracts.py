@@ -68,6 +68,7 @@ _OPENAI_STRICT_SHIPPED_TOOLS = {
     "analyze_image",
     "project",
     "text_to_speech",
+    "web_fetch",
     "write",
 }
 

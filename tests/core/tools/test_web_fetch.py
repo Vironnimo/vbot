@@ -79,6 +79,10 @@ def make_context(workspace: Path, tool_name: str = WEB_FETCH_TOOL_NAME) -> ToolC
     )
 
 
+def web_fetch_arguments(url: str, output: str = "markdown") -> dict[str, Any]:
+    return {"url": url, "output": output}
+
+
 def make_result(
     *,
     status_code: int = 200,
@@ -201,7 +205,10 @@ async def test_web_fetch_reports_response_over_download_limit(
 
     monkeypatch.setattr(web_fetch_module, "_http_get", _raise_too_large)
 
-    result = await web_fetch_handler(make_context(workspace), {"url": "https://example.com/large"})
+    result = await web_fetch_handler(
+        make_context(workspace),
+        web_fetch_arguments("https://example.com/large"),
+    )
 
     error = assert_failure_envelope(result, "response_too_large")
     assert error["retryable"] is False
@@ -266,26 +273,19 @@ def test_register_web_fetch_tool_schema() -> None:
 
     parameters = definition["parameters"]
     assert parameters["type"] == "object"
-    assert parameters["required"] == ["url"]
+    assert parameters["required"] == ["url", "output"]
     assert parameters["additionalProperties"] is False
-    assert set(parameters["properties"]) == {"url", "include_links", "raw"}
-    include_links = parameters["properties"]["include_links"]
-    assert include_links["type"] == "boolean"
-    assert "default" not in include_links
-    assert "Omit it" in include_links["description"]
-    assert "default: true" in include_links["description"]
-    assert "without quotes" in include_links["description"]
-    assert "cleaned HTML" in include_links["description"]
-    raw = parameters["properties"]["raw"]
-    assert raw["type"] == "boolean"
-    assert "default" not in raw
-    assert "Omit it" in raw["description"]
-    assert "default: false" in raw["description"]
-    assert "without quotes" in raw["description"]
-    assert "Non-HTML text" in raw["description"]
+    assert set(parameters["properties"]) == {"url", "output"}
+    output = parameters["properties"]["output"]
+    assert output["type"] == "string"
+    assert output["enum"] == ["markdown", "text", "raw"]
+    assert "Required" in output["description"]
+    assert "preserving links" in output["description"]
+    assert "removes link targets" in output["description"]
+    assert "without cleanup" in output["description"]
 
 
-def test_web_fetch_openai_wire_omits_default_annotations() -> None:
+def test_web_fetch_openai_wire_is_strict_with_required_output_mode() -> None:
     [definition] = render_tool_definitions(
         [
             {
@@ -298,10 +298,47 @@ def test_web_fetch_openai_wire_omits_default_annotations() -> None:
     )
 
     parameters = definition["parameters"]
-    assert parameters["required"] == ["url"]
-    assert "strict" not in definition
-    assert "default" not in parameters["properties"]["include_links"]
-    assert "default" not in parameters["properties"]["raw"]
+    assert parameters["required"] == ["url", "output"]
+    assert definition["strict"] is True
+    assert parameters["properties"]["output"]["enum"] == ["markdown", "text", "raw"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        ({"url": "https://example.com"}, "output must be one of"),
+        (
+            {"url": "https://example.com", "output": "unsupported"},
+            "output must be one of",
+        ),
+        (
+            {"url": "https://example.com", "output": "markdown", "raw": False},
+            "Unknown argument(s): raw",
+        ),
+        (
+            {
+                "url": "https://example.com",
+                "output": "markdown",
+                "include_links": True,
+            },
+            "Unknown argument(s): include_links",
+        ),
+    ],
+)
+async def test_web_fetch_handler_rejects_missing_invalid_or_legacy_output_arguments(
+    tmp_path: Path,
+    arguments: dict[str, Any],
+    message: str,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    result = await web_fetch_handler(make_context(workspace), arguments)
+
+    error = assert_failure_envelope(result, "validation_error")
+    assert message in error["message"]
+    assert error["retryable"] is False
 
 
 @pytest.mark.asyncio
@@ -309,7 +346,10 @@ async def test_web_fetch_handler_rejects_non_http_scheme(tmp_path: Path) -> None
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
-    result = await web_fetch_handler(make_context(workspace), {"url": "ftp://example.com"})
+    result = await web_fetch_handler(
+        make_context(workspace),
+        web_fetch_arguments("ftp://example.com"),
+    )
 
     error = assert_failure_envelope(result, "validation_error")
     assert "http/https" in error["message"]
@@ -328,7 +368,7 @@ async def test_web_fetch_handler_rejects_ssrf_prefixes(tmp_path: Path, url: str)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
-    result = await web_fetch_handler(make_context(workspace), {"url": url})
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
     error = assert_failure_envelope(result, "validation_error")
     assert "blocked" in error["message"].lower()
@@ -348,7 +388,7 @@ async def test_web_fetch_handler_rejects_obfuscated_private_hosts(tmp_path: Path
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
-    result = await web_fetch_handler(make_context(workspace), {"url": url})
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
     error = assert_failure_envelope(result, "validation_error")
     assert "blocked" in error["message"].lower()
@@ -373,7 +413,7 @@ async def test_web_fetch_handler_rejects_redirect_to_private_host(
 
     install_http_get(monkeypatch, responder)
 
-    result = await web_fetch_handler(make_context(workspace), {"url": start_url})
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(start_url))
 
     error = assert_failure_envelope(result, "validation_error")
     assert "blocked" in error["message"].lower()
@@ -392,7 +432,7 @@ async def test_web_fetch_handler_http_error(
         monkeypatch, lambda _url: make_result(status_code=404, text="missing", url=url)
     )
 
-    result = await web_fetch_handler(make_context(workspace), {"url": url})
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
     error = assert_failure_envelope(result, "request_error")
     assert "404" in error["message"]
@@ -412,7 +452,7 @@ async def test_web_fetch_handler_network_error(
     install_http_get(monkeypatch, responder)
 
     with caplog.at_level(logging.WARNING, logger="vbot.tools.web_fetch"):
-        result = await web_fetch_handler(make_context(workspace), {"url": url})
+        result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
     error = assert_failure_envelope(result, "request_error")
     assert "request failed" in error["message"].lower()
@@ -450,7 +490,7 @@ async def test_web_fetch_handler_retries_retryable_statuses(
 
     install_http_get(monkeypatch, responder)
 
-    result = await web_fetch_handler(make_context(workspace), {"url": url})
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
     data = assert_success_envelope(result)
     assert data["content"] == "retried success"
@@ -479,7 +519,7 @@ async def test_web_fetch_handler_exhausted_retryable_status_signals_retryable(
 
     install_http_get(monkeypatch, responder)
 
-    result = await web_fetch_handler(make_context(workspace), {"url": url})
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
     error = assert_failure_envelope(result, "request_error")
     assert error["retryable"] is True
@@ -523,7 +563,7 @@ async def test_web_fetch_handler_honors_retry_after_hint(
 
     install_http_get(monkeypatch, responder)
 
-    result = await web_fetch_handler(make_context(workspace), {"url": url})
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
     data = assert_success_envelope(result)
     assert data["content"] == "recovered"
@@ -540,7 +580,7 @@ async def test_web_fetch_handler_non_retryable_status_signals_not_retryable(
 
     install_http_get(monkeypatch, lambda _url: make_result(status_code=404, text="missing"))
 
-    result = await web_fetch_handler(make_context(workspace), {"url": url})
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
     error = assert_failure_envelope(result, "request_error")
     assert error["retryable"] is False
@@ -560,7 +600,7 @@ async def test_web_fetch_handler_transport_error_signals_retryable_single_attemp
 
     install_http_get(monkeypatch, responder)
 
-    result = await web_fetch_handler(make_context(workspace), {"url": url})
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
     error = assert_failure_envelope(result, "request_error")
     # web_fetch does not loop on transport errors, so it tried exactly once.
@@ -586,7 +626,7 @@ async def test_web_fetch_handler_redirect_limit_signals_not_retryable(
 
     install_http_get(monkeypatch, responder)
 
-    result = await web_fetch_handler(make_context(workspace), {"url": url})
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
     error = assert_failure_envelope(result, "request_error")
     assert error["retryable"] is False
@@ -600,7 +640,10 @@ async def test_web_fetch_handler_validation_error_signals_not_retryable(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
-    result = await web_fetch_handler(make_context(workspace), {"url": "ftp://example.com"})
+    result = await web_fetch_handler(
+        make_context(workspace),
+        web_fetch_arguments("ftp://example.com"),
+    )
 
     error = assert_failure_envelope(result, "validation_error")
     assert error["retryable"] is False
@@ -633,7 +676,7 @@ async def test_web_fetch_handler_html_extraction(
         ),
     )
 
-    result = await web_fetch_handler(make_context(workspace), {"url": url})
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
     data = assert_success_envelope(result)
     content = data["content"]
@@ -646,7 +689,9 @@ async def test_web_fetch_handler_html_extraction(
 
 
 @pytest.mark.asyncio
-async def test_web_fetch_handler_raw_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_web_fetch_handler_raw_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     url = "https://example.com/raw"
@@ -659,14 +704,17 @@ async def test_web_fetch_handler_raw_mode(tmp_path: Path, monkeypatch: pytest.Mo
         ),
     )
 
-    result = await web_fetch_handler(make_context(workspace), {"url": url, "raw": True})
+    result = await web_fetch_handler(
+        make_context(workspace),
+        web_fetch_arguments(url, "raw"),
+    )
 
     data = assert_success_envelope(result)
     assert data["content"] == html
 
 
 @pytest.mark.asyncio
-async def test_web_fetch_handler_include_links_false(
+async def test_web_fetch_handler_text_output_removes_link_targets(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -690,7 +738,7 @@ async def test_web_fetch_handler_include_links_false(
 
     result = await web_fetch_handler(
         make_context(workspace),
-        {"url": page_url, "include_links": False},
+        web_fetch_arguments(page_url, "text"),
     )
 
     data = assert_success_envelope(result)
@@ -722,7 +770,11 @@ async def test_web_fetch_handler_image_url_stores_attachment_and_emits_artifact(
         ),
     )
 
-    result = await web_fetch_handler(make_context(workspace), {"url": url}, attachment_store=store)
+    result = await web_fetch_handler(
+        make_context(workspace),
+        web_fetch_arguments(url),
+        attachment_store=store,
+    )
 
     assert is_tool_result_envelope(result) is True
     assert result["ok"] is True
@@ -743,7 +795,7 @@ async def test_web_fetch_handler_image_url_stores_attachment_and_emits_artifact(
 
 
 @pytest.mark.asyncio
-async def test_web_fetch_handler_image_url_shown_even_with_raw_flag(
+async def test_web_fetch_handler_image_url_shown_with_raw_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -759,7 +811,7 @@ async def test_web_fetch_handler_image_url_shown_even_with_raw_flag(
     )
 
     result = await web_fetch_handler(
-        make_context(workspace), {"url": url, "raw": True}, attachment_store=store
+        make_context(workspace), web_fetch_arguments(url, "raw"), attachment_store=store
     )
 
     assert result["ok"] is True
@@ -786,7 +838,11 @@ async def test_web_fetch_handler_image_attachment_error_maps_to_failure(
         ),
     )
 
-    result = await web_fetch_handler(make_context(workspace), {"url": url}, attachment_store=store)
+    result = await web_fetch_handler(
+        make_context(workspace),
+        web_fetch_arguments(url),
+        attachment_store=store,
+    )
 
     error = assert_failure_envelope(result, "attachment_error")
     assert error["retryable"] is False
@@ -807,7 +863,7 @@ async def test_web_fetch_handler_image_without_store_returns_note(
         ),
     )
 
-    result = await web_fetch_handler(make_context(workspace), {"url": url})
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
     data = assert_success_envelope(result)
     content = data["content"]
@@ -834,7 +890,7 @@ async def test_web_fetch_handler_binary_content_returns_notice_not_garbage(
         ),
     )
 
-    result = await web_fetch_handler(make_context(workspace), {"url": url})
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
     data = assert_success_envelope(result)
     content = data["content"]
@@ -861,7 +917,7 @@ async def test_web_fetch_handler_binary_detected_by_nul_without_content_type(
         lambda _url: make_result(status_code=200, headers={}, content=blob, url=url),
     )
 
-    result = await web_fetch_handler(make_context(workspace), {"url": url})
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
     data = assert_success_envelope(result)
     content = data["content"]
@@ -939,7 +995,7 @@ async def test_web_fetch_extracts_pdf_as_text(
         ),
     )
 
-    result = await web_fetch_handler(make_context(workspace), {"url": url})
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
     data = assert_success_envelope(result)
     content = data["content"]
@@ -969,7 +1025,7 @@ async def test_web_fetch_extracts_docx_recognized_by_media_type_without_extensio
         ),
     )
 
-    result = await web_fetch_handler(make_context(workspace), {"url": url})
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
     data = assert_success_envelope(result)
     content = data["content"]
@@ -1001,7 +1057,7 @@ async def test_web_fetch_rejects_document_expansion_over_limit(
         ),
     )
 
-    result = await web_fetch_handler(make_context(workspace), {"url": url})
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
     error = assert_failure_envelope(result, "document_too_large")
     assert error["retryable"] is False
@@ -1025,7 +1081,7 @@ async def test_web_fetch_scanned_pdf_reports_no_text(
         ),
     )
 
-    result = await web_fetch_handler(make_context(workspace), {"url": url})
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
     data = assert_success_envelope(result)
     content = data["content"]
@@ -1051,7 +1107,7 @@ async def test_web_fetch_malformed_pdf_returns_binary_notice(
         ),
     )
 
-    result = await web_fetch_handler(make_context(workspace), {"url": url})
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
     data = assert_success_envelope(result)
     content = data["content"]
@@ -1079,7 +1135,7 @@ async def test_web_fetch_handler_non_html_json_returns_text(
         ),
     )
 
-    result = await web_fetch_handler(make_context(workspace), {"url": url})
+    result = await web_fetch_handler(make_context(workspace), web_fetch_arguments(url))
 
     data = assert_success_envelope(result)
     assert data["content"] == body
