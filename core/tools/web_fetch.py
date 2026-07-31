@@ -145,7 +145,6 @@ WEB_FETCH_TOOL_PARAMETERS: JsonObject = {
                 "link text without target URLs. Applies only to cleaned HTML; "
                 "ignored when raw is true and for non-HTML responses."
             ),
-            "default": True,
         },
         "raw": {
             "type": "boolean",
@@ -155,7 +154,6 @@ WEB_FETCH_TOOL_PARAMETERS: JsonObject = {
                 "return HTML without cleanup. Non-HTML text is already returned "
                 "unchanged."
             ),
-            "default": False,
         },
     },
     "required": ["url"],

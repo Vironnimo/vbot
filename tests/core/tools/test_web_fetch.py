@@ -16,6 +16,7 @@ from curl_cffi.requests.exceptions import ConnectionError as CurlConnectionError
 import core.tools.read_extract as read_extract_module
 import core.tools.web_fetch as web_fetch_module
 from core.attachments import AttachmentTooLargeError
+from core.providers.tool_schema import render_tool_definitions
 from core.tools.tools import ToolContext, ToolRegistry, is_tool_result_envelope
 from core.tools.web_fetch import (
     WEB_FETCH_TOOL_DESCRIPTION,
@@ -270,16 +271,37 @@ def test_register_web_fetch_tool_schema() -> None:
     assert set(parameters["properties"]) == {"url", "include_links", "raw"}
     include_links = parameters["properties"]["include_links"]
     assert include_links["type"] == "boolean"
-    assert include_links["default"] is True
+    assert "default" not in include_links
     assert "Omit it" in include_links["description"]
+    assert "default: true" in include_links["description"]
     assert "without quotes" in include_links["description"]
     assert "cleaned HTML" in include_links["description"]
     raw = parameters["properties"]["raw"]
     assert raw["type"] == "boolean"
-    assert raw["default"] is False
+    assert "default" not in raw
     assert "Omit it" in raw["description"]
+    assert "default: false" in raw["description"]
     assert "without quotes" in raw["description"]
     assert "Non-HTML text" in raw["description"]
+
+
+def test_web_fetch_openai_wire_omits_default_annotations() -> None:
+    [definition] = render_tool_definitions(
+        [
+            {
+                "name": WEB_FETCH_TOOL_NAME,
+                "description": WEB_FETCH_TOOL_DESCRIPTION,
+                "parameters": WEB_FETCH_TOOL_PARAMETERS,
+            }
+        ],
+        profile="openai_strict",
+    )
+
+    parameters = definition["parameters"]
+    assert parameters["required"] == ["url"]
+    assert "strict" not in definition
+    assert "default" not in parameters["properties"]["include_links"]
+    assert "default" not in parameters["properties"]["raw"]
 
 
 @pytest.mark.asyncio
