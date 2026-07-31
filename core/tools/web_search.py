@@ -75,12 +75,8 @@ _ALLOWED_ARGUMENTS = frozenset({"query", "domains", "count", "page", "recency"})
 
 WEB_SEARCH_TOOL_NAME = "web_search"
 WEB_SEARCH_TOOL_DESCRIPTION = (
-    "Search the public web using the configured search provider and return "
-    "structured results with title, url, description, and page age where "
-    "available. Descriptions are short snippets - use web_fetch on a result "
-    "url to read the full page. Supports domain restriction (domains), "
-    "a provider-neutral recency window (recency), and pagination (page). "
-    "Search operators in query are passed through to the configured provider."
+    "Search the public web using the configured provider. Returns structured "
+    "results with title, URL, short description, and page age when available."
 )
 WEB_SEARCH_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -88,14 +84,13 @@ WEB_SEARCH_TOOL_PARAMETERS: JsonObject = {
         "query": {
             "type": "string",
             "minLength": 1,
-            "description": "Search query text.",
+            "description": "Search query; provider search operators are passed through.",
         },
         "domains": {
             "type": "array",
             "description": (
-                "Optional domains that every returned result must belong to. "
-                "Use hostnames without a scheme or path (for example, example.com). "
-                "A domain includes its subdomains; a specific subdomain narrows the scope."
+                "Restrict results to these hostnames and their subdomains. Use hostnames "
+                "without a scheme or path."
             ),
             "items": {"type": "string", "minLength": 1, "maxLength": 253},
             "minItems": 1,
@@ -104,17 +99,14 @@ WEB_SEARCH_TOOL_PARAMETERS: JsonObject = {
         },
         "count": {
             "type": "integer",
-            "description": (
-                "Maximum number of results to return (1-20). Omit to use the configured default."
-            ),
+            "description": "Maximum results to return. Omit to use the configured default.",
             "minimum": MIN_WEB_SEARCH_COUNT,
             "maximum": MAX_WEB_SEARCH_COUNT,
         },
         "page": {
             "type": "integer",
             "description": (
-                "Result page to fetch (1-based). Request the next page when "
-                "more_results_available is true and the first page was not enough."
+                "Result page to fetch. Request the next page when more results are available."
             ),
             "minimum": 1,
             "maximum": MAX_WEB_SEARCH_PAGE,
@@ -123,15 +115,10 @@ WEB_SEARCH_TOOL_PARAMETERS: JsonObject = {
         "recency": {
             "type": "string",
             "enum": list(_RECENCY_VALUES),
-            "description": (
-                "Optional provider-neutral age window for results: day, month, or year. "
-                "The configured search provider determines page age. Omit for no recency "
-                "restriction."
-            ),
+            "description": "Maximum result age. Omit for no recency restriction.",
         },
     },
     "required": ["query"],
-    "additionalProperties": False,
 }
 
 
@@ -715,6 +702,7 @@ def register_web_search_tool(
         WEB_SEARCH_TOOL_DESCRIPTION,
         WEB_SEARCH_TOOL_PARAMETERS,
         _handler,
+        open_input_schema=True,
         result_schema={"type": "object", "required": ["query", "results"]},
         display=ToolDisplay(summary_fields=("query",)),
         parallel_safe=True,
