@@ -177,6 +177,57 @@ async def test_background_mode_returns_running_session_with_clear_handoff(
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform != "win32", reason="PowerShell-specific stdin contract")
+async def test_windows_background_process_accepts_raw_stdin_via_process_tool(
+    manager: ProcessManager,
+    tmp_path: Path,
+) -> None:
+    bash_context = make_context(tmp_path)
+    bash_result = await bash_handler(
+        bash_context,
+        {
+            "command": ('$value = [Console]::In.ReadLine(); Write-Output "stdin-mode-$value"'),
+            "mode": "background",
+            "timeout": 10,
+        },
+        manager,
+    )
+    bash_data = bash_result["data"]
+    assert isinstance(bash_data, dict)
+    process_session_id = bash_data["session_id"]
+    assert isinstance(process_session_id, str)
+
+    process_context = ToolContext(
+        agent_id=AGENT_ID,
+        session_id=bash_context.session_id,
+        run_id=RUN_ID,
+        tool_call_id="call-process-input",
+        tool_name=PROCESS_TOOL_NAME,
+        tool_call_index=1,
+        workspace=tmp_path,
+        vbot_root=tmp_path,
+        data_root=tmp_path,
+    )
+    input_result = await make_process_handler(manager)(
+        process_context,
+        {
+            "action": "input",
+            "session_id": process_session_id,
+            "text": "hello-from-input",
+            "eof": True,
+        },
+    )
+    process_session = manager.get_session(process_session_id, AGENT_ID)
+    assert process_session.wait_task is not None
+    await asyncio.wait_for(process_session.wait_task, timeout=5)
+    terminal = await manager.snapshot(process_session_id, AGENT_ID)
+
+    assert input_result["ok"] is True
+    assert terminal["status"] == "completed"
+    assert "stdin-mode-hello-from-input" in str(terminal["output"])
+
+
+@pytest.mark.asyncio
 async def test_background_trigger_fires_when_trigger_service_provided(
     manager: ProcessManager,
     tmp_path: Path,

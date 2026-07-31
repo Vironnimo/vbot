@@ -20,7 +20,7 @@ Runs host shell commands and streams foreground stdout/stderr into the Run timel
 ## Conventions
 
 - Relative `workdir` resolves from `ToolContext.effective_cwd` (the working directory); absolute working directories are allowed.
-- Uses the platform-native shell: `pwsh -NonInteractive -Command` on Windows, `bash -c` elsewhere. PowerShell remains connected to the ProcessManager stdin pipe for native child-process input, but its own host prompts fail instead of waiting indefinitely after an invalid command. The tool description names the actual shell (built per host at import from the same platform check, plus PowerShell syntax pitfalls on Windows), so the model does not guess cmd/bash syntax from the tool name.
+- Uses the platform-native shell: `pwsh -NonInteractive -Command` on Windows, `bash -c` elsewhere. PowerShell remains connected to the ProcessManager raw stdin pipe, but its own host prompts such as `Read-Host` are unavailable; commands expecting later `process.input` must read through `[Console]::In.ReadLine()` / `[Console]::In.ReadToEnd()` or a native child process. Keeping `-NonInteractive` is a safety invariant because an interactive host can wait indefinitely after an invalid command. The tool description names the actual shell and this input boundary (built per host at import from the same platform check, plus PowerShell syntax pitfalls on Windows), so the model does not guess cmd/bash syntax or terminal semantics from the Tool name.
 - On Windows, command shells, the one-time environment probe, and probe-cleanup `taskkill` use the shared windowless creation flags from `process_manager.py`; none may create a visible console window in Desktop or background-server use.
 - Non-zero exits are successful tool results with an exit code.
 
