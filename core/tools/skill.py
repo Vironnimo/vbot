@@ -48,8 +48,8 @@ SKILL_TOOL_DESCRIPTION = (
 )
 SKILL_LIST_TOOL_NAME = "skill_list"
 SKILL_LIST_TOOL_DESCRIPTION = (
-    "List the currently available Skills grouped by origin. This Tool is available only "
-    "during Reflection Runs; call it with no arguments before choosing a Skill to inspect."
+    "List the currently available Skills grouped by origin. Call it with no arguments "
+    "before choosing a Skill to inspect."
 )
 SKILL_STATUS_LOADED = "loaded"
 SKILL_STATUS_ALREADY_ACTIVE = "already_active"
@@ -203,7 +203,7 @@ def make_skill_handler(
 
 
 def make_skill_list_handler(resolve_registry: SkillRegistryResolver) -> Any:
-    """Return the Reflection-only Skill catalog handler."""
+    """Return the Skill catalog handler."""
 
     def skill_list_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         if arguments:
