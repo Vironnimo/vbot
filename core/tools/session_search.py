@@ -132,55 +132,40 @@ def build_session_search_parameters() -> JsonObject:
 
 
 def build_session_read_parameters() -> JsonObject:
-    non_cursor_fields = (
-        "session_id",
-        "agent_id",
-        "start_message_id",
-        "end_message_id",
-    )
     return {
         "type": "object",
-        "description": "Read one canonical Session range or continue one previous page.",
         "properties": {
             "session_id": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Session to read; required for a new read.",
+                "description": "Session to read. Required for a new read; omit with cursor.",
             },
             "agent_id": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Agent that owns the Session; defaults to the current Agent.",
+                "description": "Agent that owns the Session. Omit for the current Agent.",
             },
             "start_message_id": {
                 "type": "string",
                 "minLength": 1,
                 "description": (
-                    "First Message of the inclusive range; omit to start at the beginning."
+                    "First Message of a new inclusive range. Omit to start at the beginning."
                 ),
             },
             "end_message_id": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Last Message of the inclusive range; omit to read to the end.",
+                "description": "Last Message of a new inclusive range. Omit to read to the end.",
             },
             "cursor": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Opaque continuation; when set, omit every other argument.",
+                "description": (
+                    "Previous session_read continuation. When set, omit every other field."
+                ),
             },
         },
-        "additionalProperties": False,
-        "oneOf": [
-            {
-                "required": ["session_id"],
-                "not": {"required": ["cursor"]},
-            },
-            {
-                "required": ["cursor"],
-                "not": {"anyOf": [{"required": [field]} for field in non_cursor_fields]},
-            },
-        ],
+        "required": [],
     }
 
 
@@ -359,6 +344,7 @@ def register_session_search_tool(
         SESSION_READ_TOOL_DESCRIPTION,
         SESSION_READ_TOOL_PARAMETERS,
         make_session_read_handler(resolved_sessions),
+        open_input_schema=True,
         result_schema={
             "type": "object",
             "required": ["session_id", "session", "items", "has_more", "formatted_bytes"],

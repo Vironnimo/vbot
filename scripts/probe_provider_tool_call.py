@@ -67,6 +67,11 @@ from core.tools.read import (
     READ_TOOL_NAME,
     READ_TOOL_PARAMETERS,
 )
+from core.tools.session_search import (
+    SESSION_READ_TOOL_DESCRIPTION,
+    SESSION_READ_TOOL_NAME,
+    SESSION_READ_TOOL_PARAMETERS,
+)
 from core.tools.skill import (
     SKILL_LIST_TOOL_DESCRIPTION,
     SKILL_LIST_TOOL_NAME,
@@ -127,6 +132,7 @@ PROBE_SCENARIOS = (
     "process",
     "project",
     "read",
+    "session_read",
     "skill",
     "skill_list",
     "status",
@@ -195,6 +201,15 @@ READ_CASES = (
     "limit_only",
     "offset_line_limit",
     "offset_character_limit",
+)
+SESSION_READ_CASES = (
+    "whole",
+    "agent",
+    "start",
+    "end",
+    "range",
+    "all",
+    "cursor",
 )
 SKILL_CASES = ("activate", "skill_md", "reference", "script", "asset")
 STATUS_CASES = ("current", "session", "agent_session")
@@ -288,6 +303,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=READ_CASES,
         default="path_only",
         help="Exact read argument shape requested by the read scenario.",
+    )
+    parser.add_argument(
+        "--session-read-case",
+        choices=SESSION_READ_CASES,
+        default="whole",
+        help="Exact session_read argument shape requested by the scenario.",
     )
     parser.add_argument(
         "--skill-case",
@@ -848,6 +869,52 @@ def _text_to_speech_scenario(case_name: str) -> ProbeScenario:
     )
 
 
+def _session_read_scenario(case_name: str) -> ProbeScenario:
+    session_id = "session-123"
+    agent_id = "tester"
+    start_message_id = "message-start"
+    end_message_id = "message-end"
+    session_read_arguments = {
+        "whole": {"session_id": session_id},
+        "agent": {"session_id": session_id, "agent_id": agent_id},
+        "start": {"session_id": session_id, "start_message_id": start_message_id},
+        "end": {"session_id": session_id, "end_message_id": end_message_id},
+        "range": {
+            "session_id": session_id,
+            "start_message_id": start_message_id,
+            "end_message_id": end_message_id,
+        },
+        "all": {
+            "session_id": session_id,
+            "agent_id": agent_id,
+            "start_message_id": start_message_id,
+            "end_message_id": end_message_id,
+        },
+        "cursor": {"cursor": "session-read-cursor-token"},
+    }
+    expected_arguments = session_read_arguments[case_name]
+    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
+    instruction = (
+        f"Call {SESSION_READ_TOOL_NAME} exactly once with exactly this JSON object as its "
+        f"arguments: {rendered_arguments}. Preserve every value and omit every field not "
+        "shown."
+    )
+    return ProbeScenario(
+        "session_read",
+        [
+            {
+                "name": SESSION_READ_TOOL_NAME,
+                "description": SESSION_READ_TOOL_DESCRIPTION,
+                "parameters": SESSION_READ_TOOL_PARAMETERS,
+            }
+        ],
+        _probe_messages(instruction),
+        SESSION_READ_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
+    )
+
+
 def _web_fetch_scenario(case_name: str) -> ProbeScenario:
     url = "https://example.com/provider-tool-probe"
     web_fetch_arguments: dict[str, dict[str, Any]] = {
@@ -1124,6 +1191,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _project_scenario()
     if name == "read":
         return _read_scenario(str(args.read_case))
+    if name == "session_read":
+        return _session_read_scenario(str(args.session_read_case))
     if name == "skill":
         return _skill_scenario(str(args.skill_case))
     if name == "skill_list":
@@ -1812,6 +1881,9 @@ async def _run(args: argparse.Namespace) -> int:
             "grep_case": args.grep_case if scenario.name == "grep" else None,
             "process_case": args.process_case if scenario.name == "process" else None,
             "read_case": args.read_case if scenario.name == "read" else None,
+            "session_read_case": (
+                args.session_read_case if scenario.name == "session_read" else None
+            ),
             "skill_case": args.skill_case if scenario.name == "skill" else None,
             "status_case": args.status_case if scenario.name == "status" else None,
             "speech_case": args.speech_case if scenario.name == "text_to_speech" else None,
