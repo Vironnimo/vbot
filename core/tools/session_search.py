@@ -52,9 +52,8 @@ SESSION_SEARCH_CURSOR_VERSION = 2
 
 _BASE_DESCRIPTION = (
     "Find persisted Sessions and relevant conversation passages. Omit query to list recent "
-    "Sessions; provide query to search with the configured Recall backend. period is one "
-    "inclusive ISO-8601 start/end interval; either endpoint may be open. Results contain exact "
-    "session_read references. Continue a page with cursor by itself."
+    "Sessions; provide query to search. Results include exact session_read references. "
+    "Continue a page with cursor by itself."
 )
 SESSION_SEARCH_TOOL_DESCRIPTION = _BASE_DESCRIPTION
 SESSION_READ_TOOL_DESCRIPTION = (
@@ -80,10 +79,8 @@ class _Cursor:
 
 
 def build_session_search_parameters() -> JsonObject:
-    non_cursor_fields = ("query", "period", "agent_id", "session_id", "limit")
     return {
         "type": "object",
-        "description": "Find Sessions or continue one previous page.",
         "properties": {
             "query": {
                 "type": "string",
@@ -112,7 +109,8 @@ def build_session_search_parameters() -> JsonObject:
                 "type": "integer",
                 "minimum": 1,
                 "maximum": SESSION_SEARCH_MAX_LIMIT,
-                "description": "Maximum results in this page; default 10, maximum 100.",
+                "default": SESSION_SEARCH_DEFAULT_LIMIT,
+                "description": "Maximum results in this page.",
             },
             "cursor": {
                 "type": "string",
@@ -120,14 +118,7 @@ def build_session_search_parameters() -> JsonObject:
                 "description": "Opaque continuation; when set, omit every other argument.",
             },
         },
-        "additionalProperties": False,
-        "oneOf": [
-            {"not": {"required": ["cursor"]}},
-            {
-                "required": ["cursor"],
-                "not": {"anyOf": [{"required": [field]} for field in non_cursor_fields]},
-            },
-        ],
+        "required": [],
     }
 
 
@@ -329,6 +320,7 @@ def register_session_search_tool(
         build_session_search_description(recall_backend),
         SESSION_SEARCH_TOOL_PARAMETERS,
         make_session_search_handler(recall_backend, sessions, backend_name),
+        open_input_schema=True,
         result_schema={
             "type": "object",
             "required": ["items", "has_more", "formatted_bytes"],

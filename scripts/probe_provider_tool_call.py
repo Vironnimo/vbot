@@ -71,6 +71,9 @@ from core.tools.session_search import (
     SESSION_READ_TOOL_DESCRIPTION,
     SESSION_READ_TOOL_NAME,
     SESSION_READ_TOOL_PARAMETERS,
+    SESSION_SEARCH_TOOL_DESCRIPTION,
+    SESSION_SEARCH_TOOL_NAME,
+    SESSION_SEARCH_TOOL_PARAMETERS,
 )
 from core.tools.skill import (
     SKILL_LIST_TOOL_DESCRIPTION,
@@ -133,6 +136,7 @@ PROBE_SCENARIOS = (
     "project",
     "read",
     "session_read",
+    "session_search",
     "skill",
     "skill_list",
     "status",
@@ -208,6 +212,17 @@ SESSION_READ_CASES = (
     "start",
     "end",
     "range",
+    "all",
+    "cursor",
+)
+SESSION_SEARCH_CASES = (
+    "list",
+    "query",
+    "period",
+    "agent",
+    "session",
+    "limit_min",
+    "limit_max",
     "all",
     "cursor",
 )
@@ -309,6 +324,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=SESSION_READ_CASES,
         default="whole",
         help="Exact session_read argument shape requested by the scenario.",
+    )
+    parser.add_argument(
+        "--session-search-case",
+        choices=SESSION_SEARCH_CASES,
+        default="list",
+        help="Exact session_search argument shape requested by the scenario.",
     )
     parser.add_argument(
         "--skill-case",
@@ -915,6 +936,48 @@ def _session_read_scenario(case_name: str) -> ProbeScenario:
     )
 
 
+def _session_search_scenario(case_name: str) -> ProbeScenario:
+    query = "Tool schema defaults"
+    session_search_arguments: dict[str, dict[str, Any]] = {
+        "list": {},
+        "query": {"query": query},
+        "period": {"period": "2026-07-01/2026-07-31"},
+        "agent": {"agent_id": "tester"},
+        "session": {"session_id": "session-123"},
+        "limit_min": {"limit": 1},
+        "limit_max": {"limit": 100},
+        "all": {
+            "query": query,
+            "period": "2026-07-01/2026-07-31",
+            "agent_id": "tester",
+            "session_id": "session-123",
+            "limit": 100,
+        },
+        "cursor": {"cursor": "session-search-cursor-token"},
+    }
+    expected_arguments = session_search_arguments[case_name]
+    rendered_arguments = json.dumps(expected_arguments, separators=(",", ":"))
+    instruction = (
+        f"Call {SESSION_SEARCH_TOOL_NAME} exactly once with exactly this JSON object as its "
+        f"arguments: {rendered_arguments}. Preserve every value and omit every field not "
+        "shown."
+    )
+    return ProbeScenario(
+        "session_search",
+        [
+            {
+                "name": SESSION_SEARCH_TOOL_NAME,
+                "description": SESSION_SEARCH_TOOL_DESCRIPTION,
+                "parameters": SESSION_SEARCH_TOOL_PARAMETERS,
+            }
+        ],
+        _probe_messages(instruction),
+        SESSION_SEARCH_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
+    )
+
+
 def _web_fetch_scenario(case_name: str) -> ProbeScenario:
     url = "https://example.com/provider-tool-probe"
     web_fetch_arguments: dict[str, dict[str, Any]] = {
@@ -1193,6 +1256,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _read_scenario(str(args.read_case))
     if name == "session_read":
         return _session_read_scenario(str(args.session_read_case))
+    if name == "session_search":
+        return _session_search_scenario(str(args.session_search_case))
     if name == "skill":
         return _skill_scenario(str(args.skill_case))
     if name == "skill_list":
@@ -1883,6 +1948,9 @@ async def _run(args: argparse.Namespace) -> int:
             "read_case": args.read_case if scenario.name == "read" else None,
             "session_read_case": (
                 args.session_read_case if scenario.name == "session_read" else None
+            ),
+            "session_search_case": (
+                args.session_search_case if scenario.name == "session_search" else None
             ),
             "skill_case": args.skill_case if scenario.name == "skill" else None,
             "status_case": args.status_case if scenario.name == "status" else None,

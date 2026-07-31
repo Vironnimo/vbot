@@ -560,6 +560,36 @@ def test_session_read_cases_use_production_schema_and_exact_arguments() -> None:
     assert whole.expected_arguments == {"session_id": "session-123"}
 
 
+def test_session_search_cases_use_production_schema_and_exact_arguments() -> None:
+    for case_name in PROBE.SESSION_SEARCH_CASES:
+        scenario = PROBE._scenario(
+            SimpleNamespace(
+                scenario="session_search",
+                session_search_case=case_name,
+                lines=8,
+            ),
+        )
+        contracts = PROBE._compile_probe_contracts(
+            scenario.tools,
+            require_closed_input=scenario.require_closed_input,
+        )
+        arguments = scenario.expected_arguments
+
+        assert scenario.tools[0]["parameters"] is PROBE.SESSION_SEARCH_TOOL_PARAMETERS
+        assert arguments is not None
+        contracts[PROBE.SESSION_SEARCH_TOOL_NAME].validate_arguments(arguments)
+        assert (
+            PROBE._expected_argument_measurements(
+                [{"name": PROBE.SESSION_SEARCH_TOOL_NAME, "arguments": arguments}],
+                scenario,
+            )["expected_arguments_match"]
+            is True
+        )
+
+    listing = PROBE._session_search_scenario("list")
+    assert listing.expected_arguments == {}
+
+
 def test_glob_cases_use_production_schema_and_exact_expected_arguments() -> None:
     for case_name in PROBE.GLOB_CASES:
         scenario = PROBE._scenario(

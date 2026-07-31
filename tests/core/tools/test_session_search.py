@@ -111,11 +111,15 @@ async def test_registration_exposes_two_small_stable_tools(tmp_path: Path) -> No
     }
     assert search.parameters == SESSION_SEARCH_TOOL_PARAMETERS
     assert read.parameters == SESSION_READ_TOOL_PARAMETERS
+    assert "oneOf" not in search.parameters
+    assert "additionalProperties" not in search.parameters
+    assert search.parameters["required"] == []
+    assert search.parameters["properties"]["limit"]["default"] == 10
     assert "oneOf" not in read.parameters
     assert "additionalProperties" not in read.parameters
     assert read.parameters["required"] == []
     assert read.open_input_schema is True
-    assert search.open_input_schema is False
+    assert search.open_input_schema is True
     assert search.description.startswith(SESSION_SEARCH_TOOL_DESCRIPTION)
     assert {
         SESSION_SEARCH_TOOL_NAME,
