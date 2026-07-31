@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from core.providers.tool_schema import render_tool_definitions, render_tool_schema
+from core.providers.tool_schema import render_tool_definitions
 from core.tools.bash import BASH_TOOL_PARAMETERS
 from core.tools.channel import CHANNEL_SEND_TOOL_PARAMETERS
 from core.tools.contracts import ToolContractError, compile_tool_contract
@@ -63,13 +63,6 @@ _DIRECT_TOOL_SCHEMAS: tuple[tuple[str, JsonObject], ...] = (
     ("web_search", WEB_SEARCH_TOOL_PARAMETERS),
     ("write", WRITE_TOOL_PARAMETERS),
 )
-
-_OPENAI_STRICT_SHIPPED_TOOLS = {
-    "analyze_image",
-    "project",
-    "text_to_speech",
-    "write",
-}
 
 _BRANCH_COMPLETE_SCHEMAS = (
     ("bash", BASH_TOOL_PARAMETERS),
@@ -146,31 +139,9 @@ _BRANCH_MISSING_REQUIRED_CALLS = (
 )
 
 
-def test_shipped_tool_profile_eligibility_snapshot_is_explicit() -> None:
-    schemas = list(_DIRECT_TOOL_SCHEMAS)
-    openai_decisions = {
-        name: render_tool_schema(schema, profile="openai_strict") for name, schema in schemas
-    }
-    anthropic_definitions = render_tool_definitions(
-        [
-            {"name": name, "description": f"Call {name}.", "parameters": schema}
-            for name, schema in schemas
-        ],
-        profile="anthropic_strict",
-    )
-
-    assert {
-        name for name, decision in openai_decisions.items() if decision.strict
-    } == _OPENAI_STRICT_SHIPPED_TOOLS
-    assert all(
-        decision.strict or decision.reason is not None for decision in openai_decisions.values()
-    )
-    assert all("strict" not in definition for definition in anthropic_definitions)
-
-
 @pytest.mark.parametrize(
     "profile",
-    ("openai_strict", "anthropic_strict", "best_effort"),
+    ("openai_non_strict", "best_effort"),
 )
 def test_skill_schema_exposes_direct_fields_in_every_provider_profile(profile: str) -> None:
     rendered = render_tool_definitions(
@@ -187,15 +158,15 @@ def test_skill_schema_exposes_direct_fields_in_every_provider_profile(profile: s
     assert set(rendered["parameters"]["properties"]) == {"name", "file_path"}
     assert rendered["parameters"]["required"] == ["name"]
     assert rendered["parameters"] == SKILL_TOOL_PARAMETERS
-    if profile == "anthropic_strict":
-        assert rendered["strict"] is True
+    if profile == "openai_non_strict":
+        assert rendered["strict"] is False
     else:
         assert "strict" not in rendered
 
 
 @pytest.mark.parametrize(
     "profile",
-    ("openai_strict", "anthropic_strict", "best_effort"),
+    ("openai_non_strict", "best_effort"),
 )
 def test_skill_list_schema_is_an_empty_call_in_every_provider_profile(profile: str) -> None:
     rendered = render_tool_definitions(
@@ -210,8 +181,8 @@ def test_skill_list_schema_is_an_empty_call_in_every_provider_profile(profile: s
     )[0]
 
     assert rendered["parameters"] == SKILL_LIST_TOOL_PARAMETERS
-    if profile in {"openai_strict", "anthropic_strict"}:
-        assert rendered["strict"] is True
+    if profile == "openai_non_strict":
+        assert rendered["strict"] is False
     else:
         assert "strict" not in rendered
 
@@ -221,7 +192,7 @@ def test_skill_list_schema_is_an_empty_call_in_every_provider_profile(profile: s
     _BRANCH_COMPLETE_SCHEMAS,
     ids=[contract[0] for contract in _BRANCH_COMPLETE_SCHEMAS],
 )
-@pytest.mark.parametrize("profile", ("openai_strict", "anthropic_strict", "best_effort"))
+@pytest.mark.parametrize("profile", ("openai_non_strict", "best_effort"))
 def test_branch_complete_schema_reaches_provider_unchanged(
     tool_name: str,
     schema: JsonObject,
@@ -233,7 +204,7 @@ def test_branch_complete_schema_reaches_provider_unchanged(
     )
 
     assert rendered[0]["parameters"] == schema
-    assert "strict" not in rendered[0]
+    assert rendered[0].get("strict") is not True
 
 
 @pytest.mark.parametrize(
@@ -275,7 +246,7 @@ def test_branch_complete_schema_enforces_variant_requirements(
     _DIRECT_TOOL_SCHEMAS,
     ids=[contract[0] for contract in _DIRECT_TOOL_SCHEMAS],
 )
-def test_direct_tool_schema_is_strict_and_declares_required_properties(
+def test_direct_tool_schema_is_closed_and_declares_required_properties(
     tool_name: str,
     schema: JsonObject,
 ) -> None:

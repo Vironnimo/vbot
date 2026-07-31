@@ -118,27 +118,25 @@ def test_validation_measurements_report_structure_without_echoing_values() -> No
     assert marker not in json.dumps(invalid)
 
 
-def test_strict_budget_scenarios_use_production_profile_decisions() -> None:
-    args = SimpleNamespace(scenario="strict_budget", lines=8)
-
-    anthropic = PROBE._scenario(args, "anthropic_strict")
-    anthropic_rendered = PROBE.render_tool_definitions(
-        anthropic.tools,
-        profile="anthropic_strict",
+def test_probe_profiles_never_enable_strict_mode() -> None:
+    openai = PROBE._expected_profile(
+        SimpleNamespace(profile="auto", provider="openai", wire="openai")
     )
-    openai = PROBE._scenario(args, "openai_strict")
-    openai_rendered = PROBE.render_tool_definitions(openai.tools, profile="openai_strict")
+    anthropic = PROBE._expected_profile(
+        SimpleNamespace(profile="auto", provider="anthropic", wire="anthropic")
+    )
+    opencode_go = PROBE._expected_profile(
+        SimpleNamespace(profile="auto", provider="opencode-go", wire="openai")
+    )
 
-    assert len(anthropic.tools) == PROBE.ANTHROPIC_MAX_STRICT_TOOLS + 1
-    assert all("strict" not in tool for tool in anthropic_rendered)
-    assert len(openai.tools) == 1
-    assert "strict" not in openai_rendered[0]
+    assert openai == "openai_non_strict"
+    assert anthropic == "best_effort"
+    assert opencode_go == "best_effort"
 
 
 def test_nested_operation_scenario_compiles_and_validates() -> None:
     scenario = PROBE._scenario(
         SimpleNamespace(scenario="nested_operation", lines=8),
-        "best_effort",
     )
     contracts = PROBE._compile_probe_contracts(scenario.tools)
 
@@ -158,7 +156,6 @@ def test_nested_operation_scenario_compiles_and_validates() -> None:
 def test_optional_boolean_scenarios_differ_only_by_schema_defaults() -> None:
     without_defaults = PROBE._scenario(
         SimpleNamespace(scenario="optional_booleans", optional_case="omit", lines=8),
-        "openai_strict",
     )
     with_defaults = PROBE._scenario(
         SimpleNamespace(
@@ -166,7 +163,6 @@ def test_optional_boolean_scenarios_differ_only_by_schema_defaults() -> None:
             optional_case="omit",
             lines=8,
         ),
-        "openai_strict",
     )
 
     without_schema = without_defaults.tools[0]["parameters"]
@@ -181,7 +177,6 @@ def test_optional_boolean_scenarios_differ_only_by_schema_defaults() -> None:
 def test_bare_optional_boolean_scenario_omits_default_values_from_descriptions() -> None:
     scenario = PROBE._scenario(
         SimpleNamespace(scenario="optional_booleans_bare", optional_case="omit", lines=8),
-        "openai_strict",
     )
 
     properties = scenario.tools[0]["parameters"]["properties"]
@@ -195,7 +190,6 @@ def test_bare_optional_boolean_scenario_omits_default_values_from_descriptions()
 def test_optional_boolean_measurements_report_presence_without_argument_values() -> None:
     scenario = PROBE._scenario(
         SimpleNamespace(scenario="optional_booleans", optional_case="omit", lines=8),
-        "openai_strict",
     )
 
     result = PROBE._optional_boolean_measurements(
@@ -256,7 +250,6 @@ def test_optional_boolean_cases_request_one_exact_argument_shape() -> None:
                 optional_case=case_name,
                 lines=8,
             ),
-            "openai_strict",
         )
 
         assert "exactly once" in scenario.messages[1]["content"]

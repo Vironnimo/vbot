@@ -23,7 +23,7 @@ from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfi
 API_KEY = "test-opencode-go-key"
 OPENCODE_GO_URL = "https://opencode-go.example/v1/chat/completions"
 OPENCODE_GO_MESSAGES_URL = "https://opencode-go.example/v1/messages"
-STRICT_TOOL = {
+CLOSED_TOOL = {
     "name": "inspect_probe",
     "description": "Inspect one synthetic value.",
     "parameters": {
@@ -620,7 +620,7 @@ class TestOpenCodeGoAdapterMinimaxRouting:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_messages_path_uses_live_verified_anthropic_strict_tools(
+    async def test_messages_path_never_enables_strict_mode(
         self,
         opencode_go_adapter: OpenCodeGoAdapter,
     ) -> None:
@@ -639,22 +639,21 @@ class TestOpenCodeGoAdapterMinimaxRouting:
         await opencode_go_adapter.send(
             [{"role": "user", "content": "inspect"}],
             model_id="minimax-m3",
-            tools=[STRICT_TOOL],
+            tools=[CLOSED_TOOL],
         )
 
         body = json.loads(messages_route.calls.last.request.content)
         assert body["tools"] == [
             {
-                "name": STRICT_TOOL["name"],
-                "description": STRICT_TOOL["description"],
-                "input_schema": STRICT_TOOL["parameters"],
-                "strict": True,
+                "name": CLOSED_TOOL["name"],
+                "description": CLOSED_TOOL["description"],
+                "input_schema": CLOSED_TOOL["parameters"],
             }
         ]
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_messages_path_downgrades_whole_oversized_strict_tool_set(
+    async def test_messages_path_keeps_large_tool_set_non_strict(
         self,
         opencode_go_adapter: OpenCodeGoAdapter,
     ) -> None:
@@ -669,7 +668,7 @@ class TestOpenCodeGoAdapterMinimaxRouting:
                 },
             )
         )
-        tools = [{**STRICT_TOOL, "name": f"inspect_probe_{index}"} for index in range(21)]
+        tools = [{**CLOSED_TOOL, "name": f"inspect_probe_{index}"} for index in range(21)]
 
         await opencode_go_adapter.send(
             [{"role": "user", "content": "inspect"}],
@@ -743,7 +742,7 @@ class TestOpenCodeGoAdapterMinimaxRouting:
         await opencode_go_adapter.send(
             [{"role": "user", "content": "inspect"}],
             model_id="deepseek-v4-flash",
-            tools=[STRICT_TOOL],
+            tools=[CLOSED_TOOL],
         )
 
         body = json.loads(chat_route.calls.last.request.content)

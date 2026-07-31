@@ -382,7 +382,7 @@ async def test_codex_send_posts_responses_payload_with_account_and_beta_headers(
                 "name": "search",
                 "description": "Search docs",
                 "parameters": {"type": "object"},
-                "strict": True,
+                "strict": False,
             }
         ],
         "reasoning": {"effort": "xhigh", "summary": "auto"},

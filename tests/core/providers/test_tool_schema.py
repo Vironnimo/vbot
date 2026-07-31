@@ -1,4 +1,4 @@
-"""Tests for explicit canonical-to-Provider Tool-schema profiles."""
+"""Tests for Provider Tool-schema rendering without strict mode."""
 
 from __future__ import annotations
 
@@ -7,12 +7,7 @@ from typing import Any
 
 import pytest
 
-from core.providers.tool_schema import (
-    ANTHROPIC_MAX_STRICT_TOOLS,
-    render_tool_definitions,
-    render_tool_schema,
-    sanitize_anthropic_tool_input_schema,
-)
+from core.providers.tool_schema import render_tool_definitions, sanitize_anthropic_tool_input_schema
 
 _SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -49,47 +44,28 @@ def test_anthropic_sanitizer_rejects_non_object_roots(schema: object) -> None:
         sanitize_anthropic_tool_input_schema(schema)
 
 
-def test_openai_strict_render_preserves_canonical_nullable_optionals() -> None:
-    schema = copy.deepcopy(_SCHEMA)
-    schema["properties"]["limit"]["type"] = ["integer", "null"]
+def test_openai_profile_preserves_canonical_schema_and_explicitly_disables_strict() -> None:
+    rendered = render_tool_definitions([_tool("read")], profile="openai_non_strict")
 
-    decision = render_tool_schema(schema, profile="openai_strict")
-
-    assert decision.strict is True
-    assert decision.reason is None
-    assert decision.schema["required"] == ["path", "limit"]
-    assert decision.schema["properties"]["limit"]["type"] == ["integer", "null"]
-    assert decision.schema["additionalProperties"] is False
-    assert _SCHEMA["required"] == ["path"]
+    assert rendered == [{**_tool("read"), "strict": False}]
+    assert rendered[0]["parameters"]["required"] == ["path"]
+    assert rendered[0]["parameters"] is not _SCHEMA
 
 
-def test_openai_strict_downgrades_nonnullable_optional_without_weakening_schema() -> None:
-    decision = render_tool_schema(_SCHEMA, profile="openai_strict")
+@pytest.mark.parametrize("profile", ("openai_non_strict", "best_effort"))
+def test_caller_cannot_enable_strict_mode(profile: str) -> None:
+    tool = {**_tool("read"), "strict": True}
 
-    assert decision.strict is False
-    assert decision.reason == "optional_property_not_nullable:/properties/limit"
-    assert decision.schema == _SCHEMA
-
-
-def test_openai_strict_downgrades_unsupported_keywords_without_weakening_schema() -> None:
-    schema = {**_SCHEMA, "not": {"required": ["limit"]}}
-
-    decision = render_tool_schema(schema, profile="openai_strict")
-
-    assert decision.strict is False
-    assert decision.reason == "unsupported_keyword:not"
-    assert decision.schema == schema
-
-
-def test_anthropic_strict_is_all_or_none_for_the_request_set() -> None:
-    eligible = render_tool_definitions([_tool("one"), _tool("two")], profile="anthropic_strict")
-    oversized = render_tool_definitions(
-        [_tool(f"tool_{index}") for index in range(ANTHROPIC_MAX_STRICT_TOOLS + 1)],
-        profile="anthropic_strict",
+    [rendered] = render_tool_definitions(
+        [tool],
+        profile=profile,  # type: ignore[arg-type]
     )
 
-    assert all(tool["strict"] is True for tool in eligible)
-    assert all("strict" not in tool for tool in oversized)
+    assert rendered.get("strict") is not True
+    if profile == "openai_non_strict":
+        assert rendered["strict"] is False
+    else:
+        assert "strict" not in rendered
 
 
 def test_best_effort_profile_preserves_schema_and_emits_no_internal_fields() -> None:

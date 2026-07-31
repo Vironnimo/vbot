@@ -26,7 +26,6 @@ from core.providers.reasoning import (
     normalize_thinking_effort,
 )
 from core.providers.token_getter import TokenGetter
-from core.providers.tool_schema import ToolSchemaProfile
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("providers.opencode_go")
@@ -51,7 +50,6 @@ MINIMUM_REASONING_EFFORT_METADATA_KEY = "minimum_reasoning_effort"
 # not mark is unknown: route it the SAFE default (OpenAI chat/completions) and
 # warn, so a newly added model is never silently misrouted onto the wrong wire.
 _DEFAULT_PROTOCOL = PROTOCOL_OPENAI
-_MESSAGES_TOOL_SCHEMA_PROFILE: ToolSchemaProfile = "anthropic_strict"
 
 # OpenCode returns account/subscription exhaustion through the same HTTP 429
 # status as transient throttling. These stable error identifiers and phrases
@@ -91,10 +89,7 @@ def _raise_if_permanent_rate_limit(status_code: int, detail: str) -> None:
 
 
 class _OpenCodeGoMessagesAdapter(AnthropicCompatibleAdapter):
-    """OpenCode Go's live-verified Anthropic Messages wire profile."""
-
-    def _tool_schema_profile(self) -> ToolSchemaProfile:
-        return _MESSAGES_TOOL_SCHEMA_PROFILE
+    """OpenCode Go's Anthropic Messages wire adapter."""
 
     def _classify_http_status(
         self,
