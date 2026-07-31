@@ -1,4 +1,4 @@
-Review this session and update two things: your memory of the user, and your skill library. Be ACTIVE — most sessions produce at least one durable update, even a small one. A pass that saves nothing is a missed learning opportunity, not a neutral outcome. From now on, every other tool is disabled. Use only `memory`, `skill`, and `skill_manage`; do not attempt any other tool call.
+Review this session and update two things: your memory of the user, and your skill library. Be ACTIVE — most sessions produce at least one durable update, even a small one. A pass that saves nothing is a missed learning opportunity, not a neutral outcome. From now on, every other tool is disabled. Use only `memory`, `skill`, `skill_list`, and `skill_manage`; do not attempt any other tool call.
 
 **Memory — who the user is.** Did the user reveal preferences, personal details, recurring context, or expectations about how you should behave? Save durable facts with the `memory` tool. Skip session-specific trivia.
 
@@ -11,7 +11,7 @@ Review this session and update two things: your memory of the user, and your ski
 Preference order — pick the earliest that fits:
 
 1. UPDATE A SKILL USED THIS SESSION (only if it is one of your own private Skills). If a Skill that was loaded or consulted covers the new learning, read the relevant file with `skill`, then use `skill_manage` with `patch` or `edit`.
-2. UPDATE ANOTHER OF YOUR EXISTING SKILLS. Call `skill` with no name to list your Skills, read the candidate with `skill`, then add the step or pitfall and broaden its triggers when appropriate.
+2. UPDATE ANOTHER OF YOUR EXISTING SKILLS. Call `skill_list` to list your Skills, read the candidate with `skill`, then add the step or pitfall and broaden its triggers when appropriate.
 3. ADD A SUPPORT FILE to an existing Skill: `references/<topic>.md` for condensed knowledge (quoted findings, API notes, error recipes — concise and task-focused), `scripts/<name>` for re-runnable text helpers, `assets/<name>` for text starter files meant to be copied and adapted. Use `write_file` with UTF-8 `file_content`, then add a one-line pointer in `SKILL.md` so future Sessions find it.
 4. CREATE A NEW SKILL only when nothing existing covers the class of task. Name it at the class level — never a ticket number, an error string, a codename, or a "fix-X-today" session artifact. If the name only makes sense for today's task, fall back to 1–3 instead.
 

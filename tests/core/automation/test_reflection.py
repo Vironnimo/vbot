@@ -12,6 +12,7 @@ import pytest
 from core.automation.reflection import (
     COUNTER_GENERATION_KEY,
     REFLECTION_COUNTERS_META_KEY,
+    REFLECTION_TOOL_GRANTS,
     REFLECTION_TOOL_RESTRICTION,
     ReflectionService,
     _cadence_instruction,
@@ -263,6 +264,7 @@ async def test_memory_threshold_triggers_focused_review_and_resets_turns() -> No
     review = loop.started[0]
     assert review["internal"] is True
     assert review["tool_restriction"] == REFLECTION_TOOL_RESTRICTION
+    assert review["tool_grants"] == REFLECTION_TOOL_GRANTS
     assert review["session_id"] == "fork-1"
     assert review["message"].startswith(REFLECT_BRIEF)
     assert "memory cadence" in review["message"]
@@ -441,6 +443,7 @@ async def test_run_review_reports_fork_before_run_and_returns_summary() -> None:
         f"{REFLECT_BRIEF}\n\nThe user asked you to focus this reflection on:\nskills"
     )
     assert loop.started[0]["reply_surface"] is None
+    assert loop.started[0]["tool_grants"] == REFLECTION_TOOL_GRANTS
     assert loop.started[0]["contributes_to_agent_activity"] is False
 
 
@@ -478,4 +481,6 @@ def test_real_reflection_prompt_explicitly_disables_every_other_tool() -> None:
     prompt = prompt_path.read_text(encoding="utf-8")
 
     assert "every other tool is disabled" in prompt
-    assert "Use only `memory`, `skill`, and `skill_manage`" in prompt
+    assert "Use only `memory`, `skill`, `skill_list`, and `skill_manage`" in prompt
+    assert "Call `skill_list` to list your Skills" in prompt
+    assert "Call `skill` with no name" not in prompt

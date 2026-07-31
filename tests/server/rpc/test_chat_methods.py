@@ -551,7 +551,13 @@ async def test_reflect_forks_and_runs_restricted_review(monkeypatch: pytest.Monk
     assert captured[0]["session_id"] == "fork-1"
     assert captured[0]["session_id"] != "s1"
     assert captured[0]["internal"] is True
-    assert captured[0]["tool_restriction"] == ("memory", "skill", "skill_manage")
+    assert captured[0]["tool_restriction"] == (
+        "memory",
+        "skill",
+        "skill_list",
+        "skill_manage",
+    )
+    assert captured[0]["tool_grants"] == ("skill_list",)
     assert captured[0]["reply_surface"] == ReplySurface.webui()
     # The brief carries the fragment marker plus the focus text.
     assert "Review this session" in captured[0]["message"]

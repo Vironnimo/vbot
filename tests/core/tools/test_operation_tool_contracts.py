@@ -27,7 +27,7 @@ from core.tools.session_search import (
     SESSION_READ_TOOL_PARAMETERS,
     SESSION_SEARCH_TOOL_PARAMETERS,
 )
-from core.tools.skill import SKILL_TOOL_PARAMETERS
+from core.tools.skill import SKILL_LIST_TOOL_PARAMETERS, SKILL_TOOL_PARAMETERS
 from core.tools.skill_manage import SKILL_MANAGE_TOOL_PARAMETERS
 from core.tools.speech import TEXT_TO_SPEECH_TOOL_PARAMETERS
 from core.tools.status import STATUS_TOOL_PARAMETERS
@@ -177,7 +177,7 @@ def test_skill_schema_exposes_direct_fields_in_every_provider_profile(profile: s
         [
             {
                 "name": "skill",
-                "description": "List or activate Skills.",
+                "description": "Activate or read a Skill.",
                 "parameters": SKILL_TOOL_PARAMETERS,
             }
         ],
@@ -185,9 +185,32 @@ def test_skill_schema_exposes_direct_fields_in_every_provider_profile(profile: s
     )[0]
 
     assert set(rendered["parameters"]["properties"]) == {"name", "file_path"}
-    assert rendered["parameters"]["required"] == []
+    assert rendered["parameters"]["required"] == ["name"]
     assert rendered["parameters"] == SKILL_TOOL_PARAMETERS
     if profile == "anthropic_strict":
+        assert rendered["strict"] is True
+    else:
+        assert "strict" not in rendered
+
+
+@pytest.mark.parametrize(
+    "profile",
+    ("openai_strict", "anthropic_strict", "best_effort"),
+)
+def test_skill_list_schema_is_an_empty_call_in_every_provider_profile(profile: str) -> None:
+    rendered = render_tool_definitions(
+        [
+            {
+                "name": "skill_list",
+                "description": "List Skills during Reflection.",
+                "parameters": SKILL_LIST_TOOL_PARAMETERS,
+            }
+        ],
+        profile=profile,  # type: ignore[arg-type]
+    )[0]
+
+    assert rendered["parameters"] == SKILL_LIST_TOOL_PARAMETERS
+    if profile in {"openai_strict", "anthropic_strict"}:
         assert rendered["strict"] is True
     else:
         assert "strict" not in rendered

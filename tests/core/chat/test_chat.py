@@ -648,6 +648,75 @@ async def test_tool_restriction_denies_at_dispatch_without_changing_definitions(
 
 
 @pytest.mark.asyncio
+async def test_run_tool_grant_exposes_session_scoped_tool_only_for_that_run(
+    tmp_path: Path,
+) -> None:
+    from tests.core.chat.test_chat_loop import StubAdapter, StubAgent, StubRuntime
+
+    def build(session_id: str, *, invoke: bool = False) -> tuple[Any, StubAdapter, list[str]]:
+        ran: list[str] = []
+
+        def list_skills(_context: ToolContext, _arguments: dict) -> dict:
+            ran.append("skill_list")
+            return tool_success({"skill_groups": [], "count": 0})
+
+        tools = ToolRegistry()
+        tools.register(
+            "skill_list",
+            "List Skills during Reflection.",
+            {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
+            list_skills,
+            session_scoped=True,
+        )
+        agent = StubAgent(id="coder", model="openai/gpt-5.2", allowed_tools=[])
+        responses = (
+            [
+                {
+                    "content": None,
+                    "tool_calls": [{"id": "list-call", "name": "skill_list", "arguments": {}}],
+                },
+                {"content": "done", "tool_calls": []},
+            ]
+            if invoke
+            else [{"content": "done", "tool_calls": []}]
+        )
+        adapter = StubAdapter(responses)
+        runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter, tools=tools)
+        runtime.chat_sessions.create("coder", session_id=session_id)
+        return runtime, adapter, ran
+
+    normal_runtime, normal_adapter, normal_ran = build("normal")
+    normal_run = await build_chat_loop(normal_runtime).start_run(
+        "coder", "Continue", session_id="normal"
+    )
+    await normal_run.wait()
+
+    reflection_runtime, reflection_adapter, reflection_ran = build("reflection", invoke=True)
+    reflection_run = await build_chat_loop(reflection_runtime).start_run(
+        "coder",
+        "Reflect",
+        session_id="reflection",
+        tool_restriction=("skill_list",),
+        tool_grants=("skill_list",),
+    )
+    await reflection_run.wait()
+
+    assert normal_adapter.requests[0]["kwargs"]["tools"] == []
+    assert [
+        definition["name"] for definition in reflection_adapter.requests[0]["kwargs"]["tools"]
+    ] == ["skill_list"]
+    assert normal_runtime.system_prompts.effective_tool_name_calls == [()]
+    assert reflection_runtime.system_prompts.effective_tool_name_calls == [("skill_list",)]
+    assert normal_ran == []
+    assert reflection_ran == ["skill_list"]
+
+
+@pytest.mark.asyncio
 async def test_checkpoint_granted_history_stays_advertised_when_run_restricts_dispatch(
     tmp_path: Path,
 ) -> None:
