@@ -372,6 +372,30 @@ def test_skill_cases_use_production_schema_and_exact_expected_arguments() -> Non
     assert activate.expected_arguments == {"name": "vbot-cli"}
 
 
+def test_skill_list_scenario_uses_production_schema_and_empty_arguments() -> None:
+    scenario = PROBE._scenario(
+        SimpleNamespace(
+            scenario="skill_list",
+            lines=8,
+        ),
+    )
+    contracts = PROBE._compile_probe_contracts(
+        scenario.tools,
+        require_closed_input=scenario.require_closed_input,
+    )
+
+    assert scenario.tools[0]["parameters"] is PROBE.SKILL_LIST_TOOL_PARAMETERS
+    assert scenario.expected_arguments == {}
+    contracts[PROBE.SKILL_LIST_TOOL_NAME].validate_arguments({})
+    assert (
+        PROBE._expected_argument_measurements(
+            [{"name": PROBE.SKILL_LIST_TOOL_NAME, "arguments": {}}],
+            scenario,
+        )["expected_arguments_match"]
+        is True
+    )
+
+
 def test_probe_runtime_suppresses_background_service_start_hooks() -> None:
     class RuntimeStub:
         def __init__(self) -> None:

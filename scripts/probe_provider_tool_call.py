@@ -38,6 +38,9 @@ from core.tools.process import (
     PROCESS_TOOL_PARAMETERS,
 )
 from core.tools.skill import (
+    SKILL_LIST_TOOL_DESCRIPTION,
+    SKILL_LIST_TOOL_NAME,
+    SKILL_LIST_TOOL_PARAMETERS,
     SKILL_TOOL_DESCRIPTION,
     SKILL_TOOL_NAME,
     SKILL_TOOL_PARAMETERS,
@@ -69,6 +72,7 @@ PROBE_SCENARIOS = (
     "large_arguments",
     "process",
     "skill",
+    "skill_list",
     "web_fetch",
 )
 OPTIONAL_BOOLEAN_CASES = ("omit", "include_links", "raw", "both")
@@ -443,6 +447,28 @@ def _skill_scenario(case_name: str) -> ProbeScenario:
     )
 
 
+def _skill_list_scenario() -> ProbeScenario:
+    expected_arguments: dict[str, Any] = {}
+    instruction = (
+        f"Call {SKILL_LIST_TOOL_NAME} exactly once with an empty JSON object as its "
+        "arguments. Do not add any field."
+    )
+    return ProbeScenario(
+        "skill_list",
+        [
+            {
+                "name": SKILL_LIST_TOOL_NAME,
+                "description": SKILL_LIST_TOOL_DESCRIPTION,
+                "parameters": SKILL_LIST_TOOL_PARAMETERS,
+            }
+        ],
+        _probe_messages(instruction),
+        SKILL_LIST_TOOL_NAME,
+        require_closed_input=False,
+        expected_arguments=expected_arguments,
+    )
+
+
 def _scenario(args: argparse.Namespace) -> ProbeScenario:
     direct = json.loads(json.dumps(PROBE_TOOL))
     name = str(args.scenario)
@@ -550,6 +576,8 @@ def _scenario(args: argparse.Namespace) -> ProbeScenario:
         return _process_scenario(str(args.process_case))
     if name == "skill":
         return _skill_scenario(str(args.skill_case))
+    if name == "skill_list":
+        return _skill_list_scenario()
     if name == "web_fetch":
         return _web_fetch_scenario(str(args.web_fetch_case))
     raise AssertionError(f"unsupported probe scenario: {name}")

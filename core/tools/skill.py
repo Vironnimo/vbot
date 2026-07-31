@@ -93,7 +93,6 @@ SKILL_LIST_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
     "properties": {},
     "required": [],
-    "additionalProperties": False,
 }
 
 
@@ -247,6 +246,7 @@ def register_skill_tool(
         make_skill_list_handler(resolve_registry),
         result_schema={"type": "object"},
         session_scoped=True,
+        open_input_schema=True,
     )
 
 
