@@ -919,8 +919,14 @@ def test_windows_update_refuses_running_owned_desktop_before_changes(
     manifest = tmp_path / ".vbot-install.json"
     manifest_before = manifest.read_bytes()
 
-    def running_process_id(executable: Path) -> int | None:
+    package_launcher = scripts_dir / "vbot.exe"
+
+    def running_process_id(executable: Path, *, include_current: bool = False) -> int | None:
+        if executable == package_launcher.resolve():
+            assert include_current
+            return None
         assert executable == desktop_launcher.resolve()
+        assert not include_current
         return 4242
 
     monkeypatch.setattr(update_management, "_running_process_id", running_process_id)
@@ -982,8 +988,14 @@ def test_windows_update_rechecks_desktop_immediately_before_pip(
     manifest_before = manifest.read_bytes()
     process_ids = iter([None, 4242])
 
-    def running_process_id(executable: Path) -> int | None:
+    package_launcher = scripts_dir / "vbot.exe"
+
+    def running_process_id(executable: Path, *, include_current: bool = False) -> int | None:
+        if executable == package_launcher.resolve():
+            assert include_current
+            return None
         assert executable == desktop_launcher.resolve()
+        assert not include_current
         return next(process_ids)
 
     monkeypatch.setattr(update_management, "_running_process_id", running_process_id)
@@ -1016,6 +1028,115 @@ def test_windows_update_rechecks_desktop_immediately_before_pip(
     assert runner.ran("git", "pull")
     assert not runner.ran("pip")
     assert manifest.read_bytes() == manifest_before
+
+
+def test_windows_update_refuses_active_package_launcher_before_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / ".git").mkdir()
+    scripts_dir = tmp_path / ".venv" / "Scripts"
+    scripts_dir.mkdir(parents=True)
+    python_executable = scripts_dir / "python.exe"
+    python_executable.write_bytes(b"")
+    package_launcher = scripts_dir / "vbot.exe"
+    package_launcher.write_bytes(b"")
+    _write_state(tmp_path, python_executable=str(python_executable))
+    manifest = tmp_path / ".vbot-install.json"
+    manifest_before = manifest.read_bytes()
+
+    def running_process_id(executable: Path, *, include_current: bool = False) -> int | None:
+        assert executable == package_launcher.resolve()
+        assert include_current
+        return 31337
+
+    monkeypatch.setattr(update_management, "_running_process_id", running_process_id)
+
+    def handler(command: list[str]) -> CommandRun:
+        if command[:2] == ["git", "symbolic-ref"]:
+            return _ok("main")
+        if command[:2] == ["git", "rev-parse"]:
+            return _ok("samesha")
+        raise AssertionError(f"update mutated state after launcher preflight failed: {command}")
+
+    runner = ScriptedRunner(handler)
+    result = run_update(
+        _instance(),
+        runner=runner,
+        root=tmp_path,
+        restart=False,
+        platform_name="nt",
+    )
+
+    assert not result.ok
+    assert "Windows package launcher is active" in result.message
+    assert "process 31337" in result.message
+    assert "no checkout or installation files were changed" in result.message
+    expected_recovery = (
+        f"Set-Location -LiteralPath '{tmp_path.resolve()}'; "
+        f"& '{python_executable}' -m cli.main update"
+    )
+    assert f"resume update: {expected_recovery}" in result.message
+    assert manifest.read_bytes() == manifest_before
+    assert not runner.ran("git", "status")
+    assert not runner.ran("git", "pull")
+    assert not runner.ran("pip")
+
+
+def test_windows_update_migrates_installer_command_shim_to_python_module(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "pyproject.toml").write_text("same", encoding="utf-8")
+    dist = tmp_path / "webui" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    scripts_dir = tmp_path / ".venv" / "Scripts"
+    scripts_dir.mkdir(parents=True)
+    python_executable = scripts_dir / "python.exe"
+    python_executable.write_bytes(b"")
+    shim = tmp_path / "bin" / "vbot.cmd"
+    shim.parent.mkdir()
+    shim.write_bytes(b'@echo off\r\n"old\\vbot.exe" %*\r\n')
+    _write_state(
+        tmp_path,
+        python_executable=str(python_executable),
+        webui_revision="samesha",
+    )
+
+    def handler(command: list[str]) -> CommandRun:
+        if command[:2] == ["git", "symbolic-ref"]:
+            return _ok("main")
+        if command[:2] == ["git", "rev-parse"]:
+            return _ok("samesha")
+        if command[:2] == ["git", "status"]:
+            return _ok("")
+        if command[:2] == ["git", "pull"]:
+            return _ok("")
+        raise AssertionError(f"unexpected command: {command}")
+
+    result = run_update(
+        _instance(),
+        runner=ScriptedRunner(handler),
+        root=tmp_path,
+        restart=False,
+        platform_name="nt",
+    )
+
+    assert result.ok, result.message
+    assert "command launcher refreshed" in result.message
+    assert shim.read_bytes() == (f'@echo off\r\n"{python_executable}" -m cli.main %*\r\n'.encode())
+
+    repeated = run_update(
+        _instance(),
+        runner=ScriptedRunner(handler),
+        root=tmp_path,
+        restart=False,
+        platform_name="nt",
+    )
+
+    assert repeated.ok, repeated.message
+    assert "command launcher refreshed" not in repeated.message
 
 
 def test_running_desktop_lookup_matches_only_exact_executable(

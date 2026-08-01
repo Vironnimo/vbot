@@ -22,6 +22,7 @@ import sys
 import tarfile
 import tomllib
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -54,6 +55,8 @@ WEBUI_ASSET_NAME = "webui-dist.tar.gz"
 _API_TIMEOUT_SECONDS = 30.0
 _DOWNLOAD_TIMEOUT_SECONDS = 60.0
 _COMMAND_TIMEOUT_SECONDS = 600.0
+_WINDOWS_COMMAND_LAUNCHER_NAME = "vbot.exe"
+_WINDOWS_COMMAND_SHIM_RELATIVE_PATH = Path("bin") / "vbot.cmd"
 _WINDOWS_DESKTOP_LAUNCHER_NAME = "vbot-desktop.exe"
 _WINDOWS_POWERSHELL = "powershell.exe"
 _DESKTOP_INSTALL_SHAPES = frozenset({SERVER_DESKTOP_SHAPE, DESKTOP_CLIENT_SHAPE})
@@ -170,6 +173,14 @@ def run_update(
     except (OSError, ValueError) as exc:
         return _fail(instance, f"update: server target is not usable: {exc}")
 
+    package_launcher_guard = _guard_windows_package_launcher_not_running(
+        state,
+        repo,
+        platform_name=effective_platform,
+    )
+    if not package_launcher_guard.ok:
+        return _fail(instance, package_launcher_guard.message)
+
     desktop_guard = _guard_windows_desktop_not_running(
         state,
         repo,
@@ -279,6 +290,16 @@ def run_update(
         if not saved.ok:
             lines.append(saved.message)
             return _failure_with_stash(instance, lines, run, repo, stashed=stashed)
+
+    command_shim = _refresh_windows_command_shim(
+        repo,
+        state,
+        platform_name=effective_platform,
+    )
+    if command_shim.message:
+        lines.append(command_shim.message)
+    if not command_shim.ok:
+        return _failure_with_stash(instance, lines, run, repo, stashed=stashed)
 
     shortcut = _refresh_desktop_shortcut(
         run,
@@ -455,7 +476,36 @@ def _guard_windows_desktop_not_running(
     )
 
 
-def _running_process_id(executable: Path) -> int | None:
+def _guard_windows_package_launcher_not_running(
+    state: InstallState,
+    repo: Path,
+    *,
+    platform_name: str,
+) -> _Step:
+    """Keep pip away from an active Windows package launcher."""
+
+    if platform_name != "nt":
+        return _Step(True, "")
+
+    package_launcher = (
+        Path(state.python_executable).parent / _WINDOWS_COMMAND_LAUNCHER_NAME
+    ).resolve()
+    process_id = _running_process_id(package_launcher, include_current=True)
+    if process_id is None:
+        return _Step(True, "")
+
+    recovery = _resume_update_command(repo, state, platform_name=platform_name)
+    return _Step(
+        False,
+        f"update: the Windows package launcher is active at {package_launcher} "
+        f"(process {process_id}). It cannot update itself while Windows holds the file; "
+        "no checkout or installation files were changed. Run this one-time recovery "
+        "command, which also migrates the installer-owned command shim:\n"
+        f"resume update: {recovery}",
+    )
+
+
+def _running_process_id(executable: Path, *, include_current: bool = False) -> int | None:
     """Return a process id only for the exact Windows executable path."""
 
     target = _normalized_windows_path(executable)
@@ -466,13 +516,44 @@ def _running_process_id(executable: Path) -> int | None:
                 process_executable = process.info["exe"]
             except (KeyError, TypeError, ValueError, psutil.Error):
                 continue
-            if process_id == os.getpid() or not process_executable:
+            if (process_id == os.getpid() and not include_current) or not process_executable:
                 continue
             if _normalized_windows_path(Path(process_executable)) == target:
                 return process_id
     except psutil.Error:
         return None
     return None
+
+
+def _refresh_windows_command_shim(
+    repo: Path,
+    state: InstallState,
+    *,
+    platform_name: str,
+) -> _Step:
+    """Migrate the public Windows Installer's command shim away from vbot.exe."""
+
+    if platform_name != "nt":
+        return _Step(True, "")
+
+    shim = repo / _WINDOWS_COMMAND_SHIM_RELATIVE_PATH
+    if not shim.is_file():
+        return _Step(True, "")
+
+    escaped_python = state.python_executable.replace("%", "%%")
+    content = f'@echo off\r\n"{escaped_python}" -m cli.main %*\r\n'
+    encoded_content = content.encode("utf-8")
+    temporary = shim.with_name(f".{shim.name}.tmp")
+    try:
+        if shim.read_bytes() == encoded_content:
+            return _Step(True, "")
+        temporary.write_bytes(encoded_content)
+        os.replace(temporary, shim)
+    except OSError as exc:
+        with suppress(OSError):
+            temporary.unlink(missing_ok=True)
+        return _Step(False, f"command launcher update failed: {exc}")
+    return _Step(True, "command launcher refreshed")
 
 
 def _normalized_windows_path(path: Path) -> str:
