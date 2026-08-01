@@ -682,6 +682,57 @@ async def test_completion_delivery_coalesces_every_result_ready_before_run_end(
     assert "second" in message
 
 
+async def test_completion_delivery_joins_active_run_at_next_request_boundary(
+    tmp_path: Path,
+) -> None:
+    run_manager = ChatRunManager()
+    active_release = asyncio.Event()
+
+    async def active_executor(_run: Run) -> str:
+        await active_release.wait()
+        return "parent complete"
+
+    parent_run = await run_manager.start(
+        agent_id="coder",
+        session_id="session-one",
+        executor=active_executor,
+        project_id=None,
+    )
+    sessions = ChatSessionManager(tmp_path)
+    session = sessions.create("coder", session_id="session-one")
+    completion_loop = _CompletionChatLoop(run_manager)
+    trigger_service = TriggerService(
+        cast(Any, completion_loop),
+        run_manager,
+        cast(Any, Mock()),
+        trigger_chat_loop=cast(Any, completion_loop),
+        sessions=sessions,
+    )
+    delivery = trigger_service.submit_completion(
+        "coder",
+        "session-one",
+        notice_id="bash:in-run",
+        origin_run_id=parent_run.id,
+        body="finished during the active run",
+    )
+
+    assert trigger_service.deliver_background_completions(parent_run, session) is True
+    await asyncio.wait_for(delivery, timeout=1)
+
+    notes = [
+        message.content
+        for message in session.load()
+        if message.role == "note" and isinstance(message.content, str)
+    ]
+    assert len(notes) == 1
+    assert "finished during the active run" in notes[0]
+
+    active_release.set()
+    await parent_run.wait()
+    await asyncio.sleep(0)
+    assert completion_loop.messages == []
+
+
 async def test_completion_finishing_after_boundary_uses_later_delivery(tmp_path: Path) -> None:
     run_manager = ChatRunManager()
     active_release = asyncio.Event()

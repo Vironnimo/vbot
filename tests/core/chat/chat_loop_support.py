@@ -58,6 +58,13 @@ def build_chat_loop(runtime: Any, **kwargs: Any) -> ChatLoop:
         task_model_available=lambda task_type: bool(
             getattr(runtime, "task_model_available", lambda _task_type: False)(task_type)
         ),
+        deliver_background_completions=lambda run, session: bool(
+            getattr(
+                runtime,
+                "deliver_background_completions",
+                lambda _run, _session: False,
+            )(run, session)
+        ),
     )
     return ChatLoop(dependencies, **kwargs)
 

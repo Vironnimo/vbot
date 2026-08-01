@@ -407,6 +407,7 @@ class ChatLoopDependencies:
     refresh_skills: Callable[[str | None, str | None], SkillRegistry]
     get_local_context_windows: Callable[[], Mapping[str, Any]]
     task_model_available: Callable[[str], bool]
+    deliver_background_completions: Callable[[Run, ChatSession], bool]
 
 
 @dataclass(frozen=True)
@@ -2382,7 +2383,18 @@ class ChatLoop:
         failed_tool_call_breaker = _FailedToolCallCircuitBreaker()
         for _ in range(self._max_tool_iterations + 1):
             run.raise_if_cancelled()
-            pending_notes = session.drain_pending_notes()
+            async with self._dependencies.sessions.write_lock(
+                run.agent_id, run.session_id, project_id
+            ):
+                try:
+                    self._dependencies.deliver_background_completions(run, session)
+                except Exception:
+                    _LOGGER.warning(
+                        "Background completion injection failed for run %s",
+                        run.id,
+                        exc_info=True,
+                    )
+                pending_notes = session.drain_pending_notes()
             if pending_notes:
                 messages.extend(_notes_to_request_messages(pending_notes))
             extension_registry = self._dependencies.get_extension_registry()
