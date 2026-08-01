@@ -16,7 +16,7 @@ test("Session actions rename, override Compaction Policy, and delete a Session",
   await selectedSession
     .getByRole("button", { name: "Session actions" })
     .click();
-  await selectedSession.getByRole("menuitem", { name: "Rename" }).click();
+  await page.getByRole("menuitem", { name: "Rename" }).click();
   const renameInput = drawer.getByRole("textbox", {
     name: "Rename session",
   });
@@ -30,9 +30,7 @@ test("Session actions rename, override Compaction Policy, and delete a Session",
   await selectedSession
     .getByRole("button", { name: "Session actions" })
     .click();
-  await selectedSession
-    .getByRole("menuitem", { name: "Compaction Policy" })
-    .click();
+  await page.getByRole("menuitem", { name: "Compaction Policy" }).click();
   let policyDialog = page.getByRole("dialog", { name: "Compaction Policy" });
   const sessionOverride = policyDialog.getByRole("switch", {
     name: "Session override",
@@ -45,9 +43,7 @@ test("Session actions rename, override Compaction Policy, and delete a Session",
   await selectedSession
     .getByRole("button", { name: "Session actions" })
     .click();
-  await selectedSession
-    .getByRole("menuitem", { name: "Compaction Policy" })
-    .click();
+  await page.getByRole("menuitem", { name: "Compaction Policy" }).click();
   policyDialog = page.getByRole("dialog", { name: "Compaction Policy" });
   await expect(
     policyDialog.getByRole("switch", { name: "Session override" }),
@@ -59,7 +55,7 @@ test("Session actions rename, override Compaction Policy, and delete a Session",
   await selectedSession
     .getByRole("button", { name: "Session actions" })
     .click();
-  await selectedSession.getByRole("menuitem", { name: "Delete" }).click();
+  await page.getByRole("menuitem", { name: "Delete" }).click();
   const deleteDialog = page.getByRole("dialog", { name: "Delete session" });
   await expect(deleteDialog).toContainText("E2E Managed Session");
   await deleteDialog

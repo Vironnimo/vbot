@@ -202,6 +202,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
       return {
         calls: [
           toolCall("bash", {
+            mode: "foreground",
             command:
               "node -e \"console.log('e2e-tool-started'); setTimeout(() => console.log('e2e-tool-ended'), 15000)\"",
           }),
@@ -217,7 +218,12 @@ function plannedToolResponse(prompt, results, offeredTools) {
     }
     if (resultsFor(results, "bash").length === 0) {
       return {
-        calls: [toolCall("bash", { command: "echo e2e-shell-output" })],
+        calls: [
+          toolCall("bash", {
+            mode: "foreground",
+            command: "echo e2e-shell-output",
+          }),
+        ],
       };
     }
     if (resultsFor(results, "process").length === 0) {
@@ -459,8 +465,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
             action: "create",
             name: "E2E tool-created schedule",
             prompt: "E2E tool-created scheduled prompt",
-            schedule_type: "cron",
-            cron_expression: "15 4 * * *",
+            schedule: "15 4 * * *",
           }),
         ],
       };
@@ -498,7 +503,7 @@ function plannedToolResponse(prompt, results, offeredTools) {
   }
 
   if (
-    prompt.includes("Sub-agent batch complete") &&
+    prompt.includes("Automatic completion delivery") &&
     prompt.includes("Fake sub-agent result.")
   ) {
     return { text: "Sub-agent tool completed." };
@@ -546,7 +551,10 @@ function responseText(model, prompt, messages = []) {
   if (prompt.includes("E2E handoff brief 9182")) {
     return "E2E handoff received by target Agent.";
   }
-  if (prompt.includes("Review this session and update two things")) {
+  if (
+    prompt.includes("Review this Session") &&
+    prompt.includes("E2E reflection focus")
+  ) {
     return "E2E reflection completed.";
   }
   if (prompt.includes("E2E_QUEUE_FOLLOWUP")) {
